@@ -7,11 +7,13 @@
 //!   secrets on code from a fork), or any key or value names `pull_request_target` or
 //!   `self-hosted`;
 //! - a step's (or a job's) `uses:` is not an action pinned to a full 40-character commit SHA
-//!   followed on the same line by a version comment (`# v1.2.3`), or names a local path (a
+//!   followed on the same line by a version comment (`# v1.2.3`; the value may be quoted, and
+//!   the spaces before and after `#` are free), or names a local path (a
 //!   local action or reusable workflow is code this lint does not read);
 //! - a job has no `runs-on`, or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group,
 //!   a custom label (a self-hosted or a paid larger runner), or an expression other than
-//!   `${{ matrix.<key> }}`, whose values are read from the job's own `strategy.matrix`;
+//!   `${{ matrix.<key> }}`, whose values are read from the job's own `strategy.matrix` (a list
+//!   or an `include` the lint cannot read, such as an expression, is refused);
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
 //!   one the table gives (the table is empty: no job of this repository writes yet);
@@ -65,13 +67,6 @@ pub fn entry<'a>(map: &'a Node, key: &str) -> Option<&'a Node> {
 pub fn entries(map: &Node) -> &[(Node, Node)] {
     match &map.value {
         Value::Map(entries) => entries,
-        _ => &[],
-    }
-}
-
-fn items(node: &Node) -> &[Node] {
-    match &node.value {
-        Value::Seq(items) => items,
         _ => &[],
     }
 }
@@ -137,8 +132,19 @@ fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
             "line {line}: `uses: {value}` is not pinned to a 40-digit lowercase commit SHA"
         ));
     }
+    // The comment after the value on the line the value is written on (for an alias, the line
+    // of its anchor): past a closing quote, one or more spaces or tabs, `#`, then `v<digit>`.
     let source = text.lines().nth(line - 1).unwrap_or_default();
-    let comment = source.split_once(&format!("{value} # ")).map(|(_, c)| c);
+    let after = source
+        .find(value)
+        .map(|at| &source[at + value.len()..])
+        .unwrap_or_default();
+    let after = after.strip_prefix(['\'', '"']).unwrap_or(after);
+    let spaced = after.trim_start_matches([' ', '\t']);
+    let comment = (spaced.len() < after.len())
+        .then(|| spaced.strip_prefix('#'))
+        .flatten()
+        .map(|c| c.trim_start_matches([' ', '\t']));
     let versioned = comment.is_some_and(|c| {
         c.strip_prefix('v')
             .is_some_and(|v| v.starts_with(|ch: char| ch.is_ascii_digit()))
@@ -284,11 +290,26 @@ fn runner_labels<'a>(name: &str, job: &'a Node) -> Result<Vec<&'a str>, String> 
             ));
         }
     };
-    let included = matrix
-        .and_then(|m| entry(m, "include"))
-        .map_or(&[][..], items)
-        .iter()
-        .filter_map(|i| entry(i, key));
+    // An `include` the lint cannot read (an expression for the list, or for one entry) could
+    // add any runner, so it is refused rather than read as empty.
+    let include = match matrix.and_then(|m| entry(m, "include")) {
+        None => &[][..],
+        Some(Node {
+            value: Value::Seq(list),
+            ..
+        }) => list,
+        Some(_) => {
+            return Err(format!(
+                "job {name}: `strategy.matrix.include` is not a list the lint can read"
+            ));
+        }
+    };
+    if include.iter().any(|i| !matches!(i.value, Value::Map(_))) {
+        return Err(format!(
+            "job {name}: an entry of `strategy.matrix.include` is not a mapping the lint can read"
+        ));
+    }
+    let included = include.iter().filter_map(|i| entry(i, key));
     let values: Vec<&Node> = listed.iter().chain(included).collect();
     if values.is_empty() {
         return Err(format!(

@@ -2,16 +2,18 @@
 //!
 //! Only the per-file summary lines are read: `SF:<path>` opens a record, `LF`/`LH` give
 //! the lines found and hit, `BRF`/`BRH` the branches found and hit, and
-//! `end_of_record` closes it. A summary line a record lacks counts as zero (llvm-cov
-//! leaves the branch lines out when branch coverage is off). Every other line (`TN`,
-//! `FN`, `FNDA`, `DA`, `BRDA`, ...) carries detail the summaries already total, and
-//! is skipped.
+//! `end_of_record` closes it. Every record must carry all four: `cargo llvm-cov --branch`
+//! writes them for every source, `BRF:0`/`BRH:0` for one with no branches, so a record that
+//! lacks one comes from another tool or a report made without branch coverage, and its
+//! missing count is not read as zero. Every other line (`TN`, `FN`, `FNDA`, `DA`, `BRDA`, ...)
+//! carries detail the summaries already total, and is skipped.
 //!
 //! Refused, so that a damaged or merged file cannot report a wrong total: a summary
-//! line outside a record, a summary line twice in one record, a count that is not a
-//! decimal number, more hits than items, a record left open at the end, the same
-//! source in two records, and a file with no records at all (an empty report would
-//! otherwise pass every check).
+//! line outside a record, a summary line twice in one record, a summary line missing from a
+//! record, a count that is not a decimal number, more hits than items, a record left open at
+//! the end, the same source in two records (compared as paths, so `a//b` and `a/./b` are the
+//! same as `a/b`), and a file with no records at all (an empty report would otherwise pass
+//! every check).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -50,6 +52,12 @@ pub enum LcovError {
     },
     #[error("{path} appears in two records")]
     Duplicate { path: String },
+    #[error("line {line}: the record for {path} has no {field}")]
+    Missing {
+        line: usize,
+        path: String,
+        field: &'static str,
+    },
     #[error("the record for {path} has no end_of_record")]
     Unterminated { path: String },
     #[error("the tracefile holds no records")]
@@ -67,7 +75,14 @@ const FIELDS: [&str; 4] = ["LF", "LH", "BRF", "BRH"];
 
 impl Open {
     fn close(self, line: usize) -> Result<FileRecord, LcovError> {
-        let [lf, lh, brf, brh] = self.fields.map(|f| f.unwrap_or(0));
+        if let Some(i) = self.fields.iter().position(Option::is_none) {
+            return Err(LcovError::Missing {
+                line,
+                path: self.path,
+                field: FIELDS[i],
+            });
+        }
+        let [lf, lh, brf, brh] = self.fields.map(|f| f.unwrap_or_default());
         let counts = |what, found, hit| {
             Counts::new(found, hit).ok_or_else(|| LcovError::HitAboveFound {
                 line,
@@ -114,7 +129,7 @@ pub fn parse(text: &str) -> Result<Vec<FileRecord>, LcovError> {
                     open: o.path.clone(),
                 });
             }
-            if !seen.insert(value.to_owned()) {
+            if !seen.insert(PathBuf::from(value)) {
                 return Err(LcovError::Duplicate {
                     path: value.to_owned(),
                 });
@@ -170,7 +185,7 @@ mod tests {
     fn reads_each_record_summary() {
         let text = "TN:\nSF:/w/crates/a/src/lib.rs\nFN:1,f\nDA:1,3\nDA:2,0\nBRDA:1,0,0,1\n\
                     BRDA:1,0,1,-\nLF:2\nLH:1\nBRF:2\nBRH:1\nend_of_record\n\
-                    SF:/w/crates/b/src/lib.rs\nLH:4\nLF:5\nend_of_record\n";
+                    SF:/w/crates/b/src/lib.rs\nLH:4\nBRH:0\nLF:5\nBRF:0\nend_of_record\n";
         let got = parse(text).expect("valid");
         assert_eq!(
             got,
@@ -179,7 +194,7 @@ mod tests {
                     path: "/w/crates/a/src/lib.rs".into(),
                     coverage: cov(2, 1, 2, 1),
                 },
-                // No BRF/BRH: branch coverage was off for this file; zero, not an error.
+                // The summaries in another order; no branches, written as zero.
                 FileRecord {
                     path: "/w/crates/b/src/lib.rs".into(),
                     coverage: cov(5, 4, 0, 0),
@@ -191,7 +206,8 @@ mod tests {
     /// Catches: trailing whitespace or CRLF line ends breaking `end_of_record`.
     #[test]
     fn tolerates_crlf() {
-        let got = parse("SF:/w/x.rs\r\nLF:1\r\nLH:1\r\nend_of_record\r\n").expect("valid");
+        let got = parse("SF:/w/x.rs\r\nLF:1\r\nLH:1\r\nBRF:0\r\nBRH:0\r\nend_of_record\r\n")
+            .expect("valid");
         assert_eq!(got[0].coverage, cov(1, 1, 0, 0));
     }
 
@@ -212,9 +228,9 @@ mod tests {
             }
         );
         assert_eq!(
-            err("SF:a\nend_of_record\nend_of_record\n"),
+            err("SF:a\nLF:0\nLH:0\nBRF:0\nBRH:0\nend_of_record\nend_of_record\n"),
             LcovError::OutsideRecord {
-                line: 3,
+                line: 7,
                 field: field("end_of_record")
             }
         );
@@ -241,9 +257,9 @@ mod tests {
             }
         );
         assert_eq!(
-            err("SF:a\nLF:1\nLH:2\nend_of_record\n"),
+            err("SF:a\nLF:1\nLH:2\nBRF:0\nBRH:0\nend_of_record\n"),
             LcovError::HitAboveFound {
-                line: 4,
+                line: 6,
                 path: field("a"),
                 what: "lines",
                 found: 1,
@@ -251,9 +267,9 @@ mod tests {
             }
         );
         assert_eq!(
-            err("SF:a\nBRF:1\nBRH:2\nend_of_record\n"),
+            err("SF:a\nLF:0\nLH:0\nBRF:1\nBRH:2\nend_of_record\n"),
             LcovError::HitAboveFound {
-                line: 4,
+                line: 6,
                 path: field("a"),
                 what: "branches",
                 found: 1,
@@ -261,7 +277,7 @@ mod tests {
             }
         );
         assert_eq!(
-            err("SF:a\nend_of_record\nSF:a\nend_of_record\n"),
+            err("SF:a\nLF:0\nLH:0\nBRF:0\nBRH:0\nend_of_record\nSF:a\n"),
             LcovError::Duplicate { path: field("a") }
         );
         assert_eq!(
@@ -280,8 +296,9 @@ mod tests {
             err("SF:a\nSF:b\n").to_string(),
             err("SF:a\nLH:1\nLH:1\n").to_string(),
             err("SF:a\nBRF:x\n").to_string(),
-            err("SF:a\nLF:1\nLH:2\nend_of_record\n").to_string(),
-            err("SF:a\nend_of_record\nSF:a\nend_of_record\n").to_string(),
+            err("SF:a\nLF:1\nLH:2\nBRF:0\nBRH:0\nend_of_record\n").to_string(),
+            err("SF:a\nLF:0\nLH:0\nBRF:0\nBRH:0\nend_of_record\nSF:a\n").to_string(),
+            err("SF:a\nLF:1\nLH:1\nend_of_record\n").to_string(),
             err("SF:a\n").to_string(),
             err("").to_string(),
         ];
@@ -292,11 +309,70 @@ mod tests {
                 "line 2: SF while the record for a is still open",
                 "line 3: LH given twice in one record",
                 "line 2: BRF is not a count: \"x\"",
-                "line 4: record for a hits 2 of 1 lines",
+                "line 6: record for a hits 2 of 1 lines",
                 "a appears in two records",
+                "line 4: the record for a has no BRF",
                 "the record for a has no end_of_record",
                 "the tracefile holds no records",
             ]
         );
+    }
+
+    /// Catches: a record missing a summary read as zero. A record with uncovered lines but no
+    /// `LF`/`LH` would add nothing, so a crate could pass with untested code beside a fully
+    /// covered file; and a record with no `BRF`/`BRH` (a report made without branch coverage)
+    /// would pass the branch gate with nothing measured. Each of the four is required.
+    #[test]
+    fn a_record_missing_any_summary_is_refused() {
+        let full = "SF:/w/crates/a/src/lib.rs\nLF:10\nLH:10\nBRF:2\nBRH:2\nend_of_record\n";
+        for (i, name) in FIELDS.iter().enumerate() {
+            let partial: String = ["LF:5", "LH:0", "BRF:4", "BRH:0"]
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, l)| format!("{l}\n"))
+                .collect();
+            let text = format!(
+                "{full}SF:/w/crates/a/src/other.rs\nDA:1,0\nBRDA:1,0,0,0\n{partial}end_of_record\n"
+            );
+            assert_eq!(
+                err(&text),
+                LcovError::Missing {
+                    line: 13,
+                    path: "/w/crates/a/src/other.rs".to_owned(),
+                    field: name,
+                },
+                "{text}"
+            );
+        }
+        let none = format!("{full}SF:/w/crates/a/src/other.rs\nDA:1,0\nend_of_record\n");
+        assert_eq!(
+            err(&none),
+            LcovError::Missing {
+                line: 9,
+                path: "/w/crates/a/src/other.rs".to_owned(),
+                field: "LF",
+            }
+        );
+    }
+
+    /// Catches: one source counted twice because its path is spelled two ways.
+    #[test]
+    fn the_same_source_spelled_two_ways_is_a_duplicate() {
+        let record = |path: &str| format!("SF:{path}\nLF:1\nLH:1\nBRF:0\nBRH:0\nend_of_record\n");
+        for other in [
+            "/w/crates/a//src/lib.rs",
+            "/w/crates/a/./src/lib.rs",
+            "/w/crates/a/src/lib.rs/",
+        ] {
+            let text = record("/w/crates/a/src/lib.rs") + &record(other);
+            assert_eq!(
+                err(&text),
+                LcovError::Duplicate {
+                    path: other.to_owned()
+                },
+                "{other}"
+            );
+        }
     }
 }

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use super::*;
+use crate::testdir::TestDir;
 
 fn cov(lf: u64, lh: u64, brf: u64, brh: u64) -> CrateCoverage {
     CrateCoverage {
@@ -44,7 +45,8 @@ fn records_are_summed_per_crate_and_every_crate_is_listed() {
 }
 
 /// Catches: a source outside every crate dropped (its lines would escape the gate), a file
-/// directly under `crates/`, and a path under a directory that is not a workspace crate.
+/// directly under `crates/`, a path under a directory that is not a workspace crate, and a
+/// path that starts in a crate and climbs out of it with `..`.
 #[test]
 fn a_record_outside_every_crate_is_an_error() {
     let root = Path::new("/w");
@@ -53,11 +55,13 @@ fn a_record_outside_every_crate_is_an_error() {
         "/w/crates/lib.rs",
         "/w/crates/ghost/src/lib.rs",
         "/w/src/lib.rs",
+        "/w/crates/a/../../outside.rs",
+        "/w/crates/a/src/../../b/src/lib.rs",
     ] {
         let files = [record(path, cov(1, 1, 0, 0))];
         assert_eq!(
             by_crate(root, &names(&["a"]), &files),
-            Err(Unattributed(PathBuf::from(path))),
+            Err(Error::Unattributed(PathBuf::from(path))),
             "{path}"
         );
     }
@@ -136,7 +140,7 @@ fn the_table_has_a_row_per_crate_a_total_and_a_verdict() {
         ("b".to_owned(), cov(100, 90, 0, 0)),
     ]
     .into();
-    let report = render(&rows(&measured));
+    let report = render(&rows(&measured), total(&measured).expect("fits"));
     assert!(
         report.contains("| a | 100/100 | 100.00 | 10/10 | 100.00 | ok |"),
         "{report}"
@@ -154,7 +158,7 @@ fn the_table_has_a_row_per_crate_a_total_and_a_verdict() {
         "{report}"
     );
     let passing: BTreeMap<String, CrateCoverage> = [("a".to_owned(), cov(1, 1, 0, 0))].into();
-    let report = render(&rows(&passing));
+    let report = render(&rows(&passing), total(&passing).expect("fits"));
     assert!(
         report.ends_with("coverage gate: PASS (threshold 99.00 of lines and branches)\n"),
         "{report}"
@@ -164,12 +168,11 @@ fn the_table_has_a_row_per_crate_a_total_and_a_verdict() {
 /// Catches: the crate list taking files or directories without a manifest for crates.
 #[test]
 fn workspace_crates_are_the_directories_with_a_manifest() {
-    let beside = std::env::current_exe().expect("test binary");
-    let root = beside
-        .parent()
-        .expect("deps")
-        .join("coverage-gate-unit-crates");
-    let _ = std::fs::remove_dir_all(&root);
+    let exe = std::env::current_exe().expect("test binary");
+    let root = TestDir::under(
+        &exe.parent().expect("deps").join("coverage-gate-unit"),
+        "crates",
+    );
     for dir in ["a", "b", "no-manifest"] {
         std::fs::create_dir_all(root.join("crates").join(dir)).expect("dir");
     }
@@ -178,5 +181,32 @@ fn workspace_crates_are_the_directories_with_a_manifest() {
     std::fs::write(root.join("crates/file"), b"").expect("file");
     assert_eq!(workspace_crates(&root).expect("list"), names(&["a", "b"]));
     assert!(workspace_crates(&root.join("absent")).is_err());
-    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Catches: counts that overflow saturated into a passing crate. Two records each half
+/// covered with `u64::MAX` lines would saturate to `u64::MAX` of `u64::MAX`, 100%, though
+/// together they are about 50% covered; the sum is an error naming the crate, and a workspace
+/// total that does not fit is an error too.
+#[test]
+fn a_sum_that_does_not_fit_is_an_error_naming_the_crate() {
+    let root = Path::new("/w");
+    let half = cov(u64::MAX, 1 << 63, 0, 0);
+    let files = [
+        record("/w/crates/a/src/lib.rs", half),
+        record("/w/crates/a/src/other.rs", half),
+    ];
+    assert_eq!(
+        by_crate(root, &names(&["a"]), &files),
+        Err(Error::Overflow("a".to_owned()))
+    );
+    assert_eq!(
+        Error::Overflow("a".to_owned()).to_string(),
+        "the coverage counts of a do not fit in 64 bits"
+    );
+    let measured: BTreeMap<String, CrateCoverage> =
+        [("a".to_owned(), half), ("b".to_owned(), half)].into();
+    assert_eq!(
+        total(&measured),
+        Err(Error::Overflow("the workspace".to_owned()))
+    );
 }

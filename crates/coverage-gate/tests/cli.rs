@@ -1,14 +1,21 @@
 //! The binary end to end: a workspace directory with crates, an lcov tracefile, and the
 //! exit status and output it gives.
 
+#[path = "../src/testdir.rs"]
+mod testdir;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// A workspace under the target directory with the crates `names`, removed first if a
-/// run left it.
-fn workspace(name: &str, names: &[&str]) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("coverage-gate-{name}"));
-    let _ = std::fs::remove_dir_all(&root);
+use testdir::TestDir;
+
+/// A workspace of its own under the target directory with the crates `names`, removed when it
+/// drops.
+fn workspace(name: &str, names: &[&str]) -> TestDir {
+    let root = TestDir::under(
+        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        &format!("coverage-gate-{name}"),
+    );
     for krate in names {
         let dir = root.join("crates").join(krate);
         std::fs::create_dir_all(dir.join("src")).expect("crate dir");
@@ -211,4 +218,78 @@ fn a_summary_file_that_cannot_be_written_is_status_2() {
     );
     assert_eq!(o.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&o.stderr).contains("append to"));
+}
+
+#[test]
+fn a_record_missing_a_summary_is_status_2_not_a_pass() {
+    // Catches: a fully covered file beside a record whose uncovered lines carry no summary
+    // passing the gate, and a report made without branch coverage passing the branch gate.
+    let root = workspace("missing-summary", &["a"]);
+    let lib = root.join("crates/a/src/lib.rs");
+    let other = root.join("crates/a/src/other.rs");
+    let good = format!(
+        "SF:{}\nLF:10\nLH:10\nBRF:2\nBRH:2\nend_of_record\n",
+        lib.display()
+    );
+    for (case, record) in [
+        (
+            "lines",
+            format!("SF:{}\nDA:1,0\nDA:2,0\nend_of_record\n", other.display()),
+        ),
+        (
+            "branches",
+            format!("SF:{}\nLF:3\nLH:3\nend_of_record\n", other.display()),
+        ),
+    ] {
+        let file = root.join(format!("{case}.info"));
+        std::fs::write(&file, format!("{good}{record}")).expect("lcov");
+        let o = gate(&root, &file, &[]);
+        assert_eq!(o.status.code(), Some(2), "{case}: {}", out(&o));
+        let field = if case == "lines" { "LF" } else { "BRF" };
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains(&format!("has no {field}")),
+            "{case}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}
+
+#[test]
+fn counts_that_overflow_are_status_2_not_a_pass() {
+    // Catches: two half-covered records of u64::MAX lines saturating into 100% and passing.
+    let root = workspace("overflow", &["a"]);
+    let half = 1u64 << 63;
+    let tracefile = lcov(
+        &root,
+        &[
+            ("crates/a/src/lib.rs", u64::MAX, half, 0, 0),
+            ("crates/a/src/other.rs", u64::MAX, half, 0, 0),
+        ],
+    );
+    let o = gate(&root, &tracefile, &[]);
+    assert_eq!(o.status.code(), Some(2), "{}", out(&o));
+    assert_eq!(
+        String::from_utf8_lossy(&o.stderr),
+        "coverage-gate: the coverage counts of a do not fit in 64 bits\n"
+    );
+}
+
+#[test]
+fn a_source_that_climbs_out_of_its_crate_is_status_2() {
+    // Catches: `crates/a/../../outside.rs`, which is not in crate `a`, counted for `a`.
+    let root = workspace("climbs", &["a"]);
+    let tracefile = lcov(
+        &root,
+        &[
+            ("crates/a/src/lib.rs", 10, 10, 0, 0),
+            ("crates/a/../../outside.rs", 10, 10, 0, 0),
+        ],
+    );
+    let o = gate(&root, &tracefile, &[]);
+    assert_eq!(o.status.code(), Some(2), "{}", out(&o));
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("is not under <root>/crates/<crate>/"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
 }

@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::lcov::FileRecord;
 use crate::{Counts, CrateCoverage, Percent, show};
@@ -26,37 +26,57 @@ pub fn workspace_crates(root: &Path) -> io::Result<BTreeSet<String>> {
     Ok(out)
 }
 
-/// A tracefile source that is not inside a workspace crate.
+/// Why the records cannot be summed per crate.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0} is not under <root>/crates/<crate>/ for any workspace crate")]
-pub struct Unattributed(pub PathBuf);
+pub enum Error {
+    /// A source outside every workspace crate, or one whose path climbs out of where it seems
+    /// to be (a `..` component).
+    #[error("{0} is not under <root>/crates/<crate>/ for any workspace crate")]
+    Unattributed(PathBuf),
+    /// A sum of counts that does not fit in 64 bits.
+    #[error("the coverage counts of {0} do not fit in 64 bits")]
+    Overflow(String),
+}
 
 /// Sums the records per crate. Every crate in `crates` gets an entry, zero when no
-/// record names it; a record outside every crate is an error rather than dropped.
+/// record names it; a record outside every crate is an error rather than dropped, and so is a
+/// record whose path holds a `..` component (`crates/a/../../outside.rs` is not in `a`).
 pub fn by_crate(
     root: &Path,
     crates: &BTreeSet<String>,
     files: &[FileRecord],
-) -> Result<BTreeMap<String, CrateCoverage>, Unattributed> {
+) -> Result<BTreeMap<String, CrateCoverage>, Error> {
     let base = root.join("crates");
     let mut out: BTreeMap<String, CrateCoverage> = crates
         .iter()
         .map(|c| (c.clone(), CrateCoverage::default()))
         .collect();
     for f in files {
-        let total = f
+        let climbs = f.path.components().any(|c| c == Component::ParentDir);
+        let entry = f
             .path
             .strip_prefix(&base)
             .ok()
-            .filter(|rest| rest.components().count() > 1)
+            .filter(|rest| !climbs && rest.components().count() > 1)
             .and_then(|rest| rest.iter().next())
-            .and_then(|name| out.get_mut(name.to_str()?));
-        let Some(total) = total else {
-            return Err(Unattributed(f.path.clone()));
+            .and_then(|name| out.get_key_value(name.to_str()?));
+        let Some((name, total)) = entry else {
+            return Err(Error::Unattributed(f.path.clone()));
         };
-        *total = total.plus(f.coverage);
+        let sum = total
+            .plus(f.coverage)
+            .ok_or_else(|| Error::Overflow(name.clone()))?;
+        out.insert(name.clone(), sum);
     }
     Ok(out)
+}
+
+/// The sum over every crate, for the table's last row.
+pub fn total(measured: &BTreeMap<String, CrateCoverage>) -> Result<CrateCoverage, Error> {
+    measured
+        .values()
+        .try_fold(CrateCoverage::default(), |sum, c| sum.plus(*c))
+        .ok_or_else(|| Error::Overflow("the workspace".to_owned()))
 }
 
 /// Lines or branches.
@@ -153,9 +173,9 @@ fn cells(c: Counts) -> [String; 2] {
     [format!("{}/{}", c.hit(), c.found()), show(c.percent())]
 }
 
-/// The report as a Markdown table (readable in a log, rendered in a job summary), with a
-/// workspace total and a closing verdict line.
-pub fn render(rows: &[Row]) -> String {
+/// The report as a Markdown table (readable in a log, rendered in a job summary), with the
+/// workspace `total` and a closing verdict line.
+pub fn render(rows: &[Row], total: CrateCoverage) -> String {
     let mut out = String::new();
     out.push_str(
         "| crate | lines | line % | branches | branch % | status |\n\
@@ -167,12 +187,10 @@ pub fn render(rows: &[Row]) -> String {
         // Writing to a String cannot fail.
         let _ = writeln!(out, "| {name} | {l} | {lp} | {b} | {bp} | {status} |");
     };
-    let mut total = CrateCoverage::default();
     let mut failing = 0;
     for r in rows {
         let status = r.status();
         failing += usize::from(status.fails());
-        total = total.plus(r.measured);
         line(&r.krate, r.measured, status.to_string());
     }
     line("**workspace**", total, String::new());

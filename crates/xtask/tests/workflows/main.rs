@@ -506,3 +506,79 @@ fn a_matrix_runner_list_that_is_not_a_list_is_refused() {
         &["job test: `strategy.matrix.os` is not a list of runner labels"],
     );
 }
+
+#[test]
+fn a_quoted_or_spaced_pin_and_an_alias_of_a_pin_pass() {
+    // Catches: a version comment missed because the value is quoted, because of two spaces or
+    // a tab before or after `#`, or because the `uses:` is an alias of a pinned anchor.
+    let pinned =
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n";
+    let sha = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
+    for line in [
+        format!("      - uses: '{sha}' # v7.0.1\n"),
+        format!("      - uses: \"{sha}\" # v7.0.1\n"),
+        format!("      - uses: {sha}   #   v7.0.1\n"),
+        format!("      - uses: {sha}\t#\tv7.0.1\n"),
+    ] {
+        assert_problems(&with(pinned, &line), &[]);
+    }
+    let anchored = format!(
+        "      - uses: &checkout {sha} # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: *checkout\n"
+    );
+    let text = with(pinned, &anchored);
+    let text = with_in(
+        &text,
+        "        with:\n          persist-credentials: false\n      - run:",
+        "      - run:",
+    );
+    assert_problems(&text, &[]);
+    // A `#` with no space before it is part of the value, not a comment.
+    assert_problems(
+        &with(pinned, &format!("      - uses: {sha}#v7.0.1\n")),
+        &[&format!(
+            "line 13: `uses: {sha}#v7.0.1` is not pinned to a 40-digit lowercase commit SHA"
+        )],
+    );
+    // A quoted value with no comment after it still has none.
+    assert_problems(
+        &with(pinned, &format!("      - uses: '{sha}'\n")),
+        &[&format!(
+            "line 13: `uses: {sha}` has no version comment (`# v1.2.3`) on its line"
+        )],
+    );
+}
+
+#[test]
+fn a_matrix_include_the_lint_cannot_read_is_refused_and_a_static_one_passes() {
+    // Catches: an `include` given as an expression, or one entry of it given as an expression,
+    // adding a runner beside a hosted static list without the lint seeing it.
+    let hosted = "    runs-on: ubuntu-latest\n";
+    let matrix = |include: &str| {
+        format!(
+            "    runs-on: ${{{{ matrix.os }}}}\n    strategy:\n      matrix:\n        os: [ubuntu-latest]\n{include}"
+        )
+    };
+    assert_problems(
+        &with(
+            hosted,
+            &matrix("        include: ${{ fromJSON(vars.EXTRA_RUNNERS) }}\n"),
+        ),
+        &["job test: `strategy.matrix.include` is not a list the lint can read"],
+    );
+    assert_problems(
+        &with(
+            hosted,
+            &matrix("        include:\n          - ${{ fromJSON(vars.EXTRA_RUNNER) }}\n"),
+        ),
+        &["job test: an entry of `strategy.matrix.include` is not a mapping the lint can read"],
+    );
+    assert_problems(
+        &with(
+            hosted,
+            &matrix(
+                "        include:\n          - os: ubuntu-24.04-arm\n            arch: arm64\n",
+            ),
+        ),
+        &[],
+    );
+}

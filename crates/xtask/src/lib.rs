@@ -1,12 +1,14 @@
 //! `cargo xtask <verb>`: the CI steps of this repository, as Rust with tests, so a workflow step
 //! is one command.
 //!
-//! - [`fetch`]: download a pinned tool, check its SHA-256, install it.
+//! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
+//!   (`install`).
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
-//! them to the rules of this repository.
+//! them to the rules of this repository. The crate's one export is [`main`], the entry point of
+//! the binary.
 
-pub mod fetch;
+mod install;
 
 #[cfg(test)]
 mod testdir;
@@ -18,12 +20,12 @@ use clap::{Parser, Subcommand};
 
 /// Why a verb failed.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub enum Error {
+enum Error {
     #[error(transparent)]
-    Fetch(#[from] fetch::Error),
+    Install(#[from] install::Error),
     /// Flags that do not fit together (exit status 2, like a clap error).
-    #[error("{0}")]
-    Usage(String),
+    #[error(transparent)]
+    Usage(#[from] install::UnpackFlags),
 }
 
 #[derive(Parser)]
@@ -35,20 +37,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Verb {
-    /// Download a pinned file, check its SHA-256 and install it (mode 0755).
-    Fetch {
-        /// Where to download it from (HTTPS; redirects must stay on HTTPS).
+    /// Check a downloaded file against its pinned SHA-256 and install it (mode 0755).
+    InstallTool {
+        /// The downloaded file (the workflow's `curl --proto =https` step wrote it).
         #[arg(long)]
-        url: String,
+        download: PathBuf,
         /// The SHA-256 of the download (before unpacking), 64 lowercase hex digits.
         #[arg(long)]
-        sha256: fetch::Sha256,
+        sha256: install::Sha256,
         /// The file to install; its directory is created when missing.
         #[arg(long)]
         out: PathBuf,
         /// How the download is packed (default: it is the file).
         #[arg(long, value_enum)]
-        extract: Option<fetch::Format>,
+        extract: Option<install::Format>,
         /// The file to take out of a tar (`--extract tar.gz`): its path inside the archive.
         #[arg(long)]
         member: Option<PathBuf>,
@@ -57,16 +59,17 @@ enum Verb {
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
     match cli.verb {
-        Verb::Fetch {
-            url,
+        Verb::InstallTool {
+            download,
             sha256,
             out,
             extract,
             member,
         } => {
-            let unpack = fetch::Unpack::new(extract, member).map_err(Error::Usage)?;
-            let roots = fetch::host_roots();
-            Ok(vec![fetch::fetch(&url, &sha256, &unpack, &out, &roots)?])
+            let unpack = install::Unpack::new(extract, member)?;
+            Ok(vec![install::install_tool(
+                &download, &sha256, &unpack, &out,
+            )?])
         }
     }
 }
@@ -84,7 +87,7 @@ pub fn main() -> ExitCode {
             eprintln!("xtask: {e}");
             match e {
                 Error::Usage(_) => ExitCode::from(2),
-                Error::Fetch(_) => ExitCode::FAILURE,
+                Error::Install(_) => ExitCode::FAILURE,
             }
         }
     }

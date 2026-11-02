@@ -12,12 +12,9 @@ description = "The CI steps of this repository (cargo xtask <verb>)."
 clap.workspace = true
 flate2.workspace = true
 hex.workspace = true
-rustls.workspace = true
-rustls-native-certs.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
-ureq.workspace = true
 
 [dev-dependencies]
 saphyr-parser.workspace = true

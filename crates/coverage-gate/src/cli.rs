@@ -14,23 +14,23 @@ use crate::{gate, lcov};
 /// Per-crate coverage table and gate.
 #[derive(Debug, Parser)]
 #[command(name = "coverage-gate")]
-pub struct Cli {
+struct Cli {
     /// The lcov tracefile `cargo llvm-cov --lcov` wrote.
     #[arg(long)]
-    pub lcov: PathBuf,
+    lcov: PathBuf,
     /// The workspace root: absolute, spelled as the tracefile's source paths begin, or
     /// relative to the working directory.
     #[arg(long)]
-    pub root: PathBuf,
+    root: PathBuf,
     /// Also append the table to this file (created if absent), as a CI job summary:
     /// `--summary-file "$GITHUB_STEP_SUMMARY"`.
     #[arg(long)]
-    pub summary_file: Option<PathBuf>,
+    summary_file: Option<PathBuf>,
 }
 
 /// Why the gate could not judge the workspace (exit status 2).
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+enum Error {
     #[error("read {path}: {source}")]
     Read {
         path: PathBuf,
@@ -52,7 +52,7 @@ pub enum Error {
         source: std::io::Error,
     },
     #[error(transparent)]
-    Unattributed(#[from] gate::Unattributed),
+    Gate(#[from] gate::Error),
     #[error("append to {path}: {source}")]
     Summary {
         path: PathBuf,
@@ -96,7 +96,7 @@ fn source_root(root: &Path) -> Result<PathBuf, Error> {
 }
 
 /// Prints the table (and appends it to `--summary-file`); returns whether the gate passed.
-pub fn run(cli: &Cli) -> Result<bool, Error> {
+fn run(cli: &Cli) -> Result<bool, Error> {
     let text = std::fs::read_to_string(&cli.lcov).map_err(|source| Error::Read {
         path: cli.lcov.clone(),
         source,
@@ -111,7 +111,7 @@ pub fn run(cli: &Cli) -> Result<bool, Error> {
     })?;
     let measured = gate::by_crate(&source_root(&cli.root)?, &crates, &files)?;
     let rows = gate::rows(&measured);
-    let report = gate::render(&rows);
+    let report = gate::render(&rows, gate::total(&measured)?);
     print!("{report}");
     if let Some(path) = &cli.summary_file {
         append(path, &report).map_err(|source| Error::Summary {
