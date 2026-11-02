@@ -1,0 +1,11 @@
+# cargo-nextest's configuration (CI: .github/workflows/ci.yml runs `cargo llvm-cov nextest`).
+# It holds a hang guard and nothing else: no test asserts how long it takes, and no test has a
+# timeout of its own. A test that waits for something that never comes is stopped by nextest's
+# slow-timeout with terminate-after (the test is killed and fails once period x terminate-after
+# has passed), instead of hanging the run.
+
+# The general budget: every test, of every package, is ended after eight minutes (120 seconds
+# x 4).
+[[profile.default.overrides]]
+filter = 'all()'
+slow-timeout = { period = "120s", terminate-after = 4 }

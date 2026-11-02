@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/komira-ai/hostkeeper"
+publish = false
+
+# Every external dependency is declared here once and used from a member as
+# `name.workspace = true` (members add features they need).
+[workspace.dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+# gzip for the tarballs `cargo xtask fetch` unpacks; the pure-Rust backend.
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+hex = "0.4.3"
+# The TLS client of `cargo xtask fetch`: the host's trusted roots and nothing else.
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8.4"
+# The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.
+saphyr-parser = "0.1.0"
+sha2 = "0.11.0"
+tar = { version = "0.4.46", default-features = false }
+thiserror = "2.0.21"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls-no-provider"] }
+
+[workspace.lints.rust]
+# `coverage` is set by cargo-llvm-cov.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
+# No unsafe code (AGENTS.md R2).
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# The methods and types `clippy.toml` bans, each with the reason clippy prints.
+disallowed_methods = "deny"
+disallowed_types = "deny"
+
+# Dev and test builds: line tables keep panic backtraces and profilers at file:line;
+# variable-level debug info is the part dropped. `test` inherits `dev`; it is spelled out so the
+# two cannot drift. Release is untouched.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.test]
+debug = "line-tables-only"
+incremental = false
