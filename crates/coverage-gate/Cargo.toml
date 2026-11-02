@@ -1,0 +1,16 @@
+[package]
+name = "coverage-gate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Per-crate line and branch coverage from an lcov tracefile, and the 99% gate CI applies."
+
+[dependencies]
+clap.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

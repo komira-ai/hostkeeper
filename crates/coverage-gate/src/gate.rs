@@ -1,0 +1,213 @@
+//! Per-crate totals, the comparison with the threshold, and the table CI prints.
+//!
+//! A crate is a directory under `<root>/crates` holding a `Cargo.toml`. A crate passes when
+//! its line coverage and its branch coverage each reach [`Percent::TARGET`]. A metric with
+//! nothing to measure passes, except lines: a crate with no instrumented line at all fails
+//! ([`Status::NoData`]), because a crate whose tests stopped being instrumented would
+//! otherwise slip past the gate. Every crate is judged: there is no way to exclude one.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Write as _};
+use std::io;
+use std::path::{Component, Path, PathBuf};
+
+use crate::lcov::FileRecord;
+use crate::{Counts, CrateCoverage, Percent, show};
+
+/// The workspace's crates: the directories under `<root>/crates` with a `Cargo.toml`.
+pub fn workspace_crates(root: &Path) -> io::Result<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    for entry in std::fs::read_dir(root.join("crates"))? {
+        let entry = entry?;
+        if entry.path().join("Cargo.toml").is_file() {
+            out.insert(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    Ok(out)
+}
+
+/// Why the records cannot be summed per crate.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    /// A source outside every workspace crate, or one whose path climbs out of where it seems
+    /// to be (a `..` component).
+    #[error("{0} is not under <root>/crates/<crate>/ for any workspace crate")]
+    Unattributed(PathBuf),
+    /// A sum of counts that does not fit in 64 bits.
+    #[error("the coverage counts of {0} do not fit in 64 bits")]
+    Overflow(String),
+}
+
+/// Sums the records per crate. Every crate in `crates` gets an entry, zero when no
+/// record names it; a record outside every crate is an error rather than dropped, and so is a
+/// record whose path holds a `..` component (`crates/a/../../outside.rs` is not in `a`).
+pub fn by_crate(
+    root: &Path,
+    crates: &BTreeSet<String>,
+    files: &[FileRecord],
+) -> Result<BTreeMap<String, CrateCoverage>, Error> {
+    let base = root.join("crates");
+    let mut out: BTreeMap<String, CrateCoverage> = crates
+        .iter()
+        .map(|c| (c.clone(), CrateCoverage::default()))
+        .collect();
+    for f in files {
+        let climbs = f.path.components().any(|c| c == Component::ParentDir);
+        let entry = f
+            .path
+            .strip_prefix(&base)
+            .ok()
+            .filter(|rest| !climbs && rest.components().count() > 1)
+            .and_then(|rest| rest.iter().next())
+            .and_then(|name| out.get_key_value(name.to_str()?));
+        let Some((name, total)) = entry else {
+            return Err(Error::Unattributed(f.path.clone()));
+        };
+        let sum = total
+            .plus(f.coverage)
+            .ok_or_else(|| Error::Overflow(name.clone()))?;
+        out.insert(name.clone(), sum);
+    }
+    Ok(out)
+}
+
+/// The sum over every crate, for the table's last row.
+pub fn total(measured: &BTreeMap<String, CrateCoverage>) -> Result<CrateCoverage, Error> {
+    measured
+        .values()
+        .try_fold(CrateCoverage::default(), |sum, c| sum.plus(*c))
+        .ok_or_else(|| Error::Overflow("the workspace".to_owned()))
+}
+
+/// Lines or branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Metric {
+    Lines,
+    Branches,
+}
+
+impl fmt::Display for Metric {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Metric::Lines => "lines",
+            Metric::Branches => "branches",
+        })
+    }
+}
+
+/// How one crate stands against the threshold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Status {
+    /// Every metric meets the threshold.
+    Ok,
+    /// These metrics are under the threshold: fails.
+    Below(Vec<Metric>),
+    /// No line of the crate was instrumented: fails.
+    NoData,
+}
+
+impl Status {
+    pub fn fails(&self) -> bool {
+        !matches!(self, Status::Ok)
+    }
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Status::Ok => f.write_str("ok"),
+            Status::Below(m) => {
+                let names: Vec<String> = m.iter().map(Metric::to_string).collect();
+                write!(f, "BELOW THRESHOLD ({})", names.join(", "))
+            }
+            Status::NoData => f.write_str("NOTHING MEASURED"),
+        }
+    }
+}
+
+/// One crate and what was measured of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    pub krate: String,
+    pub measured: CrateCoverage,
+}
+
+impl Row {
+    pub fn status(&self) -> Status {
+        let measured = self.measured;
+        if measured.lines.found() == 0 {
+            return Status::NoData;
+        }
+        let below: Vec<Metric> = [
+            (Metric::Lines, measured.lines),
+            (Metric::Branches, measured.branches),
+        ]
+        .into_iter()
+        .filter(|(_, counts)| !counts.meets(Percent::TARGET))
+        .map(|(metric, _)| metric)
+        .collect();
+        if below.is_empty() {
+            Status::Ok
+        } else {
+            Status::Below(below)
+        }
+    }
+}
+
+/// Every crate of the workspace, in name order.
+pub fn rows(measured: &BTreeMap<String, CrateCoverage>) -> Vec<Row> {
+    measured
+        .iter()
+        .map(|(k, m)| Row {
+            krate: k.clone(),
+            measured: *m,
+        })
+        .collect()
+}
+
+/// `hit/found` and the percentage for one metric; `-` for both where nothing was measured.
+fn cells(c: Counts) -> [String; 2] {
+    if c.found() == 0 {
+        return ["-".into(), "-".into()];
+    }
+    [format!("{}/{}", c.hit(), c.found()), show(c.percent())]
+}
+
+/// The report as a Markdown table (readable in a log, rendered in a job summary), with the
+/// workspace `total` and a closing verdict line.
+pub fn render(rows: &[Row], total: CrateCoverage) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "| crate | lines | line % | branches | branch % | status |\n\
+         |---|---:|---:|---:|---:|---|\n",
+    );
+    let mut line = |name: &str, m: CrateCoverage, status: String| {
+        let [l, lp] = cells(m.lines);
+        let [b, bp] = cells(m.branches);
+        // Writing to a String cannot fail.
+        let _ = writeln!(out, "| {name} | {l} | {lp} | {b} | {bp} | {status} |");
+    };
+    let mut failing = 0;
+    for r in rows {
+        let status = r.status();
+        failing += usize::from(status.fails());
+        line(&r.krate, r.measured, status.to_string());
+    }
+    line("**workspace**", total, String::new());
+    let _ = write!(
+        out,
+        "\n{}\n",
+        if failing == 0 {
+            format!(
+                "coverage gate: PASS (threshold {} of lines and branches)",
+                Percent::TARGET
+            )
+        } else {
+            format!("coverage gate: FAIL ({failing} crate(s) need attention; see status)")
+        }
+    );
+    out
+}
+
+#[cfg(test)]
+mod tests;
