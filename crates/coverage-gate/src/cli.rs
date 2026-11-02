@@ -135,14 +135,11 @@ mod tests {
         assert_eq!(source_root(absolute).expect("absolute"), absolute);
         let missing = Path::new("coverage-gate-no-such-root/crates");
         let e = source_root(missing).expect_err("missing");
-        let Error::Root { path, source } = &e else {
-            panic!("{e:?}");
-        };
-        assert_eq!(path, missing);
-        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        // ENOENT, as `canonicalize` reports a path that does not exist.
+        let enoent = std::io::Error::from_raw_os_error(2);
         assert_eq!(
             e.to_string(),
-            format!("--root coverage-gate-no-such-root/crates: {source}")
+            format!("--root coverage-gate-no-such-root/crates: {enoent}")
         );
     }
 }

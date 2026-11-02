@@ -15,8 +15,10 @@
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
 //!   one the table gives (the table is empty: no job of this repository writes yet);
-//! - the workflow runs on `pull_request` and a job of it is privileged or macOS, whatever its
-//!   `if:` says, so that nothing of the kind runs on a pull request, as a gate or not.
+//! - the workflow runs for a pull request (`pull_request`, its review events, or
+//!   `merge_group`) and a job of it is privileged or macOS, whatever its `if:` says, or what
+//!   sits beside `jobs` (`env`, `defaults`, ...) is, so that nothing of the kind runs on a pull
+//!   request, as a gate or not.
 //!   Privileged: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
 //!   cargo runner of `sudo` too), `--privileged` or `--cap-add` (a container's options), or the
 //!   job holds a `write` scope. macOS: a value of the job names `macos` or `darwin`, in any case
@@ -180,7 +182,19 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     for (line, value) in pinned {
         problems.extend(pin_problem(text, line, value));
     }
-    let on_pull_request = on.iter().any(|t| t == "pull_request");
+    let on_pull_request = on.iter().any(|t| runs_on_pull_requests(t));
+    if on_pull_request {
+        // What sits beside `jobs` (`env`, `defaults`, ...) applies to every job.
+        let mut values = Vec::new();
+        for (k, v) in entries(&doc)
+            .iter()
+            .filter(|(k, _)| k.as_str() != Some("jobs"))
+        {
+            scalars(k, &mut values);
+            scalars(v, &mut values);
+        }
+        problems.extend(word_problems("workflow", &values));
+    }
     let jobs = entry(&doc, "jobs").map_or(&[][..], entries);
     for (name, job) in jobs {
         let name = name.as_str().unwrap_or_default();
@@ -258,7 +272,18 @@ fn runner_labels<'a>(name: &str, job: &'a Node) -> Result<Vec<&'a str>, String> 
             format!("job {name}: `runs-on: {label}` is an expression other than `${{{{ matrix.<key> }}}}`")
         })?;
     let matrix = entry(job, "strategy").and_then(|s| entry(s, "matrix"));
-    let listed = matrix.and_then(|m| entry(m, key)).map_or(&[][..], items);
+    let listed = match matrix.and_then(|m| entry(m, key)) {
+        None => &[][..],
+        Some(Node {
+            value: Value::Seq(list),
+            ..
+        }) => list,
+        Some(_) => {
+            return Err(format!(
+                "job {name}: `strategy.matrix.{key}` is not a list of runner labels"
+            ));
+        }
+    };
     let included = matrix
         .and_then(|m| entry(m, "include"))
         .map_or(&[][..], items)
@@ -302,33 +327,46 @@ fn first_line<'a>(values: &[&'a str], found: impl Fn(&str) -> bool) -> Option<&'
         .find(|line| found(line))
 }
 
-/// What a job of a workflow that runs on `pull_request` may not be: privileged or macOS.
+/// Whether the trigger `name` runs the workflow for a pull request: `pull_request` and its
+/// review events, and the merge queue (`pull_request_target` is refused on its own).
+fn runs_on_pull_requests(name: &str) -> bool {
+    name.starts_with("pull_request") || name == "merge_group"
+}
+
+/// What a job of a workflow that runs on pull requests may not be: privileged or macOS.
 fn pull_request_problems(name: &str, job: &Node) -> Vec<String> {
     let mut values = Vec::new();
     scalars(job, &mut values);
-    let mut problems = Vec::new();
-    let privileged = first_line(&values, |line| {
-        has_word(line, "sudo") || line.contains("--privileged") || line.contains("--cap-add")
-    });
-    if let Some(line) = privileged {
-        problems.push(format!("job {name}: privileged on pull_request (`{line}`)"));
-    }
+    let who = format!("job {name}");
+    let mut problems = word_problems(&who, &values);
     let writes = entry(job, "permissions")
         .map_or(&[][..], entries)
         .iter()
         .find(|(_, level)| level.as_str() == Some("write"));
     if let Some((scope, _)) = writes {
         problems.push(format!(
-            "job {name}: privileged on pull_request (`{}: write`)",
+            "{who}: privileged on pull_request (`{}: write`)",
             scope.as_str().unwrap_or_default()
         ));
     }
-    let macos = first_line(&values, |line| {
+    problems
+}
+
+/// The privileged and macOS words among `values`, the values of `who` (a job or the workflow).
+fn word_problems(who: &str, values: &[&str]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let privileged = first_line(values, |line| {
+        has_word(line, "sudo") || line.contains("--privileged") || line.contains("--cap-add")
+    });
+    if let Some(line) = privileged {
+        problems.push(format!("{who}: privileged on pull_request (`{line}`)"));
+    }
+    let macos = first_line(values, |line| {
         let lower = line.to_ascii_lowercase();
         lower.contains("macos") || lower.contains("darwin")
     });
     if let Some(line) = macos {
-        problems.push(format!("job {name}: macOS on pull_request (`{line}`)"));
+        problems.push(format!("{who}: macOS on pull_request (`{line}`)"));
     }
     problems
 }

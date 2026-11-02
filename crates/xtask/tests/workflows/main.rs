@@ -456,3 +456,53 @@ fn a_document_the_lint_does_not_evaluate_is_refused() {
         "an alias to no anchor is refused"
     );
 }
+
+#[test]
+fn workflow_level_env_and_defaults_on_pull_request_are_held_to_the_same_rule() {
+    // Catches: a privileged runner or a darwin target set once for every job, beside `jobs`,
+    // escaping the per-job scan; and the same values passing where no pull request runs.
+    let at = "permissions: {}\n";
+    let cases: [(&str, &str); 3] = [
+        (
+            "env:\n  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: sudo\n",
+            "workflow: privileged on pull_request (`sudo`)",
+        ),
+        (
+            "env:\n  CARGO_BUILD_TARGET: aarch64-apple-darwin\n",
+            "workflow: macOS on pull_request (`aarch64-apple-darwin`)",
+        ),
+        (
+            "defaults:\n  run:\n    shell: sudo bash {0}\n",
+            "workflow: privileged on pull_request (`sudo bash {0}`)",
+        ),
+    ];
+    for (top, want) in cases {
+        assert_problems(&with(at, &format!("{at}{top}")), &[want]);
+        assert_problems(&with_in(&push_only(), at, &format!("{at}{top}")), &[]);
+    }
+}
+
+#[test]
+fn every_trigger_that_runs_for_a_pull_request_is_held_to_the_pull_request_rule() {
+    // Catches: a macOS job reaching a pull request through a review event or the merge queue.
+    let mac = with("    runs-on: ubuntu-latest\n", "    runs-on: macos-15\n");
+    for trigger in [
+        "pull_request_review",
+        "pull_request_review_comment",
+        "merge_group",
+    ] {
+        let text = with_in(&mac, "  pull_request:\n", &format!("  {trigger}:\n"));
+        assert_problems(&text, &["job test: macOS on pull_request (`macos-15`)"]);
+    }
+}
+
+#[test]
+fn a_matrix_runner_list_that_is_not_a_list_is_refused() {
+    // Catches: an expression standing for the runner list, next to a hosted `include`, leaving
+    // the expression's labels unchecked.
+    let runs_on = "    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: ${{ fromJSON(inputs.runners) }}\n        include:\n          - os: ubuntu-latest\n";
+    assert_problems(
+        &with("    runs-on: ubuntu-latest\n", runs_on),
+        &["job test: `strategy.matrix.os` is not a list of runner labels"],
+    );
+}
