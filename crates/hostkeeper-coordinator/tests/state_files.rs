@@ -307,8 +307,12 @@ async fn what_this_coordinator_writes_is_within_kbfs_readers(readers: &Readers) 
         check_ops(&rig, readers);
     }
     let ops = parse(&rig.dir.path().join("desired.json.ops"));
-    assert_eq!(ops["services"]["kbf"]["halt_generation"], 1);
     assert_eq!(ops["services"]["kbf"]["halt"], Value::Null);
+    // The clear's generation is kept in the halts file, as kbf keeps it, so the ops file
+    // stays one that kbf's strict reader takes.
+    assert_eq!(ops["services"]["kbf"]["halt_generation"], Value::Null);
+    let halts = parse(&rig.dir.path().join("desired.json.ops.halts"));
+    assert_eq!(halts["services"]["kbf"]["halt_generation"], 1);
     assert_eq!(ops["audit"].as_array().map(Vec::len), Some(6));
 }
 

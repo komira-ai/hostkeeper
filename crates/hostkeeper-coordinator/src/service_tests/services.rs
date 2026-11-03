@@ -470,12 +470,14 @@ async fn without_a_legacy_service_a_body_naming_no_service_is_refused() {
     let rig = without_legacy("svc-no-legacy-set");
     let c = &rig.coordinator;
     let set = c.set_desired(Some(&ci_token()), STATE.as_bytes()).await;
-    assert!(matches!(
-        set,
-        Err(SetError::Invalid(
-            crate::desired::DesiredError::NoLegacyService
-        ))
-    ));
+    assert!(
+        matches!(
+            &set,
+            Err(SetError::Invalid(crate::desired::DesiredError::Malformed(why)))
+                if why == "service is required"
+        ),
+        "{set:?}"
+    );
     let status = c.status(Some(OPERATOR)).expect("status");
     assert!(status.desired.is_none() && status.services.is_empty());
     c.set_desired(Some(&ci_token()), OTHER.as_bytes())
