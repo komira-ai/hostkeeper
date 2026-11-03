@@ -15,8 +15,14 @@ const USAGE: u8 = 64;
     reason = "the spawner test reads what environment reached the fixture; a program of the tests"
 )]
 fn environment() -> Vec<(OsString, OsString)> {
-    std::env::vars_os().collect()
+    std::env::vars_os()
+        .filter(|(name, _)| !name.as_bytes().starts_with(COVERAGE_RUNTIME))
+        .collect()
 }
+
+/// The prefix of the variables the coverage runtime of an instrumented build sets in this
+/// process itself when it starts (`__LLVM_PROFILE_RT_INIT_ONCE`): nothing the spawner passed.
+const COVERAGE_RUNTIME: &[u8] = b"__LLVM_PROFILE_RT_";
 
 fn joined(args: &[OsString]) -> Vec<u8> {
     let words: Vec<&[u8]> = args.iter().map(|arg| arg.as_bytes()).collect();

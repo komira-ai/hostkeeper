@@ -846,8 +846,10 @@ fn is_bare_host(name: &str, before: Option<u8>, after: Option<u8>) -> bool {
     if !is_tld(last) {
         return false;
     }
-    let file_like = FILE_SUFFIXES.contains(&last)
-        && (labels.len() == 2 || is_path_edge(before) || is_path_edge(after));
+    // A component of a path (a `/` next to it) is a file name, whatever its suffix; so is
+    // `stem.ext` when the suffix is also a file extension.
+    let in_path = is_path_edge(before) || is_path_edge(after);
+    let file_like = in_path || (FILE_SUFFIXES.contains(&last) && labels.len() == 2);
     !file_like
 }
 
