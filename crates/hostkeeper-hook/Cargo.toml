@@ -1,0 +1,46 @@
+[package]
+name = "hostkeeper-hook"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The contract between a host updater and the update hook a service ships, and the conformance harness that proves a hook keeps it."
+
+# The contract between a host updater and the update hook a service ships (docs/design/host-updates.md,
+# sections 3.2 and 9): the five steps and their arguments, the exit codes, the JSON last line, the
+# `--params` table, what the updater runs next after each outcome, and, behind the feature
+# `conformance`, the harness a service uses in its own tests to prove its hook keeps the contract.
+# The crate depends on no other crate of this workspace, so a service can depend on the contract
+# alone (crates/xtask/tests/layering keeps it so).
+
+[dependencies]
+# `kill(-pgid)` for the step the harness stops at a kill point.
+rustix = { workspace = true, features = ["process"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The `--params` file is TOML, like the declaration table it is written from.
+toml.workspace = true
+
+[features]
+# The conformance harness (`hostkeeper_hook::conformance`): a service turns it on in its
+# dev-dependencies to test its hook.
+conformance = ["dep:rustix"]
+
+# The example hook the harness is proven against (tests/conformance.rs), with its defects. A
+# program of the tests, not shipped; it speaks the harness's kill points, so it needs the
+# feature, which the tests of this crate turn on.
+[[bin]]
+name = "hostkeeper-hook-example"
+path = "tests/bin/example_hook.rs"
+required-features = ["conformance"]
+
+[dev-dependencies]
+# Its own tests turn on `conformance`.
+hostkeeper-hook = { path = ".", features = ["conformance"] }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true

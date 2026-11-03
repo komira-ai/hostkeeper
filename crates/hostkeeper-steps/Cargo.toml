@@ -1,0 +1,30 @@
+[package]
+name = "hostkeeper-steps"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The step runner of the host updater: the step record and its resume, the dead-man, the staged-artifact check and the updater's own update."
+
+# The step runner of the generic host updater (docs/design/host-updates.md, sections 3.2 to 3.5):
+# the persisted step record and its resume, the dead-man that enforces the bounds on a thread of
+# its own, the exit codes read as outcomes through `hostkeeper-hook`, the check of the staged
+# artifact before any run, and the updater's own update with its fallback. It runs a step through
+# a `StepLauncher` it is given and knows no service and no declaration. Synchronous, threads and
+# blocking files. It depends on `hostkeeper-hook` alone (crates/xtask/tests/layering keeps it so).
+[dependencies]
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The effective uid (the owner checks) and the monotonic clock; `fs` for the tests' special files.
+rustix = { workspace = true, features = ["fs", "process", "time"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true
