@@ -15,7 +15,8 @@
 // Refusals: a gRPC status whose message is exactly one token of `RootRefusal`, written as the
 // value's name without the `ROOT_REFUSAL_` prefix, in lower case (for example `pinned`);
 // the status code is the one each value names. Nothing else is ever in the message. A refused
-// order runs no hook.
+// order runs no hook, with one exception: `outcome_unrecorded` says a hook ran and its outcome
+// could not be written, and its answer is a resend of the same try, never a new one.
 //
 // Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
 // A digest is SHA-256 as 64 lower-case hex characters. A version is the release's version
@@ -43,14 +44,20 @@ service Root {
   // cancelled, or whose connection closed, before the lock was taken runs nothing. Once the lock
   // is taken, the order runs to its end under the step runner's rules even if the call goes away.
   //
-  // Each try of an order carries `order_try`, the agent's number for it: a resend of one try keeps
-  // the number, and a new try (after a deferral's wait, after an approval, a forced order after a
-  // failure) raises it. A request whose service, order, version, release digest, `forced` and
-  // `order_try` equal the step record's current or last order is a resend: of a running order it
-  // resumes it under the crash-resume rules, of an ended one it returns the recorded outcome;
-  // neither repeats a committed step. A request with a higher `order_try` is a new try, run anew
-  // once the last one ended. One with a lower `order_try` than the record's is refused
-  // (`stale_try`), so a delayed resend never starts after a newer try.
+  // Each try carries `order_try`, the agent's number for it. The numbers are per service, across
+  // every order and target of it: each new try of any order of the service (a first order, a new
+  // target, a retry after a deferral's wait or an approval, a forced order after a failure) takes
+  // a number higher than every number the service's step record holds, and a resend of one try
+  // keeps its number. The root part judges a request against the service's step record:
+  // - the same `order_try` as the record's current or last order, with the same order, version,
+  //   release digest and `forced`, is a resend: of a running order it resumes it under the
+  //   crash-resume rules, of an ended one it returns the recorded outcome; neither repeats a
+  //   committed step;
+  // - the same `order_try` with any of those different is refused (`try_conflict`): one number
+  //   never names two orders;
+  // - a higher `order_try` is a new try, run once the last one ended;
+  // - a lower `order_try` is refused (`stale_try`), whatever its order or target, so a delayed
+  //   request for an earlier target never runs after a later one.
   //
   // An order whose release asks for rights the approved declaration does not grant, or a first
   // install no declaration was approved for, runs no hook and ends DEFERRED with the reason
@@ -91,7 +98,7 @@ enum RootRefusal {
   ROOT_REFUSAL_PINNED = 7;
   // ABORTED: another order holds the step lock.
   ROOT_REFUSAL_BUSY = 8;
-  // FAILED_PRECONDITION: `order_try` is lower than the step record's for the same order.
+  // FAILED_PRECONDITION: `order_try` is lower than the newest the service's step record holds.
   ROOT_REFUSAL_STALE_TRY = 9;
   // UNAVAILABLE: the step record could not be read or written before any hook ran; nothing ran,
   // and a resend is safe.
@@ -99,6 +106,9 @@ enum RootRefusal {
   // INTERNAL: a hook ran and its outcome could not be written; a resend of the same try finishes
   // the order and records it.
   ROOT_REFUSAL_OUTCOME_UNRECORDED = 11;
+  // FAILED_PRECONDITION: `order_try` is the step record's newest, and the request's order,
+  // version, release digest or `forced` differs from the order it names.
+  ROOT_REFUSAL_TRY_CONFLICT = 12;
 }
 
 // What the agent asks the root part to do to a service. Closed: see the header.
@@ -127,7 +137,8 @@ message RunStepRequest {
   // unapproved right still ends DEFERRED with `rights_change` or `first_install`), and a pin
   // still holds the service.
   bool forced = 6;
-  // The agent's number for this try of the order, from 1 (see `RunStep`).
+  // The agent's number for this try, from 1, rising per service across every order and target of
+  // it (see `RunStep`).
   uint64 order_try = 7;
 }
 
@@ -138,7 +149,8 @@ enum StepOutcome {
   STEP_OUTCOME_SUCCEEDED = 1;
   // The order did not end with the release running confirmed healthy. Where the service is now
   // is in its state: an ordinary order is reverted to the release it ran before (or never left
-  // it), and a forced one stays on its release, unhealthy.
+  // it); a forced one is not rolled back, and stays where it got to: on the release it ran before
+  // when it failed before the switch, on its new release when it failed after.
   STEP_OUTCOME_FAILED = 2;
   // The order did not run, for a reason about its moment or a right not yet approved, not about
   // the release.

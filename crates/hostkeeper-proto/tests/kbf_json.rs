@@ -63,6 +63,17 @@ const REPLY: &[(&str, &str)] = &[
     ("forced", "order.forced"),
 ];
 
+/// Keys whose values kbf writes as enum spellings: their field must be an enum, so a field made a
+/// string, which would take any spelling, is refused (`services[]` entries folded onto the facts).
+const ENUM_KEYS: [&str; 6] = [
+    "platform",
+    "health",
+    "last_update.outcome",
+    "last_update.phase",
+    "last_update.class",
+    "commit",
+];
+
 /// Keys whose values are maps of names to numbers: their keys are data, not fields.
 const MAPS: [&str; 2] = ["step_secs", "halts"];
 
@@ -211,6 +222,14 @@ fn uncarried(
             if !allowed.contains(&text) {
                 out.push(format!("{key}={value}"));
             }
+            continue;
+        }
+        let enum_key = ENUM_KEYS.contains(&key.replace("services[].", "").as_str());
+        if enum_key && !matches!(field.kind(), Kind::Enum(_)) {
+            out.push(format!(
+                "{key}: {value} is not an enum, but {}",
+                shape(&field)
+            ));
             continue;
         }
         if !value_fits(&field, value) {
@@ -390,6 +409,37 @@ message T {
 
 fn same(key: &str) -> Option<String> {
     Some(key.to_owned())
+}
+
+/// Catches: a field kbf writes as an enum spelling made a string, which would take any spelling
+/// and so pass the spelling check; in the legacy service's facts and in a service entry.
+#[test]
+fn an_enum_fact_carried_by_a_string_is_refused() {
+    let text = r#"syntax = "proto3";
+package x.v1;
+enum Platform { PLATFORM_UNSPECIFIED = 0; PLATFORM_LINUX_X86_64 = 1; }
+message ServiceBeat { string name = 1; string version = 2; string health = 3; }
+message HeartbeatRequest { Platform platform = 1; repeated ServiceBeat services = 4; }
+"#;
+    let mut compiler = protox::Compiler::with_file_resolver(One(text));
+    compiler.open_file("x.proto").expect("the fixture compiles");
+    let beat = compiler
+        .descriptor_pool()
+        .get_message_by_name("x.v1.HeartbeatRequest")
+        .expect("the message");
+    let json: Value = serde_json::from_str(
+        r#"{"platform": "linux-x86_64", "version": "1.0", "health": "healthy",
+            "services": [{"name": "db", "version": "1.0", "health": "sleepy"}]}"#,
+    )
+    .expect("parses");
+    let mut met = BTreeSet::new();
+    assert_eq!(
+        uncarried(&json, &beat, heartbeat_field, &mut met),
+        [
+            r#"health: "healthy" is not an enum, but string"#,
+            r#"services[].health: "sleepy" is not an enum, but string"#,
+        ]
+    );
 }
 
 /// Catches: a value check that holds only key names: a scalar type, a narrower number, a list or

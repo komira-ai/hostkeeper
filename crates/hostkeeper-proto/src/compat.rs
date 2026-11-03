@@ -160,7 +160,7 @@ pub enum Break {
 pub enum Attribute {
     /// `implicit` or `explicit`, for a singular field.
     Presence,
-    /// The oneof's name, or `none`.
+    /// The oneof's name; empty when the field is in no oneof, a name no oneof can have.
     Oneof,
     /// The proto2 default value; empty when there is none.
     Default,
@@ -333,15 +333,15 @@ fn presence(field: &FieldDescriptorProto, message: Message<'_>) -> &'static str 
     if explicit { "explicit" } else { "implicit" }
 }
 
-/// The name of the oneof a field belongs to, or `none`. A proto3 `optional` field's synthetic
-/// oneof is not a oneof here: its presence says it.
-fn oneof(field: &FieldDescriptorProto, message: Message<'_>) -> String {
-    let declared = field
+/// The name of the oneof a field belongs to, if it belongs to one. A proto3 `optional` field's
+/// synthetic oneof is not a oneof here: its presence says it.
+fn oneof<'a>(field: &FieldDescriptorProto, message: Message<'a>) -> Option<&'a str> {
+    field
         .oneof_index
         .filter(|_| !field.proto3_optional())
         .and_then(|i| usize::try_from(i).ok())
-        .and_then(|i| message.proto.oneof_decl.get(i));
-    declared.map_or_else(|| "none".to_owned(), |o| o.name().to_owned())
+        .and_then(|i| message.proto.oneof_decl.get(i))
+        .map(|o| o.name())
 }
 
 fn fields(message: &str, before: Message<'_>, after: Message<'_>, out: &mut Vec<Break>) {
@@ -408,7 +408,9 @@ fn fields(message: &str, before: Message<'_>, after: Message<'_>, out: &mut Vec<
         }
         let (was, is) = (oneof(old, before), oneof(now, after));
         if was != is {
-            out.push(changed(message, old, Attribute::Oneof, &was, &is));
+            // No oneof is the empty name, which no oneof can have.
+            let (was, is) = (was.unwrap_or_default(), is.unwrap_or_default());
+            out.push(changed(message, old, Attribute::Oneof, was, is));
         }
         if old.default_value() != now.default_value() {
             let (was, is) = (old.default_value(), now.default_value());

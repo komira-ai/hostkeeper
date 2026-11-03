@@ -251,7 +251,24 @@ fn compat_refuses_a_field_moved_into_a_oneof() {
                 "implicit",
                 "explicit"
             ),
-            attribute(GET_RESPONSE, "value", Attribute::Oneof, "none", "pick"),
+            attribute(GET_RESPONSE, "value", Attribute::Oneof, "", "pick"),
+        ]
+    );
+}
+
+/// Catches: a check that tells "in no oneof" from a oneof by a name a oneof may have: two
+/// message fields, explicitly present already, moved into a oneof named `none`.
+#[test]
+fn compat_refuses_fields_moved_into_a_oneof_named_none() {
+    let old = "syntax = \"proto3\";\npackage z.v1;\n\
+               message M { Inner a = 1; Inner b = 2; }\nmessage Inner {}\n";
+    let new = "syntax = \"proto3\";\npackage z.v1;\n\
+               message M { oneof none { Inner a = 1; Inner b = 2; } }\nmessage Inner {}\n";
+    assert_eq!(
+        diff(old, new),
+        [
+            attribute(".z.v1.M", "a", Attribute::Oneof, "", "none"),
+            attribute(".z.v1.M", "b", Attribute::Oneof, "", "none"),
         ]
     );
 }

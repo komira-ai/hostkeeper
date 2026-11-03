@@ -10,7 +10,7 @@ use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
 
 use hostkeeper_proto::hostkeeper::agent::v1::{
-    Health, HeartbeatRequest, Outcome, PinReport, Platform, ServiceBeat, UpdateResult,
+    FailurePhase, Health, HeartbeatRequest, Outcome, PinReport, Platform, ServiceBeat, UpdateResult,
 };
 use hostkeeper_proto::hostkeeper::local::v1::{
     ActivateResponse, Pin, RecordProblem, ServiceRecord, StatusResponse, StepOutcome, StepRecord,
@@ -179,6 +179,40 @@ fn a_forced_update_that_failed_on_its_target_is_reported() {
     assert!(read.forced);
 }
 
+/// Catches: outcomes that can only say a forced update failed on its target: one that failed
+/// before the switch leaves the service on the release before, reported as such.
+#[test]
+fn a_forced_update_that_failed_before_its_switch_is_reported() {
+    let before_switch = UpdateResult {
+        phase: FailurePhase::BeforeCommit.into(),
+        ..failed(Some(1_800_000_000), Some(4))
+    };
+    let beat = ServiceBeat {
+        name: "db".to_owned(),
+        version: "1.4".to_owned(),
+        health: Health::Healthy.into(),
+        last_update: Some(before_switch),
+        ..ServiceBeat::default()
+    };
+    let read = ServiceBeat::decode(beat.encode_to_vec().as_slice()).expect("decodes");
+    let result = read.last_update.as_ref().expect("a result");
+    assert_eq!(result.outcome(), Outcome::Failed);
+    assert_eq!(result.phase(), FailurePhase::BeforeCommit);
+    assert_ne!(read.version, result.target);
+
+    let record = StepRecord {
+        version: "1.5".to_owned(),
+        forced: true,
+        outcome: StepOutcome::Failed.into(),
+        phase: FailurePhase::BeforeCommit.into(),
+        order_try: 4,
+        ..StepRecord::default()
+    };
+    let read = StepRecord::decode(record.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(read.phase(), FailurePhase::BeforeCommit);
+    assert!(read.forced && !read.committed);
+}
+
 /// Catches: a status that cannot say a step record is unreadable, and an activation that cannot
 /// say where the pin it kept now holds the service.
 #[test]
@@ -286,6 +320,7 @@ fn the_refusal_vocabularies_are_closed() {
                 "stale_try",
                 "journal_unavailable",
                 "outcome_unrecorded",
+                "try_conflict",
             ],
         ),
         (

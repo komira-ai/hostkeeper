@@ -128,7 +128,8 @@ enum Outcome {
   OUTCOME_SUCCEEDED = 1;
   // The update did not end with the target running confirmed healthy. Where the service is now
   // is in its `version`: an ordinary update is reverted to the version it ran before (or never
-  // left it), and a forced one stays on its target, unhealthy.
+  // left it); a forced one is not rolled back, and stays where it got to: on the version it ran
+  // before when it failed before the switch, on its target when it failed after.
   OUTCOME_FAILED = 2;
 }
 
