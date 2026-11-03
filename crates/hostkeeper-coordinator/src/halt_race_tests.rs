@@ -299,7 +299,7 @@ fn an_acknowledgement_another_writer_ended_first_is_not_ended_again() {
     rig.coordinator
         .heartbeat(storage("s1"), beat("1.0"))
         .expect("a heartbeat");
-    assert_eq!(kbf(&rig).halt_acked, []);
+    assert_eq!(kbf(&rig).halt_acked, Vec::<HaltAck>::new());
     let ended = rig.coordinator.ops().read(|state| {
         state
             .audit

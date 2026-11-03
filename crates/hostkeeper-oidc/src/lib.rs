@@ -351,12 +351,12 @@ fn audience_is(claims: &Map<String, Value>, want: &str) -> Result<bool, Refusal>
     }
 }
 
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_edges;
 #[cfg(test)]
 mod tests_entries;
-
-#[cfg(any(test, feature = "testkit"))]
-pub mod testkit;

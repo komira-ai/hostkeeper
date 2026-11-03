@@ -10,6 +10,7 @@
 mod support;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use hostkeeper_coordinator::desired::DesiredStore;
@@ -132,10 +133,10 @@ fn check_ops(rig: &Rig, readers: &Readers) {
             .collect();
         keys.sort_unstable();
         assert_eq!(keys, ["ops", "services"], "the halts file's keys");
-        let digest: String = Sha256::digest(std::fs::read(&ops).expect("ops file"))
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let mut digest = String::new();
+        for b in Sha256::digest(std::fs::read(&ops).expect("ops file")).iter() {
+            write!(digest, "{b:02x}").expect("a string takes text");
+        }
         assert_eq!(
             halts["ops"],
             digest.as_str(),

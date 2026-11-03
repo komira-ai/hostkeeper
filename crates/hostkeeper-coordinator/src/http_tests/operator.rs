@@ -447,7 +447,7 @@ async fn labels_do_not_change_what_a_host_is_told_without_a_selector() {
 /// one is refused with 401 before any byte of the body is taken, so a body over the limit does
 /// not turn the answer into a 400, and a body that never ends does not hold the connection
 /// for the patience and then answer 400. `operate` refuses such a caller too.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_caller_without_the_token_is_refused_before_the_body_is_read() {
     let rig = Rig::new("op-token-before-read");
     let oversized = format!("{EXCLUDE}{}", " ".repeat(MAX_OPERATOR_BYTES));

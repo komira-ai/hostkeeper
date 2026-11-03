@@ -677,6 +677,8 @@ impl TryFrom<RawReply> for Reply {
 mod platform_text {
     use serde::{Deserialize, Deserializer, Serializer};
 
+    use crate::names::Platform;
+
     pub fn serialize<S: Serializer>(platform: &Platform, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(platform.as_str())
     }

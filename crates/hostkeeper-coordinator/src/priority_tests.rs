@@ -10,7 +10,7 @@ use hostkeeper_wire::wire::{ServiceBeat, ServiceReply};
 
 use crate::identity::Identity;
 use crate::services::Services;
-use crate::testutil::{Rig, beat, id, kbf_def, role};
+use crate::testutil::{Rig, beat, id, kbf_def, role, with_kbf};
 
 const BODY: &str = r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#;
 
@@ -150,7 +150,7 @@ fn parse(text: &str) -> Result<Services, String> {
 #[test]
 fn priority_is_parsed_and_defaults_to_zero() {
     let text = service("a", "priority = 7") + &service("b", "priority = -3") + &service("c", "");
-    let services = parse(&text).expect("parsed");
+    let services = with_kbf(&text);
     let priority = |name: &str| services.get(name).expect("defined").priority;
     assert_eq!((priority("a"), priority("b"), priority("c")), (7, -3, 0));
     assert_eq!(priority("kbf"), 0);

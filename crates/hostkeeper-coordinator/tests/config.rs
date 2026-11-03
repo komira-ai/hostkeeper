@@ -185,7 +185,7 @@ fn the_flags_are_parsed_and_refused_as_the_usage_says() {
         ExitCode::from(2)
     );
     let mut args = files.args();
-    args.extend(["--tls-reload-secs".into(), "0".into()]);
+    args.extend([OsString::from("--tls-reload-secs"), OsString::from("0")]);
     assert_eq!(exit_code(args), ExitCode::from(2));
 }
 

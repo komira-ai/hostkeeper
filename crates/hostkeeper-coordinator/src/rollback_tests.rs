@@ -373,8 +373,7 @@ fn nothing_is_planned_in_the_quiet_start() {
 fn a_bad_version_is_not_ordered_even_if_desired_names_it() {
     let services = Services::parse(&definition("")).expect("services");
     let all = BTreeMap::from([(LEGACY.to_owned(), desired("2.0", 0, 0))]);
-    let fleet = Fleet::new(Duration::ZERO);
-    let mut fleet = fleet;
+    let mut fleet = Fleet::new(Duration::ZERO);
     fleet.record_in(LEGACY, id("d1"), role("daemon"), beat("1.0"), secs(2_000));
     let go = Decision::Update {
         version: version("2.0"),

@@ -391,7 +391,8 @@ fn a_services_file_defines_at_most_the_most_services() {
     let file = |n: usize| {
         (0..n)
             .map(|i| format!("[[service]]\nname = \"svc-{i}\"\n[service.roles.daemon]\n"))
-            .collect::<String>()
+            .collect::<Vec<_>>()
+            .concat()
     };
     Services::parse(&file(MAX_SERVICES)).expect("at the cap");
     assert!(refusal(&file(MAX_SERVICES + 1)).contains("more than 16 services"));

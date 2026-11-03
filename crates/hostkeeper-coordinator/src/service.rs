@@ -375,7 +375,7 @@ impl Coordinator {
         let mut extras = self.extras.lock().unwrap_or_else(PoisonError::into_inner);
         let mut due = false;
         for fact in facts {
-            *extras.counts.entry(fact).or_default() += 1;
+            *extras.counts.entry(*fact).or_default() += 1;
             let last = extras.logged.get(&(node.clone(), *fact)).copied();
             if last.is_none_or(|at| now.saturating_sub(at) >= EXTRAS_LOG_EVERY) {
                 extras.logged.insert((node.clone(), *fact), now);

@@ -13,7 +13,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use serde_json::{Value, json};
 
 use super::testkit::{
-    FakeIssuer, STATIC_ISSUER, good_claims, jwks_of, keys, mint, mint_raw, static_verifier,
+    FakeIssuer, STATIC_ISSUER, good_claims, jwks_of, keys, mint, static_verifier,
 };
 use super::{Dial, HttpsKeys, KeySource, KeySourceError, OidcConfig, Refusal, Roots, Stream};
 
@@ -121,22 +121,22 @@ async fn claims_that_are_absent_or_mistyped_are_refused() {
         ("aud", Box::new(drop("aud")), Refusal::MissingClaim("aud")),
         (
             "aud type",
-            Box::new(|c| c["aud"] = json!(7)),
+            Box::new(|c: &mut Value| c["aud"] = json!(7)),
             Refusal::MissingClaim("aud"),
         ),
         (
             "jti",
-            Box::new(|c| c["jti"] = json!("")),
+            Box::new(|c: &mut Value| c["jti"] = json!("")),
             Refusal::MissingClaim("jti"),
         ),
         (
             "jti long",
-            Box::new(|c| c["jti"] = json!("j".repeat(257))),
+            Box::new(|c: &mut Value| c["jti"] = json!("j".repeat(257))),
             Refusal::MissingClaim("jti"),
         ),
         (
             "nbf type",
-            Box::new(|c| c["nbf"] = json!("soon")),
+            Box::new(|c: &mut Value| c["nbf"] = json!("soon")),
             Refusal::MissingClaim("nbf"),
         ),
         ("iss", Box::new(drop("iss")), Refusal::MissingClaim("iss")),
@@ -347,7 +347,6 @@ async fn a_signature_that_is_not_base64url_is_malformed() {
         verifier.verify(&token).await,
         Err(Refusal::Malformed(_))
     ));
-    let _ = mint_raw;
 }
 
 fn verifier_for(text: &str) -> Arc<super::Verifier> {
@@ -479,7 +478,7 @@ fn steered(
         fail: false.into(),
         hold: false.into(),
         release: tokio::sync::Notify::new(),
-        fetches: 0.into(),
+        fetches: 0_usize.into(),
     });
     let (clock, now) = super::testkit::clock();
     let config = OidcConfig::parse(&super::testkit::config_text(STATIC_ISSUER)).expect("a config");

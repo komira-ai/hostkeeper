@@ -511,8 +511,9 @@ fn scan_role_dir(root: &Path, dir: &Path, scanned: &mut usize, found: &mut Vec<S
                 if skipping {
                     // A `#[cfg(test)]` item at column 0 ends at the first column-0 line that is
                     // `}` or ends in `;`.
-                    skipping = !(line == "}"
-                        || (!line.starts_with(char::is_whitespace) && line.ends_with(';')));
+                    let top_level = !line.starts_with(char::is_whitespace);
+                    let ends = line == "}" || (top_level && line.ends_with(';'));
+                    skipping = !ends;
                     continue;
                 }
                 if line == "#[cfg(test)]" {

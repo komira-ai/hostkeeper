@@ -134,7 +134,7 @@ async fn serve(
     let Ok(mut tls) = acceptor.accept(stream).await else {
         return;
     };
-    let mut head = Vec::new();
+    let mut head: Vec<u8> = Vec::new();
     let mut buf = [0u8; 1024];
     while !head.windows(4).any(|w| w == b"\r\n\r\n") {
         match tls.read(&mut buf).await {

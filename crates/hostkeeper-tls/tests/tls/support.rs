@@ -59,7 +59,7 @@ pub fn leaf(ca: &Ca, name: &str, usage: ExtendedKeyUsagePurpose, expired: bool) 
         params.not_after = rcgen::date_time_ymd(2026, 9, 3);
     }
     let key = KeyPair::generate().expect("leaf key");
-    let cert = params.signed_by(&key, &*ca.issuer).expect("sign leaf");
+    let cert = params.signed_by(&key, &ca.issuer).expect("sign leaf");
     Leaf {
         cert: cert.pem(),
         key: key.serialize_pem(),

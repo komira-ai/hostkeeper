@@ -102,7 +102,7 @@ fn a_bad_halts_map_is_refused() {
         r#"{"reply":"nothing","halts":{"kbf":1.5}}"#,
         r#"{"reply":"nothing","halts":{"kbf":"1"}}"#,
         r#"{"reply":"nothing","halts":["kbf"]}"#,
-        &too_many,
+        too_many.as_str(),
     ] {
         assert!(answer(text).is_err(), "{text}");
     }

@@ -195,7 +195,7 @@ impl Ca {
         params.subject_alt_names = names;
         params.extended_key_usages = vec![usage];
         let key = KeyPair::generate().expect("a key");
-        let cert = params.signed_by(&key, &*self.issuer).expect("signed");
+        let cert = params.signed_by(&key, &self.issuer).expect("signed");
         Leaf {
             der: cert.der().to_vec(),
             key_der: key.serialize_der(),
