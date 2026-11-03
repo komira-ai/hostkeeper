@@ -12,10 +12,11 @@ use serde_json::{Value, json};
 use support::rig::{Rig, Spec};
 use support::{BEAT, OPERATOR};
 
-/// How many object keys named `agent` a JSON text holds at any depth. Reading the text, not a
-/// parsed value, it sees a key said twice in one object (which a parsed value collapses) and
-/// refuses it.
-struct AgentKeys(usize);
+/// How many keys named `agent` whose value is an object (an agent, not the count of a dropped
+/// fact) a JSON text holds at any depth, and whether the text itself is an object. Reading the
+/// text, not a parsed value, it sees a key said twice in one object (which a parsed value
+/// collapses) and refuses it.
+struct AgentKeys(usize, bool);
 
 impl<'de> Deserialize<'de> for AgentKeys {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -26,50 +27,50 @@ impl<'de> Deserialize<'de> for AgentKeys {
                 f.write_str("any JSON without a repeated key")
             }
             fn visit_bool<E>(self, _: bool) -> Result<AgentKeys, E> {
-                Ok(AgentKeys(0))
+                Ok(AgentKeys(0, false))
             }
             fn visit_i64<E>(self, _: i64) -> Result<AgentKeys, E> {
-                Ok(AgentKeys(0))
+                Ok(AgentKeys(0, false))
             }
             fn visit_u64<E>(self, _: u64) -> Result<AgentKeys, E> {
-                Ok(AgentKeys(0))
+                Ok(AgentKeys(0, false))
             }
             fn visit_f64<E>(self, _: f64) -> Result<AgentKeys, E> {
-                Ok(AgentKeys(0))
+                Ok(AgentKeys(0, false))
             }
             fn visit_str<E>(self, _: &str) -> Result<AgentKeys, E> {
-                Ok(AgentKeys(0))
+                Ok(AgentKeys(0, false))
             }
             fn visit_unit<E>(self) -> Result<AgentKeys, E> {
-                Ok(AgentKeys(0))
+                Ok(AgentKeys(0, false))
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<AgentKeys, A::Error> {
                 let mut total = 0;
-                while let Some(AgentKeys(n)) = seq.next_element()? {
+                while let Some(AgentKeys(n, _)) = seq.next_element()? {
                     total += n;
                 }
-                Ok(AgentKeys(total))
+                Ok(AgentKeys(total, false))
             }
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<AgentKeys, A::Error> {
                 let mut seen = BTreeSet::new();
                 let mut total = 0;
                 while let Some(key) = map.next_key::<String>()? {
-                    let AgentKeys(n) = map.next_value()?;
-                    total += n + usize::from(key == "agent");
+                    let AgentKeys(n, object) = map.next_value()?;
+                    total += n + usize::from(key == "agent" && object);
                     if !seen.insert(key.clone()) {
                         return Err(serde::de::Error::custom(format!("repeated key {key}")));
                     }
                 }
-                Ok(AgentKeys(total))
+                Ok(AgentKeys(total, true))
             }
         }
         deserializer.deserialize_any(Walk)
     }
 }
 
-/// The number of `agent` keys in `text`, which has no repeated key.
+/// The number of `agent` keys holding an object in `text`, which has no repeated key.
 fn agent_keys(text: &str) -> usize {
-    let AgentKeys(n) = serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}: {text}"));
+    let AgentKeys(n, _) = serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}: {text}"));
     n
 }
 
@@ -190,7 +191,9 @@ async fn one_host_agent_follows_its_beats_named_then_omitted_then_malformed() {
 #[test]
 fn agent_key_counter_sees_nested_keys_and_refuses_a_repeated_key() {
     assert_eq!(
-        agent_keys(r#"{"agent":{"a":[1,-2,1.5,true,null,"x"]},"b":[{"agent":1}]}"#),
+        agent_keys(
+            r#"{"agent":{"a":[1,-2,1.5,true,null,"x"]},"b":[{"agent":{}}],"c":{"agent":1}}"#
+        ),
         2
     );
     let repeated = serde_json::from_str::<AgentKeys>(r#"{"x":[{"agent":1,"agent":2}]}"#);

@@ -30,6 +30,7 @@ yaml.org
 # a word the IANA list delegates as a top-level domain (`new`, `download`, `group`, `name`).
 # They are names, not hosts; each is an exact entry (`=`).
 =current.new
+=desired.json.new
 =approved.new
 =tool.download
 =hook.group
