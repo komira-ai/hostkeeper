@@ -47,17 +47,15 @@ pub(crate) fn run_step(
         .args(&hook.hook_args)
         .args(inv.to_args())
         .env_clear()
-        .envs(
-            PASS_THROUGH.iter().filter_map(|name| {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "the coverage profile file is set by the coverage run, not configuration \
-                              (AGENTS.md S2); it is passed through to the hook unread"
-                )]
-                let value = std::env::var_os(name);
-                value.map(|value| (OsString::from(*name), value))
-            }),
-        )
+        .envs(PASS_THROUGH.iter().filter_map(|name| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the coverage profile file is set by the coverage run, not \
+                              configuration (AGENTS.md S2); it is passed to the hook unread"
+            )]
+            let value = std::env::var_os(name);
+            value.map(|value| (OsString::from(*name), value))
+        }))
         .envs(env)
         .env(GATE_DIR_VAR, sandbox.control())
         .env(KILL_AT_VAR, kill_at.to_string())

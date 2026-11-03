@@ -2,8 +2,8 @@
 
 mod support;
 
-use support::Scratch;
 use hostkeeper_rights::{Accounts, EtcAccounts, UserIds};
+use support::Scratch;
 
 const PASSWD: &str = "\
 root:x:0:0:root:/root:/bin/sh

@@ -4,9 +4,9 @@ mod support;
 
 use std::process::ExitCode;
 
-use support::{Scratch, my_uid};
 use hostkeeper_rights::cli::{Env, main, run};
 use hostkeeper_rights::{Approvals, Digest};
+use support::{Scratch, my_uid};
 
 fn strings(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_owned()).collect()

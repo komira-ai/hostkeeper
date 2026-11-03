@@ -1,0 +1,32 @@
+{
+  "schema": 2,
+  "service": "web",
+  "target_version": "3.0.0",
+  "artifact_digest": "abababababababababababababababababababababababababababababababab",
+  "tarball_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "previous_digest": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "generation": 4,
+  "params": "/var/lib/updater/state/web/params.toml",
+  "step": "cutover",
+  "attempt": 1,
+  "state": {
+    "state": "quiescing",
+    "since": {
+      "boot_id": "boot-one",
+      "mono_secs": 1
+    }
+  },
+  "hook": "new",
+  "progress": {
+    "committed": false,
+    "promotion_pending": false,
+    "then": null,
+    "retry": 0,
+    "verify_started": null,
+    "watching": null,
+    "reason": null
+  },
+  "fleet_hint": {
+    "lane": "canary"
+  }
+}

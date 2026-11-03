@@ -10,13 +10,13 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
+use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_steps::record::State;
 use hostkeeper_steps::{
     ArtifactError, DeadMan, Finished, LaunchError, Loaded, RunError, StepCall, StepExit,
     StepLauncher, StepRunner,
 };
 use support::Rig;
-use hostkeeper_hook::{Step, Verdict};
 
 fn halted() -> Finished {
     Finished {

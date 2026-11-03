@@ -5,8 +5,8 @@ mod support;
 use std::fs;
 use std::os::unix::fs::symlink;
 
-use support::{Scratch, my_uid};
 use hostkeeper_rights::trust::{TrustError, check_dir, read_trusted};
+use support::{Scratch, my_uid};
 
 /// Catches a file the trusted account owns and nobody else can write not being read.
 #[test]

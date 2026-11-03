@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde::{Deserialize, Serialize};
 use hostkeeper_hook::{Step, Verdict};
+use serde::{Deserialize, Serialize};
 
 use crate::clock::Stamp;
 

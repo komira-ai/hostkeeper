@@ -4,11 +4,11 @@ mod support;
 
 use std::collections::BTreeSet;
 
-use support::{sample, with};
 use hostkeeper_rights::names::Capability;
 use hostkeeper_rights::{
     Approvals, Declaration, Deferral, Digest, FIRST_INSTALL, Gate, RIGHTS_CHANGE, gate,
 };
+use support::{sample, with};
 
 fn digest(seed: &str) -> Digest {
     Digest::of(seed.as_bytes())

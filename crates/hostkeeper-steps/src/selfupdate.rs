@@ -1,8 +1,9 @@
 //! The updater's own update (docs/design/host-updates.md, 3.5, "Updating the updater itself").
 //!
-//! The updater is updated like any service, but never inside the trial it guards. After the update of the release has finished
-//! and `verify` has succeeded, a follow-on step ([`follow_on`]) stages the new updater binary
-//! beside the old, points `current` at it and tells the caller to reply and exit cleanly; the
+//! The updater is updated like any service, but never inside the trial it guards. After the
+//! update of the release has finished and `verify` has succeeded, a follow-on step
+//! ([`follow_on`]) stages the new updater binary beside the old, points `current` at it and tells
+//! the caller to reply and exit cleanly; the
 //! unit's `Restart=always` starts the new binary. If the new binary cannot start, systemd gives
 //! up after `StartLimitBurst` starts, the unit fails, and its `OnFailure=` unit runs the
 //! *previous* binary's `self-update-fallback` verb, which calls [`Layout::flip_back`]: `current`

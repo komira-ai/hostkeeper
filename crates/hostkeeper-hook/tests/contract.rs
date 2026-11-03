@@ -447,12 +447,18 @@ fn the_reserved_key_carries_the_promotion_ceiling() {
 /// updater left it out (a first install has no previous release or version).
 #[test]
 fn the_updater_tells_the_hook_which_releases_and_versions() {
-    assert_eq!(hostkeeper_hook::STAGED_RELEASE_KEY, "updater.staged_release");
+    assert_eq!(
+        hostkeeper_hook::STAGED_RELEASE_KEY,
+        "updater.staged_release"
+    );
     assert_eq!(
         hostkeeper_hook::PREVIOUS_RELEASE_KEY,
         "updater.previous_release"
     );
-    assert_eq!(hostkeeper_hook::TARGET_VERSION_KEY, "updater.target_version");
+    assert_eq!(
+        hostkeeper_hook::TARGET_VERSION_KEY,
+        "updater.target_version"
+    );
     assert_eq!(
         hostkeeper_hook::PREVIOUS_VERSION_KEY,
         "updater.previous_version"
@@ -567,7 +573,10 @@ fn the_release_paths_must_be_absolute() {
 /// on it, so a different shape would be a different identity for the same artifact.
 #[test]
 fn the_artifact_digest_is_sha256_and_64_lowercase_hex() {
-    assert_eq!(hostkeeper_hook::ARTIFACT_DIGEST_KEY, "updater.artifact_digest");
+    assert_eq!(
+        hostkeeper_hook::ARTIFACT_DIGEST_KEY,
+        "updater.artifact_digest"
+    );
     let good = format!("sha256:{}", "0123456789abcdef".repeat(4));
     let params = Params::parse(&format!("\"updater.artifact_digest\" = \"{good}\"\n")).unwrap();
     assert_eq!(params.artifact_digest().unwrap(), Some(good.as_str()));
@@ -584,7 +593,10 @@ fn the_artifact_digest_is_sha256_and_64_lowercase_hex() {
             "{bad}"
         );
         let mut params = Params::default();
-        params.insert(hostkeeper_hook::ARTIFACT_DIGEST_KEY, Scalar::Text(bad.clone()));
+        params.insert(
+            hostkeeper_hook::ARTIFACT_DIGEST_KEY,
+            Scalar::Text(bad.clone()),
+        );
         assert!(
             matches!(params.artifact_digest(), Err(ParamsError::BadDigest(_))),
             "{bad}"

@@ -9,12 +9,12 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_steps::selfupdate::{
     FollowOn, Layout, START_LIMIT_BURST, fallback_unit, follow_on, main_dropin,
 };
 use hostkeeper_steps::{ArtifactError, Finished, Staged};
 use support::Scratch;
-use hostkeeper_hook::{Class, Phase, Verdict};
 
 fn binary(dir: &Path, name: &str, text: &str) -> PathBuf {
     let path = dir.join(name);

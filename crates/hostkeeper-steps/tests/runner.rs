@@ -6,11 +6,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use hostkeeper_hook::{Class, Params, Phase, Step, Verdict};
 use hostkeeper_steps::record::{RECORD_FILE, State};
 use hostkeeper_steps::runner::{DEFAULT_RETRY_SECS, ROLLBACK_ATTEMPTS, WATCH_POLL_SECS};
 use hostkeeper_steps::{Finished, Loaded, RunError, Staged};
 use support::{DEFER, ENV_FAIL, FAIL, HALT, IRREVERSIBLE_OK, OK, PENDING, Reply, Rig};
-use hostkeeper_hook::{Class, Params, Phase, Step, Verdict};
 
 const ROLLBACK_STUCK: Reply = Reply::Exit(1, Some(r#"{"reversible":false}"#));
 

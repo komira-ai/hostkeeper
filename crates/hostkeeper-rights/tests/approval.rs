@@ -5,8 +5,8 @@ mod support;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, symlink};
 
-use support::{Scratch, my_uid};
 use hostkeeper_rights::{ApprovalError, Approvals, Approved, Digest, approve};
+use support::{Scratch, my_uid};
 
 fn digest(seed: &str) -> Digest {
     Digest::of(seed.as_bytes())

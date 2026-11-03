@@ -5,9 +5,9 @@ mod support;
 
 use std::collections::BTreeSet;
 
-use support::with;
 use hostkeeper_rights::names::{Capability, Family};
 use hostkeeper_rights::{Declaration, widening};
+use support::with;
 
 fn cap(name: &str) -> Capability {
     Capability::try_from(name.to_owned()).unwrap()

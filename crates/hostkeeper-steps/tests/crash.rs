@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use hostkeeper_hook::Step;
 use hostkeeper_steps::{CrashPoint, Finished};
 use support::{DEFER, FAIL, IRREVERSIBLE_OK, OK, PENDING, Rig};
-use hostkeeper_hook::Step;
 
 #[derive(Clone, Copy, Debug)]
 enum Kind {

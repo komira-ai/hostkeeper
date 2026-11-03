@@ -1,0 +1,22 @@
+# Public sites the tree may name, one domain per line. A domain allows its subdomains. The
+# example domains (example.com, example.net, example.org, *.example, *.test, *.invalid,
+# *.localhost) and localhost need no entry. A `#` starts a comment.
+
+# Where the code and its dependencies live.
+github.com
+crates.io
+
+# Licence texts.
+apache.org
+developercertificate.org
+
+# The YAML tag prefix the workflow lint's tests quote.
+yaml.org
+
+# File names that end in a top-level domain, not hosts.
+lcov.info
+empty.info
+absent.info
+
+# A container image name in the workflow lint's tests, not a host.
+alpine

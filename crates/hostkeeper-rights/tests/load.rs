@@ -7,13 +7,13 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use support::{Scratch, accounts, my_gid, my_uid};
 use hostkeeper_hook::Step;
 use hostkeeper_rights::reserved::Violation;
 use hostkeeper_rights::{
     Digest, EtcAccounts, Finished, Launch, Loaded, Policy, Refusal, Spawner, SystemdRun, UserIds,
     check_state_dir, load_dir, run_step,
 };
+use support::{Scratch, accounts, my_gid, my_uid};
 
 /// One declaration, small enough to vary: the account names, the claims that can collide, the
 /// paths.
@@ -972,7 +972,9 @@ fn a_loaded_declaration_whose_hook_has_uid_zero_is_held_to_the_root_rules_howeve
     assert!(root.root_hook());
     assert!(matches!(
         run_step(&Silent, &root),
-        Err(hostkeeper_rights::RunError::Recheck(Refusal::Ancestor { .. }))
+        Err(hostkeeper_rights::RunError::Recheck(
+            Refusal::Ancestor { .. }
+        ))
     ));
 }
 
@@ -1067,7 +1069,9 @@ fn a_root_hook_in_another_services_directory_is_refused_at_the_recheck_and_the_l
     let launch = Launch::of(&both, Step::Verify, 1, release, None);
     assert!(matches!(
         run_step(&Silent, &launch),
-        Err(hostkeeper_rights::RunError::Recheck(Refusal::Conflict { .. }))
+        Err(hostkeeper_rights::RunError::Recheck(
+            Refusal::Conflict { .. }
+        ))
     ));
 
     let alone = support::declared(declaration.clone(), 0, &["tierstore"]);

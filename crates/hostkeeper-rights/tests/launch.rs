@@ -9,13 +9,13 @@ use std::io;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
-use support::{Scratch, sample, with};
 use hostkeeper_hook::{Class, Outcome, Step};
 use hostkeeper_rights::launch::FIXED_PROPERTIES;
 use hostkeeper_rights::{
     Declaration, Declared, Finished, Launch, LaunchError, Refusal, RunError, Spawner, Systemd,
     SystemdRun, command, properties, run_step, unit_name,
 };
+use support::{Scratch, sample, with};
 
 const RELEASE: &str = "/var/lib/updater/releases/tierstore/abc";
 const PARAMS: &str = "/run/updater/params.toml";

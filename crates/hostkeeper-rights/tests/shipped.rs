@@ -75,7 +75,7 @@ fn every_shipped_declaration_parses() {
 #[test]
 fn a_shipped_declaration_with_a_key_in_the_wrong_table_is_refused() {
     let text = fs::read_to_string(
-        root().join("crates/update-rights/tests/fixtures/updater.d/tierstore.toml"),
+        root().join("crates/hostkeeper-rights/tests/fixtures/updater.d/tierstore.toml"),
     )
     .unwrap();
     assert!(Declaration::parse(&text).is_ok());

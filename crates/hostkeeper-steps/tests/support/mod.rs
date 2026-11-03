@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use hostkeeper_hook::{Params, Step};
 use hostkeeper_steps::record::CrashGate;
 use hostkeeper_steps::{
     Bounds, Clock, LaunchError, RecordStore, Staged, StepCall, StepExit, StepLauncher, StepRunner,
     UpdateOrder,
 };
-use hostkeeper_hook::{Params, Step};
 
 /// A directory under the target directory, unique to the test, removed when it is dropped.
 pub struct Scratch(hostkeeper_testkit::Scratch);
@@ -293,7 +293,10 @@ impl Rig {
 
     pub fn order(&self) -> UpdateOrder {
         let mut declared = Params::default();
-        declared.insert("promotion_bound_secs", hostkeeper_hook::Scalar::Integer(900));
+        declared.insert(
+            "promotion_bound_secs",
+            hostkeeper_hook::Scalar::Integer(900),
+        );
         UpdateOrder {
             service: "svc".to_owned(),
             target_version: "2.0.0".to_owned(),

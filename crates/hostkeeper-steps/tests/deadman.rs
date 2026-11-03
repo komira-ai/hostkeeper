@@ -5,9 +5,9 @@ mod support;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
+use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::{Clock, DeadMan, LaunchError, StepCall, StepExit, StepLauncher, Watch};
 use support::{Fake, FakeClock, Reply, Rig};
-use hostkeeper_hook::{Class, Phase, Step, Verdict};
 
 fn deadman(fake: &Arc<Fake>, clock: &Arc<FakeClock>) -> (Arc<Watch>, DeadMan) {
     let watch = Watch::new();

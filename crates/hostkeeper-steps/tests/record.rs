@@ -6,10 +6,10 @@ use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{HookSel, PARAMS_FILE, Progress, RECORD_FILE, SCHEMA, State};
 use hostkeeper_steps::{CrashPoint, Loaded, Record, RecordError, RecordStore, Stamp};
 use support::{FakeClock, Scratch};
-use hostkeeper_hook::{Class, Phase, Step, Verdict};
 
 fn record() -> Record {
     let clock = FakeClock::new();

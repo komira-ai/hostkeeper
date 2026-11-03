@@ -4,12 +4,12 @@ mod support;
 
 use std::collections::BTreeSet;
 
-use support::{SAMPLE, refusal, sample, with, with_in};
 use hostkeeper_hook::Step;
 use hostkeeper_rights::declaration::{MAX_CEILING_SECS, MAX_SECS};
 use hostkeeper_rights::names::{Capability, Family, PathError, UnitError};
 use hostkeeper_rights::reserved::Violation;
 use hostkeeper_rights::{Declaration, Refusal};
+use support::{SAMPLE, refusal, sample, with, with_in};
 
 fn caps(names: &[&str]) -> BTreeSet<Capability> {
     names
