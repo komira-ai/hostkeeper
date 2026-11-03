@@ -87,8 +87,9 @@ pub struct OidcConfig {
     /// The most `exp - iat` may be.
     pub max_lifetime_secs: u64,
     /// The services a token of this entry may set the desired version of; `None` when the
-    /// entry names none, which the caller (the coordinator, `hostkeeper-coordinator`) reads as
-    /// its legacy service.
+    /// entry has no `services` key, which the caller (the coordinator,
+    /// `hostkeeper-coordinator`) reads as its legacy service. `Some([])` (`services = []`)
+    /// names no service: a token of the entry may set none.
     pub services: Option<Vec<String>>,
 }
 
@@ -187,16 +188,10 @@ impl OidcConfig {
                 "max_token_lifetime_secs is 1 to {MAX_LIFETIME_CEILING_SECS}"
             )));
         }
-        let services = match raw.services {
-            None => None,
-            Some(list) => {
-                let list = clean_list(list, "services")?;
-                if list.is_empty() {
-                    return Err(ConfigError::Invalid("services must not be empty".into()));
-                }
-                Some(list)
-            }
-        };
+        let services = raw
+            .services
+            .map(|list| clean_list(list, "services"))
+            .transpose()?;
         Ok(Self {
             issuer,
             audience,

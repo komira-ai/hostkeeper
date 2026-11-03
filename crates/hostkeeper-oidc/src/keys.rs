@@ -13,12 +13,13 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use super::Refusal;
+use super::https::FetchError;
 use super::jwt::jwk_integer;
 
 /// Where the keys come from. The production source is [`super::https::HttpsKeys`].
 pub trait KeySource: Send + Sync {
     /// The issuer's JWKS document (JSON text).
-    fn jwks(&self) -> BoxFuture<'_, Result<String, String>>;
+    fn jwks(&self) -> BoxFuture<'_, Result<String, FetchError>>;
 }
 
 #[derive(Deserialize)]
@@ -44,10 +45,28 @@ pub(crate) struct RsaKey {
     pub e: Vec<u8>,
 }
 
+/// Why a JWKS document is refused.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum JwksError {
+    #[error("not a JWKS: {0}")]
+    NotJson(#[from] serde_json::Error),
+    #[error("the JWKS holds no RS256 signing key")]
+    NoSigningKey,
+}
+
+/// Why a refresh of the key set failed: the fetch or the document.
+#[derive(Debug, thiserror::Error)]
+enum RefreshError {
+    #[error(transparent)]
+    Fetch(#[from] FetchError),
+    #[error(transparent)]
+    Jwks(#[from] JwksError),
+}
+
 /// The usable keys of a JWKS document, by `kid`. A key that is not an RSA signature key
 /// for RS256, or has no `kid`, is skipped; a document with none is an error.
-pub(crate) fn parse_jwks(text: &str) -> Result<BTreeMap<String, RsaKey>, String> {
-    let doc: Jwks = serde_json::from_str(text).map_err(|e| format!("not a JWKS: {e}"))?;
+pub(crate) fn parse_jwks(text: &str) -> Result<BTreeMap<String, RsaKey>, JwksError> {
+    let doc: Jwks = serde_json::from_str(text)?;
     let mut out = BTreeMap::new();
     for key in doc.keys {
         let usable = key.kty == "RSA"
@@ -65,7 +84,7 @@ pub(crate) fn parse_jwks(text: &str) -> Result<BTreeMap<String, RsaKey>, String>
         out.insert(kid, RsaKey { n, e });
     }
     if out.is_empty() {
-        return Err("the JWKS holds no RS256 signing key".to_owned());
+        return Err(JwksError::NoSigningKey);
     }
     Ok(out)
 }
@@ -131,6 +150,12 @@ impl KeyCache {
             .flatten()
     }
 
+    /// One fetch of the source and the keys it gives.
+    async fn refresh(&self) -> Result<BTreeMap<String, RsaKey>, RefreshError> {
+        let text = self.source.jwks().await?;
+        Ok(parse_jwks(&text)?)
+    }
+
     /// The key `kid` names, fetching if it is unknown or the set is old and the interval allows.
     pub(crate) async fn key(&self, kid: &str, now: u64) -> Result<RsaKey, Refusal> {
         if let Some(key) = self.fresh(kid, now) {
@@ -159,7 +184,7 @@ impl KeyCache {
             due
         };
         if due {
-            match self.source.jwks().await.and_then(|t| parse_jwks(&t)) {
+            match self.refresh().await {
                 Ok(keys) => {
                     let mut held = self.held();
                     held.keys = keys;

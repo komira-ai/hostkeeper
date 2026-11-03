@@ -13,8 +13,9 @@ It is planned as:
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
-**hostkeeper is pre-release.** There is no program to run and no release yet. The parts listed
-above are being moved here from [kbf](https://github.com/komira-ai/kbf), where they are developed
+**hostkeeper is pre-release.** There is no release yet, and the updater is not here yet: the
+only program is the update coordinator, `hostkeeper-coordinator serve`, built from source. The
+parts listed above are being moved here from [kbf](https://github.com/komira-ai/kbf), where they are developed
 today. So far this repository holds the generic half of the host updater and its coordinator, moved from kbf
 ([MIGRATION.md](MIGRATION.md)), and the build, lint and coverage tooling:
 

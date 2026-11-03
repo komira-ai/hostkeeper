@@ -23,7 +23,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{Map, Value};
 
 pub use config::{AllowList, ConfigError, LEEWAY_SECS, OidcConfig};
-pub use https::{AsyncReadWrite, Dial, HttpsKeys, KeySourceError, Roots, Stream};
+pub use https::{
+    AsyncReadWrite, BodyError, Dial, DiscoveryError, FetchCause, FetchError, HttpsKeys,
+    KeySourceError, Roots, Stream,
+};
 pub use keys::{KeyCache, KeySource};
 
 /// The most `jti`s remembered. A full cache refuses new tokens rather than forget one.
@@ -142,8 +145,9 @@ pub struct Verified {
     pub sha: Option<String>,
     /// Which entry of the allow-list admitted the token (its place in the file, from 0).
     pub entry: usize,
-    /// The services that entry lets the token set; `None` when the entry names none, which
-    /// the caller (the coordinator, `hostkeeper-coordinator`) reads as its legacy service.
+    /// The services that entry lets the token set; `None` when the entry has no `services`
+    /// key, which the caller (the coordinator, `hostkeeper-coordinator`) reads as its legacy
+    /// service; `Some([])` when it names none, so the token may set none.
     pub services: Option<Vec<String>>,
 }
 
@@ -219,8 +223,10 @@ impl Verifier {
     /// The first [`Refusal`] in the rule set's order.
     pub async fn verify(&self, token: &str) -> Result<Verified, Refusal> {
         let parsed = jwt::parse(token)?;
+        let key = self.keys.key(&parsed.kid, (self.clock)()).await?;
+        // Read after the keys are in hand: a fetch can take long, and the times are judged,
+        // and the `jti` spent, at the moment of the decision.
         let now = (self.clock)();
-        let key = self.keys.key(&parsed.kid, now).await?;
         if !jwt::signature_holds(&key.n, &key.e, parsed.signing_input, &parsed.signature) {
             return Err(Refusal::BadSignature);
         }

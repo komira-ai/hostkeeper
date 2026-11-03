@@ -360,7 +360,7 @@ pub const STATIC_ISSUER: &str = "https://token.example";
 pub struct StaticKeys(pub String);
 
 impl super::KeySource for StaticKeys {
-    fn jwks(&self) -> futures::future::BoxFuture<'_, Result<String, String>> {
+    fn jwks(&self) -> futures::future::BoxFuture<'_, Result<String, super::FetchError>> {
         Box::pin(async move { Ok(self.0.clone()) })
     }
 }

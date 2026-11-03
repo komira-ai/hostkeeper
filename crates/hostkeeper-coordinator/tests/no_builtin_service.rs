@@ -119,3 +119,25 @@ async fn no_service_name_is_built_in() {
         .collect();
     assert_eq!(names, ["tierstore"]);
 }
+
+/// Proves: an allow-list entry that says `services = []` grants CI nothing: with tierstore
+/// defined, CI's desired state for it is refused 403 (a defined service the entry does not
+/// name), one for kbf is refused 400 (not defined), and nothing is stored.
+#[tokio::test]
+async fn an_entry_with_no_services_grants_ci_nothing() {
+    let spec = Spec::recorded()
+        .with_services(&recorded("tierstore.services.toml"))
+        .without_legacy()
+        .with_oidc_services(&[]);
+    assert!(spec.allow_list().contains("services = []"));
+    let rig = Rig::new("no-builtin-empty-entry", spec);
+    rig.at(1_100);
+    let body = |name: &str| {
+        format!(r#"{{"service":"{name}","version":"2.0","min_up":{{"storage":1,"frontend":1}}}}"#)
+    };
+    let (code, answer) = rig.desired(&body("tierstore")).await;
+    assert_eq!((code, answer.as_str()), (403, r#"{"error":"forbidden"}"#));
+    let (code, answer) = rig.desired(&body("kbf")).await;
+    assert_eq!((code, answer.as_str()), (400, r#"{"error":"bad_request"}"#));
+    assert!(!rig.dir.path().join("desired.json").exists());
+}

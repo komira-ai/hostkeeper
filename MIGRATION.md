@@ -187,6 +187,25 @@ flag, and the desired-state file format stays kbf's.
 - **No `unsafe`.** The effective user id is read with `rustix` instead of `libc::geteuid`.
 - **`StartError`.** The coordinator's start-up errors are a `thiserror` enum, not a boxed error.
   The text of each error is kbf's.
+- **Behaviour fixed on the way in.** Each of these differs from kbf at the tag, and each has a
+  test:
+  - an OIDC allow-list entry may say `services = []`: it names no service and its tokens may set
+    none (kbf refused the empty list), so a coordinator with no services can start;
+  - a service whose roles wait on each other through `after` (a role after itself, or a cycle)
+    is refused when the services file is read (kbf accepted it, and the hosts of such roles would
+    wait on each other for ever);
+  - the OIDC verifier reads the clock again after it fetched the issuer's keys, so a token that
+    expired during the fetch is refused;
+  - CI's set of a desired state holds the fleet's lock that a heartbeat plans and writes an
+    automatic rollback under, so a rollback planned from an older state cannot overwrite the
+    version CI set meanwhile;
+  - a desired-state write whose directory sync fails after the rename is reported as an error
+    and the coordinator serves the state now on disk, which a restart reads too (kbf kept the
+    old state in memory);
+  - a connection whose peer stops reading its responses is closed after the same patience as a
+    stalled request, so it gives its slot back;
+  - typed errors replace text in the issuer-key fetch (`FetchError`) and in `Selector::new`
+    (`SelectorError`); their texts are kbf's.
 
 ## Left behind
 

@@ -397,3 +397,52 @@ fn a_services_file_defines_at_most_the_most_services() {
     Services::parse(&file(MAX_SERVICES)).expect("at the cap");
     assert!(refusal(&file(MAX_SERVICES + 1)).contains("more than 16 services"));
 }
+
+/// Catches: roles that wait on each other being accepted, so that their hosts would wait for
+/// ever: a role after itself, two roles after each other and a three-role cycle (with a role
+/// outside it, which is not named) are each refused naming the service and the roles of the
+/// cycle; a chain of open role names, a role after two roles that share a root, and roles with
+/// no `after` load.
+#[test]
+fn roles_that_wait_on_each_other_are_refused_and_a_chain_loads() {
+    let file = |roles: &[(&str, &[&str])]| {
+        let mut text = "[[service]]\nname = \"pipeline\"\n".to_owned();
+        for (name, after) in roles {
+            let quoted: Vec<String> = after.iter().map(|a| format!("\"{a}\"")).collect();
+            text.push_str(&format!(
+                "[service.roles.{name}]\nafter = [{}]\n",
+                quoted.join(", ")
+            ));
+        }
+        text
+    };
+    let cycle = "pipeline: roles {} wait on each other through after, which is a cycle";
+    assert_eq!(
+        refusal(&file(&[("cook", &["cook"])])),
+        format!("services: {}", cycle.replace("{}", "cook"))
+    );
+    assert_eq!(
+        refusal(&file(&[("cook", &["cache"]), ("cache", &["cook"])])),
+        format!("services: {}", cycle.replace("{}", "cache, cook"))
+    );
+    assert_eq!(
+        refusal(&file(&[
+            ("ingest", &["serve"]),
+            ("serve", &["index"]),
+            ("index", &["ingest"]),
+            ("edge", &["ingest"]),
+            ("base", &[]),
+        ])),
+        format!("services: {}", cycle.replace("{}", "index, ingest, serve"))
+    );
+    let chain = Services::parse(&file(&[
+        ("base", &[]),
+        ("cache", &["base"]),
+        ("cook", &["base", "cache"]),
+        ("edge", &["cook"]),
+    ]))
+    .expect("a chain");
+    let def = chain.get("pipeline").expect("the service");
+    assert_eq!(def.roles["edge"].after, ["cook"]);
+    assert_eq!(def.roles["cook"].after, ["base", "cache"]);
+}

@@ -1,9 +1,10 @@
 //! The secret of the operator API: the bearer token, read from a file that passes the server's
 //! own file rule.
 //!
-//! It is read on every call (so a rotated token needs no restart), held only in the request
-//! buffer, and never in an error text, a `Debug` or a log. An error names the flag of the
-//! file, not its path: it reaches `GET /rolls/{id}`.
+//! `read_token` reads the file and checks it each time it is called; when to call it is the
+//! caller's choice (the coordinator reads the operator token once, at start, so a rotated
+//! token needs a restart). The token never appears in an error text or a `Debug`. An error
+//! names the flag of the file, never its path or its content.
 
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -47,8 +48,9 @@ pub enum SecretError {
 /// Read the token in the file at `path`: a regular file (not followed if it is a symlink,
 /// not opened if it is a FIFO) owned by this process's user with mode exactly `0600` or
 /// `0400`, one token of visible ASCII, 32 bytes or more, surrounding whitespace dropped. The
-/// error text names the flag and the rule, never the path or the content (it reaches
-/// `GET /rolls/{id}`).
+/// file is opened and checked on every call; nothing is cached, so a caller that wants a
+/// rotated token calls again. The error text names the flag and the rule, never the path or
+/// the content.
 ///
 /// # Errors
 /// [`SecretError`]: the file cannot be read, breaks the file rule, or holds no such token.
@@ -67,7 +69,8 @@ pub fn read_token(path: &Path) -> Result<String, SecretError> {
 }
 
 /// The bytes of a secret file that passes the file rule, at most `limit` of them (and one
-/// more, so that a longer file is seen to be too long). The error text names `flag`.
+/// more, so that a longer file is seen to be too long). A `limit` of `u64::MAX` means no limit
+/// beyond what the file holds. The error text names `flag`.
 ///
 /// # Errors
 /// [`SecretError::Io`]: the file cannot be opened or read; [`SecretError::Rule`]: it breaks
@@ -85,7 +88,9 @@ pub fn read_secret(path: &Path, flag: &str, limit: u64) -> Result<Vec<u8>, Secre
         }
     })?;
     let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes).map_err(io)?;
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
     Ok(bytes)
 }
 

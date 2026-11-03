@@ -10,9 +10,11 @@ description = "The update coordinator: tells each host's updater which version t
 
 # The update coordinator (docs/design/host-updates.md): a deployable of its own that tells each
 # host's updater which version to run, within per-role limits. Updaters dial it over mutual
-# TLS; CI sets the one desired state with a GitHub Actions OIDC token (hostkeeper-oidc); an
-# operator reads the status with the operator token. The decision is a pure function (`decide`)
-# over the heartbeats the coordinator has seen; the only state on disk is the desired state.
+# TLS; CI sets the desired state of a service with a GitHub Actions OIDC token
+# (hostkeeper-oidc); an operator reads the status with the operator token. The decision is a
+# pure function (`decide`) over the heartbeats the coordinator has seen. On disk it keeps three
+# files: the desired state of each service, the operations file (operator actions, version
+# marks, the audit ring) and the halts file beside it (halt reports, clear generations).
 # The services it manages are data: the file named by `--services-file`.
 [[bin]]
 name = "hostkeeper-coordinator"

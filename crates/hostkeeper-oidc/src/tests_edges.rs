@@ -237,7 +237,8 @@ fn only_rs256_signing_keys_of_a_jwks_are_kept() {
 ///
 /// Catches: a plain-http issuer fetched, a discovery document taken for the issuer's when it
 /// names another or has no `jwks_uri` or is not JSON, a connection that never answers waiting
-/// for ever, a refused connection or a bad status read as an empty answer.
+/// for ever, a refused connection, a failed handshake or a bad status read as an empty answer,
+/// an error that drops the URL or its cause from the operator's text.
 #[tokio::test(start_paused = true)]
 async fn every_way_of_failing_to_fetch_the_keys_is_an_error() {
     let issuer = FakeIssuer::start(jwks_of(&[&keys()[0]])).await;
@@ -250,41 +251,87 @@ async fn every_way_of_failing_to_fetch_the_keys_is_an_error() {
         async { Err::<Stream, _>(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)) }
             .boxed()
     });
+    // The server end is dropped at once: the first write of the handshake finds a broken pipe.
+    let dead: Dial = Arc::new(|_host: String, _port: u16| {
+        async {
+            let (client, _server) = tokio::io::duplex(1024);
+            Ok::<Stream, std::io::Error>(Box::new(client))
+        }
+        .boxed()
+    });
     let good = source(&issuer.url, Duration::from_secs(5), issuer.dial());
     assert!(good.jwks().await.is_ok());
     assert!(format!("{good:?}").contains("HttpsKeys"));
 
+    let discovery = "/.well-known/openid-configuration";
     let failures = [
         (
-            "not https",
             source("http://issuer.test", Duration::from_secs(5), issuer.dial()),
+            format!("http://issuer.test{discovery}: not https"),
         ),
         (
-            "refused",
             source("https://issuer.test", Duration::from_secs(5), refused),
+            format!("https://issuer.test{discovery}: connection refused"),
         ),
         (
-            "no host",
-            source("https://", Duration::from_secs(5), issuer.dial()),
+            source("https://issuer.test", Duration::from_secs(5), dead),
+            format!("https://issuer.test{discovery}: broken pipe"),
+        ),
+        (
+            source("https://[::1]", Duration::from_secs(5), issuer.dial()),
+            format!("https://[::1]{discovery}: invalid dns name"),
         ),
     ];
-    for (what, bad) in failures {
-        let why = bad.jwks().await.expect_err(what);
-        assert!(!why.is_empty(), "{what}: {why}");
+    for (bad, want) in failures {
+        let why = bad.jwks().await.expect_err(&want);
+        assert_eq!(why.to_string(), want);
     }
-    for (what, document) in [
-        ("not json", "nonsense".to_owned()),
-        ("another issuer", json!({"issuer": "https://other.example", "jwks_uri": format!("{}/.well-known/jwks", issuer.url)}).to_string()),
-        ("no jwks_uri", json!({"issuer": issuer.url}).to_string()),
+    let empty = source("https://", Duration::from_secs(5), issuer.dial());
+    let why = empty.jwks().await.expect_err("no host").to_string();
+    assert!(why.starts_with("https://"), "{why}");
+    let own = |path: &str| format!("{}{path}", issuer.url);
+    for (document, want) in [
+        (
+            "nonsense".to_owned(),
+            format!(
+                "{}: {}",
+                own("/.well-known/openid-configuration"),
+                serde_json::from_slice::<Value>(b"nonsense").expect_err("not json")
+            ),
+        ),
+        (
+            json!({"issuer": "https://other.example", "jwks_uri": own("/.well-known/jwks")})
+                .to_string(),
+            format!(
+                "{}: its issuer is not {}",
+                own("/.well-known/openid-configuration"),
+                issuer.url
+            ),
+        ),
+        (
+            json!({"issuer": issuer.url}).to_string(),
+            format!("{}: no jwks_uri", own("/.well-known/openid-configuration")),
+        ),
+        (
+            json!({"issuer": issuer.url, "jwks_uri": "https://elsewhere.example/jwks"}).to_string(),
+            format!(
+                "{}: jwks_uri is not on the issuer's origin",
+                own("/.well-known/openid-configuration")
+            ),
+        ),
     ] {
         issuer.set_discovery(&document);
-        assert!(good.jwks().await.is_err(), "{what}");
+        let why = good.jwks().await.expect_err("a refused document");
+        assert_eq!(why.to_string(), want);
     }
     let hung = FakeIssuer::start(jwks_of(&[&keys()[0]])).await;
     hung.set_hang();
     let slow = hung.source(Duration::from_millis(200));
     let why = slow.jwks().await.expect_err("it never answers");
-    assert!(why.contains("timed out"), "{why}");
+    assert_eq!(
+        why.to_string(),
+        format!("{}{discovery}: timed out", hung.url)
+    );
     let down = FakeIssuer::start(jwks_of(&[&keys()[0]])).await;
     down.set_fail(true);
     let why = down
@@ -292,45 +339,38 @@ async fn every_way_of_failing_to_fetch_the_keys_is_an_error() {
         .jwks()
         .await
         .expect_err("503");
-    assert!(why.contains("503"), "{why}");
-}
-
-/// The production dial is TCP: a source made by `HttpsKeys::new` alone reports a connection
-/// that cannot be made (port 0 is never listening) as an error naming the URL.
-///
-/// Catches: a failed dial read as an empty answer, or the error dropped.
-#[tokio::test]
-async fn the_production_dial_reports_a_connection_it_cannot_make() {
-    let issuer = FakeIssuer::start(jwks_of(&[&keys()[0]])).await;
-    let tcp = HttpsKeys::new(
-        "https://127.0.0.1:0",
-        issuer.roots.clone(),
-        Duration::from_secs(5),
-    )
-    .expect("a source");
-    let why = tcp.jwks().await.expect_err("nothing listens on port 0");
-    assert!(why.contains("https://127.0.0.1:0"), "{why}");
-}
-
-/// A source with no roots to trust is refused; the system's roots are read (whether the host
-/// has any is the host's business).
-#[test]
-fn a_source_needs_roots_to_trust() {
-    let none = HttpsKeys::new(
-        "https://i.example",
-        Roots::Given(Vec::new()),
-        Duration::from_secs(1),
+    assert_eq!(
+        why.to_string(),
+        format!("{}{discovery}: status 503 Service Unavailable", down.url)
     );
-    assert!(matches!(none, Err(KeySourceError::NoRoots)));
+}
+
+/// A source with roots to trust is made, and one with none is refused with the operator's text.
+/// Both cases use `Roots::Given`: the host's own store is never read by a test.
+///
+/// Catches: a source made with an empty trust store (every issuer then fails at the handshake),
+/// roots that are not certificates counted as usable.
+#[tokio::test]
+async fn a_source_needs_roots_to_trust() {
+    let issuer = FakeIssuer::start(jwks_of(&[&keys()[0]])).await;
+    let usable = HttpsKeys::new(&issuer.url, issuer.roots.clone(), Duration::from_secs(1));
+    assert!(usable.is_ok());
+    for (what, roots) in [
+        ("no roots", Roots::Given(Vec::new())),
+        (
+            "bytes that are no certificate",
+            Roots::Given(vec![rustls::pki_types::CertificateDer::from(vec![
+                1_u8, 2, 3,
+            ])]),
+        ),
+    ] {
+        let none = HttpsKeys::new("https://i.example", roots, Duration::from_secs(1));
+        assert!(matches!(none, Err(KeySourceError::NoRoots)), "{what}");
+    }
     assert_eq!(
         KeySourceError::NoRoots.to_string(),
         "no trusted root certificates for fetching the issuer's keys"
     );
-    let _ = Arc::new(HttpsKeys::new(
-        "https://i.example",
-        Roots::System,
-        Duration::from_secs(1),
-    ));
 }
 
 /// A raw token with a signature part that is not base64url is `Malformed`.
@@ -437,7 +477,10 @@ async fn the_fake_issuer_and_the_fetch_survive_odd_clients() {
     );
     let source = issuer.source(Duration::from_secs(5));
     let why = source.jwks().await.expect_err("404");
-    assert!(why.contains("404"), "{why}");
+    assert_eq!(
+        why.to_string(),
+        format!("{}/nope: status 404 Not Found", issuer.url)
+    );
 }
 
 /// A key source the test steers: the JWKS it serves, whether it fails, and whether it holds a
@@ -451,7 +494,7 @@ struct Steered {
 }
 
 impl KeySource for Steered {
-    fn jwks(&self) -> futures::future::BoxFuture<'_, Result<String, String>> {
+    fn jwks(&self) -> futures::future::BoxFuture<'_, Result<String, super::FetchError>> {
         use std::sync::atomic::Ordering::SeqCst;
         Box::pin(async move {
             self.fetches.fetch_add(1, SeqCst);
@@ -459,7 +502,9 @@ impl KeySource for Steered {
                 self.release.notified().await;
             }
             if self.fail.load(SeqCst) {
-                return Err("down".to_owned());
+                return Err(super::FetchError::TimedOut {
+                    url: "https://down.test".to_owned(),
+                });
             }
             Ok(self.jwks.lock().expect("lock").clone())
         })
@@ -583,6 +628,72 @@ async fn a_held_key_is_not_kept_waiting_by_a_slow_fetch() {
     source.hold.store(false, SeqCst);
     source.release.notify_waiters();
     assert_eq!(slow.await.expect("joined"), Err(Refusal::UnknownKey));
+}
+
+/// A token that was valid when its verification began is refused as expired when the keys it
+/// waited for arrive after its `exp` plus the leeway, and its `jti` is not spent.
+///
+/// Catches: the clock read once before the key fetch and the stale value used to judge `exp`
+/// and to spend the `jti`, which accepts a token after it expired.
+#[tokio::test(start_paused = true)]
+async fn a_token_that_expires_while_its_keys_are_fetched_is_refused() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let (source, verifier, now) = steered(&[&keys()[0]]);
+    let t0 = super::testkit::NOW;
+    source.hold.store(true, SeqCst);
+    let token = token_at(&keys()[0], t0);
+    let pending = {
+        let verifier = Arc::clone(&verifier);
+        let token = token.clone();
+        tokio::spawn(async move { verifier.verify(&token).await })
+    };
+    while source.fetches.load(SeqCst) < 1 {
+        tokio::task::yield_now().await;
+    }
+    now.store(t0 + 300 + super::LEEWAY_SECS, SeqCst);
+    source.hold.store(false, SeqCst);
+    source.release.notify_waiters();
+    assert_eq!(pending.await.expect("joined"), Err(Refusal::Expired));
+}
+
+/// A key source that answers with text that is no JWKS leaves the verifier without keys, and
+/// the fetch errors tell their cause and their URL through `Display` and `source`.
+///
+/// Catches: a document that is not a JWKS taken for keys, a fetch error that drops its cause
+/// or its URL from the operator's text.
+#[tokio::test]
+async fn a_source_that_answers_nonsense_gives_no_keys() {
+    use std::error::Error as _;
+    let (source, verifier, _now) = steered(&[&keys()[0]]);
+    *source.jwks.lock().expect("lock") = "nonsense".to_owned();
+    let token = token_at(&keys()[0], super::testkit::NOW);
+    assert_eq!(verifier.verify(&token).await, Err(Refusal::KeysUnavailable));
+
+    let bad_header = hyper::http::Request::builder()
+        .header("bad\n", "x")
+        .body(())
+        .expect_err("a header name with a newline");
+    let causes = [
+        super::FetchCause::from(bad_header),
+        super::FetchCause::from(super::BodyError(Box::from("too long"))),
+        super::FetchCause::from("a b".parse::<hyper::Uri>().expect_err("not a uri")),
+    ];
+    let texts: Vec<String> = causes.iter().map(ToString::to_string).collect();
+    assert_eq!(texts[1], "too long");
+    assert_eq!(texts.len(), 3);
+    for cause in causes {
+        let failed = super::FetchError::Failed {
+            url: "https://i.test".to_owned(),
+            cause,
+        };
+        assert!(failed.source().is_some());
+    }
+    let not_utf8 = super::FetchError::NotUtf8 {
+        url: "https://i.test/jwks".to_owned(),
+        source: String::from_utf8(vec![0xff]).expect_err("not utf-8"),
+    };
+    assert!(not_utf8.to_string().starts_with("https://i.test/jwks: "));
+    assert!(not_utf8.source().is_some());
 }
 
 /// A held key in a set that is old, with a fetch already under way, is used and does not wait.

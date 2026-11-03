@@ -1,16 +1,22 @@
-//! The desired state: the one thing the coordinator stores (`docs/design/host-updates.md`).
+//! The desired state of each service (`docs/design/host-updates.md`), and its file.
 //!
-//! CI sets it with one call: the version every host should run, how many hosts of a kind
-//! may update at once (only 0, which holds the role, matters: one update is live at a time
-//! across every service, [`crate::decide`]), and how many hosts of a role must stay up. The
-//! store keeps one such state per service name; a service must be one the services file
-//! defines (`crate::services`). It is one small JSON file, replaced whole by a temporary file,
-//! fsync, rename and a directory fsync, so a crash leaves the old state or the new one.
-//! While the legacy service (the coordinator's `--legacy-service`) is the only service the
-//! file is the single state itself (the format earlier builds read and wrote, so a
-//! downgrade keeps working); a file with `{"services": {name: state}}` is the map. A file that
-//! cannot be read back is a refusal to start: the coordinator does not guess what an operator
-//! meant.
+//! The coordinator keeps three files: `desired.json`, which this module reads and writes and
+//! which holds the desired state of each service; the operations file (`crate::ops`,
+//! `crate::ops_file`), which holds operator actions, version marks and the audit log; and the
+//! halts file beside it, which holds halt reports and clear generations.
+//!
+//! CI sets a desired state with one call: the version every host should run, how many hosts of
+//! a kind may update at once (only 0, which holds the role, matters: one update is live at a
+//! time across every service, [`crate::decide`]), and how many hosts of a role must stay up.
+//! The store keeps one such state per service name; a service must be one the services file
+//! defines (`crate::services`). The file is small JSON, replaced whole by a temporary file,
+//! fsync, rename and a directory fsync, so a crash leaves the old state or the new one. A
+//! directory fsync that fails after the rename leaves the new state in place
+//! ([`StoreError::NotSynced`]). While the legacy service (the coordinator's `--legacy-service`)
+//! is the only service the file is the single state itself (the format earlier builds read and
+//! wrote, so a downgrade keeps working); a file with `{"services": {name: state}}` is the map.
+//! A file that cannot be read back is a refusal to start: the coordinator does not guess what
+//! an operator meant.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -350,6 +356,16 @@ pub enum StoreError {
         /// Why.
         source: io::Error,
     },
+    /// The new file is in place, but the directory holding it could not be synced: a crash now
+    /// may bring the old file back. The state is written, not durable; writing it again is
+    /// safe.
+    #[error("{path}: written, but the directory was not synced: {source}")]
+    NotSynced {
+        /// The directory.
+        path: PathBuf,
+        /// Why.
+        source: io::Error,
+    },
     /// The file holds no desired state this build accepts.
     #[error("{path}: {source}")]
     Invalid {
@@ -360,6 +376,9 @@ pub enum StoreError {
     },
 }
 
+/// Syncs a directory to disk.
+pub(crate) type SyncDir = fn(&Path) -> io::Result<()>;
+
 /// The desired state, in memory and in its file.
 #[derive(Debug)]
 pub struct DesiredStore {
@@ -367,6 +386,8 @@ pub struct DesiredStore {
     /// The legacy service: the one whose state alone is written as the single state.
     legacy: Option<String>,
     current: Mutex<BTreeMap<String, Desired>>,
+    /// Syncs the directory of the file after a rename.
+    sync_dir: SyncDir,
     /// Held across a whole replacement, so that writers wait for each other and not readers:
     /// `current` is only locked to read or to swap, never across the file's fsyncs.
     writing: Mutex<()>,
@@ -403,10 +424,12 @@ impl DesiredStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeMap::new(),
             Err(e) => return Err(io_at(path)(e)),
         };
+        let sync_dir: SyncDir = sync_dir;
         Ok(Self {
             path: path.to_owned(),
             legacy: legacy.map(str::to_owned),
             current: Mutex::new(current),
+            sync_dir,
             writing: Mutex::new(()),
         })
     }
@@ -423,16 +446,32 @@ impl DesiredStore {
         self.lock().clone()
     }
 
+    /// The store with `sync_dir` as its directory sync, to fail the sync after the rename.
+    #[cfg(test)]
+    pub(crate) fn with_sync_dir(mut self, sync_dir: SyncDir) -> Self {
+        self.sync_dir = sync_dir;
+        self
+    }
+
     /// Replaces the desired state of `service` (the others stay), in the file first and in
     /// memory only if the file holds it.
     ///
     /// # Errors
     /// [`StoreError::Io`]: the file could not be replaced; the old state stands.
+    /// [`StoreError::NotSynced`]: the file holds the new state, so memory does too; the caller
+    /// still reports the failure, and setting the same state again is safe.
     pub fn set(&self, service: &str, desired: Desired) -> Result<(), StoreError> {
         let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         let mut next = self.all();
         next.insert(service.to_owned(), desired);
-        self.write(&next)?;
+        match self.write(&next) {
+            Ok(()) => {}
+            Err(e @ StoreError::NotSynced { .. }) => {
+                *self.lock() = next;
+                return Err(e);
+            }
+            Err(e) => return Err(e),
+        }
         *self.lock() = next;
         Ok(())
     }
@@ -456,7 +495,7 @@ impl DesiredStore {
             .map_err(io::Error::from)
             .map_err(io_at(&self.path))?;
         text.push(b'\n');
-        write_whole(&self.path, &text)
+        write_whole_syncing(&self.path, &text, self.sync_dir)
     }
 }
 
@@ -464,7 +503,25 @@ impl DesiredStore {
 /// and owner-only, fsynced, renamed over `path`, and the directory fsynced, so a crash leaves
 /// the old file or the new one. A leftover temporary file of a crash is replaced, never
 /// followed.
+///
+/// # Errors
+/// [`StoreError::Io`]: before the rename; the old file stands. [`StoreError::NotSynced`]: the
+/// rename was made and the directory could not be synced; the new file is in place.
 pub(crate) fn write_whole(path: &Path, text: &[u8]) -> Result<(), StoreError> {
+    write_whole_syncing(path, text, sync_dir)
+}
+
+/// The directory fsync of [`write_whole`].
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    File::open(dir).and_then(|d| d.sync_all())
+}
+
+/// [`write_whole`] with `sync` as the directory fsync.
+pub(crate) fn write_whole_syncing(
+    path: &Path,
+    text: &[u8],
+    sync: SyncDir,
+) -> Result<(), StoreError> {
     let mut temp = path.to_path_buf().into_os_string();
     temp.push(".new");
     let temp = PathBuf::from(temp);
@@ -482,7 +539,8 @@ pub(crate) fn write_whole(path: &Path, text: &[u8]) -> Result<(), StoreError> {
     file.sync_all().map_err(io_at(&temp))?;
     fs::rename(&temp, path).map_err(io_at(path))?;
     let dir = dir_of(path);
-    File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(io_at(dir))
+    sync(dir).map_err(|source| StoreError::NotSynced {
+        path: dir.to_owned(),
+        source,
+    })
 }

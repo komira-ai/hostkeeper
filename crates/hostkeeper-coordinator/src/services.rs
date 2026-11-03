@@ -299,6 +299,35 @@ fn role_def(
     })
 }
 
+/// Refuses roles that wait on each other, a role after itself included: a host of a role in a
+/// cycle would wait for ever. Roles that wait on nothing, and then the ones nothing waits on,
+/// are set aside until only the roles on a cycle are left.
+fn check_role_order(service: &str, roles: &BTreeMap<String, RoleDef>) -> Result<(), ServicesError> {
+    let mut stuck: BTreeSet<&str> = roles.keys().map(String::as_str).collect();
+    while let Some(free) = stuck
+        .iter()
+        .copied()
+        .find(|r| roles[*r].after.iter().all(|a| !stuck.contains(a.as_str())))
+    {
+        stuck.remove(free);
+    }
+    while let Some(last) = stuck.iter().copied().find(|r| {
+        !stuck
+            .iter()
+            .any(|other| roles[*other].after.iter().any(|a| a == r))
+    }) {
+        stuck.remove(last);
+    }
+    let cycle = stuck.into_iter().collect::<Vec<_>>().join(", ");
+    if cycle.is_empty() {
+        Ok(())
+    } else {
+        invalid(format!(
+            "{service}: roles {cycle} wait on each other through after, which is a cycle"
+        ))
+    }
+}
+
 fn service_def(
     raw: RawService,
     defined: &BTreeMap<String, ServiceDef>,
@@ -372,7 +401,8 @@ fn service_def(
     let roles = roles
         .into_iter()
         .map(|(r, raw)| Ok((role_of(&r)?, role_def(&name, raw, &names)?)))
-        .collect::<Result<_, ServicesError>>()?;
+        .collect::<Result<BTreeMap<_, _>, ServicesError>>()?;
+    check_role_order(&name, &roles)?;
     Ok(ServiceDef {
         name,
         roles,
@@ -412,7 +442,8 @@ impl Services {
     /// [`ServicesError`]: the text is not TOML of the shape, a name is bad or repeated, a
     /// service has no roles, there are more than [`MAX_SERVICES`] services, a role name or
     /// count is unusable, a `require_min_up` names a role the service lacks, or an `after`
-    /// names what does not exist (or is defined later, which also forbids a cycle).
+    /// names what does not exist (or is defined later, which also forbids a cycle of services), or
+    /// the roles of a service wait on each other through `after`.
     pub fn parse(text: &str) -> Result<Self, ServicesError> {
         let file: RawFile =
             toml::from_str(text).map_err(|e| ServicesError::Parse(e.to_string()))?;

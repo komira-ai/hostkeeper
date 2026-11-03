@@ -675,8 +675,10 @@ fn wire_oidc_and_tls_depending_on_a_workspace_crate_are_refused() {
 
 /// Catches: the closed set of roles coming back in non-test source: the enum `HostRole`, an
 /// enum named `...Role`, a `const` or `static` of `RoleName`, a function returning an array of
-/// `RoleName`; each is named by file and line. Test files, a `#[cfg(test)]` module and comments
-/// holding the same words are left alone.
+/// `RoleName` (its name possibly path-qualified, its declaration possibly split over lines);
+/// each is named by file and the line the declaration starts on. Test files, a `#[cfg(test)]`
+/// module, and line and block comments, string literals (plain and raw) and character literals
+/// holding the same words are left alone, as are `const fn` and a const generic parameter.
 #[test]
 fn layering_refuses_a_closed_role_enum() {
     let (scanned, found) = closed_role_enums(&fixtures().join("closed-role-enum"));
@@ -688,9 +690,14 @@ fn layering_refuses_a_closed_role_enum() {
              a const or static of type RoleName"
                 .to_string(),
             "crates/hostkeeper-oidc/src/lib.rs:3: a const or static of type RoleName".to_string(),
+            "crates/hostkeeper-oidc/src/lib.rs:5: a const or static of type RoleName".to_string(),
             "crates/hostkeeper-tls/src/lib.rs:1: the enum NodeRole, a closed set of roles"
                 .to_string(),
             "crates/hostkeeper-tls/src/lib.rs:5: a function returning an array of RoleName"
+                .to_string(),
+            "crates/hostkeeper-tls/src/lib.rs:9: a function returning an array of RoleName"
+                .to_string(),
+            "crates/hostkeeper-tls/src/lib.rs:13: a function returning an array of RoleName"
                 .to_string(),
             "crates/hostkeeper-wire/src/lib.rs:2: the identifier HostRole".to_string(),
         ]

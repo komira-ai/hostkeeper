@@ -75,8 +75,11 @@ async fn the_single_table_form_is_one_entry_that_names_no_services() {
     assert_eq!((who.entry, who.services), (0, None));
 }
 
-/// A `services` list in the single table is carried to the verified token, and an empty
-/// list, or one with a blank name, is refused.
+/// A `services` list in the single table is carried to the verified token, an empty list is
+/// carried as naming no service, and a list with a blank or padded name is refused.
+///
+/// Catches: `services = []` refused (a coordinator with no services could then not start) or
+/// read as the legacy service.
 #[tokio::test]
 async fn an_entry_may_name_its_services() {
     let text = entry(
@@ -87,7 +90,10 @@ async fn an_entry_may_name_its_services() {
     );
     let who = verifier(&text).verify(&token(|_| {})).await.expect("ok");
     assert_eq!(who.services, Some(vec!["a".to_owned(), "b".to_owned()]));
-    for bad in ["services = []", "services = [\" a\"]", "services = [\"\"]"] {
+    let none = entry("[remote_operator]", "4242", WORKFLOW, "services = []");
+    let who = verifier(&none).verify(&token(|_| {})).await.expect("ok");
+    assert_eq!(who.services, Some(Vec::new()));
+    for bad in ["services = [\" a\"]", "services = [\"\"]"] {
         let text = entry("[remote_operator]", "4242", WORKFLOW, bad);
         assert!(AllowList::parse(&text).is_err(), "{bad}");
     }

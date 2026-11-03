@@ -362,6 +362,47 @@ fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
     assert!(why.to_string().contains("state.json"), "{why}");
 }
 
+/// Catches: a coordinator that manages no service being unable to start: an empty services
+/// file, no `--legacy-service` and an allow-list entry with `services = []` (which grants CI
+/// nothing) build a coordinator whose status lists no service, through `build` and through
+/// `start`; an entry that names a service the file does not define is still refused.
+#[tokio::test]
+async fn a_coordinator_with_no_services_starts_and_grants_nothing() {
+    let files = Files::new("config-empty");
+    files.put("services.toml", "", 0o600);
+    files.put(
+        "empty.toml",
+        &format!("{}services = []\n", config_text(STATIC_ISSUER)),
+        0o644,
+    );
+    let path = files.path("empty.toml").display().to_string();
+    let args = without(
+        &with(&files.args(), "--oidc-config", &path),
+        "--legacy-service",
+    );
+    let parts = build_given(&flags_of(args.clone())).expect("a start with no service");
+    assert_eq!(parts.coordinator.legacy_service(), None);
+    let status = parts.coordinator.status(Some(OPERATOR)).expect("status");
+    let shown = serde_json::to_value(&status).expect("json");
+    assert_eq!(shown["services"], serde_json::json!({}));
+    assert_eq!(shown["per_service"], serde_json::json!({}));
+
+    let bind = |addr: SocketAddr| async move { Ok::<_, io::Error>((addr, never as Never)) };
+    let stop = async {
+        tokio::task::yield_now().await;
+        Ok(())
+    };
+    start(flags_of(args.clone()), roots(), bind, stop)
+        .await
+        .expect("the start runs and stops cleanly");
+
+    let named = format!("{}services = [\"kbf\"]\n", config_text(STATIC_ISSUER));
+    files.put("named.toml", &named, 0o644);
+    let path = files.path("named.toml").display().to_string();
+    let why = refusal(with(&args, "--oidc-config", &path));
+    assert!(matches!(why, StartError::OidcEntryService { .. }), "{why}");
+}
+
 /// Catches: a state file in the single-state form read with no legacy service to own it: a file
 /// the last kbf coordinator wrote is refused at start when `--legacy-service` is not given (an
 /// allow-list entry that names `kbf` keeps the entry check out of the way), and read when it is.

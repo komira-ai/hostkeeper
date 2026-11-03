@@ -148,7 +148,7 @@ use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, config_text, good_claims, keys, mint, static_verifier,
 };
 use hostkeeper_oidc::testkit::{StaticKeys, clock as oidc_clock, jwks_of};
-use hostkeeper_oidc::{AllowList, KeySource, OidcConfig, Verifier};
+use hostkeeper_oidc::{AllowList, FetchCause, FetchError, KeySource, OidcConfig, Verifier};
 
 use crate::desired::DesiredStore;
 use crate::ops::OpsStore;
@@ -180,8 +180,15 @@ pub fn kbf_prefixes() -> SanPrefixes {
 pub struct Unreachable;
 
 impl KeySource for Unreachable {
-    fn jwks(&self) -> BoxFuture<'_, Result<String, String>> {
-        Box::pin(async { Err("no route".to_owned()) })
+    fn jwks(&self) -> BoxFuture<'_, Result<String, FetchError>> {
+        Box::pin(async {
+            Err(FetchError::Failed {
+                url: STATIC_ISSUER.to_owned(),
+                cause: FetchCause::Connect(std::io::Error::from(
+                    std::io::ErrorKind::HostUnreachable,
+                )),
+            })
+        })
     }
 }
 

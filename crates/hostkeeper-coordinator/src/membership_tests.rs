@@ -5,6 +5,7 @@ use hostkeeper_wire::wire::{Heartbeat, Reply, ServiceBeat, ServiceReply};
 use serde_json::{Value, json};
 
 use crate::identity::Identity;
+use crate::membership::{RawSelector, Selector, SelectorError};
 use crate::service::FEATURES;
 use crate::services::{Services, ServicesError};
 use crate::testutil::{LEGACY, OPERATOR, Rig, beat, id, kbf_def, role};
@@ -451,4 +452,26 @@ pub(crate) async fn heartbeat_v2_is_acted_on() {
 async fn heartbeat_v2_is_advertised_and_acted_on() {
     assert!(FEATURES.contains(&V2));
     heartbeat_v2_is_acted_on().await;
+}
+
+/// Catches: `Selector::new` answering with free text instead of a typed refusal: a role the
+/// service lacks is `UnknownRole` naming it, a label outside the grammar is `BadLabel`, and
+/// each prints exactly the text the services file reports after the service name.
+#[test]
+fn selector_new_refuses_with_a_typed_error_that_prints_the_old_text() {
+    let roles = std::collections::BTreeSet::from(["daemon".to_owned()]);
+    let selector =
+        |text: &str| Selector::new(toml::from_str::<RawSelector>(text).expect("raw"), &roles);
+    let lacking = selector("roles = [\"storage\"]").expect_err("refused");
+    assert_eq!(lacking, SelectorError::UnknownRole("storage".to_owned()));
+    assert_eq!(
+        lacking.to_string(),
+        "names storage, a role it does not have"
+    );
+    let bad = selector("labels = { Zone = \"a\" }").expect_err("refused");
+    assert_eq!(bad, SelectorError::BadLabel);
+    assert_eq!(
+        bad.to_string(),
+        "has a bad label: at most 8, each key and value 1 to 32 bytes of [a-z0-9-]"
+    );
 }

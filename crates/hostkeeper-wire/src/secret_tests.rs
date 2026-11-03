@@ -101,6 +101,19 @@ fn a_secret_is_read_up_to_one_byte_past_the_limit() {
     assert!(e.starts_with("--services-file: "), "{e}");
 }
 
+/// Catches an overflow at the extremes of the limit: `0` still reads one byte, so a non-empty
+/// file is seen to be too long, and `u64::MAX` reads the whole file instead of overflowing.
+#[test]
+fn a_secret_limit_of_zero_or_u64_max_does_not_overflow() {
+    let scratch = scratch("secretedge");
+    let path = file(scratch.path(), "s", "0123456789", 0o600);
+    assert_eq!(read_secret(&path, "--x", 0), Ok(b"0".to_vec()));
+    assert_eq!(
+        read_secret(&path, "--x", u64::MAX),
+        Ok(b"0123456789".to_vec())
+    );
+}
+
 /// Catches `euid` reading another user than the one that owns the files this process makes.
 #[test]
 fn the_effective_user_owns_the_files_it_makes() {

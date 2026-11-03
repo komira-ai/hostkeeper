@@ -8,3 +8,11 @@ pub enum HostRole {
 pub fn named(text: &'static str) -> RoleName {
     RoleName::new(text)
 }
+
+pub fn generic<const N: usize>(role: RoleName) -> [u8; N] {
+    todo!()
+}
+
+pub const fn make() -> RoleName {
+    RoleName::new("storage")
+}

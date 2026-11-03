@@ -50,6 +50,17 @@ pub struct RawSelector {
     labels: BTreeMap<String, String>,
 }
 
+/// Why a selector is refused. The text follows the service name and `selector`.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SelectorError {
+    /// It names a role the service does not have.
+    #[error("names {0}, a role it does not have")]
+    UnknownRole(String),
+    /// A label is outside the grammar of the operator's labels.
+    #[error("has a bad label: at most 8, each key and value 1 to 32 bytes of [a-z0-9-]")]
+    BadLabel,
+}
+
 /// Which hosts should run a service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selector {
@@ -64,17 +75,14 @@ impl Selector {
     /// all of them.
     ///
     /// # Errors
-    /// What is wrong, as text: a role the service lacks, or labels beyond the grammar of the
+    /// [`SelectorError`]: a role the service lacks, or labels beyond the grammar of the
     /// operator's labels.
-    pub fn new(raw: RawSelector, service_roles: &BTreeSet<String>) -> Result<Self, String> {
+    pub fn new(raw: RawSelector, service_roles: &BTreeSet<String>) -> Result<Self, SelectorError> {
         if let Some(role) = raw.roles.iter().find(|r| !service_roles.contains(*r)) {
-            return Err(format!("names {role}, a role it does not have"));
+            return Err(SelectorError::UnknownRole(role.clone()));
         }
         if raw.labels.len() > MAX_LABELS || !raw.labels.iter().all(|(k, v)| label(k) && label(v)) {
-            return Err(
-                "has a bad label: at most 8, each key and value 1 to 32 bytes of [a-z0-9-]"
-                    .to_owned(),
-            );
+            return Err(SelectorError::BadLabel);
         }
         let roles = if raw.roles.is_empty() {
             service_roles.clone()

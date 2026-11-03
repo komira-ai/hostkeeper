@@ -603,12 +603,14 @@ impl Coordinator {
         }
         // CI naming a version by hand lifts its mark. The mark goes first: a set that fails
         // after it leaves nothing blocked, and the reverse would leave a wanted version that
-        // the next beat rolls back.
+        // the next beat rolls back. The fleet's lock is held to the end of the set: a heartbeat
+        // plans a rollback and writes it under that lock, so it cannot write a rollback from
+        // the state it read over the version CI stores meanwhile.
         {
             let fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
             clear_bad(&self.ops, &fleet, &service, &desired.version)?;
+            self.desired.set(&service, desired.clone())?;
         }
-        self.desired.set(&service, desired.clone())?;
         tracing::info!(
             workflow = %verified.job_workflow_ref,
             sha = ?verified.sha,
