@@ -472,29 +472,37 @@ fn run_program(program: &str, args: &[&str]) -> io::Result<Finished> {
     Systemd::new(Path::new(program)).run(&command)
 }
 
+/// The program of the tests the real spawner runs (tests/bin/spawn_fixture.rs).
+const FIXTURE: &str = env!("CARGO_BIN_EXE_hostkeeper-rights-spawn-fixture");
+
+fn run_fixture(args: &[&str]) -> io::Result<Finished> {
+    run_program(FIXTURE, args)
+}
+
 /// Catches the real spawner passing something to the program it was not told to: the arguments
-/// are the command's, the environment is empty (`env` prints what it inherited, and nothing
-/// follows its own arguments), and the input is nothing (`cat` returns at once).
+/// are the command's, the environment is empty (the fixture prints what it inherited), and the
+/// input is nothing (the fixture copies its input and returns at once).
 #[test]
 fn the_spawner_runs_the_program_with_the_arguments_and_nothing_inherited() {
-    let echoed = run_program("/bin/echo", &["a", "b c"]).unwrap();
+    let echoed = run_fixture(&["echo", "a", "b c"]).unwrap();
     assert_eq!((echoed.code, echoed.stdout), (Some(0), b"a b c\n".to_vec()));
-    let env = run_program("/usr/bin/env", &["ONLY=this"]).unwrap();
-    assert_eq!(String::from_utf8(env.stdout).unwrap(), "ONLY=this\n");
-    let cat = run_program("/bin/cat", &[]).unwrap();
-    assert_eq!((cat.code, cat.stdout), (Some(0), Vec::new()));
+    let env = run_fixture(&["environ"]).unwrap();
+    assert_eq!((env.code, env.stdout), (Some(0), Vec::new()));
+    let stdin = run_fixture(&["stdin"]).unwrap();
+    assert_eq!((stdin.code, stdin.stdout), (Some(0), Vec::new()));
 }
 
 /// Catches the exit status and the error output being lost, and a missing program being
 /// swallowed.
 #[test]
 fn the_spawner_returns_the_status_the_error_output_and_a_missing_program() {
-    assert_eq!(run_program("/usr/bin/true", &[]).unwrap().code, Some(0));
-    assert_eq!(run_program("/usr/bin/false", &[]).unwrap().code, Some(1));
-    let ls = run_program("/bin/ls", &["/no/such/path/for/the/test"]).unwrap();
-    assert_ne!(ls.code, Some(0));
-    assert!(String::from_utf8_lossy(&ls.stderr).contains("no/such/path"));
-    let missing = run_program("/no/such/program", &[]).unwrap_err();
+    assert_eq!(run_fixture(&["exit", "0"]).unwrap().code, Some(0));
+    assert_eq!(run_fixture(&["exit", "1"]).unwrap().code, Some(1));
+    let complained = run_fixture(&["complain", "no/such/path"]).unwrap();
+    assert_eq!(complained.code, Some(2));
+    assert_eq!(complained.stderr, b"no/such/path\n".to_vec());
+    let absent = Path::new(FIXTURE).with_file_name("no-such-program");
+    let missing = run_program(absent.to_str().unwrap(), &[]).unwrap_err();
     assert_eq!(missing.kind(), io::ErrorKind::NotFound);
     assert!(format!("{:?}", Systemd::system().clone()).contains("/usr/bin/systemd-run"));
 }

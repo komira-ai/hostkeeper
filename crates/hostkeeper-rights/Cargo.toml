@@ -37,6 +37,14 @@ name = "hostkeeper-rights-probe"
 path = "tests/bin/probe_hook.rs"
 required-features = ["test-support"]
 
+# The program the spawner tests run in place of the real `systemd-run` (tests/launch.rs): it
+# prints its arguments, its environment or its input, or exits with a status, so the tests need no
+# program of the host. A program of the tests, not shipped; built only with `test-support`.
+[[bin]]
+name = "hostkeeper-rights-spawn-fixture"
+path = "tests/bin/spawn_fixture.rs"
+required-features = ["test-support"]
+
 [features]
 # `Declared::by_hand`, for the tests of this crate: a loaded declaration made without a directory.
 # Off for everything else, so a `Declared` comes only from `load_dir`.

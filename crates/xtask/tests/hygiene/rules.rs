@@ -2,7 +2,7 @@
 //!
 //! A rule returns one [`Finding`] per offence, with the path and the 1-based line, and the
 //! reason in words. The rules are:
-//! - [`dates`]: a date before the cutoff (2026-09-01), of any year from 1000 to 9999, in a common
+//! - [`dates`]: a date before the cutoff (2026-09-01), of any four-digit year from 0000 to 9999, in a common
 //!   spelling: numeric year first (`-`, `/` or `.` between the parts), compact eight digits at word
 //!   boundaries, numeric year last, and month names (whole or abbreviated, any case) with a year,
 //!   with or without a day, in the orders `Month D, YYYY`, `D Month YYYY`, `D-Mon-YYYY`,
@@ -13,14 +13,15 @@
 //! - [`emails`]: an e-mail address, with a plain or a quoted local part, outside the example
 //!   domains, apart from the instance name of a systemd unit (`name@instance.service`);
 //! - [`hostnames`]: the host of a URL, or a bare dotted name (in any case) ending in a top-level
-//!   domain of `GENERIC_TLDS` or `COUNTRY_TLDS` (and not of `FILE_SUFFIXES`), outside the example
-//!   domains and the allow list of public domains;
+//!   domain of the pinned IANA list (`iana-tlds.txt`), outside the example domains and the allow
+//!   list of public domains;
 //! - [`repositories`]: a token whose SHA-256 is on the deny list of internal repository names.
 //!
 //! In a Rust file a bare dotted name counts only inside a comment or a string, as found by a small
 //! lexical scan of the whole file (`rust_text`), and a name followed by `(` never counts, so
-//! field and method access is not read as a host. A name whose last label is a common file
-//! extension (`FILE_SUFFIXES`) is a file name, not a host. In a TOML file a table header is not
+//! field and method access is not read as a host. A name whose last label is a top-level domain
+//! and also a common file extension (`FILE_SUFFIXES`) is a file name when it has two labels or
+//! is part of a path, and a host otherwise. In a TOML file a table header is not
 //! read for bare names.
 
 use std::collections::HashSet;
@@ -163,8 +164,7 @@ fn digits(tok: Option<&Tok<'_>>, min: usize, max: usize) -> Option<u32> {
 }
 
 fn year(tok: Option<&Tok<'_>>) -> Option<u32> {
-    let y = digits(tok, 4, 4)?;
-    (1000..=9999).contains(&y).then_some(y)
+    digits(tok, 4, 4)
 }
 
 fn sep_char(tok: Option<&Tok<'_>>) -> Option<char> {
@@ -275,7 +275,7 @@ fn compact_date(toks: &[Tok<'_>], at: usize) -> Option<Found> {
     }
     let value: u32 = tok.text.parse().ok()?;
     let (y, month, day) = (value / 10_000, value / 100 % 100, value % 100);
-    if !(1000..=9999).contains(&y) || !valid_day_month(month, day) {
+    if !valid_day_month(month, day) {
         return None;
     }
     let previous = at.checked_sub(1).and_then(|i| toks.get(i));
@@ -798,7 +798,9 @@ pub fn hostnames(path: &str, text: &str, public: &[String]) -> Vec<Finding> {
             let after_at = start > 0 && b[start - 1] == b'@';
             let call = b.get(end) == Some(&b'(');
             let name = line[start..end].trim_end_matches('.').to_ascii_lowercase();
-            if inside_url || after_at || call || !is_bare_host(&name) {
+            let before = start.checked_sub(1).map(|p| b[p]);
+            let after = b.get(end).copied();
+            if inside_url || after_at || call || !is_bare_host(&name, before, after) {
                 continue;
             }
             if is_rust && !mask[line_start + start] {
@@ -818,14 +820,22 @@ fn host_reason(host: &str) -> String {
     )
 }
 
-/// Dotted labels of letters, digits and hyphens, at least two, in any case, the last a top-level
-/// domain that is not a file suffix.
-fn is_bare_host(name: &str) -> bool {
+/// True when a byte next to a name makes it part of a path.
+fn is_path_edge(b: Option<u8>) -> bool {
+    b == Some(b'/')
+}
+
+/// Dotted labels of letters, digits and hyphens, none empty, at least two, in any case, the last
+/// a top-level domain of the IANA list. When the last label is also a file extension of this
+/// repository (`FILE_SUFFIXES`), the name is a file name, not a host, if it has exactly two labels
+/// (`lib.rs`) or is part of a path (`/` before or after it); with three or more labels and no
+/// path it is a host.
+fn is_bare_host(name: &str, before: Option<u8>, after: Option<u8>) -> bool {
     let lower = name.to_ascii_lowercase();
     let plain = lower
         .bytes()
         .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-'));
-    if !plain || lower.starts_with('.') {
+    if !plain {
         return false;
     }
     let labels: Vec<&str> = lower.split('.').collect();
@@ -833,7 +843,12 @@ fn is_bare_host(name: &str) -> bool {
         return false;
     }
     let last = labels[labels.len() - 1];
-    !FILE_SUFFIXES.contains(&last) && is_tld(last)
+    if !is_tld(last) {
+        return false;
+    }
+    let file_like = FILE_SUFFIXES.contains(&last)
+        && (labels.len() == 2 || is_path_edge(before) || is_path_edge(after));
+    !file_like
 }
 
 // ---------------------------------------------------------------------------------------------

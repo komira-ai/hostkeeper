@@ -20,3 +20,12 @@ absent.info
 
 # A container image name in the workflow lint's tests, not a host.
 alpine
+
+# File names and configuration field paths of this repository's own tests and docs that end in
+# a word the IANA list delegates as a top-level domain (`new`, `download`, `group`, `name`).
+# They are names, not hosts; each entry is the exact name.
+current.new
+approved.new
+tool.download
+hook.group
+hook.environment.name

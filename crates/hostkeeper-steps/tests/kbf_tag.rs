@@ -252,6 +252,7 @@ fn kbf_tag_reader_contract_documented() {
             "README.md",
             "done.json",
             "finished.json",
+            "kbf-ci-pinned.json",
             "newer-schema.json",
             "pending.json",
             "reason-absent.json",
@@ -267,6 +268,121 @@ fn kbf_tag_reader_contract_documented() {
     }
     assert!(readme.contains("`SCHEMA` 1"));
     assert_eq!(SCHEMA, 1);
+}
+
+/// The record the tag's own CI test `the_record_on_disk_has_this_shape` builds, field by field.
+fn kbf_ci_record() -> Record {
+    Record {
+        schema: SCHEMA,
+        service: "svc".to_owned(),
+        target_version: "2.0.0".to_owned(),
+        artifact_digest: "abc".to_owned(),
+        tarball_digest: "0123".to_owned(),
+        previous_digest: Some("def".to_owned()),
+        generation: 7,
+        params: "/state/params.toml".into(),
+        step: Step::Verify,
+        attempt: 2,
+        state: State::Pending,
+        hook: HookSel::Previous,
+        progress: Progress {
+            committed: true,
+            promotion_pending: false,
+            then: Some(Verdict::Deferred {
+                retry_after_secs: None,
+            }),
+            retry: 2,
+            verify_started: Some(stamp("b", 7)),
+            watching: None,
+            reason: Some("remote_down".to_owned()),
+        },
+    }
+}
+
+/// Catches a change to the record's JSON from what kbf's CI pinned at the tag: the fixture holds
+/// the compact string that test asserted, this code reads it as the same record (directly and
+/// through the store), and writes exactly those bytes from it.
+#[test]
+fn reads_and_writes_the_record_kbf_ci_pinned_at_the_tag() {
+    let bytes = fs::read(fixtures().join("kbf-ci-pinned.json")).unwrap();
+    assert!(!bytes.ends_with(b"\n"));
+    assert_eq!(bytes.iter().filter(|b| **b == b'\n').count(), 0);
+    let record = kbf_ci_record();
+    assert_eq!(serde_json::from_slice::<Record>(&bytes).unwrap(), record);
+    assert_eq!(serde_json::to_string(&record).unwrap().into_bytes(), bytes);
+
+    let dir = Scratch::new("kbf-ci-pinned");
+    fs::write(dir.path().join(RECORD_FILE), &bytes).unwrap();
+    assert_eq!(
+        RecordStore::new(dir.path()).load().unwrap(),
+        Loaded::Current(Box::new(record))
+    );
+}
+
+/// Catches a renamed or re-shaped state or verdict: the JSON strings kbf's CI test asserted at the
+/// tag are written and read identically here.
+#[test]
+fn the_state_and_verdict_forms_kbf_ci_pinned_at_the_tag() {
+    let verdicts = [
+        (
+            Verdict::Succeeded {
+                promotion_pending: true,
+            },
+            r#"{"Succeeded":{"promotion_pending":true}}"#,
+        ),
+        (
+            Verdict::Failed {
+                phase: Phase::AfterCommit,
+                class: Class::Environment,
+            },
+            r#"{"Failed":{"phase":"after_commit","class":"environment"}}"#,
+        ),
+        (
+            Verdict::Deferred {
+                retry_after_secs: Some(5),
+            },
+            r#"{"Deferred":{"retry_after_secs":5}}"#,
+        ),
+        (
+            Verdict::Deferred {
+                retry_after_secs: None,
+            },
+            r#"{"Deferred":{"retry_after_secs":null}}"#,
+        ),
+        (Verdict::Halt, r#""Halt""#),
+    ];
+    for (verdict, json) in verdicts {
+        assert_eq!(serde_json::to_string(&verdict).unwrap(), json);
+        assert_eq!(serde_json::from_str::<Verdict>(json).unwrap(), verdict);
+    }
+    let states = [
+        (State::Pending, r#"{"state":"pending"}"#),
+        (
+            State::Running {
+                started: stamp("b", 7),
+                deadline_secs: 9,
+            },
+            r#"{"state":"running","started":{"boot_id":"b","mono_secs":7},"deadline_secs":9}"#,
+        ),
+        (
+            State::Done {
+                code: Some(75),
+                last_line: Some("{}".to_owned()),
+            },
+            r#"{"state":"done","code":75,"last_line":"{}"}"#,
+        ),
+        (
+            State::Finished {
+                verdict: Verdict::Halt,
+                reason: Some("x".to_owned()),
+            },
+            r#"{"state":"finished","verdict":"Halt","reason":"x"}"#,
+        ),
+    ];
+    for (state, json) in states {
+        assert_eq!(serde_json::to_string(&state).unwrap(), json);
+        assert_eq!(serde_json::from_str::<State>(json).unwrap(), state);
+    }
 }
 
 /// Catches a name, number or text that a host, a unit or a file on disk sees changing from what

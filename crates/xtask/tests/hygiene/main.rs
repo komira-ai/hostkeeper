@@ -21,7 +21,7 @@ use rules::{
     repositories,
 };
 use sha2::{Digest, Sha256};
-use tlds::{COUNTRY_TLDS, FILE_SUFFIXES, GENERIC_TLDS};
+use tlds::{FILE_SUFFIXES, IANA_TEXT, PRIVATE_TLDS, is_tld, parse_tlds};
 
 /// The deny list, as a path from the repository root: a tracked file that is not scanned.
 const DENIED_FILE: &str = "crates/xtask/tests/hygiene/denied_repositories.sha256";
@@ -144,7 +144,7 @@ fn hygiene_lint_refuses_a_date_before_the_cutoff() {
     // Catches: a date that names a day before 2026-09-01 and goes unflagged because of how it
     // is spelled (numeric with each separator, compact, year last, month names whole or
     // abbreviated in any case, with or without a day, joined by hyphens or slashes, or the year
-    // first, in any year from 1000 on), or a date on or after the cutoff, a version number or a
+    // first, in any four-digit year from 0000 on), or a date on or after the cutoff, a version number or a
     // lone year that is flagged although it names no day before it.
     let refused = [
         ["2025", "01", "02"].join("-"),
@@ -167,6 +167,12 @@ fn hygiene_lint_refuses_a_date_before_the_cutoff() {
         ["2025", "January", "3"].join(" "),
         ["2025,", "March", "4"].join(" "),
         ["2025", "dec.", "31"].join(" "),
+        ["0999", "12", "31"].join("-"),
+        ["0001", "01", "01"].join("-"),
+        ["0999", "1231"].concat(),
+        ["Dec", "31,", "0999"].join(" "),
+        ["December", "0999"].join(" "),
+        ["31", "12", "0999"].join("/"),
     ];
     for spelling in refused {
         let found = reasons(dates("notes.md", &on(&spelling)));
@@ -202,6 +208,12 @@ fn hygiene_lint_refuses_a_date_before_the_cutoff() {
         "2025-13-01",
         "12345678",
         "it may happen in 2025",
+        "1.95.0",
+        "a3f5c9d0e1b2",
+        "sha-0999a1231b",
+        "0999 items",
+        "00000000",
+        "09991331",
     ];
     for text in passing {
         assert_clean(dates("notes.md", text), text);
@@ -397,8 +409,8 @@ fn hygiene_lint_refuses_a_hostname_under_a_non_example_domain() {
         assert_clean(hostnames("h.md", text, &public()), text);
     }
 
-    // A mixed-case name is a host, as is one under a top-level domain that is not in the
-    // short list of generic ones.
+    // A mixed-case name is a host, as is one under any top-level domain of the IANA list, whether
+    // or not it is a common word or a file extension.
     let mixed = ["Build-01", "Corp", "Acme", "COM"].join(".");
     let others = [
         ["vpn", "acme", "de"].join("."),
@@ -406,6 +418,11 @@ fn hygiene_lint_refuses_a_hostname_under_a_non_example_domain() {
         ["files", "acme", "studio"].join("."),
         ["mail", "acme", "localdomain"].join("."),
         ["Wiki", "ACME", "Fr"].join("."),
+        ["ci", "acme", "build"].join("."),
+        ["www", "acme", "solutions"].join("."),
+        ["build-01", "corp", "acme", "rs"].join("."),
+        ["fileserver", "acme", "zip"].join("."),
+        ["gw", "acme", "xn--p1ai"].join("."),
     ];
     let mut text = format!("ssh to {mixed} now\n");
     for name in &others {
@@ -424,7 +441,8 @@ fn hygiene_lint_refuses_a_hostname_under_a_non_example_domain() {
     let loud = ["GitHub", "COM"].join(".");
     assert_clean(hostnames("h.md", &loud, &public()), &loud);
 
-    // A name whose last label is a file suffix is a file name, in any case.
+    // A name whose last label is a file suffix is a file name when it has two labels or sits in
+    // a path, in any case.
     for text in [
         "lib.rs",
         "Cargo.toml and Cargo.lock",
@@ -432,7 +450,31 @@ fn hygiene_lint_refuses_a_hostname_under_a_non_example_domain() {
         "run.sh then tool.py",
         "ci.yml, config.yaml, data.json, notes.txt",
         "a.c b.h c.o libz.a libc.so",
+        "tests/foo.rs",
+        "crates/x/src/lib.rs",
+        "src/main.rs",
+        "see target/llvm-cov/lcov.info",
+        "a.b.rs/more",
+        "x/a.b.rs",
+        "./a.b.sh",
+        "bundle.zip and clip.mov",
+        "worker.pid",
     ] {
+        assert_clean(hostnames("h.md", text, &public()), text);
+    }
+    // With three or more labels and no path, such a name is a host.
+    let three = ["build-01", "corp", "acme", "rs"].join(".");
+    let md_host = ["wiki", "acme", "md"].join(".");
+    let text = format!("{three}\n{md_host}.\n");
+    assert_eq!(
+        reasons(hostnames("h.md", &text, &public())),
+        [
+            format!("h.md:1: {}", host_reason(&three)),
+            format!("h.md:2: {}", host_reason(&md_host)),
+        ]
+    );
+    // An empty label makes no host.
+    for text in ["a..com", ".com"] {
         assert_clean(hostnames("h.md", text, &public()), text);
     }
 }
@@ -493,11 +535,34 @@ fn hygiene_lint_reads_comments_and_strings_of_a_rust_file_lexically() {
 }
 
 #[test]
-fn hygiene_lint_top_level_domain_lists_are_consistent() {
-    // Catches: a suffix that is both a file suffix and a top-level domain of the lists (so a file
-    // name could be read as a host), an entry that is not a lowercase name, a country code of
-    // the wrong length, and the loss of the country codes or generic domains the lint relies on.
-    for list in [GENERIC_TLDS, COUNTRY_TLDS, FILE_SUFFIXES] {
+fn hygiene_lint_tld_list_is_the_pinned_iana_list() {
+    // Catches: the committed top-level domain list being edited, truncated or replaced (its
+    // SHA-256 is pinned), losing IANA's version header, or losing the generic, country,
+    // new-generic and internationalised domains the lint relies on.
+    let digest = hex::encode(Sha256::digest(IANA_TEXT.as_bytes()));
+    assert_eq!(
+        digest,
+        "e874bbcdb65cdeaa632d510d69535e4466457e7ad198d73b9c546a10fc9b7fd1"
+    );
+    assert!(
+        IANA_TEXT.starts_with("# Version "),
+        "the list does not start with IANA's version line"
+    );
+    for domain in ["com", "build", "solutions", "de", "rs", "xn--p1ai"] {
+        assert!(is_tld(domain), "{domain} is not a top-level domain");
+    }
+    for word in ["toml", "json", "yml", "e", "g", "localhost", "example"] {
+        assert!(!is_tld(word), "{word} is a top-level domain");
+    }
+    assert_eq!(parse_tlds(IANA_TEXT).len(), 1436);
+}
+
+#[test]
+fn hygiene_lint_top_level_domain_tables_are_consistent() {
+    // Catches: an entry of the file extension or private-use tables that is not a lowercase
+    // name, a private-use suffix that IANA delegates (so it belongs to the pinned list), a
+    // parsed IANA entry that is not lowercase, and the loss of the extensions the lint relies on.
+    for list in [FILE_SUFFIXES, PRIVATE_TLDS] {
         for entry in list {
             assert!(
                 !entry.is_empty() && entry.bytes().all(|b| b.is_ascii_lowercase()),
@@ -505,38 +570,25 @@ fn hygiene_lint_top_level_domain_lists_are_consistent() {
             );
         }
     }
-    for suffix in FILE_SUFFIXES {
-        assert!(
-            !GENERIC_TLDS.contains(suffix) && !COUNTRY_TLDS.contains(suffix),
-            "{suffix} is both a file suffix and a top-level domain"
-        );
+    let iana = parse_tlds(IANA_TEXT);
+    for suffix in PRIVATE_TLDS {
+        assert!(is_tld(suffix), "{suffix} is not read as a top-level domain");
+        assert!(!iana.contains(*suffix), "{suffix} is delegated by IANA");
     }
-    for code in COUNTRY_TLDS {
-        assert_eq!(code.len(), 2, "not a country code: {code}");
+    for tld in &iana {
+        assert!(
+            tld.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+            "not a lowercase top-level domain: {tld:?}"
+        );
     }
     for suffix in [
         "rs", "md", "sh", "toml", "yml", "yaml", "json", "lock", "txt", "py", "c", "h", "o", "a",
-        "so",
+        "so", "zip", "mov", "pid",
     ] {
         assert!(
             FILE_SUFFIXES.contains(&suffix),
             "{suffix} is not a file suffix"
-        );
-    }
-    for domain in ["de", "uk", "fr", "jp", "br", "au", "nl", "ch"] {
-        assert!(
-            COUNTRY_TLDS.contains(&domain),
-            "{domain} is not a country code"
-        );
-    }
-    for domain in [
-        "com", "net", "org", "io", "dev", "ai", "app", "cloud", "co", "me", "info", "biz", "xyz",
-        "tech", "site", "online", "store", "page", "run", "internal", "local", "lan", "corp",
-        "home", "intranet", "private",
-    ] {
-        assert!(
-            GENERIC_TLDS.contains(&domain) || COUNTRY_TLDS.contains(&domain),
-            "{domain} is not a top-level domain"
         );
     }
 }

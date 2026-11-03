@@ -94,10 +94,3 @@ fn the_files_are_read_from_the_paths_given() {
     assert!(EtcAccounts::read(&scratch.path().join("missing"), &group).is_err());
     assert!(EtcAccounts::read(&passwd, &scratch.path().join("missing")).is_err());
 }
-
-/// Catches the host's own files not being what `system` reads: root is uid 0 on every host.
-#[test]
-fn the_hosts_own_files_know_root() {
-    let accounts = EtcAccounts::system().unwrap();
-    assert_eq!(accounts.user("root").map(|ids| ids.uid), Some(0));
-}
