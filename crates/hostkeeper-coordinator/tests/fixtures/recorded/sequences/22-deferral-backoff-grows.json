@@ -1,0 +1,83 @@
+{
+ "from": "kbf-coordinator/src/defer_tests.rs::the_definitions_backoff_is_the_one_used (the first two waits, 10 and 30 s; service `svc` is the legacy service kbf here; the host repeats its report at the end of the wait, which the test's `hold` stands for, and goes on with a plain heartbeat when the wait is over)",
+ "services_text": "[[service]]\nname = \"kbf\"\ndefer_backoff = { initial_secs = 10, factor = 3, max_secs = 100 }\n[service.roles.daemon]\nmax_updating = 1\nmin_up = 0\n",
+ "steps": [
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  },
+  {
+   "at_secs": 2001,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"deferred\":{\"target\":\"2.0\",\"reason\":\"drain_bound\",\"retry_after_secs\":0}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2010,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"deferred\":{\"target\":\"2.0\",\"reason\":\"drain_bound\",\"retry_after_secs\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2011,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  },
+  {
+   "at_secs": 2012,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"deferred\":{\"target\":\"2.0\",\"reason\":\"drain_bound\",\"retry_after_secs\":0}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2041,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"deferred\":{\"target\":\"2.0\",\"reason\":\"drain_bound\",\"retry_after_secs\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2042,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  }
+ ]
+}

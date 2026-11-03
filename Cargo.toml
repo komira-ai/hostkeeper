@@ -13,12 +13,29 @@ publish = false
 # Every external dependency is declared here once and used from a member as
 # `name.workspace = true` (members add features they need).
 [workspace.dependencies]
+# The JWT segments of a CI token (hostkeeper-oidc).
+base64 = "0.23.1"
+bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+futures = "0.3.34"
 hex = "0.4.3"
-# `O_NOFOLLOW` and `O_NONBLOCK` for the declaration and approval files (hostkeeper-rights).
+# The coordinator's HTTP/1.1 server and the OIDC key fetch's client (hostkeeper-coordinator,
+# hostkeeper-oidc); members turn on the parts they use.
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
+# `O_NOFOLLOW` and `O_NONBLOCK` for the declaration and approval files (hostkeeper-rights) and
+# the secret files (hostkeeper-wire).
 libc = "0.2.190"
+# Certificates made in the tests (a dev-dependency only).
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+# The RS256 signature of a CI token (hostkeeper-oidc).
+ring = "0.17.14"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+# The host's roots, which the OIDC key fetch trusts.
+rustls-native-certs = "0.8.4"
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.
@@ -26,10 +43,18 @@ saphyr-parser = "0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+# The operator token compared in constant time (hostkeeper-coordinator).
+subtle = "2.6.1"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
+tokio = "1.53.3"
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 # The `--params` file and the declaration are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+# A certificate's subjectAltNames and validity (hostkeeper-wire, hostkeeper-tls).
+x509-parser = "0.18.1"
 
 [workspace.lints.rust]
 # `coverage` is set by cargo-llvm-cov.

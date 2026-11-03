@@ -1,0 +1,59 @@
+{
+ "from": "kbf-coordinator/tests/farm.rs::after_a_restart_the_state_stands_and_an_updating_host_is_counted (the unasserted beats have no expect_body)",
+ "steps": [
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"max_updating\":{\"daemon\":1},\"min_up\":{\"storage\":1,\"frontend\":1}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":1,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 5000,
+   "call": "restart"
+  },
+  {
+   "at_secs": 5000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"updating\":\"2.0\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 5030,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"updating\":\"2.0\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 5030,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 5030,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 5030,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  }
+ ]
+}

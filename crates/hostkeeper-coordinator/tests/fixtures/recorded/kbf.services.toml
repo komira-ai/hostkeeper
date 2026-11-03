@@ -1,0 +1,20 @@
+# kbf's own service as an entry of a services file (the coordinator's --services-file). It was
+# built in to the coordinator that kbf shipped; here it is plain data like any other service.
+#
+# All four roles, limits from the desired state; a frontend is never the last one up and
+# waits for every other role. kbf hard-coded the `min_up` keys a desired state of kbf must
+# name (storage and frontend); `require_min_up` says them as data.
+
+[[service]]
+name = "kbf"
+require_min_up = ["storage", "frontend"]
+
+[service.roles.frontend]
+never_last = true
+after = ["storage", "daemon", "mac-daemon"]
+
+[service.roles.storage]
+
+[service.roles.daemon]
+
+[service.roles.mac-daemon]

@@ -15,9 +15,26 @@ const HOOK: &str = "hostkeeper-hook";
 const STEPS: &str = "hostkeeper-steps";
 const RIGHTS: &str = "hostkeeper-rights";
 const TESTKIT: &str = "hostkeeper-testkit";
+const WIRE: &str = "hostkeeper-wire";
+const OIDC: &str = "hostkeeper-oidc";
+const TLS: &str = "hostkeeper-tls";
+const COORDINATOR: &str = "hostkeeper-coordinator";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
-const LAYERS: [(&str, &[&str]); 3] = [(HOOK, &[]), (STEPS, &[HOOK]), (RIGHTS, &[HOOK])];
+const LAYERS: [(&str, &[&str]); 7] = [
+    (HOOK, &[]),
+    (STEPS, &[HOOK]),
+    (RIGHTS, &[HOOK]),
+    (WIRE, &[]),
+    (OIDC, &[]),
+    (TLS, &[]),
+    (COORDINATOR, &[WIRE, OIDC, TLS]),
+];
+
+/// Dev-dependencies on another layer crate that are allowed besides the crate itself and the
+/// testkit: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature (a fake
+/// issuer), which a dev-dependency can do and a normal dependency must not.
+const DEV_ALLOWED: [(&str, &str); 1] = [(COORDINATOR, OIDC)];
 
 /// A package name to the names of the packages it depends on.
 pub type Edges = BTreeMap<String, BTreeSet<String>>;
@@ -263,7 +280,7 @@ fn chain_to(edges: &Edges, members: &[&str], target: &str) -> Vec<String> {
 }
 
 /// Every rule the workspace breaks, one line each: first the kbf names (all of `lock`), then
-/// the hook, steps and rights crates, then the testkit.
+/// the layer crates (hook, steps, rights, wire, oidc, tls, coordinator), then the testkit.
 fn violations(members: &Members, lock: &Edges) -> Vec<String> {
     let mut out = Vec::new();
     let member_names: Vec<&str> = members.keys().map(String::as_str).collect();
@@ -299,7 +316,7 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
             }
         }
         for dev in workspace_deps(members, name, |kind| kind == Kind::Dev) {
-            if dev != name && dev != TESTKIT {
+            if dev != name && dev != TESTKIT && !DEV_ALLOWED.contains(&(name, dev)) {
                 out.push(format!(
                     "{name} has a dev-dependency on the workspace crate {dev}, \
                      which is neither itself nor {TESTKIT}"
@@ -394,4 +411,134 @@ pub fn metadata_of(root: &Path) -> serde_json::Value {
         &root.join("Cargo.toml"),
     );
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("cargo metadata printed no JSON: {e}"))
+}
+
+/// Whether the role-enum scan leaves the file out: it holds test code.
+fn is_test_file(name: &str) -> bool {
+    name == "tests.rs" || name == "testutil.rs" || name.ends_with("_tests.rs")
+}
+
+/// Whether `code` begins an item with `keyword` (`const` or `static`, not `const fn`), after an
+/// optional visibility. A lifetime such as `&'static str` is not one.
+fn starts_item(code: &str, keyword: &str) -> bool {
+    let mut rest = code.trim_start();
+    if let Some(after) = rest.strip_prefix("pub") {
+        rest = after.trim_start();
+        if rest.starts_with('(')
+            && let Some((_, after)) = rest.split_once(')')
+        {
+            rest = after.trim_start();
+        }
+    }
+    rest.strip_prefix(keyword)
+        .is_some_and(|after| after.starts_with(char::is_whitespace))
+        && !rest[keyword.len()..].trim_start().starts_with("fn ")
+}
+
+/// What a line of code says that brings the closed set of roles back, if anything: the
+/// identifier `HostRole`, an `enum` whose name ends in `Role`, a `const` or `static` of type
+/// `RoleName`, or a function returning an array of `RoleName`.
+fn closed_role_in(line: &str) -> Option<String> {
+    let code = line.split("//").next().unwrap_or("");
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|word| !word.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let all = words(code);
+    if all.iter().any(|word| word == "HostRole") {
+        return Some("the identifier HostRole".to_string());
+    }
+    if let Some(at) = all.iter().position(|word| word == "enum")
+        && let Some(name) = all.get(at + 1)
+        && name.ends_with("Role")
+    {
+        return Some(format!("the enum {name}, a closed set of roles"));
+    }
+    if (starts_item(code, "const") || starts_item(code, "static"))
+        && let Some((_, rest)) = code.split_once(':')
+        && words(rest.split('=').next().unwrap_or("")).contains(&"RoleName".to_string())
+    {
+        return Some("a const or static of type RoleName".to_string());
+    }
+    if let Some((_, returned)) = code.split_once("->") {
+        let returned = returned.trim_start().trim_start_matches('&').trim_start();
+        let returned = returned
+            .strip_prefix("'static")
+            .unwrap_or(returned)
+            .trim_start();
+        if returned.starts_with("[RoleName") {
+            return Some("a function returning an array of RoleName".to_string());
+        }
+    }
+    None
+}
+
+/// The sorted paths directly under `dir`; an unreadable `dir` panics.
+fn sorted_entries(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+        .map(|entry| entry.expect("read a directory entry").path())
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Scans the `.rs` files under `dir`, skipping test files and directories named `tests`.
+fn scan_role_dir(root: &Path, dir: &Path, scanned: &mut usize, found: &mut Vec<String>) {
+    for path in sorted_entries(dir) {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if path.is_dir() {
+            if name != "tests" {
+                scan_role_dir(root, &path, scanned, found);
+            }
+        } else if name.ends_with(".rs") && !is_test_file(&name) {
+            *scanned += 1;
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let mut skipping = false;
+            for (index, line) in text.lines().enumerate() {
+                if skipping {
+                    // A `#[cfg(test)]` item at column 0 ends at the first column-0 line that is
+                    // `}` or ends in `;`.
+                    skipping = !(line == "}"
+                        || (!line.starts_with(char::is_whitespace) && line.ends_with(';')));
+                    continue;
+                }
+                if line == "#[cfg(test)]" {
+                    skipping = true;
+                    continue;
+                }
+                if let Some(what) = closed_role_in(line) {
+                    found.push(format!("{relative}:{}: {what}", index + 1));
+                }
+            }
+        }
+    }
+}
+
+/// Scans every non-test `.rs` file under `root/crates/*/src` for the closed set of roles coming
+/// back (see `closed_role_in`). Returns the number of files scanned and one line per finding,
+/// `<file>:<line>: <what>`, in path order. Test files (`tests.rs`, `testutil.rs`, `*_tests.rs`),
+/// directories named `tests` and `#[cfg(test)]` items at column 0 are left out.
+pub fn closed_role_enums(root: &Path) -> (usize, Vec<String>) {
+    let mut scanned = 0;
+    let mut found = Vec::new();
+    for krate in sorted_entries(&root.join("crates")) {
+        let src = krate.join("src");
+        if src.is_dir() {
+            scan_role_dir(root, &src, &mut scanned, &mut found);
+        }
+    }
+    (scanned, found)
 }

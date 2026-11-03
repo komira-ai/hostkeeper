@@ -1,0 +1,52 @@
+{
+ "from": "kbf-coordinator/src/http_tests/features.rs::an_agent_that_announced_features_gets_the_supported_subset (the test's coordinator advertised deferred-v1 and halt-v1; this one advertises one more, heartbeat-v2, which the agent does not announce)",
+ "services_fixture": "kbf.services.toml",
+ "services_text": "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n",
+ "oidc_services": [
+  "kbf",
+  "other"
+ ],
+ "steps": [
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":1,\"frontend\":1}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"service\":\"other\",\"version\":\"3.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"3.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"halt-v1\",\"unknown-v9\",\"deferred-v1\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[\"deferred-v1\",\"halt-v1\"]}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"unknown-v9\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[]}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"agent_features\":[\"halt-v1\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\",\"features\":[\"halt-v1\"]}"
+  }
+ ]
+}

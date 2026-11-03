@@ -1,0 +1,103 @@
+{
+ "from": "kbf-coordinator/src/http_tests/halt.rs::the_generation_counts_clears_per_service_and_survives_a_restart (the clears' audit entries are asserted by their fields, as in kbf's other halt tests)",
+ "services_fixture": "kbf.services.toml",
+ "services_text": "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n",
+ "oidc_services": [
+  "kbf",
+  "other"
+ ],
+ "steps": [
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"service\":\"other\",\"version\":\"3.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"3.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "s1",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.1\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 1100,
+   "call": "operator",
+   "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\""
+   ]
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"halt-v1\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[\"halt-v1\"],\"halts\":{\"kbf\":1}}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "s1",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.2\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 1100,
+   "call": "operator",
+   "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\""
+   ]
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"halt-v1\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[\"halt-v1\"],\"halts\":{\"kbf\":2}}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d3",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"services\":[{\"name\":\"other\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"3.0\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}]}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 1100,
+   "call": "operator",
+   "body": "{\"action\":\"clear_halt\",\"service\":\"other\",\"reason\":\"disk replaced\"}",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"action\":\"clear_halt\",\"service\":\"other\""
+   ]
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"halt-v1\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[\"halt-v1\"],\"halts\":{\"kbf\":2,\"other\":1}}"
+  }
+ ]
+}

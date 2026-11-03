@@ -1,0 +1,71 @@
+{
+ "from": "kbf-coordinator/src/http_tests/services.rs::a_bad_services_list_is_dropped_counted_and_the_host_still_updates",
+ "services_fixture": "kbf.services.toml",
+ "steps": [
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":1,\"frontend\":1}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "status",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"services_dropped\":0"
+   ]
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"services\":[{\"name\":\"kbf\",\"version\":\"1.0\",\"health\":\"healthy\"}]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "status",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"services_dropped\":1"
+   ]
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"services\":[{\"name\":\"other\",\"version\":\"1.0\",\"health\":\"healthy\"},{\"name\":\"other\",\"version\":\"1.0\",\"health\":\"healthy\"}]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "status",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"services_dropped\":2"
+   ]
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"health\":\"healthy\",\"services\":[]}",
+   "expect_status": 400
+  },
+  {
+   "at_secs": 2000,
+   "call": "status",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"services_dropped\":2"
+   ]
+  }
+ ]
+}

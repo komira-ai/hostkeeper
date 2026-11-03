@@ -15,7 +15,7 @@ Every API is a protobuf service, and the command line is generated from those de
 
 **hostkeeper is pre-release.** There is no program to run and no release yet. The parts listed
 above are being moved here from [kbf](https://github.com/komira-ai/kbf), where they are developed
-today. So far this repository holds the generic half of the host updater, moved from kbf
+today. So far this repository holds the generic half of the host updater and its coordinator, moved from kbf
 ([MIGRATION.md](MIGRATION.md)), and the build, lint and coverage tooling:
 
 | crate | what it holds |
@@ -23,6 +23,10 @@ today. So far this repository holds the generic half of the host updater, moved 
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the updater and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
 | [`hostkeeper-rights`](crates/hostkeeper-rights) | the declaration in `/etc/updater.d`, its loader, approvals, and the transient unit that runs one step with the declared rights |
 | [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update |
+| [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and the agent exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity of an updater, the secret-file rule |
+| [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
+| [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
+| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the desired version of each service, the heartbeat and control endpoints, the convergence of a fleet; run as `hostkeeper-coordinator serve` |
 | `hostkeeper-testkit` | helpers the tests share |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
 

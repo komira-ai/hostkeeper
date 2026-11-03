@@ -1,0 +1,250 @@
+{
+ "from": "kbf-coordinator/src/rollback_tests.rs::release_failures_past_the_threshold_roll_desired_back_and_mark_the_version_bad (kbf's definition replaced as the test does; its asserts on Rust values -- the wanted version, the marks, the audit entry -- are expect_contains of the status bytes, in kbf's serialiser order)",
+ "services_text": "[[service]]\nname = \"kbf\"\nrollback = \"automatic\"\n[service.roles.daemon]\nmax_updating = 6\nmin_up = 0\n",
+ "steps": [
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"version\":\"1.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"1.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d3",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d4",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d5",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d6",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2000,
+   "call": "status",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"last_good\":\"1.0\""
+   ]
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"after_commit\",\"class\":\"release\"}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "d3",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "d4",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "d5",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "d6",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2015,
+   "call": "status",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"services\":{\"kbf\":{\"version\":\"2.0\""
+   ],
+   "expect_not_contains": [
+    "\"bad\":[\"2.0\"]"
+   ]
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"after_commit\",\"class\":\"release\"}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"gate_release\"}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "d3",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "d4",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "d5",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "d6",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2030,
+   "call": "status",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"services\":{\"kbf\":{\"version\":\"1.0\"",
+    "\"bad\":[\"2.0\"]",
+    "\"by\":\"coordinator\",\"action\":\"mark_bad\",\"service\":\"kbf\""
+   ]
+  },
+  {
+   "at_secs": 2045,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"after_commit\",\"class\":\"release\"}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2045,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"gate_release\"}}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2045,
+   "call": "heartbeat",
+   "host": "d3",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2045,
+   "call": "heartbeat",
+   "host": "d4",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2045,
+   "call": "heartbeat",
+   "host": "d5",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2045,
+   "call": "heartbeat",
+   "host": "d6",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200
+  },
+  {
+   "at_secs": 2045,
+   "call": "status",
+   "expect_status": 200,
+   "expect_contains": [
+    "\"services\":{\"kbf\":{\"version\":\"1.0\"",
+    "\"bad\":[\"2.0\"]"
+   ]
+  }
+ ]
+}

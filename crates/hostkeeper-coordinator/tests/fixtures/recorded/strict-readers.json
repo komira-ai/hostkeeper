@@ -1,0 +1,153 @@
+{
+ "from": "kbf v0.0.64 (8f90d0604794f3fee057e71647c7e1c1e034fa2e), kbf-coordinator/src/desired.rs and ops.rs: every struct the coordinator reads from its state files with deny_unknown_fields. `allowed` are the keys the struct has, `required` the ones without a serde default (an Option field without `default` is not required either), `nested` the type of a key's value: `T` a struct, `[T]` an array of them, `{T}` a map from names to them.",
+ "files": {
+  "desired-single": "Desired",
+  "desired-map": "MapFile",
+  "ops": "OpsState"
+ },
+ "structs": {
+  "Desired": {
+   "source": "kbf-coordinator/src/desired.rs:177",
+   "allowed": [
+    "version",
+    "max_updating",
+    "min_up"
+   ],
+   "required": [
+    "version",
+    "min_up"
+   ],
+   "nested": {}
+  },
+  "MapFile": {
+   "source": "kbf-coordinator/src/desired.rs:335",
+   "allowed": [
+    "services"
+   ],
+   "required": [
+    "services"
+   ],
+   "nested": {
+    "services": "{Desired}"
+   }
+  },
+  "OpsState": {
+   "source": "kbf-coordinator/src/ops.rs:234",
+   "schema": 1,
+   "allowed": [
+    "schema",
+    "hosts",
+    "excluded",
+    "services",
+    "audit"
+   ],
+   "required": [
+    "schema"
+   ],
+   "nested": {
+    "hosts": "{HostOps}",
+    "excluded": "[Exclusion]",
+    "services": "{ServiceOps}",
+    "audit": "[AuditEntry]"
+   }
+  },
+  "HostOps": {
+   "source": "kbf-coordinator/src/ops.rs:79",
+   "allowed": [
+    "labels"
+   ],
+   "required": [],
+   "nested": {}
+  },
+  "Exclusion": {
+   "source": "kbf-coordinator/src/ops.rs:88",
+   "allowed": [
+    "service",
+    "node_id",
+    "reason"
+   ],
+   "required": [
+    "service",
+    "node_id",
+    "reason"
+   ],
+   "nested": {}
+  },
+  "Halt": {
+   "source": "kbf-coordinator/src/ops.rs:100",
+   "allowed": [
+    "node_id",
+    "check",
+    "target",
+    "report"
+   ],
+   "required": [
+    "node_id",
+    "check",
+    "target"
+   ],
+   "nested": {}
+  },
+  "HaltAck": {
+   "source": "kbf-coordinator/src/ops.rs:117",
+   "allowed": [
+    "node_id",
+    "target",
+    "report"
+   ],
+   "required": [
+    "node_id",
+    "target"
+   ],
+   "nested": {}
+  },
+  "FailureAck": {
+   "source": "kbf-coordinator/src/ops.rs:155",
+   "allowed": [
+    "node_id",
+    "report"
+   ],
+   "required": [
+    "node_id",
+    "report"
+   ],
+   "nested": {}
+  },
+  "ServiceOps": {
+   "source": "kbf-coordinator/src/ops.rs:165",
+   "allowed": [
+    "halt",
+    "halt_acked",
+    "halt_seen",
+    "halt_generation",
+    "last_good",
+    "bad",
+    "failure_acked"
+   ],
+   "required": [],
+   "nested": {
+    "halt": "Halt",
+    "halt_acked": "[HaltAck]",
+    "halt_seen": "[HaltAck]",
+    "failure_acked": "[FailureAck]"
+   }
+  },
+  "AuditEntry": {
+   "source": "kbf-coordinator/src/ops.rs:197",
+   "allowed": [
+    "seq",
+    "by",
+    "action",
+    "service",
+    "node_id",
+    "reason"
+   ],
+   "required": [
+    "seq",
+    "by",
+    "action"
+   ],
+   "nested": {}
+  }
+ }
+}
