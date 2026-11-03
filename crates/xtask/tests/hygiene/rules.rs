@@ -723,7 +723,8 @@ fn ends_url(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']' | '`' | ',')
 }
 
-/// The URLs of a line: each `scheme://authority`, and each protocol-relative `//authority`
+/// The URLs of a line: each URL with a scheme (a colon and two slashes before the authority), and
+/// each protocol-relative one (two slashes, then the authority)
 /// whose authority is a host name (dotted labels under a top-level domain; `a//b`, `// text` and
 /// `///` are not URLs). The path exemption of bare names never applies to an authority.
 fn urls(line: &str) -> Vec<Url> {
