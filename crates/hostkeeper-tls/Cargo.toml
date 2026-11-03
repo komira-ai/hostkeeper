@@ -24,6 +24,7 @@ hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 rcgen.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync", "time"] }
 tokio-rustls.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

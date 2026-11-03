@@ -64,7 +64,8 @@ async fn a_single_table_sets_kbf_and_is_refused_for_another_service() {
     assert!(matches!(set, Err(SetError::Forbidden)));
     assert!(SetError::Forbidden.to_string().contains("may not"));
     let status = rig.coordinator.status(Some(OPERATOR)).expect("status");
-    assert!(status.desired.is_none() && status.services.is_empty());
+    assert!(status.desired.is_none());
+    assert!(status.services.is_empty());
     rig.set(STATE).await;
 }
 
@@ -470,16 +471,13 @@ async fn without_a_legacy_service_a_body_naming_no_service_is_refused() {
     let rig = without_legacy("svc-no-legacy-set");
     let c = &rig.coordinator;
     let set = c.set_desired(Some(&ci_token()), STATE.as_bytes()).await;
-    assert!(
-        matches!(
-            &set,
-            Err(SetError::Invalid(crate::desired::DesiredError::Malformed(why)))
-                if why == "service is required"
-        ),
-        "{set:?}"
+    assert_eq!(
+        set.map(|_| ()).map_err(|e| e.to_string()),
+        Err("the desired state is malformed: service is required".to_owned())
     );
     let status = c.status(Some(OPERATOR)).expect("status");
-    assert!(status.desired.is_none() && status.services.is_empty());
+    assert!(status.desired.is_none());
+    assert!(status.services.is_empty());
     c.set_desired(Some(&ci_token()), OTHER.as_bytes())
         .await
         .expect("other is named by the entry");

@@ -4,6 +4,7 @@
 //! socket is opened and what is checked is what a client sees, not what the source says it
 //! holds. The files are in a scratch directory under the target directory.
 
+mod logs;
 mod reload;
 mod sources;
 mod support;

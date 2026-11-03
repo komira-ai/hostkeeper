@@ -321,4 +321,29 @@ mod tests {
             assert!(version.same_release(&version), "{s}");
         }
     }
+
+    /// Catches a version taken to name a commit it does not name, or one it names missed: the
+    /// commit is the 12 to 40 hex digits after the last `+` (the `g` of a build of `main`
+    /// dropped), followed by the end or a `-`.
+    #[test]
+    fn the_commit_is_the_hex_digits_after_the_last_plus() {
+        let commit = |s: &str| v(s).commit().map(str::to_owned);
+        let twelve = "0123456789ab";
+        let forty = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            commit(&format!("0.1.7+g{twelve}-3")),
+            Some(twelve.to_owned())
+        );
+        assert_eq!(commit(&format!("0.1.0+{twelve}")), Some(twelve.to_owned()));
+        assert_eq!(commit(&format!("1.0+g{forty}")), Some(forty.to_owned()));
+        assert_eq!(commit("2.0"), None, "no +");
+        assert_eq!(commit("1.2.3-1"), None, "no +");
+        assert_eq!(commit("0.1.7+g0123456789a"), None, "11 digits");
+        assert_eq!(commit(&format!("1.0+g{forty}8")), None, "41 digits");
+        assert_eq!(
+            commit(&format!("0.1.7+g{twelve}x")),
+            None,
+            "not the end nor a -"
+        );
+    }
 }
