@@ -272,6 +272,25 @@ fn enum_zero_values_are_unspecified() {
     }
     assert!(seen >= 10, "only {seen} enums were checked");
 
+    // Enums nested at any depth are found and checked.
+    let nested = fixture_set(
+        "n.proto",
+        "syntax = \"proto3\";\npackage n.v1;\n\
+         message Outer {\n  message Inner { enum Deep { DEEP_NONE = 0; } }\n  \
+         enum Shallow { SHALLOW_UNSPECIFIED = 0; }\n}\n",
+    );
+    let problems: Vec<Option<String>> = enums_of(&nested.file[0])
+        .into_iter()
+        .map(zero_problem)
+        .collect();
+    assert_eq!(
+        problems,
+        [
+            None,
+            Some("Deep: 0 is DEEP_NONE, not DEEP_UNSPECIFIED".to_owned()),
+        ]
+    );
+
     let fixture = |values: Vec<EnumValueDescriptorProto>| EnumDescriptorProto {
         name: Some("CommitState".to_owned()),
         value: values,
@@ -306,17 +325,20 @@ fn secret_problems(pool: &DescriptorPool) -> Result<Vec<String>, String> {
     {
         return Err("(hostkeeper.secret) is not a bool option of fields".to_owned());
     }
+    // Every field: those of messages, then extensions, which carry field options too.
+    let fields = pool.all_messages().flat_map(|m| {
+        m.fields()
+            .map(|f| (f.full_name().to_owned(), f.kind(), f.options()))
+            .collect::<Vec<_>>()
+    });
+    let extensions = pool
+        .all_extensions()
+        .map(|e| (e.full_name().to_owned(), e.kind(), e.options()));
     let mut problems = Vec::new();
-    for message in pool.all_messages() {
-        for field in message.fields() {
-            let marked = field.options().get_extension(&secret).as_ref() == &Value::Bool(true);
-            if marked && !matches!(field.kind(), Kind::String | Kind::Bytes) {
-                problems.push(format!(
-                    "{} is {}",
-                    field.full_name(),
-                    kind_name(&field.kind())
-                ));
-            }
+    for (name, kind, options) in fields.chain(extensions) {
+        let marked = options.get_extension(&secret).as_ref() == &Value::Bool(true);
+        if marked && !matches!(kind, Kind::String | Kind::Bytes) {
+            problems.push(format!("{name} is {}", kind_name(&kind)));
         }
     }
     Ok(problems)
@@ -344,14 +366,23 @@ impl FileResolver for Fixture {
     }
 }
 
-fn fixture_pool(name: &'static str, text: &'static str) -> DescriptorPool {
+fn fixture_compiler(name: &'static str, text: &'static str) -> protox::Compiler {
     let mut chain = ChainFileResolver::new();
     chain.add(Fixture(name, text));
     chain.add(IncludeFileResolver::new(proto_root()));
     chain.add(GoogleFileResolver::new());
     let mut compiler = protox::Compiler::with_file_resolver(chain);
     compiler.open_file(name).expect("the fixture compiles");
-    compiler.descriptor_pool()
+    compiler
+}
+
+fn fixture_pool(name: &'static str, text: &'static str) -> DescriptorPool {
+    fixture_compiler(name, text).descriptor_pool()
+}
+
+/// The fixture file alone, as a descriptor set.
+fn fixture_set(name: &'static str, text: &'static str) -> prost_types::FileDescriptorSet {
+    fixture_compiler(name, text).file_descriptor_set()
 }
 
 /// Catches: the option missing or redeclared as something else, and a secret marked on a field
@@ -369,7 +400,12 @@ fn secret_option_is_declared_and_only_on_string_or_bytes_fields() {
         "f.proto",
         r#"syntax = "proto3";
 package f.v1;
+import "google/protobuf/descriptor.proto";
 import "hostkeeper/options.proto";
+extend google.protobuf.FieldOptions {
+  int32 tag = 50099 [(hostkeeper.secret) = true];
+  string note = 50098 [(hostkeeper.secret) = true];
+}
 message Login {
   string token = 1 [(hostkeeper.secret) = true];
   bytes key = 2 [(hostkeeper.secret) = true];
@@ -385,6 +421,7 @@ message Login {
         Ok(vec![
             "f.v1.Login.pin is uint64".to_owned(),
             "f.v1.Login.again is message f.v1.Login".to_owned(),
+            "f.v1.tag is int32".to_owned(),
         ])
     );
 
@@ -407,6 +444,19 @@ extend google.protobuf.MessageOptions { bool secret = 50000; }
     );
     assert_eq!(
         secret_problems(&wrong),
+        Err("(hostkeeper.secret) is not a bool option of fields".to_owned())
+    );
+
+    let not_bool = fixture_pool(
+        "hostkeeper/options.proto",
+        r#"syntax = "proto3";
+package hostkeeper;
+import "google/protobuf/descriptor.proto";
+extend google.protobuf.FieldOptions { string secret = 50000; }
+"#,
+    );
+    assert_eq!(
+        secret_problems(&not_bool),
         Err("(hostkeeper.secret) is not a bool option of fields".to_owned())
     );
 }

@@ -9,8 +9,15 @@
 //! - a field number that is gone: renumbered when its name is now at another number, removed
 //!   otherwise;
 //! - a field number that now has another name, and that name's reuse at another number;
-//! - a field whose type (scalar type, or message or enum name) or label (singular, repeated,
-//!   explicit presence) changed;
+//! - a field whose type (its descriptor type, and the message or enum it names) or label
+//!   (optional, repeated, required) changed;
+//! - a singular field whose presence changed (implicit, as a proto3 scalar has it, or explicit, as
+//!   a proto2 field, a message, a `optional` proto3 field or a oneof member has it), as moving it
+//!   into a oneof or its file to another syntax does;
+//! - a field that joined, left or moved to another oneof (named, so a oneof renumbered among its
+//!   message's oneofs is no break; the synthetic oneof of a proto3 `optional` field is not one);
+//! - a field whose default value (proto2) or JSON name changed;
+//! - a message that became, or stopped being, a map entry;
 //! - a new field marked required, anywhere;
 //! - an enum value that is gone: renumbered when its name is now at another number, removed
 //!   otherwise (a number that now has another name is a removed value);
@@ -27,7 +34,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use prost_types::field_descriptor_proto::Label;
+use prost_types::field_descriptor_proto::{Label, Type};
 use prost_types::{
     DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet,
     ServiceDescriptorProto,
@@ -83,12 +90,24 @@ pub enum Break {
         from: String,
         to: String,
     },
-    /// Singular, repeated, required or explicit presence changed.
+    /// The label (optional, repeated, required) changed.
     FieldLabelChanged {
         message: String,
         name: String,
         from: String,
         to: String,
+    },
+    /// The field's presence, oneof, default value or JSON name changed.
+    FieldAttributeChanged {
+        message: String,
+        name: String,
+        attribute: Attribute,
+        from: String,
+        to: String,
+    },
+    /// The message became, or stopped being, the entry of a map field.
+    MapEntryChanged {
+        message: String,
     },
     /// A field that is not in the earlier set is required.
     RequiredAdded {
@@ -136,6 +155,19 @@ pub enum Break {
     },
 }
 
+/// An attribute of a field other than its name, number, type and label.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Attribute {
+    /// `implicit` or `explicit`, for a singular field.
+    Presence,
+    /// The oneof's name, or `none`.
+    Oneof,
+    /// The proto2 default value; empty when there is none.
+    Default,
+    /// The name in JSON.
+    JsonName,
+}
+
 /// Every way `new` breaks `old`: packages first, then messages, enums and services, each in name
 /// order. Empty when `new` only adds.
 pub fn breaks(old: &FileDescriptorSet, new: &FileDescriptorSet) -> Vec<Break> {
@@ -145,15 +177,24 @@ pub fn breaks(old: &FileDescriptorSet, new: &FileDescriptorSet) -> Vec<Break> {
     let (old_messages, new_messages) = (messages(old), messages(new));
     for (name, before) in &old_messages {
         match new_messages.get(name) {
-            Some(after) => fields(name, before, after, &mut out),
+            Some(after) => {
+                if is_map_entry(before.proto) != is_map_entry(after.proto) {
+                    out.push(Break::MapEntryChanged {
+                        message: name.clone(),
+                    });
+                }
+                fields(name, *before, *after, &mut out);
+            }
             None => out.push(Break::MessageRemoved {
                 message: name.clone(),
             }),
         }
     }
     for (name, after) in &new_messages {
-        let before = old_messages.get(name).map_or(&[][..], |m| &m.field[..]);
-        for field in &after.field {
+        let before = old_messages
+            .get(name)
+            .map_or(&[][..], |m| &m.proto.field[..]);
+        for field in &after.proto.field {
             let added = !before.iter().any(|b| b.number() == field.number());
             if added && field.label() == Label::Required {
                 out.push(Break::RequiredAdded {
@@ -210,11 +251,19 @@ fn scope(package: &str) -> String {
     format!(".{package}")
 }
 
+/// A message, and whether its file gives every singular field explicit presence (proto2).
+#[derive(Clone, Copy)]
+struct Message<'a> {
+    proto: &'a DescriptorProto,
+    proto2: bool,
+}
+
 /// Every message of the set, nested ones included, by fully qualified name.
-fn messages(set: &FileDescriptorSet) -> BTreeMap<String, &DescriptorProto> {
+fn messages(set: &FileDescriptorSet) -> BTreeMap<String, Message<'_>> {
     let mut out = BTreeMap::new();
     for file in &set.file {
-        collect_messages(&scope(file.package()), &file.message_type, &mut out);
+        let proto2 = file.syntax() != "proto3";
+        collect_messages(&scope(file.package()), &file.message_type, proto2, &mut out);
     }
     out
 }
@@ -222,13 +271,18 @@ fn messages(set: &FileDescriptorSet) -> BTreeMap<String, &DescriptorProto> {
 fn collect_messages<'a>(
     scope: &str,
     list: &'a [DescriptorProto],
-    out: &mut BTreeMap<String, &'a DescriptorProto>,
+    proto2: bool,
+    out: &mut BTreeMap<String, Message<'a>>,
 ) {
-    for message in list {
-        let name = format!("{scope}.{}", message.name());
-        collect_messages(&name, &message.nested_type, out);
-        out.insert(name, message);
+    for proto in list {
+        let name = format!("{scope}.{}", proto.name());
+        collect_messages(&name, &proto.nested_type, proto2, out);
+        out.insert(name, Message { proto, proto2 });
     }
+}
+
+fn is_map_entry(message: &DescriptorProto) -> bool {
+    message.options.as_ref().is_some_and(|o| o.map_entry())
 }
 
 /// Every enum of the set, nested ones included, by fully qualified name.
@@ -241,7 +295,7 @@ fn enums(set: &FileDescriptorSet) -> BTreeMap<String, &EnumDescriptorProto> {
         }
     }
     for (name, message) in messages(set) {
-        for e in &message.enum_type {
+        for e in &message.proto.enum_type {
             out.insert(format!("{name}.{}", e.name()), e);
         }
     }
@@ -260,28 +314,45 @@ fn services(set: &FileDescriptorSet) -> BTreeMap<String, &ServiceDescriptorProto
     out
 }
 
-/// What a field holds: its message or enum when it names one, its scalar type otherwise.
+/// What a field holds: its descriptor type, and the message or enum it names, if it names one.
+/// A group and a message field of one message differ, as their encodings do.
 fn shape(field: &FieldDescriptorProto) -> String {
+    let kind = field.r#type().as_str_name();
     match field.type_name() {
-        "" => field.r#type().as_str_name().to_owned(),
-        name => name.to_owned(),
+        "" => kind.to_owned(),
+        name => format!("{kind} {name}"),
     }
 }
 
-/// How many a field holds, and whether its presence is explicit (`optional` in proto3).
-fn label(field: &FieldDescriptorProto) -> String {
-    let label = field.label().as_str_name();
-    if field.proto3_optional() {
-        format!("{label} (explicit presence)")
-    } else {
-        label.to_owned()
-    }
+/// Whether a singular field's presence is explicit or implicit.
+fn presence(field: &FieldDescriptorProto, message: Message<'_>) -> &'static str {
+    let explicit = matches!(field.r#type(), Type::Message | Type::Group)
+        || message.proto2
+        || field.proto3_optional()
+        || field.oneof_index.is_some();
+    if explicit { "explicit" } else { "implicit" }
 }
 
-fn fields(message: &str, before: &DescriptorProto, after: &DescriptorProto, out: &mut Vec<Break>) {
-    for old in &before.field {
-        let by_name = after.field.iter().find(|f| f.name() == old.name());
-        let Some(now) = after.field.iter().find(|f| f.number() == old.number()) else {
+/// The name of the oneof a field belongs to, or `none`. A proto3 `optional` field's synthetic
+/// oneof is not a oneof here: its presence says it.
+fn oneof(field: &FieldDescriptorProto, message: Message<'_>) -> String {
+    let declared = field
+        .oneof_index
+        .filter(|_| !field.proto3_optional())
+        .and_then(|i| usize::try_from(i).ok())
+        .and_then(|i| message.proto.oneof_decl.get(i));
+    declared.map_or_else(|| "none".to_owned(), |o| o.name().to_owned())
+}
+
+fn fields(message: &str, before: Message<'_>, after: Message<'_>, out: &mut Vec<Break>) {
+    for old in &before.proto.field {
+        let by_name = after.proto.field.iter().find(|f| f.name() == old.name());
+        let Some(now) = after
+            .proto
+            .field
+            .iter()
+            .find(|f| f.number() == old.number())
+        else {
             out.push(match by_name {
                 Some(moved) => Break::FieldRenumbered {
                     message: message.to_owned(),
@@ -321,15 +392,48 @@ fn fields(message: &str, before: &DescriptorProto, after: &DescriptorProto, out:
                 to: is,
             });
         }
-        let (was, is) = (label(old), label(now));
+        let (was, is) = (old.label(), now.label());
         if was != is {
             out.push(Break::FieldLabelChanged {
                 message: message.to_owned(),
                 name: old.name().to_owned(),
-                from: was,
-                to: is,
+                from: was.as_str_name().to_owned(),
+                to: is.as_str_name().to_owned(),
             });
+        } else if was != Label::Repeated {
+            let (was, is) = (presence(old, before), presence(now, after));
+            if was != is {
+                out.push(changed(message, old, Attribute::Presence, was, is));
+            }
         }
+        let (was, is) = (oneof(old, before), oneof(now, after));
+        if was != is {
+            out.push(changed(message, old, Attribute::Oneof, &was, &is));
+        }
+        if old.default_value() != now.default_value() {
+            let (was, is) = (old.default_value(), now.default_value());
+            out.push(changed(message, old, Attribute::Default, was, is));
+        }
+        if now.name() == old.name() && now.json_name() != old.json_name() {
+            let (was, is) = (old.json_name(), now.json_name());
+            out.push(changed(message, old, Attribute::JsonName, was, is));
+        }
+    }
+}
+
+fn changed(
+    message: &str,
+    field: &FieldDescriptorProto,
+    attribute: Attribute,
+    from: &str,
+    to: &str,
+) -> Break {
+    Break::FieldAttributeChanged {
+        message: message.to_owned(),
+        name: field.name().to_owned(),
+        attribute,
+        from: from.to_owned(),
+        to: to.to_owned(),
     }
 }
 

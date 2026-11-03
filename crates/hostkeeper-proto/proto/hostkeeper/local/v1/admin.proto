@@ -33,7 +33,8 @@ service Admin {
   // changes nothing.
   rpc ApproveDeclaration(ApproveDeclarationRequest) returns (ApproveDeclarationResponse);
   // Hold a service on the release it runs now: no order for it runs, forced or not, until it is
-  // unpinned. Pinning a pinned service replaces the reason.
+  // unpinned. Pinning a pinned service replaces the reason. A declared service no release of
+  // which was ever installed has nothing to hold, and is refused (`not_installed`).
   rpc Pin(PinRequest) returns (PinResponse);
   // Lift a service's pin, from every place a pin is read. Unpinning a service that is not pinned
   // changes nothing.
@@ -41,7 +42,9 @@ service Admin {
   // Switch a service to a release the host already keeps and has already verified, with no
   // fetch: the generic form of a forced local rollback. The root part runs the hook's switch
   // under the step lock, as for any order, and it is never put on trial or reverted. It does not
-  // pin: `Pin` after it holds the service there.
+  // pin: `Pin` after it holds the service there. On a pinned service it is allowed, as root's own
+  // act, and the pin is kept and moved to the activated release (its reason unchanged), so the
+  // service stays held, now on that release.
   rpc Activate(ActivateRequest) returns (ActivateResponse);
 }
 
@@ -64,6 +67,8 @@ enum AdminRefusal {
   ADMIN_REFUSAL_BUSY = 5;
   // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
   ADMIN_REFUSAL_STORE_FAILED = 6;
+  // FAILED_PRECONDITION: `Pin` of a declared service no release of which was ever installed.
+  ADMIN_REFUSAL_NOT_INSTALLED = 7;
 }
 
 message ApproveDeclarationRequest {
@@ -103,4 +108,6 @@ message ActivateRequest {
 message ActivateResponse {
   // The switch, as the step record holds it once it ended: an UPDATE, forced.
   StepRecord record = 1;
+  // The pin after the switch, on the activated release; absent when the service was not pinned.
+  Pin pin = 2;
 }

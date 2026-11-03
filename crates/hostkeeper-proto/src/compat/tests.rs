@@ -5,7 +5,7 @@ use prost::Message as _;
 use prost_types::FileDescriptorSet;
 use protox::file::{File, FileResolver};
 
-use super::{Break, breaks};
+use super::{Attribute, Break, breaks};
 
 /// Fixture sources, by file name.
 struct Sources(Vec<(String, String)>);
@@ -87,6 +87,16 @@ fn s(text: &str) -> String {
     text.to_owned()
 }
 
+fn attribute(message: &str, name: &str, attribute: Attribute, from: &str, to: &str) -> Break {
+    Break::FieldAttributeChanged {
+        message: s(message),
+        name: s(name),
+        attribute,
+        from: s(from),
+        to: s(to),
+    }
+}
+
 /// Catches: a field dropped from a released message, whose number an old reader still decodes.
 #[test]
 fn compat_refuses_removed_field() {
@@ -130,35 +140,195 @@ fn compat_refuses_changed_field_type() {
             Break::FieldTypeChanged {
                 message: s(GET_RESPONSE),
                 name: s("kind"),
-                from: s(".a.v1.Kind"),
-                to: s(".a.v1.Note"),
+                from: s("TYPE_ENUM .a.v1.Kind"),
+                to: s("TYPE_MESSAGE .a.v1.Note"),
+            },
+            // A message field always has explicit presence; a proto3 enum field never does.
+            attribute(
+                GET_RESPONSE,
+                "kind",
+                Attribute::Presence,
+                "implicit",
+                "explicit"
+            ),
+        ]
+    );
+}
+
+/// Catches: a proto2 group made a message field of the same message, name and number, whose
+/// encoding differs (start and end groups against a length-delimited message).
+#[test]
+fn compat_refuses_a_group_made_a_message_field() {
+    let old = "syntax = \"proto2\";\npackage g.v1;\n\
+               message M { optional group G = 1 { optional int32 x = 2; } }\n";
+    let new = "syntax = \"proto2\";\npackage g.v1;\n\
+               message M { message G { optional int32 x = 2; } optional G g = 1; }\n";
+    assert_eq!(
+        diff(old, new),
+        [Break::FieldTypeChanged {
+            message: s(".g.v1.M"),
+            name: s("g"),
+            from: s("TYPE_GROUP .g.v1.M.G"),
+            to: s("TYPE_MESSAGE .g.v1.M.G"),
+        }]
+    );
+}
+
+/// Catches: a repeated field made singular, and a field made required.
+#[test]
+fn compat_refuses_changed_field_label() {
+    let old = "syntax = \"proto2\";\npackage l.v1;\n\
+               message M { repeated string tags = 1; optional string id = 2; }\n";
+    let new = "syntax = \"proto2\";\npackage l.v1;\n\
+               message M { optional string tags = 1; required string id = 2; }\n";
+    assert_eq!(
+        diff(old, new),
+        [
+            Break::FieldLabelChanged {
+                message: s(".l.v1.M"),
+                name: s("tags"),
+                from: s("LABEL_REPEATED"),
+                to: s("LABEL_OPTIONAL"),
+            },
+            Break::FieldLabelChanged {
+                message: s(".l.v1.M"),
+                name: s("id"),
+                from: s("LABEL_OPTIONAL"),
+                to: s("LABEL_REQUIRED"),
             },
         ]
     );
 }
 
-/// Catches: a singular field made explicit-presence, and a repeated field made singular.
+/// Catches: a proto3 scalar given explicit presence, which an old writer never sends as zero.
 #[test]
-fn compat_refuses_changed_field_label() {
-    let new = edit("string value = 1;", "optional string value = 1;")
-        .replace("repeated string tags", "string tags");
+fn compat_refuses_changed_presence() {
+    assert_eq!(
+        diff(
+            OLD,
+            &edit("string value = 1;", "optional string value = 1;")
+        ),
+        [attribute(
+            GET_RESPONSE,
+            "value",
+            Attribute::Presence,
+            "implicit",
+            "explicit"
+        )]
+    );
+}
+
+/// Catches: a file moved from proto2 to proto3, which takes explicit presence from its scalars
+/// with no change of name, number, type or label.
+#[test]
+fn compat_refuses_a_syntax_change_that_changes_presence() {
+    let old = "syntax = \"proto2\";\npackage p.v1;\nmessage M { optional string s = 1; }\n";
+    let new = "syntax = \"proto3\";\npackage p.v1;\nmessage M { string s = 1; }\n";
+    assert_eq!(
+        diff(old, new),
+        [attribute(
+            ".p.v1.M",
+            "s",
+            Attribute::Presence,
+            "explicit",
+            "implicit"
+        )]
+    );
+}
+
+/// Catches: released fields moved into a oneof, where a new reader keeps only one of the values
+/// an old writer sends.
+#[test]
+fn compat_refuses_a_field_moved_into_a_oneof() {
+    let new = edit("string value = 1;", "oneof pick { string value = 1; }");
     assert_eq!(
         diff(OLD, &new),
         [
-            Break::FieldLabelChanged {
-                message: s(GET_RESPONSE),
-                name: s("value"),
-                from: s("LABEL_OPTIONAL"),
-                to: s("LABEL_OPTIONAL (explicit presence)"),
-            },
-            Break::FieldLabelChanged {
-                message: s(GET_RESPONSE),
-                name: s("tags"),
-                from: s("LABEL_REPEATED"),
-                to: s("LABEL_OPTIONAL"),
-            },
+            attribute(
+                GET_RESPONSE,
+                "value",
+                Attribute::Presence,
+                "implicit",
+                "explicit"
+            ),
+            attribute(GET_RESPONSE, "value", Attribute::Oneof, "none", "pick"),
         ]
     );
+}
+
+/// Catches: two released oneofs merged, so that the two values an old writer sends become one;
+/// a oneof's place among its message's oneofs is no break.
+#[test]
+fn compat_refuses_merged_oneofs() {
+    let old = "syntax = \"proto3\";\npackage o.v1;\n\
+               message M { oneof a { string x = 1; } oneof b { string y = 2; } }\n";
+    let merged = "syntax = \"proto3\";\npackage o.v1;\n\
+                  message M { oneof a { string x = 1; string y = 2; } }\n";
+    let reordered = "syntax = \"proto3\";\npackage o.v1;\n\
+                     message M { oneof b { string y = 2; } oneof a { string x = 1; } }\n";
+    assert_eq!(
+        diff(old, merged),
+        [attribute(".o.v1.M", "y", Attribute::Oneof, "b", "a")]
+    );
+    assert_eq!(diff(old, reordered), Vec::<Break>::new());
+}
+
+/// Catches: a proto2 default changed, which changes what an absent field reads as.
+#[test]
+fn compat_refuses_a_changed_default() {
+    let old = "syntax = \"proto2\";\npackage d.v1;\n\
+               message M { optional int32 n = 1 [default = 5]; }\n";
+    let new = "syntax = \"proto2\";\npackage d.v1;\n\
+               message M { optional int32 n = 1 [default = 6]; }\n";
+    assert_eq!(
+        diff(old, new),
+        [attribute(".d.v1.M", "n", Attribute::Default, "5", "6")]
+    );
+}
+
+/// Catches: a field's JSON name changed, which renames it on the JSON wire with no other change.
+#[test]
+fn compat_refuses_a_changed_json_name() {
+    let new = edit(
+        "string value = 1;",
+        "string value = 1 [json_name = \"val\"];",
+    );
+    assert_eq!(
+        diff(OLD, &new),
+        [attribute(
+            GET_RESPONSE,
+            "value",
+            Attribute::JsonName,
+            "value",
+            "val"
+        )]
+    );
+}
+
+/// Catches: a map made a repeated message of the same shape, which JSON writes as a list rather
+/// than an object.
+#[test]
+fn compat_refuses_a_map_made_a_repeated_message() {
+    let old = "syntax = \"proto3\";\npackage m.v1;\nmessage M { map<string, int32> m = 1; }\n";
+    let new = "syntax = \"proto3\";\npackage m.v1;\n\
+               message M { message MEntry { string key = 1; int32 value = 2; } \
+               repeated MEntry m = 1; }\n";
+    assert_eq!(
+        diff(old, new),
+        [Break::MapEntryChanged {
+            message: s(".m.v1.M.MEntry"),
+        }]
+    );
+}
+
+/// Catches: a check that refuses a oneof of new fields added beside the released ones.
+#[test]
+fn compat_accepts_a_new_oneof_of_new_fields() {
+    let new = edit(
+        "  Kind kind = 3;\n",
+        "  Kind kind = 3;\n  oneof extra { string a = 4; int32 b = 5; }\n",
+    );
+    assert_eq!(diff(OLD, &new), Vec::<Break>::new());
 }
 
 /// Catches: a field renamed at its number, which changes its JSON name.

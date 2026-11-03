@@ -1,42 +1,282 @@
 [
   {
     "from": "kbf crates/kbf-updater/src/wire_tests.rs: the smallest heartbeat",
-    "json": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy"}
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.0",
+      "health": "healthy"
+    }
   },
   {
     "from": "kbf crates/kbf-updater/src/wire_tests.rs: a failed update and one running",
-    "json": {"platform": "darwin-arm64", "version": "0.1.7+g0123456789ab-3", "health": "unhealthy", "last_update": {"target": "0.1.8+gabcdefabcdef-1", "outcome": "failed"}, "updating": "0.1.9"}
+    "json": {
+      "platform": "darwin-arm64",
+      "version": "0.1.7+g0123456789ab-3",
+      "health": "unhealthy",
+      "last_update": {
+        "target": "0.1.8+gabcdefabcdef-1",
+        "outcome": "failed"
+      },
+      "updating": "0.1.9"
+    }
   },
   {
     "from": "kbf crates/kbf-updater/src/wire_features_tests.rs: a heartbeat as the oldest released agent writes it",
-    "json": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "last_update": {"target": "1.1", "outcome": "failed"}, "updating": null}
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.0",
+      "health": "healthy",
+      "last_update": {
+        "target": "1.1",
+        "outcome": "failed"
+      },
+      "updating": null
+    }
   },
   {
     "from": "kbf crates/kbf-updater/src/wire_tests.rs: services",
-    "json": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "services": [{"name": "other", "version": "2.0", "health": "unhealthy", "last_update": {"target": "2.0", "outcome": "failed"}, "updating": "3.0"}, {"name": "third", "version": "1.1", "health": "healthy"}]}
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.0",
+      "health": "healthy",
+      "services": [
+        {
+          "name": "other",
+          "version": "2.0",
+          "health": "unhealthy",
+          "last_update": {
+            "target": "2.0",
+            "outcome": "failed"
+          },
+          "updating": "3.0"
+        },
+        {
+          "name": "third",
+          "version": "1.1",
+          "health": "healthy"
+        }
+      ]
+    }
   },
   {
     "from": "kbf crates/kbf-updater/src/wire_features_tests.rs: a halt, with every optional fact at the top and in a service",
-    "json": {"platform": "linux-x86_64", "version": "1.0", "health": "unhealthy", "last_update": {"target": "1.1", "outcome": "failed", "phase": "halt", "class": "environment", "reason": "state_invalid"}, "updating": null, "services": [{"name": "db", "version": "1.0", "health": "healthy", "last_update": null, "updating": null, "step": {"name": "verify", "attempt": 2}, "commit": "committed", "step_secs": {"prepare": 3, "cutover": 41}, "promotion_pending": true, "deferred": {"target": "1.2", "reason": "drain_bound", "retry_after_secs": 300}}], "agent_features": ["deferred-v1", "halt-v1"], "step": {"name": "verify", "attempt": 2}, "commit": "committed", "step_secs": {"prepare": 3, "cutover": 41}, "promotion_pending": true, "deferred": {"target": "1.2", "reason": "drain_bound", "retry_after_secs": 300}}
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.0",
+      "health": "unhealthy",
+      "last_update": {
+        "target": "1.1",
+        "outcome": "failed",
+        "phase": "halt",
+        "class": "environment",
+        "reason": "state_invalid"
+      },
+      "updating": null,
+      "services": [
+        {
+          "name": "db",
+          "version": "1.0",
+          "health": "healthy",
+          "last_update": null,
+          "updating": null,
+          "step": {
+            "name": "verify",
+            "attempt": 2
+          },
+          "commit": "committed",
+          "step_secs": {
+            "prepare": 3,
+            "cutover": 41
+          },
+          "promotion_pending": true,
+          "deferred": {
+            "target": "1.2",
+            "reason": "drain_bound",
+            "retry_after_secs": 300
+          }
+        }
+      ],
+      "agent_features": [
+        "deferred-v1",
+        "halt-v1"
+      ],
+      "step": {
+        "name": "verify",
+        "attempt": 2
+      },
+      "commit": "committed",
+      "step_secs": {
+        "prepare": 3,
+        "cutover": 41
+      },
+      "promotion_pending": true,
+      "deferred": {
+        "target": "1.2",
+        "reason": "drain_bound",
+        "retry_after_secs": 300
+      }
+    }
   },
   {
     "from": "composed from the spellings kbf reads (crates/kbf-updater/src/wire_features_tests.rs, crates/kbf-types/src/release.rs): the other platform, outcome, phases, class and commit state",
-    "json": {"platform": "linux-arm64", "version": "1.0", "health": "healthy", "last_update": {"target": "1.1", "outcome": "failed", "phase": "gate_release", "class": "release", "reason": "verify"}, "services": [{"name": "a", "version": "1.0", "health": "healthy", "last_update": {"target": "1.1", "outcome": "failed", "phase": "before_commit"}, "commit": "uncommitted"}, {"name": "b", "version": "1.0", "health": "healthy", "last_update": {"target": "1.1", "outcome": "failed", "phase": "gate_environment"}}, {"name": "c", "version": "1.0", "health": "healthy", "last_update": {"target": "1.1", "outcome": "failed", "phase": "after_commit"}}, {"name": "d", "version": "1.1", "health": "healthy", "last_update": {"target": "1.1", "outcome": "succeeded"}}]}
+    "json": {
+      "platform": "linux-arm64",
+      "version": "1.0",
+      "health": "healthy",
+      "last_update": {
+        "target": "1.1",
+        "outcome": "failed",
+        "phase": "gate_release",
+        "class": "release",
+        "reason": "verify"
+      },
+      "services": [
+        {
+          "name": "a",
+          "version": "1.0",
+          "health": "healthy",
+          "last_update": {
+            "target": "1.1",
+            "outcome": "failed",
+            "phase": "before_commit"
+          },
+          "commit": "uncommitted"
+        },
+        {
+          "name": "b",
+          "version": "1.0",
+          "health": "healthy",
+          "last_update": {
+            "target": "1.1",
+            "outcome": "failed",
+            "phase": "gate_environment"
+          }
+        },
+        {
+          "name": "c",
+          "version": "1.0",
+          "health": "healthy",
+          "last_update": {
+            "target": "1.1",
+            "outcome": "failed",
+            "phase": "after_commit"
+          }
+        },
+        {
+          "name": "d",
+          "version": "1.1",
+          "health": "healthy",
+          "last_update": {
+            "target": "1.1",
+            "outcome": "succeeded"
+          }
+        }
+      ]
+    }
   },
   {
     "from": "kbf crates/kbf-updater/src/wire_pin_tests.rs: every fact and a pin",
-    "json": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "last_update": null, "updating": null, "services": [{"name": "db", "version": "2.0", "health": "healthy", "last_update": null, "updating": null}], "agent_features": ["deferred-v1", "halt-v1"], "step": {"name": "verify", "attempt": 2}, "commit": "committed", "step_secs": {"prepare": 3}, "promotion_pending": true, "deferred": {"target": "1.2", "reason": "drain_bound", "retry_after_secs": 300}, "pinned": {"commit": "0123456789abcdef0123456789abcdef01234567"}}
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.0",
+      "health": "healthy",
+      "last_update": null,
+      "updating": null,
+      "services": [
+        {
+          "name": "db",
+          "version": "2.0",
+          "health": "healthy",
+          "last_update": null,
+          "updating": null
+        }
+      ],
+      "agent_features": [
+        "deferred-v1",
+        "halt-v1"
+      ],
+      "step": {
+        "name": "verify",
+        "attempt": 2
+      },
+      "commit": "committed",
+      "step_secs": {
+        "prepare": 3
+      },
+      "promotion_pending": true,
+      "deferred": {
+        "target": "1.2",
+        "reason": "drain_bound",
+        "retry_after_secs": 300
+      },
+      "pinned": {
+        "commit": "0123456789abcdef0123456789abcdef01234567"
+      }
+    }
   },
   {
     "from": "kbf crates/kbf-updater/src/wire_pin_tests.rs: a pin whose commit root could not read",
-    "json": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "last_update": null, "updating": null, "pinned": {}}
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.0",
+      "health": "healthy",
+      "last_update": null,
+      "updating": null,
+      "pinned": {}
+    }
   },
   {
     "from": "kbf crates/kbf-updater/src/wire_absent_tests.rs and the update rehearsal's fake host: absent, and heartbeat-v2",
-    "json": {"platform": "linux-x86_64", "version": "1.0", "health": "absent", "agent_features": ["heartbeat-v2"], "services": [{"name": "db", "version": "1.0", "health": "absent", "updating": null, "last_update": null}]}
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.0",
+      "health": "absent",
+      "agent_features": [
+        "heartbeat-v2"
+      ],
+      "services": [
+        {
+          "name": "db",
+          "version": "1.0",
+          "health": "absent",
+          "updating": null,
+          "last_update": null
+        }
+      ]
+    }
   },
   {
     "from": "not recorded: the agent field kbf's agent does not send yet, which counts a heartbeat without it as kbf-updater's",
-    "json": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "agent": {"name": "kbf-updater", "version": "0.1.7"}}
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.0",
+      "health": "healthy",
+      "agent": {
+        "name": "kbf-updater",
+        "version": "0.1.7"
+      }
+    }
+  },
+  {
+    "from": "not in kbf main: the start time a failed update reports, from the parked change kbf#2260 (komira-ai/kbf#2260), with forced-v1 announced",
+    "json": {
+      "platform": "linux-x86_64",
+      "version": "1.4",
+      "health": "unhealthy",
+      "agent_features": [
+        "deferred-v1",
+        "halt-v1",
+        "forced-v1"
+      ],
+      "last_update": {
+        "target": "1.5",
+        "outcome": "failed",
+        "phase": "after_commit",
+        "class": "release",
+        "reason": "verify",
+        "started_unix": 1800000000
+      },
+      "updating": null
+    }
   }
 ]

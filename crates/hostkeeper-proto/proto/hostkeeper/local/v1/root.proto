@@ -43,13 +43,25 @@ service Root {
   // cancelled, or whose connection closed, before the lock was taken runs nothing. Once the lock
   // is taken, the order runs to its end under the step runner's rules even if the call goes away.
   //
-  // A retry is the same service, order, version and release digest as the step record's current
-  // or last order. A retry of a running order resumes it; a retry of a finished order returns the
-  // recorded outcome. Neither repeats a committed step.
+  // Each try of an order carries `order_try`, the agent's number for it: a resend of one try keeps
+  // the number, and a new try (after a deferral's wait, after an approval, a forced order after a
+  // failure) raises it. A request whose service, order, version, release digest, `forced` and
+  // `order_try` equal the step record's current or last order is a resend: of a running order it
+  // resumes it under the crash-resume rules, of an ended one it returns the recorded outcome;
+  // neither repeats a committed step. A request with a higher `order_try` is a new try, run anew
+  // once the last one ended. One with a lower `order_try` than the record's is refused
+  // (`stale_try`), so a delayed resend never starts after a newer try.
   //
   // An order whose release asks for rights the approved declaration does not grant, or a first
   // install no declaration was approved for, runs no hook and ends DEFERRED with the reason
-  // `rights_change` or `first_install`, until `Admin.ApproveDeclaration` approves it.
+  // `rights_change` or `first_install`, until `Admin.ApproveDeclaration` approves it. A forced
+  // order is no exception: approval is never waived.
+  //
+  // Storage: when the step record cannot be read or written before a hook starts, nothing runs
+  // and the call is refused (`journal_unavailable`), so a resend is safe. When a hook ran and its
+  // outcome cannot be written, the call is refused (`outcome_unrecorded`): what the hook did
+  // stands, the record still shows the order running, and a resend of the same try finishes it
+  // under the crash-resume rules and writes the outcome, repeating no committed step.
   rpc RunStep(RunStepRequest) returns (RunStepResponse);
   // What the root part holds: each service's step records, pin and state, and the open adopt,
   // self-update or install operation. Changes nothing.
@@ -79,6 +91,14 @@ enum RootRefusal {
   ROOT_REFUSAL_PINNED = 7;
   // ABORTED: another order holds the step lock.
   ROOT_REFUSAL_BUSY = 8;
+  // FAILED_PRECONDITION: `order_try` is lower than the step record's for the same order.
+  ROOT_REFUSAL_STALE_TRY = 9;
+  // UNAVAILABLE: the step record could not be read or written before any hook ran; nothing ran,
+  // and a resend is safe.
+  ROOT_REFUSAL_JOURNAL_UNAVAILABLE = 10;
+  // INTERNAL: a hook ran and its outcome could not be written; a resend of the same try finishes
+  // the order and records it.
+  ROOT_REFUSAL_OUTCOME_UNRECORDED = 11;
 }
 
 // What the agent asks the root part to do to a service. Closed: see the header.
@@ -101,9 +121,14 @@ message RunStepRequest {
   // The digest of the release's declaration (with its extension record), which an operator
   // approves for the service with `Admin.ApproveDeclaration`.
   string declaration_digest = 5;
-  // The order comes from an operator's force: it is never put on trial and never reverted, and a
-  // deferral of the root part's own does not decline it. A pin still holds it.
+  // The order comes from an operator's force. It is never put on trial and never reverted, and
+  // the hook's own deferral for its moment (a drain bound, a busy service) does not decline it.
+  // Nothing else is waived: the release is verified, the declaration must be approved (an
+  // unapproved right still ends DEFERRED with `rights_change` or `first_install`), and a pin
+  // still holds the service.
   bool forced = 6;
+  // The agent's number for this try of the order, from 1 (see `RunStep`).
+  uint64 order_try = 7;
 }
 
 // How an order ended.
@@ -111,7 +136,9 @@ enum StepOutcome {
   STEP_OUTCOME_UNSPECIFIED = 0;
   // The service runs the release and confirmed it healthy.
   STEP_OUTCOME_SUCCEEDED = 1;
-  // The service is back on the release it ran before, or could not leave it.
+  // The order did not end with the release running confirmed healthy. Where the service is now
+  // is in its state: an ordinary order is reverted to the release it ran before (or never left
+  // it), and a forced one stays on its release, unhealthy.
   STEP_OUTCOME_FAILED = 2;
   // The order did not run, for a reason about its moment or a right not yet approved, not about
   // the release.
@@ -153,6 +180,8 @@ message StepRecord {
   uint64 retry_after_secs = 15;
   // Serving, but not yet fully the service's own.
   bool promotion_pending = 16;
+  // The try of the order this record is, as the request carried it.
+  uint64 order_try = 17;
 }
 
 message StatusRequest {}
@@ -177,6 +206,19 @@ message ServiceRecord {
   Pin pin = 4;
   // How the service runs now, as the service manager and its health check say.
   ServiceState state = 5;
+  // Why `current` and `last` cannot be trusted as they are; UNSPECIFIED when the record reads.
+  RecordProblem record_problem = 6;
+}
+
+// Why a service's step record cannot be read as it is.
+enum RecordProblem {
+  RECORD_PROBLEM_UNSPECIFIED = 0;
+  // The record is unreadable or malformed. `current` and `last` are absent, and no order runs for
+  // the service (`journal_unavailable`) until it reads again.
+  RECORD_PROBLEM_UNREADABLE = 1;
+  // The record was written by a newer root part. It is shown as far as it is understood and never
+  // rewritten, and no order runs for the service.
+  RECORD_PROBLEM_NEWER_SCHEMA = 2;
 }
 
 // A pin root holds on a service: no order runs for it until it is lifted.

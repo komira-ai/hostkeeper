@@ -126,7 +126,9 @@ enum Outcome {
   OUTCOME_UNSPECIFIED = 0;
   // The host runs the target and confirmed it healthy.
   OUTCOME_SUCCEEDED = 1;
-  // The host is back on the version it ran before, or could not leave it.
+  // The update did not end with the target running confirmed healthy. Where the service is now
+  // is in its `version`: an ordinary update is reverted to the version it ran before (or never
+  // left it), and a forced one stays on its target, unhealthy.
   OUTCOME_FAILED = 2;
 }
 
@@ -168,9 +170,13 @@ message UpdateResult {
   // The check or cause of a failure, as a token; empty when none is reported. For a failure in
   // the halt phase it is the check that halted.
   string reason = 5;
-  // When the update started, by the host's clock: it tells two tries at one target apart when
-  // they end the same way. Absent when the agent does not report it.
+  // When the update started, by the host's clock. Absent when the agent does not report it.
   optional uint64 started_unix = 6;
+  // Which try of the update this was: the root part's step record numbers each try of an order
+  // (`hostkeeper.local.v1.StepRecord.order_try`), so two tries at one target that end the same
+  // way differ in it, even within one second or after the clock moved back. Absent when the agent
+  // does not report it.
+  optional uint64 order_try = 7;
 }
 
 // Whether an update in flight is past the hook's commit point.
