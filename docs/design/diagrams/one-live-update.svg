@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" width="1200" height="700" role="img" aria-label="One live update across services: three hosts and their services, the single in-flight slot, the reasons the coordinator holds an order, and what frees the slot.">
+<title>One live update across services</title>
+<desc>The coordinator holds one slot for the whole farm, so only one host updates one service at a time while the others are held with a reason. A deferral frees the slot, a failed host keeps it until healthy, and an abandoned host holds none.</desc>
+<defs><marker id="one-live-update-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="one-live-update-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="700" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">One live update: the coordinator holds a single slot for all hosts and services</text>
+<defs><pattern id="one-live-update-hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#FFFFFF"/><line x1="0" y1="0" x2="0" y2="8" stroke="#D5D9E0" stroke-width="2"/></pattern></defs>
+<rect x="40" y="60" width="280" height="72" rx="5" class="box"/>
+<text x="56" y="80" class="b" text-anchor="start">host 1</text>
+<rect x="56" y="94" width="108" height="26" rx="4" class="box-b"/>
+<text x="110" y="112" font-size="12" text-anchor="middle">kbf</text>
+<rect x="176" y="94" width="108" height="26" rx="4" class="box-b"/>
+<text x="230" y="112" font-size="12" text-anchor="middle">tierstore</text>
+<rect x="40" y="146" width="280" height="72" rx="5" class="box"/>
+<text x="56" y="166" class="b" text-anchor="start">host 2</text>
+<rect x="56" y="180" width="108" height="26" rx="4" class="box-b"/>
+<text x="110" y="198" font-size="12" text-anchor="middle">js-agent</text>
+<rect x="176" y="180" width="108" height="26" rx="4" class="box-b"/>
+<text x="230" y="198" font-size="12" text-anchor="middle">tierstore</text>
+<rect x="40" y="232" width="280" height="72" rx="5" class="box"/>
+<text x="56" y="252" class="b" text-anchor="start">host 3</text>
+<rect x="56" y="266" width="108" height="26" rx="4" class="box-b"/>
+<text x="110" y="284" font-size="12" text-anchor="middle">kbf</text>
+<rect x="176" y="266" width="108" height="26" rx="4" class="box-b"/>
+<text x="230" y="284" font-size="12" text-anchor="middle">tierstore</text>
+<circle cx="600" cy="190" r="50" fill="#FFFAF5" stroke="#FD4F1D" stroke-width="2.2"/>
+<text x="600" y="195" class="b" font-size="16" text-anchor="middle">slot</text>
+<path d="M320,100 L550,175" class="ln-d" marker-end="url(#one-live-update-ak)"/>
+<path d="M320,186 L550,190" class="ln-d" marker-end="url(#one-live-update-ak)"/>
+<path d="M320,272 L552,208" class="ln-d" marker-end="url(#one-live-update-ak)"/>
+<text x="430" y="118" class="t-m lbl" text-anchor="middle">heartbeat</text>
+<text x="800" y="70" class="b" text-anchor="start">coordinator reasons (order held)</text>
+<rect x="800" y="84" width="380" height="30" rx="3" class="box-b"/>
+<text x="812" y="104" class="b" font-size="12" text-anchor="start">no_slot</text>
+<text x="1170" y="104" class="t-m" text-anchor="end">the slot is taken</text>
+<rect x="800" y="118" width="380" height="30" rx="3" class="box"/>
+<text x="812" y="138" class="b" font-size="12" text-anchor="start">busy_elsewhere</text>
+<text x="1170" y="138" class="t-m" text-anchor="end">another host is updating</text>
+<rect x="800" y="152" width="380" height="30" rx="3" class="box-b"/>
+<text x="812" y="172" class="b" font-size="12" text-anchor="start">deferred</text>
+<text x="1170" y="172" class="t-m" text-anchor="end">backoff after Deferred</text>
+<rect x="800" y="186" width="380" height="30" rx="3" class="box"/>
+<text x="812" y="206" class="b" font-size="12" text-anchor="start">baking</text>
+<text x="1170" y="206" class="t-m" text-anchor="end">holds the slot for N healthy beats</text>
+<rect x="800" y="220" width="380" height="30" rx="3" class="box-b"/>
+<text x="812" y="240" class="b" font-size="12" text-anchor="start">quiet</text>
+<text x="1170" y="240" class="t-m" text-anchor="end">first 30 s after start</text>
+<path d="M650,190 L800,170" class="ln-o" marker-end="url(#one-live-update-ao)"/>
+<rect x="380" y="290" width="440" height="44" rx="5" class="box-o"/>
+<text x="600" y="309" class="t-m" text-anchor="middle">a down host that was updating keeps the slot</text>
+<text x="600" y="325" class="t-m" text-anchor="middle">until the operator abandons it</text>
+<path d="M600,240 L600,290" class="ln-o" marker-end="url(#one-live-update-ao)"/>
+<text x="40" y="372" class="b" font-size="12" text-anchor="start">time</text>
+<path d="M90,368 L1100,368" class="ln" marker-end="url(#one-live-update-ak)"/>
+<text x="40" y="421" class="t-m" text-anchor="start">host 1</text>
+<text x="40" y="489" class="t-m" text-anchor="start">host 2</text>
+<text x="40" y="557" class="t-m" text-anchor="start">host 3</text>
+<rect x="110" y="400" width="290" height="30" rx="4" class="box-o"/>
+<text x="255" y="420" class="lbl" font-size="12" text-anchor="middle">update kbf</text>
+<rect x="400" y="400" width="120" height="30" rx="4" class="box" style="fill:url(#one-live-update-hatch)"/>
+<text x="460" y="420" class="lbl" font-size="12" text-anchor="middle">bake</text>
+<rect x="110" y="468" width="410" height="30" rx="4" class="box" style="fill:url(#one-live-update-hatch)"/>
+<text x="315" y="488" class="lbl" font-size="12" text-anchor="middle">tierstore: no_slot (held)</text>
+<rect x="520" y="468" width="280" height="30" rx="4" class="box-o"/>
+<text x="660" y="488" class="lbl" font-size="12" text-anchor="middle">update tierstore</text>
+<rect x="110" y="536" width="690" height="30" rx="4" class="box" style="fill:url(#one-live-update-hatch)"/>
+<text x="455" y="556" class="lbl" font-size="12" text-anchor="middle">js-agent: busy_elsewhere (held)</text>
+<path d="M650,510 l9,9 l-9,9 l-9,-9 z" fill="#FD4F1D" stroke="#0B0B0A" stroke-width="1.2"/>
+<text x="668" y="524" class="lbl" font-size="12" text-anchor="start">Deferred: slot freed</text>
+<line x1="520" y1="396" x2="520" y2="580" class="ln-d"/>
+<text x="520" y="390" class="b lbl" font-size="12" text-anchor="middle">slot passes</text>
+<line x1="800" y1="396" x2="800" y2="580" class="ln-d"/>
+<text x="800" y="390" class="b lbl" font-size="12" text-anchor="middle">slot passes</text>
+<text x="600" y="618" class="b" text-anchor="middle">A deferred host holds no slot. A failed host holds it until healthy. An abandoned host holds none.</text>
+<rect x="30" y="668" width="22" height="14" rx="3" class="box"/>
+<text x="60" y="680" class="t-m" text-anchor="start">unprivileged local</text>
+<rect x="203.292" y="668" width="22" height="14" rx="3" class="box-o"/>
+<text x="233.292" y="680" class="t-m" text-anchor="start">active update</text>
+<rect x="342.892" y="668" width="22" height="14" rx="3" class="box-p"/>
+<text x="372.892" y="680" class="t-m" text-anchor="start">held or baking (hatched)</text>
+<path d="M556.615,676 L586.615,676" class="ln" marker-end="url(#one-live-update-ak)"/>
+<text x="594.615" y="680" class="t-m" text-anchor="start">request</text>
+</svg>
