@@ -36,7 +36,8 @@ fn the_metrics_name_each_listener_and_outcome() {
     );
 
     let mut text = String::new();
-    render_metrics([&first, &second], &mut text);
+    // Both calls pass the same collection type, so they run the same code.
+    render_metrics(vec![&first, &second], &mut text);
     for want in [
         "hostkeeper_tls_reloads_total{listener=\"reapi\",outcome=\"applied\"} 1\n",
         "hostkeeper_tls_reloads_total{listener=\"reapi\",outcome=\"rejected\"} 1\n",
@@ -67,7 +68,7 @@ fn the_metrics_name_each_listener_and_outcome() {
     assert!(gauge("reapi") > 1_800_000_000 && gauge("worker") > 1_800_000_000);
 
     let mut nothing = String::new();
-    render_metrics(std::iter::empty(), &mut nothing);
+    render_metrics(Vec::<&TlsSource>::new(), &mut nothing);
     assert!(nothing.is_empty());
     assert!(format!("{first:?}").contains("reapi"));
 }
