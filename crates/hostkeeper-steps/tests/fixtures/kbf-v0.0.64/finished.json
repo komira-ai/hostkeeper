@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "service": "api",
+  "target_version": "1.4.2",
+  "artifact_digest": "abababababababababababababababababababababababababababababababab",
+  "tarball_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "previous_digest": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "generation": 13,
+  "params": "/var/lib/updater/state/api/params.toml",
+  "step": "verify",
+  "attempt": 1,
+  "state": {
+    "state": "finished",
+    "verdict": {
+      "Succeeded": {
+        "promotion_pending": true
+      }
+    },
+    "reason": null
+  },
+  "hook": "new",
+  "progress": {
+    "committed": false,
+    "promotion_pending": true,
+    "then": null,
+    "retry": 0,
+    "verify_started": {
+      "boot_id": "boot-two",
+      "mono_secs": 90
+    },
+    "watching": {
+      "boot_id": "boot-two",
+      "mono_secs": 95
+    },
+    "reason": null
+  }
+}
