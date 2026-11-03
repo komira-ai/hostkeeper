@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "service": "web",
+  "target_version": "2.0.0",
+  "artifact_digest": "abababababababababababababababababababababababababababababababab",
+  "tarball_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "previous_digest": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "generation": 3,
+  "params": "/var/lib/updater/state/web/params.toml",
+  "step": "verify",
+  "attempt": 1,
+  "state": {
+    "state": "running",
+    "started": {
+      "boot_id": "boot-one",
+      "mono_secs": 4200
+    },
+    "deadline_secs": 1600
+  },
+  "hook": "new",
+  "progress": {
+    "committed": false,
+    "promotion_pending": false,
+    "then": null,
+    "retry": 0,
+    "verify_started": {
+      "boot_id": "boot-one",
+      "mono_secs": 4100
+    },
+    "watching": null,
+    "reason": null
+  }
+}

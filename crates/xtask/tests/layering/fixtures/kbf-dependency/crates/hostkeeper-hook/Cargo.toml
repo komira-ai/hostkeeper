@@ -1,0 +1,11 @@
+[package]
+name = "hostkeeper-hook"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+shim = { path = "../../vendored/shim" }
+
+[dev-dependencies]
+hostkeeper-hook = { path = "." }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

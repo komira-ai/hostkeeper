@@ -1,0 +1,32 @@
+# Public sites the tree may name, one domain per line. A domain allows its subdomains; an entry
+# written `=name` allows that exact name and nothing under it. The
+# example domains (example.com, example.net, example.org, *.example, *.test, *.invalid,
+# *.localhost) and localhost need no entry. A `#` starts a comment.
+
+# Where the code and its dependencies live.
+github.com
+crates.io
+
+# Licence texts.
+apache.org
+developercertificate.org
+
+# The YAML tag prefix the workflow lint's tests quote.
+yaml.org
+
+# File names that end in a top-level domain, not hosts.
+=lcov.info
+=empty.info
+=absent.info
+
+# A container image name in the workflow lint's tests, not a host.
+=alpine
+
+# File names and configuration field paths of this repository's own tests and docs that end in
+# a word the IANA list delegates as a top-level domain (`new`, `download`, `group`, `name`).
+# They are names, not hosts; each is an exact entry (`=`).
+=current.new
+=approved.new
+=tool.download
+=hook.group
+=hook.environment.name

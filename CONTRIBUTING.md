@@ -47,7 +47,9 @@ no fixed port and no root, and they write only under Cargo's target directory.
 
 - `lint`: the format, `cargo deny check bans licenses sources` (the licence allow-list and the
   sources are in `deny.toml`), clippy with warnings as errors (the banned methods are in
-  `clippy.toml`), actionlint, and the workflow lint (`cargo test -p xtask --test workflows`).
+  `clippy.toml`), the build of `hostkeeper-hook` alone without its `conformance` feature
+  (`cargo check -p hostkeeper-hook --lib`), actionlint, and the workflow lint
+  (`cargo test -p xtask --test workflows`).
 - `test`: every test under `cargo llvm-cov` with branch coverage, then `coverage-gate`, which
   fails when any crate of the workspace is under 99.00% of its lines or of its branches. Every
   crate is judged; there is no way to exclude one (rules T1 to T4).

@@ -1,0 +1,12 @@
+# The names of internal repositories that must not appear in this public repository, each as
+# the lowercase hex SHA-256 of the lowercase name (no newline), so the list itself does not name
+# them. One digest per line; a line that starts with `#` and an empty line are ignored.
+#
+# This file is NOT scanned by the hygiene lint (tests/hygiene/main.rs excludes it by path).
+#
+# To add a name:  printf %s '<lowercase name>' | sha256sum
+# and paste the 64 hex digits on a line of their own.
+#
+# The lint lowercases each text, splits it into tokens at every character outside
+# [a-z0-9_-], hashes each token and refuses a token whose digest is listed here.
+5798ce3a6a4bc8f6fcf1bad58aec1ebfe9d305f0de7760383a81289099a9714f

@@ -13,9 +13,20 @@ It is planned as:
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
-**hostkeeper is pre-release.** This repository holds only the build, lint and coverage tooling so
-far. There is no code to run and no release yet. The parts listed above are being moved here from
-[kbf](https://github.com/komira-ai/kbf), where they are developed today.
+**hostkeeper is pre-release.** There is no program to run and no release yet. The parts listed
+above are being moved here from [kbf](https://github.com/komira-ai/kbf), where they are developed
+today. So far this repository holds the generic half of the host updater, moved from kbf
+([MIGRATION.md](MIGRATION.md)), and the build, lint and coverage tooling:
+
+| crate | what it holds |
+|---|---|
+| [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the updater and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
+| [`hostkeeper-rights`](crates/hostkeeper-rights) | the declaration in `/etc/updater.d`, its loader, approvals, and the transient unit that runs one step with the declared rights |
+| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update |
+| `hostkeeper-testkit` | helpers the tests share |
+| `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
+
+The design is [docs/design/host-updates.md](docs/design/host-updates.md).
 
 hostkeeper is licensed under [Apache-2.0](LICENSE). How to contribute is in
 [CONTRIBUTING.md](CONTRIBUTING.md), and how to report a vulnerability is in

@@ -4,11 +4,11 @@
 # `pull_request_target`, to GitHub-hosted runners, to write scopes that only the jobs named
 # there may hold, and to no privileged or macOS job in a workflow that runs on pull requests.
 #
-# `lint` is the format, cargo-deny (licences, bans and sources), clippy, actionlint and the
-# workflow lint. `test` runs every test under cargo-llvm-cov with branch coverage and applies
-# the 99% gate: every crate of the workspace must reach 99.00% of its lines and 99.00% of its
-# branches (crates/coverage-gate). Every crate is judged, the tooling included, with no
-# exclusion.
+# `lint` is the format, cargo-deny (licences, bans and sources), clippy, the build of the hook
+# SDK without its test feature, actionlint and the workflow lint. `test` runs every test under
+# cargo-llvm-cov with branch coverage and applies the 99% gate: every crate of the workspace
+# must reach 99.00% of its lines and 99.00% of its branches (crates/coverage-gate). Every crate
+# is judged, the tooling included, with no exclusion.
 #
 # The pull request and the push to main run the same jobs. A push to main also saves the Cargo
 # cache; a pull request only restores it.
@@ -76,6 +76,11 @@ jobs:
       - run: cargo deny --log-level warn --manifest-path ./Cargo.toml --all-features check bans licenses sources
         if: ${{ !cancelled() }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        if: ${{ !cancelled() }}
+      # hostkeeper-hook as a service depends on it: the library alone, without the feature
+      # `conformance` that the crate's own tests turn on, so a harness item that slips out from
+      # behind the feature fails here.
+      - run: cargo check -p hostkeeper-hook --lib --locked
         if: ${{ !cancelled() }}
       - name: Download actionlint (HTTPS only, redirects included)
         if: ${{ !cancelled() }}

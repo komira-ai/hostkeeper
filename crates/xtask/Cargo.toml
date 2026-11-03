@@ -18,6 +18,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 saphyr-parser.workspace = true
+# The layering test (tests/layering) reads `cargo metadata`'s JSON.
+serde_json.workspace = true
 
 [lints]
 workspace = true

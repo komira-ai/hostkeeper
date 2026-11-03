@@ -1,0 +1,15 @@
+[package]
+name = "hostkeeper-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The test helpers the crates of this workspace share: a scratch directory a test owns."
+
+# A dev-dependency only: no crate of the workspace depends on it outside its tests
+# (crates/xtask/tests/layering keeps it so). It depends on nothing.
+
+[lints]
+workspace = true

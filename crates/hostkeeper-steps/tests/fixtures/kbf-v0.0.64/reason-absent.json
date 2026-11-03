@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "service": "web",
+  "target_version": "2.0.0",
+  "artifact_digest": "abababababababababababababababababababababababababababababababab",
+  "tarball_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "previous_digest": null,
+  "generation": 1,
+  "params": "/var/lib/updater/state/web/params.toml",
+  "step": "prepare",
+  "attempt": 1,
+  "state": {
+    "state": "pending"
+  },
+  "hook": "new",
+  "progress": {
+    "committed": false,
+    "promotion_pending": false,
+    "then": null,
+    "retry": 0,
+    "verify_started": null,
+    "watching": null
+  }
+}
