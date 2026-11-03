@@ -1,0 +1,26 @@
+// hostkeeper: the options hostkeeper's own protos put on their definitions.
+//
+// Served by: nobody. This file declares options and no service.
+//
+// Authentication: none; nothing here is called.
+//
+// Refusals: none; nothing here is called.
+//
+// Units: none; an option carries no quantity.
+//
+// Extending: add an option with the next free number in 50000 to 50099, the range this file
+// keeps for hostkeeper. Never reuse or renumber one: a descriptor set an earlier release
+// compiled still carries the old number.
+syntax = "proto3";
+
+package hostkeeper;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.FieldOptions {
+  // The field holds a secret: a token, a key, a password. The command line generated from these
+  // protos never takes such a field as a flag, where it would land in a shell history and the
+  // process list; it reads it only from a file or from stdin, and never prints it. Only a
+  // `string` or `bytes` field may carry it.
+  bool secret = 50000;
+}

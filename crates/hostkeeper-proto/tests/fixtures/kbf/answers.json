@@ -1,0 +1,26 @@
+[
+  {
+    "from": "kbf crates/kbf-updater/src/wire_halts_tests.rs: to an agent that announced nothing",
+    "json": {"reply": "nothing"}
+  },
+  {
+    "from": "kbf crates/kbf-coordinator/src/http_tests/features.rs: an update of the legacy service, with a feature",
+    "json": {"reply": "update", "version": "2.0", "features": ["halt-v1"]}
+  },
+  {
+    "from": "kbf crates/kbf-updater/src/wire_features_tests.rs: an update that names a service",
+    "json": {"reply": "update", "service": "db", "version": "2.0", "features": ["deferred-v1"]}
+  },
+  {
+    "from": "kbf crates/kbf-updater/src/wire_halts_tests.rs: clear generations",
+    "json": {"reply": "nothing", "features": ["halt-v1"], "halts": {"kbf": 1, "other": 2}}
+  },
+  {
+    "from": "kbf crates/kbf-updater/src/wire_halts_tests.rs: an update with clear generations",
+    "json": {"reply": "update", "service": "other", "version": "3.0", "halts": {"kbf": 1}}
+  },
+  {
+    "from": "kbf crates/kbf-updater/src/wire_features_tests.rs: no announced feature supported",
+    "json": {"reply": "nothing", "features": []}
+  }
+]

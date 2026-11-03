@@ -1,0 +1,106 @@
+// hostkeeper.local.v1 Admin: what only root on the host may ask of the root part.
+//
+// Served by: the root part (`hostkeeper root`), on the unix socket `/run/hostkeeper/admin.sock`
+// (mode 0600, owner root). It is a service apart from `Root` so that the agent's channel never
+// carries these calls.
+//
+// Authentication: the peer's credentials on the socket (`SO_PEERCRED`; on macOS
+// `LOCAL_PEERCRED`), read on each connection before any request. Only uid 0 may connect: a
+// connection from any other uid is closed before a request is read.
+//
+// Refusals: a gRPC status whose message is exactly one token of `AdminRefusal`, written as the
+// value's name without the `ADMIN_REFUSAL_` prefix, in lower case (for example `not_kept`); the
+// status code is the one each value names. Nothing else is ever in the message. A refused call
+// changes nothing.
+//
+// Units: times are unix seconds. A digest is SHA-256 as 64 lower-case hex characters. A version
+// is the release's version string: 1 to 128 bytes, a digit first, then letters, digits and
+// `.+~-`. A service name is 1 to 64 bytes of `[a-z0-9-]`. A reason is 1 to 256 bytes once
+// trimmed, with no control character.
+//
+// Extending: add fields, messages, enum values and RPCs; never renumber, rename, retype or remove
+// one, and never reuse a number (the compatibility test in this crate refuses each). A reader
+// treats an enum value it does not know as UNSPECIFIED; no enum here is closed.
+syntax = "proto3";
+
+package hostkeeper.local.v1;
+
+import "hostkeeper/local/v1/root.proto";
+
+service Admin {
+  // Approve a service's declaration (with its extension record), so that orders whose release
+  // carries it may run: the rights it asks for are granted. Approving a digest already approved
+  // changes nothing.
+  rpc ApproveDeclaration(ApproveDeclarationRequest) returns (ApproveDeclarationResponse);
+  // Hold a service on the release it runs now: no order for it runs, forced or not, until it is
+  // unpinned. Pinning a pinned service replaces the reason.
+  rpc Pin(PinRequest) returns (PinResponse);
+  // Lift a service's pin, from every place a pin is read. Unpinning a service that is not pinned
+  // changes nothing.
+  rpc Unpin(UnpinRequest) returns (UnpinResponse);
+  // Switch a service to a release the host already keeps and has already verified, with no
+  // fetch: the generic form of a forced local rollback. The root part runs the hook's switch
+  // under the step lock, as for any order, and it is never put on trial or reverted. It does not
+  // pin: `Pin` after it holds the service there.
+  rpc Activate(ActivateRequest) returns (ActivateResponse);
+}
+
+// Why the root part refused an `Admin` call. The token is the value's name without the prefix,
+// in lower case.
+enum AdminRefusal {
+  ADMIN_REFUSAL_UNSPECIFIED = 0;
+  // INVALID_ARGUMENT: a field breaks its rule: the service name, the version, the reason, or a
+  // digest that is not 64 lower-case hex characters.
+  ADMIN_REFUSAL_INVALID_REQUEST = 1;
+  // NOT_FOUND: the service is not declared on the host.
+  ADMIN_REFUSAL_NOT_DECLARED = 2;
+  // FAILED_PRECONDITION: no kept release of the service has this version and digest, or the one
+  // kept no longer verifies.
+  ADMIN_REFUSAL_NOT_KEPT = 3;
+  // FAILED_PRECONDITION: no staged release of the service carries a declaration with this
+  // digest.
+  ADMIN_REFUSAL_UNKNOWN_DECLARATION = 4;
+  // ABORTED: an order holds the step lock.
+  ADMIN_REFUSAL_BUSY = 5;
+  // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
+  ADMIN_REFUSAL_STORE_FAILED = 6;
+}
+
+message ApproveDeclarationRequest {
+  string service = 1;
+  // The digest of the declaration and its extension record, as `RunStepRequest` names it.
+  string declaration_digest = 2;
+}
+
+message ApproveDeclarationResponse {}
+
+message PinRequest {
+  string service = 1;
+  string reason = 2;
+}
+
+message PinResponse {
+  // The pin as it is now held.
+  Pin pin = 1;
+}
+
+message UnpinRequest {
+  string service = 1;
+}
+
+message UnpinResponse {
+  // A pin was lifted; false when the service was not pinned.
+  bool was_pinned = 1;
+}
+
+message ActivateRequest {
+  string service = 1;
+  string version = 2;
+  // The kept release's digest; the root part checks the release it switches to against it.
+  string release_digest = 3;
+}
+
+message ActivateResponse {
+  // The switch, as the step record holds it once it ended: an UPDATE, forced.
+  StepRecord record = 1;
+}

@@ -13,9 +13,11 @@ It is planned as:
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
-**hostkeeper is pre-release.** This repository holds only the build, lint and coverage tooling so
-far. There is no code to run and no release yet. The parts listed above are being moved here from
-[kbf](https://github.com/komira-ai/kbf), where they are developed today.
+**hostkeeper is pre-release.** This repository holds the build, lint and coverage tooling and the
+API definitions (`crates/hostkeeper-proto`: the protobuf services of the coordinator, the operator
+and a host's root part) so far. There is no server, no client and no release yet. The parts
+listed above are being moved here from [kbf](https://github.com/komira-ai/kbf), where they are
+developed today.
 
 hostkeeper is licensed under [Apache-2.0](LICENSE). How to contribute is in
 [CONTRIBUTING.md](CONTRIBUTING.md), and how to report a vulnerability is in
