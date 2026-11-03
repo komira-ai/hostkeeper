@@ -94,7 +94,8 @@ enum RootRefusal {
   ROOT_REFUSAL_RELEASE_UNVERIFIED = 5;
   // FAILED_PRECONDITION: `declaration_digest` is not the digest of the release's declaration.
   ROOT_REFUSAL_DECLARATION_MISMATCH = 6;
-  // FAILED_PRECONDITION: the service is pinned (`Admin.Pin`); no order runs until it is unpinned.
+  // FAILED_PRECONDITION: the service is pinned (the `Pin` call of `Admin`); no order runs until it
+  // is unpinned.
   ROOT_REFUSAL_PINNED = 7;
   // ABORTED: another order holds the step lock.
   ROOT_REFUSAL_BUSY = 8;
