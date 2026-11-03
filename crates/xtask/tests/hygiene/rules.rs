@@ -694,14 +694,21 @@ fn looks_like_mail_domain(domain: &str) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Hostnames
 
-/// True when `host` is an example domain or is, or is under, a domain of the allow list.
+/// The mark of an allow-list entry that allows its exact name only, not names under it.
+pub const EXACT: char = '=';
+
+/// True when `host` is an example domain, or is a domain of the allow list or under one. An
+/// entry written `=name` allows `name` itself and nothing under it.
 fn is_allowed_host(host: &str, public: &[String]) -> bool {
     if is_example_domain(host) {
         return true;
     }
-    public.iter().any(|domain| {
-        let under = host.strip_suffix(domain.as_str());
-        domain == host || under.is_some_and(|rest| rest.ends_with('.'))
+    public.iter().any(|entry| match entry.strip_prefix(EXACT) {
+        Some(exact) => exact == host,
+        None => {
+            let under = host.strip_suffix(entry.as_str());
+            entry == host || under.is_some_and(|rest| rest.ends_with('.'))
+        }
     })
 }
 
@@ -716,10 +723,21 @@ fn ends_url(c: char) -> bool {
     c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']' | '`' | ',')
 }
 
+/// The URLs of a line: each `scheme://authority`, and each protocol-relative `//authority`
+/// whose authority is a host name (dotted labels under a top-level domain; `a//b`, `// text` and
+/// `///` are not URLs). The path exemption of bare names never applies to an authority.
 fn urls(line: &str) -> Vec<Url> {
     let mut out = Vec::new();
-    for (idx, _) in line.match_indices("://") {
-        let after = idx + 3;
+    let b = line.as_bytes();
+    let relative = line.match_indices("//").filter_map(|(idx, _)| {
+        let opens = idx == 0 || !matches!(b[idx - 1], b':' | b'/');
+        let next = b.get(idx + 2).copied();
+        (opens && next != Some(b'/')).then_some((idx, idx + 2, true))
+    });
+    let schemed = line
+        .match_indices("://")
+        .map(|(idx, _)| (idx, idx + 3, false));
+    for (idx, after, protocol_relative) in schemed.chain(relative) {
         let rest = &line[after..];
         let end = after + rest.find(ends_url).unwrap_or(rest.len());
         let token = &line[after..end];
@@ -736,6 +754,9 @@ fn urls(line: &str) -> Vec<Url> {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
         let numeric = host.bytes().all(|b| b.is_ascii_digit() || b == b'.');
         if host.is_empty() || !valid || numeric {
+            continue;
+        }
+        if protocol_relative && !is_bare_host(host, None, None) {
             continue;
         }
         out.push(Url {

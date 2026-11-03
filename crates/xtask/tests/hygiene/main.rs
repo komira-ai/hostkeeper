@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rules::{
-    Finding, LICENCE_FILE, Lists, dates, emails, entries, home_paths, hostnames, ipv4s, lint,
-    repositories,
+    EXACT, Finding, LICENCE_FILE, Lists, dates, emails, entries, home_paths, hostnames, ipv4s,
+    lint, repositories,
 };
 use sha2::{Digest, Sha256};
 use tlds::{FILE_SUFFIXES, IANA_TEXT, PRIVATE_TLDS, is_tld, parse_tlds};
@@ -716,13 +716,92 @@ fn hygiene_lint_skips_the_deny_list_file_and_it_holds_only_digests() {
     }
     assert!(digests >= 1, "the deny list holds no digest");
 
-    for domain in entries(PUBLIC_TEXT) {
+    for entry in entries(PUBLIC_TEXT) {
+        let domain = entry.strip_prefix(EXACT).unwrap_or(&entry);
         let plain = domain
             .bytes()
             .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-'));
         assert!(
             plain && !domain.starts_with('.'),
             "not a plain domain: {domain:?}"
+        );
+    }
+}
+
+#[test]
+fn hygiene_lint_refuses_a_protocol_relative_url_host() {
+    // Catches: a host written as the authority of a protocol-relative URL (`//host/path`)
+    // escaping the lint because a `/` next to a bare name marks a path component.
+    let authority = ["cdn", ".acme", ".io"].concat();
+    for text in [
+        format!("<script src=\"//{authority}/lib.js\">"),
+        format!("load //{authority} first"),
+        format!("//{authority}/x"),
+    ] {
+        assert_eq!(
+            reasons(hostnames("page.md", &text, &public())),
+            [format!("page.md:1: {}", host_reason(&authority))],
+            "{text}"
+        );
+    }
+    let in_rust = format!("let url = \"//{authority}/lib.js\";");
+    assert_eq!(
+        reasons(hostnames("src/a.rs", &in_rust, &public())),
+        [format!("src/a.rs:1: {}", host_reason(&authority))]
+    );
+    // An allowed host, workspace paths, comments and doc comments are no URLs to refuse.
+    for text in [
+        "see //github.com/a/b",
+        "crates/x//y/lib.rs",
+        "a//b.rs and x//y",
+        "// a comment",
+        "/// a doc comment",
+        "file:///x/y",
+        "https://github.com/a",
+    ] {
+        assert_clean(hostnames("page.md", text, &public()), text);
+    }
+}
+
+#[test]
+fn hygiene_lint_exact_entries_allow_only_the_name() {
+    // Catches: an allow-list entry meant for one exact name (a file or field name that ends in a
+    // word delegated as a top-level domain) letting every host under it through.
+    let public = vec![
+        format!("{EXACT}hook.group"),
+        format!("{EXACT}tool.download"),
+        "github.com".to_string(),
+    ];
+    for name in ["hook.group", "tool.download"] {
+        let text = format!("the field `{name}` is read");
+        assert_clean(hostnames("notes.md", &text, &public), &text);
+        let under = format!("ci.{name}");
+        let text = format!("talks to {under} now");
+        assert_eq!(
+            reasons(hostnames("notes.md", &text, &public)),
+            [format!("notes.md:1: {}", host_reason(&under))],
+            "{text}"
+        );
+    }
+    // A domain entry still allows the names under it.
+    assert_clean(
+        hostnames("notes.md", "see docs.github.com", &public),
+        "docs",
+    );
+    // Every exact entry of the real list allows its name and, when it is a dotted name, refuses
+    // it with one more label in front (`alpine` is no dotted name, so nothing under it is a host).
+    let real = entries(PUBLIC_TEXT);
+    let exact: Vec<&str> = real.iter().filter_map(|e| e.strip_prefix(EXACT)).collect();
+    assert!(exact.contains(&"hook.group"), "{exact:?}");
+    for name in exact.into_iter().filter(|name| name.contains('.')) {
+        let text = format!("x {name} y");
+        assert_clean(hostnames("notes.md", &text, &real), &text);
+        let under = format!("ci.{name}");
+        let text = format!("x {under} y");
+        assert_eq!(
+            reasons(hostnames("notes.md", &text, &real)),
+            [format!("notes.md:1: {}", host_reason(&under))],
+            "{text}"
         );
     }
 }
