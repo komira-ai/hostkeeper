@@ -80,7 +80,8 @@ A rule for the `manage-units` action limits an account to the units it lists. Bu
 needs `manage-unit-files`, whose policy implies `manage-units` for every unit, so an account that
 holds it can manage any unit. Hooks therefore never mask, and the launcher never grants
 `manage-unit-files` (a test holds that); if anything generates polkit rules from a declaration, it
-must not grant it either. The root tests assert both halves through `pkcheck`.
+must not grant it either. The root tests, which come with the privileged workflow (MIGRATION.md), assert both halves
+through `pkcheck`.
 
 ## Tests
 

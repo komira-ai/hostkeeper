@@ -74,6 +74,9 @@ this repository's rules require it:
   `#[expect(clippy::disallowed_methods, reason = "...")]`.
 - **The harness is behind a feature.** `hostkeeper_hook::conformance` needs the feature
   `conformance`; the example hook is built only with it.
+- **Test programs are built only for tests.** `hostkeeper-rights-probe` needs the feature
+  `test-support`, which only the crate's own tests turn on, as `hostkeeper-hook-example` needs
+  `conformance`.
 - **Test fixtures name an example signer.** Declarations in the tests that named `komira-ai/kbf` as
   their signer name `example-org/example`.
 - **Scratch directories.** The tests' scratch directories come from `hostkeeper-testkit`, with a

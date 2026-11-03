@@ -1,4 +1,4 @@
-//! Time as an input: the runner, the dead-man and the registry read the clock through this
+//! Time as an input: the runner and the dead-man read the clock through this
 //! trait, so a test drives them with a clock that moves only when told to.
 
 use std::time::Duration;

@@ -148,11 +148,13 @@ pub struct Declaration {
     #[serde(default = "default_hook_args")]
     pub hook_args: Vec<String>,
     pub signer: Signer,
-    /// The account the service runs as and registers as.
+    /// The account the service runs as.
     pub uid: String,
+    /// The lifetime of a registration on kbf's registration socket, which this repository does
+    /// not carry; kept so that every declaration that loaded before still loads.
     #[serde(default = "default_ttl")]
     pub registration_ttl_secs: u64,
-    /// Loopback ports a registration may name; none for a service with no listener.
+    /// The loopback ports a health address of the service may name; none for a service with no listener.
     #[serde(default)]
     pub health_ports: BTreeSet<u16>,
     /// After `cutover` succeeds, `verify` must succeed by then or the updater runs `rollback`.

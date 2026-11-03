@@ -5,7 +5,7 @@
 //! `<executable> <hook_args> <step> [args]`; `update-hook`, the default of `hook_args`, is the
 //! convention our own services follow (`tierstore update-hook cutover`). Nothing here requires
 //! Rust of a hook; a Rust hook uses [`Invocation`], [`Outcome`] and [`Report`] to speak the
-//! contract, and every hook is tested by [`conformance`].
+//! contract, and every hook is tested by the harness in `conformance`.
 //!
 //! The params file also carries the updater's reserved `updater.*` keys (the staged and previous
 //! release, the target and previous version); a hook validates what it reads from it against its
@@ -16,6 +16,7 @@
 //! The crate depends on no other crate of this workspace, so a service outside it can depend on
 //! the contract; a layering test (`crates/xtask/tests/layering`) keeps it so.
 
+#[cfg(feature = "conformance")]
 pub mod conformance;
 mod exit;
 mod line;

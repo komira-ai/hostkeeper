@@ -29,11 +29,13 @@ thiserror.workspace = true
 toml.workspace = true
 
 # The program the root tests run as a hook, with the operations that probe the rights it was
-# given. A program of the tests, not shipped. The root tests themselves need root and the real
-# systemd and are not part of the pull-request test set (MIGRATION.md).
+# given. A program of the tests, not shipped: it is built only with `test-support`, which only
+# the tests of this crate turn on. The root tests themselves need root and the real systemd and
+# are not part of the pull-request test set (MIGRATION.md).
 [[bin]]
 name = "hostkeeper-rights-probe"
 path = "tests/bin/probe_hook.rs"
+required-features = ["test-support"]
 
 [features]
 # `Declared::by_hand`, for the tests of this crate: a loaded declaration made without a directory.
