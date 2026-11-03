@@ -125,6 +125,48 @@ fn reads_step_record_written_by_kbf_tag() {
     }
 }
 
+/// Catches a reader that rejects a record whose `progress` has no `reason` (the field is
+/// defaulted): it loads with `reason` `None`, as the canonical `pending` record, and saving it
+/// writes the canonical bytes, `reason` included as null.
+#[test]
+fn reads_a_kbf_record_without_the_defaulted_reason() {
+    let dir = Scratch::new("kbf-reason-absent");
+    let text = fixture("reason-absent");
+    assert!(!text.contains("reason"));
+    fs::write(dir.path().join(RECORD_FILE), text).unwrap();
+    let store = RecordStore::new(dir.path());
+    let Loaded::Current(record) = store.load().unwrap() else {
+        panic!("a schema 1 record loads as current");
+    };
+    assert_eq!(record.progress.reason, None);
+    assert_eq!(*record, expected("pending"));
+    store.save(&record).unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.path().join(RECORD_FILE)).unwrap(),
+        fixture("pending")
+    );
+}
+
+/// Catches a reader that refuses a record of the same schema carrying fields it does not know,
+/// at the top level and inside `progress`: it loads as the canonical `pending` record, and
+/// saving it writes the canonical bytes without the unknown fields.
+#[test]
+fn reads_a_kbf_record_with_an_unknown_field() {
+    let dir = Scratch::new("kbf-unknown-field");
+    let text = fixture("unknown-field");
+    assert_eq!(text.matches("added_later").count(), 2);
+    fs::write(dir.path().join(RECORD_FILE), text).unwrap();
+    let store = RecordStore::new(dir.path());
+    assert_eq!(
+        store.load().unwrap(),
+        Loaded::Current(Box::new(expected("pending")))
+    );
+    store.save(&expected("pending")).unwrap();
+    let written = fs::read_to_string(dir.path().join(RECORD_FILE)).unwrap();
+    assert!(!written.contains("added_later"));
+    assert_eq!(written, fixture("pending"));
+}
+
 /// Catches a change of the on-disk format: saving each record writes exactly the bytes kbf's
 /// writer wrote (field order, names, tags, indent, no trailing newline).
 #[test]
@@ -212,7 +254,9 @@ fn kbf_tag_reader_contract_documented() {
             "finished.json",
             "newer-schema.json",
             "pending.json",
-            "running.json"
+            "reason-absent.json",
+            "running.json",
+            "unknown-field.json"
         ]
     );
     for file in &files {

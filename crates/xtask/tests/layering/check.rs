@@ -1,7 +1,10 @@
 //! The layering rules, read from a workspace directory.
 //!
 //! The members and their direct dependencies come from `cargo metadata --no-deps --offline`;
-//! the whole graph (every kind, every platform) comes from the workspace's `Cargo.lock`.
+//! the whole graph (every kind, every platform) comes from the workspace's `Cargo.lock`. A
+//! layer crate's normal and build dependencies are followed through crates outside the
+//! workspace (a path crate under an excluded directory), so such a crate cannot hide a
+//! workspace crate behind it.
 //! Nothing here touches the network.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -172,6 +175,46 @@ fn workspace_deps<'a>(
         .collect()
 }
 
+/// The workspace crates `name` reaches through its normal and build dependencies, each with the
+/// shortest chain from `name` to it. The walk starts at `name`'s direct dependencies and
+/// continues through crates that are not workspace members (their lockfile edges); it stops at
+/// a member, whose own dependencies are judged by its own rules.
+fn reached(members: &Members, lock: &Edges, name: &str) -> BTreeMap<String, Vec<String>> {
+    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut seen: BTreeSet<String> = BTreeSet::from([name.to_string()]);
+    let mut queue: VecDeque<Vec<String>> = VecDeque::from([vec![name.to_string()]]);
+    while let Some(chain) = queue.pop_front() {
+        let node = chain.last().expect("a chain is never empty");
+        let next: Vec<&str> = if chain.len() == 1 {
+            members
+                .get(name)
+                .into_iter()
+                .flatten()
+                .filter(|dep| dep.kind != Kind::Dev)
+                .map(|dep| dep.name.as_str())
+                .collect()
+        } else {
+            lock.get(node)
+                .into_iter()
+                .flatten()
+                .map(String::as_str)
+                .collect()
+        };
+        for dep in next {
+            let mut longer = chain.clone();
+            longer.push(dep.to_string());
+            if members.contains_key(dep) {
+                if dep != name {
+                    found.entry(dep.to_string()).or_insert(longer);
+                }
+            } else if seen.insert(dep.to_string()) {
+                queue.push_back(longer);
+            }
+        }
+    }
+    found
+}
+
 fn set(names: &BTreeSet<&str>) -> String {
     format!(
         "{{{}}}",
@@ -236,7 +279,8 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
             out.push(format!("{name} is not a workspace member"));
             continue;
         }
-        let actual = workspace_deps(members, name, |kind| kind != Kind::Dev);
+        let chains = reached(members, lock, name);
+        let actual: BTreeSet<&str> = chains.keys().map(String::as_str).collect();
         let wanted: BTreeSet<&str> = exact.iter().copied().collect();
         if actual != wanted {
             out.push(format!(
@@ -245,6 +289,14 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
                 set(&actual),
                 set(&wanted)
             ));
+            for (dep, chain) in &chains {
+                if chain.len() > 2 && !wanted.contains(dep.as_str()) {
+                    out.push(format!(
+                        "{name} reaches the workspace crate {dep} through {}",
+                        chain.join(" -> ")
+                    ));
+                }
+            }
         }
         for dev in workspace_deps(members, name, |kind| kind == Kind::Dev) {
             if dev != name && dev != TESTKIT {
@@ -271,4 +323,75 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
         }
     }
     out
+}
+
+/// The normal dependencies of `hostkeeper-hook` that are not optional.
+const HOOK_PLAIN_DEPS: [&str; 4] = ["serde", "serde_json", "thiserror", "toml"];
+
+/// Checks the `hostkeeper-hook` package of `cargo metadata --no-deps` JSON: the harness
+/// dependency `rustix` is optional and only the feature `conformance` turns it on, and no
+/// other normal dependency is non-optional beyond `HOOK_PLAIN_DEPS`. `Err` holds one line per
+/// violation.
+pub fn check_hook_harness(metadata: &serde_json::Value) -> Result<(), String> {
+    let Some(package) = metadata["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|package| package["name"] == HOOK)
+    else {
+        return Err(format!("{HOOK} is not in the metadata"));
+    };
+    let normal: Vec<&serde_json::Value> = package["dependencies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|dep| dep["kind"].is_null())
+        .collect();
+    let mut out = Vec::new();
+    if !normal
+        .iter()
+        .any(|dep| dep["name"] == "rustix" && dep["optional"] == true)
+    {
+        out.push(format!(
+            "{HOOK} must have rustix as an optional normal dependency"
+        ));
+    }
+    if package["features"]["conformance"] != serde_json::json!(["dep:rustix"]) {
+        out.push(format!(
+            "{HOOK} must have the feature conformance = [\"dep:rustix\"]"
+        ));
+    }
+    let plain: BTreeSet<&str> = normal
+        .iter()
+        .filter(|dep| dep["optional"] != true)
+        .filter_map(|dep| dep["name"].as_str())
+        .filter(|name| !HOOK_PLAIN_DEPS.contains(name))
+        .collect();
+    if !plain.is_empty() {
+        out.push(format!(
+            "{HOOK} has non-optional normal dependencies {} beyond {}",
+            set(&plain),
+            HOOK_PLAIN_DEPS.join(", ")
+        ));
+    }
+    if out.is_empty() {
+        Ok(())
+    } else {
+        Err(out.join("\n"))
+    }
+}
+
+/// The `cargo metadata --no-deps --offline` JSON of the workspace in `root`.
+pub fn metadata_of(root: &Path) -> serde_json::Value {
+    let text = cargo(
+        &[
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+        ],
+        &root.join("Cargo.toml"),
+    );
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("cargo metadata printed no JSON: {e}"))
 }

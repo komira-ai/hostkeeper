@@ -41,15 +41,20 @@
 //!   `first-install-no-rollback-once` rolls back; `first-install-no-rollback-rerun-undoes` and
 //!   `first-install-no-rollback-rerun-undoes-record` take `next` or `target` first;
 //!   `first-install-no-rollback-rerun-flips` says `reversible: true`.
+//! - `descendant`: in a run the harness stops at a kill point, `prepare` first starts a child
+//!   process of this program (`descendant-child <lock> <pid>`, in the hook's process group) that
+//!   takes an exclusive lock on `descendant.lock` beside the sandboxes, writes its pid to
+//!   `descendant.pid` there and parks; the hook goes on only after the child says it holds the
+//!   lock. The lock is free again only when the child is dead.
 //!
 //! Command line: `update-hook [--irreversible-cutover] [--defect=<name>] [--behaviour=<name>]...
 //! <step> [args]`, or the step first when the first argument is not `update-hook`.
 
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
 
 use hostkeeper_hook::conformance::gate;
 use hostkeeper_hook::{Class, Invocation, Outcome, Params, Report, Step};
@@ -61,6 +66,25 @@ struct Decline<'a> {
     reason: &'static str,
     reversible: bool,
     takes: Option<(&'a PathBuf, &'static str)>,
+}
+
+/// The first argument of the child process the `descendant` behaviour starts.
+const DESCENDANT_ARG: &str = "descendant-child";
+
+/// The child: takes the exclusive lock, writes its pid, tells its parent, and parks for good.
+fn descendant(lock: &Path, pid: &Path) -> io::Result<()> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(lock)?;
+    file.lock()?;
+    fs::write(pid, std::process::id().to_string())?;
+    let mut ready = io::stdout().lock();
+    ready.write_all(b"1")?;
+    ready.flush()?;
+    loop {
+        std::thread::park();
+    }
 }
 
 struct Hook {
@@ -270,6 +294,36 @@ impl Hook {
         }
     }
 
+    /// Starts the `descendant` child and waits until it holds the lock, when the harness is
+    /// going to stop this run at a kill point.
+    fn start_descendant(&self) -> io::Result<()> {
+        let kill_at = var(gate::KILL_AT_VAR);
+        let stopped = kill_at
+            .to_str()
+            .and_then(|n| n.parse::<u64>().ok())
+            .is_some_and(|n| n > 0);
+        if !self.behaves("descendant") || !stopped {
+            return Ok(());
+        }
+        // Beside the sandboxes, so that it is no change of theirs.
+        let beside = self.faults.join("../..");
+        let mut child = Command::new(std::env::current_exe()?)
+            .arg(DESCENDANT_ARG)
+            .arg(beside.join("descendant.lock"))
+            .arg(beside.join("descendant.pid"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let ready = child.stdout.take();
+        // Never waited for: the harness kills it with this process's group.
+        std::mem::forget(child);
+        let mut byte = [0u8; 1];
+        ready
+            .ok_or_else(|| io::Error::other("the child has no pipe"))?
+            .read_exact(&mut byte)
+    }
+
     fn lost(&self) -> bool {
         self.rec_get("stop_begun").is_some()
     }
@@ -317,6 +371,7 @@ impl Hook {
         }
         match step {
             Step::Prepare => {
+                self.start_descendant()?;
                 let artifact = inv.artifact.clone().unwrap_or_default();
                 let target = fs::read_to_string(artifact.join("VERSION"))?;
                 // A cordon there and not recorded as the hook's own is an operator's (for
@@ -497,6 +552,14 @@ impl Hook {
 
 fn main() -> ExitCode {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|a| a == DESCENDANT_ARG) {
+        if let [_, lock, pid] = args.as_slice()
+            && let Err(e) = descendant(Path::new(lock), Path::new(pid))
+        {
+            eprintln!("hostkeeper-hook-example: {DESCENDANT_ARG}: {e}");
+        }
+        return ExitCode::from(3);
+    }
     if args.first().is_some_and(|a| a == "update-hook") {
         args.remove(0);
     }

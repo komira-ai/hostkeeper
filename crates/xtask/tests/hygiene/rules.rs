@@ -2,26 +2,34 @@
 //!
 //! A rule returns one [`Finding`] per offence, with the path and the 1-based line, and the
 //! reason in words. The rules are:
-//! - [`dates`]: a date before the cutoff (2026-09-01) in a common spelling: numeric year first
-//!   (`-`, `/` or `.` between the parts), compact eight digits at word boundaries, numeric year
-//!   last, and month names (whole or abbreviated, any case) with a year, with or without a day.
-//!   A year alone is not a date;
+//! - [`dates`]: a date before the cutoff (2026-09-01), of any year from 1000 to 9999, in a common
+//!   spelling: numeric year first (`-`, `/` or `.` between the parts), compact eight digits at word
+//!   boundaries, numeric year last, and month names (whole or abbreviated, any case) with a year,
+//!   with or without a day, in the orders `Month D, YYYY`, `D Month YYYY`, `D-Mon-YYYY`,
+//!   `YYYY-Mon-D` and `YYYY Month D`. A year alone is not a date. The licence text is exempt from
+//!   this rule only (see [`lint`]);
 //! - [`ipv4s`]: four dotted octets that are not loopback, unspecified or a documentation range;
 //! - [`home_paths`]: a path under the home directories of a person or a host;
-//! - [`emails`]: an e-mail address outside the example domains, apart from the instance name of a
-//!   systemd unit (`name@instance.service`);
-//! - [`hostnames`]: the host of a URL, or a bare dotted name ending in a known top-level domain,
-//!   outside the example domains and the allow list of public domains;
+//! - [`emails`]: an e-mail address, with a plain or a quoted local part, outside the example
+//!   domains, apart from the instance name of a systemd unit (`name@instance.service`);
+//! - [`hostnames`]: the host of a URL, or a bare dotted name (in any case) ending in a top-level
+//!   domain of `GENERIC_TLDS` or `COUNTRY_TLDS` (and not of `FILE_SUFFIXES`), outside the example
+//!   domains and the allow list of public domains;
 //! - [`repositories`]: a token whose SHA-256 is on the deny list of internal repository names.
 //!
-//! In a Rust file a bare dotted name counts only inside a string or after `//`, and a name
-//! followed by `(` never counts, so field and method access is not read as a host. In a TOML file
-//! a table header is not read for bare names.
+//! In a Rust file a bare dotted name counts only inside a comment or a string, as found by a small
+//! lexical scan of the whole file (`rust_text`), and a name followed by `(` never counts, so
+//! field and method access is not read as a host. A name whose last label is a common file
+//! extension (`FILE_SUFFIXES`) is a file name, not a host. In a TOML file a table header is not
+//! read for bare names.
 
 use std::collections::HashSet;
 use std::fmt;
 
 use sha2::{Digest, Sha256};
+
+use crate::rust_text::rust_text_mask;
+use crate::tlds::{FILE_SUFFIXES, is_tld};
 
 /// The first day that may be named: a date before it is refused.
 const CUTOFF: (u32, u32, u32) = (2026, 9, 1);
@@ -68,9 +76,17 @@ pub fn entries(text: &str) -> Vec<String> {
     out
 }
 
-/// Every rule, over one file.
+/// The licence text, verbatim from its authors, dated as they dated it: the one file the date
+/// rule does not read. Every other rule reads it.
+pub const LICENCE_FILE: &str = "LICENSE";
+
+/// Every rule, over one file. The date rule skips the licence text and nothing else does.
 pub fn lint(path: &str, text: &str, lists: &Lists) -> Vec<Finding> {
-    let mut out = dates(path, text);
+    let mut out = if path == LICENCE_FILE {
+        Vec::new()
+    } else {
+        dates(path, text)
+    };
     out.extend(ipv4s(path, text));
     out.extend(home_paths(path, text));
     out.extend(emails(path, text));
@@ -148,7 +164,7 @@ fn digits(tok: Option<&Tok<'_>>, min: usize, max: usize) -> Option<u32> {
 
 fn year(tok: Option<&Tok<'_>>) -> Option<u32> {
     let y = digits(tok, 4, 4)?;
-    (1900..=2099).contains(&y).then_some(y)
+    (1000..=9999).contains(&y).then_some(y)
 }
 
 fn sep_char(tok: Option<&Tok<'_>>) -> Option<char> {
@@ -259,7 +275,7 @@ fn compact_date(toks: &[Tok<'_>], at: usize) -> Option<Found> {
     }
     let value: u32 = tok.text.parse().ok()?;
     let (y, month, day) = (value / 10_000, value / 100 % 100, value % 100);
-    if !(1900..=2099).contains(&y) || !valid_day_month(month, day) {
+    if !(1000..=9999).contains(&y) || !valid_day_month(month, day) {
         return None;
     }
     let previous = at.checked_sub(1).and_then(|i| toks.get(i));
@@ -373,11 +389,94 @@ fn named_date(toks: &[Tok<'_>], at: usize) -> Option<Found> {
     })
 }
 
+/// `D-Mon-YYYY`, `YYYY-Mon-D`, `Mon-YYYY` and `YYYY-Mon`, the same `-` or `/` on both sides of
+/// the month name.
+fn joined_named_date(toks: &[Tok<'_>], at: usize) -> Option<Found> {
+    let tok = toks.get(at)?;
+    if tok.kind != Kind::Word {
+        return None;
+    }
+    let month = month_of(tok.text)?;
+    let joiner = |i: Option<usize>| {
+        i.and_then(|i| sep_char(toks.get(i)))
+            .filter(|&c| matches!(c, '-' | '/'))
+    };
+    let before = joiner(at.checked_sub(1));
+    let after = joiner(Some(at + 1));
+    let two_back = at.checked_sub(2);
+    let day_first = two_back.and_then(|i| digits(toks.get(i), 1, 2));
+    let year_first = two_back.and_then(|i| year(toks.get(i)));
+    let day_last = digits(toks.get(at + 2), 1, 2);
+    let year_last = year(toks.get(at + 2));
+    let make = |y: u32, day: u32, first: usize, last: usize| {
+        (1..=31).contains(&day).then_some(Found {
+            before: (y, month, day) < CUTOFF,
+            first,
+            last,
+        })
+    };
+    let both = before.is_some() && before == after;
+    if let (true, Some(day), Some(y)) = (both, day_first, year_last) {
+        return make(y, day, at - 2, at + 2);
+    }
+    if let (true, Some(y), Some(day)) = (both, year_first, day_last) {
+        return make(y, day, at - 2, at + 2);
+    }
+    if let (Some(_), Some(y)) = (after, year_last) {
+        return make(y, 1, at, at + 2);
+    }
+    if let (Some(_), Some(y)) = (before, year_first) {
+        return make(y, 1, at - 2, at);
+    }
+    None
+}
+
+/// The index of the last token before `at` that is not a space.
+fn back_over_space(toks: &[Tok<'_>], mut at: usize) -> Option<usize> {
+    while toks.get(at).is_some_and(is_space) {
+        at = at.checked_sub(1)?;
+    }
+    Some(at)
+}
+
+/// `YYYY Month D` and `YYYY, Month D`: the year first, then the month name and the day.
+fn year_first_named_date(toks: &[Tok<'_>], at: usize) -> Option<Found> {
+    let tok = toks.get(at)?;
+    if tok.kind != Kind::Word || toks.get(at + 1).is_none_or(|t| t.kind == Kind::Num) {
+        return None;
+    }
+    let month = month_of(tok.text)?;
+    let mut j = back_over_space(toks, at.checked_sub(1)?)?;
+    if sep_char(toks.get(j)) == Some(',') {
+        j = back_over_space(toks, j.checked_sub(1)?)?;
+    }
+    if j + 1 >= at {
+        return None;
+    }
+    let y = year(toks.get(j))?;
+    let mut p = at + 1;
+    if sep_char(toks.get(p)) == Some('.') {
+        p += 1;
+    }
+    p = skip_space(toks, p);
+    let day = digits(toks.get(p), 1, 2)?;
+    if !(1..=31).contains(&day) {
+        return None;
+    }
+    Some(Found {
+        before: (y, month, day) < CUTOFF,
+        first: j,
+        last: p,
+    })
+}
+
 fn date_at(toks: &[Tok<'_>], at: usize) -> Option<Found> {
     iso_date(toks, at)
         .or_else(|| year_last_date(toks, at))
         .or_else(|| compact_date(toks, at))
         .or_else(|| named_date(toks, at))
+        .or_else(|| joined_named_date(toks, at))
+        .or_else(|| year_first_named_date(toks, at))
 }
 
 /// Dates before the cutoff.
@@ -555,6 +654,11 @@ pub fn emails(path: &str, text: &str) -> Vec<Finding> {
             if local_start < at && local_start > 0 && b[local_start - 1] == b'\\' {
                 local_start += 1;
             }
+            // A quoted local part: `"any text"@domain`.
+            if local_start == at && at > 1 && b[at - 1] == b'"' {
+                let open = line[..at - 1].rfind('"').filter(|&o| o + 2 < at);
+                local_start = open.unwrap_or(local_start);
+            }
             let mut domain_end = at + 1;
             while domain_end < b.len() && is_domain_byte(b[domain_end]) {
                 domain_end += 1;
@@ -576,26 +680,19 @@ pub fn emails(path: &str, text: &str) -> Vec<Finding> {
     out
 }
 
-/// Dotted labels, the first starting with a letter and the last of letters only.
+/// Dotted labels, the first starting with a letter or a digit and the last of letters only.
 fn looks_like_mail_domain(domain: &str) -> bool {
     let labels: Vec<&str> = domain.split('.').collect();
     if labels.len() < 2 || labels.iter().any(|l| l.is_empty()) {
         return false;
     }
-    let first_is_letter = labels[0].starts_with(|c: char| c.is_ascii_alphabetic());
+    let first_is_alnum = labels[0].starts_with(|c: char| c.is_ascii_alphanumeric());
     let last = labels[labels.len() - 1];
-    first_is_letter && last.len() >= 2 && last.bytes().all(|c| c.is_ascii_alphabetic())
+    first_is_alnum && last.len() >= 2 && last.bytes().all(|c| c.is_ascii_alphabetic())
 }
 
 // ---------------------------------------------------------------------------------------------
 // Hostnames
-
-/// The top-level domains a bare dotted name is read as a host for: public ones and the
-/// private-use ones.
-const TLDS: [&str; 22] = [
-    "com", "net", "org", "io", "dev", "ai", "app", "cloud", "co", "me", "info", "biz", "xyz", "sh",
-    "tech", "internal", "local", "lan", "corp", "intranet", "home", "private",
-];
 
 /// True when `host` is an example domain or is, or is under, a domain of the allow list.
 fn is_allowed_host(host: &str, public: &[String]) -> bool {
@@ -654,15 +751,6 @@ fn is_name_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')
 }
 
-/// True when byte offset `at` of a line of a Rust file is in a string or in a `//` comment.
-fn in_rust_text(line: &str, at: usize) -> bool {
-    if line.trim_start().starts_with("//") {
-        return true;
-    }
-    let quotes = line.as_bytes()[..at].iter().filter(|&&b| b == b'"').count();
-    quotes % 2 == 1
-}
-
 fn is_toml_table_header(line: &str) -> bool {
     let line = line.trim();
     line.starts_with('[') && line.ends_with(']')
@@ -672,8 +760,19 @@ fn is_toml_table_header(line: &str) -> bool {
 pub fn hostnames(path: &str, text: &str, public: &[String]) -> Vec<Finding> {
     let is_rust = path.ends_with(".rs");
     let is_toml = path.ends_with(".toml");
+    let mask = if is_rust {
+        rust_text_mask(text)
+    } else {
+        Vec::new()
+    };
     let mut out = Vec::new();
-    for (n, line) in numbered(text) {
+    let mut base = 0;
+    for (index, raw) in text.split_inclusive('\n').enumerate() {
+        let n = index + 1;
+        let line_start = base;
+        base += raw.len();
+        let line = raw.strip_suffix('\n').unwrap_or(raw);
+        let line = line.strip_suffix('\r').unwrap_or(line);
         let found_urls = urls(line);
         for url in &found_urls {
             if !is_allowed_host(&url.host, public) {
@@ -698,15 +797,15 @@ pub fn hostnames(path: &str, text: &str, public: &[String]) -> Vec<Finding> {
             let inside_url = found_urls.iter().any(|u| start < u.end && end > u.start);
             let after_at = start > 0 && b[start - 1] == b'@';
             let call = b.get(end) == Some(&b'(');
-            let name = line[start..end].trim_end_matches('.');
-            if inside_url || after_at || call || !is_bare_host(name) {
+            let name = line[start..end].trim_end_matches('.').to_ascii_lowercase();
+            if inside_url || after_at || call || !is_bare_host(&name) {
                 continue;
             }
-            if is_rust && !in_rust_text(line, start) {
+            if is_rust && !mask[line_start + start] {
                 continue;
             }
-            if !is_allowed_host(name, public) {
-                out.push(finding(path, n, host_reason(name)));
+            if !is_allowed_host(&name, public) {
+                out.push(finding(path, n, host_reason(&name)));
             }
         }
     }
@@ -719,19 +818,22 @@ fn host_reason(host: &str) -> String {
     )
 }
 
-/// Lowercase dotted labels, at least two, the last a listed top-level domain.
+/// Dotted labels of letters, digits and hyphens, at least two, in any case, the last a top-level
+/// domain that is not a file suffix.
 fn is_bare_host(name: &str) -> bool {
-    let plain = name
+    let lower = name.to_ascii_lowercase();
+    let plain = lower
         .bytes()
         .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-'));
-    if !plain || name.starts_with('.') {
+    if !plain || lower.starts_with('.') {
         return false;
     }
-    let labels: Vec<&str> = name.split('.').collect();
+    let labels: Vec<&str> = lower.split('.').collect();
     if labels.len() < 2 || labels.iter().any(|l| l.is_empty()) {
         return false;
     }
-    TLDS.contains(&labels[labels.len() - 1])
+    let last = labels[labels.len() - 1];
+    !FILE_SUFFIXES.contains(&last) && is_tld(last)
 }
 
 // ---------------------------------------------------------------------------------------------

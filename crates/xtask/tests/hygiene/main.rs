@@ -4,19 +4,24 @@
 //! The files come from `git ls-files` at the repository root. A file whose bytes are not UTF-8 is
 //! binary and is skipped; every other tracked file is read. The deny list of internal repository
 //! names ([`DENIED_FILE`]) is not scanned, because its job is to hold the digests of those
-//! names, and neither is the licence text ([`LICENCE_FILE`]), which carries its authors' date. Test sources that need a text a rule refuses build it from pieces at
-//! run time, so that this directory passes its own lint.
+//! names. The licence text ([`LICENCE_FILE`]) is scanned by every rule but the date rule, because
+//! it is the verbatim third-party notice with its authors' date. Test sources that need a text a
+//! rule refuses build it from pieces at run time, so that this directory passes its own lint.
 
 mod rules;
+mod rust_text;
+mod tlds;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rules::{
-    Finding, Lists, dates, emails, entries, home_paths, hostnames, ipv4s, lint, repositories,
+    Finding, LICENCE_FILE, Lists, dates, emails, entries, home_paths, hostnames, ipv4s, lint,
+    repositories,
 };
 use sha2::{Digest, Sha256};
+use tlds::{COUNTRY_TLDS, FILE_SUFFIXES, GENERIC_TLDS};
 
 /// The deny list, as a path from the repository root: a tracked file that is not scanned.
 const DENIED_FILE: &str = "crates/xtask/tests/hygiene/denied_repositories.sha256";
@@ -49,15 +54,10 @@ fn tracked_files(root: &Path) -> Vec<String> {
     paths
 }
 
-/// The licence text, verbatim from its authors, dated as they dated it: not scanned.
-const LICENCE_FILE: &str = "LICENSE";
-
-/// The paths the lint reads: all but the deny list and the licence text.
+/// The paths the lint reads: all but the deny list. The licence text is read, by every rule but
+/// the date rule.
 fn scanned(paths: Vec<String>) -> Vec<String> {
-    paths
-        .into_iter()
-        .filter(|p| p != DENIED_FILE && p != LICENCE_FILE)
-        .collect()
+    paths.into_iter().filter(|p| p != DENIED_FILE).collect()
 }
 
 /// `(path, text)` of every scanned file that is text. A directory (a submodule) and a file that
@@ -143,8 +143,9 @@ fn hygiene_lint_passes_the_tree() {
 fn hygiene_lint_refuses_a_date_before_the_cutoff() {
     // Catches: a date that names a day before 2026-09-01 and goes unflagged because of how it
     // is spelled (numeric with each separator, compact, year last, month names whole or
-    // abbreviated in any case, with or without a day), or a date on or after the cutoff, a
-    // version number or a lone year that is flagged although it names no day before it.
+    // abbreviated in any case, with or without a day, joined by hyphens or slashes, or the year
+    // first, in any year from 1000 on), or a date on or after the cutoff, a version number or a
+    // lone year that is flagged although it names no day before it.
     let refused = [
         ["2025", "01", "02"].join("-"),
         ["2025", "01", "02"].join("/"),
@@ -157,6 +158,15 @@ fn hygiene_lint_refuses_a_date_before_the_cutoff() {
         ["Mar", "2025"].join(" "),
         ["AUGUST", "2026"].join(" "),
         ["2026", "08", "31"].join("-"),
+        ["1999", "12", "31"].join("-"),
+        ["1066", "10", "14"].join("-"),
+        ["3", "Jan", "2025"].join("-"),
+        ["3", "SEPT", "2025"].join("/"),
+        ["2025", "Jan", "03"].join("-"),
+        ["Jan", "2025"].join("-"),
+        ["2025", "January", "3"].join(" "),
+        ["2025,", "March", "4"].join(" "),
+        ["2025", "dec.", "31"].join(" "),
     ];
     for spelling in refused {
         let found = reasons(dates("notes.md", &on(&spelling)));
@@ -182,7 +192,13 @@ fn hygiene_lint_refuses_a_date_before_the_cutoff() {
         "20261001",
         "edition = \"2024\"",
         "1.1.8+spec-1.1.0",
+        "1.2.3",
+        "0.2.190",
         "1.2.3.2025",
+        "3-Jan-2027",
+        "2026-Sep-01",
+        "2027 March 4",
+        "in 2025 may be wrong",
         "2025-13-01",
         "12345678",
         "it may happen in 2025",
@@ -268,14 +284,19 @@ fn hygiene_lint_refuses_a_home_path() {
 #[test]
 fn hygiene_lint_refuses_an_email_address() {
     // Catches: an e-mail address outside the example domains that is not flagged (a plain one,
-    // one with a tag and capitals), or an example address, a systemd unit instance name, an
-    // action pin, a version or a bare `@name` that is flagged.
+    // one with a tag and capitals, one whose domain starts with a digit, one with a quoted local
+    // part), or an example address, a systemd unit instance name, an action pin, a version or a
+    // bare `@name` that is flagged.
     let plain = ["alice", &["corp-mail", "com"].join(".")].join("@");
-    let tagged = ["Bob.Smith+ops", "Sub.Corp-Mail.IO"].join("@");
-    let text = format!("mail {plain} now\nand ({tagged}).\n");
+    let tagged = ["Bob.Smith+ops", &["Sub", "Corp-Mail", "IO"].join(".")].join("@");
+    let digit_first = ["dana", &["42-mail", "com"].join(".")].join("@");
+    let quoted = ["\"j doe\"", &["corp-mail", "com"].join(".")].join("@");
+    let text = format!("mail {plain} now\nand ({tagged}).\n{digit_first}\nsent to {quoted} too\n");
     let want = [
         format!("m.md:1: the e-mail address `{plain}` is not at an example domain"),
         format!("m.md:2: the e-mail address `{tagged}` is not at an example domain"),
+        format!("m.md:3: the e-mail address `{digit_first}` is not at an example domain"),
+        format!("m.md:4: the e-mail address `{quoted}` is not at an example domain"),
     ];
     assert_eq!(reasons(emails("m.md", &text)), want);
 
@@ -293,6 +314,10 @@ fn hygiene_lint_refuses_an_email_address() {
         "@AGENTS.md",
         "text\\n@AGENTS.md",
         "pkg@1.2.3",
+        "you@7mail.example.com",
+        "\"quoted local\"@example.com",
+        "worker@42.timer",
+        "say \"hi\", then @AGENTS.md",
     ];
     for text in passing {
         assert_clean(emails("m.md", text), text);
@@ -301,10 +326,11 @@ fn hygiene_lint_refuses_an_email_address() {
 
 #[test]
 fn hygiene_lint_refuses_a_hostname_under_a_non_example_domain() {
-    // Catches: the host of a URL (with user and port, in any case) or a bare dotted name under a
-    // non-example domain that is not flagged; a domain that only ends like an allowed one; or a
-    // public site, an example domain, a method call, a field access in Rust code outside a
-    // string, an underscore or capitalised name, and a TOML table header that is flagged.
+    // Catches: the host of a URL (with user and port, in any case) or a bare dotted name, in any
+    // case and under any top-level domain, under a non-example domain that is not flagged; a
+    // domain that only ends like an allowed one; or a public site, an example domain, a method
+    // call, a field access in Rust code outside a string, an underscore name, a file name and a
+    // TOML table header that is flagged.
     let url = ["https", "://", "build", ".internal", "/x?y=1"].concat();
     let url_with_user = ["http", "://", "ci@", "Build", ".Corp", ".io", ":8080/p"].concat();
     let corp = ["build", "corp"].join(".");
@@ -370,8 +396,149 @@ fn hygiene_lint_refuses_a_hostname_under_a_non_example_domain() {
     for text in passing {
         assert_clean(hostnames("h.md", text, &public()), text);
     }
-    let capitalised = ["Build", "corp"].join(".");
-    assert_clean(hostnames("h.md", &capitalised, &public()), &capitalised);
+
+    // A mixed-case name is a host, as is one under a top-level domain that is not in the
+    // short list of generic ones.
+    let mixed = ["Build-01", "Corp", "Acme", "COM"].join(".");
+    let others = [
+        ["vpn", "acme", "de"].join("."),
+        ["git", "acme", "co", "uk"].join("."),
+        ["files", "acme", "studio"].join("."),
+        ["mail", "acme", "localdomain"].join("."),
+        ["Wiki", "ACME", "Fr"].join("."),
+    ];
+    let mut text = format!("ssh to {mixed} now\n");
+    for name in &others {
+        text.push_str(&format!("see {name}\n"));
+    }
+    let mut want = vec![format!("h.md:1: {}", host_reason(&mixed.to_lowercase()))];
+    for (i, name) in others.iter().enumerate() {
+        want.push(format!(
+            "h.md:{}: {}",
+            i + 2,
+            host_reason(&name.to_lowercase())
+        ));
+    }
+    assert_eq!(reasons(hostnames("h.md", &text, &public())), want);
+    // The allow list still applies to a name in capitals.
+    let loud = ["GitHub", "COM"].join(".");
+    assert_clean(hostnames("h.md", &loud, &public()), &loud);
+
+    // A name whose last label is a file suffix is a file name, in any case.
+    for text in [
+        "lib.rs",
+        "Cargo.toml and Cargo.lock",
+        "README.MD",
+        "run.sh then tool.py",
+        "ci.yml, config.yaml, data.json, notes.txt",
+        "a.c b.h c.o libz.a libc.so",
+    ] {
+        assert_clean(hostnames("h.md", text, &public()), text);
+    }
+}
+
+#[test]
+fn hygiene_lint_reads_comments_and_strings_of_a_rust_file_lexically() {
+    // Catches: a host in a trailing or doc comment, a block comment over several lines, a nested
+    // block comment, a string with an escaped quote, a byte string, or an interior line of a
+    // multi-line raw string (with any number of hashes) that is not flagged; and a dotted name in
+    // code, after a character literal holding a quote, beside a lifetime, or after a comment
+    // that holds a quote, that is flagged.
+    let name = ["svc", "dev"].join(".");
+    let code = ["self", "inner", "dev"].join(".");
+    let rs = |text: &str| reasons(hostnames("src/a.rs", text, &public()));
+    let at = |line: usize| format!("src/a.rs:{line}: {}", host_reason(&name));
+
+    assert_eq!(rs(&format!("let a = 1; // talks to {name}")), [at(1)]);
+    assert_eq!(rs(&format!("/// see {name}\nfn a() {{}}")), [at(1)]);
+    assert_eq!(
+        rs(&format!(
+            "fn a() {{}}\n/* first\n   {name}\n*/\nlet b = {code};"
+        )),
+        [at(3)]
+    );
+    assert_eq!(
+        rs(&format!("/* a /* b */ {name} */\nlet c = {code};")),
+        [at(1)]
+    );
+    assert_eq!(
+        rs(&format!(
+            "let s = r#\"\nfirst\n{name}\n\"#;\nlet t = {code};"
+        )),
+        [at(3)]
+    );
+    assert_eq!(
+        rs(&format!(
+            "let s = r##\"\n\"# {name}\n\"##;\nlet t = {code};"
+        )),
+        [at(2)]
+    );
+    assert_eq!(rs(&format!("let s = \"q\\\"{name}\";")), [at(1)]);
+    assert_eq!(rs(&format!("let s = b\"{name}\";")), [at(1)]);
+    assert_eq!(rs(&format!("let s = br#\"{name}\"#;")), [at(1)]);
+
+    let in_code = [
+        format!("let a = {code};"),
+        format!("let q = '\"'; let a = {code};"),
+        format!("let q = '\\''; let a = {code};"),
+        format!("fn f<'a>(x: &'a str) -> &'a str {{ {code} }}"),
+        format!("// a \" quote\nlet a = {code};"),
+        format!("let s = \"x\"; let a = {code};"),
+        format!("let s = r#\"x\"#; let a = {code};"),
+        format!("/* \" */ let a = {code};"),
+    ];
+    for text in &in_code {
+        assert!(rs(text).is_empty(), "code is not read for hosts: {text:?}");
+    }
+}
+
+#[test]
+fn hygiene_lint_top_level_domain_lists_are_consistent() {
+    // Catches: a suffix that is both a file suffix and a top-level domain of the lists (so a file
+    // name could be read as a host), an entry that is not a lowercase name, a country code of
+    // the wrong length, and the loss of the country codes or generic domains the lint relies on.
+    for list in [GENERIC_TLDS, COUNTRY_TLDS, FILE_SUFFIXES] {
+        for entry in list {
+            assert!(
+                !entry.is_empty() && entry.bytes().all(|b| b.is_ascii_lowercase()),
+                "not a lowercase name: {entry:?}"
+            );
+        }
+    }
+    for suffix in FILE_SUFFIXES {
+        assert!(
+            !GENERIC_TLDS.contains(suffix) && !COUNTRY_TLDS.contains(suffix),
+            "{suffix} is both a file suffix and a top-level domain"
+        );
+    }
+    for code in COUNTRY_TLDS {
+        assert_eq!(code.len(), 2, "not a country code: {code}");
+    }
+    for suffix in [
+        "rs", "md", "sh", "toml", "yml", "yaml", "json", "lock", "txt", "py", "c", "h", "o", "a",
+        "so",
+    ] {
+        assert!(
+            FILE_SUFFIXES.contains(&suffix),
+            "{suffix} is not a file suffix"
+        );
+    }
+    for domain in ["de", "uk", "fr", "jp", "br", "au", "nl", "ch"] {
+        assert!(
+            COUNTRY_TLDS.contains(&domain),
+            "{domain} is not a country code"
+        );
+    }
+    for domain in [
+        "com", "net", "org", "io", "dev", "ai", "app", "cloud", "co", "me", "info", "biz", "xyz",
+        "tech", "site", "online", "store", "page", "run", "internal", "local", "lan", "corp",
+        "home", "intranet", "private",
+    ] {
+        assert!(
+            GENERIC_TLDS.contains(&domain) || COUNTRY_TLDS.contains(&domain),
+            "{domain} is not a top-level domain"
+        );
+    }
 }
 
 #[test]
@@ -417,16 +584,62 @@ fn hygiene_lint_reports_every_finding_at_once() {
 }
 
 #[test]
+fn hygiene_lint_reads_the_licence_text_for_everything_but_dates() {
+    // Catches: the licence text being skipped by the rules other than the date rule, so that an
+    // e-mail address, an IPv4 address, a home path or a host added to it goes unflagged; and the
+    // licence text's own date being refused, or the date exemption reaching another file.
+    let lists = Lists {
+        public: public(),
+        denied: HashSet::new(),
+    };
+    let old = ["2014", "03", "09"].join("-");
+    let line = |rest: &str| format!("Copyright {old} {rest}\n");
+    assert_clean(
+        lint(LICENCE_FILE, &line("by the authors"), &lists),
+        "the date alone",
+    );
+    let elsewhere = reasons(lint("NOTICE", &line("by the authors"), &lists));
+    assert_eq!(
+        elsewhere,
+        [format!("NOTICE:1: the date `{old}` is before 2026-09-01")]
+    );
+
+    let mail = ["alice", &["corp-mail", "com"].join(".")].join("@");
+    let ip = ["10", "0", "0", "1"].join(".");
+    let home = concat!("/ho", "me/alice");
+    let host = ["build", "corp"].join(".");
+    let text = format!(
+        "{}{}{}{}",
+        line(&format!("write to {mail}")),
+        line(&format!("at {ip}")),
+        line(&format!("in {home}")),
+        line(&format!("see {host}")),
+    );
+    // The rules report in turn: addresses, then paths, then e-mail, then hosts.
+    let want = [
+        format!(
+            "LICENSE:2: the IPv4 address `{ip}` is not loopback, unspecified or a documentation address"
+        ),
+        format!(
+            "LICENSE:3: the path prefix `{}` names a home directory",
+            concat!("/ho", "me/")
+        ),
+        format!("LICENSE:1: the e-mail address `{mail}` is not at an example domain"),
+        format!("LICENSE:4: {}", host_reason(&host)),
+    ];
+    assert_eq!(reasons(lint(LICENCE_FILE, &text, &lists)), want);
+}
+
+#[test]
 fn hygiene_lint_skips_the_deny_list_file_and_it_holds_only_digests() {
-    // Catches: the licence text, with its authors' date, being scanned and failing the tree;
-    // the deny list being scanned (its digests are not names, but a plaintext name
+    // Catches: the deny list being scanned (its digests are not names, but a plaintext name
     // added there by mistake would then be flagged in the one place it must not be named), a
     // line of it that is neither a comment nor a lowercase 64-digit SHA-256, and an allow list
     // entry that is not a plain lowercase name.
     let paths = ["Cargo.toml", DENIED_FILE, LICENCE_FILE, "docs/a.md"]
         .map(String::from)
         .to_vec();
-    assert_eq!(scanned(paths), ["Cargo.toml", "docs/a.md"]);
+    assert_eq!(scanned(paths), ["Cargo.toml", LICENCE_FILE, "docs/a.md"]);
     assert!(
         repo_root().join(DENIED_FILE).is_file(),
         "{DENIED_FILE} does not exist"

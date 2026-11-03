@@ -22,21 +22,34 @@ pub struct Scratch(PathBuf);
 
 impl Scratch {
     /// Creates `base/<name>-<pid>-<n>`, and `base` when it is missing. A directory that already
-    /// exists at that path is an error, never shared.
+    /// exists at that path is an error, never shared. `name` must stay one plain component of
+    /// a path inside `base`: an empty name, or one holding a `/` (an absolute path, `..`
+    /// above it, or a deeper path), is refused with `InvalidInput` before anything is made.
     pub fn under(base: &Path, name: &str) -> io::Result<Scratch> {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let pid = base36(u64::from(std::process::id()));
-        let path = base.join(format!("{name}-{pid}-{}", base36(n)));
-        std::fs::create_dir_all(base)?;
-        // `create_dir`, not `create_dir_all`: a directory that already exists is an error.
-        std::fs::create_dir(&path)?;
-        Ok(Scratch(path))
+        if name.is_empty() || name.contains('/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("a scratch name is one plain path component, not {name:?}"),
+            ));
+        }
+        make(base, &format!("{name}-{pid}-{}", base36(n)))
     }
 
     /// The directory.
     pub fn path(&self) -> &Path {
         &self.0
     }
+}
+
+/// Creates `base`, when it is missing, and the new directory `base/<leaf>`.
+fn make(base: &Path, leaf: &str) -> io::Result<Scratch> {
+    let path = base.join(leaf);
+    std::fs::create_dir_all(base)?;
+    // `create_dir`, not `create_dir_all`: a directory that already exists is an error.
+    std::fs::create_dir(&path)?;
+    Ok(Scratch(path))
 }
 
 /// `n` in base 36, lower-case digits and letters, most significant first.
@@ -86,6 +99,41 @@ mod tests {
         drop(a);
         assert!(!gone.exists());
         assert_eq!(std::fs::read(b.path().join("kept")).expect("read"), b"x");
+    }
+
+    /// Catches a name that leaves the base: an absolute name would replace it when joined, and
+    /// `..` would climb out of it. Nothing is created for a refused name.
+    #[test]
+    fn a_name_that_is_not_one_plain_component_is_refused() {
+        let parent = Scratch::under(&base("testkit-unit"), "names").expect("parent");
+        for name in ["", "/abs", "../up", "a/b", "a/"] {
+            let refused = Scratch::under(parent.path(), name).expect_err(name);
+            assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{name:?}");
+            assert_eq!(
+                refused.to_string(),
+                format!("a scratch name is one plain path component, not {name:?}")
+            );
+        }
+        let made: Vec<_> = std::fs::read_dir(parent.path()).expect("list").collect();
+        assert!(made.is_empty(), "{made:?}");
+        // A name that only starts with dots is one component and stays inside the base.
+        let dots = Scratch::under(parent.path(), "..").expect("a plain name");
+        assert_eq!(dots.path().parent(), Some(parent.path()));
+    }
+
+    /// Catches a scratch directory that already exists being shared or emptied: making it
+    /// again is an error and leaves its contents as they were.
+    #[test]
+    fn an_existing_directory_is_refused_and_left_alone() {
+        let parent = Scratch::under(&base("testkit-unit"), "existing").expect("parent");
+        let first = make(parent.path(), "taken").expect("first");
+        std::fs::write(first.path().join("kept"), b"x").expect("write");
+        let refused = make(parent.path(), "taken").expect_err("taken");
+        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(first.path().join("kept")).expect("read"),
+            b"x"
+        );
     }
 
     /// Catches a name that grows a unix socket's path past its limit, or that two numbers

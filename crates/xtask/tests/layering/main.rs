@@ -19,7 +19,7 @@ mod testdir;
 
 use std::path::{Path, PathBuf};
 
-use check::{cargo, check, parse_lock, read_lock};
+use check::{cargo, check, check_hook_harness, metadata_of, parse_lock, read_lock};
 use testdir::TestDir;
 
 const HOOK_DEP: &str = "hostkeeper-hook = { path = \"../hostkeeper-hook\" }\n";
@@ -135,6 +135,99 @@ fn the_workspace_keeps_its_layers() {
 fn a_clean_fixture_passes() {
     let dir = fixture("clean", vec![]);
     assert_eq!(check(&dir), Ok(()));
+}
+
+/// A crate `shim` under the fixture's `vendored/` (outside the members) that depends on the
+/// workspace crate `target`, and `hostkeeper-steps` depending on the hook and on `shim`.
+fn steps_through_shim(target: &str) -> Vec<(String, String)> {
+    vec![
+        (
+            "vendored/shim/Cargo.toml".to_string(),
+            layered(
+                "shim",
+                &format!("{target} = {{ path = \"../../crates/{target}\" }}\n"),
+                "",
+                "",
+            ),
+        ),
+        ("vendored/shim/src/lib.rs".to_string(), String::new()),
+        manifest_of(
+            "hostkeeper-steps",
+            layered(
+                "hostkeeper-steps",
+                &format!("{HOOK_DEP}{}", vendored_dep("shim")),
+                "",
+                TESTKIT_DEP,
+            ),
+        ),
+    ]
+}
+
+/// Catches: a layer rule that looks only at direct dependencies, so that the step runner
+/// reaches the rights crate through a crate outside the workspace and goes unseen; the refusal
+/// must name the chain.
+#[test]
+fn layering_refuses_a_layer_reached_through_an_excluded_crate() {
+    let dir = fixture("clean", steps_through_shim("hostkeeper-rights"));
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-steps depends (normal or build) on the workspace crates \
+             {hostkeeper-hook, hostkeeper-rights}, but must depend on exactly {hostkeeper-hook}\n\
+             hostkeeper-steps reaches the workspace crate hostkeeper-rights through \
+             hostkeeper-steps -> shim -> hostkeeper-rights"
+        )
+    );
+}
+
+/// Catches: an intermediary outside the workspace being refused although it reaches only the
+/// hook contract, which the step runner may depend on.
+#[test]
+fn an_excluded_crate_reaching_only_the_hook_passes() {
+    let dir = fixture("clean", steps_through_shim("hostkeeper-hook"));
+    assert_eq!(check(&dir), Ok(()));
+}
+
+/// Catches: the hook harness's dependency on `rustix` becoming unconditional (every service
+/// that depends on the contract would link it), the `conformance` feature no longer turning it
+/// on, or another non-optional normal dependency joining the contract crate.
+#[test]
+fn hook_harness_dependency_is_behind_the_conformance_feature() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut metadata = metadata_of(&root);
+    assert_eq!(check_hook_harness(&metadata), Ok(()));
+    let package = metadata["packages"]
+        .as_array_mut()
+        .expect("metadata lists packages")
+        .iter_mut()
+        .find(|package| package["name"] == "hostkeeper-hook")
+        .expect("the hook crate is a member");
+    let rustix = package["dependencies"]
+        .as_array_mut()
+        .expect("a package lists its dependencies")
+        .iter_mut()
+        .find(|dep| dep["name"] == "rustix")
+        .expect("the hook crate depends on rustix");
+    rustix["optional"] = serde_json::Value::Bool(false);
+    package["features"]["conformance"] = serde_json::json!([]);
+    assert_eq!(
+        check_hook_harness(&metadata),
+        refused(
+            "hostkeeper-hook must have rustix as an optional normal dependency\n\
+             hostkeeper-hook must have the feature conformance = [\"dep:rustix\"]\n\
+             hostkeeper-hook has non-optional normal dependencies {rustix} beyond \
+             serde, serde_json, thiserror, toml"
+        )
+    );
+}
+
+/// Catches: the hook harness check passing when the hook package is absent from the metadata.
+#[test]
+fn the_hook_harness_check_refuses_metadata_without_the_hook() {
+    assert_eq!(
+        check_hook_harness(&serde_json::json!({ "packages": [] })),
+        refused("hostkeeper-hook is not in the metadata")
+    );
 }
 
 /// Catches: the underscore spelling of a kbf package name (`kbf_types`) slipping past a check

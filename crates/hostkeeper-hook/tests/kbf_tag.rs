@@ -175,28 +175,65 @@ fn report_and_verdict_wire_words_match_kbf_at_the_tag() {
     );
 }
 
-/// Every check of the harness on the example hook with these arguments, as an update and as a
-/// first install, with the number of kill points it was stopped at.
-fn passes(name: &str, args: &[&str]) {
+/// The scenarios the harness runs, in order: success, then a failure, a deferral and a halt at
+/// each of the four steps of an update, then three failures of `rollback` itself.
+const SCENARIOS: [&str; 16] = [
+    "none",
+    "prepare=Fail",
+    "prepare=Defer",
+    "prepare=Halt",
+    "cutover=Fail",
+    "cutover=Defer",
+    "cutover=Halt",
+    "verify=Fail",
+    "verify=Defer",
+    "verify=Halt",
+    "cleanup=Fail",
+    "cleanup=Defer",
+    "cleanup=Halt",
+    "cutover=Fail,rollback=Fail",
+    "cutover=Fail,rollback=Defer",
+    "verify=Fail,rollback=Fail",
+];
+
+/// Every check of the harness on the example hook with these arguments, as an update or, with
+/// `first_install`, as a first install: returns the number of kill points it was stopped at,
+/// after asserting that the scenarios are exactly [`SCENARIOS`] and none was skipped.
+fn passes(name: &str, args: &[&str], first_install: bool) -> u64 {
     let scratch = Scratch::new(name);
     let mut fake = ExampleFake::default();
-    let summary = Conformance::new(&example(args), &mut fake, scratch.path())
+    let hook = example(args);
+    let mut harness = Conformance::new(&hook, &mut fake, scratch.path());
+    if first_install {
+        harness = harness.with_first_install();
+    }
+    let summary = harness
         .check_all()
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     assert!(summary.kill_points > 0, "{name}: no kill point was reached");
-    assert_eq!(summary.scenarios.len(), 16, "{name}");
-    assert!(summary.skipped.is_empty(), "{name}");
+    assert_eq!(summary.scenarios, SCENARIOS, "{name}");
+    assert_eq!(summary.skipped, Vec::<String>::new(), "{name}");
+    summary.kill_points
 }
 
 /// Catches an example hook that stops passing the harness, or a harness that stops running a
-/// check: the example passes every check as an update and as a first install, is stopped at a
-/// positive number of kill points and resumes to the world of an uninterrupted run, runs all
-/// sixteen fault scenarios with none skipped, and a `rollback` rerun that says `reversible: true`
-/// where the first said `false` is refused without the allowance and passes with it.
+/// check, in either mode. Four runs of `check_all`: the example with its commit at `cleanup`
+/// and with its commit at `cutover`, each as an update (a previous release in the params) and as
+/// a first install (none). Each run passes every check, is stopped at a positive number of kill
+/// points (the same number in both modes, which the previous release does not change), and runs
+/// all sixteen fault scenarios, a failure, a deferral and a halt at each step among them, none
+/// skipped. Then a `rollback` rerun that says `reversible: true` where the first said `false`
+/// is refused without the allowance and passes with it.
 #[test]
 fn example_hook_passes_the_conformance_harness() {
-    passes("kbf-tag-update", &["update-hook"]);
-    passes("kbf-tag-irreversible", IRREVERSIBLE);
+    for (name, args) in [
+        ("kbf-tag", &["update-hook"][..]),
+        ("kbf-tag-irreversible", IRREVERSIBLE),
+    ] {
+        let update = passes(&format!("{name}-update"), args, false);
+        let first = passes(&format!("{name}-first"), args, true);
+        assert_eq!(update, first, "{name}: kill points differ by mode");
+    }
 
     let rerun = example(&[
         "update-hook",
@@ -224,6 +261,6 @@ fn example_hook_passes_the_conformance_harness() {
         .check_all()
         .expect("declared: accepted");
     assert!(summary.kill_points > 0);
-    assert_eq!(summary.scenarios.len(), 16);
+    assert_eq!(summary.scenarios, SCENARIOS);
     assert!(summary.skipped.is_empty());
 }
