@@ -14,8 +14,9 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 /// A new, empty directory that one test owns, removed when it is dropped.
 ///
 /// Its name is `<name>-<pid>-<n>`, with the process id and a number this process gives each
-/// directory, so two tests, or two runs sharing one target directory, never get the same
-/// directory and never remove one another's.
+/// directory, both in base 36 to keep paths short (a unix socket's path must fit in 108 bytes),
+/// so two tests, or two runs sharing one target directory, never get the same directory and
+/// never remove one another's.
 #[derive(Debug)]
 pub struct Scratch(PathBuf);
 
@@ -24,7 +25,8 @@ impl Scratch {
     /// exists at that path is an error, never shared.
     pub fn under(base: &Path, name: &str) -> io::Result<Scratch> {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = base.join(format!("{name}-{}-{n}", std::process::id()));
+        let pid = base36(u64::from(std::process::id()));
+        let path = base.join(format!("{name}-{pid}-{}", base36(n)));
         std::fs::create_dir_all(base)?;
         // `create_dir`, not `create_dir_all`: a directory that already exists is an error.
         std::fs::create_dir(&path)?;
@@ -35,6 +37,21 @@ impl Scratch {
     pub fn path(&self) -> &Path {
         &self.0
     }
+}
+
+/// `n` in base 36, lower-case digits and letters, most significant first.
+fn base36(mut n: u64) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = Vec::new();
+    loop {
+        out.push(DIGITS[(n % 36) as usize]);
+        n /= 36;
+        if n == 0 {
+            break;
+        }
+    }
+    out.reverse();
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 impl Drop for Scratch {
@@ -69,6 +86,23 @@ mod tests {
         drop(a);
         assert!(!gone.exists());
         assert_eq!(std::fs::read(b.path().join("kept")).expect("read"), b"x");
+    }
+
+    /// Catches a name that grows a unix socket's path past its limit, or that two numbers
+    /// share: each number has one short spelling.
+    #[test]
+    fn numbers_are_spelled_in_base_36() {
+        let cases = [
+            (0, "0"),
+            (35, "z"),
+            (36, "10"),
+            (1295, "zz"),
+            (4_194_304, "2hwcg"),
+        ];
+        for (n, spelled) in cases {
+            assert_eq!(base36(n), spelled, "{n}");
+        }
+        assert_eq!(base36(u64::MAX), "3w5e11264sgsf");
     }
 
     /// Catches a scratch directory made inside something that is not a directory being

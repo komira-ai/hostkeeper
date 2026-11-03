@@ -478,7 +478,7 @@ pub fn ipv4s(path: &str, text: &str) -> Vec<Finding> {
 /// this file does not hold them.
 const HOME_PREFIXES: [&str; 2] = [concat!("/ho", "me/"), concat!("/Us", "ers/")];
 
-/// Paths under `/home/` and `/Users/`.
+/// Paths under either prefix of `HOME_PREFIXES`.
 pub fn home_paths(path: &str, text: &str) -> Vec<Finding> {
     let mut out = Vec::new();
     for (n, line) in numbered(text) {

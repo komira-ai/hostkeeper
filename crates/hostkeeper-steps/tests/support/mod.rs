@@ -23,8 +23,7 @@ impl Scratch {
     pub fn new(name: &str) -> Scratch {
         let base = Path::new(env!("CARGO_TARGET_TMPDIR"));
         Scratch(
-            hostkeeper_testkit::Scratch::under(base, &format!("hks-{name}"))
-                .expect("create the scratch directory"),
+            hostkeeper_testkit::Scratch::under(base, name).expect("create the scratch directory"),
         )
     }
 
