@@ -34,7 +34,7 @@ fn health_url_refuses_names_https_and_userinfo() {
         ("127.0.0.1/healthz", UrlRefusal::Scheme),
         ("http://user@127.0.0.1/healthz", UrlRefusal::Userinfo),
         ("http://user:pw@127.0.0.1:80/", UrlRefusal::Userinfo),
-        ("http://tierstore/healthz", UrlRefusal::Host),
+        ("http://example.com/healthz", UrlRefusal::Host),
         ("http://localhost:9301/healthz", UrlRefusal::Host),
         ("http://:9301/healthz", UrlRefusal::Host),
         ("http://127.0.0.1:/healthz", UrlRefusal::Port),
