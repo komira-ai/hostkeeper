@@ -42,6 +42,9 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem
 ring = "0.17.14"
 # Dev only: hostkeeper-enrollment's tests verify the certificates it issues as TLS would.
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+# The zstd decoder of hostkeeper-unpack: pure Rust (MIT); `hash` (twox-hash, MIT) to check a
+# frame's content checksum; no dictionary builder.
+ruzstd = { version = "0.9.1", default-features = false, features = ["hash", "std"] }
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.

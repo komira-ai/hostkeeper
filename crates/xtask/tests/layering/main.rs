@@ -4,8 +4,9 @@
 //!   `kbf_*`;
 //! - `hostkeeper-hook` and `hostkeeper-config` depend on no other crate of this workspace (their
 //!   dev-dependencies hold only themselves and `hostkeeper-testkit`);
-//! - `hostkeeper-steps` depends on `hostkeeper-hook`, and `hostkeeper-rights` on
-//!   `hostkeeper-config` and `hostkeeper-hook`, and on no other workspace crate
+//! - `hostkeeper-steps` depends on `hostkeeper-hook`, `hostkeeper-rights` on
+//!   `hostkeeper-config` and `hostkeeper-hook`, and `hostkeeper-unpack` on `hostkeeper-config`,
+//!   `hostkeeper-hook` and `hostkeeper-steps`, and on no other workspace crate
 //!   (dev-dependencies: themselves and `hostkeeper-testkit`);
 //! - `hostkeeper-enrollment` (the coordinator's CA and enrollment store) depends on no other
 //!   crate of this workspace (dev-dependencies: itself and `hostkeeper-testkit`);
@@ -393,6 +394,55 @@ fn steps_with_an_extra_workspace_dependency_is_refused() {
     );
 }
 
+const STEPS_DEP: &str = "hostkeeper-steps = { path = \"../hostkeeper-steps\" }\n";
+
+/// Catches: the unpack crate gaining a normal dependency on a workspace crate beside its three
+/// (here the rights crate), or losing one (here the step runner, whose layout and seal it
+/// uses); either is refused with the set it has and the set it must have.
+#[test]
+fn unpack_with_another_set_of_workspace_dependencies_is_refused() {
+    let extra = fixture(
+        "clean",
+        vec![manifest_of(
+            "hostkeeper-unpack",
+            layered(
+                "hostkeeper-unpack",
+                &format!("{CONFIG_DEP}{HOOK_DEP}{STEPS_DEP}{RIGHTS_DEP}"),
+                "",
+                TESTKIT_DEP,
+            ),
+        )],
+    );
+    assert_eq!(
+        check(&extra),
+        refused(
+            "hostkeeper-unpack depends (normal or build) on the workspace crates \
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-rights, hostkeeper-steps}, \
+             but must depend on exactly {hostkeeper-config, hostkeeper-hook, hostkeeper-steps}"
+        )
+    );
+    let missing = fixture(
+        "clean",
+        vec![manifest_of(
+            "hostkeeper-unpack",
+            layered(
+                "hostkeeper-unpack",
+                &format!("{CONFIG_DEP}{HOOK_DEP}"),
+                "",
+                TESTKIT_DEP,
+            ),
+        )],
+    );
+    assert_eq!(
+        check(&missing),
+        refused(
+            "hostkeeper-unpack depends (normal or build) on the workspace crates \
+             {hostkeeper-config, hostkeeper-hook}, \
+             but must depend on exactly {hostkeeper-config, hostkeeper-hook, hostkeeper-steps}"
+        )
+    );
+}
+
 /// Catches: the rights crate losing its dependency on the hook contract or on the config crate
 /// (the set must be exactly the two, not merely a subset of them).
 #[test]
@@ -534,7 +584,7 @@ fn a_missing_layer_crate_is_refused() {
         "[workspace]\nresolver = \"3\"\nexclude = [\"vendored\"]\nmembers = [\n    \
          \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-enrollment\",\n    \
          \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
-         \"crates/hostkeeper-testkit\",\n]\n"
+         \"crates/hostkeeper-testkit\",\n    \"crates/hostkeeper-unpack\",\n]\n"
             .to_string(),
     );
     let dir = fixture("clean", vec![root]);
