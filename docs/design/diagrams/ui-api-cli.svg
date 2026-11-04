@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-label="UI, CLI and API: the generated CLI and the web UI both call the coordinator's one API with the operator token; the UI listener is bound to the private network only.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" width="1200" height="540" role="img" aria-label="UI, CLI and API: the generated CLI and the static web app both call the coordinator's HTTP/JSON gateway with the operator token. The coordinator has no UI-specific code.">
 <title>UI, CLI and API</title>
-<desc>The operator uses either the generated command-line tool or the web UI. Both end in the same operator API methods on the coordinator, with the same token, and both are recorded in one audit log. The UI listener is off unless configured and is bound to the private network only.</desc>
+<desc>The operator uses the generated command-line tool or a static web app in the browser. Both call the same operator API through the coordinator's private HTTP/JSON gateway with the operator's token, and every call is audited. The coordinator serves the app's static files from the same listener and nothing else for the UI.</desc>
 <defs><marker id="ui-api-cli-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="ui-api-cli-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -20,63 +20,52 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 .t-m{fill:#5A5A57;font-size:12px}
 .lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
 </style>
-<rect x="0" y="0" width="1200" height="560" fill="#FFFFFF"/>
-<text x="20" y="28" class="b" font-size="16" text-anchor="start">UI, CLI and API: two front ends, one API, one audit log (the UI is designed, not built)</text>
-<rect x="30" y="100" width="200" height="70" rx="5" class="box"/>
-<text x="130.0" y="119" class="b" text-anchor="middle">Operator</text>
-<text x="130.0" y="137" class="t-m" text-anchor="middle">person with a token</text>
-<rect x="300" y="70" width="230" height="70" rx="5" class="box"/>
-<text x="415.0" y="89" class="b" text-anchor="middle">CLI (hostkeeper ctl)</text>
-<text x="415.0" y="107" class="t-m" text-anchor="middle">generated from the API</text>
-<text x="415.0" y="123" class="t-m" text-anchor="middle">schema (B11)</text>
-<rect x="300" y="180" width="230" height="70" rx="5" class="box-p"/>
-<text x="415.0" y="199" class="b" text-anchor="middle">Web UI (in the browser)</text>
-<text x="415.0" y="217" class="t-m" text-anchor="middle">any browser on the private network</text>
-<path d="M230,125 L300,105" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<path d="M230,150 L300,215" class="ln" marker-end="url(#ui-api-cli-ak)"/>
+<rect x="0" y="0" width="1200" height="540" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">The UI is a front end for the API: the CLI and the web app make the same calls (the UI is designed, not built)</text>
+<rect x="30" y="150" width="200" height="70" rx="5" class="box"/>
+<text x="130" y="169" class="b" text-anchor="middle">Operator</text>
+<text x="130" y="187" class="t-m" text-anchor="middle">person with a token</text>
+<rect x="300" y="80" width="230" height="74" rx="5" class="box"/>
+<text x="415" y="99" class="b" text-anchor="middle">CLI (hostkeeper ctl)</text>
+<text x="415" y="117" class="t-m" text-anchor="middle">generated from the API</text>
+<text x="415" y="135" class="t-m" text-anchor="middle">schema (B10)</text>
+<rect x="300" y="200" width="230" height="74" rx="5" class="box-p"/>
+<text x="415" y="219" class="b" text-anchor="middle">Web app (in the browser)</text>
+<text x="415" y="237" class="t-m" text-anchor="middle">static files, client-side</text>
+<text x="415" y="255" class="t-m" text-anchor="middle">token held in page memory</text>
+<path d="M230,175 L300,125" class="ln" marker-end="url(#ui-api-cli-ak)"/>
+<path d="M230,195 L300,240" class="ln" marker-end="url(#ui-api-cli-ak)"/>
 <line x1="565" y1="60" x2="565" y2="470" class="tb"/>
-<text x="565" y="52" class="b lbl" text-anchor="middle">network</text>
+<text x="565" y="52" class="b lbl" text-anchor="middle">private network</text>
 <rect x="600" y="60" width="570" height="410" rx="5" class="box-b"/>
 <text x="616" y="82" class="b" text-anchor="start">Coordinator</text>
-<rect x="630" y="100" width="230" height="60" rx="5" class="box"/>
-<text x="745.0" y="119" class="b" text-anchor="middle">Control listener</text>
-<text x="745.0" y="137" class="t-m" text-anchor="middle">TLS + bearer token</text>
-<text x="745.0" y="153" class="t-m" text-anchor="middle">(operator or CI)</text>
-<rect x="630" y="200" width="230" height="60" rx="5" class="box-p"/>
-<text x="745.0" y="219" class="b" text-anchor="middle">UI listener</text>
-<text x="745.0" y="237" class="t-m" text-anchor="middle">off unless --ui-listen,</text>
-<text x="745.0" y="253" class="t-m" text-anchor="middle">private network only</text>
-<rect x="920" y="100" width="230" height="160" rx="5" class="box-b"/>
-<text x="1035.0" y="119" class="b" text-anchor="middle">Operator API</text>
-<text x="1035.0" y="137" class="t-m" text-anchor="middle">the same handlers for</text>
-<text x="1035.0" y="153" class="t-m" text-anchor="middle">both front ends; every</text>
-<text x="1035.0" y="169" class="t-m" text-anchor="middle">action is an API method</text>
-<text x="1035.0" y="185" class="t-m" text-anchor="middle">a test lists the UI actions</text>
-<text x="1035.0" y="201" class="t-m" text-anchor="middle">and requires that</text>
-<path d="M860,130 L920,130" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<path d="M860,230 L920,230" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<rect x="920" y="300" width="230" height="60" rx="5" class="box"/>
-<text x="1035.0" y="319" class="b" text-anchor="middle">Audit log (append-only)</text>
-<text x="1035.0" y="337" class="t-m" text-anchor="middle">one named entry per action,</text>
-<text x="1035.0" y="353" class="t-m" text-anchor="middle">token name recorded</text>
-<path d="M1035,260 L1035,300" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<rect x="630" y="300" width="230" height="60" rx="5" class="box"/>
-<text x="745.0" y="319" class="b" text-anchor="middle">State files</text>
-<text x="745.0" y="337" class="t-m" text-anchor="middle">desired, ops, halts files</text>
-<rect x="630" y="390" width="520" height="56" rx="5" class="box-p"/>
-<text x="890.0" y="409" class="b" text-anchor="middle">UI pages</text>
-<text x="890.0" y="427" class="t-m" text-anchor="middle">server-rendered pages: fleet, rollout, actions, audit. Sign-in is the operator token.</text>
-<path d="M530,105 L630,125" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<text x="580" y="100" class="t-m lbl" text-anchor="middle">TLS, token</text>
-<path d="M530,215 L630,230" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<text x="580" y="248" class="t-m lbl" text-anchor="middle">TLS, token</text>
-<text x="600" y="500" class="b" text-anchor="middle">The UI has no operation the CLI lacks, and none the API does not define. Neither reaches a host: only the coordinator's orders do.</text>
-<rect x="30" y="526" width="22" height="14" rx="3" class="box-b"/>
-<text x="60" y="538" class="t-m" text-anchor="start">parses network input</text>
-<rect x="210" y="526" width="22" height="14" rx="3" class="box"/>
-<text x="240" y="538" class="t-m" text-anchor="start">passive or external</text>
-<rect x="400" y="526" width="22" height="14" rx="3" class="box-p"/>
-<text x="430" y="538" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
-<path d="M670,534 L700,534" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<text x="708" y="538" class="t-m" text-anchor="start">request</text>
+<rect x="630" y="100" width="230" height="70" rx="5" class="box-b"/>
+<text x="745" y="119" class="b" text-anchor="middle">HTTP/JSON gateway</text>
+<text x="745" y="137" class="t-m" text-anchor="middle">private listener, TLS</text>
+<text x="745" y="155" class="t-m" text-anchor="middle">bearer token (operator or CI)</text>
+<rect x="920" y="100" width="230" height="110" rx="5" class="box-b"/>
+<text x="1035" y="119" class="b" text-anchor="middle">Operator API</text>
+<text x="1035" y="137" class="t-m" text-anchor="middle">protobuf services; one</text>
+<text x="1035" y="155" class="t-m" text-anchor="middle">method per action; the</text>
+<text x="1035" y="173" class="t-m" text-anchor="middle">method list is section 4.8</text>
+<path d="M860,135 L920,135" class="ln" marker-end="url(#ui-api-cli-ak)"/>
+<rect x="920" y="260" width="230" height="60" rx="5" class="box"/>
+<text x="1035" y="279" class="b" text-anchor="middle">Audit log (append-only)</text>
+<text x="1035" y="297" class="t-m" text-anchor="middle">one entry per call,</text>
+<text x="1035" y="315" class="t-m" text-anchor="middle">token name recorded</text>
+<path d="M1035,210 L1035,260" class="ln" marker-end="url(#ui-api-cli-ak)"/>
+<rect x="630" y="260" width="230" height="60" rx="5" class="box"/>
+<text x="745" y="279" class="b" text-anchor="middle">State files</text>
+<text x="745" y="297" class="t-m" text-anchor="middle">desired, rollout, ops (holds)</text>
+<rect x="630" y="380" width="520" height="64" rx="5" class="box-p"/>
+<text x="890" y="399" class="b" text-anchor="middle">Static files</text>
+<text x="890" y="417" class="t-m" text-anchor="middle">served from this listener: same-origin calls, no CORS;</text>
+<text x="890" y="435" class="t-m" text-anchor="middle">the coordinator has no UI handlers, no rendering and no session cookie</text>
+<path d="M530,110 L630,125" class="ln" marker-end="url(#ui-api-cli-ak)"/>
+<text x="585" y="140" class="t-m lbl" text-anchor="middle">API call, token</text>
+<path d="M530,245 L630,150" class="ln" marker-end="url(#ui-api-cli-ak)"/>
+<text x="592" y="236" class="t-m lbl" text-anchor="middle">API call, token</text>
+<path d="M630,412 L548,274" class="ln-d" marker-end="url(#ui-api-cli-ak)"/>
+<text x="545" y="350" class="t-m lbl" text-anchor="end">load the app</text>
+<text x="600" y="500" class="b" text-anchor="middle">Every page is a view over API calls and every button is one call. Neither front end reaches a host: only the coordinator's orders do.</text>
 </svg>
