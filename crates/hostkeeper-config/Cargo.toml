@@ -15,6 +15,9 @@ description = "The host's daemon config (hostkeeper.toml) and the manifest a pac
 [dependencies]
 # `O_NOFOLLOW` and `O_NONBLOCK`, to open a file without following a link or waiting on a pipe.
 libc.workspace = true
+# The release index (index.json) is JSON, read with a derived strict parser.
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 

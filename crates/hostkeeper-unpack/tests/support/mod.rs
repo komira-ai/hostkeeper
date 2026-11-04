@@ -56,6 +56,7 @@ pub const VERSION: &str = "1.5.0";
 pub const MANIFEST: &str = "schema = 1
 name = \"tierstore\"
 version = \"1.5.0\"
+platform = \"linux-x86_64\"
 min_hostkeeper = \"0.1.0\"
 [hook]
 command = [\"bin/x\", \"update-hook\"]

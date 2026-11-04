@@ -13,6 +13,7 @@ use super::Scratch;
 pub const EXAMPLE: &str = r#"schema         = 1
 name           = "tierstore"
 version        = "1.5.0"
+platform       = "linux-x86_64"
 min_hostkeeper = "0.4.0"          # oldest daemon that can run this package
 
 [hook]

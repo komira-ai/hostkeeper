@@ -18,7 +18,7 @@ use support::{Rig, VERSION, limits, me, valid_tar, zstd};
 
 /// The tree digest of the valid package of the tests (`valid_tar`): the manifest, `bin/x`,
 /// `units/tierstore.service`, `files/c.conf` and their three directories, unpacked.
-const GOLDEN_TREE_DIGEST: &str = "18479648f09d5bd43998825db7c2339a2922600de221d2386b627110c516083c";
+const GOLDEN_TREE_DIGEST: &str = "2060e19cfc96ecacbcb0122b8c4126c0319a439840f75bd4b458c8ef4e134a45";
 
 fn unpack_valid(name: &str) -> (Rig, hostkeeper_unpack::Unpacked) {
     let rig = Rig::new(name);
@@ -297,7 +297,7 @@ fn what_the_host_port_creates_is_given_to_its_owner() {
 /// The tree digest of a tree in which full-name order and directory-by-directory order differ:
 /// `bin/a-` sorts before `bin/a/x` (`-` is below `/`), though `bin/a` sorts before `bin/a-`.
 const GOLDEN_PREFIX_TREE_DIGEST: &str =
-    "d478cc9a32cd63940b9680413e71c4a685b40e94f2c73186311cc5906e04b473";
+    "85dfbc97472ae3de86d597f5ed577d5c8aaccf6a7156f9a34f2112171970dd6f";
 
 /// The prefix tree's entries, in the order of `order` (indexes into the list below), with each
 /// directory before what is in it.

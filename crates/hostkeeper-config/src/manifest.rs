@@ -5,6 +5,7 @@
 //! schema         = 1
 //! name           = "tierstore"
 //! version        = "1.5.0"
+//! platform       = "linux-x86_64"
 //! min_hostkeeper = "0.4.0"
 //!
 //! [hook]
@@ -53,6 +54,7 @@ use std::path::Path;
 use crate::names::{
     ServiceName, UnitError, UnitName, Version, check_path, check_relative, is_within,
 };
+use crate::platform::Platform;
 use crate::table::{self, Fields, Problem, Shape};
 use crate::url;
 
@@ -114,6 +116,7 @@ const TOP: &[(&str, Shape)] = &[
     ("schema", Shape::Value),
     ("name", Shape::Value),
     ("version", Shape::Value),
+    ("platform", Shape::Value),
     ("min_hostkeeper", Shape::Value),
     ("hook", Shape::Table(HOOK)),
     ("units", Shape::Table(UNITS)),
@@ -334,6 +337,8 @@ pub struct FileEntry {
 pub struct Manifest {
     pub name: ServiceName,
     pub version: Version,
+    /// The operating system and CPU family the package was built for.
+    pub platform: Platform,
     pub min_hostkeeper: HostkeeperVersion,
     pub hook: Hook,
     /// The names of the files in `units/`, each the service's.
@@ -720,6 +725,10 @@ impl Manifest {
                 found: version.to_owned(),
             });
         }
+        let platform = top
+            .string("platform")?
+            .parse::<Platform>()
+            .map_err(|why| top.invalid("platform", why.to_string()))?;
         let service = expected.name.as_str();
         let hook = hook(&top)?;
         let unit_files = unit_files(version_dir, service)?;
@@ -739,6 +748,7 @@ impl Manifest {
         Ok(Manifest {
             name: expected.name.clone(),
             version: expected.version.clone(),
+            platform,
             min_hostkeeper,
             hook,
             unit_files,
