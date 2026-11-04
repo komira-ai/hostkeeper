@@ -8,10 +8,11 @@
 //!   either ends at the closer of what encloses it. An inner `#![cfg(test)]` skips to the end of
 //!   what encloses it.
 //! - Paths: `a::b::c` and `<T>::f`, each with what it may stand for: as written, with its first
-//!   segment replaced by the plain import of that name, and, for a lone name that is called,
-//!   under each glob import. Renames (`use .. as ..`, `type .. = ..;`) are listed, not followed.
+//!   segment replaced by the plain import of that name, and, for a lone name (called or not),
+//!   under each glob import. Renames (`use .. as ..`, `type .. = ..;`) are listed, not followed;
+//!   [`Code::resolve`] follows a rename's source through the file's imports.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::lex::{Tok, is_ident, segment, text_at, tokens};
 use crate::skip::{enclosing_end, item_end, test_attr};
@@ -21,6 +22,7 @@ pub struct Code {
     toks: Vec<Tok>,
     chains: Vec<Chain>,
     renames: Vec<Rename>,
+    imports: Imports,
 }
 
 /// A path in the code, with the full paths it may stand for.
@@ -44,13 +46,49 @@ impl Code {
         let mut imports = Imports::default();
         let code = code_mask(&toks, &mut imports);
         let chains = chains(&toks, &code, &imports);
-        let mut renames = imports.renames;
+        let mut renames = std::mem::take(&mut imports.renames);
         renames.extend((0..toks.len()).filter_map(|k| type_rename(&toks, &code, k)));
+        for pair in toks.windows(2) {
+            if pair[0].text == "mod" && is_ident(&pair[1]) {
+                imports.mods.insert(segment(&pair[1]));
+            }
+        }
         Code {
             toks,
             chains,
             renames,
+            imports,
         }
+    }
+
+    /// `path` with its first segment replaced, as long as it is a name a `use` of the file
+    /// binds (plainly or renamed), by the path that name stands for (at most 8 steps, so a
+    /// cycle ends).
+    pub fn resolve(&self, path: &[String]) -> Vec<String> {
+        let mut out = path.to_vec();
+        for _ in 0..8 {
+            let Some(first) = out.first() else {
+                break;
+            };
+            let full = self
+                .imports
+                .names
+                .get(first)
+                .or(self.imports.aliases.get(first));
+            match full {
+                Some(full) if full.len() > 1 || full.first() != Some(first) => {
+                    out = full.iter().chain(&out[1..]).cloned().collect();
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
+    /// Whether a path starting with `first` names something of this crate: `crate`, `self`,
+    /// `super`, or a module the file declares.
+    pub fn is_local(&self, first: &str) -> bool {
+        matches!(first, "crate" | "self" | "super") || self.imports.mods.contains(first)
     }
 
     /// The paths of the code, in order.
@@ -76,23 +114,26 @@ impl Code {
     }
 }
 
-/// The imports of a file: each name a plain `use` binds, with its path; the glob prefixes; and
-/// the renames, which bind nothing.
+/// The imports of a file: each name a plain `use` binds, with its path; each alias a renaming
+/// `use` binds (followed only by [`Code::resolve`]); the glob prefixes; the renames; and the
+/// modules the file declares.
 #[derive(Default)]
 struct Imports {
     names: BTreeMap<String, Vec<String>>,
+    aliases: BTreeMap<String, Vec<String>>,
     globs: Vec<Vec<String>>,
     renames: Vec<Rename>,
+    mods: BTreeSet<String>,
 }
 
 impl Imports {
     /// The full paths `segments` may stand for (see the module header).
-    fn paths_of(&self, segments: Vec<String>, called: bool) -> Vec<Vec<String>> {
+    fn paths_of(&self, segments: Vec<String>) -> Vec<Vec<String>> {
         let mut out = Vec::new();
         if let Some(full) = self.names.get(&segments[0]) {
             out.push(full.iter().chain(&segments[1..]).cloned().collect());
         }
-        if segments.len() == 1 && called {
+        if segments.len() == 1 {
             for glob in &self.globs {
                 out.push(glob.iter().chain(&segments).cloned().collect());
             }
@@ -147,6 +188,8 @@ fn use_tree(toks: &[Tok], mut i: usize, prefix: &mut Vec<String>, imports: &mut 
             let alias = text_at(toks, i + 1);
             if prefix.len() > base && alias != "_" {
                 let path = without_self(prefix);
+                let name = alias.strip_prefix("r#").unwrap_or(alias).to_owned();
+                imports.aliases.insert(name, path.clone());
                 imports.renames.push(Rename {
                     line: toks[i].line,
                     spelling: format!("{} as {alias}", path.join("::")),
@@ -247,7 +290,7 @@ fn chains(toks: &[Tok], code: &[bool], imports: &Imports) -> Vec<Chain> {
         let paths = if method {
             vec![segments]
         } else {
-            imports.paths_of(segments, text_at(toks, i) == "(")
+            imports.paths_of(segments)
         };
         out.push(Chain {
             start,

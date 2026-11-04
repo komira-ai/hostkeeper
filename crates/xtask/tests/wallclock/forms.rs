@@ -147,9 +147,27 @@ fn form_cases() -> Vec<(&'static str, String, usize)> {
             1,
         ),
         (
+            "ClockId::Realtime",
+            "use rustix::time::ClockId::*;\nfn f() { rustix::time::clock_gettime(Realtime); }"
+                .to_owned(),
+            2,
+        ),
+        (
+            "ClockId::Realtime",
+            "use rustix::time::ClockId::*;\nfn f() {\n    let id = Realtime;\n    \
+             rustix::time::clock_gettime(id);\n}"
+                .to_owned(),
+            3,
+        ),
+        (
             "ClockId::RealtimeCoarse",
             "rustix::time::clock_gettime(ClockId::RealtimeCoarse)".to_owned(),
             1,
+        ),
+        (
+            "ClockId::RealtimeCoarse",
+            "use ClockId::*;\nlet id = RealtimeCoarse;".to_owned(),
+            2,
         ),
         (
             "DynamicClockId::RealtimeAlarm",
@@ -166,7 +184,8 @@ fn form_cases() -> Vec<(&'static str, String, usize)> {
 
 /// Catches: a row of the form table that refuses nothing (or that is removed); a form missed
 /// when it is spelled through a `use`, a group, `self`, a leading `::`, `<T>::`, a libc glob,
-/// a reference passed on to be called, a clock id held in a binding, a raw or Unicode
+/// a reference passed on to be called, a clock id held in a binding or brought in by a glob
+/// (passed directly or held in a binding), a raw or Unicode
 /// identifier nearby, or inside a function with a `use<..>` capture bound; and a row added to
 /// the table without a case here.
 #[test]
@@ -187,8 +206,9 @@ fn each_wall_clock_form_is_refused() {
 
 /// Catches: a wall-clock name renamed by `use .. as ..` or `type .. = ..;` hiding the reads made
 /// through the new name (in the same scope, in another module, through a chain of renames or a
-/// re-export, under a raw or Unicode alias, in either order of the scopes), and a rename of a
-/// name that is not a wall clock (or `as _`) refused.
+/// re-export, under a raw or Unicode alias, in either order of the scopes; a source reached
+/// through an import, a crate alias, `crate::` or a module of the file), and a rename of a name
+/// that is not a wall clock, or of another crate's `Timestamp` or `time` (or `as _`), refused.
 #[test]
 fn a_renamed_wall_clock_name_is_refused() {
     let st = st();
@@ -272,6 +292,41 @@ fn a_renamed_wall_clock_name_is_refused() {
             1,
             "jiff::Timestamp as Ts".to_owned(),
         ),
+        (
+            "use chrono::Utc;\ntype W = Utc;\nfn f() { W::now(); }".to_owned(),
+            2,
+            "type W = Utc".to_owned(),
+        ),
+        (
+            "mod m { pub use chrono::Utc; }\nuse m::Utc as W;".to_owned(),
+            2,
+            "m::Utc as W".to_owned(),
+        ),
+        (
+            "use jiff::Timestamp;\ntype T = Timestamp;".to_owned(),
+            2,
+            "type T = Timestamp".to_owned(),
+        ),
+        (
+            "mod m { pub use jiff::Timestamp; }\nuse m::Timestamp as T;".to_owned(),
+            2,
+            "m::Timestamp as T".to_owned(),
+        ),
+        (
+            "use crate::clock::Timestamp as T;".to_owned(),
+            1,
+            "crate::clock::Timestamp as T".to_owned(),
+        ),
+        (
+            "use jiff as j;\nuse j::Timestamp as T;".to_owned(),
+            2,
+            "j::Timestamp as T".to_owned(),
+        ),
+        (
+            "use crate::time as t2;".to_owned(),
+            1,
+            "crate::time as t2".to_owned(),
+        ),
     ];
     for (text, line, spelling) in &cases {
         assert_eq!(
@@ -282,7 +337,7 @@ fn a_renamed_wall_clock_name_is_refused() {
     }
     let passing = format!(
         "use std::time::Instant as I;\nuse std::time as t;\nuse prost_types::Timestamp as Pb;\n\
-         use chrono::Duration as D;\nuse std::time::{st} as _;\nuse crate::time as t2;\n\
+         use chrono::Duration as D;\nuse std::time::{st} as _;\nuse other::Timestamp as Pb2;\n\
          type R = Result<{st}, E>;\ntype J = std::time::Instant;\nfn f() {{ I::now(); }}\n"
     );
     assert_eq!(lint(&[(DECIDE, passing.as_str())], ""), Ok(()));
@@ -296,7 +351,7 @@ fn monotonic_reads_pass() {
     let st = st();
     let text = format!(
         "use std::time::{{Instant, {st}, UNIX_EPOCH}};\nuse libc::time;\n\
-         use libc::{{clock_gettime as cg}};\nuse rustix::time::*;\n\
+         use libc::{{clock_gettime as cg}};\nuse rustix::time::*;\nuse rustix::time::ClockId::*;\n\
          fn f(clock: &dyn Clock, id: ClockId, t: {st}) -> impl Sized + use<> {{\n\
              let a = Instant::now();\n    let b = std::time::Instant::now().elapsed();\n\
              let c = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);\n\
@@ -306,6 +361,7 @@ fn monotonic_reads_pass() {
              let h = cg(id);\n    let i = Stamp::now(clock);\n\
              let j = {st}::UNIX_EPOCH + d;\n    let k = x.time();\n    let l = clock_gettime;\n\
              let m = t.duration_since(UNIX_EPOCH);\n    let n = start.elapsed();\n\
+             let o = clock_gettime(Monotonic);\n    let p = Boottime;\n\
              Instant::now()\n}}\n"
     );
     assert_eq!(lint(&[(DECIDE, text.as_str())], ""), Ok(()));

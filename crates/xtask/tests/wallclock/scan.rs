@@ -87,16 +87,18 @@ pub const FORMS: &[Form] = &[
     form("DynamicClockId::Tai", &["DynamicClockId", "Tai"]),
 ];
 
-/// The names whose rename is refused, each with the first segment its path must have (`None`:
-/// any path, a re-export included).
+/// The names whose rename is refused. A name that other crates use too has a root: its rename
+/// is refused only when its source, followed through the file's imports, starts with that crate
+/// or with something of this crate (`crate`, `self`, `super`, a module the file declares), which
+/// may re-export it. The others are refused from any source.
 pub const RENAMED: &[(&str, Option<&str>)] = &[
     ("SystemTime", None),
     ("UNIX_EPOCH", None),
-    ("Utc", Some("chrono")),
-    ("Local", Some("chrono")),
-    ("OffsetDateTime", Some("time")),
+    ("Utc", None),
+    ("Local", None),
+    ("OffsetDateTime", None),
     ("Timestamp", Some("jiff")),
-    ("Zoned", Some("jiff")),
+    ("Zoned", None),
     ("libc", None),
     ("time", Some("libc")),
     ("gettimeofday", None),
@@ -172,14 +174,15 @@ fn matches(form: &Form, chain: &Chain, code: &Code) -> bool {
     chain.paths.iter().any(|p| ends_with(p, form.tail)) && code.followed_by(chain, form.then)
 }
 
-/// Whether `rename` renames a wall-clock name.
-fn hides_a_read(rename: &Rename) -> bool {
-    let (Some(first), Some(last)) = (rename.path.first(), rename.path.last()) else {
+/// Whether `rename` renames a wall-clock name (see [`RENAMED`]).
+fn hides_a_read(rename: &Rename, code: &Code) -> bool {
+    let source = code.resolve(&rename.path);
+    let (Some(first), Some(last)) = (source.first(), source.last()) else {
         return false;
     };
     RENAMED
         .iter()
-        .any(|(name, root)| last == name && root.is_none_or(|r| first == r))
+        .any(|(name, root)| last == name && root.is_none_or(|r| first == r || code.is_local(first)))
 }
 
 /// Every wall-clock read and wall-clock rename in the source `text` of the file at `path`, by
@@ -197,7 +200,7 @@ pub fn reads(path: &str, text: &str) -> Vec<Read> {
             });
         }
     }
-    for rename in code.renames().iter().filter(|r| hides_a_read(r)) {
+    for rename in code.renames().iter().filter(|r| hides_a_read(r, &code)) {
         out.push(Read {
             path: path.to_owned(),
             line: rename.line,
