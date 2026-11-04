@@ -496,6 +496,9 @@ fn an_intent_already_carried_out_changes_nothing() {
         .placer()
         .unlink_unlisted(&manifest)
         .expect("drop the paths only 1.4.2 listed");
+    // Enabling the run units owes a reload, and dropping only files does not pay it: the
+    // daemon pays it here, so that the start below owes nothing.
+    world.placer().reload().expect("the reload enabling owed");
     touch_lock(&world);
     world.log.clear();
     let report = world

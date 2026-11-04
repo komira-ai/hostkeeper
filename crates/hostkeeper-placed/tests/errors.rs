@@ -234,7 +234,7 @@ fn every_lint_error_is_a_manifest_mismatch() {
                 file: "a.service".to_owned(),
                 target: "x y".to_owned(),
             },
-            "units/a.service has WantedBy=\"x y\", which is not the name of a unit",
+            "units/a.service has WantedBy=\"x y\", which is not a unit name of a known type of at most 249 bytes",
         ),
         (
             LintError::Unreadable {
