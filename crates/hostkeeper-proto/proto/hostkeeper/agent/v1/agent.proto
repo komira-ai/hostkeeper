@@ -1,4 +1,5 @@
-// hostkeeper.agent.v1: the heartbeat a host's agent sends the coordinator, and the reply.
+// hostkeeper.agent.v1: the heartbeat a host's daemon sends the coordinator, and the reply,
+// which carries at most one order.
 //
 // Served by: the coordinator, on its heartbeat listener (gRPC over TCP with TLS). The JSON
 // route `POST /v1/heartbeat` that kbf's agents speak is an adapter onto the same handler: its
@@ -22,7 +23,13 @@
 // A version is the release's version string: 1 to 128 bytes, a digit first, then letters,
 // digits and `.+~-`. A service name is 1 to 64 bytes of `[a-z0-9-]`. A token (a reason, a
 // check, a step name) is 1 to 64 bytes of `[a-z0-9_]`; a step name at most 16. A commit is 40
-// lower-case hex digits.
+// lower-case hex digits; a package digest is SHA-256 as 64 lower-case hex characters. A heartbeat
+// lists at most 16 services.
+//
+// Orders: an order is one verb with typed arguments (`Order`): a service name, a version, a
+// package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds
+// everything else (the release channel, the hook, the units) in its own configuration and in the
+// manifest of the package whose digest verified.
 //
 // Extending: add fields, messages, enum values and RPCs; never renumber, rename, retype or
 // remove one, and never reuse a number (the compatibility test in this crate refuses each).
@@ -57,12 +64,12 @@ message HeartbeatRequest {
   // and is counted as `kbf-updater`.
   AgentInfo agent = 2;
   // What this agent can use of the coordinator's side, by feature name (`deferred-v1`,
-  // `halt-v1`, `forced-v1`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
+  // `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
   // as missing them.
   repeated string features = 3;
-  // Every service the host runs, one entry each, at most 17, none named twice.
+  // Every service installed on the host, one entry each, at most 16, none named twice.
   repeated ServiceBeat services = 4;
 }
 
@@ -105,8 +112,9 @@ message ServiceBeat {
   bool promotion_pending = 9;
   // An update the host declined for a reason about its moment, not about the release.
   DeferredReport deferred = 10;
-  // The service is pinned on the host: root holds it on a release, and the agent acts on no
-  // order for it until root lifts the pin. Absent when it is not pinned.
+  // Legacy: sent only by kbf's agent, never by a hostkeeper daemon, and kept so that its
+  // heartbeats read as they always did. The service is pinned on that host: root holds it on a
+  // release, and kbf's agent acts on no order for it until root lifts the pin.
   PinReport pinned = 11;
 }
 
@@ -117,7 +125,7 @@ enum Health {
   HEALTH_HEALTHY = 1;
   // It does not, or the agent cannot tell.
   HEALTH_UNHEALTHY = 2;
-  // It is declared on the host and has never run.
+  // It is installed on the host and has never run.
   HEALTH_ABSENT = 3;
 }
 
@@ -173,11 +181,23 @@ message UpdateResult {
   string reason = 5;
   // When the update started, by the host's clock. Absent when the agent does not report it.
   optional uint64 started_unix = 6;
-  // Which try of the update this was: the root part's step record numbers each try of an order
-  // (`hostkeeper.local.v1.StepRecord.order_try`), so two tries at one target that end the same
-  // way differ in it, even within one second or after the clock moved back. Absent when the agent
-  // does not report it.
+  // Which try of the order this was: the coordinator numbers each try (`Order.try`) and the
+  // daemon's step record keeps it (`order_try` of `StepRecord` in `hostkeeper/local/v1/admin.proto`),
+  // so two tries at one target that end the same way differ in it, even within one second or
+  // after the clock moved back. Absent when the daemon does not report it.
   optional uint64 order_try = 7;
+  // The order this is the verdict of (`Order.order_id`). The coordinator counts a verdict once per
+  // host, order id and try, however often the daemon resends it. Absent from kbf's agent.
+  optional string order_id = 8;
+  // The verdict of a `Force` order, which runs no hook: SUCCEEDED; FAILED before anything changed
+  // on the host (`digest_mismatch`, `path_conflict` and the like); or FAILED after the switch, with
+  // the reason `link_failed`, `daemon_reload_failed` or `start_failed`.
+  bool forced = 9;
+  // What the hook or the daemon said of the outcome, at most 512 bytes.
+  optional string detail = 10;
+  // The last lines of the step's output, at most 20, each at most 200 bytes. When a heartbeat
+  // would exceed 16 KiB, these and the other optional facts are the first dropped.
+  repeated string log_tail = 11;
 }
 
 // Whether an update in flight is past the hook's commit point.
@@ -216,7 +236,7 @@ message PinReport {
 
 message HeartbeatResponse {
   // What to do now. Absent: nothing.
-  UpdateOrder order = 1;
+  Order order = 1;
   // The features the coordinator supports of those the heartbeat announced, in the
   // coordinator's order. Empty when it supports none of them, or none was announced.
   repeated string features = 2;
@@ -227,15 +247,82 @@ message HeartbeatResponse {
   map<string, uint64> halt_generations = 3;
 }
 
-// Update a service to a version now.
-message UpdateOrder {
-  // The service.
+// One order: one verb with its typed arguments, and the coordinator's identity for it. No field
+// of an order, at any depth, can carry a command, a path, a URL or a script.
+message Order {
+  // The coordinator's id for the order, kept by the daemon in its step record and sent back with
+  // the verdict (`UpdateResult.order_id`).
+  string order_id = 1;
+  // The coordinator's number for this try of the order, from 1: a resend of the order keeps it,
+  // and a new try raises it.
+  uint64 try = 2;
+  oneof verb {
+    // Fetch, verify and unpack the package, read its manifest and run its hook's steps; refused
+    // below the running version.
+    Update update = 3;
+    // Add a service the coordinator assigned to the host, by the update path with no previous
+    // version.
+    Install install = 4;
+    // A hooked update to a lower version, which automatic rollback sends.
+    ForceRollback force_rollback = 5;
+    // Hookless: stop the service's units, switch to the version, link, start the units, report.
+    // Refused for the service `hostkeeper`. Only for a daemon that announced `forced-v1`.
+    Force force = 6;
+    // Stop the service's units, run its `uninstall` hook and remove its package and placed paths.
+    Uninstall uninstall = 7;
+    // Stop the service's running step and end its order in the halt phase.
+    Abort abort = 8;
+    // Lift the service's halt.
+    ClearHalt clear_halt = 9;
+  }
+}
+
+// The arguments of an `update`.
+message Update {
   string service = 1;
-  // The version, and nothing else of the release: the agent resolves the release itself and
-  // checks it.
   string version = 2;
-  // The order comes from an operator's force (`hostkeeper.operator.v1.Releases.Force`). The agent
-  // never puts a forced update on trial and never reverts it, and a local deferral does not
-  // decline it. Only for an agent that announced `forced-v1`.
-  bool forced = 3;
+  // The digest the package must have; nothing runs from a package that does not match it.
+  string package_digest = 3;
+}
+
+// The arguments of an `install`.
+message Install {
+  string service = 1;
+  string version = 2;
+  string package_digest = 3;
+}
+
+// The arguments of a `force_rollback`.
+message ForceRollback {
+  string service = 1;
+  string version = 2;
+  string package_digest = 3;
+}
+
+// The arguments of a `force`.
+message Force {
+  string service = 1;
+  string version = 2;
+  // The digest CI registered for this service and version.
+  string package_digest = 3;
+  // Greater than the generation the service is held under: a force lifts a standing halt.
+  uint64 halt_generation = 4;
+}
+
+// The arguments of an `uninstall`.
+message Uninstall {
+  string service = 1;
+}
+
+// The arguments of an `abort`.
+message Abort {
+  string service = 1;
+}
+
+// The arguments of a `clear_halt`.
+message ClearHalt {
+  string service = 1;
+  // The clear generation; the daemon lifts its hold only on one greater than the one it halted
+  // under.
+  uint64 halt_generation = 2;
 }

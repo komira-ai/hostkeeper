@@ -1,5 +1,5 @@
 // hostkeeper.operator.v1: what an operator, and CI, ask of the coordinator: the hosts it knows,
-// and the releases it rolls.
+// the releases it rolls, and the services each host runs.
 //
 // Served by: the coordinator, on its control listener (gRPC over TCP with TLS, on loopback or
 // behind a tunnel). It replaces the JSON routes `/v1/desired`, `/v1/convergence`, `/v1/status`
@@ -14,7 +14,7 @@
 // takes the operator token only. The token is checked before the request is read.
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
-// (`HostsRefusal`, `ReleasesRefusal`), written as the value's name without the prefix, in lower
+// (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`), written as the value's name without the prefix, in lower
 // case (for example `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
 // request changes nothing.
@@ -29,8 +29,8 @@
 // Extending: add fields, messages, enum values, RPCs and services; never renumber, rename,
 // retype or remove one, and never reuse a number (the compatibility test in this crate refuses
 // each). A reader treats an enum value it does not know as UNSPECIFIED; none of the enums here is
-// closed. Enrollment, batches, assignments and roles are added as their own services by their own
-// changes.
+// closed. `Hosts.Abort`, abandoning an excluded host, `Audit` and `Enrollment` are added by their
+// own changes.
 syntax = "proto3";
 
 package hostkeeper.operator.v1;
@@ -59,7 +59,8 @@ service Releases {
   rpc SetDesired(SetDesiredRequest) returns (SetDesiredResponse);
   // How far a service's hosts are from its desired version. Changes nothing.
   rpc Converge(ConvergeRequest) returns (ConvergeResponse);
-  // Roll a service to a version past every health gate (see `ForceRequest`).
+  // Switch a service to a version on the targeted hosts at once, with no hook (see
+  // `ForceRequest`).
   rpc Force(ForceRequest) returns (ForceResponse);
   // Lift a bad mark from a version, so that it may be ordered and CI may set it again.
   rpc UnmarkBad(UnmarkBadRequest) returns (UnmarkBadResponse);
@@ -67,6 +68,36 @@ service Releases {
   rpc ClearHalt(ClearHaltRequest) returns (ClearHaltResponse);
   // Everything the coordinator holds about each service. Changes nothing.
   rpc Status(StatusRequest) returns (StatusResponse);
+  // Mark a version bad by hand: it is never ordered again until it is unmarked. A held pair is
+  // not reached.
+  rpc MarkBad(MarkBadRequest) returns (MarkBadResponse);
+  // Halt a service by hand, as a host's halt report does: no host of it is ordered until the halt
+  // is cleared.
+  rpc Halt(HaltRequest) returns (HaltResponse);
+}
+
+// The services the coordinator manages, which hosts run them, and the operator's holds.
+service Services {
+  // Every service, with the hosts it is assigned to, its minimum versions and its holds.
+  rpc List(ListServicesRequest) returns (ListServicesResponse);
+  // Assign a service to a host: the host is ordered to install it at its next heartbeat, unless a
+  // hold stands. Assigning a service already assigned changes nothing.
+  rpc Assign(AssignRequest) returns (AssignResponse);
+  // Take a service off a host. With `uninstall`, the host is ordered to uninstall it; without,
+  // the coordinator stops managing it there and the host keeps running it.
+  rpc Unassign(UnassignRequest) returns (UnassignResponse);
+  // Set the version below which no order (a force, an automatic rollback) takes the service, for
+  // a role or a host.
+  rpc SetMinVersion(SetMinVersionRequest) returns (SetMinVersionResponse);
+  // Hold a service on a host, a role or the whole fleet where it is: the coordinator orders the
+  // held pairs nothing (no update, install, rollback, uninstall or force) until the hold is
+  // released. A hold carries no version, takes no slot, survives a coordinator restart, covers
+  // hosts that later join a held role, and the host never learns of it. An update already
+  // running finishes. Holding a pair already held under the same scope replaces the reason.
+  rpc Hold(HoldRequest) returns (HoldResponse);
+  // Release a hold: the pairs it held are ordered to the then-desired version at their next
+  // heartbeat.
+  rpc Unhold(UnholdRequest) returns (UnholdResponse);
 }
 
 // Why `Hosts` refused a request. The token is the value's name without the prefix, in lower
@@ -118,6 +149,39 @@ enum ReleasesRefusal {
   RELEASES_REFUSAL_NOT_MARKED_BAD = 10;
   // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
   RELEASES_REFUSAL_STORE_FAILED = 11;
+  // FAILED_PRECONDITION: a force to a version CI registered no package digest for.
+  RELEASES_REFUSAL_NO_DIGEST = 12;
+  // FAILED_PRECONDITION: a force of the service `hostkeeper`, which updates itself by its own path.
+  RELEASES_REFUSAL_SELF_SERVICE = 13;
+  // INVALID_ARGUMENT: a fleet-wide force whose `confirm_service` is not its `service`.
+  RELEASES_REFUSAL_CONFIRM_MISMATCH = 14;
+  // FAILED_PRECONDITION: `MarkBad` of a version that is marked bad already.
+  RELEASES_REFUSAL_ALREADY_BAD = 15;
+  // FAILED_PRECONDITION: `Halt` of a service that is halted already.
+  RELEASES_REFUSAL_ALREADY_HALTED = 16;
+}
+
+// Why `Services` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum ServicesRefusal {
+  SERVICES_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no bearer, or not the operator token.
+  SERVICES_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Services` does not take.
+  SERVICES_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a field breaks its rule (a node id, a role, a version, a reason), or a scope
+  // is missing.
+  SERVICES_REFUSAL_INVALID_REQUEST = 3;
+  // NOT_FOUND: the service is not one the coordinator manages.
+  SERVICES_REFUSAL_UNKNOWN_SERVICE = 4;
+  // NOT_FOUND: the coordinator knows no such host.
+  SERVICES_REFUSAL_UNKNOWN_HOST = 5;
+  // FAILED_PRECONDITION: `Unassign` of a service the host is not assigned.
+  SERVICES_REFUSAL_NOT_ASSIGNED = 6;
+  // FAILED_PRECONDITION: `Unhold` of a pair no hold of that scope holds.
+  SERVICES_REFUSAL_NOT_HELD = 7;
+  // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
+  SERVICES_REFUSAL_STORE_FAILED = 8;
 }
 
 // One change the coordinator made, as its audit ring keeps it (the last 64).
@@ -127,7 +191,8 @@ message AuditEntry {
   // Who made it.
   Actor by = 2;
   // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
-  // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`). Open: a later coordinator
+  // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
+  // `set_min_version`, `hold`, `unhold`). Open: a later coordinator
   // adds actions.
   string action = 3;
   // The service, when the change is about one.
@@ -194,57 +259,77 @@ message HostService {
   string service = 1;
   // Live, healthy, and not updating this service.
   bool up = 2;
-  // It holds one of the service's update slots of its role.
+  // It holds the one live update slot of the farm for this service.
   bool holds_slot = 3;
-  // Why the host would not be ordered at its next heartbeat.
-  Hold hold = 4;
+  // Why the host would not be ordered at its next heartbeat: the rollout gate's reason.
+  GateReason gate_reason = 4;
   // Whether the service counts the host.
   Membership membership = 5;
+  // The operator's holds that hold the pair: of the host, of its role, of the fleet.
+  repeated HoldMark holds = 6;
+  // The version of the service installed on the host, as it last reported; absent when it is not
+  // installed.
+  optional string installed_version = 7;
+  // Its health, as the host last reported it.
+  hostkeeper.agent.v1.Health health = 8;
+  // The last update of the service on the host, with its verdict, phase, class, reason, detail,
+  // try and log lines; absent before the first.
+  hostkeeper.agent.v1.UpdateResult last_update = 9;
+  // The operator's reason, when the host is excluded from the service.
+  optional string excluded_reason = 10;
 }
 
-// Why a host is not ordered now. These spellings are public.
-enum Hold {
-  HOLD_UNSPECIFIED = 0;
+// Why the rollout gate does not order a host now (not to be confused with an operator's hold,
+// `HoldMark`). These spellings are public. A value is never removed: one the coordinator no
+// longer produces says so.
+enum GateReason {
+  GATE_REASON_UNSPECIFIED = 0;
   // Nothing holds it: it is ordered at its next heartbeat.
-  HOLD_NONE = 1;
+  GATE_REASON_NONE = 1;
   // The service is halted.
-  HOLD_HALTED = 2;
-  // The coordinator defines no such service.
-  HOLD_NO_DEFINITION = 3;
+  GATE_REASON_HALTED = 2;
+  // No longer produced: a service assigned to the host and not installed is ordered `install`.
+  GATE_REASON_NO_DEFINITION = 3;
   // The service has no desired version.
-  HOLD_NO_DESIRED = 4;
+  GATE_REASON_NO_DESIRED = 4;
   // The service does not count the host.
-  HOLD_NOT_A_MEMBER = 5;
+  GATE_REASON_NOT_A_MEMBER = 5;
   // The coordinator is within its quiet start after a restart.
-  HOLD_QUIET = 6;
-  // The host is pinned.
-  HOLD_PINNED = 7;
-  // The service is declared on the host and never ran, and its definition does not install it.
-  HOLD_ABSENT = 8;
+  GATE_REASON_QUIET = 6;
+  // No longer produced: only kbf's agent reports a pin.
+  GATE_REASON_PINNED = 7;
+  // No longer produced: a service assigned to the host and not installed is ordered `install`.
+  GATE_REASON_ABSENT = 8;
   // The host is updating the service.
-  HOLD_UPDATING = 9;
-  // The host is updating another service.
-  HOLD_BUSY_ELSEWHERE = 10;
+  GATE_REASON_UPDATING = 9;
+  // Another host or service holds the one live update.
+  GATE_REASON_BUSY_ELSEWHERE = 10;
   // The host runs the desired version.
-  HOLD_UP_TO_DATE = 11;
+  GATE_REASON_UP_TO_DATE = 11;
   // The host failed the desired version, and is not told it again.
-  HOLD_FAILED_HERE = 12;
+  GATE_REASON_FAILED_HERE = 12;
   // The host declined the desired version for now.
-  HOLD_DEFERRED = 13;
-  // Every slot of the host's role is held.
-  HOLD_NO_SLOT = 14;
-  // An earlier role has not finished.
-  HOLD_WAITING_FOR_ROLE = 15;
-  // A service this one comes after has not finished.
-  HOLD_WAITING_FOR_SERVICE = 16;
-  // An update would leave fewer hosts of the role up than `min_up`.
-  HOLD_MIN_UP = 17;
+  GATE_REASON_DEFERRED = 13;
+  // The one live update slot is held.
+  GATE_REASON_NO_SLOT = 14;
+  // No longer produced: the one live update orders roles already.
+  GATE_REASON_WAITING_FOR_ROLE = 15;
+  // No longer produced: the one live update orders services already.
+  GATE_REASON_WAITING_FOR_SERVICE = 16;
+  // No longer produced: the one live update keeps all but one host serving.
+  GATE_REASON_MIN_UP = 17;
   // The hosts that updated are still baking.
-  HOLD_BAKING = 18;
+  GATE_REASON_BAKING = 18;
   // The canaries have not finished.
-  HOLD_CANARY_WAIT = 19;
+  GATE_REASON_CANARY_WAIT = 19;
   // The desired version is marked bad.
-  HOLD_BAD = 20;
+  GATE_REASON_BAD = 20;
+  // An operator holds the pair (`Services.Hold`).
+  GATE_REASON_HELD = 21;
+  // The host is waiting for an operator to approve its enrollment.
+  GATE_REASON_WAITING_FOR_OPERATOR = 22;
+  // The host's identity is also another host's: a cloned disk.
+  GATE_REASON_DUPLICATE = 23;
 }
 
 // Whether a service counts a host.
@@ -300,14 +385,16 @@ message SetLabelsResponse {
 message DesiredState {
   string version = 1;
   // Per role, 0 holds the role: none of its hosts is ordered. Any other number lets the role
-  // update one host at a time, because one update is live at a time; only a force
-  // (`ForceRequest.max_updating`) paces a role faster. A role not named takes its default (1; 2
-  // for `daemon` and `mac-daemon`).
+  // update one host at a time, because one update is live in the farm at a time. A role not named
+  // takes its default (1; 2 for `daemon` and `mac-daemon`).
   map<string, uint32> max_updating = 2;
   // The fewest hosts of each role that must stay up while others update. A role not named needs
   // none. A service's definition may require roles here (`kbf` requires `storage` and
   // `frontend`).
   map<string, uint32> min_up = 3;
+  // The digest of the package CI registered for this version (64 lower-case hex characters): the
+  // one every order of this version names, and that a force fills in.
+  optional string package_digest = 4;
 }
 
 message SetDesiredRequest {
@@ -320,6 +407,8 @@ message SetDesiredRequest {
   // that lost the answer can tell whether its write landed: 1 to 128 visible ASCII characters.
   // Absent: none.
   optional string write_id = 4;
+  // The digest of the package CI registers for `desired.version` (64 lower-case hex characters).
+  optional string package_digest = 5;
 }
 
 message SetDesiredResponse {
@@ -419,52 +508,64 @@ message HostCounts {
   uint32 deferred = 5;
 }
 
-// Roll a service to a version past every health gate, as an operator's last resort when a
-// release broke the very health the gates read.
+// Fix a service on every targeted host at once, with no hook, because a broken hook is often
+// the thing that is broken: each targeted host stops the service's units, switches to `version`,
+// links, starts the units and reports (the `force` verb of `hostkeeper.agent.v1.Order`). A force
+// may cut running work: the units stop without a drain.
 //
-// The force sets the service's desired version to `version` and, while it stands, a host is
-// ordered past the canary, the bake, `min_up`, a deferral (the agent does not decline a forced
-// order either), a bad mark on the version (the force lifts it), a standing halt, and the rule
-// that a host which failed the version is not told it again (each failure of the version reported
-// when the force is made is acknowledged; a failure of the attempt the force orders holds that
-// host again). The automatic rollback does not run while a force stands.
+// The coordinator fills the order's package digest from the one CI registered for this service
+// and version, and refuses the call if CI registered none (`no_digest`). It refuses the service
+// `hostkeeper`, which updates itself by its own path (`self_service`), and a version below the
+// service's `min_version` (`below_min_version`); lowering that is a separate change. A fleet-wide
+// force needs `confirm_service` equal to `service` (`confirm_mismatch`).
 //
-// A halt raised while the force stands is recorded and the convergence says HALTED, but forced
-// orders go on.
+// It records the force, lifts the bad mark of the version, clears a standing halt by sending a
+// halt generation greater than the held one, sets the desired version to `version`, and on a
+// downgrade marks bad each version it leaves (from the installed versions the targeted hosts last
+// reported). Each is an audit entry.
 //
-// It keeps the quiet start after a coordinator restart, the order of roles and the order between
-// services, one live update at a time on a host, and `max_updating` as the pace: a role named in
-// `max_updating` here takes that number, any other its service's own. A host that runs the
-// version, healthy or not, holds no slot. A host that fails the forced order holds the roles
-// after it until it is excluded or forced again. A pinned host is ordered like any other, and its
-// root part runs no order while the pin stands (`hostkeeper.local.v1.Admin.Unpin` lifts it).
+// It orders the `force` on each targeted host at its next heartbeat, passing the one live update,
+// the canary, the bake, a deferral, bad marks, a standing halt and a host's failure of the
+// version, so one call may reach every host in the same heartbeat round. It skips a pair an
+// operator holds and lists the host in `held`, unless `include_held` is set: then it orders the
+// held pairs it targets, for this call only, and removes no hold.
 //
-// `min_version` is the one gate a force does not pass: a force below the service's
-// `min_version`, the first release that has its update hook, is refused (`below_min_version`); a
-// force to `min_version` itself is accepted.
-//
-// In one write, the coordinator records the force, lifts a bad mark from the version, marks the
-// version it leaves (the desired version before the force, when it differs) bad and held, so
-// that neither the automatic rollback nor CI's next `SetDesired` returns to it until an operator
-// calls `UnmarkBad`, and clears the halt through the same path as `ClearHalt` (the clear
-// generation is raised even when no halt stands). Each is an audit entry, in that order.
-//
-// The force stands while the service's desired version is the forced one. CI's next `SetDesired`
-// ends it, whatever version it sets, and so does any other change of the desired version. A
-// second force replaces the first.
+// The force stands until CI sets a newer desired version or an operator clears it; the automatic
+// rollback of the service is suspended meanwhile. A second force replaces the first.
 message ForceRequest {
   string service = 1;
   string version = 2;
   string reason = 3;
-  // The most hosts of each named role updating at once, 1 to 10000 each, for as long as the force
-  // stands. Every role named must be one the service runs on.
-  map<string, uint32> max_updating = 4;
+  // Which hosts: the whole fleet, the hosts of a role, or a list of hosts.
+  oneof targets {
+    FleetTarget fleet = 4;
+    string role = 5;
+    HostList hosts = 6;
+  }
+  // Order the held pairs among the targets too, for this call only.
+  bool include_held = 7;
+}
+
+// Every host that runs the service.
+message FleetTarget {
+  // The service's name again, which must equal `ForceRequest.service`: a fleet-wide force is
+  // confirmed by naming the service twice.
+  string confirm_service = 1;
+}
+
+// Hosts by node id.
+message HostList {
+  repeated string node_ids = 1;
 }
 
 message ForceResponse {
   // The entries the force wrote, in order: `force`, then `unmark_bad`, `mark_bad` and
   // `clear_halt` as they apply.
   repeated AuditEntry entries = 1;
+  // The targeted hosts skipped because an operator holds the pair; empty with `include_held`.
+  repeated string held = 2;
+  // How many hosts the force orders.
+  uint32 targeted = 3;
 }
 
 // A force, as the coordinator records it.
@@ -473,7 +574,6 @@ message ForceRecord {
   // One more for every force of the service.
   uint64 generation = 2;
   string reason = 3;
-  map<string, uint32> max_updating = 4;
 }
 
 message UnmarkBadRequest {
@@ -583,4 +683,129 @@ message HaltRecord {
 message FailureAck {
   string node_id = 1;
   hostkeeper.agent.v1.UpdateResult report = 2;
+}
+
+message MarkBadRequest {
+  string service = 1;
+  string version = 2;
+  string reason = 3;
+}
+
+message MarkBadResponse {
+  AuditEntry entry = 1;
+}
+
+message HaltRequest {
+  string service = 1;
+  string reason = 2;
+}
+
+message HaltResponse {
+  AuditEntry entry = 1;
+}
+
+// Where a hold applies.
+message HoldScope {
+  oneof scope {
+    // One host, by node id.
+    string host = 1;
+    // Every host of a role, those that join it later included.
+    string role = 2;
+    // Every host.
+    WholeFleet fleet = 3;
+  }
+}
+
+// The whole fleet, as a scope.
+message WholeFleet {}
+
+// An operator's hold: the pairs of `service` in `scope` are ordered nothing until it is released.
+message HoldMark {
+  HoldScope scope = 1;
+  string service = 2;
+  string reason = 3;
+  // The name of the token that set it.
+  string set_by = 4;
+  uint64 set_unix = 5;
+}
+
+message ListServicesRequest {}
+
+message ListServicesResponse {
+  // In name order.
+  repeated ServiceEntry services = 1;
+  // Every hold that stands.
+  repeated HoldMark holds = 2;
+}
+
+// One service the coordinator manages.
+message ServiceEntry {
+  string service = 1;
+  // The hosts it is assigned to, by node id.
+  repeated string hosts = 2;
+  // The version below which no order takes it, by role or host.
+  repeated MinVersion min_versions = 3;
+  // The holds of the service.
+  repeated HoldMark holds = 4;
+}
+
+// A minimum version, for a role or a host.
+message MinVersion {
+  oneof scope {
+    string role = 1;
+    string host = 2;
+  }
+  string version = 3;
+}
+
+message AssignRequest {
+  string node_id = 1;
+  string service = 2;
+}
+
+message AssignResponse {
+  AuditEntry entry = 1;
+}
+
+message UnassignRequest {
+  string node_id = 1;
+  string service = 2;
+  // Order the host to uninstall the service; false (the default) leaves it running there,
+  // unmanaged.
+  bool uninstall = 3;
+}
+
+message UnassignResponse {
+  AuditEntry entry = 1;
+}
+
+message SetMinVersionRequest {
+  string service = 1;
+  MinVersion min_version = 2;
+}
+
+message SetMinVersionResponse {
+  AuditEntry entry = 1;
+}
+
+message HoldRequest {
+  HoldScope scope = 1;
+  string service = 2;
+  string reason = 3;
+}
+
+message HoldResponse {
+  // The hold as it now stands.
+  HoldMark hold = 1;
+  AuditEntry entry = 2;
+}
+
+message UnholdRequest {
+  HoldScope scope = 1;
+  string service = 2;
+  string reason = 3;
+}
+
+message UnholdResponse {
+  AuditEntry entry = 1;
 }

@@ -8,8 +8,10 @@
 //! - `hostkeeper.agent.v1`: `Coordinator`, the heartbeat an agent sends the coordinator.
 //! - `hostkeeper.operator.v1`: `Hosts` and `Releases`, what an operator and CI ask of the
 //!   coordinator.
-//! - `hostkeeper.local.v1`: `Root`, the agent's channel to the host's root part, and `Admin`,
-//!   what only root on the host may ask of it.
+//! - `hostkeeper.operator.v1` also holds `Services`: which hosts run each service, and the
+//!   operator's holds.
+//! - `hostkeeper.local.v1`: `Admin`, what root on the host may ask of its daemon with the
+//!   coordinator down (status, abort, clear a corrupt step record).
 //!
 //! Modules mirror the proto packages, because generated code names other packages by relative
 //! paths (`super::super::...`).
@@ -37,13 +39,16 @@ pub mod hostkeeper {
         }
     }
     pub mod local {
-        /// The host-local services of the root part: `Root` (the agent's channel) and `Admin`
-        /// (root's).
+        /// The host-local service of the daemon: `Admin`, root's socket.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.local.v1");
         }
     }
 }
+
+/// The most services one heartbeat lists, as the header of `hostkeeper/agent/v1/agent.proto`
+/// says ("A heartbeat lists at most 16 services.").
+pub const MAX_SERVICES_PER_HEARTBEAT: usize = 16;
 
 /// The `FileDescriptorSet` every file under `proto/hostkeeper` compiles to, with the files they
 /// import and their comments, encoded. Custom options (`(hostkeeper.secret)`) are kept in it.

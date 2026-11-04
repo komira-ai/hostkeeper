@@ -2,7 +2,7 @@
 //!
 //! `tests/fixtures/kbf` holds heartbeats and replies recorded from kbf's own wire tests, with
 //! nothing that names a host. Every key of them, at every depth, has a field in
-//! `hostkeeper.agent.v1` through the table below (the mapping the coordinator's JSON adapter
+//! `hostkeeper.agent.v1` through the tables in `support/kbf_tables.rs` (the mapping the coordinator's JSON adapter
 //! follows), every value fits its field (the JSON type, one value or a list or a map, and a
 //! number's range), every enum spelling in them has a value of that field's enum, and `reply` is
 //! one of the discriminators the reply carries as the presence of `order`. A key or a
@@ -14,54 +14,10 @@ use std::collections::BTreeSet;
 use prost_reflect::{DescriptorPool, FieldDescriptor, Kind, MessageDescriptor};
 use serde_json::Value;
 
-/// A service's facts, as kbf writes them at the top level (for its legacy service) and in each
-/// entry of `services`: the JSON key, and the field of `ServiceBeat`.
-const SERVICE_FACTS: &[(&str, &str)] = &[
-    ("version", "version"),
-    ("health", "health"),
-    ("last_update", "last_update"),
-    ("last_update.target", "last_update.target"),
-    ("last_update.outcome", "last_update.outcome"),
-    ("last_update.phase", "last_update.phase"),
-    ("last_update.class", "last_update.class"),
-    ("last_update.reason", "last_update.reason"),
-    ("last_update.started_unix", "last_update.started_unix"),
-    ("updating", "updating"),
-    ("step", "step"),
-    ("step.name", "step.name"),
-    ("step.attempt", "step.attempt"),
-    ("commit", "commit"),
-    ("step_secs", "step_secs"),
-    ("promotion_pending", "promotion_pending"),
-    ("deferred", "deferred"),
-    ("deferred.target", "deferred.target"),
-    ("deferred.reason", "deferred.reason"),
-    ("deferred.retry_after_secs", "deferred.retry_after_secs"),
-    ("pinned", "pinned"),
-    ("pinned.commit", "pinned.commit"),
-];
+#[path = "support/kbf_tables.rs"]
+mod kbf_tables;
 
-/// The heartbeat's own keys: the JSON key, and the field of `HeartbeatRequest`.
-const HEARTBEAT: &[(&str, &str)] = &[
-    ("platform", "platform"),
-    ("agent", "agent"),
-    ("agent.name", "agent.name"),
-    ("agent.version", "agent.version"),
-    ("agent_features", "features"),
-    ("services", "services"),
-    ("services[].name", "services.name"),
-];
-
-/// The reply's keys: the JSON key, and the field of `HeartbeatResponse`. `reply` is `nothing`
-/// (no `order`) or `update` (an `order`).
-const REPLY: &[(&str, &str)] = &[
-    ("reply", "order"),
-    ("service", "order.service"),
-    ("version", "order.version"),
-    ("features", "features"),
-    ("halts", "halt_generations"),
-    ("forced", "order.forced"),
-];
+use kbf_tables::{HEARTBEAT, REPLY, SERVICE_FACTS};
 
 /// Keys whose values kbf writes as enum spellings: their field must be an enum, so a field made a
 /// string, which would take any spelling, is refused (`services[]` entries folded onto the facts).
@@ -142,9 +98,13 @@ fn field_at(message: &MessageDescriptor, path: &str) -> Option<FieldDescriptor> 
     found
 }
 
-/// The values a JSON discriminator may take, where the proto carries it as the presence of a
-/// message rather than as a value: `reply` is `nothing` (no `order`) or `update` (an `order`).
-const DISCRIMINATORS: &[(&str, &[&str])] = &[("reply", &["nothing", "update"])];
+/// The values a JSON discriminator may take, as JSON text, where the proto carries it as the
+/// presence of a message rather than as a value: `reply` is `nothing` (no `order`) or `update`
+/// (an `order`), and `forced`, which kbf writes only as `true`, makes the order's verb `force`.
+const DISCRIMINATORS: &[(&str, &[&str])] = &[
+    ("reply", &["\"nothing\"", "\"update\""]),
+    ("forced", &["true"]),
+];
 
 /// A field's type as a problem names it: `uint32`, `enum <name>`, `repeated string`, `map`.
 fn shape(field: &FieldDescriptor) -> String {
@@ -218,8 +178,7 @@ fn uncarried(
             .unwrap_or_else(|| panic!("{key} maps to {path}, which is no field"));
         met.insert(key.replace("services[].", ""));
         if let Some((_, allowed)) = DISCRIMINATORS.iter().find(|(k, _)| *k == key) {
-            let text = value.as_str().unwrap_or_default();
-            if !allowed.contains(&text) {
+            if !allowed.contains(&value.to_string().as_str()) {
                 out.push(format!("{key}={value}"));
             }
             continue;

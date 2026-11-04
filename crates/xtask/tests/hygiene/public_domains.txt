@@ -42,3 +42,5 @@ yaml.org
 =services.version.name
 =t.v1.health
 =f.v1.login.pin
+# A protobuf type path in hostkeeper-proto's operator.proto, not a host.
+=hostkeeper.agent.v1.health

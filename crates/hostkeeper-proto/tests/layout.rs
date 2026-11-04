@@ -460,3 +460,141 @@ extend google.protobuf.FieldOptions { string secret = 50000; }
         Err("(hostkeeper.secret) is not a bool option of fields".to_owned())
     );
 }
+
+/// The number a header gives in its sentence "A heartbeat lists at most <n> services.", read
+/// across the header's line breaks.
+fn header_service_limit(text: &str) -> Option<usize> {
+    let header: Vec<&str> = text
+        .lines()
+        .take_while(|l| l.starts_with("//"))
+        .map(|l| l.trim_start_matches('/').trim())
+        .collect();
+    let joined = header.join(" ");
+    let rest = joined.split("A heartbeat lists at most ").nth(1)?;
+    let (number, after) = rest.split_once(' ')?;
+    after
+        .starts_with("services.")
+        .then(|| number.parse().ok())?
+}
+
+/// Catches: a service-count limit that the crate and the heartbeat's header give differently, as
+/// the import and an earlier schema once did (16 against 17).
+#[test]
+fn the_service_limit_is_the_headers() {
+    let text = std::fs::read_to_string(proto_root().join("hostkeeper/agent/v1/agent.proto"))
+        .expect("read the file");
+    assert_eq!(
+        header_service_limit(&text),
+        Some(hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT)
+    );
+    assert_eq!(hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT, 16);
+
+    assert_eq!(
+        header_service_limit("// A heartbeat lists at most 17\n// services.\nsyntax\n"),
+        Some(17)
+    );
+    assert_eq!(
+        header_service_limit("// A heartbeat lists at most many services.\n"),
+        None
+    );
+    assert_eq!(header_service_limit("// No limit is given.\n"), None);
+    assert_eq!(
+        header_service_limit("syntax\n// A heartbeat lists at most 16 services.\n"),
+        None
+    );
+}
+
+/// The only fields an order may hold at any depth besides its verbs, each with its one type.
+const ORDER_FIELDS: [(&str, Kind); 6] = [
+    ("order_id", Kind::String),
+    ("try", Kind::Uint64),
+    ("service", Kind::String),
+    ("version", Kind::String),
+    ("package_digest", Kind::String),
+    ("halt_generation", Kind::Uint64),
+];
+
+/// What in an order could carry more than a verb and its typed arguments: every field of the
+/// order, and of every message under it, must be one of `ORDER_FIELDS` with its type, singular,
+/// or a message field of the order's `verb` oneof.
+fn order_field_problems(order: &prost_reflect::MessageDescriptor) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut todo = vec![order.clone()];
+    let mut seen = BTreeSet::new();
+    while let Some(message) = todo.pop() {
+        if !seen.insert(message.full_name().to_owned()) {
+            continue;
+        }
+        for field in message.fields() {
+            let verb = field.containing_oneof().is_some_and(|o| o.name() == "verb")
+                && message.full_name() == order.full_name();
+            if let (true, Kind::Message(inner)) = (verb, field.kind()) {
+                todo.push(inner);
+                continue;
+            }
+            let allowed = ORDER_FIELDS
+                .iter()
+                .any(|(name, kind)| field.name() == *name && field.kind() == *kind);
+            if !allowed || field.is_list() {
+                problems.push(format!(
+                    "{} is {}{}, not an order field",
+                    field.full_name(),
+                    if field.is_list() { "repeated " } else { "" },
+                    kind_name(&field.kind())
+                ));
+            }
+        }
+    }
+    problems.sort();
+    problems
+}
+
+/// Catches: an order field that could name a command, a path, a URL or a script, or any field
+/// beyond a verb's typed arguments, at any depth of the order.
+#[test]
+fn no_order_field_can_carry_a_command_path_or_url() {
+    let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
+    let order = pool
+        .get_message_by_name("hostkeeper.agent.v1.Order")
+        .expect("the order");
+    assert_eq!(order_field_problems(&order), Vec::<String>::new());
+    assert!(
+        order
+            .fields()
+            .filter(|f| f.containing_oneof().is_some())
+            .count()
+            >= 7,
+        "the verbs are checked"
+    );
+
+    let fixture = fixture_pool(
+        "o.proto",
+        r#"syntax = "proto3";
+package o.v1;
+message Order {
+  string order_id = 1;
+  string try = 2;
+  oneof verb { Update update = 3; }
+  Extra extra = 4;
+}
+message Update {
+  string service = 1;
+  string command = 2;
+  repeated string version = 3;
+}
+message Extra { string url = 1; }
+"#,
+    );
+    let order = fixture
+        .get_message_by_name("o.v1.Order")
+        .expect("the order");
+    assert_eq!(
+        order_field_problems(&order),
+        [
+            "o.v1.Order.extra is message o.v1.Extra, not an order field",
+            "o.v1.Order.try is string, not an order field",
+            "o.v1.Update.command is string, not an order field",
+            "o.v1.Update.version is repeated string, not an order field",
+        ]
+    );
+}

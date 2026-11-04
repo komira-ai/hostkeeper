@@ -4,20 +4,36 @@
 //! `optional` field tells absent from zero. The release before is this crate's descriptor set
 //! with the newest fields taken out, read with `prost-reflect`.
 //!
-//! Also the closed refusal vocabularies, whose tokens are the wire of every refusal.
+//! Also the names on the wire, pinned: the feature strings, the order's verbs and their numbers,
+//! every refusal token, and the kbf JSON keys and the fields that carry them.
 
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
 
 use hostkeeper_proto::hostkeeper::agent::v1::{
-    FailurePhase, Health, HeartbeatRequest, Outcome, PinReport, Platform, ServiceBeat, UpdateResult,
+    FailurePhase, Force, Health, HeartbeatRequest, HeartbeatResponse, Order, Outcome, PinReport,
+    Platform, ServiceBeat, UpdateResult, order,
 };
 use hostkeeper_proto::hostkeeper::local::v1::{
-    ActivateResponse, Pin, RecordProblem, ServiceRecord, StatusResponse, StepOutcome, StepRecord,
+    AbortResponse, ClearRecordResponse, RecordProblem, ServiceRecord, StatusResponse, StepOutcome,
+    StepRecord,
 };
 
+#[path = "support/kbf_tables.rs"]
+mod kbf_tables;
+
+/// The fields of `UpdateResult` that the release before did not have.
+const NEWEST: [&str; 6] = [
+    "started_unix",
+    "order_try",
+    "order_id",
+    "forced",
+    "detail",
+    "log_tail",
+];
+
 /// This crate's descriptors, as a reader of the release before would have them: `UpdateResult`
-/// without `started_unix` and `order_try`.
+/// without its newest fields.
 fn older_pool() -> DescriptorPool {
     let mut set = prost_types::FileDescriptorSet::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET)
         .expect("the set decodes");
@@ -31,10 +47,8 @@ fn older_pool() -> DescriptorPool {
         .iter_mut()
         .find(|m| m.name() == "UpdateResult")
         .expect("UpdateResult");
-    result
-        .field
-        .retain(|f| !matches!(f.name(), "started_unix" | "order_try"));
-    // Their synthetic oneofs go with them; `UpdateResult` has no other.
+    result.field.retain(|f| !NEWEST.contains(&f.name()));
+    // The synthetic oneofs of the optional ones go with them; `UpdateResult` has no other.
     result.oneof_decl.clear();
     DescriptorPool::from_file_descriptor_set(set).expect("the older set is valid")
 }
@@ -50,12 +64,24 @@ fn failed(started: Option<u64>, order_try: Option<u64>) -> UpdateResult {
     }
 }
 
+/// A verdict with every newest field set.
+fn verdict_with_everything() -> UpdateResult {
+    UpdateResult {
+        order_id: Some("o-17".to_owned()),
+        forced: true,
+        reason: "start_failed".to_owned(),
+        detail: Some("db.service did not become active".to_owned()),
+        log_tail: vec!["starting".to_owned(), "exit 1".to_owned()],
+        ..failed(Some(1_800_000_000), Some(2))
+    }
+}
+
 /// Catches: a new field that an older reader cannot skip, or loses when it writes back what it
 /// read: the older reader reads every field it knows, and the bytes it writes back still carry
 /// the new ones.
 #[test]
 fn an_older_reader_reads_what_it_knows_and_keeps_the_rest() {
-    let newer = failed(Some(1_800_000_000), Some(2));
+    let newer = verdict_with_everything();
     let older = older_pool()
         .get_message_by_name("hostkeeper.agent.v1.UpdateResult")
         .expect("the older message");
@@ -145,7 +171,7 @@ fn two_tries_in_one_second_are_two_reports() {
 }
 
 /// Catches: a shape the documented outcomes cannot say: a forced update that failed and stays on
-/// its target, unhealthy, reported by the agent and recorded by the root part.
+/// its target, unhealthy, reported by the agent and recorded by the daemon.
 #[test]
 fn a_forced_update_that_failed_on_its_target_is_reported() {
     let beat = HeartbeatRequest {
@@ -154,7 +180,11 @@ fn a_forced_update_that_failed_on_its_target_is_reported() {
             name: "db".to_owned(),
             version: "1.5".to_owned(),
             health: Health::Unhealthy.into(),
-            last_update: Some(failed(Some(1_800_000_000), Some(3))),
+            last_update: Some(UpdateResult {
+                forced: true,
+                reason: "start_failed".to_owned(),
+                ..failed(Some(1_800_000_000), Some(3))
+            }),
             ..ServiceBeat::default()
         }],
         ..HeartbeatRequest::default()
@@ -166,6 +196,7 @@ fn a_forced_update_that_failed_on_its_target_is_reported() {
         service.last_update.as_ref().expect("a result").target
     );
     assert_eq!(service.health(), Health::Unhealthy);
+    assert!(service.last_update.as_ref().is_some_and(|u| u.forced));
 
     let record = StepRecord {
         version: "1.5".to_owned(),
@@ -185,6 +216,8 @@ fn a_forced_update_that_failed_on_its_target_is_reported() {
 fn a_forced_update_that_failed_before_its_switch_is_reported() {
     let before_switch = UpdateResult {
         phase: FailurePhase::BeforeCommit.into(),
+        forced: true,
+        reason: "digest_mismatch".to_owned(),
         ..failed(Some(1_800_000_000), Some(4))
     };
     let beat = ServiceBeat {
@@ -213,40 +246,66 @@ fn a_forced_update_that_failed_before_its_switch_is_reported() {
     assert!(read.forced && !read.committed);
 }
 
-/// Catches: a status that cannot say a step record is unreadable, and an activation that cannot
-/// say where the pin it kept now holds the service.
+/// Catches: an Admin status that cannot say a step record is unreadable, an abort that cannot
+/// return the record it closed, and a clear that cannot say what it cleared.
 #[test]
-fn status_and_activate_carry_a_record_problem_and_the_moved_pin() {
+fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
     let status = StatusResponse {
         services: vec![ServiceRecord {
             service: "db".to_owned(),
             record_problem: RecordProblem::Unreadable.into(),
             ..ServiceRecord::default()
         }],
-        ..StatusResponse::default()
     };
     let read = StatusResponse::decode(status.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(read.services[0].record_problem(), RecordProblem::Unreadable);
     assert_eq!(read.services[0].current, None);
 
-    let activated = ActivateResponse {
+    let aborted = AbortResponse {
         record: Some(StepRecord {
-            version: "1.4".to_owned(),
-            forced: true,
-            outcome: StepOutcome::Succeeded.into(),
+            order_id: "o-17".to_owned(),
+            order_try: 2,
+            outcome: StepOutcome::Failed.into(),
+            phase: FailurePhase::Halt.into(),
             ..StepRecord::default()
         }),
-        pin: Some(Pin {
-            version: Some("1.4".to_owned()),
-            reason: "back to the release before".to_owned(),
-            ..Pin::default()
-        }),
     };
-    let read = ActivateResponse::decode(activated.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(
-        read.pin.and_then(|p| p.version),
-        read.record.map(|r| r.version)
-    );
+    let read = AbortResponse::decode(aborted.encode_to_vec().as_slice()).expect("decodes");
+    let record = read.record.expect("a record");
+    assert_eq!(record.phase(), FailurePhase::Halt);
+    assert_eq!((record.order_id.as_str(), record.order_try), ("o-17", 2));
+
+    let cleared = ClearRecordResponse {
+        problem: RecordProblem::NewerSchema.into(),
+    };
+    let read = ClearRecordResponse::decode(cleared.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(read.problem(), RecordProblem::NewerSchema);
+}
+
+/// Catches: an order that cannot say one verb with its typed arguments, or that reads back as
+/// another: a force with its digest and halt generation, in a reply.
+#[test]
+fn an_order_is_one_verb_with_typed_arguments() {
+    let reply = HeartbeatResponse {
+        order: Some(Order {
+            order_id: "o-18".to_owned(),
+            r#try: 1,
+            verb: Some(order::Verb::Force(Force {
+                service: "db".to_owned(),
+                version: "1.4".to_owned(),
+                package_digest: "ab".repeat(32),
+                halt_generation: 3,
+            })),
+        }),
+        ..HeartbeatResponse::default()
+    };
+    let read = HeartbeatResponse::decode(reply.encode_to_vec().as_slice()).expect("decodes");
+    let order = read.order.expect("an order");
+    let Some(order::Verb::Force(force)) = order.verb else {
+        panic!("not a force: {:?}", order.verb);
+    };
+    assert_eq!(force.package_digest.len(), 64);
+    assert_eq!((force.halt_generation, order.r#try), (3, 1));
 }
 
 /// The tokens of a refusal enum: each value's name without the enum's prefix, in lower case.
@@ -264,11 +323,58 @@ fn tokens(pool: &DescriptorPool, name: &str, prefix: &str) -> Vec<String> {
         .collect()
 }
 
-/// Catches: a refusal token added, renamed or dropped without this list changing with it; the
-/// tokens are the wire of every refusal, and callers branch on them.
+/// The feature names `agent.proto` gives (`deferred-v1`), in the order it first names them.
+fn feature_names() -> Vec<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("proto/hostkeeper/agent/v1/agent.proto");
+    let text = std::fs::read_to_string(path).expect("read the file");
+    let mut out: Vec<String> = Vec::new();
+    for quoted in text.split('`').skip(1).step_by(2) {
+        let feature = quoted.rsplit_once("-v").is_some_and(|(name, n)| {
+            !name.is_empty()
+                && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+                && !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+        });
+        if feature && !out.iter().any(|f| f == quoted) {
+            out.push(quoted.to_owned());
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Catches: a name on the wire renamed or renumbered without this test changing with it: the
+/// features daemons announce, the order's verbs, every refusal token, and the kbf JSON keys and
+/// the fields that carry them. Callers branch on each.
 #[test]
-fn the_refusal_vocabularies_are_closed() {
+fn wire_names_are_pinned() {
+    assert_eq!(
+        feature_names(),
+        ["deferred-v1", "forced-v1", "halt-v1", "heartbeat-v2"]
+    );
+
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
+    let order = pool
+        .get_message_by_name("hostkeeper.agent.v1.Order")
+        .expect("the order");
+    let fields: Vec<(String, u32)> = order
+        .fields()
+        .map(|f| (f.name().to_owned(), f.number()))
+        .collect();
+    let want = [
+        ("order_id", 1),
+        ("try", 2),
+        ("update", 3),
+        ("install", 4),
+        ("force_rollback", 5),
+        ("force", 6),
+        ("uninstall", 7),
+        ("abort", 8),
+        ("clear_halt", 9),
+    ];
+    assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
+
     let cases: [(&str, &str, &[&str]); 5] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
@@ -303,24 +409,25 @@ fn the_refusal_vocabularies_are_closed() {
                 "not_halted",
                 "not_marked_bad",
                 "store_failed",
+                "no_digest",
+                "self_service",
+                "confirm_mismatch",
+                "already_bad",
+                "already_halted",
             ],
         ),
         (
-            "hostkeeper.local.v1.RootRefusal",
-            "ROOT_REFUSAL_",
+            "hostkeeper.operator.v1.ServicesRefusal",
+            "SERVICES_REFUSAL_",
             &[
-                "unknown_order",
+                "unauthorized",
+                "forbidden",
                 "invalid_request",
-                "not_declared",
-                "already_installed",
-                "release_unverified",
-                "declaration_mismatch",
-                "pinned",
-                "busy",
-                "stale_try",
-                "journal_unavailable",
-                "outcome_unrecorded",
-                "try_conflict",
+                "unknown_service",
+                "unknown_host",
+                "not_assigned",
+                "not_held",
+                "store_failed",
             ],
         ),
         (
@@ -328,16 +435,65 @@ fn the_refusal_vocabularies_are_closed() {
             "ADMIN_REFUSAL_",
             &[
                 "invalid_request",
-                "not_declared",
-                "not_kept",
-                "unknown_declaration",
-                "busy",
-                "store_failed",
                 "not_installed",
+                "nothing_running",
+                "record_reads",
+                "store_failed",
             ],
         ),
     ];
     for (name, prefix, want) in cases {
         assert_eq!(tokens(&pool, name, prefix), want, "{name}");
     }
+
+    assert_eq!(
+        kbf_tables::SERVICE_FACTS,
+        [
+            ("version", "version"),
+            ("health", "health"),
+            ("last_update", "last_update"),
+            ("last_update.target", "last_update.target"),
+            ("last_update.outcome", "last_update.outcome"),
+            ("last_update.phase", "last_update.phase"),
+            ("last_update.class", "last_update.class"),
+            ("last_update.reason", "last_update.reason"),
+            ("last_update.started_unix", "last_update.started_unix"),
+            ("updating", "updating"),
+            ("step", "step"),
+            ("step.name", "step.name"),
+            ("step.attempt", "step.attempt"),
+            ("commit", "commit"),
+            ("step_secs", "step_secs"),
+            ("promotion_pending", "promotion_pending"),
+            ("deferred", "deferred"),
+            ("deferred.target", "deferred.target"),
+            ("deferred.reason", "deferred.reason"),
+            ("deferred.retry_after_secs", "deferred.retry_after_secs"),
+            ("pinned", "pinned"),
+            ("pinned.commit", "pinned.commit"),
+        ]
+    );
+    assert_eq!(
+        kbf_tables::HEARTBEAT,
+        [
+            ("platform", "platform"),
+            ("agent", "agent"),
+            ("agent.name", "agent.name"),
+            ("agent.version", "agent.version"),
+            ("agent_features", "features"),
+            ("services", "services"),
+            ("services[].name", "services.name"),
+        ]
+    );
+    assert_eq!(
+        kbf_tables::REPLY,
+        [
+            ("reply", "order"),
+            ("service", "order.update.service"),
+            ("version", "order.update.version"),
+            ("features", "features"),
+            ("halts", "halt_generations"),
+            ("forced", "order.force"),
+        ]
+    );
 }
