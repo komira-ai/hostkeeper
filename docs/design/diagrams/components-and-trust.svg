@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800" role="img" aria-label="Components and trust boundaries: coordinator with service assignment, one root daemon per host with its daemon config, the signed package, hook, service, trusted signer, release channel, operator and CI, with the trust boundary drawn at each crossing.">
+<title>Components and trust boundaries</title>
+<desc>Operator and CI reach the coordinator over TLS. The coordinator orders one root daemon per host over mutual TLS; an order is a verb and typed arguments. The coordinator assigns services to hosts. The daemon runs a package's hook as root only after the package verified against the trusted signers in the host's daemon config, its only trust root.</desc>
+<defs><marker id="components-and-trust-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="components-and-trust-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="800" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Components and trust boundaries: one root daemon per host, and what it trusts</text>
+<rect x="30" y="80" width="200" height="70" rx="5" class="box"/>
+<text x="130.0" y="99" class="b" text-anchor="middle">Operator (CLI or UI)</text>
+<text x="130.0" y="117" class="t-m" text-anchor="middle">person with a token</text>
+<rect x="30" y="200" width="200" height="70" rx="5" class="box"/>
+<text x="130.0" y="219" class="b" text-anchor="middle">CI release job</text>
+<text x="130.0" y="237" class="t-m" text-anchor="middle">sets the desired version</text>
+<rect x="340" y="80" width="260" height="310" rx="5" class="box-b"/>
+<text x="470" y="99" class="b" text-anchor="middle">Coordinator</text>
+<rect x="356" y="112" width="228" height="40" rx="5" class="box-b"/>
+<text x="470" y="137" class="b" text-anchor="middle">rollout gate: decide()</text>
+<rect x="356" y="162" width="228" height="40" rx="5" class="box-b"/>
+<text x="470" y="187" class="b" text-anchor="middle">desired, assignment, ops</text>
+<rect x="356" y="212" width="228" height="40" rx="5" class="box-b"/>
+<text x="470" y="237" class="b" text-anchor="middle">OIDC verifier + operator API</text>
+<rect x="356" y="262" width="228" height="40" rx="5" class="box-p"/>
+<text x="470" y="287" class="b" text-anchor="middle">CA module (key owner-only)</text>
+<text x="470" y="372" class="t-m" text-anchor="middle">assigns services per host or role</text>
+<rect x="340" y="412" width="260" height="62" rx="5" class="box"/>
+<text x="470.0" y="431" class="b" text-anchor="middle">Release channel</text>
+<text x="470.0" y="449" class="t-m" text-anchor="middle">serves package bytes; cannot sign</text>
+<rect x="340" y="540" width="260" height="74" rx="5" class="box"/>
+<text x="470.0" y="559" class="b" text-anchor="middle">Trusted signer</text>
+<text x="470.0" y="577" class="t-m" text-anchor="middle">org release workflow,</text>
+<text x="470.0" y="593" class="t-m" text-anchor="middle">trusted in the daemon config</text>
+<path d="M470,540 L470,474" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="478" y="512" class="t-m lbl" text-anchor="start">publish signed package</text>
+<rect x="750" y="60" width="430" height="640" rx="6" class="box-t"/>
+<text x="766" y="84" class="b" text-anchor="start">Host</text>
+<path d="M1030,110 v70 a67.5,9 0 0 0 135,0 v-70 a67.5,9 0 0 0 -135,0 z" class="box-b"/>
+<ellipse cx="1097.5" cy="110" rx="67.5" ry="9" class="box-b"/>
+<text x="1097.5" y="128" class="b" text-anchor="middle">hostkeeper.toml</text>
+<text x="1097.5" y="145" class="t-m" text-anchor="middle">daemon config,</text>
+<text x="1097.5" y="159" class="t-m" text-anchor="middle">trust root</text>
+<path d="M1030,260 v70 a67.5,9 0 0 0 135,0 v-70 a67.5,9 0 0 0 -135,0 z" class="box-b"/>
+<ellipse cx="1097.5" cy="260" rx="67.5" ry="9" class="box-b"/>
+<text x="1097.5" y="278" class="b" text-anchor="middle">Package versions</text>
+<text x="1097.5" y="295" class="t-m" text-anchor="middle">0555, sealed</text>
+<text x="1097.5" y="309" class="t-m" text-anchor="middle">current, links</text>
+<rect x="775" y="90" width="220" height="360" rx="5" class="box-o"/>
+<rect x="775" y="90" width="220" height="22" rx="5" class="box-b"/>
+<text x="885" y="105" class="t-m" text-anchor="middle">parses network data</text>
+<text x="885" y="134" class="b" text-anchor="middle">hostkeeper daemon</text>
+<text x="885" y="150" class="t-m" text-anchor="middle">root</text>
+<text x="885" y="176" class="t-m" text-anchor="middle">mutual TLS to the coordinator</text>
+<text x="885" y="193" class="t-m" text-anchor="middle">only the compiled-in verbs</text>
+<text x="885" y="210" class="t-m" text-anchor="middle">checks every order itself</text>
+<text x="885" y="227" class="t-m" text-anchor="middle">verifies and unpacks packages</text>
+<text x="885" y="244" class="t-m" text-anchor="middle">links units, writes step record</text>
+<text x="885" y="276" class="t-m" text-anchor="middle">no unprivileged part,</text>
+<text x="885" y="293" class="t-m" text-anchor="middle">no filter on the hook</text>
+<path d="M995,160 L1030,160" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="1012" y="150" class="t-m lbl" text-anchor="middle">read</text>
+<path d="M995,310 L1030,310" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="1012" y="300" class="t-m lbl" text-anchor="middle">link</text>
+<line x1="750" y1="480" x2="1180" y2="480" class="tb"/>
+<text x="1170" y="474" class="b lbl" text-anchor="end">signed code below this line</text>
+<path d="M885,450 L885,520" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="893" y="500" class="t-m lbl" text-anchor="start">systemd-run step</text>
+<rect x="775" y="520" width="220" height="80" rx="5" class="box-o"/>
+<text x="885.0" y="539" class="b" text-anchor="middle">Hook (root)</text>
+<text x="885.0" y="557" class="t-m" text-anchor="middle">transient unit: timeout, kill,</text>
+<text x="885.0" y="573" class="t-m" text-anchor="middle">log capture only</text>
+<path d="M885,600 L885,630" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="893" y="622" class="t-m lbl" text-anchor="start">start, stop, drain</text>
+<rect x="775" y="630" width="220" height="44" rx="5" class="box"/>
+<text x="885.0" y="649" class="b" text-anchor="middle">Service</text>
+<line x1="612" y1="62" x2="612" y2="700" class="tb"/>
+<text x="612" y="54" class="b lbl" text-anchor="middle">network</text>
+<path d="M230,115 L340,115" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="285" y="94" class="t-m lbl" text-anchor="middle">operator token</text>
+<text x="285" y="109" class="t-m lbl" text-anchor="middle">TLS</text>
+<path d="M230,238 L356,238" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="285" y="216" class="t-m lbl" text-anchor="middle">OIDC token</text>
+<text x="285" y="231" class="t-m lbl" text-anchor="middle">TLS</text>
+<path d="M600,125 L775,125" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="690" y="119" class="t-m lbl" text-anchor="middle">mutual TLS heartbeat</text>
+<path d="M775,150 L600,150" class="ln-d" marker-end="url(#components-and-trust-ak)"/>
+<text x="690" y="167" class="t-m lbl" text-anchor="middle">verb + arguments</text>
+<path d="M600,420 L775,420" class="ln-d" marker-end="url(#components-and-trust-ak)"/>
+<text x="690" y="413" class="t-m lbl" text-anchor="middle">package bytes</text>
+<text x="600" y="735" class="b" text-anchor="middle">An order is a verb and typed arguments. Never a command, a path, a URL or a script.</text>
+<text x="600" y="754" class="t-m" text-anchor="middle">Break-glass, outside this picture: root on the host when the daemon is broken or the host is off the network (section 5.6).</text>
+<rect x="30" y="766" width="22" height="14" rx="3" class="box-o"/>
+<text x="60" y="778" class="t-m" text-anchor="start">runs as root</text>
+<rect x="160" y="766" width="22" height="14" rx="3" class="box-b"/>
+<text x="190" y="778" class="t-m" text-anchor="start">parses network input</text>
+<rect x="340" y="766" width="22" height="14" rx="3" class="box"/>
+<text x="370" y="778" class="t-m" text-anchor="start">passive or external</text>
+<rect x="530" y="766" width="22" height="14" rx="3" class="box-p"/>
+<text x="560" y="778" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
+<path d="M800,774 L830,774" class="ln" marker-end="url(#components-and-trust-ak)"/>
+<text x="838" y="778" class="t-m" text-anchor="start">request</text>
+<path d="M900,774 L930,774" class="ln-d" marker-end="url(#components-and-trust-ak)"/>
+<text x="938" y="778" class="t-m" text-anchor="start">reply or report</text>
+<line x1="1040" y1="774" x2="1070" y2="774" class="tb"/>
+<text x="1078" y="778" class="t-m" text-anchor="start">trust boundary</text>
+</svg>

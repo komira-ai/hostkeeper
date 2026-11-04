@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" role="img" aria-label="Host lifecycle as two state diagrams. The host: unenrolled, pending, enrolled, retired. A service on an enrolled host: absent, installing, running, updating, rolled back, halted, removing, forced failed. Every edge is labelled by its event.">
+<title>Host lifecycle state machines</title>
+<desc>Two state diagrams side by side. A host goes from unenrolled to pending when it posts a request, to enrolled when approved, and to retired when revoked. A service on an enrolled host goes from absent to installing to running, from running to updating and back, to rolled back or halted on failure, and from running to removing to absent on uninstall; a Force from running, updating, halted or rolled back goes to running, or to forced failed if the units do not start, and a second Force repairs it. Holds, exclusions and bad versions are coordinator marks, not host states.</desc>
+<defs><marker id="host-lifecycle-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="host-lifecycle-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="680" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Host lifecycle: the host, and a service on an enrolled host</text>
+<rect x="20" y="60" width="420" height="430" rx="6" class="box-p"/>
+<text x="36" y="84" class="b" text-anchor="start">The host</text>
+<rect x="155" y="120" width="150" height="44" rx="5" class="box-b"/>
+<text x="230" y="147" class="b" text-anchor="middle">unenrolled</text>
+<rect x="155" y="220" width="150" height="44" rx="5" class="box-b dash"/>
+<text x="230" y="247" class="b" text-anchor="middle">pending</text>
+<rect x="155" y="320" width="150" height="44" rx="5" class="box-b dash"/>
+<text x="230" y="347" class="b" text-anchor="middle">enrolled</text>
+<rect x="155" y="420" width="150" height="44" rx="5" class="box dash"/>
+<text x="230" y="447" class="b" text-anchor="middle">retired</text>
+<circle cx="230" cy="98" r="5" fill="#0B0B0A"/>
+<path d="M230,103 L230,120" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<path d="M230,164 L230,220" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="240" y="196" class="t-m lbl" text-anchor="start">post request</text>
+<path d="M230,264 L230,320" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="240" y="296" class="t-m lbl" text-anchor="start">approve (key hash)</text>
+<path d="M230,364 L230,420" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="240" y="396" class="t-m lbl" text-anchor="start">revoke, deny row</text>
+<path d="M155,242 L110,242 L110,142 L155,142" class="ln-d" marker-end="url(#host-lifecycle-ak)"/>
+<text x="102" y="188" class="t-m lbl" text-anchor="end">request</text>
+<text x="102" y="202" class="t-m lbl" text-anchor="end">expired</text>
+<path d="M305,332 L350,332 L350,352 L305,352" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="358" y="338" class="t-m lbl" text-anchor="start">renew at</text>
+<text x="358" y="352" class="t-m lbl" text-anchor="start">half life</text>
+<rect x="470" y="60" width="710" height="430" rx="6" class="box-p"/>
+<text x="486" y="84" class="b" text-anchor="start">A service on an enrolled host</text>
+<rect x="520" y="150" width="90" height="44" rx="5" class="box"/>
+<text x="565" y="177" class="b" text-anchor="middle">absent</text>
+<rect x="660" y="150" width="90" height="44" rx="5" class="box dash"/>
+<text x="705" y="177" class="b" text-anchor="middle">installing</text>
+<rect x="850" y="150" width="120" height="44" rx="5" class="box"/>
+<text x="910" y="177" class="b" text-anchor="middle">running</text>
+<rect x="1060" y="150" width="100" height="44" rx="5" class="box dash"/>
+<text x="1110" y="177" class="b" text-anchor="middle">forced failed</text>
+<rect x="520" y="310" width="90" height="44" rx="5" class="box dash"/>
+<text x="565" y="337" class="b" text-anchor="middle">removing</text>
+<rect x="660" y="310" width="90" height="44" rx="5" class="box"/>
+<text x="705" y="337" class="b" text-anchor="middle">rolled back</text>
+<rect x="850" y="310" width="120" height="44" rx="5" class="box"/>
+<text x="910" y="337" class="b" text-anchor="middle">updating</text>
+<rect x="1040" y="310" width="110" height="44" rx="5" class="box"/>
+<text x="1095" y="337" class="b" text-anchor="middle">halted</text>
+<rect x="1030" y="232" width="130" height="36" rx="18" class="box-o dash"/>
+<text x="1095" y="248" class="b" text-anchor="middle">Force</text>
+<text x="1095" y="262" class="t-m" text-anchor="middle">no hook</text>
+<circle cx="500" cy="172" r="5" fill="#0B0B0A"/>
+<path d="M505,172 L520,172" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<path d="M610,172 L660,172" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="635" y="164" class="t-m lbl" text-anchor="middle">install order</text>
+<path d="M750,172 L850,172" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="800" y="164" class="t-m lbl" text-anchor="middle">Succeeded</text>
+<path d="M705,194 L705,222 L590,222 L590,194" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="640" y="236" class="t-m lbl" text-anchor="middle">Failed, declined</text>
+<text x="640" y="249" class="t-m lbl" text-anchor="middle">or Deferred</text>
+<path d="M565,310 L565,194" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="573" y="290" class="t-m lbl" text-anchor="start">service gone</text>
+<path d="M890,194 L890,310" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="882" y="207" class="t-m lbl" text-anchor="end">update order</text>
+<path d="M935,310 L935,194" class="ln-d" marker-end="url(#host-lifecycle-ak)"/>
+<text x="943" y="290" class="t-m lbl" text-anchor="start">Succeeded</text>
+<path d="M850,332 L750,332" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="796" y="290" class="t-m lbl" text-anchor="middle">Failed before commit</text>
+<text x="800" y="303" class="t-m lbl" text-anchor="middle">or Deferred</text>
+<path d="M705,310 L705,262 L800,262 L800,172 L850,172" class="ln-d" marker-end="url(#host-lifecycle-ak)"/>
+<text x="734" y="256" class="t-m lbl" text-anchor="middle">old release serving</text>
+<path d="M970,332 L1040,332" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="1005" y="324" class="t-m lbl" text-anchor="middle">exit 76</text>
+<path d="M1150,332 L1170,332 L1170,104 L905,104 L905,150" class="ln-d" marker-end="url(#host-lifecycle-ak)"/>
+<text x="1040" y="98" class="t-m lbl" text-anchor="middle">operator clears (clear_halt)</text>
+<path d="M890,150 L890,116 L486,116 L486,332 L520,332" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="690" y="110" class="t-m lbl" text-anchor="middle">uninstall order</text>
+<path d="M1030,250 L960,250 L960,194" class="ln-o" marker-end="url(#host-lifecycle-ao)"/>
+<text x="995" y="244" class="t-m lbl" text-anchor="middle">units start</text>
+<path d="M1110,232 L1110,194" class="ln-o" marker-end="url(#host-lifecycle-ao)"/>
+<text x="1102" y="218" class="t-m lbl" text-anchor="end">units do not start</text>
+<path d="M1110,150 L1110,128 L930,128 L930,150" class="ln-o" marker-end="url(#host-lifecycle-ao)"/>
+<text x="1020" y="122" class="t-m lbl" text-anchor="middle">Force again, to previous</text>
+<text x="486" y="396" class="t-m" text-anchor="start">Install, update and uninstall are orders from the coordinator.</text>
+<text x="486" y="412" class="t-m" text-anchor="start">Force starts from running, updating, halted or rolled back. From absent, installing or</text>
+<text x="486" y="428" class="t-m" text-anchor="start">removing it is refused and nothing changes.</text>
+<text x="486" y="446" class="t-m" text-anchor="start">After Failed (after commit) the service stays running and the coordinator may roll it back.</text>
+<rect x="20" y="510" width="1160" height="120" rx="6" class="box-p"/>
+<text x="36" y="534" class="b" text-anchor="start">Coordinator marks, not host states</text>
+<rect x="36" y="548" width="110" height="28" rx="14" class="box-o dash"/>
+<text x="91" y="567" class="t-m" text-anchor="middle">held</text>
+<rect x="166" y="548" width="110" height="28" rx="14" class="box-o dash"/>
+<text x="221" y="567" class="t-m" text-anchor="middle">excluded</text>
+<rect x="296" y="548" width="110" height="28" rx="14" class="box-o dash"/>
+<text x="351" y="567" class="t-m" text-anchor="middle">bad version</text>
+<text x="36" y="602" class="t-m" text-anchor="start">They decide whether an order is sent. They never change what the host reports, so no arrow above leads to or from them.</text>
+<rect x="780" y="552" width="22" height="14" rx="3" class="box-p"/>
+<text x="810" y="563" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
+<path d="M780,590 L810,590" class="ln" marker-end="url(#host-lifecycle-ak)"/>
+<text x="818" y="594" class="t-m" text-anchor="start">event</text>
+<path d="M880,590 L910,590" class="ln-d" marker-end="url(#host-lifecycle-ak)"/>
+<text x="918" y="594" class="t-m" text-anchor="start">return to a state</text>
+<path d="M1030,590 L1060,590" class="ln-o" marker-end="url(#host-lifecycle-ao)"/>
+<text x="1068" y="594" class="t-m" text-anchor="start">Force</text>
+</svg>
