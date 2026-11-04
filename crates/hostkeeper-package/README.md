@@ -50,9 +50,18 @@ crate's `REASONS` hold the same set, and that no token that shipped is gone.
 
 ## Where the attestation comes from, and what is checked
 
-The index is a lookup, not a trust anchor, and is not signed: a tampered index can only cause a
-refusal, because the package must still have the size and SHA-256 the index gives, be attested by
-the trusted signer, and name in its manifest the service, version and platform asked for.
+The index is a lookup, not a trust anchor, and is not signed. The package must have the size and
+SHA-256 the index gives, be attested by the trusted signer, and name in its manifest the service,
+version and platform asked for. So a tampered index can at most cause a refusal, or the install of
+another build that the trusted signer attested for the same service, version and platform (one who
+controls the channel can swap the index entry, the archive and its bundle together for another such
+build); never anything unattested, and never another service, version or platform. Nothing on the
+host pins one build of a version: an order names only the service and the version.
+
+The packages directory (`/var/lib/hostkeeper/packages`) is root's: the daemon creates it root-owned
+and closed to group and others. A service directory under it that group or others can write is
+refused (`fetch_failed`). `gh` and the Sigstore trusted root are installed in root-owned
+directories; the verifier checks each file and its directory before every run.
 
 The bundle is fetched from the same release channel, at the package's URL with `.sigstore.json`
 appended, through the same bounded downloader: at most 1 MiB, within `attestation_timeout_secs`,

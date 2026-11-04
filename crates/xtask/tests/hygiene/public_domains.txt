@@ -13,6 +13,8 @@ crates.io
 githubusercontent.com
 slsa.dev
 in-toto.io
+# The Sigstore transparency log a captured attestation bundle's checkpoint names (rekor.sigstore.dev).
+sigstore.dev
 
 # Licence texts.
 apache.org

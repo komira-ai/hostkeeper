@@ -1,11 +1,11 @@
 use std::cell::Cell;
-use std::os::unix::fs::{MetadataExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::rc::Rc;
 
 use super::*;
 use crate::ports::{Got, NetError, Sink, Url};
 use crate::testing::{
-    Failing, FakeClock, FakeFetcher, deliver, listing, scratch, serve, sha256_hex,
+    Failing, FakeClock, FakeFetcher, deliver, listing, scratch, serve, service_dir, sha256_hex,
 };
 
 const URL: &str = "https://releases.example/svc/svc-1.tar.zst";
@@ -17,6 +17,7 @@ fn job<'a>(fetcher: &'a FakeFetcher, clock: &'a FakeClock, dir: &'a Path, url: &
         clock,
         dir,
         url,
+        suffix: "",
         cap: 10,
         deadline: clock.stamp(clock.mono_secs() + 100),
     }
@@ -284,4 +285,69 @@ fn read_back_reads_at_most_cap_bytes_and_refuses_a_link() {
     symlink(&file, &link).expect("a link");
     let refused = read_back(&link, 100).expect_err("a link");
     assert_eq!(refused.raw_os_error(), Some(libc::ELOOP));
+}
+
+/// Catches a bundle staged under a name `gh` cannot read, or a suffix that loses the prefix the
+/// orphan sweep looks for: every name of `names_with(".json")` begins with `.fetch-` and ends
+/// with `.json`, none repeats, and a download whose job has the suffix is staged under such a
+/// name.
+#[test]
+fn a_suffixed_staging_name_keeps_the_prefix_and_ends_in_the_suffix() {
+    let suffixed = names_with(".json");
+    assert_eq!(suffixed.len(), 16);
+    assert!(
+        suffixed
+            .iter()
+            .all(|name| name.starts_with(".fetch-") && name.ends_with(".json")),
+        "{suffixed:?}"
+    );
+
+    let scratch = scratch("stage-suffix");
+    let url = Url::new(URL.to_owned());
+    let fetcher = FakeFetcher::new().route(URL, serve(b"{}"));
+    let clock = FakeClock::at(5);
+    let mut json = job(&fetcher, &clock, scratch.path(), &url);
+    json.suffix = ".json";
+    let got = download(&json, plain).expect("downloaded");
+    let name = got
+        .file
+        .path()
+        .file_name()
+        .expect("a name")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        name.starts_with(".fetch-") && name.ends_with(".json"),
+        "{name}"
+    );
+    assert_eq!(listing(scratch.path()), [name]);
+}
+
+/// Catches a service directory that other accounts can write to being used: a directory
+/// writable by its group, by others, or by both is refused by `is_dir` and `make_dir` with the
+/// error naming it; 0755 and 0700 are accepted.
+#[test]
+fn a_service_directory_writable_by_group_or_others_is_refused() {
+    let scratch = scratch("stage-writable");
+    let dir = scratch.path().join("svc");
+    service_dir(&dir);
+    for mode in [0o775, 0o757, 0o777, 0o722] {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).expect("set mode");
+        let expected = format!("{} is writable by group or others", dir.display());
+        assert_eq!(
+            is_dir(&dir).expect_err("writable").to_string(),
+            expected,
+            "{mode:o}"
+        );
+        assert_eq!(
+            make_dir(&dir).expect_err("writable").to_string(),
+            expected,
+            "{mode:o}"
+        );
+    }
+    for mode in [0o755, 0o700, 0o555] {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).expect("set mode");
+        assert!(is_dir(&dir).expect("not writable by others"), "{mode:o}");
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("restore");
 }

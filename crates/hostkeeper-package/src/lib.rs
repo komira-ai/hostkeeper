@@ -31,6 +31,7 @@ mod bundle;
 mod der;
 mod failure;
 mod stage;
+mod unique;
 
 #[cfg(test)]
 mod testing;

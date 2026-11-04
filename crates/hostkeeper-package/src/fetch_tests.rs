@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::fs::File;
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,10 +9,12 @@ use std::time::Duration;
 use hostkeeper_hook::{Class, Outcome};
 
 use super::*;
+use crate::index::package_file;
 use crate::ports::{Got, Limit, NetError, Sink};
 use crate::testing::{
-    CHANNEL, Failing, FakeClock, FakeFetcher, HOST, Serve, config, deliver, digest, full, index_at,
-    index_json, listing, order, package_at, published, scratch, serve, sha256_hex,
+    CHANNEL, Failing, FakeClock, FakeFetcher, HOST, ReadOnlyDir, Serve, config, deliver, digest,
+    full, index_at, index_json, listing, order, package_at, published, scratch, serve, service_dir,
+    sha256_hex,
 };
 
 const ARCHIVE: &[u8] = b"the bytes of tierstore 1.5.0";
@@ -482,7 +484,8 @@ fn an_index_that_cannot_be_read_back_defers_with_fetch_failed() {
 }
 
 /// Catches an orphan sweep that is too wide, too narrow, or follows a link: before a new fetch
-/// the service's `.fetch-*` files and links go (the link's target stays); a `.fetch-*`
+/// the service's `.fetch-*` files (a bundle's `.fetch-*.json` too) and links go (the link's target
+/// stays); a `.fetch-*`
 /// directory, a `.stage-*` directory, a version directory, `current` and another service's
 /// `.fetch-*` stay.
 #[test]
@@ -491,6 +494,7 @@ fn an_orphan_fetch_file_is_removed_before_a_new_fetch_and_only_that() {
     let root = scratch.path();
     let dir = root.join("tierstore");
     let other = root.join("other");
+    service_dir(&dir);
     for made in [
         &dir,
         &other,
@@ -503,6 +507,7 @@ fn an_orphan_fetch_file_is_removed_before_a_new_fetch_and_only_that() {
     let outside = root.join("outside");
     std::fs::write(&outside, b"keep").expect("a file outside");
     std::fs::write(dir.join(".fetch-1-0"), b"partial").expect("an orphan");
+    std::fs::write(dir.join(".fetch-1-2.json"), b"{}").expect("a bundle's orphan");
     symlink(&outside, dir.join(".fetch-x")).expect("an orphan link");
     symlink("1.4.2", dir.join("current")).expect("current");
     std::fs::write(other.join(".fetch-9-9"), b"theirs").expect("another service's orphan");
@@ -711,4 +716,214 @@ fn the_package_is_the_one_for_this_hosts_platform() {
             *body
         );
     }
+}
+
+/// Padded with trailing spaces to exactly `len` bytes.
+fn padded(text: &str, len: u64) -> Vec<u8> {
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.resize(usize::try_from(len).expect("a length"), b' ');
+    bytes
+}
+
+/// Catches an off-by-one at the index cap that a non-JSON body would hide: a valid index padded
+/// with trailing spaces to exactly 64 KiB is read and its package fetched, whether its length
+/// is announced or not; one byte more is refused with `index_invalid` (by the header, or at
+/// the first byte past the cap), the package is never requested, and nothing is left.
+#[test]
+fn an_index_of_exactly_64_kib_is_read_and_one_byte_more_is_refused() {
+    let scratch = scratch("fetch-index-cap");
+    let text = index_json("tierstore", "1.5.0", &[(HOST, ARCHIVE)]);
+    for announce in [true, false] {
+        let given = Rc::new(Cell::new(0));
+        let fetcher = FakeFetcher::new()
+            .route(
+                &at_index(),
+                counted(padded(&text, MAX_INDEX_BYTES), announce, &given),
+            )
+            .route(&at_package(), serve(ARCHIVE));
+        let staged = fetch(
+            &fetcher,
+            &FakeClock::at(1),
+            &bounds(),
+            scratch.path(),
+            &tierstore(),
+        )
+        .expect("an index at the cap");
+        assert_eq!(staged.size, 28, "{announce}");
+        assert_eq!(urls(&fetcher), [at_index(), at_package()], "{announce}");
+        drop(staged);
+        assert!(left(scratch.path()).is_empty());
+    }
+    for announce in [true, false] {
+        let given = Rc::new(Cell::new(0));
+        let fetcher = FakeFetcher::new()
+            .route(
+                &at_index(),
+                counted(padded(&text, MAX_INDEX_BYTES + 1), announce, &given),
+            )
+            .route(&at_package(), serve(ARCHIVE));
+        let refused = fetch(
+            &fetcher,
+            &FakeClock::at(1),
+            &bounds(),
+            scratch.path(),
+            &tierstore(),
+        )
+        .expect_err("an index one byte over the cap");
+        assert_eq!(refused, failed(INDEX_INVALID), "{announce}");
+        assert_eq!(urls(&fetcher), [at_index()], "{announce}");
+        assert!(left(scratch.path()).is_empty());
+    }
+}
+
+/// Catches a package of no bytes being refused, or its file being opened: an index entry of 0
+/// bytes with the SHA-256 of empty input is fetched to an empty staging file whose size is 0 and
+/// whose digest is the empty input's.
+#[test]
+fn a_zero_byte_package_is_staged_as_an_empty_file() {
+    let scratch = scratch("fetch-empty");
+    let fetcher = published("tierstore", "1.5.0", b"");
+    let staged = fetch(
+        &fetcher,
+        &FakeClock::at(1),
+        &bounds(),
+        scratch.path(),
+        &tierstore(),
+    )
+    .expect("an empty package");
+    assert_eq!(staged.size, 0);
+    assert_eq!(
+        staged.sha256.as_str(),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        std::fs::metadata(staged.file.path())
+            .expect("the file")
+            .len(),
+        0
+    );
+    assert_eq!(urls(&fetcher), [at_index(), at_package()]);
+}
+
+/// Catches a staging file named after the package: with a service and a version of 255 bytes
+/// each (the longest the grammar allows), the package's derived file name is longer than a file
+/// name may be, yet the URLs are built, the package is fetched, and the staging file in the
+/// service's directory is a `.fetch-*` name.
+#[test]
+fn names_of_the_longest_length_are_fetched_into_a_fetch_staging_file() {
+    let scratch = scratch("fetch-longest");
+    let service = "s".repeat(255);
+    let version = "v".repeat(255);
+    let long = order(&service, &version);
+    assert!(package_file(&long.service, &long.version, HOST).len() > 255);
+    let fetcher = published(&service, &version, ARCHIVE);
+    let staged = fetch(
+        &fetcher,
+        &FakeClock::at(1),
+        &bounds(),
+        scratch.path(),
+        &long,
+    )
+    .expect("fetched");
+    assert_eq!(
+        urls(&fetcher),
+        [index_at(&service, &version), package_at(&service, &version)]
+    );
+    let listed = listing(&scratch.path().join(&service));
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].starts_with(".fetch-"), "{listed:?}");
+    assert_eq!(staged.file.path().file_name().expect("a name"), &*listed[0]);
+    assert_eq!(
+        std::fs::read(staged.file.path()).expect("the file"),
+        ARCHIVE
+    );
+}
+
+/// Catches a service directory that other accounts can write to being used: a directory with
+/// mode 0777 is refused with `fetch_failed`, nothing is requested, and nothing is made in it.
+#[test]
+fn a_service_directory_writable_by_others_defers_with_fetch_failed() {
+    let scratch = scratch("fetch-writable");
+    let dir = scratch.path().join("tierstore");
+    service_dir(&dir);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("set mode");
+    let fetcher = published("tierstore", "1.5.0", ARCHIVE);
+    let refused = fetch(
+        &fetcher,
+        &FakeClock::at(1),
+        &bounds(),
+        scratch.path(),
+        &tierstore(),
+    )
+    .expect_err("a writable directory");
+    assert_eq!(refused, deferred(FETCH_FAILED));
+    assert!(fetcher.calls().is_empty());
+    assert!(left(scratch.path()).is_empty());
+}
+
+/// Catches a staging file that cannot be created being reported as anything but `fetch_failed`,
+/// or the network being used first: in a service directory that is read-only (mode 0555) the
+/// fetch is deferred with `fetch_failed`, no URL is requested, and the directory is empty.
+#[test]
+fn a_staging_file_that_cannot_be_created_defers_before_any_request() {
+    let scratch = scratch("fetch-create");
+    let dir = scratch.path().join("tierstore");
+    service_dir(&dir);
+    let guard = ReadOnlyDir::new(&dir);
+    let fetcher = published("tierstore", "1.5.0", ARCHIVE);
+    let refused = fetch(
+        &fetcher,
+        &FakeClock::at(1),
+        &bounds(),
+        scratch.path(),
+        &tierstore(),
+    )
+    .expect_err("no staging file");
+    assert_eq!(refused, deferred(FETCH_FAILED));
+    assert!(fetcher.calls().is_empty());
+    drop(guard);
+    assert!(left(scratch.path()).is_empty());
+}
+
+/// Catches an orphan that cannot be removed being ignored, and one that is never retried: an
+/// orphan in a read-only service directory (mode 0555) defers the fetch with `fetch_failed`
+/// before any request and stays; once the mode is restored the next fetch removes it and
+/// succeeds.
+#[test]
+fn an_orphan_that_cannot_be_removed_defers_and_is_swept_by_the_next_fetch() {
+    let scratch = scratch("fetch-orphan-stuck");
+    let dir = scratch.path().join("tierstore");
+    service_dir(&dir);
+    std::fs::write(dir.join(".fetch-1-0"), b"partial").expect("an orphan");
+    let guard = ReadOnlyDir::new(&dir);
+    let fetcher = published("tierstore", "1.5.0", ARCHIVE);
+    let refused = fetch(
+        &fetcher,
+        &FakeClock::at(1),
+        &bounds(),
+        scratch.path(),
+        &tierstore(),
+    )
+    .expect_err("the orphan stays");
+    assert_eq!(refused, deferred(FETCH_FAILED));
+    assert!(fetcher.calls().is_empty());
+    assert_eq!(left(scratch.path()), [".fetch-1-0"]);
+
+    drop(guard);
+    let staged = fetch(
+        &fetcher,
+        &FakeClock::at(1),
+        &bounds(),
+        scratch.path(),
+        &tierstore(),
+    )
+    .expect("fetched once the orphan can go");
+    let name = staged
+        .file
+        .path()
+        .file_name()
+        .expect("a name")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(left(scratch.path()), [name]);
 }

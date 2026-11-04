@@ -9,7 +9,10 @@
 //! - the signing workflow is the config's `workflow` path in any repository of the
 //!   organisation. `gh` quotes `--signer-workflow` as one exact workflow URL, which cannot say
 //!   "any repository", so the check is `--cert-identity-regex` on the certificate's signer URI,
-//!   `^https://github\.com/<organisation>/[^/]+/<workflow>@`, with both config values escaped;
+//!   `^https://github\.com/<organisation>/[^/]+/<workflow>@refs/[^@]+$`, with both config values
+//!   escaped. The whole URI must match: after the workflow path comes `@` and a `refs/...` ref
+//!   with no further `@`, so a workflow whose file name merely starts with the configured one
+//!   and an `@` (`artifacts.yml@other.yml`) is a different workflow and is refused;
 //! - `--deny-self-hosted-runners` is passed only when the config's `hosted_runner` is true;
 //! - the config's refs are globs. The ref in the bundle's certificate is matched against them
 //!   here, and a ref no glob matches is rejected without running `gh`; otherwise `gh` is run once,
@@ -23,6 +26,12 @@
 //! of `gh`, of the trusted root and of the scratch home come from the daemon, not from the
 //! config. `gh` and the trusted root are checked before each run ([`FileTrust`]): an untrusted
 //! one is no verdict on the package and makes the verifier [`VerifyError::Unavailable`].
+//!
+//! `gh` runs with the scratch home as its working directory, so every path it is given (the
+//! program, the archive, the bundle, the trusted root and the home) is made absolute first,
+//! against the daemon's own working directory; one that cannot be made absolute makes the
+//! verifier [`VerifyError::Unavailable`]. The daemon installs `gh` and the trusted root under
+//! root-owned directories nobody else can write; [`OwnedBy`] checks the file and its directory.
 
 use std::ffi::OsString;
 use std::fs::OpenOptions;
@@ -48,6 +57,9 @@ pub const DEAD_PROXY: &str = "http://127.0.0.1:9";
 /// The URL every signer URI of a GitHub Actions certificate starts with, as a regular
 /// expression.
 const SIGNER_URI_START: &str = r"^https://github\.com/";
+/// What ends a signer URI, as a regular expression: `@`, a `refs/...` ref with no further `@`,
+/// and the end of the text.
+const SIGNER_URI_END: &str = "@refs/[^@]+$";
 /// The characters that mean something in a Go regular expression (`regexp.QuoteMeta`'s set).
 const REGEX_META: &str = r"\.+*?()|[]{}^$";
 /// The most bytes of `gh`'s standard error that are kept.
@@ -56,7 +68,7 @@ pub const STDERR_BYTES: u64 = 64 * 1024;
 /// Whether `source_ref` matches the glob `pattern`. A `*` matches any run of characters within
 /// one `/`-separated component, none included; every other character matches itself. So
 /// `refs/tags/*` matches `refs/tags/v1.2.3`, and neither `refs/tags` nor `refs/tags/a/b`.
-pub fn ref_matches(pattern: &str, source_ref: &str) -> bool {
+pub(crate) fn ref_matches(pattern: &str, source_ref: &str) -> bool {
     let patterns: Vec<&str> = pattern.split('/').collect();
     let parts: Vec<&str> = source_ref.split('/').collect();
     (patterns.len() == parts.len())
@@ -101,7 +113,7 @@ fn component_matches(pattern: &[u8], text: &[u8]) -> bool {
 
 /// `text` with every character a Go regular expression gives a meaning escaped, as
 /// `regexp.QuoteMeta` does.
-pub fn quote_meta(text: &str) -> String {
+pub(crate) fn quote_meta(text: &str) -> String {
     let mut quoted = String::with_capacity(text.len());
     for c in text.chars() {
         if REGEX_META.contains(c) {
@@ -112,11 +124,12 @@ pub fn quote_meta(text: &str) -> String {
     quoted
 }
 
-/// The regular expression the certificate's signer URI must match: the config's workflow, in
-/// any repository of the config's organisation.
-pub fn signer_identity(signers: &TrustedSigners) -> String {
+/// The regular expression the certificate's signer URI must match in full: the config's
+/// workflow, in any repository of the config's organisation, then `@` and a ref with no further
+/// `@`.
+pub(crate) fn signer_identity(signers: &TrustedSigners) -> String {
     format!(
-        "{SIGNER_URI_START}{}/[^/]+/{}@",
+        "{SIGNER_URI_START}{}/[^/]+/{}{SIGNER_URI_END}",
         quote_meta(&signers.organisation),
         quote_meta(&signers.workflow)
     )
@@ -154,7 +167,8 @@ pub trait Runner {
 
 /// The [`Runner`] of a host: a child process with no input, its output dropped and its
 /// standard error kept in a staging file in `cwd`, polled once a second on `clock` and killed at
-/// the deadline.
+/// the deadline. A deadline that has passed before the start starts nothing, and one that passes
+/// while the child runs wins over the child's exit seen at the same poll.
 pub struct SystemRunner {
     clock: Arc<dyn Clock>,
 }
@@ -167,6 +181,12 @@ impl SystemRunner {
 
 impl Runner for SystemRunner {
     fn run(&self, spawn: &Spawn) -> io::Result<Ran> {
+        if remaining_secs(&spawn.deadline, &*self.clock) == 0 {
+            return Ok(Ran {
+                timed_out: true,
+                ..Ran::default()
+            });
+        }
         let (stderr, kept) = stage::create(&spawn.cwd, stage::names())?;
         let mut child = Command::new(&spawn.program)
             .args(&spawn.args)
@@ -178,14 +198,14 @@ impl Runner for SystemRunner {
             .stderr(stderr)
             .spawn()?;
         let (code, timed_out) = loop {
-            if let Some(status) = child.try_wait()? {
-                break (status.code(), false);
-            }
             if remaining_secs(&spawn.deadline, &*self.clock) == 0 {
                 // An error here is a child that has just exited; `wait` reaps it either way.
                 let _ = child.kill();
                 child.wait()?;
                 break (None, true);
+            }
+            if let Some(status) = child.try_wait()? {
+                break (status.code(), false);
             }
             self.clock.sleep_secs(1);
         };
@@ -210,10 +230,28 @@ pub trait FileTrust {
 }
 
 /// The [`FileTrust`] of a host: a regular file, not a link, owned by `uid` (root, 0, on a host)
-/// and writable by neither its group nor others, checked on the open file.
+/// and writable by neither its group nor others, checked on the open file; and the directory
+/// that holds it, owned by `uid` or by root and writable by neither its group nor others, so that
+/// nobody else can swap the file for another between the check and its use. The directories above
+/// that one are not checked: the daemon installs the file under root-owned directories all the
+/// way up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OwnedBy {
     pub uid: u32,
+}
+
+/// Whether an owner and a mode are trusted: the owner is `wanted` or one of `also`, and neither
+/// the group nor others can write.
+fn judge(found: u32, mode: u32, wanted: u32, also: &[u32]) -> Result<(), TrustError> {
+    if (found != wanted) & !also.contains(&found) {
+        return Err(TrustError::Owner { found, wanted });
+    }
+    if mode & 0o022 != 0 {
+        return Err(TrustError::Writable {
+            mode: mode & 0o7777,
+        });
+    }
+    Ok(())
 }
 
 impl FileTrust for OwnedBy {
@@ -226,18 +264,11 @@ impl FileTrust for OwnedBy {
         if !meta.is_file() {
             return Err(TrustError::NotRegular);
         }
-        if meta.uid() != self.uid {
-            return Err(TrustError::Owner {
-                found: meta.uid(),
-                wanted: self.uid,
-            });
-        }
-        if meta.mode() & 0o022 != 0 {
-            return Err(TrustError::Writable {
-                mode: meta.mode() & 0o7777,
-            });
-        }
-        Ok(())
+        judge(meta.uid(), meta.mode(), self.uid, &[])?;
+        let whole = std::path::absolute(path)?;
+        // The parent of a path that opened as a file is a directory.
+        let parent = std::fs::metadata(whole.parent().unwrap_or(&whole))?;
+        judge(parent.uid(), parent.mode(), self.uid, &[0])
     }
 }
 
@@ -269,7 +300,7 @@ impl GhVerifier {
         }
     }
 
-    /// The arguments of `gh` for `request`:
+    /// The arguments of `gh` for `request`, the archive, the bundle and `trusted_root` as given:
     ///
     /// ```text
     /// attestation verify <archive> --bundle <bundle> --custom-trusted-root <root>
@@ -277,7 +308,7 @@ impl GhVerifier {
     ///   --cert-oidc-issuer <ISSUER> --source-ref <ref> --source-digest <commit>
     ///   --predicate-type <PREDICATE> [--deny-self-hosted-runners]
     /// ```
-    pub fn args(&self, request: &Attest<'_>) -> Vec<OsString> {
+    pub fn args(&self, request: &Attest<'_>, trusted_root: &Path) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec![
             "attestation".into(),
             "verify".into(),
@@ -285,7 +316,7 @@ impl GhVerifier {
             "--bundle".into(),
             request.bundle.into(),
             "--custom-trusted-root".into(),
-            self.trusted_root.clone().into(),
+            trusted_root.into(),
         ];
         let identity = signer_identity(request.signers);
         for (flag, value) in [
@@ -308,8 +339,8 @@ impl GhVerifier {
     /// The whole environment `gh` gets: a fixed `PATH`, the scratch home and a configuration
     /// directory in it, no prompts, update notices or colour, and a proxy that refuses every
     /// connection. Nothing of the daemon's environment, a token included, is in it.
-    pub fn env(&self) -> Vec<(String, String)> {
-        let home = self.home.display().to_string();
+    pub fn env(&self, home: &Path) -> Vec<(String, String)> {
+        let home = home.display().to_string();
         let mut env = vec![
             ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
             ("HOME".to_owned(), home.clone()),
@@ -326,11 +357,13 @@ impl GhVerifier {
 }
 
 impl Verifier for GhVerifier {
-    /// Rejects a ref none of the signer's globs matches, without running `gh`; then checks `gh`
+    /// Rejects a ref none of the signer's globs matches, without running `gh`; then makes the
+    /// paths absolute, checks `gh`
     /// and the trusted root, runs `gh` once and reads its verdict: exit 0 is attested, another
     /// exit code is [`VerifyError::Rejected`] with `gh`'s first line of complaint, a `gh` killed
     /// at the deadline is [`VerifyError::TimedOut`], and a `gh` that cannot start, is ended by a
-    /// signal or is not trusted is [`VerifyError::Unavailable`].
+    /// signal, is not trusted or is given a path that cannot be made absolute is
+    /// [`VerifyError::Unavailable`].
     fn verify(&self, request: &Attest<'_>) -> Result<Attested, VerifyError> {
         let source_ref = request.source_ref.as_str();
         if !request
@@ -343,15 +376,28 @@ impl Verifier for GhVerifier {
                 "the ref {source_ref} matches none of the trusted signer's refs"
             )));
         }
+        let [gh, root, home, archive, bundle] = absolute_all([
+            &self.gh,
+            &self.trusted_root,
+            &self.home,
+            request.archive,
+            request.bundle,
+        ])
+        .map_err(|_| VerifyError::Unavailable)?;
         self.trust
-            .check(&self.gh)
-            .and_then(|()| self.trust.check(&self.trusted_root))
+            .check(&gh)
+            .and_then(|()| self.trust.check(&root))
             .map_err(|_| VerifyError::Unavailable)?;
+        let request = Attest {
+            archive: &archive,
+            bundle: &bundle,
+            ..*request
+        };
         let spawn = Spawn {
-            program: self.gh.clone(),
-            args: self.args(request),
-            env: self.env(),
-            cwd: self.home.clone(),
+            program: gh,
+            args: self.args(&request, &root),
+            env: self.env(&home),
+            cwd: home,
             deadline: request.deadline.clone(),
         };
         let ran = self
@@ -370,6 +416,16 @@ impl Verifier for GhVerifier {
             Ran { stderr, .. } => Err(VerifyError::Rejected(complaint(&stderr))),
         }
     }
+}
+
+/// `paths`, each made absolute against the working directory without touching the filesystem.
+/// An empty path cannot be made absolute and is an error.
+fn absolute_all(paths: [&Path; 5]) -> io::Result<[PathBuf; 5]> {
+    let mut out = [(); 5].map(|()| PathBuf::new());
+    for (slot, path) in out.iter_mut().zip(paths) {
+        *slot = std::path::absolute(path)?;
+    }
+    Ok(out)
 }
 
 /// The first line `gh` printed to its standard error, cut to 160 characters, with anything but

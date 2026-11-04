@@ -13,13 +13,16 @@
 //!  "schema":1,"service":"S","version":"V"}
 //! ```
 //!
-//! The index is read strictly ([`ReleaseIndex::parse`]): exactly these fields, schema 1, the
-//! service and version asked for, each file named `{S}-{V}-{platform}.tar.zst`, each digest 64
-//! lower-case hex digits, at least one package, each platform once and in order. It is a lookup,
-//! not a trust anchor, and is not signed: the fetch checks the size and the SHA-256 of the file
-//! it names, the proof checks the archive's own attestation, and the manifest step checks that
-//! the archive names the service, version and platform asked for, so a tampered index can only
-//! cause a refusal.
+//! The index is read strictly ([`ReleaseIndex::parse`]): exactly these fields, each key once in
+//! every object, schema 1, the service and version asked for, each file named
+//! `{S}-{V}-{platform}.tar.zst`, each digest 64 lower-case hex digits, at least one package, each
+//! platform once and in order. It is a lookup, not a trust anchor, and is not signed. What a
+//! tampered index can do is bounded by what the rest of the fetch checks: the size and the SHA-256
+//! of the file it names, the archive's own attestation by the trusted signer, and the manifest
+//! step's check that the archive names the service, version and platform asked for. So a tampered
+//! index can at most cause a refusal, or the install of another build that the trusted signer
+//! attested for the same service, version and platform; never anything unattested, and never
+//! another service, version or platform.
 //!
 //! These types are held here under the names the shared `hostkeeper-config` types take; this
 //! crate switches to those when they land.
@@ -30,6 +33,7 @@ use hostkeeper_config::daemon::{HttpsUrl, Sha256Hex};
 use hostkeeper_config::names::{ServiceName, Version};
 
 use crate::ports::Url;
+use crate::unique::repeated_key;
 
 /// The name of the release index in a version's directory.
 pub const INDEX_FILE: &str = "index.json";
@@ -243,7 +247,7 @@ fn entry(
 
 impl ReleaseIndex {
     /// Reads `bytes` as the index of `service` at `version`, refusing anything that is not
-    /// exactly one: not JSON, other or missing fields, another schema, service or version, a
+    /// exactly one: not JSON, a key repeated in any object, other or missing fields, another schema, service or version, a
     /// file name that is not the package's, a digest that is not a SHA-256, no package, or the
     /// platforms not in strictly increasing order (which refuses a platform listed twice).
     pub fn parse(
@@ -253,6 +257,11 @@ impl ReleaseIndex {
     ) -> Result<ReleaseIndex, IndexInvalid> {
         let value: Value =
             serde_json::from_slice(bytes).map_err(|e| invalid(format!("not JSON: {e}")))?;
+        if let Some(key) = repeated_key(bytes) {
+            return Err(invalid(format!(
+                "an object of the index repeats the key {key:?}"
+            )));
+        }
         let object = object(&value, &FIELDS, "the index")?;
         let schema = object.get("schema").and_then(Value::as_u64);
         if schema != Some(SCHEMA) {

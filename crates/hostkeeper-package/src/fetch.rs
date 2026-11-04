@@ -11,7 +11,19 @@
 //! | the bytes, all received, are fewer than the entry's size or do not hash to its SHA-256 | `Failure`, `release`, `package_digest_mismatch` |
 //! | no connection, a status other than 2xx (404 included), a body cut short, `fetch_timeout_secs` passed, for the index or the package | `Deferred`, `environment`, `fetch_failed` |
 //! | the disk is full while a staging file is written | `Deferred`, `environment`, `no_space` |
-//! | a staging file cannot be made, written or read for another reason | `Deferred`, `environment`, `fetch_failed` |
+//! | the service directory is a link, is not a directory, or is writable by group or others; a staging file cannot be made, written or read for another reason | `Deferred`, `environment`, `fetch_failed` |
+//!
+//! Where files are made: only `packages_root/<service>/.fetch-<pid>-<n>`. The staging file is
+//! never named after the package (`<service>-<version>-<platform>.tar.zst`, which for the longest
+//! service name and version the grammar allows is longer than a file name may be), so a package
+//! whose derived name is too long for a file system is still fetched: only its URL is built from
+//! the name, and a channel that cannot serve it answers with a status (`fetch_failed`).
+//!
+//! The packages root is the daemon's: it makes it, owns it and keeps it from other accounts
+//! (mode 0755 or tighter, owned by the daemon's user); that is its precondition, and this crate
+//! does not check it. The service directory under it is checked on every use: it must be a real
+//! directory (not a link) that is not writable by its group or by others, because anyone who can
+//! write there can replace a staging file between its creation and its use.
 //!
 //! Every refusal removes the staging files. Nothing else is removed to make room, and no version
 //! is compared with anything: the downgrade bound is the coordinator's `min_version` (design
@@ -130,6 +142,7 @@ pub(crate) fn fetch_with(
         clock: env.clock,
         dir: &dir,
         url: &index_at,
+        suffix: "",
         cap: MAX_INDEX_BYTES,
         deadline: deadline.clone(),
     };
@@ -157,6 +170,7 @@ pub(crate) fn fetch_with(
         clock: env.clock,
         dir: &dir,
         url: &url,
+        suffix: "",
         cap: entry.bytes,
         deadline,
     };

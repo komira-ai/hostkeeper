@@ -3,8 +3,9 @@
 //! generator of the synthetic attestation bundles under `tests/fixtures/`.
 
 use std::cell::RefCell;
-use std::fs::File;
+use std::fs::{File, Permissions};
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -470,4 +471,32 @@ impl Write for Failing {
 /// The staging file's writer on a full disk (`ENOSPC`).
 pub(crate) fn full(_: &File) -> Box<dyn Write + '_> {
     Box::new(Failing(io::ErrorKind::StorageFull))
+}
+
+/// Makes the directory `path` (and its parents) and sets the mode of `path` to 0755, whatever
+/// the umask of the test run: a service directory the fetch will accept.
+pub(crate) fn service_dir(path: &Path) {
+    std::fs::create_dir_all(path).expect("make the directory");
+    std::fs::set_permissions(path, Permissions::from_mode(0o755)).expect("set mode 0755");
+}
+
+/// A directory made read-only (mode 0555) for the life of this value: its mode is 0755 again
+/// when it is dropped, so that the scratch directory can be removed even if a test panics.
+pub(crate) struct ReadOnlyDir {
+    path: PathBuf,
+}
+
+impl ReadOnlyDir {
+    pub(crate) fn new(path: &Path) -> ReadOnlyDir {
+        std::fs::set_permissions(path, Permissions::from_mode(0o555)).expect("set mode 0555");
+        ReadOnlyDir {
+            path: path.to_owned(),
+        }
+    }
+}
+
+impl Drop for ReadOnlyDir {
+    fn drop(&mut self) {
+        std::fs::set_permissions(&self.path, Permissions::from_mode(0o755)).expect("restore 0755");
+    }
 }

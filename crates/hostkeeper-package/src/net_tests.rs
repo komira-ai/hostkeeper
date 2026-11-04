@@ -510,3 +510,80 @@ fn ureq_transport_refuses_a_plain_http_url() {
     let result = transport.open(&format!("http://127.0.0.1:{port}/x"), generous());
     assert_eq!(result.err(), Some(NetError::Connect));
 }
+
+/// A deadline further away than the cap gives the transport exactly the cap as its total timeout.
+///
+/// Catches a total timeout of `u64::MAX` seconds handed to `ureq`, whose clock arithmetic
+/// overflows on it, and a cap applied to the deadline checks instead of the transport.
+#[test]
+fn net_adapter_caps_the_total_timeout_handed_to_the_transport() {
+    let run = drive(
+        &Arc::new(FakeClock::at(10)),
+        Ok(scripted(200, Some(0), b"")),
+        Recorder::default(),
+        u64::MAX,
+    );
+    assert_eq!(run.result, Ok(Got::Complete));
+    assert_eq!(
+        run.opened,
+        vec![(
+            URL.to_owned(),
+            Timeouts {
+                connect: Duration::from_secs(7),
+                total: Duration::from_secs(MAX_TRANSPORT_SECS),
+            }
+        )]
+    );
+}
+
+/// A time left just under the cap is handed over as it is.
+///
+/// Catches a cap that replaces every total timeout instead of limiting the largest.
+#[test]
+fn net_adapter_hands_over_a_time_left_below_the_cap_unchanged() {
+    let run = drive(
+        &Arc::new(FakeClock::at(10)),
+        Ok(scripted(200, Some(0), b"")),
+        Recorder::default(),
+        10 + MAX_TRANSPORT_SECS - 1,
+    );
+    assert_eq!(run.opened.len(), 1);
+    assert_eq!(
+        run.opened.first().map(|(_, timeouts)| timeouts.total),
+        Some(Duration::from_secs(MAX_TRANSPORT_SECS - 1))
+    );
+}
+
+/// A timeout of the body is the deadline however `ureq` carried it through the reader: wrapped
+/// by its own `into_io`, and as a plain `TimedOut` kind; other wrapped and plain errors are not.
+///
+/// Catches a body timeout that `ureq` wrapped as an `Other` I/O error and that is reported as
+/// an I/O failure instead of the missed deadline.
+#[test]
+fn net_adapter_reads_a_wrapped_ureq_timeout_as_the_deadline() {
+    let cases = [
+        (
+            ureq::Error::Timeout(ureq::Timeout::Global).into_io(),
+            NetError::DeadlineExceeded,
+        ),
+        (
+            ureq::Error::Timeout(ureq::Timeout::RecvBody).into_io(),
+            NetError::DeadlineExceeded,
+        ),
+        (
+            io::Error::from(io::ErrorKind::TimedOut),
+            NetError::DeadlineExceeded,
+        ),
+        (ureq::Error::HostNotFound.into_io(), NetError::Io),
+        (io::Error::other("not from ureq"), NetError::Io),
+        (
+            io::Error::from(io::ErrorKind::UnexpectedEof),
+            NetError::Truncated,
+        ),
+        (io::Error::from(io::ErrorKind::BrokenPipe), NetError::Io),
+    ];
+    for (error, expected) in cases {
+        let text = error.to_string();
+        assert_eq!(read_error(error), expected, "{text}");
+    }
+}

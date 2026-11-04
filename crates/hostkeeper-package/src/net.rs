@@ -25,6 +25,11 @@ use crate::ports::{Fetcher, Got, Limit, NetError, Sink, Url, remaining_secs};
 /// The most bytes read from the body at once.
 pub const CHUNK_BYTES: usize = 64 * 1024;
 
+/// The longest total timeout handed to the transport: seven days. A deadline further away is
+/// still enforced by the checks between reads, and a duration this size cannot overflow the
+/// transport's own clock arithmetic.
+pub const MAX_TRANSPORT_SECS: u64 = 7 * 24 * 60 * 60;
+
 /// The timeouts of one request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timeouts {
@@ -66,7 +71,7 @@ impl<T: Transport> Fetcher for NetFetcher<T> {
         }
         let timeouts = Timeouts {
             connect: limit.connect_timeout,
-            total: Duration::from_secs(left),
+            total: Duration::from_secs(left.min(MAX_TRANSPORT_SECS)),
         };
         let Response {
             status,
@@ -105,6 +110,14 @@ impl<T: Transport> Fetcher for NetFetcher<T> {
 
 /// What a failed read of the body is.
 fn read_error(error: io::Error) -> NetError {
+    // `ureq` hands a timeout of the body over as an `io::Error` of kind `Other` that wraps it.
+    let wrapped_timeout = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<ureq::Error>())
+        .is_some_and(|inner| matches!(inner, ureq::Error::Timeout(_)));
+    if wrapped_timeout {
+        return NetError::DeadlineExceeded;
+    }
     match error.kind() {
         io::ErrorKind::TimedOut => NetError::DeadlineExceeded,
         io::ErrorKind::UnexpectedEof => NetError::Truncated,
@@ -184,3 +197,7 @@ fn call_error(error: ureq::Error) -> NetError {
 #[cfg(test)]
 #[path = "net_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "net_tls_tests.rs"]
+mod tls_tests;

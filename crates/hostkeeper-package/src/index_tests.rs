@@ -106,13 +106,24 @@ fn a_platform_is_found_by_its_exact_name_only() {
     }
 }
 
-/// Proves the platform of the running build is one of the three and is found again by its own
-/// name. Catches a `current` that returns a platform outside the set or one whose name does not
-/// round-trip.
+/// The platform the compiled target must give, for the target this build is compiled for.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const TARGET_PLATFORM: Platform = Platform::LinuxX86_64;
+/// The platform the compiled target must give, for the target this build is compiled for.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const TARGET_PLATFORM: Platform = Platform::LinuxArm64;
+/// The platform the compiled target must give, for the target this build is compiled for.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const TARGET_PLATFORM: Platform = Platform::MacosArm64;
+
+/// Proves the platform of the running build is the one the compilation target names (linux
+/// x86_64, linux aarch64 or macos aarch64, each expected only on its own target) and that it is
+/// found again by its own name. Catches a `current` that returns another supported platform,
+/// which would select the wrong package.
 #[test]
-fn the_current_platform_is_one_of_the_three_and_round_trips_by_name() {
+fn the_current_platform_is_the_compilation_targets_and_round_trips_by_name() {
     let current = Platform::current();
-    assert!(Platform::ALL.contains(&current));
+    assert_eq!(current, TARGET_PLATFORM);
     assert_eq!(Platform::of_name(current.name()), Some(current));
 }
 
@@ -465,4 +476,58 @@ fn the_platforms_must_be_one_or_more_each_once_and_in_order() {
         ),
     ];
     assert_refusals(&cases);
+}
+
+/// Proves an index that repeats a key is refused naming the key, at the top level and inside a
+/// package entry, even when the last value would have passed every other check (schema 2 then 1,
+/// a second digest or size). Catches a parse that keeps the last duplicate silently.
+#[test]
+fn a_repeated_key_anywhere_in_the_index_is_refused_naming_the_key() {
+    let one = good_package(Platform::LinuxX86_64);
+    let good = document("1", "tierstore", "1.5.0", &format!("[{one}]"));
+    let repeated = |text: String, key: &str| {
+        (
+            text,
+            format!("an object of the index repeats the key {key:?}"),
+        )
+    };
+    let cases = [
+        repeated(
+            good.replace("\"schema\":1,", "\"schema\":2,\"schema\":1,"),
+            "schema",
+        ),
+        repeated(
+            good.replace("\"service\":", "\"service\":\"other\",\"service\":"),
+            "service",
+        ),
+        repeated(
+            good.replace(
+                &format!("\"sha256\":\"{SHA}\""),
+                &format!("\"sha256\":\"{SHA}\",\"sha256\":\"{SHA}\""),
+            ),
+            "sha256",
+        ),
+        repeated(
+            good.replace("\"bytes\":7,", "\"bytes\":99,\"bytes\":7,"),
+            "bytes",
+        ),
+        repeated(
+            good.replace("\"packages\":[", "\"packages\":[],\"packages\":["),
+            "packages",
+        ),
+    ];
+    assert_refusals(&cases);
+}
+
+/// Proves a key that appears once per object, even if the same name is in several objects, is
+/// not mistaken for a repeat. Catches a duplicate check that shares keys between the index and
+/// its entries.
+#[test]
+fn the_same_key_in_different_objects_of_the_index_is_accepted() {
+    let (service, version) = asked();
+    let text = document_of(&[
+        good_package(Platform::LinuxArm64),
+        good_package(Platform::LinuxX86_64),
+    ]);
+    assert!(ReleaseIndex::parse(text.as_bytes(), &service, &version).is_ok());
 }

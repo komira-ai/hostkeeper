@@ -8,12 +8,13 @@ repository.workspace = true
 publish.workspace = true
 description = "Fetch a package from the release channel within bounds, check its digest, and check offline that a trusted signer attested it."
 
-# Steps 1 (download) and 2 (prove it is ours) of docs/design/hostkeeper-design.md, section 5.5:
-# the archive is downloaded into a root-only staging file with byte counting and deadlines on
-# the injected clock, refused when it is too large or does not hash to the order's digest, and
-# then checked offline against the daemon config's trusted signer. The network and the verifier
-# sit behind the ports `Fetcher` and `Verifier`; `net` and `gh` are their one real adapter each.
-# Nothing here opens, decompresses or unpacks the archive.
+# Steps 1 (download) and 2 (prove it is ours) of docs/design/hostkeeper-design.md, section 5.5,
+# under the release layout of one package per platform: the release index is read strictly, the
+# host platform's package is downloaded into a root-only staging file with byte counting and
+# deadlines on the injected clock, and refused when its size or SHA-256 is not the index entry's;
+# then it is checked offline against the daemon config's trusted signer. The network and the
+# verifier sit behind the ports `Fetcher` and `Verifier`; `net` and `gh` are their one real adapter
+# each. Nothing here opens, decompresses or unpacks the archive.
 [dependencies]
 base64.workspace = true
 # The daemon config's `TrustedSigners`, `Bounds`, `HttpsUrl` and `Sha256Hex`, the trust error, and
@@ -26,6 +27,8 @@ hostkeeper-steps = { path = "../hostkeeper-steps" }
 hex.workspace = true
 # `O_NOFOLLOW` and `O_NONBLOCK`, to open a file without following a link or waiting on a pipe.
 libc.workspace = true
+# Duplicate keys in the release index are refused while it is parsed.
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
@@ -33,6 +36,9 @@ ureq.workspace = true
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+regex.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
 
 [lints]
 workspace = true

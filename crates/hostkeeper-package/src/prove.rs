@@ -3,7 +3,8 @@
 //! daemon config's trusted signer.
 //!
 //! The attestation bundle is downloaded from the release channel at the archive's URL with
-//! `.sigstore.json` appended, through the same [`Fetcher`], into a second root-only staging file,
+//! `.sigstore.json` appended, through the same [`Fetcher`], into a second root-only staging file
+//! (named `.fetch-*.json`: the verifier reads the extension),
 //! at most 1 MiB, within `attestation_timeout_secs` (which bounds the whole proof, not the
 //! fetch's `fetch_timeout_secs`). The bundle names a commit and a ref, which the verifier is
 //! asked to confirm against the signed certificate.
@@ -11,7 +12,7 @@
 //! | what happened | outcome, class, reason |
 //! |---|---|
 //! | the bundle cannot be downloaded (no connection, a status other than 2xx, the deadline) | `Deferred`, `environment`, `attestation_unavailable` |
-//! | the verifier cannot run, gives no verdict, or runs out of time | `Deferred`, `environment`, `attestation_unavailable` |
+//! | the verifier cannot run, gives no verdict, or runs out of time (a verdict that arrives after the deadline is not taken) | `Deferred`, `environment`, `attestation_unavailable` |
 //! | the bundle is over 1 MiB, is not a bundle, names no commit or ref, or does not list the archive's digest (the verifier is not asked) | `Failure`, `release`, `not_attested` |
 //! | the verifier rejects the attestation | `Failure`, `release`, `not_attested` |
 //! | the disk is full while the bundle is written | `Deferred`, `environment`, `no_space` |
@@ -29,7 +30,9 @@ use crate::bundle::{self, BUNDLE_SUFFIX, MAX_BUNDLE_BYTES};
 use crate::failure::{ATTESTATION_UNAVAILABLE, NO_SPACE, NOT_ATTESTED, PackageFailure};
 use crate::fetch::StagedArchive;
 use crate::index::Platform;
-use crate::ports::{Attest, CommitId, Fetcher, SourceRef, Verifier, VerifyError, after};
+use crate::ports::{
+    Attest, CommitId, Fetcher, SourceRef, Verifier, VerifyError, after, remaining_secs,
+};
 use crate::stage::{self, Download, Fault, Job, OpenWriter, TempFile};
 
 /// What a proof needs from the daemon: the network, the verifier, the clock, and the config's
@@ -110,6 +113,8 @@ pub(crate) fn prove_with(
         clock: env.clock,
         dir: &staged.dir,
         url: &url,
+        // `gh` reads the extension of the bundle file it is given to choose its parser.
+        suffix: ".json",
         cap: MAX_BUNDLE_BYTES,
         deadline: deadline.clone(),
     };
@@ -120,6 +125,9 @@ pub(crate) fn prove_with(
         .ok()
         .filter(|facts| facts.lists(staged.sha256.as_str()))
         .ok_or(PackageFailure::release(NOT_ATTESTED))?;
+    // The budget is checked before the verifier is asked and again when it answers, so a proof
+    // that ran out of time is never taken for one.
+    in_time(&deadline, env.clock)?;
     let request = Attest {
         archive: staged.file.path(),
         bundle: bundle.path(),
@@ -130,6 +138,7 @@ pub(crate) fn prove_with(
         deadline: &deadline,
     };
     let attested = env.verifier.verify(&request).map_err(verify_failure)?;
+    in_time(&deadline, env.clock)?;
     let StagedArchive {
         file,
         platform,
@@ -145,6 +154,15 @@ pub(crate) fn prove_with(
         commit: attested.commit,
         source_ref: attested.source_ref,
     })
+}
+
+/// Whether any of the proof's time is left: `attestation_unavailable` once the deadline has
+/// passed, however the step in progress ended.
+fn in_time(deadline: &Stamp, clock: &dyn Clock) -> Result<(), PackageFailure> {
+    if remaining_secs(deadline, clock) == 0 {
+        return Err(PackageFailure::deferred(ATTESTATION_UNAVAILABLE));
+    }
+    Ok(())
 }
 
 /// The refusal a fault of the bundle's download is.

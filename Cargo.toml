@@ -41,6 +41,13 @@ protox = "0.10.0"
 # The zstd decoder of hostkeeper-unpack: pure Rust (MIT); `hash` (twox-hash, MIT) to check a
 # frame's content checksum; no dictionary builder.
 ruzstd = { version = "0.9.1", default-features = false, features = ["hash", "std"] }
+# hostkeeper-package's tests: the signer identity it passes to `gh` is compiled and matched as
+# the regular expression `gh` reads it as.
+regex = "1.13.1"
+# hostkeeper-package's tests: a TLS server on loopback for its HTTPS client, with the ring
+# provider ureq already brings; and reading the test certificates.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.

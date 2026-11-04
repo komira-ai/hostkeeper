@@ -293,3 +293,25 @@ fn refs_that_could_mean_something_else_are_refused() {
         assert_eq!(SourceRef::new(bad), None, "{bad:?}");
     }
 }
+
+/// A bundle captured from GitHub for a public release asset (`cli/cli` v2.103.3, the Linux amd64
+/// archive) yields its recorded commit, the certificate's source ref and the asset's digest
+/// among its subjects, read offline from a v0.3 bundle that no hostkeeper code produced.
+/// Catches a reader that agrees only with the synthetic bundles of the test helpers, such as one
+/// that expects a certificate or provenance layout the real producer does not write.
+#[test]
+fn a_captured_github_bundle_yields_its_commit_ref_and_subjects() {
+    let captured = include_bytes!("../tests/fixtures/captured/gh-linux-amd64.sigstore.json");
+    let facts = read(captured).expect("the captured bundle");
+    assert_eq!(
+        facts.commit,
+        CommitId::new("63837fb778d6a39f02be0ce76ff89f2bc8d74bdc").expect("a commit")
+    );
+    assert_eq!(
+        facts.source_ref,
+        SourceRef::new("refs/heads/trunk").expect("a ref")
+    );
+    assert_eq!(facts.subjects.len(), 21);
+    assert!(facts.lists("4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d"));
+    assert!(!facts.lists(DIGEST));
+}

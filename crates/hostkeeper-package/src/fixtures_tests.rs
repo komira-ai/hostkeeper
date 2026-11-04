@@ -4,6 +4,7 @@
 //! a fake `gh` that applies each flag it is given to the bundle's (unsigned) certificate.
 
 use std::cell::RefCell;
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -12,6 +13,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hostkeeper_config::daemon::Bounds;
 use hostkeeper_config::trust::TrustError;
+use regex::Regex;
 use serde_json::Value;
 
 use crate::bundle::{self, Facts};
@@ -88,6 +90,15 @@ fn fixtures() -> Vec<Fixture> {
             1,
         ),
         fixture(
+            "embedded-at-workflow.sigstore.json",
+            BundleSpec {
+                workflow: ".github/workflows/artifacts.yml@other.yml",
+                ..good()
+            },
+            "gh: --cert-identity-regex",
+            1,
+        ),
+        fixture(
             "other-organisation.sigstore.json",
             BundleSpec {
                 organisation: "other-org",
@@ -135,34 +146,6 @@ fn configured() -> hostkeeper_config::daemon::TrustedSigners {
     signers("example-org", WORKFLOW, &["refs/heads/main"])
 }
 
-/// `text` with each `\` escape undone.
-fn unquote(text: &str) -> String {
-    let mut out = String::new();
-    let mut escaped = false;
-    for c in text.chars() {
-        if escaped | (c != '\\') {
-            out.push(c);
-            escaped = false;
-        } else {
-            escaped = true;
-        }
-    }
-    out
-}
-
-/// The organisation and the workflow of a `--cert-identity-regex` value of `signer_identity`'s
-/// form.
-fn identity_parts(regex: &str) -> (String, String) {
-    let rest = regex
-        .strip_prefix(r"^https://github\.com/")
-        .expect("the start of a signer URI");
-    let (organisation, workflow) = rest.split_once("/[^/]+/").expect("any repository");
-    let workflow = workflow
-        .strip_suffix('@')
-        .expect("the end of the workflow path");
-    (unquote(organisation), unquote(workflow))
-}
-
 /// A `gh` that verifies nothing cryptographically but applies each flag it is given to the
 /// bundle's certificate, in `gh`'s order, and exits 1 naming the first flag that does not hold.
 struct FakeGh {
@@ -186,7 +169,18 @@ impl Runner for FakeGh {
                 .cloned()
                 .unwrap_or_default()
         };
-        let text = std::fs::read(value("--bundle"))?;
+        let bundle_path = value("--bundle");
+        // gh picks the bundle loader from the file name's extension, before it reads the file.
+        let extension = Path::new(&bundle_path).extension();
+        if !matches!(extension.and_then(OsStr::to_str), Some("json" | "jsonl")) {
+            return Ok(Ran {
+                code: Some(1),
+                timed_out: false,
+                stderr: b"gh: bundle file extension not supported, must be json or jsonl\n"
+                    .to_vec(),
+            });
+        }
+        let text = std::fs::read(bundle_path)?;
         let archive = std::fs::read(&args[2])?;
         let json: Value = serde_json::from_slice(&text).expect("a JSON bundle");
         let certificate = STANDARD
@@ -201,14 +195,9 @@ impl Runner for FakeGh {
                 .unwrap_or_default()
                 .to_owned()
         };
-        let (organisation, workflow) = identity_parts(&value("--cert-identity-regex"));
-        let signer = field(BUILD_SIGNER_URI);
-        let identity = signer
-            .strip_prefix(&format!("https://github.com/{organisation}/"))
-            .and_then(|rest| rest.split_once('/'))
-            .is_some_and(|(repository, rest)| {
-                !repository.is_empty() & rest.starts_with(&format!("{workflow}@"))
-            });
+        let identity = Regex::new(&value("--cert-identity-regex"))
+            .expect("a valid --cert-identity-regex")
+            .is_match(&field(BUILD_SIGNER_URI));
         let hosted = args.iter().any(|arg| arg == "--deny-self-hosted-runners");
         let checks = [
             (
@@ -408,6 +397,31 @@ fn prove_fixture(file: &str, service: &str) -> (Result<String, PackageFailure>, 
     let proven = prove(&env, staged).map(|verified| verified.source_ref().as_str().to_owned());
     let args = gh.args.borrow().clone();
     (proven, args)
+}
+
+/// A bundle path whose extension is neither `json` nor `jsonl` is refused by `gh` before the
+/// bundle is read, with `gh`'s message (shown as the reason); the same bundle under a `.json` or
+/// `.jsonl` name is accepted.
+/// Catches a bundle staged as an extensionless `.fetch-*` file, which real `gh` refuses, passing
+/// in tests because the fake did not check the extension.
+#[test]
+fn gh_refuses_a_bundle_path_without_a_json_extension() {
+    let dir = scratch("fixture-extension");
+    let archive = fixtures_dir().join("good.tar.zst");
+    let text = std::fs::read(fixtures_dir().join("good.sigstore.json")).expect("the fixture");
+    let facts = bundle::read(&text).expect("it parses");
+    let refusal = "gh: bundle file extension not supported, must be json or jsonl";
+    for (name, want) in [
+        (".fetch-123-16", (refusal, 1)),
+        ("bundle.txt", (refusal, 1)),
+        (".fetch-123-16.json", ("accepted", 1)),
+        ("bundle.jsonl", ("accepted", 1)),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, &text).expect("write the bundle");
+        let (reason, runs) = verdict(&archive, &path, &facts);
+        assert_eq!((reason.as_str(), runs), want, "{name}");
+    }
 }
 
 /// Catches design Q12 option (b) built by mistake: the good bundle, from the repository

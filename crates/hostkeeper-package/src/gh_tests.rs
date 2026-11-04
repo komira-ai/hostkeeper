@@ -23,7 +23,8 @@ fn staging_files(dir: &Path) -> Vec<String> {
 }
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-const IDENTITY: &str = r"^https://github\.com/example-org/[^/]+/\.github/workflows/artifacts\.yml@";
+const IDENTITY: &str =
+    r"^https://github\.com/example-org/[^/]+/\.github/workflows/artifacts\.yml@refs/[^@]+$";
 
 /// What a test asks the verifier about.
 struct Case {
@@ -40,8 +41,8 @@ impl Case {
     fn new(signers: TrustedSigners, source_ref_text: &str) -> Case {
         Case {
             signers,
-            archive: PathBuf::from("pkg/archive.tar.zst"),
-            bundle: PathBuf::from("pkg/archive.bundle.json"),
+            archive: PathBuf::from("/srv/pkg/archive.tar.zst"),
+            bundle: PathBuf::from("/srv/pkg/archive.bundle.json"),
             sha: digest(&"ab".repeat(32)),
             commit: commit_id(COMMIT),
             source_ref: source_ref(source_ref_text),
@@ -110,7 +111,24 @@ struct Rig {
     spawns: Rc<RefCell<Vec<Spawn>>>,
 }
 
+/// The three paths a verifier is built with: `gh`, the trusted root and the scratch home.
+type Paths = [&'static str; 3];
+
+const PATHS: Paths = [
+    "/opt/tools/gh",
+    "/opt/tools/trusted_root.json",
+    "/opt/state/gh-scratch",
+];
+
 fn rig_refusing(answer: impl Fn(&Spawn) -> io::Result<Ran> + 'static, refuse: &[&str]) -> Rig {
+    rig_at(PATHS, answer, refuse)
+}
+
+fn rig_at(
+    paths: Paths,
+    answer: impl Fn(&Spawn) -> io::Result<Ran> + 'static,
+    refuse: &[&str],
+) -> Rig {
     let spawns = Rc::new(RefCell::new(Vec::new()));
     let runner = FakeRunner {
         spawns: Rc::clone(&spawns),
@@ -120,9 +138,9 @@ fn rig_refusing(answer: impl Fn(&Spawn) -> io::Result<Ran> + 'static, refuse: &[
         refuse: refuse.iter().map(PathBuf::from).collect(),
     };
     let verifier = GhVerifier::new(
-        PathBuf::from("tools/gh"),
-        PathBuf::from("tools/trusted_root.json"),
-        PathBuf::from("state/gh-scratch"),
+        PathBuf::from(paths[0]),
+        PathBuf::from(paths[1]),
+        PathBuf::from(paths[2]),
         Box::new(runner),
         Box::new(trust),
     );
@@ -147,9 +165,12 @@ fn os(items: &[&str]) -> Vec<OsString> {
 /// The arguments `gh` should get for `case` under the sample rig, with the hosted-runner flag
 /// as the case's signer says.
 fn expected_args(case: &Case) -> Vec<OsString> {
-    let mut args = os(&["attestation", "verify", "pkg/archive.tar.zst"]);
-    args.extend(os(&["--bundle", "pkg/archive.bundle.json"]));
-    args.extend(os(&["--custom-trusted-root", "tools/trusted_root.json"]));
+    let mut args = os(&["attestation", "verify", "/srv/pkg/archive.tar.zst"]);
+    args.extend(os(&["--bundle", "/srv/pkg/archive.bundle.json"]));
+    args.extend(os(&[
+        "--custom-trusted-root",
+        "/opt/tools/trusted_root.json",
+    ]));
     args.extend(os(&[
         "--owner",
         "example-org",
@@ -184,21 +205,21 @@ fn gh_is_asked_for_exactly_the_configured_signer() {
     let spawns = rig.spawns.borrow();
     assert_eq!(spawns.len(), 1);
     let spawn = &spawns[0];
-    assert_eq!(spawn.program, PathBuf::from("tools/gh"));
-    assert_eq!(spawn.cwd, PathBuf::from("state/gh-scratch"));
+    assert_eq!(spawn.program, PathBuf::from("/opt/tools/gh"));
+    assert_eq!(spawn.cwd, PathBuf::from("/opt/state/gh-scratch"));
     assert_eq!(spawn.deadline, case.deadline);
     let want = os(&[
         "attestation",
         "verify",
-        "pkg/archive.tar.zst",
+        "/srv/pkg/archive.tar.zst",
         "--bundle",
-        "pkg/archive.bundle.json",
+        "/srv/pkg/archive.bundle.json",
         "--custom-trusted-root",
-        "tools/trusted_root.json",
+        "/opt/tools/trusted_root.json",
         "--owner",
         "example-org",
         "--cert-identity-regex",
-        r"^https://github\.com/example-org/[^/]+/\.github/workflows/artifacts\.yml@",
+        IDENTITY,
         "--cert-oidc-issuer",
         "https://token.actions.githubusercontent.com",
         "--source-ref",
@@ -251,10 +272,10 @@ fn gh_gets_a_fixed_environment_and_a_dead_proxy() {
     let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
     let want = vec![
         pair("ALL_PROXY", "http://127.0.0.1:9"),
-        pair("GH_CONFIG_DIR", "state/gh-scratch/config"),
+        pair("GH_CONFIG_DIR", "/opt/state/gh-scratch/config"),
         pair("GH_NO_UPDATE_NOTIFIER", "1"),
         pair("GH_PROMPT_DISABLED", "1"),
-        pair("HOME", "state/gh-scratch"),
+        pair("HOME", "/opt/state/gh-scratch"),
         pair("HTTPS_PROXY", "http://127.0.0.1:9"),
         pair("HTTP_PROXY", "http://127.0.0.1:9"),
         pair("NO_COLOR", "1"),
@@ -365,12 +386,12 @@ fn the_workflow_value_is_escaped_not_interpolated() {
     let both = signers("a.b", "w[1]*.yml", &["refs/heads/main"]);
     assert_eq!(
         signer_identity(&both),
-        r"^https://github\.com/a\.b/[^/]+/w\[1\]\*\.yml@"
+        r"^https://github\.com/a\.b/[^/]+/w\[1\]\*\.yml@refs/[^@]+$"
     );
     let everything = signers(REGEX_META, REGEX_META, &["refs/heads/main"]);
     assert_eq!(
         signer_identity(&everything),
-        format!("^https://github\\.com/{escaped}/[^/]+/{escaped}@")
+        format!("^https://github\\.com/{escaped}/[^/]+/{escaped}@refs/[^@]+$")
     );
 }
 
@@ -449,7 +470,7 @@ fn a_gh_that_cannot_start_is_unavailable_a_gh_killed_at_the_deadline_is_timed_ou
 #[test]
 fn an_untrusted_gh_or_trusted_root_is_unavailable_and_nothing_runs() {
     let case = sample();
-    for refused in ["tools/gh", "tools/trusted_root.json"] {
+    for refused in ["/opt/tools/gh", "/opt/tools/trusted_root.json"] {
         let rig = rig_refusing(exit_zero, &[refused]);
         assert_eq!(
             rig.verifier.verify(&case.request()),
@@ -457,6 +478,113 @@ fn an_untrusted_gh_or_trusted_root_is_unavailable_and_nothing_runs() {
             "{refused}"
         );
         assert_eq!(rig.spawns.borrow().len(), 0, "{refused}");
+    }
+}
+
+/// The signer pattern, compiled by the `regex` crate, matches the whole signer URI of the
+/// configured workflow in any repository of the organisation, and nothing else.
+/// Catches a pattern that is only a prefix (a workflow named `artifacts.yml@other.yml` passing as
+/// `artifacts.yml`), an unanchored end, another organisation, a repository path of another
+/// depth, and a suffix after the ref.
+#[test]
+fn the_signer_pattern_matches_the_complete_signer_uri_and_only_that() {
+    let configured = signers(
+        "example-org",
+        ".github/workflows/artifacts.yml",
+        &["refs/heads/main"],
+    );
+    let pattern = regex::Regex::new(&signer_identity(&configured)).expect("a valid pattern");
+    let base = "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml";
+    for good in [
+        format!("{base}@refs/heads/main"),
+        format!("{base}@refs/tags/v1.2.3"),
+        "https://github.com/example-org/other-tool/.github/workflows/artifacts.yml@refs/heads/x"
+            .to_owned(),
+    ] {
+        assert!(pattern.is_match(&good), "{good}");
+    }
+    for bad in [
+        "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@other.yml@refs/heads/main",
+        "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@refs/heads/main@x",
+        "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@",
+        "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@heads/main",
+        "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml",
+        "https://github.com/other-org/tool-a/.github/workflows/artifacts.yml@refs/heads/main",
+        "https://github.com/example-org/a/b/.github/workflows/artifacts.yml@refs/heads/main",
+        "https://github.com/example-org//.github/workflows/artifacts.yml@refs/heads/main",
+        "https://github.com/example-org/tool-a/.github/workflows/artifactsXyml@refs/heads/main",
+        "https://github.com/example-org/tool-a/.github/workflows/release.yml@refs/heads/main",
+        "xhttps://github.com/example-org/tool-a/.github/workflows/artifacts.yml@refs/heads/main",
+    ] {
+        assert!(!pattern.is_match(bad), "{bad}");
+    }
+    assert_eq!(IDENTITY, signer_identity(&configured));
+}
+
+/// A relative archive, bundle, `gh`, trusted root or home reaches `gh` as an absolute path
+/// against the daemon's working directory, and the trust check is made on the absolute `gh` and
+/// root.
+/// Catches a relative path handed to a child that runs in another directory.
+#[test]
+fn relative_paths_reach_gh_as_absolute_paths() {
+    let mut case = sample();
+    case.archive = PathBuf::from("packages/svc/archive.tar.zst");
+    case.bundle = PathBuf::from("packages/svc/.fetch-1-2.json");
+    let relative = ["bin/gh", "etc/root.json", "state/home"];
+    let rig = rig_at(relative, exit_zero, &[]);
+    rig.verifier.verify(&case.request()).expect("attested");
+    let absolute = |text: &str| std::path::absolute(text).expect("an absolute path");
+    let spawns = rig.spawns.borrow();
+    let spawn = &spawns[0];
+    assert_eq!(spawn.program, absolute("bin/gh"));
+    assert_eq!(spawn.cwd, absolute("state/home"));
+    assert!(spawn.program.is_absolute() & spawn.cwd.is_absolute());
+    assert_eq!(spawn.args[2], absolute("packages/svc/archive.tar.zst"));
+    assert_eq!(spawn.args[4], absolute("packages/svc/.fetch-1-2.json"));
+    assert_eq!(spawn.args[6], absolute("etc/root.json"));
+    let home = absolute("state/home").display().to_string();
+    assert!(spawn.env.contains(&("HOME".to_owned(), home.clone())));
+    assert!(
+        spawn
+            .env
+            .contains(&("GH_CONFIG_DIR".to_owned(), format!("{home}/config")))
+    );
+
+    let gh_abs = absolute("bin/gh").display().to_string();
+    let refused = rig_at(relative, exit_zero, &[gh_abs.as_str()]);
+    assert_eq!(
+        refused.verifier.verify(&case.request()),
+        Err(VerifyError::Unavailable)
+    );
+    assert_eq!(refused.spawns.borrow().len(), 0);
+}
+
+/// A path that cannot be made absolute (an empty one) gives no verdict and runs nothing.
+/// Catches an empty path passed to the child, or reported as a rejection of the package.
+#[test]
+fn a_path_that_cannot_be_made_absolute_is_unavailable_and_nothing_runs() {
+    for empty in 0..3 {
+        let mut paths = PATHS;
+        paths[empty] = "";
+        let rig = rig_at(paths, exit_zero, &[]);
+        assert_eq!(
+            rig.verifier.verify(&sample().request()),
+            Err(VerifyError::Unavailable),
+            "path {empty}"
+        );
+        assert_eq!(rig.spawns.borrow().len(), 0, "path {empty}");
+    }
+    let mut no_archive = sample();
+    no_archive.archive = PathBuf::new();
+    let mut no_bundle = sample();
+    no_bundle.bundle = PathBuf::new();
+    for case in [no_archive, no_bundle] {
+        let rig = rig(exit_zero);
+        assert_eq!(
+            rig.verifier.verify(&case.request()),
+            Err(VerifyError::Unavailable)
+        );
+        assert_eq!(rig.spawns.borrow().len(), 0);
     }
 }
 
@@ -472,9 +600,15 @@ fn complaint_keeps_one_short_printable_line() {
     assert_eq!(complaint(b"tab\there \x1b[0m"), "tab?here ?[0m");
 }
 
+/// Makes `dir` a directory only its owner can write, whatever the umask.
+fn protect(dir: &Path) {
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("set the directory mode");
+}
+
 /// A regular file is trusted when its owner is the wanted uid and only the owner can write it.
 fn trusted_file(dir: &Path, name: &str, mode: u32) -> PathBuf {
     let path = dir.join(name);
+    protect(dir);
     fs::write(&path, b"content").expect("write the file");
     fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("set the mode");
     path
@@ -551,6 +685,52 @@ fn owned_by_refuses_a_directory_a_link_and_a_missing_path() {
         .check(&dir.path().join("missing"))
         .expect_err("a missing path");
     assert!(matches!(err, TrustError::Io(ref e) if e.kind() == io::ErrorKind::NotFound));
+}
+
+/// A file in a directory the group or others can write is refused with the directory's mode, even
+/// though the file itself is fine; the same file in a directory only its owner can write passes.
+/// Catches a trusted file whose directory entry anyone else can replace.
+#[test]
+fn owned_by_refuses_a_file_in_a_directory_the_group_or_others_can_write() {
+    let dir = scratch("gh-owned-parent");
+    let path = trusted_file(dir.path(), "file", 0o644);
+    let trust = OwnedBy { uid: uid_of(&path) };
+    for mode in [0o777, 0o775, 0o757] {
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(mode)).expect("set the mode");
+        let err = trust.check(&path).expect_err("a writable directory");
+        assert_eq!(
+            err.to_string(),
+            format!("mode {mode:o} lets the group or others write it")
+        );
+        assert!(matches!(err, TrustError::Writable { mode: m } if m == mode));
+    }
+    for mode in [0o755, 0o700, 0o555] {
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(mode)).expect("set the mode");
+        trust.check(&path).expect("a protected directory");
+    }
+    protect(dir.path());
+}
+
+/// The owner and mode judgment: the wanted owner or an extra one passes, another owner is
+/// refused with both uids, and a group- or other-writable mode is refused with the mode.
+/// Catches a directory owner other than the file's trusted uid or root accepted, and root refused.
+#[test]
+fn the_judgment_accepts_the_wanted_owner_or_root_for_a_directory_and_nobody_else() {
+    judge(1000, 0o644, 1000, &[]).expect("the wanted owner");
+    judge(1000, 0o755, 1000, &[0]).expect("the wanted owner of a directory");
+    judge(0, 0o755, 1000, &[0]).expect("root owns the directory");
+    let err = judge(0, 0o755, 1000, &[]).expect_err("root is not the file's owner here");
+    assert_eq!(err.to_string(), "owned by uid 0, not the trusted uid 1000");
+    let err = judge(7, 0o755, 1000, &[0]).expect_err("a third owner");
+    assert!(matches!(
+        err,
+        TrustError::Owner {
+            found: 7,
+            wanted: 1000
+        }
+    ));
+    let err = judge(0, 0o40775, 1000, &[0]).expect_err("a group-writable directory");
+    assert!(matches!(err, TrustError::Writable { mode: 0o775 }));
 }
 
 /// A `Spawn` of the test binary itself in `cwd`.
@@ -655,4 +835,72 @@ fn a_missing_working_directory_is_an_error() {
     let spawn = self_spawn(&dir.path().join("absent"), &["--list"], clock.stamp(200));
     let err = runner.run(&spawn).expect_err("no working directory");
     assert_eq!(err.kind(), io::ErrorKind::NotFound);
+}
+
+/// A clock that reads 100 the first time it is looked at and 1000 ever after: the deadline passes
+/// between the check before the start and the first poll.
+struct PassesAfterOneLook {
+    inner: FakeClock,
+    looks: std::sync::atomic::AtomicU64,
+}
+
+impl Clock for PassesAfterOneLook {
+    fn mono_secs(&self) -> u64 {
+        match self.looks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            0 => 100,
+            _ => 1000,
+        }
+    }
+
+    fn boot_id(&self) -> String {
+        self.inner.boot_id()
+    }
+
+    fn sleep_secs(&self, secs: u64) {
+        self.inner.sleep_secs(secs);
+    }
+}
+
+/// A deadline that has passed before the start is a timeout without anything started: the
+/// program does not exist, yet no start error comes back, and no staging file is made.
+/// Catches a child spawned (or a staging file created) after the deadline.
+#[test]
+fn a_deadline_that_has_passed_before_the_start_starts_nothing() {
+    let dir = scratch("gh-run-expired");
+    let clock = Arc::new(FakeClock::yielding(100));
+    let runner = SystemRunner::new(clock.clone());
+    for deadline in [100, 99, 0] {
+        let mut spawn = self_spawn(dir.path(), &[], clock.stamp(deadline));
+        spawn.program = dir.path().join("no-such-program");
+        assert_eq!(
+            runner.run(&spawn).expect("a timeout, not a start error"),
+            Ran {
+                code: None,
+                timed_out: true,
+                stderr: Vec::new(),
+            }
+        );
+    }
+    assert_eq!(clock.sleeps(), 0);
+    assert_eq!(listing(dir.path()), Vec::<String>::new());
+}
+
+/// A deadline that passes after the start but before the first poll wins over a child that
+/// exits at once: the run is a timeout, with no exit code.
+/// Catches an exit observed at or after the deadline being taken for an answer in time.
+#[test]
+fn a_deadline_that_passes_before_the_first_poll_wins_over_the_childs_exit() {
+    let dir = scratch("gh-run-expiry-wins");
+    let clock = Arc::new(PassesAfterOneLook {
+        inner: FakeClock::at(100),
+        looks: std::sync::atomic::AtomicU64::new(0),
+    });
+    let runner = SystemRunner::new(clock.clone());
+    let spawn = self_spawn(dir.path(), &["--list"], clock.inner.stamp(500));
+    let ran = runner.run(&spawn).expect("the child ran");
+    assert_eq!(ran.code, None);
+    assert!(ran.timed_out);
+    assert_eq!(staging_files(dir.path()), Vec::<String>::new());
+    clock.sleep_secs(1);
+    assert_eq!(clock.inner.sleeps(), 1);
 }
