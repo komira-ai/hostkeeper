@@ -26,6 +26,9 @@ prost-types = "0.14.4"
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's build script and tests.
 protox = "0.10.0"
+# zstd in pure Rust: the compression of the hostkeeper package (`cargo xtask release package`)
+# and its decoding in that verb's tests.
+ruzstd = "0.9.1"
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.

@@ -1,0 +1,211 @@
+use super::*;
+
+const BASELINE: &str = include_str!("../../../tests/release/asset_names.baseline");
+
+/// What stands for the version in the baseline.
+const PLACEHOLDER: &str = "<version>";
+
+fn commit(text: &str) -> Commit {
+    text.parse().expect("a commit")
+}
+
+fn version(text: &str) -> Version {
+    text.parse().expect("a version")
+}
+
+/// The names of the baseline, with `version` in place of the placeholder, sorted.
+fn baseline_for(version: &Version) -> Vec<String> {
+    let mut names: Vec<String> = BASELINE
+        .lines()
+        .filter(|l| !l.starts_with('#') & !l.trim().is_empty())
+        .map(|l| l.replace(PLACEHOLDER, &version.to_string()))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The names of `baseline` that `current` does not hold.
+fn missing_from(baseline: &[String], current: &[String]) -> Vec<String> {
+    baseline
+        .iter()
+        .filter(|n| !current.contains(n))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn asset_names_are_the_documented_contract() {
+    // Catches: a name added, removed or renamed in `asset_names` without the baseline file
+    // changing with it, or a platform added or dropped.
+    let v = version("7.8.9");
+    assert_eq!(asset_names(&v, &Platform::ALL), baseline_for(&v));
+    assert_eq!(asset_names(&v, &Platform::ALL).len(), 31);
+}
+
+#[test]
+fn asset_name_list_only_grows() {
+    // Catches: a released name that the current list no longer holds; adding a name is allowed.
+    let v = version("0.1.4");
+    let current = asset_names(&v, &Platform::ALL);
+    assert_eq!(
+        missing_from(&baseline_for(&v), &current),
+        Vec::<String>::new()
+    );
+    // The check itself: a removed name and a renamed one are both reported, an added one is not.
+    let mut changed = current.clone();
+    changed.retain(|n| n != SUMS);
+    changed.push("hostkeeper-0.1.4-linux-riscv64.tar.gz".to_owned());
+    let renamed = "hostkeeper_0.1.4_amd64.deb";
+    changed.retain(|n| n != renamed);
+    changed.push("hostkeeper-0.1.4-amd64.deb".to_owned());
+    assert_eq!(
+        missing_from(&baseline_for(&v), &changed),
+        vec![SUMS.to_owned(), renamed.to_owned()]
+    );
+}
+
+#[test]
+fn tag_and_version_string_formats_are_pinned() {
+    // Catches: a tag that is not `v<X.Y.Z>`, a `--version` text other than
+    // `hostkeeper X.Y.Z+<12 hex>`, or a change of the signer identity.
+    let v = version("0.1.27");
+    let c = commit("0123456789abcdef0123456789abcdef01234567");
+    assert_eq!(v.tag(), "v0.1.27");
+    assert_eq!(Version::of_tag("v0.1.27"), Some(v));
+    assert_eq!(stamp_string(&v, &c), "hostkeeper 0.1.27+0123456789ab");
+    assert_eq!(
+        SIGNER_WORKFLOW,
+        "komira-ai/hostkeeper/.github/workflows/artifacts.yml"
+    );
+    assert_eq!(SIGNER_REF, "refs/heads/main");
+    assert_eq!(REPO, "komira-ai/hostkeeper");
+    assert_eq!(
+        format!("{REPO}/.github/workflows/{ARTIFACTS_WORKFLOW}"),
+        SIGNER_WORKFLOW
+    );
+}
+
+#[test]
+fn a_tag_names_a_version_only_in_the_exact_form() {
+    // Catches: a tag with a prefix other than `v`, a leading zero, a suffix or a part too many
+    // read as a release version.
+    for tag in [
+        "0.1.2",
+        "v0.1",
+        "v0.1.2.3",
+        "v01.1.2",
+        "V0.1.2",
+        "v0.1.2-rc1",
+        "v",
+    ] {
+        assert_eq!(Version::of_tag(tag), None, "{tag}");
+    }
+    assert_eq!(Version::of_tag("v0.0.0"), Some(version("0.0.0")));
+}
+
+#[test]
+fn versions_parse_in_the_exact_form_and_order_by_number() {
+    // Catches: a malformed or overflowing version accepted, or versions ordered as text.
+    for bad in [
+        "",
+        "1",
+        "1.2",
+        "1.2.3.4.5",
+        "1.02.3",
+        "1.2.x",
+        "1..3",
+        " 1.2.3",
+        "1.2.3\n",
+    ] {
+        assert_eq!(
+            bad.parse::<Version>(),
+            Err(BadValue::Version(bad.to_owned()))
+        );
+    }
+    assert!(version("0.1.10") > version("0.1.9"));
+    assert!(version("1.0.0") > version("0.99.99"));
+    assert_eq!(version("10.20.30").to_string(), "10.20.30");
+    assert_eq!(
+        "18446744073709551616.0.0".parse::<Version>(),
+        Err(BadValue::Version("18446744073709551616.0.0".to_owned()))
+    );
+}
+
+#[test]
+fn the_version_file_is_major_and_minor_with_one_optional_line_break() {
+    // Catches: a version file with a patch, a prefix, spaces or extra lines accepted as `X.Y`.
+    assert_eq!("0.1".parse::<Base>(), Ok(Base { major: 0, minor: 1 }));
+    assert_eq!(
+        "2.13\n".parse::<Base>(),
+        Ok(Base {
+            major: 2,
+            minor: 13
+        })
+    );
+    for bad in [
+        "0.1\n\n", "0.1.0", "v0.1", " 0.1", "0.1 \n", "", "01.1", "0",
+    ] {
+        assert_eq!(bad.parse::<Base>(), Err(BadValue::Base(bad.to_owned())));
+    }
+    let base: Base = "3.4".parse().expect("base");
+    assert_eq!(base.with_patch(5), version("3.4.5"));
+}
+
+#[test]
+fn a_commit_is_forty_lowercase_hex_digits() {
+    // Catches: a short, uppercase, non-hex or overlong commit accepted, or a stamp prefix that
+    // is not its first 12 digits.
+    let full = "abcdef0123456789abcdef0123456789abcdef01";
+    assert_eq!(commit(full).as_str(), full);
+    assert_eq!(commit(full).short(), "abcdef012345");
+    assert_eq!(commit(full).to_string(), full);
+    for bad in [
+        "abcdef012345",
+        "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        "abcdef0123456789abcdef0123456789abcdef0g",
+        "abcdef0123456789abcdef0123456789abcdef012",
+    ] {
+        assert_eq!(bad.parse::<Commit>(), Err(BadValue::Commit(bad.to_owned())));
+    }
+}
+
+#[test]
+fn a_repository_is_owner_slash_name() {
+    // Catches: a repository without an owner, a name, or with a part too many accepted.
+    let repo: Repo = "komira-ai/hostkeeper".parse().expect("repo");
+    assert_eq!(repo.as_str(), "komira-ai/hostkeeper");
+    assert_eq!(repo.to_string(), "komira-ai/hostkeeper");
+    for bad in [
+        "hostkeeper",
+        "/hostkeeper",
+        "komira-ai/",
+        "a/b/c",
+        "a b/c",
+        "",
+    ] {
+        assert_eq!(bad.parse::<Repo>(), Err(BadValue::Repo(bad.to_owned())));
+    }
+}
+
+#[test]
+fn the_attested_and_summed_names_partition_the_assets() {
+    // Catches: a bundle listed in the sums, an attested asset without its bundle, or the sums
+    // listing themselves.
+    let v = version("0.1.3");
+    let attested = attested_names(&v);
+    let summed = summed_names(&v);
+    assert_eq!(attested.len(), 12);
+    assert_eq!(summed.len(), 18);
+    assert!(attested.iter().all(|a| summed.contains(a)));
+    assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
+    assert!(attested.contains(&package_name(&v, Platform::LinuxArm64)));
+    assert_eq!(
+        package_name(&v, Platform::LinuxX86_64),
+        "hostkeeper-0.1.3-linux-x86_64.tar.zst"
+    );
+    assert_eq!(bundle_of("a.deb"), "a.deb.sigstore.json");
+    assert_eq!(
+        Platform::ALL.map(Platform::name),
+        ["linux-x86_64", "linux-arm64"]
+    );
+}
