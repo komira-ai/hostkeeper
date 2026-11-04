@@ -16,13 +16,15 @@ const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
 const RIGHTS: &str = "hostkeeper-rights";
 const TESTKIT: &str = "hostkeeper-testkit";
+const ENROLLMENT: &str = "hostkeeper-enrollment";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
-const LAYERS: [(&str, &[&str]); 4] = [
+const LAYERS: [(&str, &[&str]); 5] = [
     (HOOK, &[]),
     (CONFIG, &[]),
     (STEPS, &[HOOK]),
     (RIGHTS, &[CONFIG, HOOK]),
+    (ENROLLMENT, &[]),
 ];
 
 /// A package name to the names of the packages it depends on.
@@ -269,7 +271,7 @@ fn chain_to(edges: &Edges, members: &[&str], target: &str) -> Vec<String> {
 }
 
 /// Every rule the workspace breaks, one line each: first the kbf names (all of `lock`), then
-/// the hook, config, steps and rights crates, then the testkit.
+/// the hook, config, steps, rights and enrollment crates, then the testkit.
 fn violations(members: &Members, lock: &Edges) -> Vec<String> {
     let mut out = Vec::new();
     let member_names: Vec<&str> = members.keys().map(String::as_str).collect();

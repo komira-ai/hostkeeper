@@ -8,3 +8,7 @@
 # Each entry has a `#` line directly above it saying which of these it serves and why. The test
 # no_decision_reads_the_wall_clock in crates/xtask/tests/wallclock reads this file; it refuses
 # an entry that matches no file or whose files read no wall clock.
+# TLS and certificate validity: SystemClock, the coordinator CA's clock, from which the validity
+# window of every certificate it signs starts (hostkeeper-enrollment, the only file of the crate
+# that reads the wall clock).
+crates/hostkeeper-enrollment/src/validity.rs

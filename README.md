@@ -24,6 +24,7 @@ today. So far this repository holds the generic half of the host updater, moved 
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of the host's daemon config (`/etc/hostkeeper/hostkeeper.toml`) and of the `manifest.toml` a package carries, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-rights`](crates/hostkeeper-rights) | the transient unit that runs one step of a hook, and the part of the old declaration it is still built from |
 | [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update |
+| [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (the P-256 request profile, host and server certificates, the owner-only key file, the CA bundle) and its durable enrollment store (requests, approval, one certificate per request, duplicate claims, deny rows), as a library |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), and the test that keeps them compatible |
 | `hostkeeper-testkit` | helpers the tests share |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |

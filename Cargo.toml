@@ -24,8 +24,17 @@ prost = "0.14.4"
 prost-types = "0.14.4"
 # Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests.
 prost-reflect = "0.16.5"
-# Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's build script and tests.
+# Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
+# hostkeeper-enrollment's build scripts, and tests.
 protox = "0.10.0"
+# The CA module of hostkeeper-enrollment: the certificates it signs, with the ring backend
+# (members add `x509-parser`, which reads a public key back for signing).
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+# ECDSA P-256 / SHA-256 signature checks and SHA-256 digests (hostkeeper-enrollment: a CSR's
+# self-signature, a poll's signed nonce, the request id).
+ring = "0.17.14"
+# Dev only: hostkeeper-enrollment's tests verify the certificates it issues as TLS would.
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.
@@ -35,6 +44,8 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
+# The validity of a certificate, in the type rcgen takes (hostkeeper-enrollment).
+time = { version = "0.3.45", default-features = false }
 # The `--params` file, the daemon config and the manifest are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
 # gRPC: the service traits and clients hostkeeper-proto generates. Code generation only: no
@@ -42,6 +53,10 @@ toml = { version = "1.1.8", default-features = false, features = ["display", "pa
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
+# The alerts of hostkeeper-enrollment (a duplicate claim, a duplicate host): warn events with fields.
+tracing = "0.1.44"
+# Reads a CSR and a certificate (hostkeeper-enrollment), and its tests read issued certificates back.
+x509-parser = "0.18.1"
 
 [workspace.lints.rust]
 # `coverage` is set by cargo-llvm-cov.
