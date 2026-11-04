@@ -16,7 +16,7 @@ use std::time::Duration;
 use hostkeeper_steps::{Clock, Stamp};
 use sha2::{Digest, Sha256};
 
-use crate::ports::{Fetcher, Got, Limit, NetError, Sink, Stop, Url, remaining_secs};
+use crate::ports::{Fetcher, Got, Limit, Sink, Stop, Url, remaining_secs};
 
 /// The prefix of every staging file's name.
 pub(crate) const PREFIX: &str = ".fetch-";
@@ -114,7 +114,7 @@ pub(crate) enum Fault {
     /// The deadline passed.
     Deadline,
     /// The network failed.
-    Net(NetError),
+    Net,
     /// The staging file could not be made or written.
     Storage(io::Error),
     /// The adapter said the sink stopped it, and the sink did not.
@@ -218,7 +218,7 @@ pub(crate) fn download(job: &Job<'_>, writer: OpenWriter) -> Result<Download, Fa
     } = sink;
     match (got, fault) {
         (_, Some(fault)) => Err(fault),
-        (Err(net), None) => Err(Fault::Net(net)),
+        (Err(_), None) => Err(Fault::Net),
         (Ok(Got::Stopped), None) => Err(Fault::Unexplained),
         (Ok(Got::Complete), None) => {
             if remaining_secs(&job.deadline, job.clock) == 0 {

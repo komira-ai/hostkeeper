@@ -139,7 +139,7 @@ fn drive(
         response: RefCell::new(Some(script.map(|s| s.into_response(Arc::clone(&reads))))),
         opened: Arc::clone(&opened),
     };
-    let shared: Arc<dyn Clock> = Arc::clone(clock);
+    let shared: Arc<dyn Clock> = clock.clone();
     let fetcher = NetFetcher::new(transport, shared);
     let limit = Limit {
         connect_timeout: Duration::from_secs(7),
@@ -272,7 +272,7 @@ fn net_adapter_gives_up_before_the_request_when_the_deadline_has_passed() {
         response: RefCell::new(Some(Ok(scripted(200, None, b"abc").into_response(reads)))),
         opened: Arc::clone(&opened),
     };
-    let shared: Arc<dyn Clock> = Arc::clone(&clock);
+    let shared: Arc<dyn Clock> = clock.clone();
     let limit = Limit {
         connect_timeout: Duration::from_secs(7),
         deadline,

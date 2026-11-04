@@ -251,7 +251,7 @@ fn a_network_error_or_an_unexplained_stop_is_a_fault() {
         Box::new(|_: &mut dyn Sink, _: &Limit| Err(NetError::Connect));
     assert!(matches!(
         fault_of("stage-net", refused, plain),
-        Fault::Net(NetError::Connect)
+        Fault::Net
     ));
     let claims: crate::testing::Serve = Box::new(|_: &mut dyn Sink, _: &Limit| Ok(Got::Stopped));
     assert!(matches!(

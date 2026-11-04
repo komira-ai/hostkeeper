@@ -153,7 +153,7 @@ fn failure(fault: Fault) -> PackageFailure {
         Fault::Storage(e) if stage::is_full(&e) => PackageFailure::deferred(NO_SPACE),
         // A 404 is `Net(Status(404))`, deferred like any other status: the channel may not have
         // the version yet, and the coordinator retries a deferred order.
-        Fault::Storage(_) | Fault::Deadline | Fault::Net(_) | Fault::Unexplained => {
+        Fault::Storage(_) | Fault::Deadline | Fault::Net | Fault::Unexplained => {
             PackageFailure::deferred(FETCH_FAILED)
         }
     }

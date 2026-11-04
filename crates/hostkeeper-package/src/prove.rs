@@ -155,7 +155,7 @@ fn bundle_failure(fault: Fault) -> PackageFailure {
     match fault {
         Fault::TooLarge => PackageFailure::release(NOT_ATTESTED),
         Fault::Storage(e) if stage::is_full(&e) => PackageFailure::deferred(NO_SPACE),
-        Fault::Storage(_) | Fault::Deadline | Fault::Net(_) | Fault::Unexplained => {
+        Fault::Storage(_) | Fault::Deadline | Fault::Net | Fault::Unexplained => {
             PackageFailure::deferred(ATTESTATION_UNAVAILABLE)
         }
     }
