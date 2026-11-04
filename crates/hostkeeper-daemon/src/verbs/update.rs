@@ -52,8 +52,9 @@ pub fn hooked(ctx: &Ctx, verb: HookedVerb, order: Hooked) -> Reply {
     reply
 }
 
-/// The answer to an order for a service whose lock is held.
-fn while_held(service: &ServiceName, held: &Held, package: &Package) -> Reply {
+/// The answer to an order for a service whose lock is held: a resend of the order that holds
+/// it runs nothing, any other is `busy`.
+pub(crate) fn while_held(service: &ServiceName, held: &Held, package: &Package) -> Reply {
     match held.package == *package {
         true => Reply::Running,
         false => Reply::refused(
@@ -68,7 +69,7 @@ fn while_held(service: &ServiceName, held: &Held, package: &Package) -> Reply {
 }
 
 /// The step record of a service, or the refusal of an order while it cannot be read.
-fn last_record(ctx: &Ctx, service: &ServiceName) -> Result<Option<Box<Record>>, Reply> {
+pub(crate) fn last_record(ctx: &Ctx, service: &ServiceName) -> Result<Option<Box<Record>>, Reply> {
     match ctx.store(service).load() {
         Ok(Loaded::Absent) => Ok(None),
         Ok(Loaded::Current(rec)) => Ok(Some(rec)),

@@ -37,13 +37,16 @@ impl fmt::Display for PackageDigest {
     }
 }
 
-/// The two verbs that run a package's hook to a verdict through the step runner.
+/// The verbs that switch a service to a package under the service's lock: the two that run its
+/// hook to a verdict through the step runner, and `force`, which runs no hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookedVerb {
     /// Refused below the running version.
     Update,
     /// A hooked update to any version, lower ones included (automatic rollback sends it).
     ForceRollback,
+    /// The hookless switch of design section 5.6, to any version, lower ones included.
+    Force,
 }
 
 impl HookedVerb {
@@ -52,6 +55,7 @@ impl HookedVerb {
         match self {
             HookedVerb::Update => "update",
             HookedVerb::ForceRollback => "force_rollback",
+            HookedVerb::Force => "force",
         }
     }
 }
@@ -72,6 +76,9 @@ pub struct Forced {
     pub package: Hooked,
     /// Greater than the generation the service is held under: a force lifts a standing halt.
     pub halt_generation: u64,
+    /// The coordinator's id of the order, kept in the force record and reported with its
+    /// verdict; `None` when the order carries none.
+    pub order_id: Option<String>,
 }
 
 /// One verb with its typed arguments. The executor matches it exhaustively; a verb a later
@@ -172,6 +179,7 @@ impl TryFrom<&Order> for Verb {
                     order_try,
                 )?,
                 halt_generation: a.halt_generation,
+                order_id: Some(order.order_id.clone()).filter(|id| !id.is_empty()),
             }),
             order::Verb::Uninstall(a) => Verb::Uninstall(service("uninstall", &a.service)?),
             order::Verb::Abort(a) => Verb::Abort(service("abort", &a.service)?),

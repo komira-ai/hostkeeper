@@ -8,13 +8,14 @@
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use hostkeeper_hook::{Step, Verdict};
+use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use serde::{Deserialize, Serialize};
 
 use crate::clock::Stamp;
+use crate::force::ForceRecord;
 
 /// The schema this binary writes.
 pub const SCHEMA: u32 = 1;
@@ -22,6 +23,8 @@ pub const SCHEMA: u32 = 1;
 pub const RECORD_FILE: &str = "step-record.json";
 /// The params file's name in the state directory.
 pub const PARAMS_FILE: &str = "params.toml";
+/// The reason of a hooked update a `force` stopped (design section 5.6, steps 4 to 6).
+pub const REASON_FORCED_OVER: &str = "forced_over";
 
 /// Which release's hook a step runs from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,12 +101,43 @@ pub struct Record {
     /// record without a try is written without the key, byte for byte as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_try: Option<u64>,
+    /// A `force` of the service stopped this update (design section 5.6, step 4): the runner
+    /// launches no further step of it and closes it `Failed`, `forced_over`. Additive: written
+    /// only when set, and a record without it loads as `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub forced: bool,
+    /// The record is the journal of a `force` ([`ForceRecord`]), not of a hooked update.
+    /// Additive: written only when set, and a record without it loads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force: Option<ForceRecord>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Record {
     /// The deterministic name of the unit a step of this update runs in.
     pub fn unit(&self, step: Step) -> String {
         step_unit(&self.service, step, self.generation)
+    }
+
+    /// Closes the update as a `force` closes one it stopped: `forced` set, and `Failed` with the
+    /// reason `forced_over`, in the phase it had reached (after the commit once a step committed),
+    /// of class environment. Nothing of the update is undone.
+    pub fn close_forced_over(&mut self) {
+        self.forced = true;
+        let phase = match self.progress.committed {
+            true => Phase::AfterCommit,
+            false => Phase::BeforeCommit,
+        };
+        self.state = State::Finished {
+            verdict: Verdict::Failed {
+                phase,
+                class: Class::Environment,
+            },
+            reason: Some(REASON_FORCED_OVER.to_owned()),
+        };
     }
 }
 
@@ -158,6 +192,9 @@ pub struct RecordStore {
     gate: Option<CrashGate>,
     fault: Option<WriteFault>,
     writes: AtomicU64,
+    /// Held from a read of the record to the write that follows it, wherever the record may be
+    /// written by two parties: the runner and a `force` that flags it.
+    lock: Arc<Mutex<()>>,
 }
 
 impl RecordStore {
@@ -168,7 +205,42 @@ impl RecordStore {
             gate: None,
             fault: None,
             writes: AtomicU64::new(0),
+            lock: Arc::default(),
         }
+    }
+
+    /// The same store, its record lock `lock`: every store of one state directory is given the
+    /// same lock, so that a `force` flagging the record ([`RecordStore::mark_forced`]) and the
+    /// runner writing it take turns. A store made without one has a lock of its own.
+    pub fn with_lock(mut self, lock: Arc<Mutex<()>>) -> RecordStore {
+        self.lock = lock;
+        self
+    }
+
+    /// The record lock, held until the guard is dropped.
+    pub(crate) fn hold(&self) -> MutexGuard<'_, ()> {
+        self.lock.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Step 4 of a `force` (design section 5.6): under the record lock, flags the unfinished
+    /// hooked update the record holds `forced` and writes it, unless it already is. Returns that
+    /// record; `None`, and nothing written, when the record is absent, finished, the journal of
+    /// a force, or written by a newer daemon.
+    pub fn mark_forced(&self) -> Result<Option<Record>, RecordError> {
+        let _held = self.hold();
+        let mut rec = match self.load()? {
+            Loaded::Current(rec) => rec,
+            Loaded::Absent | Loaded::Newer { .. } => return Ok(None),
+        };
+        let finished = matches!(rec.state, State::Finished { .. });
+        if finished | rec.force.is_some() {
+            return Ok(None);
+        }
+        if !rec.forced {
+            rec.forced = true;
+            self.save(&rec)?;
+        }
+        Ok(Some(*rec))
     }
 
     /// The same store, stopped wherever `gate` says: the seam of the crash-and-resume tests.
