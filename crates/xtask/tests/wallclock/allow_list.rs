@@ -69,8 +69,9 @@ fn an_allow_list_entry_with_no_read_fails() {
     );
 }
 
-/// Catches: an allow-list entry let in without its reason, twice, outside the repository or
-/// not as a plain relative path; each refused with its line.
+/// Catches: an allow-list entry let in without its reason (a reason serves one entry only),
+/// twice, outside the repository or not as a plain relative path (a space or a tab inside it
+/// too); each refused with its line. CRLF line ends and a missing final newline are accepted.
 #[test]
 fn an_allow_list_entry_without_a_reason_fails() {
     let read: &str = &format!("fn valid() {{ {}; }}\n", st_now());
@@ -120,6 +121,18 @@ fn an_allow_list_entry_without_a_reason_fails() {
             "# a \ncrates/tls/src/cert.rs\n",
             "allowed.txt:1: trailing whitespace",
         ),
+        (
+            "# a\ncrates/tls/src/ce rt.rs\n",
+            "allowed.txt:2: crates/tls/src/ce rt.rs is not a plain relative path (forward slashes, no `.`, empty segment or space)",
+        ),
+        (
+            "# a\ncrates/tls/src/ce\trt.rs\n",
+            "allowed.txt:2: crates/tls/src/ce\trt.rs is not a plain relative path (forward slashes, no `.`, empty segment or space)",
+        ),
+        (
+            "# one reason\ncrates/tls/src/cert.rs\ncrates/tls/src/other.rs\n",
+            "allowed.txt:3: crates/tls/src/other.rs has no `#` line above it saying why it may read the wall clock",
+        ),
     ];
     for (allowed, want) in cases {
         assert_eq!(
@@ -140,6 +153,40 @@ fn an_allow_list_entry_without_a_reason_fails() {
             "allowed.txt:1: /x has no `#` line above it saying why it may read the wall clock"
                 .to_owned(),
             "allowed.txt:1: /x is absolute; give it from the repository root".to_owned(),
+        ])
+    );
+    for allowed in [
+        "# certificate validity\r\ncrates/tls/src/cert.rs\r\n",
+        "# certificate validity\ncrates/tls/src/cert.rs",
+    ] {
+        assert_eq!(lint(&files, allowed), Ok(()), "in {allowed:?}");
+    }
+}
+
+/// Catches: a scan that stops at the first read of a file, reads on one line reported once, an
+/// allow-listed read reported, or the entry checks dropped when reads are refused; the whole
+/// list comes in order: the reads by file and line, then the entries by line.
+#[test]
+fn every_read_and_entry_error_is_reported_in_order() {
+    let now = st_now();
+    let decide = format!("fn a() {{ {now}; {now}; }}\nfn b() {{ chrono::Utc::now(); }}\n");
+    let cert = format!("fn valid() {{ {now}; }}\n");
+    let files = [
+        ("crates/demo/src/decide.rs", decide.as_str()),
+        ("crates/demo/src/quiet.rs", "fn q() {}\n"),
+        ("crates/tls/src/cert.rs", cert.as_str()),
+    ];
+    let allowed = "# certificate validity\ncrates/tls/src/cert.rs\n# gone\ncrates/gone/x.rs\n\
+                   # quiet\ncrates/demo/src/quiet.rs\n";
+    let decide_path = "crates/demo/src/decide.rs";
+    assert_eq!(
+        lint(&files, allowed),
+        Err(vec![
+            refusal(decide_path, 1, "SystemTime::now"),
+            refusal(decide_path, 1, "SystemTime::now"),
+            refusal(decide_path, 2, "Utc::now"),
+            "stale allow-list entry: crates/gone/x.rs matches no file".to_owned(),
+            "unused allow-list entry: crates/demo/src/quiet.rs has no wall-clock read".to_owned(),
         ])
     );
 }

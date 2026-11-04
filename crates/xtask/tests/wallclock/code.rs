@@ -1,27 +1,56 @@
-//! The code of a Rust source as the wall-clock rule reads it: its tokens outside comments,
-//! strings and character literals, and the paths among them, each with its first segment replaced
-//! by what a `use` of the file brought in under that name. A `use` item and an item behind
-//! `#[cfg(test)]` hold no path: what the attribute applies to ends at the first `;` at its own
-//! depth, at the end of the first braced block at its own depth, at the first `,` at its own
-//! depth when it is a field, an arm or an argument rather than an item, or at the closer of what
-//! encloses it.
+//! The code of a Rust source as the wall-clock rule reads it.
+//!
+//! - Tokens: see `lex.rs`.
+//! - Skipped: a `use` item (one followed by a path, not a `use<..>` capture bound), and what a
+//!   `#[cfg(..)]` whose predicate implies `test` applies to (`test`, or `all(..)` holding it). An
+//!   item ends after its body (the first braced block outside its generics) or its `;`; a field,
+//!   an arm, an argument or a statement ends at its `,` or `;`, or after an arm's `=> {..}`;
+//!   either ends at the closer of what encloses it. An inner `#![cfg(test)]` skips to the end of
+//!   what encloses it.
+//! - Paths: `a::b::c` and `<T>::f`, each with what it may stand for: as written, with its first
+//!   segment replaced by the plain import of that name, and, for a lone name that is called,
+//!   under each glob import. Renames (`use .. as ..`, `type .. = ..;`) are listed, not followed.
 
 use std::collections::BTreeMap;
 
-use crate::rust_text::{after_quote, rust_text_mask};
+use crate::lex::{Tok, is_ident, segment, text_at, tokens};
+use crate::skip::{enclosing_end, item_end, test_attr};
 
 /// The code of one source.
 pub struct Code {
     toks: Vec<Tok>,
     chains: Vec<Chain>,
+    renames: Vec<Rename>,
+}
+
+/// A path in the code, with the full paths it may stand for.
+pub struct Chain {
+    start: usize,
+    end: usize,
+    pub paths: Vec<Vec<String>>,
+}
+
+/// A rename: `use <path> as <alias>` or `type <alias> = <path>;`, as `spelling`.
+pub struct Rename {
+    pub line: usize,
+    pub path: Vec<String>,
+    pub spelling: String,
 }
 
 impl Code {
     /// The code of the source `text`.
     pub fn of(text: &str) -> Code {
         let toks = tokens(text);
-        let chains = chains(&toks);
-        Code { toks, chains }
+        let mut imports = Imports::default();
+        let code = code_mask(&toks, &mut imports);
+        let chains = chains(&toks, &code, &imports);
+        let mut renames = imports.renames;
+        renames.extend((0..toks.len()).filter_map(|k| type_rename(&toks, &code, k)));
+        Code {
+            toks,
+            chains,
+            renames,
+        }
     }
 
     /// The paths of the code, in order.
@@ -29,261 +58,126 @@ impl Code {
         &self.chains
     }
 
+    /// The renames of the source.
+    pub fn renames(&self) -> &[Rename] {
+        &self.renames
+    }
+
     /// The line (from 1) a path starts on.
     pub fn line(&self, chain: &Chain) -> usize {
         self.toks[chain.start].line
     }
 
-    /// The paths inside the parentheses that follow `chain` when it is called; none otherwise.
-    pub fn args(&self, chain: &Chain) -> &[Chain] {
-        if text_at(&self.toks, chain.end) != "(" {
-            return &[];
-        }
-        let close = close_of(&self.toks, chain.end);
-        let from = self.chains.partition_point(|c| c.start <= chain.end);
-        let to = self.chains.partition_point(|c| c.start < close);
-        &self.chains[from..to.max(from)]
+    /// Whether the tokens right after `chain` are `next`.
+    pub fn followed_by(&self, chain: &Chain, next: &[&str]) -> bool {
+        next.iter()
+            .enumerate()
+            .all(|(k, want)| text_at(&self.toks, chain.end + k) == *want)
     }
 }
 
-/// A token of code: an identifier, `::`, or one other byte; with its line (from 1).
-struct Tok {
-    text: String,
-    line: usize,
+/// The imports of a file: each name a plain `use` binds, with its path; the glob prefixes; and
+/// the renames, which bind nothing.
+#[derive(Default)]
+struct Imports {
+    names: BTreeMap<String, Vec<String>>,
+    globs: Vec<Vec<String>>,
+    renames: Vec<Rename>,
 }
 
-fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
-}
-
-fn is_ident(tok: &Tok) -> bool {
-    tok.text.bytes().next().is_some_and(is_ident_byte)
-}
-
-/// The tokens of `text` outside its comments, strings and character literals.
-fn tokens(text: &str) -> Vec<Tok> {
-    let mask = rust_text_mask(text);
-    let b = text.as_bytes();
-    let mut out = Vec::new();
-    let mut line = 1;
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
-        if c == b'\n' {
-            line += 1;
-            i += 1;
-        } else if mask[i] || c.is_ascii_whitespace() {
-            i += 1;
-        } else if c == b'\'' {
-            i = after_quote(text, i);
-        } else if is_ident_byte(c) {
-            let start = i;
-            while i < b.len() && is_ident_byte(b[i]) && !mask[i] {
-                i += 1;
+impl Imports {
+    /// The full paths `segments` may stand for (see the module header).
+    fn paths_of(&self, segments: Vec<String>, called: bool) -> Vec<Vec<String>> {
+        let mut out = Vec::new();
+        if let Some(full) = self.names.get(&segments[0]) {
+            out.push(full.iter().chain(&segments[1..]).cloned().collect());
+        }
+        if segments.len() == 1 && called {
+            for glob in &self.globs {
+                out.push(glob.iter().chain(&segments).cloned().collect());
             }
-            out.push(Tok {
-                text: text[start..i].to_owned(),
-                line,
-            });
-        } else if c == b':' && b.get(i + 1) == Some(&b':') {
-            out.push(Tok {
-                text: "::".to_owned(),
-                line,
-            });
-            i += 2;
-        } else {
-            let len = text[i..].chars().next().map_or(1, char::len_utf8);
-            out.push(Tok {
-                text: text[i..i + len].to_owned(),
-                line,
-            });
-            i += len;
         }
-    }
-    out
-}
-
-fn text_at(toks: &[Tok], i: usize) -> &str {
-    toks.get(i).map_or("", |t| t.text.as_str())
-}
-
-/// Whether `#[cfg(test)]` starts at `i`.
-fn is_cfg_test(toks: &[Tok], i: usize) -> bool {
-    ["#", "[", "cfg", "(", "test", ")", "]"]
-        .iter()
-        .enumerate()
-        .all(|(k, want)| text_at(toks, i + k) == *want)
-}
-
-/// The keywords that start an item, whose text may hold a comma at its own depth (`fn f<A, B>()`),
-/// so that only a `;` or a braced block ends it.
-const ITEM_KEYWORDS: &[&str] = &[
-    "async",
-    "const",
-    "enum",
-    "extern",
-    "fn",
-    "impl",
-    "macro_rules",
-    "mod",
-    "static",
-    "struct",
-    "trait",
-    "type",
-    "union",
-    "unsafe",
-    "use",
-];
-
-/// Whether what starts at `from` (after its attributes and visibility) is an item, not a field,
-/// a match arm, an argument or another element of a comma-separated list.
-fn is_item(toks: &[Tok], mut from: usize) -> bool {
-    loop {
-        match text_at(toks, from) {
-            "#" if text_at(toks, from + 1) == "[" => from = close_of(toks, from + 1) + 1,
-            "pub" if text_at(toks, from + 1) == "(" => from = close_of(toks, from + 1) + 1,
-            "pub" => from += 1,
-            word => return ITEM_KEYWORDS.contains(&word),
-        }
+        out.push(segments);
+        out
     }
 }
 
-/// The end (exclusive) of what the `#[cfg(test)]` before `from` applies to: after the first `;`
-/// at its depth, after the first braced block at its depth, after the first `,` at its depth
-/// when it is not an item, or at the closer of what encloses it.
-fn item_end(toks: &[Tok], from: usize) -> usize {
-    let comma_ends = !is_item(toks, from);
-    let mut depth = 0usize;
-    let mut braced = false;
-    for (k, tok) in toks.iter().enumerate().skip(from) {
-        match tok.text.as_str() {
-            "(" | "[" | "{" => {
-                braced |= depth == 0 && tok.text == "{";
-                depth += 1;
-            }
-            ")" | "]" | "}" => {
-                if depth == 0 {
-                    return k;
-                }
-                depth -= 1;
-                if depth == 0 && braced {
-                    return k + 1;
-                }
-            }
-            ";" if depth == 0 => return k + 1,
-            "," if depth == 0 && comma_ends => return k + 1,
-            _ => {}
-        }
-    }
-    toks.len()
+/// Whether a `use` item starts at `i` (not a `use<..>` capture bound).
+fn is_use(toks: &[Tok], i: usize) -> bool {
+    toks[i].text == "use"
+        && (toks.get(i + 1).is_some_and(is_ident) || matches!(text_at(toks, i + 1), "::" | "{"))
 }
 
-/// Reads the use tree at `i` under `prefix` into `names` (the name each import binds, and the
-/// full path it stands for); returns the offset after the tree.
-fn use_tree(
-    toks: &[Tok],
-    mut i: usize,
-    prefix: &mut Vec<String>,
-    names: &mut BTreeMap<String, Vec<String>>,
-) -> usize {
+/// `prefix` without a trailing `self`.
+fn without_self(prefix: &[String]) -> Vec<String> {
+    match prefix.split_last() {
+        Some((last, before)) if last == "self" => before.to_vec(),
+        _ => prefix.to_vec(),
+    }
+}
+
+/// Reads the use tree at `i` under `prefix` into `imports`; returns the offset after the tree.
+fn use_tree(toks: &[Tok], mut i: usize, prefix: &mut Vec<String>, imports: &mut Imports) -> usize {
     let base = prefix.len();
     loop {
         let text = text_at(toks, i);
         if text == "::" {
             i += 1;
-        } else if text == "{" {
+            continue;
+        }
+        if text != "as" && toks.get(i).is_some_and(is_ident) {
+            prefix.push(segment(&toks[i]));
+            i += 1;
+            continue;
+        }
+        if text == "{" {
             i += 1;
             loop {
-                i = use_tree(toks, i, prefix, names);
+                i = use_tree(toks, i, prefix, imports);
                 if text_at(toks, i) != "," {
                     break;
                 }
                 i += 1;
             }
             i += usize::from(text_at(toks, i) == "}");
-            prefix.truncate(base);
-            return i;
-        } else if text == "as" {
-            let alias = text_at(toks, i + 1).to_owned();
-            bind(prefix, base, Some(alias), names);
-            prefix.truncate(base);
-            return i + 2;
         } else if text == "*" {
-            prefix.truncate(base);
-            return i + 1;
-        } else if toks.get(i).is_some_and(is_ident) {
-            prefix.push(text.to_owned());
+            imports.globs.push(prefix.clone());
             i += 1;
-        } else {
-            bind(prefix, base, None, names);
-            prefix.truncate(base);
-            return i;
-        }
-    }
-}
-
-/// Binds the import `prefix` (when this tree added segments to it) under `alias` or its last
-/// segment; a trailing `self` stands for the path before it, and `_` binds nothing. A glob
-/// (`*`) binds no name.
-fn bind(
-    prefix: &[String],
-    base: usize,
-    alias: Option<String>,
-    names: &mut BTreeMap<String, Vec<String>>,
-) {
-    if prefix.len() <= base {
-        return;
-    }
-    let path = match prefix.split_last() {
-        Some((last, before)) if last == "self" => before.to_vec(),
-        _ => prefix.to_vec(),
-    };
-    let Some(name) = alias.or_else(|| path.last().cloned()) else {
-        return;
-    };
-    if name != "_" {
-        names.insert(name, path);
-    }
-}
-
-/// A path in the code: its first token, the offset after it, and its segments with the first
-/// replaced by what the file imported under that name.
-pub struct Chain {
-    start: usize,
-    end: usize,
-    pub segments: Vec<String>,
-}
-
-/// The offset of the closer of the `(`, `[` or `{` at `open` (counting every bracket kind), or
-/// the end of the tokens.
-fn close_of(toks: &[Tok], open: usize) -> usize {
-    let mut depth = 0usize;
-    for (k, tok) in toks.iter().enumerate().skip(open) {
-        match tok.text.as_str() {
-            "(" | "[" | "{" => depth += 1,
-            ")" | "]" | "}" => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return k;
-                }
+        } else if text == "as" {
+            let alias = text_at(toks, i + 1);
+            if prefix.len() > base && alias != "_" {
+                let path = without_self(prefix);
+                imports.renames.push(Rename {
+                    line: toks[i].line,
+                    spelling: format!("{} as {alias}", path.join("::")),
+                    path,
+                });
             }
-            _ => {}
+            i += 2;
+        } else if prefix.len() > base {
+            let path = without_self(prefix);
+            if let Some(name) = path.last() {
+                imports.names.insert(name.clone(), path);
+            }
         }
+        prefix.truncate(base);
+        return i;
     }
-    toks.len()
 }
 
-/// The paths of the code, outside `use` items and `#[cfg(test)]` items. The imports are read
-/// first, so a `use` below the path it names counts as it does for the compiler.
-fn chains(toks: &[Tok]) -> Vec<Chain> {
-    let mut names = BTreeMap::new();
+/// For every token, whether it is code the rule reads: not in a `use` item or a test-only item.
+fn code_mask(toks: &[Tok], imports: &mut Imports) -> Vec<bool> {
     let mut code = vec![true; toks.len()];
     let mut i = 0;
     while i < toks.len() {
-        let end = if is_cfg_test(toks, i) {
-            item_end(toks, i + 7)
-        } else if toks[i].text == "use" {
-            use_tree(toks, i + 1, &mut Vec::new(), &mut names);
+        let end = if let Some(after) = test_attr(toks, i) {
+            if text_at(toks, i + 1) == "!" {
+                enclosing_end(toks, after)
+            } else {
+                item_end(toks, after)
+            }
+        } else if is_use(toks, i) {
+            use_tree(toks, i + 1, &mut Vec::new(), imports);
             item_end(toks, i + 1)
         } else {
             i += 1;
@@ -292,6 +186,39 @@ fn chains(toks: &[Tok]) -> Vec<Chain> {
         code[i..end].fill(false);
         i = end;
     }
+    code
+}
+
+/// The rename `type <alias> = <path>;` at `k`, when the right side is a path alone.
+fn type_rename(toks: &[Tok], code: &[bool], k: usize) -> Option<Rename> {
+    if !code[k] || toks[k].text != "type" || !toks.get(k + 1).is_some_and(is_ident) {
+        return None;
+    }
+    let semi = (k..toks.len()).find(|&j| text_at(toks, j) == ";")?;
+    let eq = (k..semi).find(|&j| text_at(toks, j) == "=")?;
+    let mut j = eq + 1 + usize::from(text_at(toks, eq + 1) == "::");
+    let mut path = Vec::new();
+    while toks.get(j).is_some_and(is_ident) {
+        path.push(segment(&toks[j]));
+        j += 1;
+        if text_at(toks, j) != "::" {
+            break;
+        }
+        j += 1;
+    }
+    if j != semi || path.is_empty() {
+        return None;
+    }
+    let spelling = format!("type {} = {}", toks[k + 1].text, path.join("::"));
+    Some(Rename {
+        line: toks[k].line,
+        path,
+        spelling,
+    })
+}
+
+/// The paths of the code, outside `use` items and test-only items.
+fn chains(toks: &[Tok], code: &[bool], imports: &Imports) -> Vec<Chain> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < toks.len() {
@@ -300,20 +227,32 @@ fn chains(toks: &[Tok]) -> Vec<Chain> {
             continue;
         }
         let start = i;
-        let mut segments = vec![toks[i].text.clone()];
+        let mut segments = vec![segment(&toks[i])];
         i += 1;
-        while text_at(toks, i) == "::" && toks.get(i + 1).is_some_and(is_ident) {
-            segments.push(toks[i + 1].text.clone());
-            i += 2;
+        loop {
+            if text_at(toks, i) == "::" && toks.get(i + 1).is_some_and(is_ident) {
+                segments.push(segment(&toks[i + 1]));
+                i += 2;
+            } else if text_at(toks, i) == ">"
+                && text_at(toks, i + 1) == "::"
+                && toks.get(i + 2).is_some_and(is_ident)
+            {
+                segments.push(segment(&toks[i + 2]));
+                i += 3;
+            } else {
+                break;
+            }
         }
         let method = start > 0 && toks[start - 1].text == ".";
-        if let Some(full) = names.get(&segments[0]).filter(|_| !method) {
-            segments = full.iter().chain(&segments[1..]).cloned().collect();
-        }
+        let paths = if method {
+            vec![segments]
+        } else {
+            imports.paths_of(segments, text_at(toks, i) == "(")
+        };
         out.push(Chain {
             start,
             end: i,
-            segments,
+            paths,
         });
     }
     out

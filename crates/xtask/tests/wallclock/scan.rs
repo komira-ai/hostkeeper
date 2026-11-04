@@ -1,15 +1,17 @@
 //! The rule: no source of a shipping crate reads the wall clock, unless the allow-list names its
 //! path.
 //!
-//! A source is read as its code ([`Code`]): comments and strings are not code, so a form named in
-//! a comment or a string is not a read. A path such as `std::time::SystemTime::now` is a read when
-//! its last segments are those of a row of [`FORMS`], with its first segment replaced by what a
-//! `use` of the file brought in under that name (so `use std::time::SystemTime as T; T::now()` is
-//! caught). A `use` itself is never a read, and neither is an item behind `#[cfg(test)]`.
+//! A source is read as its code ([`Code`]): comments, strings and test-only items are not code.
+//! A path is a read when one of the full paths it may stand for ends with the segments of a row
+//! of [`FORMS`] (and, for a row that says so, the tokens after it follow): a call, or a reference
+//! such as `unwrap_or_else(SystemTime::now)`, which calls it later. Naming a realtime clock id is
+//! a read wherever it is, since it is only ever passed to a clock. A rename of a wall-clock name
+//! ([`RENAMED`]) is refused too: the rule does not follow renames, so a renamed name would hide
+//! its reads. A `use` of a wall-clock name under its own name is not a read.
 
 use std::fmt;
 
-use crate::code::{Chain, Code};
+use crate::code::{Chain, Code, Rename};
 
 /// The crate of test helpers: it never ships, so it is not scanned.
 const TESTKIT: &str = "hostkeeper-testkit";
@@ -17,104 +19,124 @@ const TESTKIT: &str = "hostkeeper-testkit";
 /// The allow-list as the failure message names it, from the repository root.
 pub const ALLOWED_FILE: &str = "crates/xtask/tests/wallclock/allowed.txt";
 
-/// One way of reading the wall clock: a path whose last segments are `path` and, when `arg` is
-/// not empty, a call of it whose arguments hold a path whose last segments are `arg`.
+/// One way of reading the wall clock: a path ending with `tail`, followed by the tokens `then`.
 pub struct Form {
     pub name: &'static str,
-    path: &'static [&'static str],
-    arg: &'static [&'static str],
+    tail: &'static [&'static str],
+    then: &'static [&'static str],
 }
 
-const fn form(
-    name: &'static str,
-    path: &'static [&'static str],
-    arg: &'static [&'static str],
-) -> Form {
-    Form { name, path, arg }
+const fn form(name: &'static str, tail: &'static [&'static str]) -> Form {
+    Form {
+        name,
+        tail,
+        then: &[],
+    }
 }
 
-/// Every form that obtains the wall-clock time. `Instant::now` and the monotonic and boot-time
-/// clock ids are not here: they are not the wall clock.
+/// Every form that obtains the wall-clock time. `Instant` and the monotonic and boot-time clock
+/// ids are not here: they are not the wall clock.
 pub const FORMS: &[Form] = &[
-    // std: the system (wall) clock, also behind `.elapsed()` and `duration_since(` on its value.
-    form("SystemTime::now", &["SystemTime", "now"], &[]),
+    // std: the system (wall) clock.
+    form("SystemTime::now", &["SystemTime", "now"]),
+    // std: `SystemTime::elapsed(&t)` reads the wall clock to measure from `t`.
+    form("SystemTime::elapsed", &["SystemTime", "elapsed"]),
+    // std: the time since the epoch, read from the wall clock.
+    Form {
+        name: "UNIX_EPOCH.elapsed",
+        tail: &["UNIX_EPOCH"],
+        then: &[".", "elapsed"],
+    },
     // chrono (`chrono::Utc`, `chrono::offset::Utc`): the wall clock in UTC.
-    form("Utc::now", &["Utc", "now"], &[]),
+    form("Utc::now", &["Utc", "now"]),
     // chrono: the wall clock in the host's time zone.
-    form("Local::now", &["Local", "now"], &[]),
+    form("Local::now", &["Local", "now"]),
     // time: the wall clock in UTC.
-    form(
-        "OffsetDateTime::now_utc",
-        &["OffsetDateTime", "now_utc"],
-        &[],
-    ),
+    form("OffsetDateTime::now_utc", &["OffsetDateTime", "now_utc"]),
     // time: the wall clock in the host's time zone.
     form(
         "OffsetDateTime::now_local",
         &["OffsetDateTime", "now_local"],
-        &[],
     ),
     // jiff: the wall clock as an instant.
-    form("Timestamp::now", &["Timestamp", "now"], &[]),
+    form("Timestamp::now", &["Timestamp", "now"]),
     // jiff: the wall clock in the host's time zone.
-    form("Zoned::now", &["Zoned", "now"], &[]),
+    form("Zoned::now", &["Zoned", "now"]),
     // libc time(2): seconds since the epoch, from the wall clock.
-    form("libc::time", &["libc", "time"], &[]),
-    // libc gettimeofday(2): the wall clock in microseconds.
-    form("libc::gettimeofday", &["libc", "gettimeofday"], &[]),
-    // libc (or nix) clock_gettime(2) on the realtime clock: the wall clock.
+    form("libc::time", &["libc", "time"]),
+    // gettimeofday(2) (libc or nix): the wall clock in microseconds.
+    form("gettimeofday", &["gettimeofday"]),
+    // libc (or nix) realtime clock id: the wall clock.
+    form("CLOCK_REALTIME", &["CLOCK_REALTIME"]),
+    // libc (or nix) coarse realtime clock id: the wall clock, less precise.
+    form("CLOCK_REALTIME_COARSE", &["CLOCK_REALTIME_COARSE"]),
+    // libc (or nix) realtime alarm clock id: the wall clock.
+    form("CLOCK_REALTIME_ALARM", &["CLOCK_REALTIME_ALARM"]),
+    // libc (or nix) TAI clock id: the wall clock without leap seconds.
+    form("CLOCK_TAI", &["CLOCK_TAI"]),
+    // rustix realtime clock id (also inside `DynamicClockId::Known`): the wall clock.
+    form("ClockId::Realtime", &["ClockId", "Realtime"]),
+    // rustix coarse realtime clock id: the wall clock, less precise.
+    form("ClockId::RealtimeCoarse", &["ClockId", "RealtimeCoarse"]),
+    // rustix realtime alarm clock id: the wall clock.
     form(
-        "clock_gettime(CLOCK_REALTIME)",
-        &["clock_gettime"],
-        &["CLOCK_REALTIME"],
+        "DynamicClockId::RealtimeAlarm",
+        &["DynamicClockId", "RealtimeAlarm"],
     ),
-    // libc (or nix) clock_gettime(2) on the coarse realtime clock: the wall clock, less precise.
-    form(
-        "clock_gettime(CLOCK_REALTIME_COARSE)",
-        &["clock_gettime"],
-        &["CLOCK_REALTIME_COARSE"],
-    ),
-    // rustix clock_gettime on the realtime clock: the wall clock.
-    form(
-        "clock_gettime(ClockId::Realtime)",
-        &["clock_gettime"],
-        &["ClockId", "Realtime"],
-    ),
-    // rustix clock_gettime on the coarse realtime clock: the wall clock, less precise.
-    form(
-        "clock_gettime(ClockId::RealtimeCoarse)",
-        &["clock_gettime"],
-        &["ClockId", "RealtimeCoarse"],
-    ),
-    // rustix clock_gettime_dynamic on the realtime clock (`DynamicClockId::Known`).
-    form(
-        "clock_gettime_dynamic(ClockId::Realtime)",
-        &["clock_gettime_dynamic"],
-        &["ClockId", "Realtime"],
-    ),
-    // rustix clock_gettime_dynamic on the coarse realtime clock.
-    form(
-        "clock_gettime_dynamic(ClockId::RealtimeCoarse)",
-        &["clock_gettime_dynamic"],
-        &["ClockId", "RealtimeCoarse"],
-    ),
+    // rustix TAI clock id: the wall clock without leap seconds.
+    form("DynamicClockId::Tai", &["DynamicClockId", "Tai"]),
 ];
 
-/// A wall-clock read found in a source.
+/// The names whose rename is refused, each with the first segment its path must have (`None`:
+/// any path, a re-export included).
+pub const RENAMED: &[(&str, Option<&str>)] = &[
+    ("SystemTime", None),
+    ("UNIX_EPOCH", None),
+    ("Utc", Some("chrono")),
+    ("Local", Some("chrono")),
+    ("OffsetDateTime", Some("time")),
+    ("Timestamp", Some("jiff")),
+    ("Zoned", Some("jiff")),
+    ("libc", None),
+    ("time", Some("libc")),
+    ("gettimeofday", None),
+    ("ClockId", None),
+    ("DynamicClockId", None),
+    ("Realtime", None),
+    ("RealtimeCoarse", None),
+    ("RealtimeAlarm", None),
+    ("Tai", Some("rustix")),
+    ("CLOCK_REALTIME", None),
+    ("CLOCK_REALTIME_COARSE", None),
+    ("CLOCK_REALTIME_ALARM", None),
+    ("CLOCK_TAI", None),
+];
+
+/// A wall-clock read, or a rename of a wall-clock name, found in a source.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Read {
     pub path: String,
     pub line: usize,
-    pub form: &'static str,
+    pub form: String,
+    pub renamed: bool,
 }
 
 impl fmt::Display for Read {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (path, line, form) = (&self.path, self.line, &self.form);
+        if self.renamed {
+            write!(
+                f,
+                "{path}:{line}: wall-clock name renamed, {form}: the lint does not follow a \
+                 rename, so use the name itself; "
+            )?;
+        } else {
+            write!(f, "{path}:{line}: wall-clock read {form}: ")?;
+        }
         write!(
             f,
-            "{}:{}: wall-clock read {}: decisions read hostkeeper_steps::Clock; if this is \
-             certificate, OIDC or nonce validity, add the path to {ALLOWED_FILE} with a reason",
-            self.path, self.line, self.form
+            "decisions read hostkeeper_steps::Clock; if this is certificate, OIDC or nonce \
+             validity, add the path to {ALLOWED_FILE} with a reason"
         )
     }
 }
@@ -147,15 +169,21 @@ fn ends_with(segments: &[String], tail: &[&str]) -> bool {
 }
 
 fn matches(form: &Form, chain: &Chain, code: &Code) -> bool {
-    ends_with(&chain.segments, form.path)
-        && (form.arg.is_empty()
-            || code
-                .args(chain)
-                .iter()
-                .any(|c| ends_with(&c.segments, form.arg)))
+    chain.paths.iter().any(|p| ends_with(p, form.tail)) && code.followed_by(chain, form.then)
 }
 
-/// Every wall-clock read in the source `text` of the file at `path`.
+/// Whether `rename` renames a wall-clock name.
+fn hides_a_read(rename: &Rename) -> bool {
+    let (Some(first), Some(last)) = (rename.path.first(), rename.path.last()) else {
+        return false;
+    };
+    RENAMED
+        .iter()
+        .any(|(name, root)| last == name && root.is_none_or(|r| first == r))
+}
+
+/// Every wall-clock read and wall-clock rename in the source `text` of the file at `path`, by
+/// line.
 pub fn reads(path: &str, text: &str) -> Vec<Read> {
     let code = Code::of(text);
     let mut out = Vec::new();
@@ -164,10 +192,20 @@ pub fn reads(path: &str, text: &str) -> Vec<Read> {
             out.push(Read {
                 path: path.to_owned(),
                 line: code.line(chain),
-                form: form.name,
+                form: form.name.to_owned(),
+                renamed: false,
             });
         }
     }
+    for rename in code.renames().iter().filter(|r| hides_a_read(r)) {
+        out.push(Read {
+            path: path.to_owned(),
+            line: rename.line,
+            form: rename.spelling.clone(),
+            renamed: true,
+        });
+    }
+    out.sort_by_key(|read| read.line);
     out
 }
 

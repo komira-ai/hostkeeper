@@ -75,9 +75,10 @@ are T1 to T19 in [AGENTS.md](AGENTS.md).
 
 Nothing the updater decides reads the wall clock: decisions read `hostkeeper_steps::Clock`
 (monotonic seconds and the boot id). `cargo test -p xtask --test wallclock` refuses a wall-clock
-read (`SystemTime::now()` and its equivalents) in any non-test source under `crates/*/src/`, except
-in a path listed, with its reason, in `crates/xtask/tests/wallclock/allowed.txt`: certificate, OIDC
-or enrollment-nonce validity only.
+read (`SystemTime::now()` and its equivalents, a realtime clock id) in any non-test source under
+`crates/*/src/`, and a rename of a wall-clock name (`use .. as ..`, `type .. = ..;`), except in a
+path listed, with its reason, in `crates/xtask/tests/wallclock/allowed.txt`: certificate, OIDC or
+enrollment-nonce validity only.
 
 ## Small pull requests
 

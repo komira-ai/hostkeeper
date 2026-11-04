@@ -6,23 +6,28 @@
 //!
 //! The files come from `git ls-files` at the repository root, as for the hygiene lint, so the
 //! scan sees exactly the tracked sources, including those of a crate that is not (yet) a
-//! workspace member. The rule is in `scan.rs`, the reading of a source in `code.rs`, and the
-//! tests of the allow-list in `allow_list.rs`. The fixtures are small trees written to a scratch
+//! workspace member. The rule is in `scan.rs`; a source is read by `lex.rs` (tokens), `skip.rs`
+//! (what is not read) and `code.rs` (paths and imports). The tests of the forms are in
+//! `forms.rs`, of test-only code and file selection in `test_only.rs`, of the allow-list in
+//! `allow_list.rs`. The fixtures are small trees written to a scratch
 //! directory; a text holding a form the rule refuses is built from pieces at run time.
 
 mod allow_list;
 mod code;
+mod forms;
+mod lex;
 #[path = "../hygiene/rust_text.rs"]
 mod rust_text;
 mod scan;
+mod skip;
+mod test_only;
 #[path = "../../src/testdir.rs"]
 mod testdir;
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use scan::{ALLOWED_FILE, FORMS, Read, check, scanned};
+use scan::{ALLOWED_FILE, Read, check, scanned};
 use testdir::TestDir;
 
 const ALLOWED_TEXT: &str = include_str!("allowed.txt");
@@ -99,11 +104,23 @@ fn lint(files: &[(&str, &str)], allowed: &str) -> Result<(), Vec<String>> {
 }
 
 /// The refusal of a read of `form` at `path:line`.
-fn refusal(path: &str, line: usize, form: &'static str) -> String {
+fn refusal(path: &str, line: usize, form: &str) -> String {
     Read {
         path: path.to_owned(),
         line,
-        form,
+        form: form.to_owned(),
+        renamed: false,
+    }
+    .to_string()
+}
+
+/// The refusal of the rename `spelling` at `path:line`.
+fn renaming(path: &str, line: usize, spelling: &str) -> String {
+    Read {
+        path: path.to_owned(),
+        line,
+        form: spelling.to_owned(),
+        renamed: true,
     }
     .to_string()
 }
@@ -160,220 +177,19 @@ fn a_decision_module_reading_the_wall_clock_fails() {
              with a reason"
         )
     );
-}
-
-/// Each case: the form it reads, the source, and the line of the read.
-fn form_cases() -> Vec<(&'static str, String, usize)> {
-    let st = st();
-    let n = "now";
-    vec![
-        (
-            "SystemTime::now",
-            format!("let t = std::time::{st}::{n}();"),
-            1,
-        ),
-        (
-            "SystemTime::now",
-            format!("let t = ::std::time::{st}::{n}();"),
-            1,
-        ),
-        (
-            "SystemTime::now",
-            format!("use std::time::{st} as T;\nlet t = T::{n}();"),
-            2,
-        ),
-        (
-            "SystemTime::now",
-            format!("use std::time::{{Instant, {st} as Wall}};\nlet t =\n  Wall::{n}();"),
-            3,
-        ),
-        (
-            "SystemTime::now",
-            format!("use std::{{time::{{self as t}}}};\nt::{st}::{n}();"),
-            2,
-        ),
-        (
-            "SystemTime::now",
-            format!("use std::time;\ntime::{st}::{n}();"),
-            2,
-        ),
-        (
-            "SystemTime::now",
-            format!("fn f() {{\n    W::{n}();\n}}\nuse std::time::{st} as W;"),
-            2,
-        ),
-        ("Utc::now", format!("chrono::Utc::{n}()"), 1),
-        ("Local::now", format!("use chrono::Local;\nLocal::{n}()"), 2),
-        (
-            "OffsetDateTime::now_utc",
-            format!("time::OffsetDateTime::{n}_utc()"),
-            1,
-        ),
-        (
-            "OffsetDateTime::now_local",
-            format!("use time::OffsetDateTime as O;\nO::{n}_local()"),
-            2,
-        ),
-        ("Timestamp::now", format!("jiff::Timestamp::{n}()"), 1),
-        ("Zoned::now", format!("jiff::Zoned::{n}()"), 1),
-        (
-            "libc::time",
-            ["libc::", "time(std::ptr::null_mut())"].concat(),
-            1,
-        ),
-        (
-            "libc::gettimeofday",
-            ["use libc::get", "timeofday;\nget", "timeofday(&mut tv, n)"].concat(),
-            2,
-        ),
-        (
-            "clock_gettime(CLOCK_REALTIME)",
-            ["libc::clock_gettime(libc::CLOCK_", "REALTIME, &mut ts)"].concat(),
-            1,
-        ),
-        (
-            "clock_gettime(CLOCK_REALTIME_COARSE)",
-            ["clock_gettime(CLOCK_", "REALTIME_COARSE, &mut ts)"].concat(),
-            1,
-        ),
-        (
-            "clock_gettime(ClockId::Realtime)",
-            [
-                "use rustix::time::{clock_gettime, ClockId};\nclock_gettime(ClockId::",
-                "Realtime)",
-            ]
-            .concat(),
-            2,
-        ),
-        (
-            "clock_gettime(ClockId::RealtimeCoarse)",
-            ["rustix::time::clock_gettime(ClockId::", "RealtimeCoarse)"].concat(),
-            1,
-        ),
-        (
-            "clock_gettime_dynamic(ClockId::Realtime)",
-            [
-                "clock_gettime_dynamic(DynamicClockId::Known(ClockId::",
-                "Realtime))",
-            ]
-            .concat(),
-            1,
-        ),
-        (
-            "clock_gettime_dynamic(ClockId::RealtimeCoarse)",
-            [
-                "clock_gettime_dynamic(DynamicClockId::Known(ClockId::",
-                "RealtimeCoarse))",
-            ]
-            .concat(),
-            1,
-        ),
-    ]
-}
-
-/// Catches: a row of the form table that refuses nothing (or that is removed), a form missed
-/// when it is spelled through a `use` (above or below the read), an alias, a group, `self` or a
-/// leading `::`, and a row added to the table without a case here.
-#[test]
-fn each_wall_clock_form_is_refused() {
-    let cases = form_cases();
-    for &(form, ref text, line) in &cases {
-        assert_eq!(
-            lint(&[(DECIDE, text.as_str())], ""),
-            Err(vec![refusal(DECIDE, line, form)]),
-            "in {text:?}"
-        );
-    }
-    let tested: BTreeSet<&str> = cases.iter().map(|(form, _, _)| *form).collect();
-    let table: BTreeSet<&str> = FORMS.iter().map(|f| f.name).collect();
-    assert_eq!(tested, table);
-    assert_eq!(table.len(), FORMS.len(), "two rows share a name");
-}
-
-/// Catches: a table that over-matches (any `::now`, any `clock_gettime`), and a `use` of a
-/// wall-clock type or function taken for a read.
-#[test]
-fn monotonic_reads_pass() {
-    let st = st();
-    let text = [
-        "use std::time::{Instant, ",
-        st.as_str(),
-        "};\nuse libc::time;\nuse libc::{clock_gettime as cg};\nuse rustix::time::*;\n",
-        "fn f(clock: &dyn Clock, id: ClockId) {\n",
-        "    let a = Instant::now();\n    let b = std::time::Instant::now();\n",
-        "    let c = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);\n",
-        "    let d = clock_gettime(ClockId::Boottime);\n",
-        "    let e = clock_gettime_dynamic(DynamicClockId::Known(ClockId::Monotonic));\n",
-        "    let g = libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);\n",
-        "    let h = cg(id);\n    let i = Stamp::now(clock);\n",
-        "    let j = ",
-        st.as_str(),
-        "::UNIX_EPOCH;\n    let k = x.time();\n    let l = clock_gettime;\n}\n",
-    ]
-    .concat();
-    assert_eq!(lint(&[(DECIDE, text.as_str())], ""), Ok(()));
-}
-
-/// Catches: a test-only read refused (inside `#[cfg(test)]`, a crate's `tests/`, `benches/` or
-/// `examples/`, a `tests.rs` or a `tests` directory in `src/`, the testkit), and a skip that
-/// runs past the end of the test item: a read just after it, or after a `;`-ended item, a
-/// field, an arm or an argument behind `#[cfg(test)]`, is refused.
-#[test]
-fn a_test_only_read_passes() {
-    let now = st_now();
-    let module = format!(
-        "#[cfg(test)]\n#[allow(dead_code)]\nmod tests {{\n    const C: char = '}}';\n    \
-         fn f<A, B>() {{ {now}; }}\n}}\n"
-    );
-    let elsewhere: &str = &format!("fn f() {{ {now}; }}\n");
-    let test_only = [
-        ("crates/demo/src/lib.rs", module.as_str()),
-        ("crates/demo/src/tests.rs", elsewhere),
-        ("crates/demo/src/net/tests/helper.rs", elsewhere),
-        ("crates/demo/tests/it.rs", elsewhere),
-        ("crates/demo/benches/b.rs", elsewhere),
-        ("crates/demo/examples/e.rs", elsewhere),
-        ("crates/hostkeeper-testkit/src/lib.rs", elsewhere),
-        ("crates/demo/build.rs", elsewhere),
-        ("README.md", elsewhere),
-    ];
-    assert_eq!(lint(&test_only, ""), Ok(()));
-
-    let after = format!("{module}fn g() {{ {now}; }}\n");
-    let lib = "crates/demo/src/lib.rs";
     assert_eq!(
-        lint(&[(lib, after.as_str())], ""),
-        Err(vec![refusal(lib, 7, "SystemTime::now")])
+        renaming(DECIDE, 1, "libc as c"),
+        format!(
+            "{DECIDE}:1: wall-clock name renamed, libc as c: the lint does not follow a rename, \
+             so use the name itself; decisions read hostkeeper_steps::Clock; if this is \
+             certificate, OIDC or nonce validity, add the path to {ALLOWED_FILE} with a reason"
+        )
     );
-    let statement = format!("#[cfg(test)]\nconst X: [u8; 2] = [0; 2];\nfn g() {{ {now}; }}\n");
-    assert_eq!(
-        lint(&[(lib, statement.as_str())], ""),
-        Err(vec![refusal(lib, 3, "SystemTime::now")])
-    );
-    let field = format!("struct S {{\n    #[cfg(test)]\n    a: u8\n}}\nfn g() {{ {now}; }}\n");
-    assert_eq!(
-        lint(&[(lib, field.as_str())], ""),
-        Err(vec![refusal(lib, 5, "SystemTime::now")])
-    );
-    // A field, an arm or an argument behind `#[cfg(test)]` ends at its comma; an item does not.
-    let lists = [
-        format!("let s = S {{\n    #[cfg(test)]\n    pub a: 1,\n    b: {now},\n}};\n"),
-        format!("match x {{\n    #[cfg(test)]\n    A => 1,\n    B => {now},\n}}\n"),
-        format!("f(\n    #[cfg(test)]\n    pub(crate) a,\n    {now},\n);\n"),
-        format!("#[cfg(test)]\n#[inline]\npub(crate) fn f<A, B>() {{}}\nfn g() {{ {now}; }}\n"),
-    ];
-    for text in &lists {
-        assert_eq!(
-            lint(&[(lib, text.as_str())], ""),
-            Err(vec![refusal(lib, 4, "SystemTime::now")]),
-            "in {text:?}"
-        );
-    }
 }
 
 /// Catches: a form named in a line, doc or block comment, a string, a raw string, a byte string
-/// or after a character literal taken for a read, and a read missed on a line that also holds
-/// one of those.
+/// or after a character literal taken for a read, a read missed on a line that also holds one of
+/// those, and a wrong line (or an item closed) after masked text that spans lines.
 #[test]
 fn a_read_in_a_comment_or_string_passes() {
     let now = st_now();
@@ -385,6 +201,28 @@ fn a_read_in_a_comment_or_string_passes() {
     let read = format!("{quoted}let t = {now}; // {now}\n");
     assert_eq!(
         lint(&[(DECIDE, read.as_str())], ""),
+        Err(vec![refusal(DECIDE, 8, "SystemTime::now")])
+    );
+    // Masked text over several lines, holding braces and attributes, keeps the line count and
+    // closes no item.
+    let multiline = format!(
+        "fn f() {{\n/* a\n   /* nested }} */\n   }} #[cfg(test)] mod x {{\n*/\n\
+         let s = \"one\n  }} #[cfg(test)] {{\n\";\nlet r = r#\"\n  }}\n\"#;\n\
+         let t = {now};\n}}\nfn g() {{ {now}; }}\n"
+    );
+    assert_eq!(
+        lint(&[(DECIDE, multiline.as_str())], ""),
+        Err(vec![
+            refusal(DECIDE, 12, "SystemTime::now"),
+            refusal(DECIDE, 14, "SystemTime::now"),
+        ])
+    );
+    let test_item = format!(
+        "#[cfg(test)]\nmod t {{\n/* }} */\nlet s = \"}}\n}}\";\nfn f() {{ {now}; }}\n}}\n\
+         fn g() {{ {now}; }}\n"
+    );
+    assert_eq!(
+        lint(&[(DECIDE, test_item.as_str())], ""),
         Err(vec![refusal(DECIDE, 8, "SystemTime::now")])
     );
 }
