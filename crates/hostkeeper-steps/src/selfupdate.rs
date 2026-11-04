@@ -39,6 +39,7 @@ use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
+use hostkeeper_config::names::{MAX_NAME, is_version};
 use hostkeeper_hook::Verdict;
 
 use crate::artifact::{ArtifactError, Staged, host_owner, trusted_owners, walk};
@@ -218,12 +219,24 @@ impl Layout {
         Ok(())
     }
 
-    /// A version is a plain name: ASCII letters, digits, `.`, `-`, `_` and `+`, not starting
-    /// with `.` ([`io::ErrorKind::InvalidInput`] otherwise). In a package directory it is also none of
+    /// A version keeps [`is_version`] ([`io::ErrorKind::InvalidInput`] otherwise), and is short
+    /// enough that every name the layout derives from it, the longest being
+    /// `.<version>.seal.tmp`, fits in [`MAX_NAME`] bytes ([`io::ErrorKind::InvalidFilename`]
+    /// otherwise). In a package directory it is also none of
     /// the directory's own names: not `current` or `previous`, and not ending in `.seal` or
     /// `.tmp`, so that a version can never be a link, a seal or a temporary file.
     pub fn check_name(&self, version: &str) -> io::Result<()> {
         check_version(version)?;
+        if version.len() + LONGEST_AFFIX > MAX_NAME {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidFilename,
+                format!(
+                    "a version of {} bytes is too long for the names the layout puts beside it: \
+                     `.<version>.seal.tmp` would pass {MAX_NAME} bytes",
+                    version.len()
+                ),
+            ));
+        }
         let own = (version == "current")
             | (version == "previous")
             | version.ends_with(".seal")
@@ -404,12 +417,14 @@ fn link_version(link: &Path) -> io::Result<Option<String>> {
     }
 }
 
-/// A version names a file: ASCII letters, digits, `.`, `-`, `_` and `+`, not starting with `.`.
+/// What the longest name the layout derives from a version adds to it: `.<version>.seal.tmp`,
+/// the seal `hostkeeper-unpack` writes beside a package version before renaming it into place
+/// (`<version>.seal` and the binary directory's `.<version>.stage` are shorter).
+const LONGEST_AFFIX: usize = ".".len() + ".seal.tmp".len();
+
+/// A version names a file: it keeps [`is_version`].
 fn check_version(version: &str) -> io::Result<()> {
-    let plain = version
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'+'));
-    if version.is_empty() || version.starts_with('.') || !plain {
+    if !is_version(version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "a version that is not a plain file name",

@@ -52,9 +52,10 @@ fn text(layout: &Layout, version: &str) -> String {
 }
 
 /// Catches a staged tree that is not moved whole, or that moves a link: staging puts the tree at
-/// `<version>/` and changes neither `current` nor `previous`; a version that is not a plain name,
-/// or a source that is not a directory, is refused; a binary directory does not stage trees and
-/// a package directory does not stage files.
+/// `<version>/` and changes neither `current` nor `previous`; a version outside the rule of
+/// design 11.8 (a leading `-` or `.`, a `/`, a `~`, a non-ASCII letter, 256 bytes), or a source
+/// that is not a directory, is refused, and one with `+` build metadata is staged; a binary
+/// directory does not stage trees and a package directory does not stage files.
 #[test]
 fn staging_a_tree_adds_a_version_and_moves_no_link() {
     let s = Scratch::new("pl-stage");
@@ -65,10 +66,13 @@ fn staging_a_tree_adds_a_version_and_moves_no_link() {
     assert!(!layout.dir().join(".stage-1.5.0").exists());
     layout.check_tree("1.5.0").unwrap();
     let source = tree(&layout, "x", "x");
-    for bad in ["", ".stage-x", "a/b", "../x", "é"] {
+    let long = "1".repeat(256);
+    for bad in ["", ".stage-x", "a/b", "../x", "é", "-1", "1.0~rc1", &long] {
         let err = layout.stage_tree(bad, &source).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
     }
+    stage(&layout, "1.4.0+g1a2b3c", "build");
+    layout.check_tree("1.4.0+g1a2b3c").unwrap();
     let file = s.path().join("file");
     fs::write(&file, "f").unwrap();
     let err = layout.stage_tree("1.6.0", &file).unwrap_err();
@@ -92,6 +96,49 @@ fn staging_a_tree_adds_a_version_and_moves_no_link() {
         io::ErrorKind::InvalidInput
     );
     assert!(source.exists());
+}
+
+/// Catches a version that keeps its rule but is too long for the names the layout puts beside it:
+/// `.<version>.seal.tmp` is at most 255 bytes, so a version of 245 bytes is staged and one of 246
+/// bytes, or 255, is `InvalidFilename` in a package directory and in the binary directory alike,
+/// before anything is touched.
+#[test]
+fn a_version_too_long_for_its_derived_names_is_refused() {
+    let s = Scratch::new("pl-long");
+    let layout = package(&s);
+    let source = tree(&layout, "x", "x");
+    for version in ["1".repeat(246), "1".repeat(255)] {
+        let err = layout.stage_tree(&version, &source).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidFilename);
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "a version of {} bytes is too long for the names the layout puts beside it: \
+                 `.<version>.seal.tmp` would pass 255 bytes",
+                version.len()
+            )
+        );
+        assert_eq!(
+            layout.check_name(&version).unwrap_err().kind(),
+            io::ErrorKind::InvalidFilename
+        );
+        let binaries = Layout::new(&s.path().join("bin"));
+        assert_eq!(
+            binaries.check_name(&version).unwrap_err().kind(),
+            io::ErrorKind::InvalidFilename
+        );
+    }
+    assert!(source.exists());
+    let longest = "1".repeat(245);
+    assert_eq!(format!(".{longest}.seal.tmp").len(), 255);
+    let tree = layout.dir().join(".stage-long");
+    fs::create_dir_all(tree.join("bin")).unwrap();
+    fs::write(tree.join("bin/x"), "long").unwrap();
+    fs::write(tree.join("manifest.toml"), "schema = 1\n").unwrap();
+    fs::set_permissions(tree.join("bin/x"), fs::Permissions::from_mode(0o555)).unwrap();
+    write_seal(&layout, &longest, &tree);
+    layout.stage_tree(&longest, &tree).unwrap();
+    layout.check_tree(&longest).unwrap();
 }
 
 /// Catches a switch that loses the way back: `previous` becomes what `current` was, a second

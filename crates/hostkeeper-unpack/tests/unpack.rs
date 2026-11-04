@@ -501,6 +501,32 @@ fn state_of(rig: &Rig) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// Catches an order whose version keeps its rule but is too long for the names the package
+/// directory derives from it (`.<version>.seal.tmp` past 255 bytes) reaching the disk: 246 and
+/// 255 bytes are `VersionTooLong`, `Failed`, release, `version_too_long`, before any call of the
+/// port, and the installed version is as it was.
+#[test]
+fn a_version_too_long_for_the_package_directory_is_refused() {
+    let (rig, before) = installed("u-long");
+    for version in ["1".repeat(246), "1".repeat(255)] {
+        let archive = manifest_tar(&MANIFEST.replace("1.5.0", &version));
+        let (path, _) = rig.archive("r.tar.zst", &archive);
+        let fake = Faulty::new(rig.host());
+        let order = order(&version, &sha256_hex(&archive));
+        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        assert!(
+            matches!(&err, UnpackError::VersionTooLong { version: v } if *v == version),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.outcome(),
+            (Outcome::Failure, Class::Release, "version_too_long")
+        );
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+        assert_eq!(state_of(&rig), before);
+    }
+}
+
 /// Catches an order whose version is one of the package directory's own names reaching the
 /// disk: `current`, `previous`, `1.4.2.seal` and `x.tmp` are refused, `Failed`, release,
 /// `reserved_version`, before any call of the port, and the installed version, its seal and

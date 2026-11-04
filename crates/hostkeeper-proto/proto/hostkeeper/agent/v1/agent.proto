@@ -19,12 +19,12 @@
 // rest of the heartbeat is read, so a host never loses its updates to a field the coordinator
 // could do without.
 //
-// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
-// A version is the release's version string: 1 to 128 bytes, a digit first, then letters,
-// digits and `.+~-`. A service name is 1 to 64 bytes of `[a-z0-9-]`. A token (a reason, a
-// check, a step name) is 1 to 64 bytes of `[a-z0-9_]`; a step name at most 16. A commit is 40
-// lower-case hex digits; a package digest is SHA-256 as 64 lower-case hex characters. A heartbeat
-// lists at most 16 services.
+// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`). A
+// service name is 1 to 255 bytes of the POSIX portable filename characters (`A-Za-z0-9._-`), not
+// beginning with `-` or `.`; a version the same with `+` added. A token (a reason, a check, a step
+// name) is 1 to 64 bytes of `[a-z0-9_]`; a step name at most 16. A commit is 40 lower-case hex
+// digits; a package digest is SHA-256 as 64 lower-case hex characters. A heartbeat lists at most
+// 16 services.
 //
 // Orders: an order is one verb with typed arguments (`Order`): a service name, a version, a
 // package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds

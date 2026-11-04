@@ -16,10 +16,11 @@
 // the status code is the one each value names. Nothing else is ever in the message. A refused
 // call changes nothing.
 //
-// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
-// A package digest is SHA-256 as 64 lower-case hex characters. A version is the release's version
-// string: 1 to 128 bytes, a digit first, then letters, digits and `.+~-`. A service name is 1 to 64
-// bytes of `[a-z0-9-]`. A token (a reason, a step name) is 1 to 64 bytes of `[a-z0-9_]`.
+// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`). A
+// package digest is SHA-256 as 64 lower-case hex characters. A service name is 1 to 255 bytes of
+// the POSIX portable filename characters (`A-Za-z0-9._-`), not beginning with `-` or `.`; a
+// version the same with `+` added. A token (a reason, a step name) is 1 to 64 bytes of
+// `[a-z0-9_]`.
 //
 // Extending: add fields, messages and enum values; never renumber, rename, retype or remove one,
 // and never reuse a number (the compatibility test in this crate refuses each). A reader treats

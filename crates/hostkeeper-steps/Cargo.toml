@@ -13,8 +13,10 @@ description = "The step runner of the host updater: the step record and its resu
 # its own, the exit codes read as outcomes through `hostkeeper-hook`, the check of the staged
 # artifact before any run, and the updater's own update with its fallback. It runs a step through
 # a `StepLauncher` it is given and knows no service and no declaration. Synchronous, threads and
-# blocking files. It depends on `hostkeeper-hook` alone (crates/xtask/tests/layering keeps it so).
+# blocking files. It depends on `hostkeeper-hook` and, for the one rule of service names and
+# versions, `hostkeeper-config` (crates/xtask/tests/layering keeps it so).
 [dependencies]
+hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The effective uid (the owner checks) and the monotonic clock; `fs` for the tests' special files.
 rustix = { workspace = true, features = ["fs", "process", "time"] }
