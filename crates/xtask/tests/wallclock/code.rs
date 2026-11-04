@@ -36,8 +36,19 @@ pub struct Chain {
 pub struct Rename {
     pub line: usize,
     pub path: Vec<String>,
+    pub alias: String,
     pub spelling: String,
 }
+
+/// The most sources [`Code::sources`] follows for one path.
+pub const MAX_SOURCES: usize = 64;
+
+/// The most steps [`Code::sources`] follows a path through the imports.
+pub const MAX_STEPS: usize = 8;
+
+/// The sources of a path do not fit in [`MAX_SOURCES`] and [`MAX_STEPS`].
+#[derive(Debug)]
+pub struct Overflow;
 
 impl Code {
     /// The code of the source `text`.
@@ -63,39 +74,54 @@ impl Code {
 
     /// Every source `path` may stand for: as written; with its first segment replaced by the
     /// path of any `use` of the file that binds that name (plainly or renamed, in any scope);
-    /// and under any glob import. Followed for at most 8 steps and 64 sources, so a cycle ends.
-    /// A name bound in two scopes yields both sources, so an unrelated scope cannot hide one.
-    pub fn sources(&self, path: &[String]) -> Vec<Vec<String>> {
-        let mut out: Vec<Vec<String>> = vec![path.to_vec()];
+    /// and under any glob import (once: a source that came from a glob is not put under a glob
+    /// again). A name bound in two scopes yields both sources, so an unrelated scope cannot hide
+    /// one. When the sources do not all fit in [`MAX_SOURCES`] and [`MAX_STEPS`] steps, the
+    /// answer is [`Overflow`], never a shortened list.
+    pub fn sources(&self, path: &[String]) -> Result<Vec<Vec<String>>, Overflow> {
+        let mut out: Vec<(Vec<String>, bool)> = vec![(path.to_vec(), false)];
         let mut next = 0;
-        for _ in 0..8 {
+        for _ in 0..MAX_STEPS {
             let end = out.len();
             let mut k = next;
             while k < end {
-                let current = out[k].clone();
+                let (current, globbed) = out[k].clone();
                 k += 1;
-                let Some(first) = current.first() else {
-                    continue;
-                };
-                let bound = self.imports.names.get(first).into_iter().flatten();
-                let aliased = self.imports.aliases.get(first).into_iter().flatten();
-                let mut found: Vec<Vec<String>> = bound
-                    .chain(aliased)
-                    .map(|full| full.iter().chain(&current[1..]).cloned().collect())
-                    .collect();
-                found.extend(
-                    self.imports
-                        .globs
-                        .iter()
-                        .map(|glob| glob.iter().chain(&current).cloned().collect()),
-                );
-                for source in found {
-                    if out.len() < 64 && !out.contains(&source) {
-                        out.push(source);
+                for found in self.expansions(&current, globbed) {
+                    if out.iter().any(|(seen, _)| *seen == found.0) {
+                        continue;
                     }
+                    if out.len() >= MAX_SOURCES {
+                        return Err(Overflow);
+                    }
+                    out.push(found);
                 }
             }
             next = end;
+        }
+        if next < out.len() {
+            return Err(Overflow);
+        }
+        Ok(out.into_iter().map(|(source, _)| source).collect())
+    }
+
+    /// The sources one step from `current`: `current` with its first segment replaced by each
+    /// binding or alias of it, and, unless `current` came from a glob, `current` under each glob
+    /// import. Each comes with whether it came from a glob.
+    fn expansions(&self, current: &[String], globbed: bool) -> Vec<(Vec<String>, bool)> {
+        let Some(first) = current.first() else {
+            return Vec::new();
+        };
+        let bound = self.imports.names.get(first).into_iter().flatten();
+        let aliased = self.imports.aliases.get(first).into_iter().flatten();
+        let mut out: Vec<(Vec<String>, bool)> = bound
+            .chain(aliased)
+            .map(|full| (full.iter().chain(&current[1..]).cloned().collect(), globbed))
+            .collect();
+        if !globbed {
+            for glob in &self.imports.globs {
+                out.push((glob.iter().chain(current).cloned().collect(), true));
+            }
         }
         out
     }
@@ -207,6 +233,7 @@ fn use_tree(toks: &[Tok], mut i: usize, prefix: &mut Vec<String>, imports: &mut 
                 imports.aliases.entry(name).or_default().push(path.clone());
                 imports.renames.push(Rename {
                     line: toks[i].line,
+                    alias: alias.to_owned(),
                     spelling: format!("{} as {alias}", path.join("::")),
                     path,
                 });
@@ -271,6 +298,7 @@ fn type_rename(toks: &[Tok], code: &[bool], k: usize) -> Option<Rename> {
     Some(Rename {
         line: toks[k].line,
         path,
+        alias: toks[k + 1].text.clone(),
         spelling,
     })
 }

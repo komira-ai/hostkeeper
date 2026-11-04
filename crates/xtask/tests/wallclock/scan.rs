@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use crate::code::{Chain, Code, Rename};
+use crate::code::{Chain, Code, MAX_SOURCES, Overflow, Rename};
 
 /// The crate of test helpers: it never ships, so it is not scanned.
 const TESTKIT: &str = "hostkeeper-testkit";
@@ -120,20 +120,37 @@ pub struct Read {
     pub path: String,
     pub line: usize,
     pub form: String,
-    pub renamed: bool,
+    pub kind: Kind,
+}
+
+/// What a [`Read`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// A read of the wall clock; `form` is the row of [`FORMS`].
+    Read,
+    /// A rename of a wall-clock name; `form` is the rename as written.
+    Renamed,
+    /// A rename whose sources do not fit in [`MAX_SOURCES`]; `form` is the new name.
+    Unresolved,
 }
 
 impl fmt::Display for Read {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (path, line, form) = (&self.path, self.line, &self.form);
-        if self.renamed {
-            write!(
+        match self.kind {
+            Kind::Unresolved => {
+                return write!(
+                    f,
+                    "{path}:{line}: cannot resolve `{form}`: more than {MAX_SOURCES} import \
+                     sources; split the glob imports or allow-list the path"
+                );
+            }
+            Kind::Renamed => write!(
                 f,
                 "{path}:{line}: wall-clock name renamed, {form}: the lint does not follow a \
                  rename, so use the name itself; "
-            )?;
-        } else {
-            write!(f, "{path}:{line}: wall-clock read {form}: ")?;
+            )?,
+            Kind::Read => write!(f, "{path}:{line}: wall-clock read {form}: ")?,
         }
         write!(
             f,
@@ -174,17 +191,36 @@ fn matches(form: &Form, chain: &Chain, code: &Code) -> bool {
     chain.paths.iter().any(|p| ends_with(p, form.tail)) && code.followed_by(chain, form.then)
 }
 
-/// Whether `rename` renames a wall-clock name (see [`RENAMED`]): whether one of the sources it
-/// may stand for ([`Code::sources`]) does, so an ambiguous source is refused.
-fn hides_a_read(rename: &Rename, code: &Code) -> bool {
-    code.sources(&rename.path).iter().any(|source| {
-        let (Some(first), Some(last)) = (source.first(), source.last()) else {
-            return false;
-        };
-        RENAMED.iter().any(|(name, root)| {
-            last == name && root.is_none_or(|r| first == r || code.is_local(first))
-        })
-    })
+/// Whether `source` is a wall-clock name (see [`RENAMED`]).
+fn is_wall_clock_source(source: &[String], code: &Code) -> bool {
+    let (Some(first), Some(last)) = (source.first(), source.last()) else {
+        return false;
+    };
+    RENAMED
+        .iter()
+        .any(|(name, root)| last == name && root.is_none_or(|r| first == r || code.is_local(first)))
+}
+
+/// What `rename` is to the rule, if anything: a rename of a wall-clock name, when its source as
+/// written or one of the sources it may stand for ([`Code::sources`]) is one, so an ambiguous
+/// source is refused; or unresolved, when those sources overflow. Only a rename whose last
+/// segment is a name of [`RENAMED`] is followed: following keeps the last segment (an alias of a
+/// wall-clock name is refused where it is written), so no other rename can name a wall clock.
+fn judge(rename: &Rename, code: &Code) -> Option<Kind> {
+    if is_wall_clock_source(&rename.path, code) {
+        return Some(Kind::Renamed);
+    }
+    let last = rename.path.last()?;
+    if !RENAMED.iter().any(|(name, _)| last == name) {
+        return None;
+    }
+    match code.sources(&rename.path) {
+        Err(Overflow) => Some(Kind::Unresolved),
+        Ok(sources) => sources
+            .iter()
+            .any(|source| is_wall_clock_source(source, code))
+            .then_some(Kind::Renamed),
+    }
 }
 
 /// Every wall-clock read and wall-clock rename in the source `text` of the file at `path`, by
@@ -198,16 +234,23 @@ pub fn reads(path: &str, text: &str) -> Vec<Read> {
                 path: path.to_owned(),
                 line: code.line(chain),
                 form: form.name.to_owned(),
-                renamed: false,
+                kind: Kind::Read,
             });
         }
     }
-    for rename in code.renames().iter().filter(|r| hides_a_read(r, &code)) {
+    for rename in code.renames() {
+        let Some(kind) = judge(rename, &code) else {
+            continue;
+        };
+        let form = match kind {
+            Kind::Unresolved => rename.alias.clone(),
+            Kind::Read | Kind::Renamed => rename.spelling.clone(),
+        };
         out.push(Read {
             path: path.to_owned(),
             line: rename.line,
-            form: rename.spelling.clone(),
-            renamed: true,
+            form,
+            kind,
         });
     }
     out.sort_by_key(|read| read.line);

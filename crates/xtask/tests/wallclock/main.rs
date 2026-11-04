@@ -8,14 +8,16 @@
 //! scan sees exactly the tracked sources, including those of a crate that is not (yet) a
 //! workspace member. The rule is in `scan.rs`; a source is read by `lex.rs` (tokens), `skip.rs`
 //! (what is not read) and `code.rs` (paths and imports). The tests of the forms are in
-//! `forms.rs`, of test-only code and file selection in `test_only.rs`, of the allow-list in
-//! `allow_list.rs`. The fixtures are small trees written to a scratch
-//! directory; a text holding a form the rule refuses is built from pieces at run time.
+//! `forms.rs`, of rename sources too many to follow in `overflow.rs`, of test-only code and file
+//! selection in `test_only.rs`, of the allow-list in `allow_list.rs`. The fixtures are small
+//! trees written to a scratch directory; a text holding a form the rule refuses is built from
+//! pieces at run time.
 
 mod allow_list;
 mod code;
 mod forms;
 mod lex;
+mod overflow;
 #[path = "../hygiene/rust_text.rs"]
 mod rust_text;
 mod scan;
@@ -27,7 +29,7 @@ mod testdir;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use scan::{ALLOWED_FILE, Read, check, scanned};
+use scan::{ALLOWED_FILE, Kind, Read, check, scanned};
 use testdir::TestDir;
 
 const ALLOWED_TEXT: &str = include_str!("allowed.txt");
@@ -109,7 +111,7 @@ fn refusal(path: &str, line: usize, form: &str) -> String {
         path: path.to_owned(),
         line,
         form: form.to_owned(),
-        renamed: false,
+        kind: Kind::Read,
     }
     .to_string()
 }
@@ -120,7 +122,18 @@ fn renaming(path: &str, line: usize, spelling: &str) -> String {
         path: path.to_owned(),
         line,
         form: spelling.to_owned(),
-        renamed: true,
+        kind: Kind::Renamed,
+    }
+    .to_string()
+}
+
+/// The refusal of the rename to `alias` at `path:line`, whose sources overflow.
+fn unresolved(path: &str, line: usize, alias: &str) -> String {
+    Read {
+        path: path.to_owned(),
+        line,
+        form: alias.to_owned(),
+        kind: Kind::Unresolved,
     }
     .to_string()
 }
