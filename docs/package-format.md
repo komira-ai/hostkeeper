@@ -21,8 +21,10 @@ One zstd frame holding one tar archive.
 - The frame's window is at most 8 MiB (8388608 bytes), the window of `zstd -19` and of every
   lower level. Build packages with `zstd -19` or lower and without `--long`; a frame that
   declares a larger window is refused before the decoder allocates anything for it.
-- Dictionaries are not used. A content checksum may be present; it is not needed, since the
-  archive's SHA-256 is checked.
+- Dictionaries are not used. A content checksum (written by `zstd` by default) is checked when
+  it is present, and a declared content size must be what the frame decompresses to. A
+  single-segment frame's window is its content size, so it too is at most 8 MiB. The reserved
+  bit of the frame header must be clear.
 
 ### The tar archive
 
@@ -124,7 +126,15 @@ it with the seal; a version that changed is not run. A reader ignores fields it 
 ```
 
 The links' targets are relative (`1.5.0`, not a path). No version starts with `.`, so the names
-of an unpack under way cannot be a version.
+of an unpack under way cannot be a version, and a version is never `current`, `previous` or a
+name ending in `.seal` or `.tmp` (refused as `reserved_version`). The service directory is
+0755, so the service's users reach their version; a `.stage-*` directory is 0700 until it
+becomes the version.
+
+One unpack of a service runs at a time: an unpack holds an exclusive lock (`flock`) on the
+service directory from before it removes orphans until it has published, and `remove_orphans`
+takes the same lock, so neither removes the other's work. A second holder is refused at once, to
+try again later.
 
 The publish keeps a version directory whole or absent:
 

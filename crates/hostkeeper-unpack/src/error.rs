@@ -20,6 +20,9 @@ pub const REASON_DAEMON_TOO_OLD: &str = "daemon_too_old";
 pub const REASON_NO_SPACE: &str = "no_space";
 /// The version is on the host but is not what its seal says, or was sealed for another archive.
 pub const REASON_ARTIFACT_CHANGED: &str = "artifact_changed";
+/// The order names a version that is one of the package directory's own names (`current`,
+/// `previous`, `*.seal`, `*.tmp`).
+pub const REASON_RESERVED_VERSION: &str = "reserved_version";
 /// The archive, the staging directory or a seal cannot be read or written right now, for a
 /// reason that is not a full disk: tried again later.
 pub const REASON_IO_ERROR: &str = "io_error";
@@ -149,6 +152,10 @@ pub enum UnpackError {
     /// Nothing was touched.
     #[error("the seal of version {version} has schema {found}, which this daemon does not read")]
     SealSchema { version: String, found: u64 },
+    /// The order's version is a name the package directory holds for itself. Nothing was
+    /// touched.
+    #[error("the version {version:?} is a name the package directory holds for itself")]
+    ReservedVersion { version: String },
     #[error("{what}: {source}")]
     Io {
         what: &'static str,
@@ -174,6 +181,7 @@ impl UnpackError {
             UnpackError::ArtifactChanged { .. } => (FAILED, REASON_ARTIFACT_CHANGED),
             UnpackError::SealUnreadable { .. } => (DEFERRED, REASON_IO_ERROR),
             UnpackError::SealSchema { .. } => (DEFERRED, REASON_DAEMON_TOO_OLD),
+            UnpackError::ReservedVersion { .. } => (FAILED, REASON_RESERVED_VERSION),
             UnpackError::Io { .. } => (DEFERRED, REASON_IO_ERROR),
         };
         (kind.0, kind.1, reason)

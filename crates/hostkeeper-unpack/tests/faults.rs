@@ -8,7 +8,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_steps::{Layout, Seal};
-use hostkeeper_unpack::{UnpackError, remove_orphans, unpack};
+use hostkeeper_unpack::{PackageFs, UnpackError, remove_orphans, unpack};
 use support::{
     Call, Faulty, MANIFEST, Matcher, Rig, SERVICE, Tar, VERSION, limits, order, sha256_hex,
     valid_tar, zstd,
@@ -247,4 +247,230 @@ fn an_unpack_removes_the_orphans_of_its_service_first() {
         .filter(|c| matches!(c, Call::RemoveTree(_)))
         .collect();
     assert_eq!(removed.len(), 3, "{removed:?}");
+}
+
+const EIO: i32 = 5;
+
+/// Whether `c` is the fsync of the service directory itself.
+fn service_sync(c: &Call) -> bool {
+    matches!(c, Call::SyncDir(p) if p == std::path::Path::new(SERVICE))
+}
+
+/// Catches a failure at a step of the publish, or a partial write, that leaves a partial tree, a
+/// seal without its version, or a changed installed version: a write that fails half done
+/// (ENOSPC and EIO), EDQUOT at a write in the middle of a file, the fsync of the temporary seal,
+/// the rename of the seal, the fsync of the service directory after it, and the rename of the
+/// tree each give the outcome of their error, leave no new version and no seal of it, and the
+/// installed versions and links as they were.
+#[test]
+fn a_failure_at_each_step_of_the_publish_leaves_the_host_as_it_was() {
+    let at: Vec<(&str, Matcher, usize, i32, &str)> = vec![
+        (
+            "a half write, ENOSPC",
+            Box::new(|c| matches!(c, Call::Write(..))),
+            2,
+            ENOSPC,
+            "no_space",
+        ),
+        (
+            "a half write, EIO",
+            Box::new(|c| matches!(c, Call::Write(..))),
+            2,
+            EIO,
+            "io_error",
+        ),
+        (
+            "EDQUOT in the middle of a file",
+            Box::new(|c| matches!(c, Call::Write(p, _) if p.ends_with("bin/big"))),
+            2,
+            EDQUOT,
+            "no_space",
+        ),
+        (
+            "the fsync of the temporary seal",
+            Box::new(|c| matches!(c, Call::FileSync(p) if p.ends_with(".1.5.0.seal.tmp"))),
+            0,
+            ENOSPC,
+            "no_space",
+        ),
+        (
+            "the rename of the seal",
+            Box::new(|c| matches!(c, Call::Rename(p, _) if p.ends_with(".1.5.0.seal.tmp"))),
+            0,
+            EIO,
+            "io_error",
+        ),
+        (
+            "the fsync after the seal's rename",
+            Box::new(service_sync),
+            0,
+            EIO,
+            "io_error",
+        ),
+        (
+            "the rename of the tree",
+            Box::new(|c| matches!(c, Call::Rename(_, to) if to.ends_with("1.5.0"))),
+            0,
+            EIO,
+            "io_error",
+        ),
+    ];
+    for (what, matcher, nth, errno, reason) in at {
+        let rig = Rig::new("f-publish");
+        install(&rig, "1.4.1");
+        install(&rig, "1.4.2");
+        let layout = Layout::package(&rig.service());
+        layout.switch("1.4.1").unwrap();
+        layout.switch("1.4.2").unwrap();
+        let before = state(&rig);
+        let (path, order) = rig.archive("new.tar.zst", &package(VERSION));
+        let fake = Faulty::new(rig.host()).partial().fail(matcher, nth, errno);
+        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        assert_eq!(err.outcome().2, reason, "{what}: {err:?}");
+        assert_eq!(state(&rig), before, "{what}");
+        layout.check_tree("1.4.1").unwrap();
+        layout.check_tree("1.4.2").unwrap();
+    }
+}
+
+/// Catches a cleanup that fails being taken for a clean host, or leaving what the next run
+/// cannot remove: when the removal of the staging directory fails too, the error of the unpack
+/// stands, what is left is only orphans, and `remove_orphans` then leaves the host as it was.
+#[test]
+fn a_cleanup_that_fails_leaves_only_orphans() {
+    let rig = Rig::new("f-cleanup");
+    install(&rig, "1.4.2");
+    let before = state(&rig);
+    let (path, order) = rig.archive("new.tar.zst", &package(VERSION));
+    let fake = Faulty::new(rig.host()).fail_all(
+        Box::new(|c| matches!(c, Call::FileSync(_) | Call::RemoveTree(_))),
+        ENOSPC,
+    );
+    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    assert!(matches!(err, UnpackError::NoSpace(_)), "{err:?}");
+    assert!(
+        rig.listing().iter().any(|n| n.starts_with(".stage-")),
+        "{:?}",
+        rig.listing()
+    );
+    remove_orphans(&order.service, &rig.host()).unwrap();
+    assert_eq!(state(&rig), before);
+}
+
+/// Catches a failure of the last fsync, after the tree's rename, losing the version or its
+/// seal: the version stays whole and sealed even when looking at it in the cleanup fails too,
+/// and with the archive deleted the next unpack of the order takes it as it is.
+#[test]
+fn a_version_published_before_a_failed_fsync_stays_and_is_used_without_the_archive() {
+    let rig = Rig::new("f-last-fsync");
+    let (path, order) = rig.archive("new.tar.zst", &package(VERSION));
+    let syncs = std::rc::Rc::new(std::cell::Cell::new(0));
+    let published = std::rc::Rc::new(std::cell::Cell::new(false));
+    let (count, after) = (syncs.clone(), published.clone());
+    let fake = Faulty::new(rig.host()).fail_all(
+        Box::new(move |c| {
+            if service_sync(c) {
+                count.set(count.get() + 1);
+                after.set(count.get() == 2);
+                return count.get() == 2;
+            }
+            matches!(c, Call::Exists(_)) & after.get()
+        }),
+        ENOSPC,
+    );
+    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    assert!(matches!(err, UnpackError::NoSpace(_)), "{err:?}");
+    assert!(published.get());
+    assert_eq!(
+        rig.listing(),
+        [VERSION.to_owned(), format!("{VERSION}.seal")]
+    );
+    Layout::package(&rig.service()).check_tree(VERSION).unwrap();
+    fs::remove_file(&path).unwrap();
+    let again = unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    assert!(!again.fresh);
+}
+
+/// Catches two unpacks of one service, or an orphan removal during an unpack, touching each
+/// other's work: while an unpack is between the rename of its seal and of its tree, a second
+/// unpack of the service and `remove_orphans` are each refused with `io_error` and remove
+/// nothing, and the first finishes with its version whole; a lock held by another holder refuses
+/// an unpack the same way.
+#[test]
+fn an_unpack_holds_its_service_against_other_unpacks_and_orphan_removal() {
+    let rig = Rig::new("f-lock");
+    let (path, order) = rig.archive("new.tar.zst", &package(VERSION));
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (packages, record, second, second_order) = (
+        rig.packages.clone(),
+        seen.clone(),
+        path.clone(),
+        order.clone(),
+    );
+    let fake = Faulty::new(rig.host()).at(
+        Box::new(|c| matches!(c, Call::Rename(_, to) if to.ends_with("1.5.0"))),
+        move |_| {
+            let other = hostkeeper_unpack::HostFs::open(&packages, support::me()).unwrap();
+            let unpacked = unpack(&second, &second_order, &limits(), &other);
+            let removed = remove_orphans(&second_order.service, &other);
+            let names: Vec<String> = fs::read_dir(packages.join(SERVICE))
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            record.borrow_mut().push((
+                unpacked.map(|_| ()).map_err(|e| e.outcome().2),
+                removed.map_err(|e| e.outcome().2),
+                names.iter().any(|n| n.starts_with(".stage-"))
+                    && names.contains(&"1.5.0.seal".into()),
+            ));
+        },
+    );
+    unpack(&path, &order, &limits(), &fake).unwrap();
+    assert_eq!(*seen.borrow(), [(Err("io_error"), Err("io_error"), true)]);
+    assert_eq!(
+        rig.listing(),
+        [VERSION.to_owned(), format!("{VERSION}.seal")]
+    );
+    Layout::package(&rig.service()).check_tree(VERSION).unwrap();
+
+    let held = rig.host();
+    let _lock = held.lock(std::path::Path::new(SERVICE)).unwrap();
+    let other = package("1.6.0");
+    let (other_path, _) = rig.archive("other.tar.zst", &other);
+    let other_order = support::order("1.6.0", &sha256_hex(&other));
+    let err = unpack(&other_path, &other_order, &limits(), &rig.host()).unwrap_err();
+    assert!(
+        matches!(&err, UnpackError::Io { what, .. } if what.contains("unpack lock")),
+        "{err:?}"
+    );
+    assert!(!rig.service().join("1.6.0").exists());
+}
+
+/// Catches a service directory that cannot be made or looked at being passed over: a packages
+/// directory nobody may write refuses a first unpack (`io_error`, nothing made), and a failed
+/// look at the service directory stops `remove_orphans` before it removes anything.
+#[test]
+fn a_service_directory_that_cannot_be_made_or_looked_at_stops_the_work() {
+    let rig = Rig::new("f-service-dir");
+    let (path, order) = rig.archive("a.tar.zst", &package(VERSION));
+    fs::set_permissions(&rig.packages, fs::Permissions::from_mode(0o555)).unwrap();
+    let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+    assert!(
+        matches!(&err, UnpackError::Io { what, .. } if *what == "cannot create the service directory"),
+        "{err:?}"
+    );
+    fs::set_permissions(&rig.packages, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!rig.service().exists());
+    install(&rig, VERSION);
+    fs::create_dir(rig.service().join(".stage-left")).unwrap();
+    let fake = Faulty::new(rig.host()).fail(Box::new(|c| matches!(c, Call::Exists(_))), 0, EIO);
+    let err = remove_orphans(&order.service, &fake).unwrap_err();
+    assert!(
+        matches!(&err, UnpackError::Io { what, .. } if *what == "cannot look at the package directory"),
+        "{err:?}"
+    );
+    assert!(rig.service().join(".stage-left").is_dir());
+    fs::write(rig.packages.join("afile"), "x").unwrap();
+    assert!(rig.host().exists(std::path::Path::new("afile/x")).is_err());
+    assert!(!rig.host().exists(std::path::Path::new("absent/x")).unwrap());
 }

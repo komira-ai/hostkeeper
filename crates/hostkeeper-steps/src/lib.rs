@@ -30,5 +30,5 @@ pub use deadman::{DeadMan, Watch};
 pub use launcher::{LaunchError, StepCall, StepExit, StepLauncher};
 pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore};
 pub use runner::{Bounds, Finished, RunError, StepRunner, UpdateOrder};
-pub use seal::{SEAL_SCHEMA, Seal, SealError};
+pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
 pub use selfupdate::Layout;

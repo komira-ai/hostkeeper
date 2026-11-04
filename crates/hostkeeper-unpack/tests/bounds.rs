@@ -3,7 +3,7 @@
 
 mod support;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_unpack::{BUFFER, Limits, MAX_WINDOW_BYTES, Rule, UnpackError, unpack};
@@ -698,10 +698,42 @@ fn archive_bounds_and_shape_rules_refuse_each_violation() {
     for row in rows() {
         let rig = Rig::new("b-row");
         let (path, order) = rig.archive("a.tar.zst", &row.archive);
-        let err = unpack(&path, &order, &row.limits, &rig.host()).unwrap_err();
-        let UnpackError::BadArchive { rule, .. } = &err else {
+        let fake = Faulty::new(rig.host());
+        let err = unpack(&path, &order, &row.limits, &fake).unwrap_err();
+        let UnpackError::BadArchive { rule, entry, .. } = &err else {
             panic!("{}: {err:?}", row.name)
         };
+        // The offending entry was checked before anything of it was made: no create of its
+        // name, except the earlier entry a duplicate repeats, and a file whose data the archive
+        // cut short (a stream rule, found while the file is written).
+        let name = entry.trim_end_matches('/');
+        let made = fake
+            .calls()
+            .iter()
+            .filter(|c| match c {
+                Call::CreateFile(p) | Call::CreateDir(p) => {
+                    let inside: PathBuf = p.components().skip(2).collect();
+                    inside
+                        .as_os_str()
+                        .as_encoded_bytes()
+                        .escape_ascii()
+                        .to_string()
+                        == name
+                }
+                _ => false,
+            })
+            .count();
+        let allowed = match rule {
+            Rule::Duplicate => 1..=1,
+            Rule::Truncated => 0..=1,
+            _ => 0..=0,
+        };
+        assert!(
+            allowed.contains(&made),
+            "{}: {made}: {:?}",
+            row.name,
+            fake.calls()
+        );
         match (&row.rule, rule) {
             (Rule::Decoder(_), Rule::Decoder(_)) => {}
             (want, got) => assert_eq!(want, got, "{}", row.name),

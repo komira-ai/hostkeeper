@@ -11,12 +11,14 @@ use hostkeeper_config::manifest::{
     Expected, HostkeeperVersion, MANIFEST_FILE, MAX_MANIFEST_BYTES, Manifest,
 };
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_steps::{EntryKind, Layout, Seal, SealError, TreeEntry, read_tree};
+use hostkeeper_steps::{
+    ArtifactError, EntryKind, Layout, Seal, SealError, TreeEntry, read_seal, read_tree,
+};
 use sha2::{Digest, Sha256};
 
 use crate::archive::{self, BLOCK, BUFFER, Extended, MAX_EXTENDED_BYTES, Stop, Stream, Tar};
 use crate::error::{Rule, UnpackError, escape};
-use crate::fs::PackageFs;
+use crate::fs::{PackageFs, ServiceLock};
 use crate::publish::publish;
 use crate::seal;
 
@@ -74,16 +76,21 @@ pub fn running_hostkeeper() -> HostkeeperVersion {
 /// Unpacks the archive at `archive` as the version `order` names, into
 /// `packages/<service>/<version>/` with its seal `<version>.seal`, through `fs`.
 ///
-/// In order: removes the orphans of the service ([`remove_orphans`]); returns the version if it
-/// is on the host already, sealed for this archive and unchanged (`fresh: false`), and refuses
-/// it untouched if it is not ([`UnpackError::ArtifactChanged`]); creates `.stage-<random>`;
-/// reads the archive in one pass, hashing it, and writes each entry that keeps every rule into
-/// the staging directory, with modes normalised (0555 when the tar mode has an execute bit and
-/// for directories, 0444 otherwise) and owner and times not taken from the archive; checks the
-/// archive's SHA-256; loads the manifest; makes the tree read-only and durable and reads it back
-/// (it must be what was written); writes the seal, then renames the tree in. On any error the
-/// staging directory, a temporary seal and a seal without its version are removed: no version
-/// directory is left half-written, and nothing else is touched.
+/// In order: refuses a version that is one of the names the package directory holds for
+/// itself (`current`, `previous`, `*.seal`, `*.tmp`: [`UnpackError::ReservedVersion`]);
+/// creates the service directory (0755) when it is missing; takes the service's unpack lock
+/// for the rest of the call, so that no other unpack or orphan removal of the service runs
+/// meanwhile (one that holds it already makes this an [`UnpackError::Io`] to try again);
+/// removes the orphans of the service; returns the version if it is on the host already,
+/// sealed for this archive and unchanged (`fresh: false`), and refuses it untouched if it is
+/// not ([`UnpackError::ArtifactChanged`]); creates `.stage-<random>`; reads the archive in one
+/// pass, hashing it, and writes each entry that keeps every rule into the staging directory,
+/// with modes normalised (0555 when the tar mode has an execute bit and for directories, 0444
+/// otherwise) and owner and times not taken from the archive; checks the archive's SHA-256;
+/// loads the manifest; makes the tree read-only and durable and reads it back (it must be what
+/// was written); writes the seal, then renames the tree in. On any error the staging
+/// directory, a temporary seal and a seal without its version are removed, and nothing else is
+/// touched; see [`UnpackError`] for the one error after which the version stays.
 pub fn unpack(
     archive: &Path,
     order: &UnpackOrder,
@@ -91,9 +98,18 @@ pub fn unpack(
     fs: &dyn PackageFs,
 ) -> Result<Unpacked, UnpackError> {
     let service = Path::new(order.service.as_str());
-    remove_orphans(&order.service, fs)?;
+    let version = order.version.as_str();
     let layout = Layout::package(&fs.real_path(service));
-    if let Some(found) = existing(&layout, order)? {
+    if layout.check_name(version).is_err() {
+        return Err(UnpackError::ReservedVersion {
+            version: version.to_owned(),
+        });
+    }
+    fs.create_service(service)
+        .map_err(|e| UnpackError::of_io("cannot create the service directory", e))?;
+    let _lock = lock(service, fs)?;
+    remove_orphans_locked(service, fs)?;
+    if let Some(found) = existing(&layout, order, fs)? {
         return Ok(found);
     }
     let stage = fs
@@ -101,26 +117,45 @@ pub fn unpack(
         .map_err(|e| UnpackError::of_io("cannot create the staging directory", e))?;
     let result = stage_and_publish(archive, order, limits, fs, &layout, &stage);
     if result.is_err() {
-        let version = order.version.as_str();
-        // What a failed cleanup leaves, the next remove_orphans removes.
+        // What a failed cleanup leaves, the next remove_orphans removes. The seal goes only
+        // when the version is known to be absent: after the tree's rename it is the version's.
         let _ = fs.remove_tree(&stage);
         let _ = fs.remove_tree(&seal::temporary(service, version));
-        if std::fs::symlink_metadata(layout.version_path(version)).is_err() {
+        if let Ok(false) = fs.exists(&service.join(version)) {
             let _ = fs.remove_tree(&seal::placed(service, version));
         }
     }
     result
 }
 
+/// The service's unpack lock.
+fn lock(service: &Path, fs: &dyn PackageFs) -> Result<ServiceLock, UnpackError> {
+    fs.lock(service)
+        .map_err(|e| UnpackError::of_io("cannot take the unpack lock of the service", e))
+}
+
 /// Removes what a crashed unpack of `service` left in `packages/<service>`: every `.stage-*`
 /// directory, every `.<version>.seal.tmp`, and every `<version>.seal` with no `<version>`
-/// beside it. Nothing else is touched. A service with no directory has nothing to remove.
+/// beside it. Nothing else is touched. A service with no directory has nothing to remove. It
+/// takes the service's unpack lock, so it never removes the staging directory or the seal of an
+/// unpack under way: while one runs, it is an [`UnpackError::Io`] to try again.
 pub fn remove_orphans(service: &ServiceName, fs: &dyn PackageFs) -> Result<(), UnpackError> {
     let dir = Path::new(service.as_str());
-    let names = match fs.read_dir(dir) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        listed => listed.map_err(|e| UnpackError::of_io("cannot list the package directory", e))?,
-    };
+    let present = fs
+        .exists(dir)
+        .map_err(|e| UnpackError::of_io("cannot look at the package directory", e))?;
+    if !present {
+        return Ok(());
+    }
+    let _lock = lock(dir, fs)?;
+    remove_orphans_locked(dir, fs)
+}
+
+/// [`remove_orphans`] under a lock the caller holds.
+fn remove_orphans_locked(dir: &Path, fs: &dyn PackageFs) -> Result<(), UnpackError> {
+    let names = fs
+        .read_dir(dir)
+        .map_err(|e| UnpackError::of_io("cannot list the package directory", e))?;
     let present: BTreeSet<&[u8]> = names.iter().map(|name| name.as_bytes()).collect();
     for name in &names {
         let bytes = name.as_bytes();
@@ -139,11 +174,17 @@ pub fn remove_orphans(service: &ServiceName, fs: &dyn PackageFs) -> Result<(), U
 
 /// The version as it is on the host: `None` when there is no `<version>`, the version when it
 /// is sealed for the order's archive and its tree has the seal's digest, an error otherwise.
-fn existing(layout: &Layout, order: &UnpackOrder) -> Result<Option<Unpacked>, UnpackError> {
+fn existing(
+    layout: &Layout,
+    order: &UnpackOrder,
+    fs: &dyn PackageFs,
+) -> Result<Option<Unpacked>, UnpackError> {
     let version = order.version.as_str();
     let dir = layout.version_path(version);
-    // What cannot be looked at is left to the staging that follows, which then reports it.
-    if std::fs::symlink_metadata(&dir).is_err() {
+    let present = fs
+        .exists(&Path::new(order.service.as_str()).join(version))
+        .map_err(|e| UnpackError::of_io("cannot look at the version", e))?;
+    if !present {
         return Ok(None);
     }
     let changed = |why: String| UnpackError::ArtifactChanged {
@@ -154,7 +195,7 @@ fn existing(layout: &Layout, order: &UnpackOrder) -> Result<Option<Unpacked>, Un
         version: version.to_owned(),
         why,
     };
-    let bytes = match std::fs::read(layout.seal_path(version)) {
+    let bytes = match read_seal(&layout.seal_path(version)) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Err(changed("has no seal".to_owned()));
         }
@@ -224,8 +265,11 @@ fn stage_and_publish(
     for dir in dirs.iter().copied().chain([stage]) {
         fs.sync_dir(dir).map_err(sealing)?;
     }
-    let tree = read_tree(&real)
-        .map_err(|e| UnpackError::of_io("cannot read back the staged tree", io::Error::other(e)))?;
+    let tree = read_tree(&real).map_err(|e| match e {
+        ArtifactError::Io(e) => UnpackError::of_io("cannot read back the staged tree", e),
+        // A file that became a link or a special file since it was written.
+        _ => broken(b"the staged tree", Rule::NotAsWritten, pass.produced),
+    })?;
     pass.entries.sort_by(|a, b| a.name.cmp(&b.name));
     if tree.entries != pass.entries {
         return Err(UnpackError::BadArchive {

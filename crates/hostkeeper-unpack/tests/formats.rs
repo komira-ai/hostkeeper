@@ -105,6 +105,7 @@ fn row(error: &UnpackError) -> (Outcome, Class, &'static str) {
         UnpackError::ArtifactChanged { .. } => failed("artifact_changed"),
         UnpackError::SealUnreadable { .. } => deferred("io_error"),
         UnpackError::SealSchema { .. } => deferred("daemon_too_old"),
+        UnpackError::ReservedVersion { .. } => failed("reserved_version"),
         UnpackError::Io { .. } => deferred("io_error"),
     }
 }
@@ -172,6 +173,12 @@ fn every_unpack_error_maps_to_one_class_and_reason() {
             "the seal of version 1.5.0 has schema 2, which this daemon does not read",
         ),
         (
+            UnpackError::ReservedVersion {
+                version: "current".into(),
+            },
+            "the version \"current\" is a name the package directory holds for itself",
+        ),
+        (
             UnpackError::Io {
                 what: "cannot open the archive",
                 source: io::Error::other("gone"),
@@ -187,6 +194,7 @@ fn every_unpack_error_maps_to_one_class_and_reason() {
         hostkeeper_unpack::REASON_NO_SPACE,
         hostkeeper_unpack::REASON_ARTIFACT_CHANGED,
         hostkeeper_unpack::REASON_IO_ERROR,
+        hostkeeper_unpack::REASON_RESERVED_VERSION,
     ];
     for (error, text) in &errors {
         assert_eq!(error.outcome(), row(error), "{error:?}");
@@ -256,7 +264,7 @@ fn the_host_port_takes_plain_paths_and_follows_no_link() {
     assert_eq!(host.real_path(Path::new("a/b")), rig.packages.join("a/b"));
 
     fs::set_permissions(&rig.packages, fs::Permissions::from_mode(0o555)).unwrap();
-    let err = host.create_stage(Path::new("new-service")).unwrap_err();
+    let err = host.create_service(Path::new("new-service")).unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
     fs::set_permissions(&rig.packages, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(rig.packages.join("afile"), "x").unwrap();
@@ -284,4 +292,53 @@ fn what_the_host_port_creates_is_given_to_its_owner() {
     let root = HostFs::open(&rig.packages, Owner::ROOT).unwrap();
     let err = root.create_dir(Path::new("roots")).unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+}
+
+/// The tree digest of a tree in which full-name order and directory-by-directory order differ:
+/// `bin/a-` sorts before `bin/a/x` (`-` is below `/`), though `bin/a` sorts before `bin/a-`.
+const GOLDEN_PREFIX_TREE_DIGEST: &str =
+    "d478cc9a32cd63940b9680413e71c4a685b40e94f2c73186311cc5906e04b473";
+
+/// The prefix tree's entries, in the order of `order` (indexes into the list below), with each
+/// directory before what is in it.
+fn prefix_tree(order: &[usize]) -> Vec<u8> {
+    let manifest = support::MANIFEST.as_bytes();
+    let mut tar = support::Tar::new();
+    for &i in order {
+        match i {
+            0 => tar.dir("bin"),
+            1 => tar.dir("bin/a"),
+            2 => tar.file("bin/a/x", 0o755, b"x\n"),
+            3 => tar.file("bin/a-", 0o644, b"a-\n"),
+            4 => tar.dir("files"),
+            5 => tar.file("files/c.conf", 0o644, b"c\n"),
+            _ => tar.file("manifest.toml", 0o644, manifest),
+        };
+    }
+    zstd(&tar.end().bytes())
+}
+
+/// Catches the tree digest walking directory by directory instead of in the byte order of full
+/// names, and a digest that depends on the order of the archive: the prefix tree has its
+/// committed digest, and the same tree in three other archive orders has the same one.
+#[test]
+fn the_tree_digest_orders_full_names_and_not_the_archive() {
+    for (i, order) in [
+        [0, 1, 2, 3, 4, 5, 6],
+        [6, 4, 5, 0, 3, 1, 2],
+        [0, 3, 1, 2, 6, 4, 5],
+        [4, 0, 1, 5, 2, 6, 3],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let rig = Rig::new("fmt-prefix");
+        let (path, order_of) = rig.archive("p.tar.zst", &prefix_tree(order));
+        let unpacked = unpack(&path, &order_of, &limits(), &rig.host()).unwrap();
+        assert_eq!(
+            unpacked.seal.tree_digest(),
+            GOLDEN_PREFIX_TREE_DIGEST,
+            "order {i}"
+        );
+    }
 }

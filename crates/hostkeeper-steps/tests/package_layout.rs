@@ -472,3 +472,95 @@ fn a_version_named_like_the_layouts_own_files_is_refused() {
     fs::write(&file, "f").unwrap();
     binaries.stage("previous", &file).unwrap();
 }
+
+/// Catches a staging source that is not a fresh staging directory: a live version (which the
+/// rename would move away from under `current`), the destination itself, a directory inside a
+/// version and a directory outside the package directory are each refused before anything is
+/// removed or moved, and every version, seal and link stays.
+#[test]
+fn only_a_staging_directory_of_the_package_directory_is_staged() {
+    let s = Scratch::new("pl-sources");
+    let layout = package(&s);
+    stage(&layout, "v1", "a");
+    layout.switch("v1").unwrap();
+    stage(&layout, "v2", "b");
+    let nested = layout.version_path("v2").join(".stage-n");
+    let outside = s.path().join(".stage-out");
+    fs::create_dir_all(&outside).unwrap();
+    let listing = |l: &Layout| {
+        let mut names: Vec<_> = fs::read_dir(l.dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = listing(&layout);
+    for (what, version, source) in [
+        ("the live version", "v3", layout.version_path("v1")),
+        ("the destination", "v2", layout.version_path("v2")),
+        ("a directory inside a version", "v3", nested),
+        ("a directory elsewhere", "v3", outside),
+    ] {
+        let err = layout.stage_tree(version, &source).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{what}");
+        assert_eq!(listing(&layout), before, "{what}");
+    }
+    assert_eq!(
+        (text(&layout, "v1"), text(&layout, "v2")),
+        ("a".into(), "b".into())
+    );
+    layout.check_tree("v1").unwrap();
+    layout.check_tree("v2").unwrap();
+    assert_eq!(links(&layout), (Some("v1".into()), None));
+}
+
+/// Catches a seal read that follows a link, waits on a pipe or has no bound: a link to a good
+/// seal, a FIFO and a file over `MAX_SEAL_BYTES` in place of the seal make the tree check
+/// refuse the version as invalid, at once, and `read_seal` says why.
+#[test]
+fn a_seal_that_is_a_link_a_fifo_or_too_large_is_refused() {
+    let s = Scratch::new("pl-odd-seal");
+    let layout = package(&s);
+    stage(&layout, "v1", "a");
+    let seal = layout.seal_path("v1");
+    let good = s.path().join("good.seal");
+    fs::copy(&seal, &good).unwrap();
+    fs::remove_file(&seal).unwrap();
+    symlink(&good, &seal).unwrap();
+    let err = hostkeeper_steps::read_seal(&seal).unwrap_err();
+    assert_eq!(err.to_string(), "the seal is a link");
+    assert_eq!(
+        layout.check_tree("v1").unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    fs::remove_file(&seal).unwrap();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &seal,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o644),
+        0,
+    )
+    .unwrap();
+    let err = hostkeeper_steps::read_seal(&seal).unwrap_err();
+    assert_eq!(err.to_string(), "the seal is not a regular file");
+    assert_eq!(
+        layout.check_tree("v1").unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    fs::remove_file(&seal).unwrap();
+    let max = hostkeeper_steps::MAX_SEAL_BYTES as usize;
+    let mut padded = fs::read(&good).unwrap();
+    padded.resize(max, b' ');
+    fs::write(&seal, &padded).unwrap();
+    layout.check_tree("v1").unwrap();
+    padded.push(b' ');
+    fs::write(&seal, &padded).unwrap();
+    let err = hostkeeper_steps::read_seal(&seal).unwrap_err();
+    assert_eq!(err.to_string(), "the seal is larger than 4096 bytes");
+    assert_eq!(
+        layout.check_tree("v1").unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+}

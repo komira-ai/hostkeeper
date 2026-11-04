@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_unpack::{HostFs, Limits, Owner, PackageFs, StagedFile, UnpackOrder};
+use hostkeeper_unpack::{HostFs, Limits, Owner, PackageFs, ServiceLock, StagedFile, UnpackOrder};
 use sha2::{Digest, Sha256};
 
 /// A directory under the target directory, unique to the test. Removed when dropped, read-only
@@ -367,6 +367,9 @@ pub fn owner_of(path: &Path) -> (u32, u32) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Call {
     ReadDir(PathBuf),
+    Exists(PathBuf),
+    CreateService(PathBuf),
+    Lock(PathBuf),
     CreateStage(PathBuf),
     CreateDir(PathBuf),
     CreateFile(PathBuf),
@@ -380,9 +383,14 @@ pub enum Call {
 }
 
 impl Call {
-    /// Whether the call writes (anything but a listing).
+    /// Whether the call writes: anything but a listing, a look, the lock, and the creation of
+    /// the service directory, which changes nothing when it is there already (the tests that
+    /// count writes run where it is).
     pub fn writes(&self) -> bool {
-        !matches!(self, Call::ReadDir(_))
+        !matches!(
+            self,
+            Call::ReadDir(_) | Call::Exists(_) | Call::Lock(_) | Call::CreateService(_)
+        )
     }
 
     /// The paths the call names.
@@ -390,6 +398,9 @@ impl Call {
         match self {
             Call::Rename(a, b) => vec![a, b],
             Call::ReadDir(p)
+            | Call::Exists(p)
+            | Call::CreateService(p)
+            | Call::Lock(p)
             | Call::CreateStage(p)
             | Call::CreateDir(p)
             | Call::CreateFile(p)
@@ -406,19 +417,29 @@ impl Call {
 /// When [`Faulty`] fails a call.
 pub type Matcher = Box<dyn Fn(&Call) -> bool>;
 
+/// What a hook runs.
+type Hook = Rc<dyn Fn(&Call)>;
+
 #[derive(Default)]
 struct State {
     calls: RefCell<Vec<Call>>,
     /// Every call from this index on fails, as if the process had died.
     crash_at: Cell<Option<usize>>,
     dead: Cell<bool>,
-    /// The `nth` call (from 0) that the matcher takes fails with the errno.
+    /// The `nth` call (from 0) that the matcher takes fails with the errno; with `every`,
+    /// every call it takes from the `nth` on.
     fail: RefCell<Option<(Matcher, usize, i32)>>,
+    every: Cell<bool>,
     taken: Cell<usize>,
     /// Writes to a file whose path ends with this reach the disk with their first byte changed.
     corrupt: RefCell<Option<String>>,
     /// A file or directory whose name ends with the first is given the second mode instead.
     dir_mode: RefCell<Option<(String, u32)>>,
+    /// A write that fails writes the first half of its bytes before it fails.
+    partial: Cell<bool>,
+    /// Run once, after the first call the matcher takes is recorded and before it is made.
+    hook: RefCell<Option<(Matcher, Hook)>>,
+    hooked: Cell<bool>,
 }
 
 /// The real port with every call recorded, and a failure or a crash where a test asks.
@@ -448,6 +469,12 @@ impl Faulty {
         self
     }
 
+    /// Every call that `matcher` takes fails with `errno`.
+    pub fn fail_all(self, matcher: Matcher, errno: i32) -> Faulty {
+        self.state.every.set(true);
+        self.fail(matcher, 0, errno)
+    }
+
     pub fn corrupt(self, suffix: &str) -> Faulty {
         *self.state.corrupt.borrow_mut() = Some(suffix.to_owned());
         self
@@ -455,6 +482,18 @@ impl Faulty {
 
     pub fn dir_mode(self, suffix: &str, mode: u32) -> Faulty {
         *self.state.dir_mode.borrow_mut() = Some((suffix.to_owned(), mode));
+        self
+    }
+
+    /// A failing write writes half its bytes first.
+    pub fn partial(self) -> Faulty {
+        self.state.partial.set(true);
+        self
+    }
+
+    /// Runs `action` once, at the first call `matcher` takes, before the call is made.
+    pub fn at(self, matcher: Matcher, action: impl Fn(&Call) + 'static) -> Faulty {
+        *self.state.hook.borrow_mut() = Some((matcher, Rc::new(action)));
         self
     }
 
@@ -482,7 +521,17 @@ fn record(state: &State, call: Call) -> io::Result<()> {
         .borrow()
         .as_ref()
         .and_then(|(matcher, nth, errno)| matcher(&call).then_some((*nth, *errno)));
-    state.calls.borrow_mut().push(call);
+    let hook = state
+        .hook
+        .borrow()
+        .as_ref()
+        .filter(|(matcher, _)| !state.hooked.get() && matcher(&call))
+        .map(|(_, action)| action.clone());
+    state.calls.borrow_mut().push(call.clone());
+    if let Some(action) = hook {
+        state.hooked.set(true);
+        action(&call);
+    }
     if state.crash_at.get() == Some(index) {
         state.dead.set(true);
     }
@@ -492,7 +541,7 @@ fn record(state: &State, call: Call) -> io::Result<()> {
     if let Some((nth, errno)) = failing {
         let taken = state.taken.get();
         state.taken.set(taken + 1);
-        if taken == nth {
+        if (taken == nth) | (state.every.get() & (taken >= nth)) {
             return Err(io::Error::from_raw_os_error(errno));
         }
     }
@@ -503,6 +552,21 @@ impl PackageFs for Faulty {
     fn read_dir(&self, dir: &Path) -> io::Result<Vec<std::ffi::OsString>> {
         self.call(Call::ReadDir(dir.to_path_buf()))?;
         self.inner.read_dir(dir)
+    }
+
+    fn exists(&self, path: &Path) -> io::Result<bool> {
+        self.call(Call::Exists(path.to_path_buf()))?;
+        self.inner.exists(path)
+    }
+
+    fn create_service(&self, service: &Path) -> io::Result<()> {
+        self.call(Call::CreateService(service.to_path_buf()))?;
+        self.inner.create_service(service)
+    }
+
+    fn lock(&self, service: &Path) -> io::Result<ServiceLock> {
+        self.call(Call::Lock(service.to_path_buf()))?;
+        self.inner.lock(service)
     }
 
     fn create_stage(&self, service: &Path) -> io::Result<PathBuf> {
@@ -563,7 +627,12 @@ struct FaultyFile {
 
 impl StagedFile for FaultyFile {
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        record(&self.state, Call::Write(self.path.clone(), bytes.len()))?;
+        if let Err(e) = record(&self.state, Call::Write(self.path.clone(), bytes.len())) {
+            if self.state.partial.get() {
+                let _ = self.inner.write(&bytes[..bytes.len() / 2]);
+            }
+            return Err(e);
+        }
         let suffix = self.state.corrupt.borrow().clone();
         let corrupt = suffix.is_some_and(|s| self.path.to_string_lossy().ends_with(&s));
         if corrupt && !bytes.is_empty() {

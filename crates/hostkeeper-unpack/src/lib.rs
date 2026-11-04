@@ -40,8 +40,9 @@ mod unpack;
 pub use archive::{BUFFER, MAX_DEPTH, MAX_NAME_BYTES, MAX_WINDOW_BYTES};
 pub use error::{
     REASON_ARTIFACT_CHANGED, REASON_BAD_ARCHIVE, REASON_DAEMON_TOO_OLD, REASON_DIGEST_MISMATCH,
-    REASON_IO_ERROR, REASON_MANIFEST_MISMATCH, REASON_NO_SPACE, Rule, UnpackError,
+    REASON_IO_ERROR, REASON_MANIFEST_MISMATCH, REASON_NO_SPACE, REASON_RESERVED_VERSION, Rule,
+    UnpackError,
 };
-pub use fs::{HostFs, Owner, PackageFs, StagedFile};
+pub use fs::{HostFs, Owner, PackageFs, ServiceLock, StagedFile};
 pub use seal::{SEAL_SCHEMA, Seal, SealError};
 pub use unpack::{Limits, UnpackOrder, Unpacked, remove_orphans, running_hostkeeper, unpack};

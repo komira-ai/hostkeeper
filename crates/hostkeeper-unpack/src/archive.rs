@@ -37,7 +37,12 @@ struct Source {
     sha: Sha256,
     eof: bool,
     failed: Option<io::Error>,
+    /// The first bytes of the file: the frame's magic number and its header descriptor.
+    head: Vec<u8>,
 }
+
+/// The bytes of [`Source::head`].
+const HEAD: usize = 5;
 
 impl Read for Source {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -45,6 +50,8 @@ impl Read for Source {
             Ok(n) => {
                 self.eof |= n == 0;
                 self.sha.update(&buf[..n]);
+                let room = HEAD.saturating_sub(self.head.len()).min(n);
+                self.head.extend_from_slice(&buf[..room]);
                 Ok(n)
             }
             Err(e) => {
@@ -63,6 +70,8 @@ pub(crate) struct Stream {
     source: Source,
     produced: u64,
     limit: u64,
+    /// The content size the frame header declares, when it declares one.
+    content_size: Option<u64>,
 }
 
 impl Stream {
@@ -74,6 +83,7 @@ impl Stream {
             sha: Sha256::new(),
             eof: false,
             failed: None,
+            head: Vec::new(),
         };
         let mut frame = FrameDecoder::new();
         frame.set_max_window_size(MAX_WINDOW_BYTES);
@@ -85,11 +95,22 @@ impl Stream {
                 other => refused(&mut source, &other),
             });
         }
+        // The descriptor: bits 7-6 the content-size field, bit 5 single segment (which implies
+        // a content size), bit 3 reserved, which a decoder must find clear.
+        let descriptor = source.head.get(4).copied().unwrap_or(0);
+        if descriptor & 0x08 != 0 {
+            return Err(Stop::Rule(Rule::Decoder(
+                "a reserved bit of the frame header is set".to_owned(),
+            )));
+        }
+        let declared = (descriptor >> 6 != 0) | (descriptor & 0x20 != 0);
+        let content_size = declared.then(|| frame.content_size());
         Ok(Stream {
             frame,
             source,
             produced: 0,
             limit,
+            content_size,
         })
     }
 
@@ -114,9 +135,26 @@ impl Stream {
         Ok(n)
     }
 
-    /// After the frame ended: the archive file must end too ([`Rule::SecondFrame`]). Returns
-    /// the SHA-256 of every byte of the file.
+    /// After the frame ended: the frame decompressed to the content size its header declares,
+    /// its content checksum (when it has one) is the checksum of what it decompressed to, and
+    /// the archive file ends too ([`Rule::SecondFrame`]). Returns the SHA-256 of every byte of
+    /// the file.
     pub(crate) fn finish(&mut self) -> Result<[u8; 32], Stop> {
+        if let Some(size) = self.content_size
+            && size != self.produced
+        {
+            return Err(Stop::Rule(Rule::Decoder(format!(
+                "the frame declares {size} bytes and decompresses to {}",
+                self.produced
+            ))));
+        }
+        if let Some(stored) = self.frame.get_checksum_from_data()
+            && Some(stored) != self.frame.get_calculated_checksum()
+        {
+            return Err(Stop::Rule(Rule::Decoder(
+                "the frame's content checksum does not match".to_owned(),
+            )));
+        }
         let mut one = [0u8; 1];
         if self.source.read(&mut one).map_err(Stop::Io)? != 0 {
             return Err(Stop::Rule(Rule::SecondFrame));

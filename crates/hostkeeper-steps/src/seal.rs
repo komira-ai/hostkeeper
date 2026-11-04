@@ -11,8 +11,40 @@
 //! must not take for schema 1 gets a new `schema`, which that reader refuses
 //! ([`SealError::Schema`]) rather than misreads.
 
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::Path;
+
 /// The one schema this release writes and reads.
 pub const SEAL_SCHEMA: u64 = 1;
+
+/// The most bytes of a seal file. A seal of schema 1 is 177 bytes; the rest is room for the
+/// fields a later schema may add.
+pub const MAX_SEAL_BYTES: u64 = 4096;
+
+/// The bytes of the seal file at `path`, read without following a link and without waiting on
+/// a pipe: [`io::ErrorKind::NotFound`] when there is none, [`io::ErrorKind::InvalidData`] when
+/// it is a link, not a regular file, or larger than [`MAX_SEAL_BYTES`], and any other I/O error
+/// as it came.
+pub fn read_seal(path: &Path) -> io::Result<Vec<u8>> {
+    use rustix::fs::{Mode, OFlags};
+    let invalid = |why: &str| io::Error::new(io::ErrorKind::InvalidData, why.to_owned());
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let fd = match rustix::fs::open(path, flags, Mode::empty()) {
+        Err(rustix::io::Errno::LOOP) => return Err(invalid("the seal is a link")),
+        opened => opened?,
+    };
+    let file = File::from(fd);
+    if !file.metadata()?.is_file() {
+        return Err(invalid("the seal is not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_SEAL_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_SEAL_BYTES {
+        return Err(invalid("the seal is larger than 4096 bytes"));
+    }
+    Ok(bytes)
+}
 
 /// Why a seal cannot be used.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

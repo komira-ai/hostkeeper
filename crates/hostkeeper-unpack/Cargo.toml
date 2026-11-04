@@ -19,8 +19,7 @@ hex.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
-# The zstd decoder, pure Rust; no default features, so no checksum hasher and no dictionary
-# builder: the archive's SHA-256 is checked instead.
+# The zstd decoder, pure Rust, with the checksum hasher (`hash`) and no dictionary builder.
 ruzstd.workspace = true
 # Directory handles and `openat`, `mkdirat`, `renameat`, `unlinkat`, `fchown`, `fchmod`, `fsync`.
 rustix = { workspace = true, features = ["fs"] }

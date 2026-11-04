@@ -43,7 +43,7 @@ use hostkeeper_hook::Verdict;
 
 use crate::artifact::{ArtifactError, Staged, host_owner, trusted_owners, walk};
 use crate::runner::Finished;
-use crate::seal::Seal;
+use crate::seal::{Seal, read_seal};
 
 /// The failed starts after which the fallback runs.
 pub const START_LIMIT_BURST: u32 = 3;
@@ -176,9 +176,11 @@ impl Layout {
 
     /// Moves the directory `tree` in as version `version` of a package directory, durably, and
     /// changes no link. For a package directory only ([`io::ErrorKind::InvalidInput`] for the
-    /// binary directory). `tree` must be a real directory on the same file system, normally a
-    /// `.stage-*` directory beside the versions; the caller writes `<version>.seal` first, so a
-    /// version directory never exists without its seal.
+    /// binary directory). `tree` must be a real directory named `.stage-*` directly in the
+    /// package directory ([`io::ErrorKind::InvalidInput`] otherwise, before anything is
+    /// touched): so it is never a version, never the destination and never inside one. The
+    /// caller writes `<version>.seal` first, so a version directory never exists without its
+    /// seal.
     ///
     /// The refusals of [`Layout::stage`] hold: the version `current` or `previous` points at is
     /// refused ([`io::ErrorKind::AlreadyExists`]) and left as it is, and only `<version>` is
@@ -187,10 +189,15 @@ impl Layout {
     pub fn stage_tree(&self, version: &str, tree: &Path) -> io::Result<()> {
         self.expect_kind(Kind::Package)?;
         self.check_stageable(version)?;
-        if !fs::symlink_metadata(tree)?.is_dir() {
+        let staging = tree
+            .file_name()
+            .is_some_and(|name| name.as_encoded_bytes().starts_with(b".stage-"));
+        let beside = tree.parent() == Some(self.dir.as_path());
+        let dir = fs::symlink_metadata(tree).is_ok_and(|meta| meta.is_dir());
+        if !(staging & beside & dir) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "a package version is staged from a directory",
+                "a package version is staged from a .stage-* directory of the package directory",
             ));
         }
         let at = self.version_path(version);
@@ -211,10 +218,11 @@ impl Layout {
         Ok(())
     }
 
-    /// A version is a plain name ([`check_version`]); in a package directory it is also none of
+    /// A version is a plain name: ASCII letters, digits, `.`, `-`, `_` and `+`, not starting
+    /// with `.` ([`io::ErrorKind::InvalidInput`] otherwise). In a package directory it is also none of
     /// the directory's own names: not `current` or `previous`, and not ending in `.seal` or
     /// `.tmp`, so that a version can never be a link, a seal or a temporary file.
-    fn check_name(&self, version: &str) -> io::Result<()> {
+    pub fn check_name(&self, version: &str) -> io::Result<()> {
         check_version(version)?;
         let own = (version == "current")
             | (version == "previous")
@@ -329,7 +337,7 @@ impl Layout {
                 "{version} is not a directory owned by root or the updater and closed to group and others"
             )));
         }
-        let seal = match fs::read(self.seal_path(version)) {
+        let seal = match read_seal(&self.seal_path(version)) {
             Ok(bytes) => Seal::parse(&bytes).map_err(|e| bad(format!("{version}.seal: {e}")))?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Err(bad(format!("{version} has no seal")));

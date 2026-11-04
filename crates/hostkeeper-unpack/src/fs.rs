@@ -27,8 +27,18 @@ use rustix::io::Errno;
 pub trait PackageFs {
     /// The names in the directory `dir` (not `.` and `..`).
     fn read_dir(&self, dir: &Path) -> io::Result<Vec<OsString>>;
-    /// Creates `<service>` when it is missing, then a new, empty directory
-    /// `<service>/.stage-<random>` with mode 0700, and returns the latter's path.
+    /// Whether something (of any kind, a link included) is at `path`, looked at without
+    /// following it. Only a missing entry, or a missing parent, is `false`.
+    fn exists(&self, path: &Path) -> io::Result<bool>;
+    /// Creates the service directory `<service>` when it is missing, mode 0755 (service users
+    /// pass through it to their version), and makes its entry in the packages directory
+    /// durable.
+    fn create_service(&self, service: &Path) -> io::Result<()>;
+    /// Takes the exclusive unpack lock of the service directory `<service>`, without waiting:
+    /// [`io::ErrorKind::WouldBlock`] while another holder has it. Held until the lock is dropped.
+    fn lock(&self, service: &Path) -> io::Result<ServiceLock>;
+    /// Creates a new, empty directory `<service>/.stage-<random>` with mode 0700 in the
+    /// existing service directory, and returns its path.
     fn create_stage(&self, service: &Path) -> io::Result<PathBuf>;
     /// Creates the new directory `path`, mode 0700.
     fn create_dir(&self, path: &Path) -> io::Result<()>;
@@ -56,6 +66,13 @@ pub trait StagedFile {
     fn set_mode(&mut self, mode: u32) -> io::Result<()>;
     /// Makes the file's contents durable.
     fn sync(&mut self) -> io::Result<()>;
+}
+
+/// The exclusive unpack lock of one service directory (`flock` on the directory), released when
+/// it is dropped. Only [`HostFs::lock`] makes one.
+#[derive(Debug)]
+pub struct ServiceLock {
+    _held: OwnedFd,
 }
 
 /// The owner of everything [`HostFs`] creates.
@@ -127,11 +144,13 @@ impl HostFs {
         Ok(rustix::fs::fchown(fd, Some(uid), Some(gid))?)
     }
 
-    /// `mkdirat`, then the new directory given to the owner.
-    fn make_dir(&self, at: &OwnedFd, name: &OsStr) -> io::Result<()> {
+    /// `mkdirat`, then the new directory given to the owner with `mode` (not narrowed by the
+    /// umask).
+    fn make_dir(&self, at: &OwnedFd, name: &OsStr, mode: u32) -> io::Result<()> {
         rustix::fs::mkdirat(at, name, Mode::from_raw_mode(0o700))?;
         let fd = rustix::fs::openat(at, name, dir_flags(), Mode::empty())?;
-        self.give(&fd)
+        self.give(&fd)?;
+        Ok(rustix::fs::fchmod(&fd, Mode::from_raw_mode(mode))?)
     }
 }
 
@@ -152,22 +171,46 @@ impl PackageFs for HostFs {
         names(&fd)
     }
 
-    fn create_stage(&self, service: &Path) -> io::Result<PathBuf> {
-        let (at, name) = self.parent(service)?;
-        match self.make_dir(&at, name) {
-            Err(e) if e.raw_os_error() != Some(Errno::EXIST.raw_os_error()) => return Err(e),
-            _ => {}
+    fn exists(&self, path: &Path) -> io::Result<bool> {
+        let found = self
+            .parent(path)
+            .and_then(|(at, name)| Ok(rustix::fs::statat(&at, name, AtFlags::SYMLINK_NOFOLLOW)?));
+        match found {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
         }
+    }
+
+    fn create_service(&self, service: &Path) -> io::Result<()> {
+        let (at, name) = self.parent(service)?;
+        match self.make_dir(&at, name, 0o755) {
+            Err(e) if e.raw_os_error() == Some(Errno::EXIST.raw_os_error()) => Ok(()),
+            made => {
+                made?;
+                Ok(rustix::fs::fsync(&at)?)
+            }
+        }
+    }
+
+    fn lock(&self, service: &Path) -> io::Result<ServiceLock> {
+        use rustix::fs::FlockOperation;
+        let fd = self.open_at(service, true)?;
+        rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive)?;
+        Ok(ServiceLock { _held: fd })
+    }
+
+    fn create_stage(&self, service: &Path) -> io::Result<PathBuf> {
         let random = RandomState::new().build_hasher().finish();
         let stage = service.join(format!(".stage-{random:016x}"));
         let (at, name) = self.parent(&stage)?;
-        self.make_dir(&at, name)?;
+        self.make_dir(&at, name, 0o700)?;
         Ok(stage)
     }
 
     fn create_dir(&self, path: &Path) -> io::Result<()> {
         let (at, name) = self.parent(path)?;
-        self.make_dir(&at, name)
+        self.make_dir(&at, name, 0o700)
     }
 
     fn create_file(&self, path: &Path) -> io::Result<Box<dyn StagedFile>> {

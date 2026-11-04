@@ -468,3 +468,258 @@ fn an_orphan_that_cannot_be_removed_stops_the_unpack() {
     );
     assert_eq!(rig.listing(), [".stage-old"]);
 }
+
+/// A rig with tierstore 1.4.2 unpacked and switched to: what each refusal below must leave as
+/// it was.
+fn installed(name: &str) -> (Rig, Vec<(String, Option<String>)>) {
+    let rig = Rig::new(name);
+    let manifest = MANIFEST.replace("1.5.0", "1.4.2");
+    let archive = manifest_tar(&manifest);
+    let (path, _) = rig.archive("old.tar.zst", &archive);
+    unpack(
+        &path,
+        &order("1.4.2", &sha256_hex(&archive)),
+        &limits(),
+        &rig.host(),
+    )
+    .unwrap();
+    Layout::package(&rig.service()).switch("1.4.2").unwrap();
+    let state = state_of(&rig);
+    (rig, state)
+}
+
+/// The names of the service directory, each with what a link points at.
+fn state_of(rig: &Rig) -> Vec<(String, Option<String>)> {
+    rig.listing()
+        .into_iter()
+        .map(|name| {
+            let target = fs::read_link(rig.service().join(&name))
+                .ok()
+                .map(|t| t.to_string_lossy().into_owned());
+            (name, target)
+        })
+        .collect()
+}
+
+/// Catches an order whose version is one of the package directory's own names reaching the
+/// disk: `current`, `previous`, `1.4.2.seal` and `x.tmp` are refused, `Failed`, release,
+/// `reserved_version`, before any call of the port, and the installed version, its seal and
+/// `current` are as they were.
+#[test]
+fn a_version_named_like_the_package_directorys_own_files_is_refused() {
+    let (rig, before) = installed("u-reserved");
+    for version in ["current", "previous", "1.4.2.seal", "x.tmp"] {
+        let archive = manifest_tar(&MANIFEST.replace("1.5.0", version));
+        let (path, _) = rig.archive("r.tar.zst", &archive);
+        let fake = Faulty::new(rig.host());
+        let order = order(version, &sha256_hex(&archive));
+        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        assert!(
+            matches!(&err, UnpackError::ReservedVersion { version: v } if v == version),
+            "{version}: {err:?}"
+        );
+        assert_eq!(
+            err.outcome(),
+            (Outcome::Failure, Class::Release, "reserved_version")
+        );
+        assert!(fake.calls().is_empty(), "{version}: {:?}", fake.calls());
+        assert_eq!(state_of(&rig), before, "{version}");
+    }
+    Layout::package(&rig.service()).check_tree("1.4.2").unwrap();
+}
+
+/// Catches a package that a service user cannot reach: the service directory is 0755 (only the
+/// staging directories are closed), and every directory of the version is open to others for
+/// reading and passing, every file for reading, executables also for running.
+#[test]
+fn a_service_user_can_reach_every_file_of_a_version() {
+    let rig = Rig::new("u-reach");
+    let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
+    unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    assert_eq!(mode(&rig.service()), 0o755);
+    let mut stack = vec![rig.service().join(VERSION)];
+    while let Some(dir) = stack.pop() {
+        assert_eq!(mode(&dir) & 0o005, 0o005, "{}", dir.display());
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                assert_eq!(mode(&path) & 0o004, 0o004, "{}", path.display());
+            }
+        }
+    }
+    assert_eq!(mode(&rig.service().join("1.5.0/bin/x")) & 0o001, 0o001);
+}
+
+/// Catches the loader's check of the staged files not being made: an archive with no
+/// `manifest.toml`, and one whose manifest names a `[[files]]` source that is not in it, are
+/// each the loader's refusal, release, `manifest_mismatch`, with the
+/// staging directory and the temporary seal removed and the installed version untouched.
+#[test]
+fn a_package_whose_staged_files_the_loader_refuses_is_a_release_failure() {
+    let (rig, before) = installed("u-sources");
+    let without_manifest = {
+        let mut tar = Tar::new();
+        tar.dir("bin").file("bin/x", 0o755, b"#!x\n");
+        zstd(&tar.end().bytes())
+    };
+    let without_source = {
+        let mut tar = Tar::new();
+        tar.file("manifest.toml", 0o644, MANIFEST.as_bytes())
+            .dir("files");
+        zstd(&tar.end().bytes())
+    };
+    for (name, archive) in [
+        ("no manifest", without_manifest),
+        ("a source not in the archive", without_source),
+    ] {
+        let (path, order) = rig.archive("s.tar.zst", &archive);
+        let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+        let UnpackError::Manifest(refusal) = &err else {
+            panic!("{name}: {err:?}")
+        };
+        assert!(
+            matches!(
+                refusal,
+                ManifestRefusal::Unreadable { .. } | ManifestRefusal::FileSource { .. }
+            ),
+            "{name}: {refusal:?}"
+        );
+        assert_eq!(
+            err.outcome(),
+            (Outcome::Failure, Class::Release, "manifest_mismatch"),
+            "{name}"
+        );
+        assert_eq!(state_of(&rig), before, "{name}");
+    }
+}
+
+/// Catches a seal read that follows a link, waits on a pipe or reads without a bound: a link, a
+/// FIFO and a file over the bound in place of the seal of a version on the host are each a seal
+/// that cannot be read, tried again (`io_error`), and the unpack returns without blocking and
+/// touches nothing.
+#[test]
+fn a_seal_that_is_a_link_a_fifo_or_too_large_is_unreadable() {
+    let (rig, path, order) = unpacked("u-odd-seal");
+    let seal = rig.service().join("1.5.0.seal");
+    let sealed = fs::read(&seal).unwrap();
+    let outside = rig.scratch.path().join("outside.seal");
+    fs::write(&outside, &sealed).unwrap();
+    type Make = Box<dyn Fn(&Path)>;
+    let odd: [(&str, Make); 3] = [
+        (
+            "a link",
+            Box::new(move |p: &Path| std::os::unix::fs::symlink(&outside, p).unwrap()),
+        ),
+        (
+            "a fifo",
+            Box::new(|p: &Path| {
+                rustix::fs::mknodat(
+                    rustix::fs::CWD,
+                    p,
+                    rustix::fs::FileType::Fifo,
+                    rustix::fs::Mode::from_raw_mode(0o644),
+                    0,
+                )
+                .unwrap()
+            }),
+        ),
+        (
+            "too large",
+            Box::new(|p: &Path| fs::write(p, vec![b' '; 4097]).unwrap()),
+        ),
+    ];
+    for (what, make) in odd {
+        fs::remove_file(&seal).unwrap();
+        make(&seal);
+        let fake = Faulty::new(rig.host());
+        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        assert!(
+            matches!(err, UnpackError::SealUnreadable { .. }),
+            "{what}: {err:?}"
+        );
+        assert_eq!(
+            err.outcome(),
+            (Outcome::Deferred, Class::Environment, "io_error")
+        );
+        assert!(fake.calls().iter().all(|c| !c.writes()), "{what}");
+    }
+    fs::remove_file(&seal).unwrap();
+    fs::write(&seal, &sealed).unwrap();
+    assert!(!unpack(&path, &order, &limits(), &rig.host()).unwrap().fresh);
+}
+
+/// Catches a file that became a link or a special file before the read-back being taken for a
+/// read error: either replacement of `bin/x` after it was written is `bad_archive`, the tree
+/// not as written, and the staging directory is removed.
+#[test]
+fn a_staged_file_replaced_by_a_link_or_a_fifo_is_not_as_written() {
+    for fifo in [false, true] {
+        let rig = Rig::new("u-replaced");
+        let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
+        let packages = rig.packages.clone();
+        let fake = Faulty::new(rig.host()).at(
+            Box::new(|c| {
+                matches!(c, Call::SetMode(p, _)
+                    if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".stage-")))
+            }),
+            move |c| {
+                let Call::SetMode(stage, _) = c else { return };
+                let bin = packages.join(stage).join("bin");
+                fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+                fs::remove_file(bin.join("x")).unwrap();
+                if fifo {
+                    rustix::fs::mknodat(
+                        rustix::fs::CWD,
+                        bin.join("x"),
+                        rustix::fs::FileType::Fifo,
+                        rustix::fs::Mode::from_raw_mode(0o555),
+                        0,
+                    )
+                    .unwrap();
+                } else {
+                    std::os::unix::fs::symlink("../manifest.toml", bin.join("x")).unwrap();
+                }
+                fs::set_permissions(&bin, fs::Permissions::from_mode(0o555)).unwrap();
+            },
+        );
+        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                UnpackError::BadArchive {
+                    rule: Rule::NotAsWritten,
+                    ..
+                }
+            ),
+            "fifo {fifo}: {err:?}"
+        );
+        assert!(rig.listing().is_empty(), "{:?}", rig.listing());
+    }
+}
+
+/// Catches a lookup error taken for an absent version: when looking at the version on the host
+/// fails, the unpack is `io_error`, tried again, and the version and its seal are as they were.
+#[test]
+fn a_version_that_cannot_be_looked_at_is_tried_again_and_left_alone() {
+    let (rig, path, order) = unpacked("u-lookup");
+    let before = state_of(&rig);
+    let fake = Faulty::new(rig.host()).fail(Box::new(|c| matches!(c, Call::Exists(_))), 0, 5);
+    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    assert!(
+        matches!(&err, UnpackError::Io { what, .. } if *what == "cannot look at the version"),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.outcome(),
+        (Outcome::Deferred, Class::Environment, "io_error")
+    );
+    assert!(
+        fake.calls().iter().all(|c| !c.writes()),
+        "{:?}",
+        fake.calls()
+    );
+    assert_eq!(state_of(&rig), before);
+    Layout::package(&rig.service()).check_tree(VERSION).unwrap();
+}
