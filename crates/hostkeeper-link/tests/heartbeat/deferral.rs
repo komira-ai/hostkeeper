@@ -699,3 +699,34 @@ fn a_deferral_with_no_reason_is_kept_under_the_reason_deferred() {
         Some(Reason::new("deferred").expect("a reason"))
     );
 }
+
+/// Catches a retry time on record that has passed being started again by a restart (the wait
+/// would renew at every restart): at the retry time and after it, the recovered deferred verdict
+/// leaves the record as it is and the target runs.
+#[test]
+fn a_restart_at_or_after_the_retry_time_on_record_does_not_start_the_wait_again() {
+    let rig = Rig::new("deferral-ended");
+    let order = update("o-1", 1, "x", "2.0");
+    rig.install(vec![RecordedService {
+        last_result: Some(deferred(&order)),
+        ..recorded("x", "1.0")
+    }]);
+    let on_record = format!(
+        r#"{{"target":"2.0","reason":"drain_bound","retry_after_unix":{}}}"#,
+        START_UNIX + 600
+    );
+    write(&file_of(&rig), &on_record);
+    for (order_try, at) in [(2, START_UNIX + 600), (3, START_UNIX + 5000)] {
+        rig.world.clock.set_unix(at);
+        let mut heartbeater = rig.heartbeater();
+        ask(&rig, order_try, "2.0");
+        heartbeater.beat_once();
+        assert_eq!(rig.world.dispatch.pending(), 1, "at {at}");
+        assert!(rig.world.dispatch.run_next());
+        drop(heartbeater);
+        assert_eq!(
+            std::fs::read_to_string(file_of(&rig)).expect("the file"),
+            on_record
+        );
+    }
+}

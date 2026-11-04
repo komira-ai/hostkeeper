@@ -2,7 +2,7 @@
 //! and try, and again after a restart.
 
 use hostkeeper_link::testing::verdict;
-use hostkeeper_link::{OrderResult, Outcome, RecordedService, Reply};
+use hostkeeper_link::{ACKED_KEPT, OrderResult, Outcome, RecordedService, Reply};
 
 use crate::{Rig, recorded, reference, reply, update};
 
@@ -149,4 +149,82 @@ fn every_verdict_of_a_service_is_sent_until_acknowledged() {
         last_update(&rig, 8),
         Some(verdict(&third, Outcome::Succeeded))
     );
+}
+
+/// Runs `order` and the heartbeat that takes its verdict, whose reply acknowledges
+/// `acknowledged`.
+fn run_then(
+    rig: &Rig,
+    heartbeater: &mut hostkeeper_link::Heartbeater,
+    order: &hostkeeper_link::Order,
+    acknowledged: Vec<hostkeeper_link::OrderRef>,
+) {
+    rig.world.link.answer(Ok(reply(Some(order.clone()), &[])));
+    heartbeater.beat_once();
+    assert!(rig.world.dispatch.run_next());
+    rig.world.link.answer(Ok(acknowledging(acknowledged)));
+    heartbeater.beat_once();
+}
+
+/// Catches an acknowledgement of an older verdict replacing the one remembered for the step
+/// record's newer verdict: acknowledged newest first, neither is sent again when the service
+/// leaves and comes back with its record. Past [`ACKED_KEPT`] acknowledgements the oldest is
+/// forgotten, and a record still holding it is sent once more (the coordinator counts it once).
+#[test]
+fn verdicts_acknowledged_newest_first_are_not_sent_again_when_the_service_returns() {
+    let rig = Rig::new("resend-ack-order");
+    rig.install(vec![recorded("x", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    let first = update("o-1", 1, "x", "2.0");
+    let second = update("o-2", 1, "x", "3.0");
+    run_then(&rig, &mut heartbeater, &first, Vec::new());
+    run_then(&rig, &mut heartbeater, &second, vec![reference("o-2", 1)]);
+    rig.world
+        .link
+        .answer(Ok(acknowledging(vec![reference("o-1", 1)])));
+    heartbeater.beat_once();
+    let back = RecordedService {
+        last_result: Some(verdict(&second, Outcome::Succeeded)),
+        ..recorded("x", "3.0")
+    };
+    rig.world.records.set(Vec::new());
+    heartbeater.beat_once();
+    rig.world.records.set(vec![back]);
+    heartbeater.beat_once();
+    assert_eq!(
+        last_update(&rig, 3),
+        Some(verdict(&second, Outcome::Succeeded))
+    );
+    assert_eq!(
+        last_update(&rig, 4),
+        Some(verdict(&first, Outcome::Succeeded))
+    );
+    assert!(rig.world.link.beats()[5].services.is_empty());
+    assert_eq!(last_update(&rig, 6), None);
+
+    // Past the bound: the oldest acknowledgement is forgotten.
+    let rig = Rig::new("resend-ack-bound");
+    rig.install(vec![recorded("x", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    let orders: Vec<_> = (1..=ACKED_KEPT + 1)
+        .map(|n| update(&format!("o-{n}"), 1, "x", "2.0"))
+        .collect();
+    for order in &orders {
+        run_then(&rig, &mut heartbeater, order, vec![order.reference()]);
+    }
+    let kept = |order: &hostkeeper_link::Order| RecordedService {
+        last_result: Some(verdict(order, Outcome::Succeeded)),
+        ..recorded("x", "2.0")
+    };
+    for (order, sent) in [
+        (&orders[1], None),
+        (&orders[0], Some(verdict(&orders[0], Outcome::Succeeded))),
+    ] {
+        rig.world.records.set(Vec::new());
+        heartbeater.beat_once();
+        rig.world.records.set(vec![kept(order)]);
+        heartbeater.beat_once();
+        let beats = rig.world.link.beats();
+        assert_eq!(beats[beats.len() - 1].services[0].last_update, sent);
+    }
 }

@@ -12,7 +12,7 @@
 //!    deferral when the last reply advertised `deferred-v1`. Step records that name a service
 //!    twice send nothing. A service listed again after it was not takes the verdict its step
 //!    record kept, unless that verdict was acknowledged, so a restart resends it; a kept
-//!    deferred verdict whose retry time is not on record starts its retry time again.
+//!    deferred verdict with no deferral of its target on record starts one.
 //! 4. [`fit`] keeps the bound; a heartbeat over it is refused and logged, never sent cut short.
 //! 5. The heartbeat goes out through [`CoordinatorLink::heartbeat`], the one outbound call.
 //! 6. From the reply: the advertised features replace the last ones; a verdict whose order id and
@@ -21,7 +21,12 @@
 //!
 //! **Verdicts.** A service may have several verdicts not yet acknowledged (an order's, then a
 //! `busy` answer, then another order's). A heartbeat carries one per service: the newest. Once
-//! it is acknowledged the one before it is sent, so every verdict is sent until counted.
+//! it is acknowledged the one before it is sent, so every verdict is sent until counted. Across
+//! a restart only the step record's verdict, the last order's, comes back: the coordinator
+//! orders a host only when it has no outstanding order (design 8.1), and after its own restart
+//! it rebuilds from heartbeats before it orders (8.2), so an order's verdict has reached it
+//! before the next order of the host is issued, and an earlier completed verdict of the
+//! service is no longer one the coordinator waits for.
 //!
 //! **Orders.** One at a time, on a worker of the [`Dispatch`], so the loop keeps beating, and
 //! reports the running target as `updating`, while a step runs. An order equal in every field to
@@ -53,6 +58,12 @@ use crate::ports::{
 
 /// The period when the daemon is given none: 15 seconds.
 pub const DEFAULT_HEARTBEAT_SECS: NonZeroU64 = NonZeroU64::MIN.saturating_add(14);
+
+/// How many acknowledged verdicts the loop remembers per service. The step record keeps one
+/// verdict, the last order's; a service holds at most a few verdicts not yet acknowledged
+/// (design 8.1: the coordinator orders a host that has no outstanding order), so the record's
+/// verdict is among these whatever order the acknowledgements came in.
+pub const ACKED_KEPT: usize = 8;
 
 /// The loop's flag on the daemon's command line.
 #[derive(Clone, Debug, PartialEq, Eq, clap::Args)]
@@ -116,9 +127,9 @@ pub struct Heartbeater {
     advertised: Features,
     /// The verdicts not yet acknowledged, by service, oldest first, one per order id and try.
     pending: BTreeMap<String, Vec<OrderResult>>,
-    /// The last verdict acknowledged, by service: a step record that still holds it is not
-    /// sent again.
-    acked: BTreeMap<String, OrderRef>,
+    /// The verdicts acknowledged, by service, the last [`ACKED_KEPT`] of them: a step record
+    /// that still holds one is not sent again.
+    acked: BTreeMap<String, Vec<OrderRef>>,
     /// The last order started, by service, in every field.
     started: BTreeMap<String, Order>,
     /// The services of the last step records whose kept verdict was read.
@@ -265,17 +276,20 @@ impl Heartbeater {
     }
 
     /// The verdict a step record kept, for a service listed again: sent unless it was
-    /// acknowledged. A deferral whose retry time is not on record starts again from now, so a
-    /// daemon that died between the step and the write of its deferral does not run the
-    /// target early.
+    /// acknowledged. A deferred verdict with no deferral of its target on record starts one
+    /// from now, so a daemon that died between the step and the write of its deferral does not
+    /// run the target early; one on record, ended or not, is kept as it is.
     fn recover(&mut self, service: &ServiceName, result: OrderResult, now: u64) {
-        if self.acked.get(service.as_str()) == Some(&result.order) {
+        let counted = self.acked.get(service.as_str());
+        if counted.is_some_and(|refs| refs.contains(&result.order)) {
             return;
         }
         if let Outcome::Deferred { retry_after_secs } = result.outcome {
             let log = self.ports.log.as_ref();
-            let active = self.book.get(service, now, log);
-            if !active.is_some_and(|deferral| deferral.declines(&result.target, now)) {
+            let on_record = self.book.get(service, now, log);
+            // A deferral of the same target on record, ended or not, is this verdict's: its
+            // retry time stands, and one that has passed is not started again.
+            if !on_record.is_some_and(|deferral| deferral.target == result.target) {
                 self.book
                     .set(service, deferral_of(&result, now, retry_after_secs), log);
             }
@@ -363,7 +377,11 @@ impl Heartbeater {
             queue.retain(|result| {
                 let counted = acknowledged.contains(&result.order);
                 if counted {
-                    self.acked.insert(service.clone(), result.order.clone());
+                    let refs = self.acked.entry(service.clone()).or_default();
+                    refs.push(result.order.clone());
+                    if refs.len() > ACKED_KEPT {
+                        refs.remove(0);
+                    }
                 }
                 !counted
             });
