@@ -1,0 +1,38 @@
+# The daemon config of a hostkeeper host (docs/design/hostkeeper-design.md, section 4.1), as a
+# template. It is the host's only configuration and its only trust root. It holds no secret:
+# only addresses, a certificate digest and the name of the release workflow.
+#
+# Replace every quoted value that starts with a placeholder in @@ marks, the quotes included,
+# with the value it describes, and install the result as /etc/hostkeeper/hostkeeper.toml, owned
+# by root, mode 0600. Only local root may edit it; the coordinator cannot. The config loader
+# refuses the file while any placeholder is left, while it is owned by another account or
+# writable by the group or others, and when it holds a key it does not know.
+
+# The coordinator's heartbeat listener: an https:// URL, with a port if it is not 443.
+coordinator     = "@@COORDINATOR@@ (an https URL)"
+# The SHA-256 of the farm CA certificate the coordinator's certificate chains to.
+ca_sha256       = "@@CA_SHA256@@ (64 hex digits)"
+# Where packages are fetched from: an https:// URL.
+release_channel = "@@RELEASE_CHANNEL@@ (an https URL)"
+
+# Whose attestation every package must carry: one entry for the organisation, none per service.
+[trusted_signers]
+# The GitHub organisation of the repositories whose releases this host installs.
+organisation  = "@@SIGNER_ORGANISATION@@ (a GitHub organisation)"
+# The release workflow, as a path in each repository.
+workflow      = "@@SIGNER_WORKFLOW@@ (a workflow path)"
+# The refs the workflow may run on, as globs.
+refs          = ["@@SIGNER_REFS@@ (one or more ref globs)"]
+# Whether the workflow must have run on a GitHub-hosted runner: true or false, unquoted.
+hosted_runner = "@@SIGNER_HOSTED_RUNNER@@ (true or false)"
+
+# The bounds of a fetch and an unpack (section 5.5); these are the design's values.
+[bounds]
+max_package_bytes        = 536870912
+max_unpacked_bytes       = 2147483648
+max_entries              = 20000
+# The bound of the whole fetch. The daemon refuses a config where max_package_bytes cannot
+# be fetched in it at 256 KiB/s.
+fetch_timeout_secs       = 2100
+attestation_timeout_secs = 60
+force_start_secs         = 60

@@ -3,6 +3,9 @@
 //!
 //! - [`start`]: start-up, in order: the daemon config, the lock on the state directory, the boot
 //!   work, the admin socket; then serving the admin socket.
+//! - [`boot`]: the boot work: the step records read against the boot id, each unfinished update
+//!   run to its verdict, the post-success watchers restarted ([`watchers`]), the manifest's
+//!   `boot` steps, and the readiness notice ([`notify`]).
 //! - [`executor`]: [`Daemon::order`], one order of the coordinator, decoded into a [`Verb`]
 //!   ([`verb`]) and handed to its module under [`verbs`]. `update` and `force_rollback` are
 //!   checked by the daemon itself ([`checks`]) and run through the step runner of
@@ -18,6 +21,7 @@
 //! the `hostkeeper_steps::Clock`; nothing here reads the wall clock.
 
 pub mod admin;
+pub mod boot;
 pub mod checks;
 pub mod cli;
 pub mod executor;
@@ -25,6 +29,7 @@ mod files;
 pub mod halt;
 pub mod installed;
 pub mod locks;
+pub mod notify;
 pub mod packages;
 pub mod refusal;
 pub mod socket;
@@ -33,8 +38,11 @@ pub mod start;
 pub mod testing;
 pub mod verb;
 pub mod verbs;
+pub mod watchers;
 
-pub use executor::{Ctx, Daemon, DaemonStatus, Dirs, Ports, Reply, ServiceStatus};
+pub use boot::{BootError, BootReport, BootStep, Outcome, ServiceBoot, Stage};
+pub use executor::{Ctx, Daemon, DaemonStatus, Dirs, Ports, Reply, ServiceStatus, StoreSeam};
 pub use files::WriteStep;
+pub use notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 pub use refusal::Refusal;
 pub use verb::Verb;

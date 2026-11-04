@@ -32,7 +32,13 @@ and coverage tooling:
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), the command table of `hostkeeper ctl` generated from them, and the test that keeps them compatible |
 | [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, called over gRPC or the coordinator's HTTP/JSON gateway |
 | `hostkeeper-testkit` | helpers the tests share |
+| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui): every call it makes is a method of the protobuf descriptors, its sources keep no token and load nothing from another origin, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; not shipped |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
+
+The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
+no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
+the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. No
+coordinator serves it yet.
 
 The design is [docs/design/host-updates.md](docs/design/host-updates.md).
 
@@ -50,12 +56,16 @@ only, never from the environment:
 | `--state-dir` | `/var/lib/updater/state` | a directory per service with its step record, params file and held halt generation, and the daemon's lock file `lock` |
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
 | `--admin-socket` | `/run/hostkeeper/admin.sock` | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
+| `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
-(one daemon per state directory), binds the admin socket and serves it. This build has no step
-launcher or package store wired in and no order source yet, so it serves the admin socket's
-`Status` and runs no order.
+(one daemon per state directory) and does its boot work: it reads every step record against the
+host's boot id (kept in `.boot-id` in the state directory), runs each update left unfinished by a
+crash or a reboot to its verdict, restarts the post-success watchers, runs each service's
+`[hook] boot` step from `current`, and only then tells systemd it is ready. It then serves the
+admin socket. This build has no step launcher or package store wired in and no order source yet,
+so it serves the admin socket's `Status` and runs no order.
 
 | exit status | meaning |
 |---|---|

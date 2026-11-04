@@ -7,9 +7,13 @@
 //! [`boot_pass`]; bind the admin socket, removing a stale socket only now that the lock is held;
 //! [`after_boot`]. [`serve`] then serves the admin socket.
 //!
-//! [`before_records`], [`boot_pass`] and [`after_boot`] are the places of the boot work of
-//! design section 6.5 (the placed links, the step records against the boot id, the manifest's
-//! `boot` step and the readiness notice); they do nothing yet.
+//! [`before_records`], [`boot_pass`] and [`after_boot`] are the boot work of design section 6.5.
+//! [`before_records`] is the place of the placed links (finished or undone, and compared with
+//! `current`), which a later change fills. [`boot_pass`] reads the step records against the boot
+//! id, runs each unfinished update to its verdict and restarts the watchers
+//! ([`crate::boot`]). [`after_boot`] runs the manifest's `boot` steps, then sends the readiness
+//! notice. The admin socket is bound before [`after_boot`] but served only by [`serve`], after
+//! [`startup`] has returned: nothing is answered on it while the boot work runs.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -22,8 +26,10 @@ use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
 
 use crate::admin;
+use crate::boot::{BootError, BootReport, Stage};
 use crate::executor::{Daemon, Dirs, Ports};
 use crate::files;
+use crate::notify::{NoNotifier, ReadyNotifier};
 use crate::socket;
 
 /// The lock file in the state directory.
@@ -77,6 +83,14 @@ pub enum StartError {
     Runtime(io::Error),
     #[error("this daemon's own version is not major.minor.patch: {0}")]
     OwnVersion(#[from] BadHostkeeperVersion),
+    /// The start pass could not list the step records.
+    #[error("the start pass could not run: {0}")]
+    Boot(#[from] BootError),
+    /// `--notify-systemd` was given, and the service manager named no notify socket.
+    #[error(
+        "--notify-systemd was given, but no notify socket was set for the daemon (NOTIFY_SOCKET)"
+    )]
+    NoNotifySocket,
 }
 
 impl StartError {
@@ -88,7 +102,9 @@ impl StartError {
             StartError::Io { .. }
             | StartError::Serve(_)
             | StartError::Runtime(_)
-            | StartError::OwnVersion(_) => EXIT_FAILED,
+            | StartError::OwnVersion(_)
+            | StartError::Boot(_)
+            | StartError::NoNotifySocket => EXIT_FAILED,
         }
     }
 }
@@ -105,6 +121,7 @@ pub struct Started {
     daemon: Arc<Daemon>,
     listener: UnixListener,
     socket_path: PathBuf,
+    report: BootReport,
     /// Held while the daemon lives: one daemon per state directory.
     _lock: File,
 }
@@ -112,6 +129,11 @@ pub struct Started {
 impl Started {
     pub fn daemon(&self) -> &Arc<Daemon> {
         &self.daemon
+    }
+
+    /// What the boot work did.
+    pub fn boot_report(&self) -> &BootReport {
+        &self.report
     }
 }
 
@@ -136,11 +158,22 @@ fn lock_state_dir(state_dir: &Path) -> Result<File, StartError> {
 }
 
 /// Starts the daemon: the config, the lock, the boot work, the admin socket. `own_version` is
-/// the daemon's own, which a manifest's `min_hostkeeper` is compared with.
+/// the daemon's own, which a manifest's `min_hostkeeper` is compared with. Nobody is told it is
+/// ready ([`NoNotifier`]).
 pub fn startup(
     settings: &Settings,
     ports: Ports,
     own_version: HostkeeperVersion,
+) -> Result<Started, StartError> {
+    startup_notifying(settings, ports, own_version, &NoNotifier)
+}
+
+/// [`startup`], telling `notifier` the daemon is ready once the boot work is over.
+pub fn startup_notifying(
+    settings: &Settings,
+    ports: Ports,
+    own_version: HostkeeperVersion,
+    notifier: &dyn ReadyNotifier,
 ) -> Result<Started, StartError> {
     let config = DaemonConfig::load(&settings.config, settings.trusted_uid).map_err(|source| {
         StartError::Config {
@@ -154,29 +187,37 @@ pub fn startup(
         packages: settings.packages_dir.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
-    before_records(&daemon);
-    boot_pass(&daemon);
+    let mut report = BootReport::default();
+    before_records(&daemon, &mut report);
+    boot_pass(&daemon, &mut report)?;
     let listener = socket::bind(&settings.admin_socket).map_err(io_at(&settings.admin_socket))?;
-    after_boot(&daemon);
+    after_boot(&daemon, &mut report, notifier);
     Ok(Started {
         daemon,
         listener,
         socket_path: settings.admin_socket.clone(),
+        report,
         _lock: lock,
     })
 }
 
 /// Before the step records are read: finish or undo a placed link left half done, and relink
-/// what differs from `current` (design section 6.5). Nothing yet.
-fn before_records(_daemon: &Daemon) {}
+/// what differs from `current` (design section 6.5). Nothing yet but its place in the order.
+fn before_records(_daemon: &Daemon, report: &mut BootReport) {
+    report.stages.push(Stage::BeforeRecords);
+}
 
-/// The step records against the boot id, and each unfinished order run to its verdict (design
-/// section 6.5). Nothing yet.
-fn boot_pass(_daemon: &Daemon) {}
+/// The step records against the boot id, each unfinished update run to its verdict, and the
+/// watchers restarted (design section 6.5, [`Daemon::boot_pass`]).
+fn boot_pass(daemon: &Daemon, report: &mut BootReport) -> Result<(), StartError> {
+    Ok(daemon.boot_pass_into(report, &|_| false)?)
+}
 
-/// After the boot pass: the manifest's `boot` step of each service and the readiness notice
-/// (design section 6.5). Nothing yet.
-fn after_boot(_daemon: &Daemon) {}
+/// After the boot pass: the manifest's `boot` step of each service, then the readiness notice
+/// (design section 6.5, [`Daemon::after_boot`]).
+fn after_boot(daemon: &Daemon, report: &mut BootReport, notifier: &dyn ReadyNotifier) {
+    daemon.after_boot(report, notifier);
+}
 
 /// Serves the admin socket of a started daemon, holding its lock, until the socket fails.
 pub async fn serve(started: Started) -> Result<(), StartError> {

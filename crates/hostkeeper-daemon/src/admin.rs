@@ -106,15 +106,20 @@ impl Admin for AdminService {
 }
 
 /// One service as `Status` reports it. What the service manager says of it (`state`) is not
-/// observed by this daemon yet and is left out.
+/// observed by this daemon yet and is left out. A service whose step could not be stopped is
+/// under way, with the reason `unstoppable_unit`.
 pub fn service_record(status: &ServiceStatus) -> ServiceRecord {
-    let (current, last, problem) = match &status.record {
+    let (mut current, last, problem) = match &status.record {
         RecordState::Absent => (None, None, RecordProblem::Unspecified),
         RecordState::Unfinished(rec) => (Some(step_record(rec)), None, RecordProblem::Unspecified),
         RecordState::Finished(rec) => (None, Some(step_record(rec)), RecordProblem::Unspecified),
         RecordState::Unreadable(_) => (None, None, RecordProblem::Unreadable),
         RecordState::Newer(_) => (None, None, RecordProblem::NewerSchema),
     };
+    // The step could not be stopped: the update stays under way, and says why.
+    if let (true, Some(current)) = (status.stuck, current.as_mut()) {
+        current.reason = crate::boot::ALERT_UNSTOPPABLE.to_owned();
+    }
     ServiceRecord {
         service: status.service.to_string(),
         current,

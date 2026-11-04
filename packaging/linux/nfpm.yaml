@@ -1,0 +1,55 @@
+# The deb and the rpm of the hostkeeper daemon (docs/design/hostkeeper-design.md, section 4.6),
+# for nfpm. Run from the repository root, after the daemon is built for the architecture:
+#
+#   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/linux/nfpm.yaml --packager deb --target <directory>
+#
+# and the same with `--packager rpm`. VERSION is the release's MAJOR.MINOR.PATCH in digits, with
+# no `v` and no prerelease or build suffix. ARCH is amd64 for the platform linux-x86_64 and
+# arm64 for linux-arm64. nfpm expands ${VERSION} and ${ARCH} and names the files
+# hostkeeper_<version>_<arch>.deb (amd64, arm64) and hostkeeper-<version>-1.<arch>.rpm (x86_64,
+# aarch64). The packages carry the daemon, its unit, its tmpfiles rules and the template of its
+# config, and nothing else: no key, no certificate, no token and no hostkeeper.toml, which
+# whoever installs the package places (packaging/linux/README.md). The deb and the rpm carry the
+# same files and the same scripts.
+name: hostkeeper
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: admin
+priority: optional
+maintainer: "The hostkeeper project <https://github.com/komira-ai/hostkeeper>"
+description: |-
+  hostkeeper, the update daemon of a host.
+  It installs and updates the services the coordinator assigns to the host,
+  each from a signed package, through the service's own hooks.
+vendor: komira-ai
+homepage: https://github.com/komira-ai/hostkeeper
+license: Apache-2.0
+contents:
+  - src: target/release/hostkeeper
+    dst: /usr/bin/hostkeeper
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: packaging/linux/hostkeeper.service
+    dst: /usr/lib/systemd/system/hostkeeper.service
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: packaging/linux/hostkeeper.tmpfiles.conf
+    dst: /usr/lib/tmpfiles.d/hostkeeper.conf
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: packaging/linux/hostkeeper.toml.template
+    dst: /usr/share/hostkeeper/hostkeeper.toml.template
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+scripts:
+  postinstall: packaging/linux/scripts/postinstall.sh
+  preremove: packaging/linux/scripts/preremove.sh
