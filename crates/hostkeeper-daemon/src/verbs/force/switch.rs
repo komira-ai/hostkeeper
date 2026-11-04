@@ -11,8 +11,9 @@
 //! 12. the target's units, `WantedBy=` links and files are linked, written ahead in
 //!     `placed.json`;
 //! 13. `daemon-reload`;
-//! 14. and 15. the target's `run` units are started, and each must be seen active once within
-//!     `force_start_secs`, polled on the daemon's clock;
+//! 14. and 15. the target's `run` units are started, and one of them must be seen active within
+//!     `force_start_secs`, polled on the daemon's clock (a second instance may be a standby,
+//!     inactive by design);
 //! 16. the verdict, `Succeeded` or `Failed` with `link_failed` (steps 9 to 12),
 //!     `daemon_reload_failed` (step 13) or `start_failed` (steps 14 and 15);
 //! 18. when the force switched `current` to another version, the prune, whatever the verdict.
@@ -239,9 +240,12 @@ fn link(placer: &Placer<'_>, target: &Manifest) -> Result<(), PlacedError> {
     Ok(())
 }
 
-/// Steps 14 and 15: starts each of `run`, then asks after each until it has been seen active
-/// once, every [`FORCE_POLL_SECS`] on the daemon's clock, within `force_start_secs` of the start.
-/// An answer that is an error counts as not active.
+/// Steps 14 and 15: starts each of `run` (a start that fails is `start_failed`), then asks after
+/// them every [`FORCE_POLL_SECS`] on the daemon's clock until one of them is seen active, within
+/// `force_start_secs` of the start. One active unit is enough, as the service observer counts a
+/// service live (design section 5.8): a service that runs two instances keeps one of them a
+/// standby, inactive by design. An answer that is an error counts as not active. A target with
+/// no `run` unit has nothing to wait for.
 fn start(ctx: &Ctx, run: &[String]) -> Result<(), String> {
     for unit in run {
         ctx.units
@@ -250,18 +254,19 @@ fn start(ctx: &Ctx, run: &[String]) -> Result<(), String> {
     }
     let bound = ctx.config.bounds.force_start_secs;
     let began = Stamp::now(&*ctx.clock);
-    let mut waiting: Vec<&String> = run.iter().collect();
     loop {
-        waiting.retain(|unit| !ctx.units.is_active(unit).unwrap_or(false));
-        if waiting.is_empty() {
+        let live = run.is_empty()
+            || run
+                .iter()
+                .any(|unit| ctx.units.is_active(unit).unwrap_or(false));
+        if live {
             return Ok(());
         }
         let spent = began.elapsed_secs(&*ctx.clock);
         if spent >= bound {
-            let names: Vec<&str> = waiting.iter().map(|unit| unit.as_str()).collect();
             return Err(format!(
-                "not active within force_start_secs ({bound}): {}",
-                names.join(", ")
+                "none of {} active within force_start_secs ({bound})",
+                run.join(", ")
             ));
         }
         ctx.clock.sleep_secs(FORCE_POLL_SECS.min(bound - spent));

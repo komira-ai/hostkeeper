@@ -103,7 +103,7 @@ own.
 | 12. Link the target | its units, `WantedBy=` links and files are linked, written ahead in `placed.json` | links that `placed.json` lists | again from step 9; a link already right is left |
 | 13. `daemon-reload` | the service manager reads the units | a reload owed in `placed.json` | again from step 9 |
 | 14. Start the target's `run` units | the units start | started units | again from step 9 |
-| 15. Wait until each is active | each must be seen active once within `force_start_secs`, polled every second | nothing more | again from step 9 |
+| 15. Wait until one is active | one of the `run` units must be seen active within `force_start_secs`, polled every second; a second instance may be a standby, inactive by design | nothing more | again from step 9 |
 | 16. Record the verdict | phase `verdicted` with `Succeeded`, or `Failed` with its reason | the verdict | nothing: a resend is answered from it |
 | 17. Report | the verdict, with the order's id and try, is what the daemon's status gives the heartbeat until the next order | the verdict | nothing |
 | 18. Prune | when `current` moved, the versions but `current` and `previous` are deleted (this build deletes nothing yet); a failed prune is an alert and leaves the verdict | the versions | nothing |

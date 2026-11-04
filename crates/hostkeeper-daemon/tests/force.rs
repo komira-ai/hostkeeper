@@ -522,18 +522,19 @@ fn force_starts_exactly_the_units_the_target_lists() {
     assert!(meta.file_type().is_symlink());
 }
 
-/// Catches a wait that ends on the first active unit, ends early, or reads another clock: with
-/// `force_start_secs` 60, one unit active at once is asked after once, and another that turns
-/// active on its 61st ask passes, on its 62nd fails `start_failed`; either way the clock moved 60
-/// seconds, by the force's polls alone.
+/// Catches a wait that ends before a unit is active, ends early, or reads another clock: with
+/// `force_start_secs` 60, while one unit never turns active, a second that turns active on its
+/// 61st ask passes and on its 62nd fails `start_failed`. Either way both are asked at every poll
+/// and the clock moved 60 seconds, by the force's polls alone.
 #[test]
-fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
+fn force_waits_within_force_start_secs_for_a_run_unit_to_be_active() {
     let two = "web-two.service";
     let failed_start = failed(Phase::AfterCommit, Class::Release, "start_failed");
     for (asks, expected) in [(60, succeeded()), (61, failed_start)] {
         let rig = Rig::new("force-wait");
         let daemon = rig.daemon();
         rig.add_units(WEB, "2.0.0", &[UNIT, two], &[UNIT, two], &[]);
+        rig.units.active_after(UNIT, u64::MAX);
         rig.units.active_after(two, asks);
         let began = rig.clock.mono_secs();
         assert_eq!(
@@ -542,9 +543,33 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
             "{asks}"
         );
         assert_eq!(rig.clock.mono_secs() - began, 60, "{asks}");
-        assert_eq!(asked_active(&rig, UNIT), 1, "{asks}");
+        assert_eq!(asked_active(&rig, UNIT), 61, "{asks}");
         assert_eq!(asked_active(&rig, two), 61, "{asks}");
     }
+}
+
+/// Catches a force that waits for every instance of a service that keeps a standby (design
+/// section 5.8: one active `run` unit is a live service): with the instances `a` and `b` of one
+/// template both started, `a` active and `b` inactive for good, the force runs to `Succeeded`
+/// at its first look, with no poll.
+#[test]
+fn force_succeeds_when_one_of_two_instances_is_active_and_the_other_a_standby() {
+    let (a, b) = ("web@a.service", "web@b.service");
+    let rig = Rig::new("force-standby");
+    let daemon = rig.daemon();
+    rig.add_units(WEB, "2.0.0", &["web@.service"], &[a, b], &[]);
+    rig.units.active_after(b, u64::MAX);
+    let began = rig.clock.mono_secs();
+    assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 1, 0)), succeeded());
+    assert_eq!(started(&rig), [a, b]);
+    assert_eq!(rig.units.active(), set(&[a, b]));
+    assert_eq!(rig.clock.mono_secs(), began);
+    assert_eq!(asked_active(&rig, a), 1);
+    let record = rig.record(WEB).expect("the record");
+    assert_eq!(
+        record.force.and_then(|force| force.verdict),
+        Some(ForceVerdict::Succeeded)
+    );
 }
 
 /// Catches a force that rolls back after a failed start, or fetches the version it left again

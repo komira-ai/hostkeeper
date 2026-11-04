@@ -25,7 +25,7 @@ pub enum ForcePhase {
     Linked,
     /// `daemon-reload` ran (step 13).
     Reloaded,
-    /// The target's `run` units are started and were each seen active (steps 14 and 15).
+    /// The target's `run` units are started and one of them was seen active (steps 14 and 15).
     UnitsStarted,
     /// The verdict is recorded (step 16).
     Verdicted,
@@ -54,8 +54,8 @@ pub enum ForceFailure {
     LinkFailed,
     /// `systemctl daemon-reload` failed (step 13).
     DaemonReloadFailed,
-    /// A `run` unit of the target did not start, or was not active within `force_start_secs`
-    /// (steps 14 and 15).
+    /// A `run` unit of the target did not start, or none of them was active within
+    /// `force_start_secs` (steps 14 and 15).
     StartFailed,
 }
 
@@ -74,7 +74,7 @@ impl ForceFailure {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "verdict", rename_all = "snake_case")]
 pub enum ForceVerdict {
-    /// Every `run` unit of the target was seen active.
+    /// The target's `run` units started, and one of them was seen active.
     Succeeded,
     /// It stopped at a part of the switch.
     Failed { reason: ForceFailure },
