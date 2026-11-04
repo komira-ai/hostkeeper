@@ -293,11 +293,11 @@ fn stop_and_run_hook(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
             },
             report.reason,
         )),
+        // The halt is recorded in the tombstone; a tombstone that cannot be written leaves the
+        // uninstall interrupted, to run the step again.
         Outcome::Halt => Err(
-            match write_tombstone(ctx, service, |tombstone| tombstone.halted = true) {
-                Ok(_) => finished(Verdict::Halt, report.reason),
-                Err(error) => link_failed(error),
-            },
+            write_tombstone(ctx, service, |tombstone| tombstone.halted = true)
+                .map_or_else(link_failed, |_| finished(Verdict::Halt, report.reason)),
         ),
     }
 }
