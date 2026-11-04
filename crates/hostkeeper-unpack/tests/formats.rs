@@ -106,6 +106,7 @@ fn row(error: &UnpackError) -> (Outcome, Class, &'static str) {
         UnpackError::SealUnreadable { .. } => deferred("io_error"),
         UnpackError::SealSchema { .. } => deferred("daemon_too_old"),
         UnpackError::ReservedVersion { .. } => failed("reserved_version"),
+        UnpackError::VersionTooLong { .. } => failed("version_too_long"),
         UnpackError::Io { .. } => deferred("io_error"),
     }
 }
@@ -179,6 +180,12 @@ fn every_unpack_error_maps_to_one_class_and_reason() {
             "the version \"current\" is a name the package directory holds for itself",
         ),
         (
+            UnpackError::VersionTooLong {
+                version: "1.0".into(),
+            },
+            "the version \"1.0\" is too long for the names the package directory derives from it",
+        ),
+        (
             UnpackError::Io {
                 what: "cannot open the archive",
                 source: io::Error::other("gone"),
@@ -195,6 +202,7 @@ fn every_unpack_error_maps_to_one_class_and_reason() {
         hostkeeper_unpack::REASON_ARTIFACT_CHANGED,
         hostkeeper_unpack::REASON_IO_ERROR,
         hostkeeper_unpack::REASON_RESERVED_VERSION,
+        hostkeeper_unpack::REASON_VERSION_TOO_LONG,
     ];
     for (error, text) in &errors {
         assert_eq!(error.outcome(), row(error), "{error:?}");

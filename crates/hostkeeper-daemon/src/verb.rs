@@ -104,10 +104,10 @@ pub struct BadOrder {
 pub const NO_VERB: &str = "is not set, or is a verb this daemon does not know";
 /// What a try of 0 breaks.
 pub const NO_TRY: &str = "is 0 or missing: a try counts from 1";
-/// What a service name that breaks its grammar breaks.
-pub const SERVICE_RULE: &str = "is not a service name: 1 to 64 bytes of A-Z, a-z, 0-9, `_` and `-`";
-/// What a version that breaks its grammar breaks.
-pub const VERSION_RULE: &str = "is not a version: 1 to 128 bytes of A-Z, a-z, 0-9, `.`, `_`, `+` and `-`, not beginning with `.`";
+/// What a service name that breaks its rule breaks: the config crate's words.
+pub const SERVICE_RULE: &str = hostkeeper_config::names::SERVICE_NAME_RULE;
+/// What a version that breaks its rule breaks: the config crate's words.
+pub const VERSION_RULE: &str = hostkeeper_config::names::VERSION_RULE;
 /// What a malformed package digest breaks.
 pub const DIGEST_RULE: &str = "is not a SHA-256 of 64 lower-case hex digits";
 

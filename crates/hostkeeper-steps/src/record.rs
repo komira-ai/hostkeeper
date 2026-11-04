@@ -103,8 +103,14 @@ pub struct Record {
 impl Record {
     /// The deterministic name of the unit a step of this update runs in.
     pub fn unit(&self, step: Step) -> String {
-        format!("updater-{}-{}-{}", self.service, step, self.generation)
+        step_unit(&self.service, step, self.generation)
     }
+}
+
+/// The name of the unit `step` of `service` runs in, in generation `generation`, without the
+/// `.service` systemd adds.
+pub(crate) fn step_unit(service: &str, step: Step, generation: u64) -> String {
+    format!("updater-{service}-{step}-{generation}")
 }
 
 /// What a state directory holds.

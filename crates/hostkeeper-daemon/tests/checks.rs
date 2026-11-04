@@ -269,6 +269,12 @@ fn each_way_the_runner_stops_has_its_token() {
             RunError::BadOrder("the service name"),
             Refusal::InvalidOrder,
         ),
+        (
+            RunError::UnitNameTooLong {
+                service: "a".repeat(210),
+            },
+            Refusal::InvalidOrder,
+        ),
     ];
     for (error, refusal) in rows {
         let detail = error.to_string();

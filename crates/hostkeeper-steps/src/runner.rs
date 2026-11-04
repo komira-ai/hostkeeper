@@ -11,6 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hostkeeper_config::names::{MAX_UNIT_NAME, is_service_name};
 use hostkeeper_hook::{
     ARTIFACT_DIGEST_KEY, Context, Invocation, Next, Outcome, PREVIOUS_RELEASE_KEY,
     PREVIOUS_VERSION_KEY, Params, Phase, Report, STAGED_RELEASE_KEY, Scalar, Step,
@@ -21,7 +22,9 @@ use crate::artifact::{ArtifactError, Staged};
 use crate::clock::{Clock, Stamp};
 use crate::deadman::Watch;
 use crate::launcher::{LaunchError, StepCall, StepExit, StepLauncher};
-use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
+use crate::record::{
+    HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State, step_unit,
+};
 
 /// The protocol version of this updater: a declaration's `min_updater_protocol` above it is
 /// `Deferred` with the reason `updater_old` until the updater has updated itself.
@@ -73,7 +76,7 @@ impl Bounds {
 /// One update of one service.
 #[derive(Clone, Debug)]
 pub struct UpdateOrder {
-    /// The service, a name of ASCII letters, digits, `-` and `_`.
+    /// The service, a name that keeps [`hostkeeper_config::names::is_service_name`].
     pub service: String,
     pub target_version: String,
     pub previous_version: Option<String>,
@@ -122,6 +125,14 @@ pub enum RunError {
     Launch(#[from] LaunchError),
     #[error("the order is not valid: {0}")]
     BadOrder(&'static str),
+    /// The service name keeps its rule, but a unit a step of it runs in,
+    /// `updater-<service>-<step>-<generation>.service`, would be longer than
+    /// [`MAX_UNIT_NAME`] bytes for some step and generation. Nothing ran.
+    #[error(
+        "the service name {service:?} is too long for the units its steps run in: \
+         `updater-<service>-<step>-<generation>.service` would pass {MAX_UNIT_NAME} bytes"
+    )]
+    UnitNameTooLong { service: String },
     #[error("an update of {service} to {target} is not finished")]
     Busy { service: String, target: String },
     #[error("the step record has schema {0}, newer than this updater writes")]
@@ -241,13 +252,13 @@ impl StepRunner {
             .as_ref()
             .map(|p| path_str(p.dir()))
             .transpose()?;
-        if order.service.is_empty()
-            || !order
-                .service
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
+        if !is_service_name(&order.service) {
             return Err(RunError::BadOrder("the service name"));
+        }
+        if longest_step_unit(&order.service) > MAX_UNIT_NAME {
+            return Err(RunError::UnitNameTooLong {
+                service: order.service.clone(),
+            });
         }
         let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
         if order.artifact_digest.len() != 64 || !order.artifact_digest.bytes().all(hex) {
@@ -630,4 +641,15 @@ fn same_update(rec: &Record, order: &UpdateOrder) -> bool {
 fn path_str(path: &Path) -> Result<&str, RunError> {
     path.to_str()
         .ok_or(RunError::BadOrder("a release path that is not UTF-8"))
+}
+
+/// The bytes of the longest unit a step of `service` can run in: the longest step name, the
+/// largest generation and the `.service` systemd adds.
+fn longest_step_unit(service: &str) -> usize {
+    Step::ALL
+        .iter()
+        .map(|step| step_unit(service, *step, u64::MAX).len())
+        .max()
+        .unwrap_or_default()
+        + ".service".len()
 }

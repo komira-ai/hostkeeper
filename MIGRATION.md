@@ -89,8 +89,9 @@ this repository's rules require it:
 The daemon config (`/etc/hostkeeper/hostkeeper.toml`) and the package manifest (`manifest.toml`)
 replace the per-service declaration (design `docs/design/hostkeeper-design.md`, sections 4.1 and
 4.7). Their loaders are the new crate `hostkeeper-config`, which also took `trust.rs` and the
-service name and path grammars from `hostkeeper-rights`; the service name grammar is now
-`A-Za-z0-9_-` (design 11.8), wider than the lowercase grammar imported from kbf.
+service name and path grammars from `hostkeeper-rights`; a service name is now 1 to 255 bytes of
+`A-Za-z0-9._-`, not beginning with `-` or `.` (design 11.8), wider than the lowercase grammar
+imported from kbf.
 
 Deleted from `hostkeeper-rights`, with their tests: the declaration loader (`load_dir`,
 `DECLARATION_DIR`), the widening check, the gate (`FIRST_INSTALL`, `RIGHTS_CHANGE`), the approval

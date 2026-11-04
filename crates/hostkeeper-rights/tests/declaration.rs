@@ -198,6 +198,28 @@ fn names_and_words_follow_their_grammars() {
     assert!(Declaration::parse(&with("name = \"tierstore\"", "name = \"Tier_Store\"")).is_ok());
 }
 
+/// Catches a name that keeps its rule but is too long for the units its steps run in
+/// (`updater-<name>-<step>-<generation>.service` past 255 bytes): 209 bytes load, 210 and 255
+/// are refused on `name`, saying why.
+#[test]
+fn a_name_too_long_for_its_step_units_is_refused() {
+    let fits = "a".repeat(209);
+    assert!(
+        Declaration::parse(&with("name = \"tierstore\"", &format!("name = \"{fits}\""))).is_ok()
+    );
+    for name in ["a".repeat(210), "a".repeat(255)] {
+        let refused = refusal(&with("name = \"tierstore\"", &format!("name = \"{name}\"")));
+        assert_eq!(field_of(&refused), "name");
+        assert!(
+            refused.to_string().contains(
+                "is too long for the units its steps run in: \
+                 `updater-<name>-<step>-<generation>.service` would pass 255 bytes"
+            ),
+            "{refused}"
+        );
+    }
+}
+
 /// Catches a step bound outside 1 s to a day: 0 is a step with no time, and a day and a second
 /// is too long.
 #[test]
