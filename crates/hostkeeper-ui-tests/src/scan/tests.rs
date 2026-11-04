@@ -40,7 +40,7 @@ fn a_word_needle_inside_a_longer_name_is_not_found() {
     assert!(
         network_and_code(
             "x.js",
-            "retrieval(x); makeFunction(y); reimport(z); $eval(w);"
+            "retrieval(x); makeFunction(y); reimport(z); $eval(w); do_eval(v);"
         )
         .is_empty()
     );
