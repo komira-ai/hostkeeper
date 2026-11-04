@@ -7,7 +7,7 @@
 //! it was taken through.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
 
@@ -29,10 +29,11 @@ pub struct Held {
     pub stuck: bool,
 }
 
-/// One lock per service, made when a service's first order comes.
-#[derive(Debug, Default)]
+/// One lock per service, made when a service's first order comes. A clone shares the locks: a
+/// post-success watcher's thread keeps a service locked through it.
+#[derive(Clone, Debug, Default)]
 pub struct ServiceLocks {
-    held: Mutex<BTreeMap<String, Held>>,
+    held: Arc<Mutex<BTreeMap<String, Held>>>,
 }
 
 impl ServiceLocks {
