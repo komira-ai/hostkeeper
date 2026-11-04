@@ -168,6 +168,22 @@ fn beat_health_mapping_table() {
             Some("unmonitored"),
         ),
         (
+            Unmonitored,
+            not_live.clone(),
+            Healthy,
+            Health::Healthy,
+            v.clone(),
+            Some("unmonitored"),
+        ),
+        (
+            Unmonitored,
+            not_live.clone(),
+            unhealthy(UnhealthyReason::Unreachable),
+            Health::Unhealthy,
+            v.clone(),
+            Some("unreachable"),
+        ),
+        (
             Stopped,
             not_live.clone(),
             NotProbed,

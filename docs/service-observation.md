@@ -22,7 +22,8 @@ For each installed service, once per round:
 3. **Health**, from the manifest's `[health] url`: one HTTP GET per active run instance, with
    `{port}` replaced by the number after the instance's `@` (`tierstore@9301.service` gives 9301).
    Only `http://` to `127.0.0.1` or `[::1]`, no redirect followed, at most 4 KiB of the reply read,
-   and only a 2xx status is healthy.
+   and only a 2xx status is healthy. A service with no run units (`unmonitored`) has its URL
+   probed once; a `{port}` in it has no instance to be filled from and is `url_invalid`.
 
 The unit set is read before and after the version and health probes; a unit whose activity or
 main pid changed in between discards the round.
@@ -32,7 +33,7 @@ main pid changed in between discards the round.
 | State | When |
 |---|---|
 | `absent` | No `current`, or the service manager knows none of the run units |
-| `unmonitored` | The manifest has no `[units] run`: nothing to observe |
+| `unmonitored` | The manifest has no `[units] run`: no unit or process to observe; its health URL, if any, is probed once |
 | `transitioning` | A run unit is starting or stopping, even beside an active one: a hand-over under way |
 | `live` | At least one run unit is active and none is starting or stopping; an inactive standby instance beside it is not a stop |
 | `stopped` | Every run unit is inactive, failed or unknown to the manager |
@@ -50,8 +51,9 @@ was read) and a health view (`healthy`; unhealthy with `status_non_2xx`, `redire
 ## Reason tokens
 
 `Observation::reason_token()` is the one token the daemon's status shows: the state's token when
-the service is not live (`absent`, `stopped`, `transitioning`, `unobserved`, `unmonitored`), and
-for a live service, in this order, `version_mismatch`, the health reason, `version_unknown`,
+the service is not live (`absent`, `stopped`, `transitioning`, `unobserved`, `unmonitored`;
+for an unmonitored service whose health URL failed, the health reason instead), and for a live
+service, in this order, `version_mismatch`, the health reason, `version_unknown`,
 `version_unconfirmed`, or none.
 
 ## The heartbeat
@@ -61,7 +63,9 @@ for a live service, in this order, `version_mismatch`, the health reason, `versi
 | Observation | `Health` | Version |
 |---|---|---|
 | `absent` | `HEALTH_ABSENT` | empty |
-| `unmonitored` | `HEALTH_UNSPECIFIED` | recorded |
+| `unmonitored`, no `[health]` | `HEALTH_UNSPECIFIED` | recorded |
+| `unmonitored`, healthy | `HEALTH_HEALTHY` | recorded |
+| `unmonitored`, unhealthy | `HEALTH_UNHEALTHY` | recorded |
 | `stopped`, `transitioning`, `unobserved` | `HEALTH_UNHEALTHY` | recorded |
 | `live` with `version_mismatch` | `HEALTH_UNHEALTHY` | recorded |
 | `live`, unhealthy | `HEALTH_UNHEALTHY` | recorded |

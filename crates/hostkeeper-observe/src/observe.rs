@@ -4,8 +4,10 @@
 //!
 //! One round, in order:
 //!
-//! 1. No `current`: [`ServiceState::Absent`]. No `[units] run`: [`ServiceState::Unmonitored`].
-//!    Neither asks anything.
+//! 1. No `current`: [`ServiceState::Absent`], and nothing is asked. No `[units] run`:
+//!    [`ServiceState::Unmonitored`]; the service manager and the process are not asked, and a
+//!    health URL, if the manifest has one, is probed once (a `{port}` in it has no instance to
+//!    be filled from, and is `url_invalid`).
 //! 2. Read every run unit. Every one `NotFound`: `Absent`. Any `Activating` or `Deactivating`:
 //!    `Transitioning`, even beside an active unit (a hand-over under way is reported as one).
 //!    Else any `Active`: `Live` (a standby instance that is inactive by design does not make a
@@ -184,7 +186,7 @@ pub enum HealthView {
     Healthy,
     /// An instance did not; the reason of the first, in run order.
     Unhealthy { reason: UnhealthyReason },
-    /// No `[health]` section, or the service is not live.
+    /// No `[health]` section, or the service is neither live nor unmonitored.
     NotProbed,
 }
 
@@ -202,11 +204,17 @@ pub struct Observation {
 impl Observation {
     /// The one token that says why the service is not plainly live, healthy and confirmed, or
     /// `None` when it is. Not live: the state's token (`absent`, `stopped`, `transitioning`,
-    /// `unobserved`, `unmonitored`). Live: `version_mismatch`, then the health reason, then
+    /// `unobserved`, `unmonitored`), except that an unmonitored service whose health URL failed
+    /// gives the health reason. Live: `version_mismatch`, then the health reason, then
     /// `version_unknown` or `version_unconfirmed`.
     pub fn reason_token(&self) -> Option<&'static str> {
         if self.state != ServiceState::Live {
-            return Some(self.state.token());
+            return match (&self.state, &self.health) {
+                (ServiceState::Unmonitored, HealthView::Unhealthy { reason }) => {
+                    Some(reason.token())
+                }
+                (state, _) => Some(state.token()),
+            };
         }
         match (&self.version, &self.health) {
             (VersionView::Mismatch { .. }, _) => Some("version_mismatch"),
@@ -339,7 +347,16 @@ impl Observer {
             return quiet(ServiceState::Absent);
         };
         if current.run.is_empty() {
-            return quiet(ServiceState::Unmonitored);
+            let health = match &current.health_url {
+                Some(template) => {
+                    let failure = self.probe(&svc.service, template, None, deadline)?;
+                    failure.map_or(HealthView::Healthy, |reason| HealthView::Unhealthy {
+                        reason,
+                    })
+                }
+                None => HealthView::NotProbed,
+            };
+            return Ok((ServiceState::Unmonitored, VersionView::NotLive, health));
         }
         let before = self.read_units(&current.run)?;
         let state = aggregate(&before);
@@ -456,7 +473,7 @@ impl Observer {
         let mut first_failure = None;
         for (unit, state) in current.run.iter().zip(units) {
             if state.active == ActiveState::Active {
-                let failure = self.probe(&svc.service, template, unit, deadline)?;
+                let failure = self.probe(&svc.service, template, Some(unit), deadline)?;
                 first_failure = first_failure.or(failure);
             }
         }
@@ -467,16 +484,17 @@ impl Observer {
         )
     }
 
-    /// One probe of the instance `unit`: `None` when it is healthy.
+    /// One probe of the instance `unit`, or of the service with no run unit: `None` when it is
+    /// healthy. With no unit, a `{port}` has nothing to be filled from and is invalid.
     fn probe(
         &self,
         service: &str,
         template: &str,
-        unit: &str,
+        unit: Option<&str>,
         deadline: Deadline,
     ) -> Round<Option<UnhealthyReason>> {
         let text = if template.contains(PORT_PLACEHOLDER) {
-            let Some(port) = instance_port(service, unit) else {
+            let Some(port) = unit.and_then(|unit| instance_port(service, unit)) else {
                 return Ok(Some(UnhealthyReason::UrlInvalid));
             };
             template.replace(PORT_PLACEHOLDER, &port.to_string())

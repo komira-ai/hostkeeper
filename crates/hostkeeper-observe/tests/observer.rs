@@ -851,6 +851,77 @@ fn load(dir: &Path) -> Manifest {
     Manifest::load(dir, &expected, &running).expect("the manifest loads")
 }
 
+/// Catches a service with no run units whose manifest has a health URL being left unprobed, or
+/// probed for anything but that URL once: a 2xx is healthy, any other answer and no answer are
+/// unhealthy, a `{port}` URL (no instance to fill it from) is invalid and not asked, and a probe
+/// that cannot be made is `unobserved`. Neither the service manager nor the process is asked.
+#[test]
+fn an_unmonitored_service_with_a_health_url_is_probed_once() {
+    let unhealthy = |reason| HealthView::Unhealthy { reason };
+    let cases = [
+        (Some(200), URL_A, HealthView::Healthy, None),
+        (
+            Some(500),
+            URL_A,
+            unhealthy(UnhealthyReason::StatusNon2xx),
+            Some("status_non_2xx"),
+        ),
+        (
+            Some(301),
+            URL_A,
+            unhealthy(UnhealthyReason::Redirect),
+            Some("redirect"),
+        ),
+        (
+            None,
+            URL_A,
+            unhealthy(UnhealthyReason::Unreachable),
+            Some("unreachable"),
+        ),
+        (
+            Some(200),
+            "http://127.0.0.1:{port}/healthz",
+            unhealthy(UnhealthyReason::UrlInvalid),
+            Some("url_invalid"),
+        ),
+    ];
+    for (status, url, want, token) in cases {
+        let r = rig();
+        status
+            .into_iter()
+            .for_each(|status| r.health.answer(URL_A, status));
+        let seen = r.observe(&with_current(&[], Some(url), Some("1.5.0")));
+        assert_eq!(seen.state, ServiceState::Unmonitored, "{url} {status:?}");
+        assert_eq!(seen.version, VersionView::NotLive, "{url} {status:?}");
+        assert_eq!(seen.health, want, "{url} {status:?}");
+        assert_eq!(
+            seen.reason_token(),
+            token.or(Some("unmonitored")),
+            "{url} {status:?}"
+        );
+        let asked = usize::from(!url.contains("{port}"));
+        assert_eq!(r.health.requests().len(), asked, "{url} {status:?}");
+        assert!(r.manager.calls().is_empty());
+        assert!(r.process.calls().is_empty());
+    }
+
+    let broken = rig();
+    broken.health.then(
+        URL_A,
+        Err(ObserveError::Probe {
+            url: URL_A.to_owned(),
+            why: "too many open files".to_owned(),
+        }),
+    );
+    assert_eq!(
+        broken.observe(&with_current(&[], Some(URL_A), None)).state,
+        unobserved(
+            UnobservedReason::HealthError,
+            "tierstore: the probe of http://127.0.0.1:9301/healthz could not be made: too many open files"
+        )
+    );
+}
+
 /// Catches a manifest without `[health]`, or without `[units]`, failing to load or to observe:
 /// both shapes shipped before health was observed and stay valid.
 #[test]

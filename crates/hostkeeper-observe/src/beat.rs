@@ -5,7 +5,9 @@
 //! | Observation | Health | Version |
 //! |---|---|---|
 //! | `Absent` | `HEALTH_ABSENT` | empty |
-//! | `Unmonitored` | `HEALTH_UNSPECIFIED` | recorded |
+//! | `Unmonitored`, no `[health]` | `HEALTH_UNSPECIFIED` | recorded |
+//! | `Unmonitored`, health `Healthy` | `HEALTH_HEALTHY` | recorded |
+//! | `Unmonitored`, health `Unhealthy` | `HEALTH_UNHEALTHY` | recorded |
 //! | `Stopped`, `Transitioning`, `Unobserved` | `HEALTH_UNHEALTHY` | recorded |
 //! | `Live`, version `Mismatch` | `HEALTH_UNHEALTHY` | recorded |
 //! | `Live`, health `Unhealthy` | `HEALTH_UNHEALTHY` | recorded |
@@ -24,7 +26,11 @@ use crate::observe::{HealthView, Observation, ServiceState, VersionView};
 pub fn beat_health(observation: &Observation) -> (Health, Option<String>) {
     let health = match &observation.state {
         ServiceState::Absent => return (Health::Absent, None),
-        ServiceState::Unmonitored => Health::Unspecified,
+        ServiceState::Unmonitored => match &observation.health {
+            HealthView::Healthy => Health::Healthy,
+            HealthView::Unhealthy { .. } => Health::Unhealthy,
+            HealthView::NotProbed => Health::Unspecified,
+        },
         ServiceState::Stopped | ServiceState::Transitioning | ServiceState::Unobserved { .. } => {
             Health::Unhealthy
         }
