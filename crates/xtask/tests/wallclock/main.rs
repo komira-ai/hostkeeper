@@ -280,7 +280,7 @@ fn each_wall_clock_form_is_refused() {
     for (form, text, line) in &cases {
         assert_eq!(
             lint(&[(DECIDE, text.as_str())], ""),
-            Err(vec![refusal(DECIDE, *line, *form)]),
+            Err(vec![refusal(DECIDE, *line, form)]),
             "in {text:?}"
         );
     }
