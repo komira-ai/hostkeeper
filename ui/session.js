@@ -1,6 +1,6 @@
-// The operator's token, held in this module's memory and nowhere else: not in a cookie, not in
-// browser storage, not in the address. Reloading or closing the tab forgets it, and the app asks
-// for it again. Nothing here renders, logs or copies it.
+// The operator's token, held in this module's memory and nowhere else: not in browser storage,
+// not in the address. Reloading or closing the tab forgets it, and the app asks for it again.
+// Nothing here renders, logs or copies it.
 
 let token = null;
 const listeners = [];
