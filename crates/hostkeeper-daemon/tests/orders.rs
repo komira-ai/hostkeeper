@@ -153,8 +153,8 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
     let rig = Rig::new("malformed");
     let daemon = rig.daemon();
     let ok = d();
-    let long_version = "1".repeat(129);
-    let long_service = "s".repeat(65);
+    let long_version = "1".repeat(256);
+    let long_service = "s".repeat(256);
     let upper = "AB".repeat(32);
     let short = "a".repeat(63);
     let with_verb = |verb: order::Verb| Order {
@@ -255,7 +255,7 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
         ),
         (
             with_verb(order::Verb::ClearHalt(ClearHalt {
-                service: "x.y".to_owned(),
+                service: "x+y".to_owned(),
                 halt_generation: 1,
             })),
             "clear_halt.service",

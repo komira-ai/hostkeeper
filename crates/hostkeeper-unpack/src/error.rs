@@ -23,6 +23,8 @@ pub const REASON_ARTIFACT_CHANGED: &str = "artifact_changed";
 /// The order names a version that is one of the package directory's own names (`current`,
 /// `previous`, `*.seal`, `*.tmp`).
 pub const REASON_RESERVED_VERSION: &str = "reserved_version";
+/// The reason of [`UnpackError::VersionTooLong`].
+pub const REASON_VERSION_TOO_LONG: &str = "version_too_long";
 /// The archive, the staging directory or a seal cannot be read or written right now, for a
 /// reason that is not a full disk: tried again later.
 pub const REASON_IO_ERROR: &str = "io_error";
@@ -156,6 +158,12 @@ pub enum UnpackError {
     /// touched.
     #[error("the version {version:?} is a name the package directory holds for itself")]
     ReservedVersion { version: String },
+    /// The order's version keeps its rule but is too long for the names the package directory
+    /// derives from it (`.<version>.seal.tmp` would pass 255 bytes). Nothing was touched.
+    #[error(
+        "the version {version:?} is too long for the names the package directory derives from it"
+    )]
+    VersionTooLong { version: String },
     #[error("{what}: {source}")]
     Io {
         what: &'static str,
@@ -182,6 +190,7 @@ impl UnpackError {
             UnpackError::SealUnreadable { .. } => (DEFERRED, REASON_IO_ERROR),
             UnpackError::SealSchema { .. } => (DEFERRED, REASON_DAEMON_TOO_OLD),
             UnpackError::ReservedVersion { .. } => (FAILED, REASON_RESERVED_VERSION),
+            UnpackError::VersionTooLong { .. } => (FAILED, REASON_VERSION_TOO_LONG),
             UnpackError::Io { .. } => (DEFERRED, REASON_IO_ERROR),
         };
         (kind.0, kind.1, reason)

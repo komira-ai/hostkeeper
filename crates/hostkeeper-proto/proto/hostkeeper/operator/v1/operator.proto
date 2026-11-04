@@ -21,12 +21,12 @@
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
 // request changes nothing.
 //
-// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
-// A version is the release's version string: 1 to 128 bytes, a digit first, then letters,
-// digits and `.+~-`. A service name is 1 to 64 bytes of `[a-z0-9-]`; a node id 1 to 63 bytes of
-// `[a-z0-9-]`, not starting or ending with `-`; a role name 1 to 32 bytes of `[a-z0-9-]`, a
-// letter first. A reason is 1 to 256 bytes once trimmed, with no control character. A count of
-// hosts per role is 0 to 10000. A host id is a node id. A request id and a key hash are SHA-256
+// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`). A
+// service name is 1 to 255 bytes of the POSIX portable filename characters (`A-Za-z0-9._-`), not
+// beginning with `-` or `.`; a version the same with `+` added. A node id is 1 to 63 bytes of
+// `[a-z0-9-]`, not starting or ending with `-`; a role name 1 to 32 bytes of `[a-z0-9-]`, a letter
+// first. A reason is 1 to 256 bytes once trimmed, with no control character. A count of hosts per
+// role is 0 to 10000. A host id is a node id. A request id and a key hash are SHA-256
 // as 64 lower-case hex characters. A `limit` is capped at 256, and 0 means the cap.
 //
 // Enrollment: the hosts that asked for a certificate (`Enroll` of `hostkeeper.agent.v1`) and
