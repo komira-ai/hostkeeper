@@ -47,7 +47,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="394" y="180" class="b" font-size="12" text-anchor="middle">2</text>
 <text x="412" y="184" class="t-m lbl" text-anchor="start">heartbeat</text>
 <path d="M380,222 L680,222" class="ln-d" marker-end="url(#update-sequence-ak)"/>
-<text x="530" y="216" class="t-m lbl" text-anchor="middle">order: update S V D, try n</text>
+<text x="530" y="216" class="t-m lbl" text-anchor="middle">order: update S V, try n</text>
 <rect x="300" y="236" width="170" height="28" rx="5" class="box-b"/>
 <text x="385" y="254" class="t-m" text-anchor="middle">rollout gate: one live update</text>
 <circle cx="590" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
@@ -61,7 +61,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="664" y="344" class="b" font-size="12" text-anchor="middle">4</text>
 <text x="730" y="337" class="t-m lbl" text-anchor="start">fetch, verify, unpack, read</text>
 <text x="730" y="352" class="t-m lbl" text-anchor="start">manifest.toml (fetch diagram)</text>
-<text x="640" y="337" class="t-m lbl" text-anchor="end">digest + attestation</text>
+<text x="640" y="337" class="t-m lbl" text-anchor="end">index entry + attestation</text>
 <text x="640" y="352" class="t-m lbl" text-anchor="end">vs the trusted signers</text>
 <rect x="934" y="420" width="12" height="500" rx="2" class="box-o"/>
 <path d="M680,435 L940,435" class="ln" marker-end="url(#update-sequence-ak)"/>

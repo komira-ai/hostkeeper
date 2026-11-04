@@ -87,7 +87,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M520,800 L150,800" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
 <circle cx="164" cy="786" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="164" y="790" class="b" font-size="12" text-anchor="middle">10</text>
-<text x="182" y="794" class="t-m lbl" text-anchor="start">order: install S V D</text>
+<text x="182" y="794" class="t-m lbl" text-anchor="start">order: install S V</text>
 <text x="535" y="822" class="t-m lbl" text-anchor="start">only if the one live update slot is free</text>
 <path d="M150,870 L190,870 L190,890 L150,890" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
 <circle cx="134" cy="880" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
