@@ -34,13 +34,10 @@ pub struct TcpConnect;
 
 impl Connect for TcpConnect {
     fn connect(&self, addr: SocketAddr, deadline: Deadline) -> io::Result<Box<dyn Duplex>> {
-        let bounded = |stream: TcpStream| {
-            stream
-                .set_read_timeout(Some(deadline.read))
-                .and_then(|()| stream.set_write_timeout(Some(deadline.read)))
-                .map(|()| Box::new(stream) as Box<dyn Duplex>)
-        };
-        TcpStream::connect_timeout(&addr, deadline.connect).and_then(bounded)
+        let stream = TcpStream::connect_timeout(&addr, deadline.connect)?;
+        stream.set_read_timeout(Some(deadline.read))?;
+        stream.set_write_timeout(Some(deadline.read))?;
+        Ok(Box::new(stream))
     }
 }
 
