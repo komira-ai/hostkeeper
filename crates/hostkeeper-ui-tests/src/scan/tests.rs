@@ -37,7 +37,13 @@ fn token_keepers_finds_each_place_a_token_could_be_kept() {
 #[test]
 fn a_word_needle_inside_a_longer_name_is_not_found() {
     assert!(token_keepers("x.js", "myconsole.log(x); const xcookie = 2;").is_empty());
-    assert!(network_and_code("x.js", "retrieval(x); makeFunction(y); reimport(z);").is_empty());
+    assert!(
+        network_and_code(
+            "x.js",
+            "retrieval(x); makeFunction(y); reimport(z); $eval(w);"
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -103,7 +109,7 @@ fn inline_code_in_html_finds_what_the_policy_refuses() {
 #[test]
 fn clean_html_has_no_inline_code() {
     let html = "<html lang=\"en\">\n<script type=\"module\" src=\"main.js\"></script>\n\
-                <p class=\"one\">Done once only; content== on = onfoo == bar</p>\n<div id=\"app\"></div>";
+                <p class=\"one\">Done once only; content== on = onfoo == bar; a style guide</p>\n<div id=\"app\"></div>";
     assert!(inline_code("index.html", html).is_empty());
 }
 

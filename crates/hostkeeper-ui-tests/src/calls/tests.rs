@@ -78,7 +78,7 @@ fn check_calls_refuses_every_call_against_an_empty_descriptor_set() {
 #[test]
 fn call_sites_reads_each_literal_with_its_line_and_page() {
     let text = "// one call per button\nconst r = await ctx.api.call(\"hostkeeper.a.v1.Hosts/List\", {});\n\
-                api.call(\n  \"hostkeeper.a.v1.Hosts/Get\",\n  { nodeId });\nrecall(x); callback(y); calls;\n";
+                api.call(\n  \"hostkeeper.a.v1.Hosts/Get\",\n  { nodeId });\nrecall(x); $call(z); callback(y); calls;\n";
     let sites = call_sites("pages/fleet.js", text).expect("the calls are literals");
     assert_eq!(
         sites,
