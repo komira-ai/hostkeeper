@@ -45,10 +45,19 @@ fn names_follow_their_grammars() {
     for bad in ["", at(33).as_str(), "Web", "-web"] {
         assert_eq!(Role::parse(bad).expect_err(bad).what, "role");
     }
-    for ok in ["api", "Api_v2", "a-b", at(64).as_str()] {
+    for ok in [
+        "api",
+        "Api_v2",
+        "a-b",
+        "api-",
+        "a.b",
+        "_x",
+        "0",
+        at(255).as_str(),
+    ] {
         assert_eq!(ServiceName::parse(ok).expect(ok).as_str(), ok);
     }
-    for bad in ["", "-api", "api-", "a.b", at(65).as_str()] {
+    for bad in ["", "-api", ".api", "a+b", "a b", "a/b", at(256).as_str()] {
         assert_eq!(ServiceName::parse(bad).expect_err(bad).what, "service name");
     }
     assert_eq!(HostId::parse("web-1").expect("id").to_string(), "web-1");

@@ -28,8 +28,9 @@ fn lower_digit_dash(b: u8) -> bool {
     b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'
 }
 
-fn service_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+/// A POSIX portable filename character (POSIX.1-2017, 3.282): `A-Z a-z 0-9 . _ -`.
+fn portable_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-'
 }
 
 /// A host's id: a DNS label, `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. A certificate names its
@@ -97,22 +98,26 @@ impl Role {
     }
 }
 
-/// A service name: 1 to 64 bytes of `A-Za-z0-9_-` (design 11.8), not starting or ending with
-/// `-`.
+/// A service name (design 11.8): `^[A-Za-z0-9_][A-Za-z0-9._-]{0,254}$`, the POSIX portable
+/// filename characters, 1 to 255 bytes, not beginning with `-` or `.`. The same rule as
+/// `hostkeeper-config`'s; this crate depends on no workspace crate, so it holds its own copy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ServiceName(String);
 
 impl ServiceName {
     /// The grammar, as the refusal states it.
     pub const GRAMMAR: &'static str =
-        "1 to 64 of A-Z, a-z, 0-9, _ and -, not starting or ending with -";
+        "1 to 255 of A-Z, a-z, 0-9, ., _ and -, not beginning with - or .";
 
     /// `text` as a service name.
     ///
     /// # Errors
     /// [`BadName`] when `text` does not match [`ServiceName::GRAMMAR`].
     pub fn parse(text: &str) -> Result<ServiceName, BadName> {
-        if matches(text, 64, service_byte) {
+        let ok = (1..=255).contains(&text.len())
+            && text.bytes().all(portable_byte)
+            && !text.starts_with(['-', '.']);
+        if ok {
             return Ok(ServiceName(text.to_owned()));
         }
         Err(BadName {
