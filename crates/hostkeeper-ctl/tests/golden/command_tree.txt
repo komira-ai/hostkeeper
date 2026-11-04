@@ -100,3 +100,38 @@ command services unhold /hostkeeper.operator.v1.Services/Unhold
 request-file services unhold scope
 flag services unhold --service STRING
 flag services unhold --reason STRING
+command audit list /hostkeeper.operator.v1.Audit/List
+flag audit list --since-seq UINT64
+flag audit list --limit UINT32
+flag audit list --actor STRING
+flag audit list --action STRING
+flag audit list --service STRING
+flag audit list --node-id STRING
+command coordinator enroll /hostkeeper.agent.v1.Coordinator/Enroll
+request-file coordinator enroll csr_der
+request-file coordinator enroll claims
+flag coordinator enroll --image STRING
+flag coordinator enroll --renewal-of STRING
+secret coordinator enroll --mac-nonce-file --mac-nonce-stdin
+command coordinator poll /hostkeeper.agent.v1.Coordinator/Poll
+flag coordinator poll --request-id STRING
+request-file coordinator poll nonce
+request-file coordinator poll signature
+command coordinator renew /hostkeeper.agent.v1.Coordinator/Renew
+request-file coordinator renew csr_der
+command enrollment list /hostkeeper.operator.v1.Enrollment/List
+flag enrollment list --limit UINT32
+flag enrollment list --page-token STRING
+command enrollment approve /hostkeeper.operator.v1.Enrollment/Approve
+flag enrollment approve --request-id STRING
+flag enrollment approve --key-sha256 STRING
+flag enrollment approve --host-id STRING
+flag enrollment approve --role STRING
+flag enrollment approve --services STRING
+flag enrollment approve --replace true|false
+flag enrollment approve --reason STRING
+flag hosts exclude --abandon true|false
+command hosts abort /hostkeeper.operator.v1.Hosts/Abort
+flag hosts abort --node-id STRING
+flag hosts abort --service STRING
+flag hosts abort --reason STRING
