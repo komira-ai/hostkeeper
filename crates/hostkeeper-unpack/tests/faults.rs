@@ -474,3 +474,41 @@ fn a_service_directory_that_cannot_be_made_or_looked_at_stops_the_work() {
     assert!(rig.host().exists(std::path::Path::new("afile/x")).is_err());
     assert!(!rig.host().exists(std::path::Path::new("absent/x")).unwrap());
 }
+
+/// Catches a service directory whose first making stopped half-way staying so: a directory a
+/// crash left between its `mkdir` and its mode (0700, here also given another mode by hand) is
+/// made 0755 by the next unpack, which publishes into it; a call on a ready directory changes
+/// nothing; and a link in the place of the service directory is refused, not followed, and
+/// its target is left as it was.
+#[test]
+fn a_service_directory_left_half_made_is_finished_by_the_next_unpack() {
+    let rig = Rig::new("f-half-made");
+    fs::create_dir(rig.service()).unwrap();
+    fs::set_permissions(rig.service(), fs::Permissions::from_mode(0o700)).unwrap();
+    let (path, order) = rig.archive("a.tar.zst", &package(VERSION));
+    unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    let mode = |p: &std::path::Path| fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode(&rig.service()), 0o755);
+    rig.host()
+        .create_service(std::path::Path::new(SERVICE))
+        .unwrap();
+    assert_eq!(mode(&rig.service()), 0o755);
+    assert_eq!(
+        rig.listing(),
+        [VERSION.to_owned(), format!("{VERSION}.seal")]
+    );
+
+    let rig = Rig::new("f-service-link");
+    let elsewhere = rig.scratch.path().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o700)).unwrap();
+    symlink(&elsewhere, rig.service()).unwrap();
+    let (path, order) = rig.archive("a.tar.zst", &package(VERSION));
+    let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+    assert!(
+        matches!(&err, UnpackError::Io { what, .. } if *what == "cannot create the service directory"),
+        "{err:?}"
+    );
+    assert_eq!(mode(&elsewhere), 0o700);
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+}

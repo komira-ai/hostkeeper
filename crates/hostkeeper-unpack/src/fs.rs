@@ -30,9 +30,11 @@ pub trait PackageFs {
     /// Whether something (of any kind, a link included) is at `path`, looked at without
     /// following it. Only a missing entry, or a missing parent, is `false`.
     fn exists(&self, path: &Path) -> io::Result<bool>;
-    /// Creates the service directory `<service>` when it is missing, mode 0755 (service users
-    /// pass through it to their version), and makes its entry in the packages directory
-    /// durable.
+    /// Makes the service directory `<service>` ready: creates it when it is missing, then, on
+    /// every call, opens it without following a link (a link or a file there is an error),
+    /// gives it to the owner with mode 0755 (service users pass through it to their version)
+    /// and makes its entry in the packages directory durable. So a call stopped half-way, by a
+    /// crash or a failed fsync, is finished by the next one.
     fn create_service(&self, service: &Path) -> io::Result<()>;
     /// Takes the exclusive unpack lock of the service directory `<service>`, without waiting:
     /// [`io::ErrorKind::WouldBlock`] while another holder has it. Held until the lock is dropped.
@@ -184,13 +186,14 @@ impl PackageFs for HostFs {
 
     fn create_service(&self, service: &Path) -> io::Result<()> {
         let (at, name) = self.parent(service)?;
-        match self.make_dir(&at, name, 0o755) {
-            Err(e) if e.raw_os_error() == Some(Errno::EXIST.raw_os_error()) => Ok(()),
-            made => {
-                made?;
-                Ok(rustix::fs::fsync(&at)?)
-            }
+        match rustix::fs::mkdirat(&at, name, Mode::from_raw_mode(0o700)) {
+            Err(Errno::EXIST) => {}
+            made => made?,
         }
+        let fd = rustix::fs::openat(&at, name, dir_flags(), Mode::empty())?;
+        self.give(&fd)?;
+        rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o755))?;
+        Ok(rustix::fs::fsync(&at)?)
     }
 
     fn lock(&self, service: &Path) -> io::Result<ServiceLock> {
