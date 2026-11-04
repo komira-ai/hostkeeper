@@ -53,7 +53,7 @@ use hostkeeper_steps::{
 use crate::executor::{Ctx, Daemon};
 use crate::files::{self, WriteStep};
 use crate::installed::{self, CURRENT};
-use crate::locks::{Package, ServiceGuard};
+use crate::locks::Package;
 use crate::notify::ReadyNotifier;
 use crate::refusal::Refusal;
 use crate::verb::{HookedVerb, PackageDigest};
@@ -751,8 +751,9 @@ impl Daemon {
                         version,
                         digest,
                     });
-                    let locked = package.and_then(|package| ctx.locks.take(service, package).ok());
-                    locked.into_iter().for_each(ServiceGuard::keep);
+                    package
+                        .into_iter()
+                        .for_each(|package| ctx.locks.keep_stuck(service, package));
                     let why = format!(
                         "{error}; its unit {unit} could not be stopped ({stop}), so {service} stays locked"
                     );

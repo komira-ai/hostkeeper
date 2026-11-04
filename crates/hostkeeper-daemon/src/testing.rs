@@ -435,6 +435,7 @@ pub struct FakePackages {
     failures: Mutex<BTreeMap<(String, String), PackageError>>,
     asked: Mutex<Vec<(String, String)>>,
     notify: Mutex<Vec<Sender<String>>>,
+    holds: Mutex<BTreeMap<(String, String), Hold>>,
 }
 
 fn dir_0755(dir: &Path) {
@@ -450,6 +451,7 @@ impl FakePackages {
             failures: Mutex::default(),
             asked: Mutex::default(),
             notify: Mutex::default(),
+            holds: Mutex::default(),
         })
     }
 
@@ -490,6 +492,21 @@ impl FakePackages {
         std::os::unix::fs::symlink(version, &path).unwrap_or_default();
     }
 
+    /// Holds the next ask for the package of `service` at `version` until the test releases it.
+    pub fn hold(&self, service: &str, version: &str) -> Gate {
+        let (entered, on_entered) = mpsc::channel();
+        let (release, on_release) = mpsc::channel();
+        let hold = Hold {
+            entered,
+            release: Mutex::new(on_release),
+        };
+        lock(&self.holds).insert((service.to_owned(), version.to_owned()), hold);
+        Gate {
+            entered: on_entered,
+            release,
+        }
+    }
+
     /// Makes the package of `service` at `version` fail with `error`.
     pub fn fail(&self, service: &str, version: &str, error: PackageError) {
         lock(&self.failures).insert((service.to_owned(), version.to_owned()), error);
@@ -517,6 +534,11 @@ impl Packages for FakePackages {
         lock(&self.asked).push(key.clone());
         for tx in lock(&self.notify).iter() {
             tx.send(format!("{service} {version}")).unwrap_or_default();
+        }
+        let held = lock(&self.holds).remove(&key);
+        if let Some(hold) = held {
+            hold.entered.send(()).unwrap_or_default();
+            lock(&hold.release).recv().unwrap_or_default();
         }
         let failure = lock(&self.failures).get(&key).cloned();
         let dir = self.root.join(&key.0).join(&key.1);

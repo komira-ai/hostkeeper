@@ -427,3 +427,55 @@ fn a_watcher_runs_while_another_service_holds_a_long_step() {
         }
     );
 }
+
+/// Catches a stuck `verify` left unguarded because an order held the lock when the watcher ended:
+/// an order of `web` holds its lock while its package is fetched; meanwhile the watcher's
+/// `verify` cannot be stopped; the order is then refused (its package is not in the channel),
+/// and the lock stays held, marked stuck, so the next order is `busy`.
+#[test]
+fn a_stuck_watcher_keeps_the_lock_an_order_held_when_it_ended() {
+    let rig = Rig::new("watch-unstopped-held");
+    watched(&rig);
+    rig.add("web", "3.0.0");
+    rig.store.fail(
+        "web",
+        "3.0.0",
+        hostkeeper_daemon::packages::PackageError::NotFound("web 3.0.0".to_owned()),
+    );
+    rig.launcher.fail_stops("web");
+    let stops = rig.launcher.stops_seen();
+    let verify = rig.launcher.hold("web", Step::Verify);
+    let fetch = rig.store.hold("web", "3.0.0");
+    let clock = FakeClock::frozen();
+    let mut ports = rig.ports();
+    ports.clock = clock.clone();
+    ports.deadman_poll_secs = Some(1);
+    let daemon = Arc::new(Daemon::new(
+        support::config(),
+        rig.dirs(),
+        ports,
+        support::OWN,
+    ));
+    daemon.boot_pass().expect("the start pass");
+    verify.entered();
+    let order = {
+        let daemon = Arc::clone(&daemon);
+        thread::spawn(move || daemon.order(&update("web", "3.0.0", &d(), 2)))
+    };
+    fetch.entered();
+    clock.advance(1001);
+    assert_eq!(stops.recv().expect("a stop"), "updater-web-verify-1");
+    verify.release();
+    wait_until_ended(&daemon);
+    fetch.release();
+    let refused = order.join().expect("the order");
+    assert_eq!(
+        refused.refusal(),
+        Some(Refusal::PackageNotFound),
+        "{refused:?}"
+    );
+    let web = name("web");
+    assert!(daemon.ctx().locks.holder(&web).expect("held").stuck);
+    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    assert_eq!(reply.refusal(), Some(Refusal::Busy), "{reply:?}");
+}

@@ -55,8 +55,20 @@ impl ServiceLocks {
         Ok(ServiceGuard {
             locks: self,
             service: service.clone(),
-            kept: false,
         })
+    }
+
+    /// Locks `service` for good, marked stuck: a step of it could not be stopped. A free lock
+    /// is taken for `package`; a held one is marked stuck, so that it stays held when its holder's
+    /// guard is dropped, whatever became of the holder's order.
+    pub fn keep_stuck(&self, service: &ServiceName, package: Package) {
+        self.map()
+            .entry(service.to_string())
+            .and_modify(|held| held.stuck = true)
+            .or_insert(Held {
+                package,
+                stuck: true,
+            });
     }
 
     /// Who holds the lock of `service` now, `None` when nobody does.
@@ -65,12 +77,12 @@ impl ServiceLocks {
     }
 }
 
-/// A service's lock, held until the guard is dropped (or for good, [`ServiceGuard::keep`]).
+/// A service's lock, held until the guard is dropped, unless it was marked stuck
+/// ([`ServiceGuard::keep`], [`ServiceLocks::keep_stuck`]): then for good.
 #[derive(Debug)]
 pub struct ServiceGuard<'a> {
     locks: &'a ServiceLocks,
     service: ServiceName,
-    kept: bool,
 }
 
 impl ServiceGuard<'_> {
@@ -84,8 +96,7 @@ impl ServiceGuard<'_> {
 
     /// Leaves the lock held, marked stuck, after this guard is gone: the order's step could not
     /// be stopped, and the service takes no other order until `abort` clears it.
-    pub fn keep(mut self) {
-        self.kept = true;
+    pub fn keep(self) {
         self.locks
             .map()
             .entry(self.service.to_string())
@@ -94,9 +105,14 @@ impl ServiceGuard<'_> {
 }
 
 impl Drop for ServiceGuard<'_> {
+    /// Lets go of the lock, unless it was marked stuck meanwhile.
     fn drop(&mut self) {
-        if !self.kept {
-            self.locks.map().remove(self.service.as_str());
+        let mut map = self.locks.map();
+        let stuck = map
+            .get(self.service.as_str())
+            .is_some_and(|held| held.stuck);
+        if !stuck {
+            map.remove(self.service.as_str());
         }
     }
 }

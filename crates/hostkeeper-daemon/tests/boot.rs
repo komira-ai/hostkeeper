@@ -781,8 +781,10 @@ fn stale_entries_of_the_boot_id_are_cleared_or_keep_the_old_boot_id() {
 }
 
 /// Catches a record trusted for a service it does not name, or a counter at its end that stops
-/// the start: a record naming another service is held as corrupt while the other services go on;
-/// a cut-off `rollback` whose attempt is the largest count runs again and the update ends.
+/// the start: a record naming another service is held as corrupt while the other services go on,
+/// and every order of that service after the start, of the same try or a higher one, unfinished
+/// or finished, is refused `record_unreadable` with the record left as it was; a cut-off
+/// `rollback` whose attempt is the largest count runs again and the update ends.
 #[test]
 fn a_record_of_another_service_is_held_and_a_full_attempt_count_is_kept() {
     let rig = Rig::new("boot-misfiled");
@@ -802,7 +804,44 @@ fn a_record_of_another_service_is_held_and_a_full_attempt_count_is_kept() {
     );
     assert_eq!(report.services["beta"].verdict(), Some(ok()));
     assert_eq!(notifier.sent(), 1);
+    let misfiled = |service: &str| Reply::Refused {
+        refusal: Refusal::RecordUnreadable,
+        detail: format!("the step record of {service} names the service \"beta\""),
+    };
+    let alpha_record = rig.state.join("alpha").join(RECORD_FILE);
+    let before = fs::read(&alpha_record).expect("the record");
+    for order_try in [1, 2] {
+        let reply = started
+            .daemon()
+            .order(&update("alpha", "2.0.0", &d(), order_try));
+        assert_eq!(reply, misfiled("alpha"), "try {order_try}");
+    }
+    assert_eq!(fs::read(&alpha_record).expect("the record"), before);
     drop(started);
+
+    let rig = Rig::new("boot-misfiled-finished");
+    rig.add("gamma", "2.0.0");
+    let (daemon, _) = rig.booted();
+    let done = daemon.order(&update("gamma", "2.0.0", &d(), 1));
+    assert!(matches!(done, Reply::Finished { .. }), "{done:?}");
+    let mut gamma = rig.record("gamma").expect("gamma's record");
+    gamma.service = "beta".to_owned();
+    RecordStore::new(&rig.state.join("gamma"))
+        .save(&gamma)
+        .expect("misfile it");
+    let gamma_record = rig.state.join("gamma").join(RECORD_FILE);
+    let before = fs::read(&gamma_record).expect("the record");
+    let (daemon, report, log) = restart(&rig);
+    assert!(matches!(
+        report.services["gamma"].outcome,
+        Outcome::Corrupt(_)
+    ));
+    for order_try in [1, 2] {
+        let reply = daemon.order(&update("gamma", "2.0.0", &d(), order_try));
+        assert_eq!(reply, misfiled("gamma"), "try {order_try}");
+    }
+    assert_eq!(fs::read(&gamma_record).expect("the record"), before);
+    assert!(calls(&log).is_empty(), "{:?}", calls(&log));
 
     let rig = Rig::new("boot-full-attempt");
     rig.launcher.exits("web", Step::Verify, &[1]);

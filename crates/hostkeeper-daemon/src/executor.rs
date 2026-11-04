@@ -25,7 +25,7 @@ use crate::boot::{ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
 use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT};
-use crate::locks::{Package, ServiceGuard, ServiceLocks, StepLock};
+use crate::locks::{Package, ServiceLocks, StepLock};
 use crate::packages::Packages;
 use crate::refusal::Refusal;
 use crate::verb::Verb;
@@ -165,10 +165,8 @@ impl Ctx {
                 Ok(_) => {}
                 Err(RunError::Launch(LaunchError::Launcher(why))) if why == STOPPED => {}
                 Err(error @ RunError::Unstopped { .. }) => {
-                    locks
-                        .take(&name, package)
-                        .into_iter()
-                        .for_each(ServiceGuard::keep);
+                    // An order that holds the lock now cannot let go of it either.
+                    locks.keep_stuck(&name, package);
                     alert(ALERT_UNSTOPPABLE, error);
                 }
                 Err(RunError::Record(error)) => alert(ALERT_JOURNAL, error),
@@ -368,24 +366,15 @@ impl Daemon {
 
     /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service
     /// stays locked and its record `running`, and every hooked order of the service, the same
-    /// update's resend included, is `busy` until `abort` clears it.
+    /// update's resend included, is `busy` until `abort` clears it. A hooked order of a service
+    /// whose step record names another service is `record_unreadable`.
     pub fn execute(&self, verb: Verb) -> Reply {
         let hooked = match &verb {
             Verb::Update(order) | Verb::ForceRollback(order) => Some(order.service.clone()),
             _ => None,
         };
-        let stuck = hooked
-            .and_then(|service| self.ctx.locks.holder(&service).map(|held| (service, held)))
-            .filter(|(_, held)| held.stuck);
-        if let Some((service, held)) = stuck {
-            return Reply::refused(
-                Refusal::Busy,
-                format!(
-                    "a step of {service} that could not be stopped holds it, for an order to {} it to {}",
-                    held.package.verb.name(),
-                    held.package.version
-                ),
-            );
+        if let Some(refused) = hooked.and_then(|service| self.held_back(&service)) {
+            return refused;
         }
         let reply = self.dispatch(verb);
         if let Reply::Interrupted {
@@ -396,6 +385,32 @@ impl Daemon {
             self.ctx.alert(ALERT_UNSTOPPABLE, detail);
         }
         reply
+    }
+
+    /// Why no hooked order of `service` may run now, before its verb's module is asked: a step
+    /// of it could not be stopped (`busy`, until `abort`), or its step record names another
+    /// service (`record_unreadable`, until `clear_record`; the start pass held it as corrupt).
+    fn held_back(&self, service: &ServiceName) -> Option<Reply> {
+        if let Some(held) = self.ctx.locks.holder(service).filter(|held| held.stuck) {
+            return Some(Reply::refused(
+                Refusal::Busy,
+                format!(
+                    "a step of {service} that could not be stopped holds it, for an order to {} it to {}",
+                    held.package.verb.name(),
+                    held.package.version
+                ),
+            ));
+        }
+        match self.ctx.store(service).load() {
+            Ok(Loaded::Current(rec)) if rec.service != service.as_str() => Some(Reply::refused(
+                Refusal::RecordUnreadable,
+                format!(
+                    "the step record of {service} names the service {:?}",
+                    rec.service
+                ),
+            )),
+            _ => None,
+        }
     }
 
     fn dispatch(&self, verb: Verb) -> Reply {
