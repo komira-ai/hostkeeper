@@ -48,7 +48,7 @@ fn the_staging_file_is_never_created_through_an_existing_path() {
     symlink(&outside, dir.join(".fetch-taken")).expect("a link at the first name");
 
     let names = [".fetch-taken", ".fetch-free"].map(str::to_owned);
-    let (mut file, temp) = create(&dir, names.into_iter()).expect("the second name");
+    let (mut file, temp) = create(&dir, names.to_vec()).expect("the second name");
     assert_eq!(temp.path(), dir.join(".fetch-free"));
     file.write_all(b"new").expect("write");
     assert_eq!(std::fs::read(&outside).expect("the target"), b"keep");
@@ -56,7 +56,7 @@ fn the_staging_file_is_never_created_through_an_existing_path() {
     assert_eq!(mode & 0o7777, 0o600);
 
     let taken = [".fetch-taken", ".fetch-free"].map(str::to_owned);
-    let refused = create(&dir, taken.into_iter()).expect_err("every name exists");
+    let refused = create(&dir, taken.to_vec()).expect_err("every name exists");
     assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
     assert_eq!(std::fs::read(&outside).expect("the target"), b"keep");
     assert_eq!(
@@ -71,20 +71,16 @@ fn the_staging_file_is_never_created_through_an_existing_path() {
     assert_eq!(listing(&dir), [".fetch-taken"]);
 }
 
-fn names_of(names: &[&str]) -> impl Iterator<Item = String> {
-    names
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect::<Vec<_>>()
-        .into_iter()
+fn names_of(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
 }
 
 /// Catches two staging files of one process sharing a name: each name has the prefix the orphan
 /// sweep looks for, and no two are alike.
 #[test]
 fn staging_names_have_the_prefix_and_never_repeat() {
-    let first: Vec<String> = names().collect();
-    let second: Vec<String> = names().collect();
+    let first = names();
+    let second = names();
     assert_eq!(first.len(), 16);
     let mut all: Vec<&String> = first.iter().chain(&second).collect();
     assert!(

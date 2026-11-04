@@ -70,19 +70,19 @@ pub(crate) fn make_dir(dir: &Path) -> io::Result<()> {
     is_dir(dir).map(|_| ())
 }
 
-/// The names a staging file is tried under, in order.
-pub(crate) fn names() -> impl Iterator<Item = String> {
+/// The names a staging file is tried under, in order. A list, not an iterator, so that
+/// [`create`] has one instantiation whatever its caller.
+pub(crate) fn names() -> Vec<String> {
     let pid = std::process::id();
-    (0..NAME_TRIES).map(move |_| format!("{PREFIX}{pid}-{}", NEXT.fetch_add(1, Ordering::Relaxed)))
+    (0..NAME_TRIES)
+        .map(|_| format!("{PREFIX}{pid}-{}", NEXT.fetch_add(1, Ordering::Relaxed)))
+        .collect()
 }
 
 /// Creates the first of `names` that does not exist in `dir`, exclusively and without following
 /// a link, mode 0600. A name that exists in any form is skipped; when every name exists the
 /// error is `AlreadyExists`, and nothing was opened.
-pub(crate) fn create(
-    dir: &Path,
-    names: impl Iterator<Item = String>,
-) -> io::Result<(File, TempFile)> {
+pub(crate) fn create(dir: &Path, names: Vec<String>) -> io::Result<(File, TempFile)> {
     let mut last = io::Error::from(io::ErrorKind::AlreadyExists);
     for name in names {
         let path = dir.join(name);
