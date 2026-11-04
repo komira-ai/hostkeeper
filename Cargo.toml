@@ -13,6 +13,8 @@ publish = false
 # Every external dependency is declared here once and used from a member as
 # `name.workspace = true` (members add features they need).
 [workspace.dependencies]
+# The byte buffers of a gRPC call's raw request and response (hostkeeper-ctl).
+bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
@@ -26,6 +28,11 @@ prost-types = "0.14.4"
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's build script and tests.
 protox = "0.10.0"
+# Test certificates for the TLS tests of hostkeeper-ctl, made at run time so that no key is
+# committed. A dev-dependency only.
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
+# TLS for `hostkeeper ctl`'s gateway client, with the ring provider tonic's `tls-ring` also uses.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.
@@ -35,6 +42,10 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
+# The runtime of one gRPC call of `hostkeeper ctl` (hostkeeper-ctl); started only for a call.
+tokio = { version = "1.54.1", default-features = false, features = ["rt"] }
+# The loopback listener of hostkeeper-ctl's gRPC transport test. A dev-dependency only.
+tokio-stream = { version = "0.1.19", default-features = false }
 # The `--params` file, the daemon config and the manifest are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
 # gRPC: the service traits and clients hostkeeper-proto generates. Code generation only: no
