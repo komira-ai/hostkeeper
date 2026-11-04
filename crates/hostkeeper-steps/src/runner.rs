@@ -11,6 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hostkeeper_config::names::{MAX_UNIT_NAME, is_service_name};
 use hostkeeper_hook::{
     ARTIFACT_DIGEST_KEY, Context, Invocation, Next, Outcome, PREVIOUS_RELEASE_KEY,
     PREVIOUS_VERSION_KEY, Params, Phase, Report, STAGED_RELEASE_KEY, Scalar, Step,
@@ -21,7 +22,9 @@ use crate::artifact::{ArtifactError, Staged};
 use crate::clock::{Clock, Stamp};
 use crate::deadman::Watch;
 use crate::launcher::{LaunchError, StepCall, StepExit, StepLauncher};
-use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
+use crate::record::{
+    HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State, step_unit,
+};
 
 /// The protocol version of this updater: a declaration's `min_updater_protocol` above it is
 /// `Deferred` with the reason `updater_old` until the updater has updated itself.
@@ -73,7 +76,7 @@ impl Bounds {
 /// One update of one service.
 #[derive(Clone, Debug)]
 pub struct UpdateOrder {
-    /// The service, a name of ASCII letters, digits, `-` and `_`.
+    /// The service, a name that keeps [`hostkeeper_config::names::is_service_name`].
     pub service: String,
     pub target_version: String,
     pub previous_version: Option<String>,
@@ -122,6 +125,14 @@ pub enum RunError {
     Launch(#[from] LaunchError),
     #[error("the order is not valid: {0}")]
     BadOrder(&'static str),
+    /// The service name keeps its rule, but a unit a step of it runs in,
+    /// `updater-<service>-<step>-<generation>.service`, would be longer than
+    /// [`MAX_UNIT_NAME`] bytes for some step and generation. Nothing ran.
+    #[error(
+        "the service name {service:?} is too long for the units its steps run in: \
+         `updater-<service>-<step>-<generation>.service` would pass {MAX_UNIT_NAME} bytes"
+    )]
+    UnitNameTooLong { service: String },
     #[error("an update of {service} to {target} is not finished")]
     Busy { service: String, target: String },
     #[error("the step record has schema {0}, newer than this updater writes")]
@@ -235,19 +246,33 @@ impl StepRunner {
     /// starts the next generation: the verdict of a finished update is read with
     /// [`StepRunner::last_result`].
     pub fn run(&self, order: &UpdateOrder) -> Result<Finished, RunError> {
+        self.run_with(order, false)
+    }
+
+    /// As [`StepRunner::run`], but the post-success watcher is not run here: once the update has
+    /// reached it (or at once, when the record is already in it) this returns
+    /// `Succeeded { promotion_pending: true }` and leaves the record in the watcher, for a later
+    /// [`StepRunner::run`] of the same order to watch. The daemon's start pass runs each
+    /// unfinished update with it, so that a watcher, which may run for as long as the promotion
+    /// ceiling, does not hold up the start (design section 6.5).
+    pub fn run_until_watching(&self, order: &UpdateOrder) -> Result<Finished, RunError> {
+        self.run_with(order, true)
+    }
+
+    fn run_with(&self, order: &UpdateOrder, handoff: bool) -> Result<Finished, RunError> {
         let staged = path_str(order.staged.dir())?;
         let previous = order
             .previous
             .as_ref()
             .map(|p| path_str(p.dir()))
             .transpose()?;
-        if order.service.is_empty()
-            || !order
-                .service
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
+        if !is_service_name(&order.service) {
             return Err(RunError::BadOrder("the service name"));
+        }
+        if longest_step_unit(&order.service) > MAX_UNIT_NAME {
+            return Err(RunError::UnitNameTooLong {
+                service: order.service.clone(),
+            });
         }
         let hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
         if order.artifact_digest.len() != 64 || !order.artifact_digest.bytes().all(hex) {
@@ -286,7 +311,7 @@ impl StepRunner {
                 }
                 let unfinished = !matches!(rec.state, State::Finished { .. });
                 if unfinished && same_update(&rec, order) {
-                    return self.advance(order, *rec);
+                    return self.advance(order, *rec, handoff);
                 }
                 if unfinished && rec.progress.watching.is_none() {
                     return Err(RunError::Busy {
@@ -302,7 +327,7 @@ impl StepRunner {
             }
         };
         let rec = self.begin(order, generation, staged, previous)?;
-        self.advance(order, rec)
+        self.advance(order, rec, handoff)
     }
 
     /// Writes the params file and the first record of an update.
@@ -351,8 +376,23 @@ impl StepRunner {
         Ok(rec)
     }
 
-    fn advance(&self, order: &UpdateOrder, mut rec: Record) -> Result<Finished, RunError> {
+    fn advance(
+        &self,
+        order: &UpdateOrder,
+        mut rec: Record,
+        handoff: bool,
+    ) -> Result<Finished, RunError> {
         loop {
+            let finished = matches!(rec.state, State::Finished { .. });
+            // The watcher is left to a later run ([`StepRunner::run_until_watching`]).
+            if handoff & rec.progress.watching.is_some() & !finished {
+                return Ok(Finished {
+                    verdict: Verdict::Succeeded {
+                        promotion_pending: true,
+                    },
+                    reason: None,
+                });
+            }
             match rec.state.clone() {
                 State::Finished { verdict, reason } => {
                     self.store.remove_params()?;
@@ -362,7 +402,7 @@ impl StepRunner {
                     // The updater died with the step's unit possibly alive: stop it by name and
                     // wait for it to end before the step is started again (3.5).
                     self.launcher.stop(&rec.unit(rec.step))?;
-                    rec.attempt += 1;
+                    rec.attempt = rec.attempt.saturating_add(1);
                     rec.state = State::Pending;
                     self.store.save(&rec)?;
                 }
@@ -534,7 +574,7 @@ impl StepRunner {
                 if step != Step::Verify {
                     rec.progress.retry += 1;
                 }
-                rec.attempt += 1;
+                rec.attempt = rec.attempt.saturating_add(1);
                 rec.state = State::Pending;
             }
             Next::Rollback { then } => {
@@ -599,7 +639,7 @@ impl StepRunner {
             Outcome::Success if !over => {
                 self.clock
                     .sleep_secs(wait_secs(report.retry_after_secs, WATCH_POLL_SECS));
-                rec.attempt += 1;
+                rec.attempt = rec.attempt.saturating_add(1);
                 rec.state = State::Pending;
                 return;
             }
@@ -630,4 +670,15 @@ fn same_update(rec: &Record, order: &UpdateOrder) -> bool {
 fn path_str(path: &Path) -> Result<&str, RunError> {
     path.to_str()
         .ok_or(RunError::BadOrder("a release path that is not UTF-8"))
+}
+
+/// The bytes of the longest unit a step of `service` can run in: the longest step name, the
+/// largest generation and the `.service` systemd adds.
+fn longest_step_unit(service: &str) -> usize {
+    Step::ALL
+        .iter()
+        .map(|step| step_unit(service, *step, u64::MAX).len())
+        .max()
+        .unwrap_or_default()
+        + ".service".len()
 }

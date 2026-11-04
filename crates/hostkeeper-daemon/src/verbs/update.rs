@@ -242,7 +242,7 @@ pub fn interrupted(error: RunError) -> Reply {
         RunError::Unreadable(_) => Refusal::ReleaseUnreadable,
         RunError::Busy { .. } => Refusal::Busy,
         RunError::RecordNewer(_) => Refusal::RecordNewer,
-        RunError::BadOrder(_) => Refusal::InvalidOrder,
+        RunError::BadOrder(_) | RunError::UnitNameTooLong { .. } => Refusal::InvalidOrder,
     };
     Reply::Interrupted {
         refusal,

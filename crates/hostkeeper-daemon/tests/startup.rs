@@ -198,8 +198,8 @@ fn the_command_line_exits_with_the_config_errors_status() {
 }
 
 /// Catches a default that drifts from the documented one, or a flag read from somewhere else:
-/// `hostkeeper daemon` alone has the four defaults, the daemon config is trusted when root owns
-/// it, and the README states each default and each exit status.
+/// `hostkeeper daemon` alone has the four defaults and no readiness notice, the daemon config is
+/// trusted when root owns it, and the README states each default and each exit status.
 #[test]
 fn daemon_flag_defaults_are_the_documented_ones() {
     let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
@@ -210,6 +210,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             state_dir: DEFAULT_STATE_DIR.into(),
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
             admin_socket: DEFAULT_ADMIN_SOCKET.into(),
+            notify_systemd: false,
         }
     );
     assert_eq!(flags.settings().trusted_uid, 0);
@@ -220,6 +221,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--state-dir` | `{DEFAULT_STATE_DIR}`"),
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
         format!("`--admin-socket` | `{DEFAULT_ADMIN_SOCKET}`"),
+        "`--notify-systemd` | off".to_owned(),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
         format!("| {EXIT_CONFIG} |"),

@@ -1,0 +1,27 @@
+[package]
+name = "hostkeeper-ui-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The checks of the operator web app under ui/: every call it makes is a method of the protobuf descriptors, its sources store no token and load nothing from the network, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should. Tests only; not shipped."
+
+# No crate of the workspace depends on this one. Its library is the checks the tests apply to
+# the sources of ui/ (read with include_str!, so no path or working directory is needed).
+
+[dependencies]
+prost-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+boa_engine.workspace = true
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+prost.workspace = true
+prost-reflect = { workspace = true, features = ["serde"] }
+
+[lints]
+workspace = true
