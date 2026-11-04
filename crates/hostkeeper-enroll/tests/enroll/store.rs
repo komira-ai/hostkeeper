@@ -312,16 +312,18 @@ fn a_generation_links_its_key_and_numbers_up() {
 }
 
 /// Catches recovery that removes a pending key only because some complete generation exists:
-/// a pending key that is not the newest generation's key belongs to an open request and stays.
+/// a pending key that reads back (mode 0600, the daemon's own) but is not the newest
+/// generation's key belongs to an open request and stays.
 #[test]
 fn a_pending_key_of_another_request_is_kept() {
     let world = World::new("other-pending-key");
     drop(world.enrolled());
     let pending = world.pki().join("pending/key");
     let other = pkcs8(&signing_key(0x66));
-    fs::write(&pending, &other).expect("another pending key");
+    crate::support::write_private(&pending, &other);
     drop(world.open());
     assert_eq!(fs::read(&pending).expect("kept"), other);
+    assert_eq!(mode(&pending), 0o600);
     assert_eq!(world.current(), Some(PathBuf::from("gen-1")));
 }
 
