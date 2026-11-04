@@ -16,7 +16,8 @@ pub enum Format {
     Text,
 }
 
-/// Writes `response` in `format`.
+/// Writes `response` in `format`. The notice of each secret taken out is written to `stderr`
+/// first; when that write fails, the error is returned and nothing is written to `stdout`.
 pub fn write(
     response: &DynamicMessage,
     format: Format,
@@ -26,7 +27,7 @@ pub fn write(
 ) -> io::Result<()> {
     let (response, removed) = secret::redacted(response, ext);
     for name in &removed {
-        let _ = writeln!(stderr, "redacted: {name}");
+        writeln!(stderr, "redacted: {name}")?;
     }
     match format {
         Format::Json => writeln!(stdout, "{}", json::pretty(&response, 0)),

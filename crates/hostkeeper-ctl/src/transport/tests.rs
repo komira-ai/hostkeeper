@@ -1,11 +1,21 @@
 //! `--endpoint`, and the TLS material read before a transport is made.
 
+use std::sync::Arc;
+use std::thread::JoinHandle;
+
+use bytes::Bytes;
+use rustls::pki_types::pem::PemObject as _;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tonic::Code;
+use tonic::metadata::MetadataMap;
+
 use super::tls::Material;
 use super::{Connect as _, Endpoint, Gateway, Network, TransportKind};
 use crate::testutil::{file, loopback_target, pki, scratch};
 
 /// Catches an endpoint that is not plain `https://host[:port]` accepted (plain HTTP, a path, a
-/// query, user information), the default port wrong, or an IPv6 host kept in brackets.
+/// query, user information), the default port wrong, an IPv6 host kept in brackets, or an
+/// explicit port that is empty, not a number, zero or above 65535 read as no port.
 #[test]
 fn an_endpoint_is_https_host_and_port_only() {
     let ok = Endpoint::parse("https://coordinator.example").expect("plain");
@@ -15,6 +25,10 @@ fn an_endpoint_is_https_host_and_port_only() {
     assert_eq!(slash.port(), 443);
     let v6 = Endpoint::parse("https://[::1]:8443").expect("IPv6, parsed only");
     assert_eq!((v6.host(), v6.port()), ("::1", 8443));
+    let v6_default = Endpoint::parse("https://[::1]").expect("IPv6, no port");
+    assert_eq!((v6_default.host(), v6_default.port()), ("::1", 443));
+    let last = Endpoint::parse("https://coordinator.example:65535").expect("the last port");
+    assert_eq!(last.port(), 65535);
     for (given, why) in [
         ("coordinator.example", "the scheme must be https"),
         ("http://coordinator.example", "the scheme must be https"),
@@ -28,6 +42,34 @@ fn an_endpoint_is_https_host_and_port_only() {
             "it carries user information",
         ),
         ("https://", "not a URL"),
+        (
+            "https://coordinator.example:",
+            "the port must be a number from 1 to 65535",
+        ),
+        (
+            "https://coordinator.example:abc",
+            "the port must be a number from 1 to 65535",
+        ),
+        (
+            "https://coordinator.example:65536",
+            "the port must be a number from 1 to 65535",
+        ),
+        (
+            "https://coordinator.example:0",
+            "the port must be a number from 1 to 65535",
+        ),
+        (
+            "https://coordinator.example:+80",
+            "the port must be a number from 1 to 65535",
+        ),
+        (
+            "https://[::1]:",
+            "the port must be a number from 1 to 65535",
+        ),
+        (
+            "https://[::1]:99999",
+            "the port must be a number from 1 to 65535",
+        ),
         ("", "not a URL"),
     ] {
         let refused = Endpoint::parse(given).expect_err(given);
@@ -164,4 +206,78 @@ fn a_gateway_needs_a_server_name_and_descriptors() {
             .starts_with("the endpoint https://a..b.example/ is not a TLS server name: "),
         "{refused}"
     );
+}
+
+/// A TLS server on 127.0.0.1, port 0, that serves one connection with `cert` and `key` (PEM) and
+/// asks for no client certificate: it does the handshake, and its result is what the thread
+/// returns. The port is open until the thread has accepted.
+fn handshake_once(cert: &str, key: &str) -> (u16, JoinHandle<std::io::Result<()>>) {
+    let chain = CertificateDer::pem_slice_iter(cert.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .expect("a certificate");
+    let key = PrivateKeyDer::from_pem_slice(key.as_bytes()).expect("a key");
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .expect("a certificate and its key");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+    let port = listener.local_addr().expect("its address").port();
+    let handle = std::thread::spawn(move || {
+        let (mut tcp, _) = listener.accept()?;
+        let mut connection =
+            rustls::ServerConnection::new(Arc::new(config)).map_err(std::io::Error::other)?;
+        connection.complete_io(&mut tcp).map(|_| ())
+    });
+    (port, handle)
+}
+
+/// Catches the gateway transport trusting a server certificate the CA signed but made for another
+/// name, or already expired: the call must end UNAVAILABLE, and the server's handshake must
+/// not complete. The server whose certificate is good completes its handshake, so a refusal is
+/// the client's doing.
+#[test]
+fn the_gateway_refuses_a_certificate_for_another_name_or_out_of_date() {
+    let pki = pki();
+    let dir = scratch("gateway-bad-certificates");
+    let ca = file(&dir, "ca.pem", pki.ca.as_bytes());
+    let path = "/hostkeeper.operator.v1.Hosts/List";
+    let mut metadata = MetadataMap::new();
+    metadata.insert(
+        "authorization",
+        "Bearer token-value-3".parse().expect("ASCII"),
+    );
+    for (what, cert, key, handshake_ends) in [
+        ("good", &pki.server_cert, &pki.server_key, true),
+        (
+            "another name",
+            &pki.other_name_cert,
+            &pki.other_name_key,
+            false,
+        ),
+        ("expired", &pki.expired_cert, &pki.expired_key, false),
+    ] {
+        let (port, server) = handshake_once(cert, key);
+        let transport = Network
+            .connect(&loopback_target(port, TransportKind::Gateway, &ca, None))
+            .expect("a transport");
+        let status = transport
+            .call(path, Bytes::new(), &metadata)
+            .expect_err(what);
+        // The good server ends the connection after its handshake, so its call fails too (how,
+        // is not asserted); a refused certificate is UNAVAILABLE.
+        if !handshake_ends {
+            assert_eq!(status.code(), Code::Unavailable, "{what}: {status:?}");
+            assert!(
+                status
+                    .message()
+                    .starts_with("the gateway connection failed: "),
+                "{what}: {status:?}"
+            );
+        }
+        let handshake = server.join().expect("the server thread");
+        assert_eq!(handshake.is_ok(), handshake_ends, "{what}: {handshake:?}");
+    }
 }

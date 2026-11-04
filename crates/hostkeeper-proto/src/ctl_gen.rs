@@ -230,15 +230,15 @@ fn kind_of(field: &FieldDescriptor) -> (&'static str, String) {
     }
 }
 
-/// The values of an enum a flag takes: every value but the `*_UNSPECIFIED` ones, spelled
-/// without the enum's prefix, in lower case, as `(spelling, name, number)`.
+/// The values of an enum a flag takes: every value but the `*_UNSPECIFIED` ones and one named
+/// `UNSPECIFIED`, spelled without the enum's prefix, in lower case, as `(spelling, name, number)`.
 fn enum_values(e: &EnumDescriptor) -> Result<Vec<(String, String, i32)>, GenError> {
     let prefix = value_prefix(e.name());
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for value in e.values() {
         let name = value.name();
-        if name.ends_with("_UNSPECIFIED") {
+        if name == "UNSPECIFIED" || name.ends_with("_UNSPECIFIED") {
             continue;
         }
         let spelling = name

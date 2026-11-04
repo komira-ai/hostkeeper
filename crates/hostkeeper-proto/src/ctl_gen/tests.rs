@@ -441,6 +441,23 @@ fn an_enum_value_with_an_empty_or_repeated_spelling_fails_the_build() {
     assert!(field_line(&t, "e").contains("flag: \"other_name\""), "{t}");
 }
 
+/// Catches an unprefixed `UNSPECIFIED` value taken as a flag value, which the rules refuse.
+#[test]
+fn an_unprefixed_unspecified_value_is_not_a_flag_value() {
+    let t = table(
+        "enum Speed { UNSPECIFIED = 0; FAST = 1; SLOW = 2; }\nmessage Req { Speed speed = 1; }\n\
+         service S { rpc Exec(Req) returns (Req); }\n",
+    );
+    assert!(
+        field_line(&t, "speed").contains(
+            "enum_values: &[EnumValue { flag: \"fast\", name: \"FAST\", number: 1 }, \
+             EnumValue { flag: \"slow\", name: \"SLOW\", number: 2 }, ]"
+        ),
+        "{t}"
+    );
+    assert!(!field_line(&t, "speed").contains("unspecified"), "{t}");
+}
+
 /// Catches a local service given commands, a local service missing from the list, a service
 /// outside hostkeeper's packages written into the table, and services or RPCs out of order.
 #[test]

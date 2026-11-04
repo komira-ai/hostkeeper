@@ -100,9 +100,18 @@ impl Endpoint {
             .host()
             .trim_start_matches('[')
             .trim_end_matches(']');
+        // `Uri` reads a port it cannot parse as no port, so the text is read here.
+        let port = match port_text(authority.as_str()) {
+            None => 443,
+            Some(text) => text
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0 && text.bytes().all(|b| b.is_ascii_digit()))
+                .ok_or_else(|| refuse("the port must be a number from 1 to 65535"))?,
+        };
         Ok(Endpoint {
             host: host.to_owned(),
-            port: authority.port_u16().unwrap_or(443),
+            port,
             uri,
         })
     }
@@ -123,6 +132,16 @@ impl Endpoint {
     }
 }
 
+/// The text after the colon that follows the host of `authority`, when there is one (possibly
+/// empty).
+fn port_text(authority: &str) -> Option<&str> {
+    let after_host = match authority.strip_prefix('[') {
+        Some(rest) => rest.split_once(']').map_or("", |(_, tail)| tail),
+        None => authority,
+    };
+    after_host.split_once(':').map(|(_, port)| port)
+}
+
 /// The global flags of a call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
@@ -132,7 +151,7 @@ pub struct Target {
     pub ca_file: PathBuf,
     /// The client certificate and its key, for mutual TLS.
     pub client_identity: Option<(PathBuf, PathBuf)>,
-    /// How long to wait to connect, and for the server.
+    /// How long the whole call may take: connecting, TLS and the exchange.
     pub timeout: Duration,
 }
 

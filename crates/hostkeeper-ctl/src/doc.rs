@@ -125,8 +125,9 @@ pub fn markdown(commands: &[Command]) -> String {
 }
 
 /// One line per name a caller or a script depends on: each command, each flag with its value,
-/// each field that comes only through the request file, each global flag, and the exit code of
-/// each gRPC code. A golden file of these lines may grow; a line it holds never changes.
+/// each field that comes only through the request file, each global flag (with the `--request`
+/// and `--help` every RPC takes), and the exit code of each gRPC code. A golden file of these
+/// lines may grow; a line it holds never changes.
 pub fn tree_lines(commands: &[Command]) -> Vec<String> {
     let mut lines: Vec<String> = GLOBALS
         .iter()
@@ -136,6 +137,12 @@ pub fn tree_lines(commands: &[Command]) -> Vec<String> {
                 .to_owned()
         })
         .collect();
+    lines.push(format!(
+        "global --{} {}",
+        tree::REQUEST_FLAG,
+        tree::REQUEST_VALUE
+    ));
+    lines.push(format!("global --{}", tree::HELP_FLAG));
     for (code, name) in codes::ALL {
         lines.push(format!("exit {name} {}", exit::code(code)));
     }

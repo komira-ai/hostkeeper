@@ -222,11 +222,17 @@ pub fn file(dir: &hostkeeper_testkit::Scratch, name: &str, contents: &[u8]) -> S
 }
 
 /// A test CA, a server certificate for 127.0.0.1 and a client certificate it signed, as PEM;
-/// made at run time, so that no key is committed.
+/// made at run time, so that no key is committed. Two more server certificates the same CA
+/// signed are wrong in one way each: one is for another name, and one for 127.0.0.1 expired
+/// in the past.
 pub struct Pki {
     pub ca: String,
     pub server_cert: String,
     pub server_key: String,
+    pub other_name_cert: String,
+    pub other_name_key: String,
+    pub expired_cert: String,
+    pub expired_key: String,
     pub client_cert: String,
     pub client_key: String,
 }
@@ -253,6 +259,21 @@ pub fn pki() -> Pki {
     let server = server
         .signed_by(&server_key, &*ca)
         .expect("the server certificate");
+    let (other_name, other_name_key) = certificate(
+        "hostkeeper test server, other name",
+        &["other.example"],
+        false,
+    );
+    let other_name = other_name
+        .signed_by(&other_name_key, &*ca)
+        .expect("the other-name certificate");
+    let (mut expired, expired_key) =
+        certificate("hostkeeper test server, expired", &["127.0.0.1"], false);
+    expired.not_before = rcgen::date_time_ymd(2026, 9, 2);
+    expired.not_after = rcgen::date_time_ymd(2026, 9, 3);
+    let expired = expired
+        .signed_by(&expired_key, &*ca)
+        .expect("the expired certificate");
     let (client, client_key) = certificate("host:test-client", &[], false);
     let client = client
         .signed_by(&client_key, &*ca)
@@ -261,6 +282,10 @@ pub fn pki() -> Pki {
         ca: ca.pem(),
         server_cert: server.pem(),
         server_key: server_key.serialize_pem(),
+        other_name_cert: other_name.pem(),
+        other_name_key: other_name_key.serialize_pem(),
+        expired_cert: expired.pem(),
+        expired_key: expired_key.serialize_pem(),
         client_cert: client.pem(),
         client_key: client_key.serialize_pem(),
     }

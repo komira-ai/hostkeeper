@@ -320,8 +320,11 @@ fn a_flag_and_the_request_file_naming_the_same_field_is_a_usage_error() {
 #[test]
 fn a_bad_request_file_is_a_usage_error_that_shows_nothing_of_it() {
     let not_canonical = "the request file is not canonical JSON of hostkeeper.fixture.v1.LoginRequest (line 1, column ";
+    assert_eq!(
+        usage("login", &["--request", "-"], b"[1]"),
+        "the request file is not a JSON object"
+    );
     let cases: &[(&[u8], &str)] = &[
-        (b"[1]", "the request file is not a JSON object"),
         (
             b"{\"name\": \"s3cr3t\"",
             "the request file is not JSON (line 1, column ",
@@ -330,9 +333,13 @@ fn a_bad_request_file_is_a_usage_error_that_shows_nothing_of_it() {
         (b"{\"s3cr3t\": 1}", not_canonical),
     ];
     for (json, error) in cases {
+        // The whole message is our prefix and a column: nothing of the file.
         let message = usage("login", &["--request", "-"], json);
-        assert!(message.starts_with(error), "{message}");
-        assert!(!message.contains("s3cr3t") && !message.contains("12345"));
+        let column = message
+            .strip_prefix(*error)
+            .and_then(|rest| rest.strip_suffix(')'))
+            .unwrap_or_else(|| panic!("not the expected error: {message}"));
+        assert!(column.parse::<usize>().is_ok(), "{message}");
     }
     let dir = scratch("unreadable");
     let gone = dir.path().join("gone.json");
@@ -404,13 +411,8 @@ fn the_debug_of_a_request_shows_no_secret() {
         b"k3y-value",
     )
     .expect("builds");
-    let shown = format!("{request:?}");
-    assert!(
-        !shown.contains("pa55w0rd") && !shown.contains("k3y"),
-        "{shown}"
-    );
     assert_eq!(
-        shown,
+        format!("{request:?}"),
         "BuiltRequest { type: \"hostkeeper.fixture.v1.LoginRequest\", json: \"{\\\"user\\\":\\\"u\\\"}\", \
          redacted: {\"hostkeeper.fixture.v1.LoginRequest.key\", \"hostkeeper.fixture.v1.LoginRequest.password\"} }"
     );
@@ -420,13 +422,11 @@ fn the_debug_of_a_request_shows_no_secret() {
         br#"{"inner": {"token": "n3sted"}, "inners": [{"token": "l1st"}], "byName": {"k": {"token": "m4p"}}}"#,
     )
     .expect("builds");
-    let shown = format!("{nested:?}");
-    for secret in ["n3sted", "l1st", "m4p"] {
-        assert!(!shown.contains(secret), "{shown}");
-    }
-    assert!(
-        shown.contains("redacted: {\"hostkeeper.fixture.v1.Inner.token\"}"),
-        "{shown}"
+    assert_eq!(
+        format!("{nested:?}"),
+        "BuiltRequest { type: \"hostkeeper.fixture.v1.Widget\", \
+         json: \"{\\\"inner\\\":{},\\\"inners\\\":[{}],\\\"byName\\\":{\\\"k\\\":{}}}\", \
+         redacted: {\"hostkeeper.fixture.v1.Inner.token\"} }"
     );
 }
 
@@ -442,4 +442,219 @@ fn an_unreadable_stdin_is_a_usage_error() {
     }
     let mut empty: &[u8] = b"\n";
     assert!(matches!(read_input(None, &mut empty, "x"), Ok(bytes) if bytes.is_empty()));
+}
+
+/// Asserts that `message` is the error for a request file that is not canonical JSON of
+/// `request`, ending in a column and nothing of the file. The column is serde's.
+fn assert_not_canonical(message: &str, request: &str) {
+    let prefix = format!(
+        "the request file is not canonical JSON of hostkeeper.fixture.v1.{request} (line 1, column "
+    );
+    let column = message
+        .strip_prefix(&prefix)
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("not the expected error: {message}"));
+    assert!(column.parse::<usize>().is_ok(), "{message}");
+}
+
+/// Catches two members of one oneof both taken (in either order, or one member twice), a
+/// `null` member counted as set, and an error that repeats the members' values.
+#[test]
+fn a_request_file_with_two_members_of_a_oneof_is_refused_and_a_null_member_is_not_one() {
+    let cases: &[(&str, &str, &[u8])] = &[
+        (
+            "make",
+            "Widget",
+            br#"{"round": "r3d", "square": {"note": "n0te"}}"#,
+        ),
+        (
+            "make",
+            "Widget",
+            br#"{"square": {"note": "n0te"}, "round": "r3d"}"#,
+        ),
+        ("make", "Widget", br#"{"round": "r3d", "round": "n0te"}"#),
+        (
+            "login",
+            "LoginRequest",
+            br#"{"otp": "s3cr3t-otp", "phrase": "n0te"}"#,
+        ),
+    ];
+    for (rpc, request, json) in cases {
+        let message = usage(rpc, &["--request", "-"], json);
+        assert_not_canonical(&message, request);
+        for content in ["r3d", "n0te", "s3cr3t"] {
+            assert!(!message.contains(content), "{message}");
+        }
+    }
+    let square = built(
+        "make",
+        &["--request", "-"],
+        br#"{"round": null, "square": {"count": "2"}}"#,
+    )
+    .expect("a null member sets nothing");
+    assert_eq!(
+        square.message(),
+        &crate::testutil::from_json("Widget", r#"{"square": {"count": "2"}}"#)
+    );
+    let round = built(
+        "make",
+        &["--request", "-"],
+        br#"{"round": "r", "square": null}"#,
+    )
+    .expect("a null member sets nothing");
+    assert_eq!(
+        round.message(),
+        &crate::testutil::from_json("Widget", r#"{"round": "r"}"#)
+    );
+}
+
+/// Catches a `null` value set as a value, and a `null` key not counted as naming its field: it
+/// sets nothing, and still conflicts with the flag of the same field.
+#[test]
+fn a_null_in_the_request_file_sets_nothing_and_still_conflicts_with_the_flag() {
+    let all = br#"{"name": null, "maybe": null, "labels": null, "tags": null, "colour": null,
+        "inner": null, "nodeId": null, "blob": null}"#;
+    let request = built("make", &["--request", "-"], all).expect("builds");
+    assert_eq!(request.message(), &DynamicMessage::new(message("Widget")));
+    assert!(request.encode().is_empty());
+
+    let cases: &[(&str, &[&str], &str)] = &[
+        ("name", &["--name", "x"], "--name"),
+        ("maybe", &["--maybe", "true"], "--maybe"),
+        ("labels", &["--labels", "k=v"], "--labels"),
+        ("tags", &["--tags", "a"], "--tags"),
+        ("colour", &["--colour", "red"], "--colour"),
+        ("nodeId", &["--node-id", "x"], "--node-id"),
+    ];
+    for (key, flags, flag) in cases {
+        let json = format!(r#"{{"{key}": null}}"#);
+        let args: Vec<&str> = ["--request", "-"]
+            .into_iter()
+            .chain(flags.iter().copied())
+            .collect();
+        let field = if *key == "nodeId" { "node_id" } else { *key };
+        assert_eq!(
+            usage("make", &args, json.as_bytes()),
+            format!("{flag} and the request file both set `{field}`"),
+            "{key}"
+        );
+    }
+    let dir = scratch("null-secret");
+    let password = file(&dir, "password", b"p");
+    assert_eq!(
+        usage(
+            "login",
+            &["--request", "-", "--password-file", &password],
+            br#"{"password": null}"#
+        ),
+        "--password-file and the request file both set `password`"
+    );
+    let codes = built(
+        "login",
+        &["--request", "-"],
+        br#"{"recoveryCodes": null, "otp": null, "key": null}"#,
+    )
+    .expect("builds");
+    assert!(codes.encode().is_empty());
+}
+
+/// Catches a field named by its JSON name read differently from its proto name, a field named
+/// by both taken with one spelling silently winning, and a spelling that is neither accepted.
+#[test]
+fn a_request_file_may_spell_a_field_one_way_but_not_both() {
+    let by_json = built("make", &["--request", "-"], br#"{"nodeId": "a"}"#).expect("builds");
+    let by_proto = built("make", &["--request", "-"], br#"{"node_id": "a"}"#).expect("builds");
+    let expected = crate::testutil::from_json("Widget", r#"{"nodeId": "a"}"#);
+    assert_eq!(by_json.message(), &expected);
+    assert_eq!(by_proto.message(), &expected);
+    assert_eq!(by_json.encode(), by_proto.encode());
+    for json in [
+        &br#"{"nodeId": "a", "node_id": "b"}"#[..],
+        br#"{"node_id": "b", "nodeId": "a"}"#,
+        br#"{"nodeId": null, "node_id": "b"}"#,
+        br#"{"nodeId": "a", "node_id": null}"#,
+    ] {
+        assert_eq!(
+            usage("make", &["--request", "-"], json),
+            "the request file names `node_id` twice, by its proto name and its JSON name"
+        );
+    }
+    for json in [
+        &br#"{"node-id": "a"}"#[..],
+        br#"{"NodeId": "a"}"#,
+        br#"{"nodeid": "a"}"#,
+    ] {
+        assert_not_canonical(&usage("make", &["--request", "-"], json), "Widget");
+    }
+}
+
+/// Catches bytes that are not base64 accepted or an error that repeats them, and the standard
+/// and the URL-safe alphabets read as different bytes.
+#[test]
+fn base64_in_a_request_file_is_checked_and_both_alphabets_are_read() {
+    let message = usage("make", &["--request", "-"], br#"{"blob": "A*B"}"#);
+    assert_not_canonical(&message, "Widget");
+    let message = usage(
+        "login",
+        &["--request", "-"],
+        br#"{"key": "s3cr3t*not-base64"}"#,
+    );
+    assert_not_canonical(&message, "LoginRequest");
+    assert!(!message.contains("s3cr3t"), "{message}");
+    for json in [&br#"{"blob": "+/8="}"#[..], br#"{"blob": "-_8="}"#] {
+        let request = built("make", &["--request", "-"], json).expect("builds");
+        assert_eq!(
+            request
+                .message()
+                .get_field_by_name("blob")
+                .expect("blob")
+                .as_bytes()
+                .map(|b| b.to_vec()),
+            Some(vec![0xfb, 0xff])
+        );
+    }
+}
+
+/// Catches a secret of a repeated, oneof or bytes field lost between the request file and the
+/// wire, taken as something else, found by no scrub, or shown by the request's `Debug`.
+#[test]
+fn repeated_oneof_and_bytes_secrets_of_the_request_file_reach_the_wire_and_not_the_debug() {
+    let json = r#"{"user": "u", "password": "pw-1", "key": "a2V5LTI=",
+        "recoveryCodes": ["rc-1", "rc-2"], "otp": "otp-1"}"#;
+    let request = built("login", &["--request", "-"], json.as_bytes()).expect("builds");
+    let sent = DynamicMessage::decode(message("LoginRequest"), request.encode()).expect("decode");
+    assert_eq!(sent, crate::testutil::from_json("LoginRequest", json));
+    let field = |name: &str| sent.get_field_by_name(name).expect(name).into_owned();
+    assert_eq!(
+        field("recovery_codes"),
+        Value::List(vec![
+            Value::String("rc-1".into()),
+            Value::String("rc-2".into())
+        ])
+    );
+    assert_eq!(field("otp"), Value::String("otp-1".into()));
+    assert_eq!(field("key"), Value::Bytes(b"key-2".to_vec().into()));
+    assert_eq!(field("password"), Value::String("pw-1".into()));
+    let mut secrets = request.secrets();
+    secrets.sort();
+    assert_eq!(secrets, ["key-2", "otp-1", "pw-1", "rc-1", "rc-2"]);
+    assert_eq!(
+        format!("{request:?}"),
+        "BuiltRequest { type: \"hostkeeper.fixture.v1.LoginRequest\", json: \"{\\\"user\\\":\\\"u\\\"}\", \
+         redacted: {\"hostkeeper.fixture.v1.LoginRequest.key\", \"hostkeeper.fixture.v1.LoginRequest.otp\", \
+         \"hostkeeper.fixture.v1.LoginRequest.password\", \"hostkeeper.fixture.v1.LoginRequest.recovery_codes\"} }"
+    );
+    // The member of the oneof that is not a secret is shown, and no notice is made of it.
+    let phrase = built(
+        "login",
+        &["--request", "-"],
+        br#"{"user": "u", "phrase": "ph"}"#,
+    )
+    .expect("builds");
+    assert_eq!(
+        format!("{phrase:?}"),
+        "BuiltRequest { type: \"hostkeeper.fixture.v1.LoginRequest\", \
+         json: \"{\\\"user\\\":\\\"u\\\",\\\"phrase\\\":\\\"ph\\\"}\", redacted: {} }"
+    );
+    assert!(phrase.secrets().is_empty());
 }

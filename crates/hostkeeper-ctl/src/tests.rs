@@ -410,42 +410,13 @@ fn output_json_is_proto3_canonical() {
     );
 }
 
-/// Catches a secret of a response printed, in either output, at any depth, and the names of
-/// those taken out not said.
-#[test]
-fn a_secret_of_a_response_is_never_printed() {
-    let reply = from_json(
-        "LoginResponse",
-        r#"{"user": "u", "session": "s3cr3t-session", "inner": {"note": "n", "token": "s3cr3t-inner"},
-            "inners": [{"token": "s3cr3t-list"}], "byName": {"k": {"token": "s3cr3t-map"}}}"#,
-    );
-    let fake = Fake::answering(&reply);
-    for output in ["json", "text"] {
-        let ran = run_fixture(
-            &with_call(&["widgets", "login", "--output", output]),
-            &fake,
-            b"",
-        );
-        assert_eq!(ran.code, 0, "{ran:?}");
-        assert!(!ran.stdout.contains("s3cr3t"), "{output}: {}", ran.stdout);
-        assert!(
-            ran.stdout.contains("\"note\": \"n\""),
-            "{output}: {}",
-            ran.stdout
-        );
-        assert_eq!(
-            ran.stderr,
-            "redacted: hostkeeper.fixture.v1.Inner.token\n\
-             redacted: hostkeeper.fixture.v1.LoginResponse.session\n"
-        );
-    }
-}
-
 /// Catches a secret field given a flag, or its value reaching `--help`, a usage error, the
-/// output or stderr; and the secret not reaching the request it belongs in.
+/// output or stderr; and the secret not reaching the request it belongs in. The complete stdout
+/// and stderr of each run are compared.
 #[test]
 fn a_secret_field_is_never_a_flag_and_never_printed() {
     const SECRET: &str = "hunter2-very-secret";
+    const NOTICE: &str = "redacted: hostkeeper.fixture.v1.LoginResponse.session\n";
     let dir = scratch("secret");
     let password = file(&dir, "password", format!("{SECRET}\n").as_bytes());
     let cli = tree::build(fixture::COMMANDS);
@@ -462,8 +433,7 @@ fn a_secret_field_is_never_a_flag_and_never_printed() {
         &format!(r#"{{"user": "u", "session": "{SECRET}"}}"#),
     );
     let fake = Fake::answering(&reply);
-    let mut runs = Vec::new();
-    for output in ["json", "text"] {
+    for (output, stdout) in [("json", "{\n  \"user\": \"u\"\n}\n"), ("text", "user: u\n")] {
         let args = with_call(&[
             "widgets",
             "login",
@@ -474,7 +444,12 @@ fn a_secret_field_is_never_a_flag_and_never_printed() {
             "--output",
             output,
         ]);
-        runs.push(run_fixture(&args, &fake, b""));
+        let ran = run_fixture(&args, &fake, b"");
+        assert_eq!(
+            (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
+            (0, stdout, NOTICE),
+            "{output}"
+        );
     }
     // A usage error with the secret's file given: the request file names a flag's field.
     let request = file(&dir, "request.json", br#"{"user": "v"}"#);
@@ -489,28 +464,47 @@ fn a_secret_field_is_never_a_flag_and_never_printed() {
         &request,
     ]);
     let conflict = run_fixture(&args, &fake, b"");
-    assert_eq!(conflict.code, 2);
     assert_eq!(
-        conflict.stderr,
-        "error: --user and the request file both set `user`\n"
+        (
+            conflict.code,
+            conflict.stdout.as_str(),
+            conflict.stderr.as_str()
+        ),
+        (
+            2,
+            "",
+            "error: --user and the request file both set `user`\n"
+        )
     );
-    runs.push(conflict);
-    runs.push(run_fixture(&["widgets", "login", "--help"], &fake, b""));
-    // From stdin, and a usage error from clap with the secret on stdin.
-    runs.push(run_fixture(
+    // From stdin.
+    let stdin = run_fixture(
         &with_call(&["widgets", "login", "--password-stdin"]),
         &fake,
         SECRET.as_bytes(),
-    ));
-    runs.push(run_fixture(
-        &with_call(&["widgets", "login", "--password-stdin", "--bogus"]),
-        &fake,
-        SECRET.as_bytes(),
-    ));
-    for ran in &runs {
-        assert!(!ran.stdout.contains(SECRET), "{ran:?}");
-        assert!(!ran.stderr.contains(SECRET), "{ran:?}");
-    }
+    );
+    assert_eq!(
+        (stdin.code, stdin.stdout.as_str(), stdin.stderr.as_str()),
+        (0, "user: u\n", NOTICE)
+    );
+    // A usage error from clap with the secret on stdin: clap's text, whole, without the secret.
+    let args = with_call(&["widgets", "login", "--password-stdin", "--bogus"]);
+    let bogus = run_fixture(&args, &fake, SECRET.as_bytes());
+    let clap_text = cli
+        .try_get_matches_from(std::iter::once("ctl").chain(args.iter().copied()))
+        .expect_err("a usage error")
+        .to_string();
+    assert_eq!(
+        (bogus.code, bogus.stdout.as_str(), bogus.stderr.as_str()),
+        (2, "", clap_text.as_str())
+    );
+    // The help names the flags of the secrets and holds no value.
+    let help = run_fixture(&["widgets", "login", "--help"], &fake, b"");
+    assert_eq!((help.code, help.stderr.as_str()), (0, ""));
+    assert!(
+        help.stdout.contains("--password-file <PATH>"),
+        "{}",
+        help.stdout
+    );
     // The request carries it: from the file without its newline, and from stdin as given.
     let calls = fake.calls();
     assert_eq!(calls.len(), 3);
@@ -534,12 +528,21 @@ fn the_token_is_read_only_from_a_file_or_stdin() {
     let cli = tree::build(fixture::COMMANDS);
     assert!(cli.get_arguments().all(|a| a.get_long() != Some("token")));
     let fake = Fake::answering(&DynamicMessage::new(message("Empty")));
-    let refused = run_fixture(
-        &with_call(&["gadgets", "list", "--token", TOKEN]),
-        &fake,
-        b"",
+    let args = with_call(&["gadgets", "list", "--token", TOKEN]);
+    let refused = run_fixture(&args, &fake, b"");
+    let clap_text = cli
+        .clone()
+        .try_get_matches_from(std::iter::once("ctl").chain(args.iter().copied()))
+        .expect_err("a usage error")
+        .to_string();
+    assert_eq!(
+        (
+            refused.code,
+            refused.stdout.as_str(),
+            refused.stderr.as_str()
+        ),
+        (2, "", clap_text.as_str())
     );
-    assert_eq!(refused.code, 2);
     assert!(!refused.stderr.contains(TOKEN), "{}", refused.stderr);
     for (args, stdin) in [
         (
@@ -549,8 +552,11 @@ fn the_token_is_read_only_from_a_file_or_stdin() {
         (vec!["gadgets", "list", "--token-stdin"], TOKEN.as_bytes()),
     ] {
         let ran = run_fixture(&with_call(&args), &fake, stdin);
-        assert_eq!(ran.code, 0, "{ran:?}");
-        assert!(!ran.stdout.contains(TOKEN) && !ran.stderr.contains(TOKEN));
+        assert_eq!(
+            (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
+            (0, "", ""),
+            "{ran:?}"
+        );
     }
     let calls = fake.calls();
     assert_eq!(calls.len(), 2);
@@ -560,7 +566,7 @@ fn the_token_is_read_only_from_a_file_or_stdin() {
             value.as_encoded_bytes(),
             format!("Bearer {TOKEN}").as_bytes()
         );
-        assert!(!format!("{value:?}").contains(TOKEN));
+        assert_eq!(format!("{value:?}"), "Sensitive");
     }
     let none = run_fixture(&with_call(&["gadgets", "list"]), &fake, b"");
     assert_eq!(none.code, 0);

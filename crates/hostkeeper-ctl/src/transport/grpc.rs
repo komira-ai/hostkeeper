@@ -7,6 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use bytes::{Buf as _, BufMut as _, Bytes};
 use tonic::Status;
@@ -118,15 +119,53 @@ fn runtime() -> Result<tokio::runtime::Runtime, Status> {
         .map_err(|e| Status::internal(format!("cannot start a runtime: {e}")))
 }
 
+/// Runs the future `make` builds to completion, on a thread and runtime of its own, and waits
+/// for it. A thread of its own has no Tokio runtime around it, so a call made from inside a
+/// runtime (an async test, or `spawn_blocking`) neither panics nor needs one to exist; it does
+/// block the calling thread until the call ends.
+fn run<F, Fut>(make: F) -> Result<Bytes, Status>
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = Result<Bytes, Status>>,
+{
+    // The thread's panic, if any, is raised again by `scope`, so this value is only the
+    // result of a thread that ended normally.
+    let mut result = Err(Status::internal("the call ended without a result"));
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            result = runtime().and_then(|runtime| runtime.block_on(make()));
+        });
+    });
+    result
+}
+
+/// `work` bounded by `limit`: the status `DEADLINE_EXCEEDED` naming `--timeout-secs` when it
+/// has not finished by then. `what` is the peer, for the message.
+async fn within(
+    limit: Duration,
+    what: &str,
+    work: Pin<Box<dyn Future<Output = Result<Bytes, Status>> + '_>>,
+) -> Result<Bytes, Status> {
+    tokio::time::timeout(limit, work).await.unwrap_or_else(|_| {
+        Err(Status::deadline_exceeded(format!(
+            "the call to {what} did not finish within --timeout-secs {}",
+            limit.as_secs()
+        )))
+    })
+}
+
 /// The status of a channel that is not ready.
 fn not_ready(e: StdError) -> Status {
     Status::unavailable(format!("the channel is not ready: {e}"))
 }
 
-/// gRPC over TLS to `--endpoint`. The runtime and the connection are made in each call.
+/// gRPC over TLS to `--endpoint`. The runtime and the connection are made in each call, and the
+/// whole call (the connection with its TLS handshake, the request, the response with its
+/// trailers) is bounded by `--timeout-secs`.
 #[derive(Debug, Clone)]
 pub struct Tonic {
     endpoint: tonic::transport::Endpoint,
+    timeout: Duration,
 }
 
 impl Tonic {
@@ -139,27 +178,41 @@ impl Tonic {
             tls = tls.identity(Identity::from_pem(&identity.cert_pem, &identity.key_pem));
         }
         let endpoint = tonic::transport::Endpoint::from(target.endpoint.uri().clone())
-            .connect_timeout(target.timeout)
-            .timeout(target.timeout)
             .tls_config(tls)
             .map_err(|e| ConnectError::Unusable {
                 what: "the TLS material",
                 path: target.ca_file.clone(),
                 why: e.to_string(),
             })?;
-        Ok(Tonic { endpoint })
+        Ok(Tonic {
+            endpoint,
+            timeout: target.timeout,
+        })
+    }
+
+    /// One call, connected and bounded by the timeout.
+    async fn call_async(
+        &self,
+        path: &str,
+        request: Bytes,
+        metadata: &MetadataMap,
+    ) -> Result<Bytes, Status> {
+        let uri = self.endpoint.uri().to_string();
+        let work = Box::pin(async {
+            let channel = self
+                .endpoint
+                .connect()
+                .await
+                .map_err(|e| Status::unavailable(format!("cannot connect to {uri}: {e}")))?;
+            unary(channel, path, request, metadata, None).await
+        });
+        within(self.timeout, &uri, work).await
     }
 }
 
 impl CtlTransport for Tonic {
     fn call(&self, path: &str, request: Bytes, metadata: &MetadataMap) -> Result<Bytes, Status> {
-        let runtime = runtime()?;
-        runtime.block_on(async {
-            let channel = self.endpoint.connect().await.map_err(|e| {
-                Status::unavailable(format!("cannot connect to {}: {e}", self.endpoint.uri()))
-            })?;
-            unary(channel, path, request, metadata, None).await
-        })
+        run(|| self.call_async(path, request, metadata))
     }
 }
 
@@ -262,15 +315,9 @@ impl Service<http::Request<Body>> for Router {
 impl CtlTransport for InMemory {
     fn call(&self, path: &str, request: Bytes, metadata: &MetadataMap) -> Result<Bytes, Status> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let runtime = runtime()?;
         let router = Router(self.services.clone());
-        runtime.block_on(unary(
-            router,
-            path,
-            request,
-            metadata,
-            Some(self.peer.clone()),
-        ))
+        let peer = self.peer.clone();
+        run(|| unary(router, path, request, metadata, Some(peer)))
     }
 }
 

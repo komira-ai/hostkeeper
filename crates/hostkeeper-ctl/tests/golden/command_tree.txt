@@ -9,6 +9,8 @@ global --client-key-file PATH
 global --transport grpc|gateway
 global --output json|text
 global --timeout-secs SECONDS
+global --request FILE|-
+global --help
 exit OK 0
 exit CANCELLED 1
 exit UNKNOWN 1

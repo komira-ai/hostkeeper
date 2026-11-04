@@ -5,8 +5,15 @@
 //!
 //! The request and response are turned between protobuf and JSON with the descriptors, so the
 //! gateway is called through the same table and the same [`CtlTransport`] as gRPC. One
-//! connection per call (`Connection: close`). A response is read up to 4 MiB, tonic's default
-//! limit of a decoded gRPC message, so both transports accept the same replies.
+//! connection per call (`Connection: close`), under one deadline, `--timeout-secs`, that covers
+//! the name lookup, every address tried, TLS and each read and write ([`deadline`]).
+//!
+//! A response is read up to [`MAX_RESPONSE_BYTES`] of HTTP, its head and its body as received.
+//! That limit is the gateway's own and is not tonic's limit on a decoded gRPC message: JSON is
+//! larger than the protobuf it stands for (bytes become base64, strings gain escapes), so a
+//! reply that the gRPC transport accepts near its limit can be refused here. A reply is read as
+//! one JSON document; trailing content, and an enum name that this build does not know, are
+//! refused ([`enums`]), while fields it does not know are skipped.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -21,9 +28,13 @@ use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use tonic::metadata::MetadataMap;
 use tonic::{Code, Status};
 
+use self::deadline::{Clock, Deadline, DeadlineIo, Monotonic, connect_within, failed};
 use super::tls::Material;
 use super::{ConnectError, CtlTransport, Target};
 use crate::{codes, json};
+
+mod deadline;
+mod enums;
 
 /// The most bytes of a response read: its head and its body.
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -70,33 +81,36 @@ impl Gateway {
         })
     }
 
-    /// A TLS connection to the gateway.
-    fn open(&self) -> Result<StreamOwned<ClientConnection, TcpStream>, Status> {
-        let unavailable = |e: std::io::Error| {
-            Status::unavailable(format!(
-                "cannot connect to {}:{}: {e}",
-                self.host, self.port
-            ))
-        };
-        let address = (self.host.as_str(), self.port)
-            .to_socket_addrs()
-            .map_err(unavailable)?
-            .next()
-            .ok_or_else(|| unavailable(std::io::ErrorKind::NotFound.into()))?;
-        let tcp = TcpStream::connect_timeout(&address, self.timeout).map_err(unavailable)?;
-        // Each fails only for a zero duration, which --timeout-secs refuses.
-        let _ = tcp.set_read_timeout(Some(self.timeout));
-        let _ = tcp.set_write_timeout(Some(self.timeout));
+    /// A TLS connection to the gateway, every read and write of it held to `clock`'s budget of
+    /// the call. The TLS handshake happens on the first write.
+    fn open<'c>(
+        &self,
+        clock: &'c dyn Clock,
+    ) -> Result<StreamOwned<ClientConnection, DeadlineIo<'c, TcpStream>>, Status> {
+        let deadline = Deadline::new(clock, self.timeout);
+        let what = format!("cannot connect to {}:{}", self.host, self.port);
+        let (host, port) = (self.host.clone(), self.port);
+        let tcp = connect_within(
+            &what,
+            &deadline,
+            move || {
+                (host.as_str(), port)
+                    .to_socket_addrs()
+                    .map(|found| found.collect())
+            },
+            |address, left| TcpStream::connect_timeout(address, left),
+        )?;
         let connection = ClientConnection::new(self.tls.clone(), self.server_name.clone())
             .map_err(|e| Status::internal(format!("cannot start TLS: {e}")))?;
-        Ok(StreamOwned::new(connection, tcp))
+        Ok(StreamOwned::new(connection, DeadlineIo::new(tcp, deadline)))
     }
 }
 
 impl CtlTransport for Gateway {
     fn call(&self, path: &str, request: Bytes, metadata: &MetadataMap) -> Result<Bytes, Status> {
         let method = method(&self.pool, path)?;
-        let mut stream = self.open()?;
+        let clock = Monotonic::start();
+        let mut stream = self.open(&clock)?;
         exchange(
             &mut stream,
             &self.authority,
@@ -151,8 +165,7 @@ pub(crate) fn exchange(
     }
     bytes.extend_from_slice(b"\r\n");
     bytes.extend_from_slice(body.as_bytes());
-    let lost =
-        |e: std::io::Error| Status::unavailable(format!("the gateway connection failed: {e}"));
+    let lost = |e: std::io::Error| failed(&e, "the gateway connection failed");
     stream.write_all(&bytes).map_err(lost)?;
     stream.flush().map_err(lost)?;
 
@@ -161,13 +174,22 @@ pub(crate) fn exchange(
         ReadError::Malformed(why) => Status::internal(format!("malformed reply: {why}")),
     })?;
     if status == 200 {
-        let mut de = serde_json::Deserializer::from_slice(&body);
-        let options = DeserializeOptions::new().deny_unknown_fields(false);
-        let response = DynamicMessage::deserialize_with_options(method.output(), &mut de, &options)
-            .map_err(|e| Status::internal(format!("malformed reply: {e}")))?;
-        return Ok(Bytes::from(response.encode_to_vec()));
+        return decode_response(method, &body);
     }
     Err(error_status(status, &body))
+}
+
+/// The encoded response of a 200's JSON `body`: one document and nothing after it (but white
+/// space), in which no enum name of a known field is unknown to this build.
+fn decode_response(method: &MethodDescriptor, body: &[u8]) -> Result<Bytes, Status> {
+    let refuse = |why: String| Status::internal(format!("malformed reply: {why}"));
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| refuse(e.to_string()))?;
+    enums::check(&value, &method.output(), "").map_err(Status::internal)?;
+    let options = DeserializeOptions::new().deny_unknown_fields(false);
+    let response = DynamicMessage::deserialize_with_options(method.output(), value, &options)
+        .map_err(|e| refuse(e.to_string()))?;
+    Ok(Bytes::from(response.encode_to_vec()))
 }
 
 /// The status an error response carries: `{"code": "<name>", "reason": "<token>"}`.
@@ -221,21 +243,39 @@ fn line(reader: &mut dyn BufRead, budget: &mut usize) -> Result<String, ReadErro
     String::from_utf8(raw).map_err(|_| malformed("a line of the head is not UTF-8"))
 }
 
-/// The status and body of an HTTP/1.1 response: by `Content-Length`, by chunks, or to the end of
-/// the connection; at most [`MAX_RESPONSE_BYTES`] in all.
-pub(crate) fn read_response(reader: &mut dyn BufRead) -> Result<(u16, Vec<u8>), ReadError> {
-    let mut budget = MAX_RESPONSE_BYTES;
-    let status_line = line(reader, &mut budget)?;
-    let status = status_line
+/// The status code of a status line: `HTTP/1.1 ` or `HTTP/1.0 `, three digits, then a space or
+/// the end of the line.
+fn status_code(line: &str) -> Option<u16> {
+    let rest = line
         .strip_prefix("HTTP/1.1 ")
-        .or_else(|| status_line.strip_prefix("HTTP/1.0 "))
-        .and_then(|rest| rest.get(..3))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| malformed(format!("not an HTTP/1.1 status line: {status_line:?}")))?;
-    let mut length: Option<usize> = None;
-    let mut chunked = false;
+        .or_else(|| line.strip_prefix("HTTP/1.0 "))?;
+    let digits = rest.get(..3)?;
+    if !digits.bytes().all(|b| b.is_ascii_digit())
+        || !matches!(rest.as_bytes().get(3), None | Some(b' '))
+    {
+        return None;
+    }
+    digits
+        .parse()
+        .ok()
+        .filter(|code| (100..=599).contains(code))
+}
+
+/// How a response says its body is framed.
+struct Framing {
+    length: Option<usize>,
+    chunked: bool,
+}
+
+/// The headers after a status line, up to the empty line, counted against `budget`. A
+/// `Content-Length` given twice must agree, and may not come with `Transfer-Encoding`.
+fn headers(reader: &mut dyn BufRead, budget: &mut usize) -> Result<Framing, ReadError> {
+    let mut framing = Framing {
+        length: None,
+        chunked: false,
+    };
     loop {
-        let header = line(reader, &mut budget)?;
+        let header = line(reader, budget)?;
         if header.is_empty() {
             break;
         }
@@ -244,19 +284,53 @@ pub(crate) fn read_response(reader: &mut dyn BufRead) -> Result<(u16, Vec<u8>), 
             .ok_or_else(|| malformed(format!("not a header: {header:?}")))?;
         let value = value.trim();
         if name.eq_ignore_ascii_case("content-length") {
-            length = Some(
-                value
-                    .parse()
-                    .map_err(|_| malformed(format!("Content-Length {value:?}")))?,
-            );
+            let length = Some(value)
+                .filter(|v| v.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|v| v.parse::<usize>().ok())
+                .ok_or_else(|| malformed(format!("Content-Length {value:?}")))?;
+            match framing.length {
+                Some(before) if before != length => {
+                    return Err(malformed(format!(
+                        "Content-Length given twice, as {before} and {length}"
+                    )));
+                }
+                _ => framing.length = Some(length),
+            }
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            chunked = value.eq_ignore_ascii_case("chunked");
-            if !chunked {
+            framing.chunked = value.eq_ignore_ascii_case("chunked");
+            if !framing.chunked {
                 return Err(malformed(format!("Transfer-Encoding {value:?}")));
             }
         }
     }
-    let body = match (chunked, length) {
+    if framing.chunked && framing.length.is_some() {
+        return Err(malformed("both Transfer-Encoding and Content-Length"));
+    }
+    Ok(framing)
+}
+
+/// The status and body of an HTTP/1.1 response: by `Content-Length`, by chunks, or to the end of
+/// the connection; at most [`MAX_RESPONSE_BYTES`] in all, counting every byte read, head and
+/// body. Informational responses (1xx) before the final one are skipped, within the same budget;
+/// a 101 is refused, as no upgrade was asked for.
+pub(crate) fn read_response(reader: &mut dyn BufRead) -> Result<(u16, Vec<u8>), ReadError> {
+    let mut budget = MAX_RESPONSE_BYTES;
+    let (status, framing) = loop {
+        let status_line = line(reader, &mut budget)?;
+        let status = status_code(&status_line)
+            .ok_or_else(|| malformed(format!("not an HTTP/1.1 status line: {status_line:?}")))?;
+        let framing = headers(reader, &mut budget)?;
+        match status {
+            101 => {
+                return Err(malformed(
+                    "101 Switching Protocols, which was not asked for",
+                ));
+            }
+            100..=199 => {}
+            _ => break (status, framing),
+        }
+    };
+    let body = match (framing.chunked, framing.length) {
         (true, _) => chunks(reader, &mut budget)?,
         (false, Some(n)) => {
             if n > budget {

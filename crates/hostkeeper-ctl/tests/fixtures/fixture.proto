@@ -29,6 +29,8 @@ service Widgets {
 service Gadgets {
   // Every gadget.
   rpc List(Empty) returns (Empty);
+  // Set the speed.
+  rpc Tune(TuneRequest) returns (Empty);
 }
 
 message Empty {}
@@ -37,6 +39,19 @@ enum Colour {
   COLOUR_UNSPECIFIED = 0;
   COLOUR_RED = 1;
   COLOUR_DARK_BLUE = 2;
+}
+
+// An enum whose zero value is spelled without the enum's prefix.
+enum Speed {
+  UNSPECIFIED = 0;
+  SLOW = 1;
+  FAST = 2;
+}
+
+// The request of Tune.
+message TuneRequest {
+  // How fast.
+  Speed speed = 1;
 }
 
 message Inner {
@@ -90,6 +105,13 @@ message LoginRequest {
   // The password.
   string password = 2 [(hostkeeper.secret) = true];
   bytes key = 3 [(hostkeeper.secret) = true];
+  // Secrets in a list: only through the request file.
+  repeated string recovery_codes = 4 [(hostkeeper.secret) = true];
+  // A secret in a oneof, beside a member that is not one.
+  oneof second_factor {
+    string otp = 5 [(hostkeeper.secret) = true];
+    string phrase = 6;
+  }
 }
 
 message LoginResponse {
@@ -98,4 +120,6 @@ message LoginResponse {
   Inner inner = 3;
   repeated Inner inners = 4;
   map<string, Inner> by_name = 5;
+  repeated string recovery_codes = 6 [(hostkeeper.secret) = true];
+  bytes key = 7 [(hostkeeper.secret) = true];
 }

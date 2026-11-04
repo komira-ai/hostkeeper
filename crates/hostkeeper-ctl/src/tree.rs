@@ -71,6 +71,13 @@ pub const GLOBALS: &[Global] = &[
     },
 ];
 
+/// The flag every RPC takes for its request file, and the name of its value.
+pub const REQUEST_FLAG: &str = "request";
+/// The value name of [`REQUEST_FLAG`] in `--help`.
+pub const REQUEST_VALUE: &str = "FILE|-";
+/// The help flag clap adds to every command.
+pub const HELP_FLAG: &str = "help";
+
 /// The default of `--transport`, `--output` and `--timeout-secs`.
 pub const DEFAULT_TRANSPORT: &str = "grpc";
 pub const DEFAULT_OUTPUT: &str = "text";
@@ -185,9 +192,9 @@ fn rpc(command: &Command) -> Cli {
     let mut cli = Cli::new(command.method_command)
         .about(command.doc)
         .arg(
-            Arg::new("request")
-                .long("request")
-                .value_name("FILE|-")
+            Arg::new(REQUEST_FLAG)
+                .long(REQUEST_FLAG)
+                .value_name(REQUEST_VALUE)
                 .help("The request as proto3 canonical JSON, from a file or `-` for stdin; flags add to it."),
         )
         .args(command.fields.iter().flat_map(field_args));
@@ -265,3 +272,6 @@ pub fn build(commands: &[Command]) -> Cli {
         .args(globals())
         .subcommands(services)
 }
+
+#[cfg(test)]
+mod tests;

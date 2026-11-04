@@ -2,8 +2,11 @@
 //! over it, as a dynamic message of the RPC's request type.
 //!
 //! A field named both by the request file and by a flag is a usage error, never a silent
-//! override. Nothing read for a secret field is ever put in an error message, and the request's
-//! `Debug` shows it with its secrets cleared.
+//! override. A key of the request file counts as naming its field even when its value is `null`,
+//! which sets nothing: `{"user": null}` with `--user` is that error too. A field is named by its
+//! proto name or its JSON name, and naming it by both is a usage error. Nothing read
+//! for a secret field is ever put in an error message, and the request's `Debug` shows it with
+//! its secrets cleared.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -31,6 +34,11 @@ impl BuiltRequest {
     /// The request in protobuf's wire format.
     pub fn encode(&self) -> Bytes {
         Bytes::from(self.message.encode_to_vec())
+    }
+
+    /// The text of every secret value in the request.
+    pub fn secrets(&self) -> Vec<String> {
+        secret::values(&self.message, self.ext.as_ref())
     }
 
     /// The message itself, secrets included.
@@ -76,7 +84,8 @@ pub(crate) fn read_input(
     Ok(bytes)
 }
 
-/// The request file, parsed, and the names of the fields it sets at its top level.
+/// The request file, parsed, and the proto names of the fields it names at its top level, `null`
+/// values included.
 fn request_file(
     desc: &MessageDescriptor,
     leaf: &ArgMatches,
@@ -89,7 +98,7 @@ fn request_file(
     let bytes = read_input(path.as_ref(), stdin, "the request")?;
     // Neither error says what the file holds: it may hold a secret.
     let where_ = |e: &serde_json::Error| format!("line {}, column {}", e.line(), e.column());
-    let keys: BTreeSet<String> = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+    let spelled: Vec<String> = match serde_json::from_slice::<serde_json::Value>(&bytes) {
         Ok(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
         Ok(_) => {
             return Err(Failure::Usage(
@@ -111,6 +120,19 @@ fn request_file(
             where_(&e)
         ))
     })?;
+    // The deserializer refused every key that is no field's name, so each key is a field's.
+    let mut keys = BTreeSet::new();
+    for key in spelled {
+        let name = desc
+            .get_field_by_json_name(&key)
+            .or_else(|| desc.get_field_by_name(&key))
+            .map_or_else(|| key.clone(), |field| field.name().to_owned());
+        if !keys.insert(name.clone()) {
+            return Err(Failure::Usage(format!(
+                "the request file names `{name}` twice, by its proto name and its JSON name"
+            )));
+        }
+    }
     Ok((message, keys))
 }
 
@@ -189,7 +211,7 @@ fn not_in_file(
     keys: &BTreeSet<String>,
     flag: &str,
 ) -> Result<(), Failure> {
-    if keys.contains(field.name()) || keys.contains(field.json_name()) {
+    if keys.contains(field.name()) {
         return Err(Failure::Usage(format!(
             "{flag} and the request file both set `{}`",
             field.name()

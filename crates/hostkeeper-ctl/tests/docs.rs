@@ -80,6 +80,8 @@ fn ctl_flag_names_are_stable() {
         "flag hosts get --node-id STRING",
         "exit INVALID_ARGUMENT 2",
         "global --token-file PATH",
+        "global --request FILE|-",
+        "global --help",
     ] {
         assert!(GOLDEN.lines().any(|l| l == line), "{line}\n{report}");
     }
@@ -92,6 +94,21 @@ fn ctl_flag_names_are_stable() {
         .map(|l| l.replace("--node-id", "--node"))
         .collect();
     assert!(!missing(GOLDEN, &renamed).is_empty());
+    // The request flag renamed and the help flag removed are both detected.
+    let request_renamed: Vec<String> = current
+        .iter()
+        .map(|l| l.replace("global --request ", "global --req "))
+        .collect();
+    assert_eq!(
+        missing(GOLDEN, &request_renamed),
+        ["global --request FILE|-"]
+    );
+    let help_removed: Vec<String> = current
+        .iter()
+        .filter(|l| *l != "global --help")
+        .cloned()
+        .collect();
+    assert_eq!(missing(GOLDEN, &help_removed), ["global --help"]);
     let fixture_lines = tree_lines(fixture::COMMANDS);
     assert!(
         missing(

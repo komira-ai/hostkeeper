@@ -83,10 +83,19 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let matches = match tree::build(commands).try_get_matches_from(args) {
+    let cli = tree::build(commands);
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    // clap repeats what it cannot parse in its error; a credential typed in the wrong place must
+    // not be repeated with it.
+    let typed: Vec<String> = args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let credentials = secret::argument_credentials(&typed, &secret::known_flags(&cli));
+    let matches = match cli.try_get_matches_from(args) {
         Ok(matches) => matches,
         Err(e) if e.use_stderr() => {
-            let _ = write!(io.stderr, "{e}");
+            let _ = write!(io.stderr, "{}", secret::scrub(&e.to_string(), &credentials));
             return exit::USAGE;
         }
         Err(e) => {
@@ -185,15 +194,19 @@ fn target(leaf: &ArgMatches) -> Result<Target, Failure> {
     })
 }
 
-/// The bearer token, from `--token-file` or `--token-stdin`, as `authorization` metadata.
-fn metadata(leaf: &ArgMatches, stdin: &mut dyn Read) -> Result<MetadataMap, Failure> {
+/// The bearer token, from `--token-file` or `--token-stdin`, as `authorization` metadata, and
+/// the token's text (none when there is no token).
+fn metadata(
+    leaf: &ArgMatches,
+    stdin: &mut dyn Read,
+) -> Result<(MetadataMap, Option<String>), Failure> {
     let mut metadata = MetadataMap::new();
     let token = if let Some(path) = leaf.get_one::<PathBuf>("token-file") {
         request::read_input(Some(path), stdin, "the token")?
     } else if leaf.get_flag("token-stdin") {
         request::read_input(None, stdin, "the token")?
     } else {
-        return Ok(metadata);
+        return Ok((metadata, None));
     };
     let usable = !token.is_empty() && token.iter().all(|b| b.is_ascii_graphic());
     let value = format!("Bearer {}", String::from_utf8_lossy(&token));
@@ -201,7 +214,7 @@ fn metadata(leaf: &ArgMatches, stdin: &mut dyn Read) -> Result<MetadataMap, Fail
         Ok(mut value) if usable => {
             value.set_sensitive(true);
             metadata.insert("authorization", value);
-            Ok(metadata)
+            Ok((metadata, Some(String::from_utf8_lossy(&token).into_owned())))
         }
         _ => Err(Failure::Usage(
             "the token is empty or holds a character that is not visible ASCII".to_owned(),
@@ -242,7 +255,10 @@ fn execute(
     let pool = DescriptorPool::decode(descriptors)
         .map_err(|e| Failure::Local(format!("the descriptor set does not decode: {e}")))?;
     let request = request::build(command, leaf, &pool, stdin)?;
-    let metadata = metadata(leaf, stdin)?;
+    let (metadata, token) = metadata(leaf, stdin)?;
+    // What a server's diagnostic must not repeat: the token and every secret of the request.
+    let mut credentials = request.secrets();
+    credentials.extend(token);
     let response_desc = pool.get_message_by_name(command.response).ok_or_else(|| {
         Failure::Local(format!(
             "the descriptors have no message {}",
@@ -254,7 +270,12 @@ fn execute(
         .map_err(|e| Failure::Usage(e.to_string()))?;
     let reply = transport
         .call(command.path, request.encode(), &metadata)
-        .map_err(Failure::Status)?;
+        .map_err(|status| {
+            Failure::Status(Status::new(
+                status.code(),
+                secret::scrub(status.message(), &credentials),
+            ))
+        })?;
     let response = DynamicMessage::decode(response_desc, reply)
         .map_err(|e| Failure::Local(format!("malformed reply: {e}")))?;
     let format = match leaf.get_one::<String>("output").map(String::as_str) {
@@ -271,6 +292,8 @@ fn execute(
     .map_err(|e| Failure::Local(format!("cannot write the response: {e}")))
 }
 
+#[cfg(test)]
+mod credential_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

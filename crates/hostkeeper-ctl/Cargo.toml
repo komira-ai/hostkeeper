@@ -20,7 +20,8 @@ prost-reflect = { workspace = true, features = ["serde"] }
 rustls.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+# `time` bounds a whole call by `--timeout-secs`.
+tokio = { workspace = true, features = ["time"] }
 # The gRPC client over rustls (ring), and the generic client the in-memory transport also uses.
 tonic = { workspace = true, features = ["channel", "tls-ring"] }
 
@@ -33,7 +34,8 @@ protox.workspace = true
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 rcgen.workspace = true
-tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+# `test-util` for the paused clock that tests of the call deadline run on.
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "test-util", "time"] }
 tokio-stream = { workspace = true, features = ["net"] }
 # A loopback gRPC server with TLS, for the tonic transport's tests.
 tonic = { workspace = true, features = ["server", "tls-ring"] }

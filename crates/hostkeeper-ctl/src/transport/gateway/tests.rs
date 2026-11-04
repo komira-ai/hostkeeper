@@ -1,5 +1,11 @@
 //! The gateway client: the request it writes and the responses it reads, on a fake stream; and a
-//! call over TLS to a loopback server (127.0.0.1, port 0) with the test PKI.
+//! call over TLS to a loopback server (127.0.0.1, port 0) with the test PKI. The framing, the
+//! deadline, the enum check and the client-certificate cases are in the modules below.
+
+mod deadline;
+mod enums;
+mod framing;
+mod mtls;
 
 use std::io::{self, BufRead, BufReader, Cursor, Read, Write};
 use std::net::TcpListener;
@@ -249,6 +255,15 @@ fn a_bad_request_a_lost_connection_and_a_bad_body() {
     );
 }
 
+/// The `Authorization` header lines of a request as received.
+fn authorization(request: &str) -> Vec<&str> {
+    request
+        .split("\r\n")
+        .take_while(|line| !line.is_empty())
+        .filter(|line| line.starts_with("Authorization:"))
+        .collect()
+}
+
 /// The status and body of a response, or why it was refused.
 fn read(bytes: &[u8]) -> Result<(u16, Vec<u8>), String> {
     read_response(&mut BufReader::new(bytes)).map_err(|e| match e {
@@ -346,23 +361,50 @@ fn responses_are_framed_and_bounded() {
     );
 }
 
-/// A loopback TLS server that answers one connection with `reply` and sends what it read.
-fn serve_once(pki: &Pki, reply: Vec<u8>) -> (u16, mpsc::Receiver<Vec<u8>>) {
+/// The server configuration of `pki`: its certificate, ALPN `http/1.1`, and no client
+/// certificate asked for, or one signed by the CA in `client_ca` (PEM) required.
+fn server_config(pki: &Pki, client_ca: Option<&str>) -> Arc<rustls::ServerConfig> {
     let certs: Vec<CertificateDer<'static>> =
         CertificateDer::pem_slice_iter(pki.server_cert.as_bytes())
             .collect::<Result<_, _>>()
             .expect("the server certificate");
     let key = PrivateKeyDer::from_pem_slice(pki.server_key.as_bytes()).expect("the server key");
-    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .expect("versions")
-    .with_no_client_auth()
-    .with_single_cert(certs, key)
-    .expect("the server config");
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = rustls::ServerConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .expect("versions");
+    let builder = match client_ca {
+        None => builder.with_no_client_auth(),
+        Some(ca) => {
+            let mut roots = rustls::RootCertStore::empty();
+            for cert in CertificateDer::pem_slice_iter(ca.as_bytes()) {
+                roots.add(cert.expect("the client CA")).expect("a root");
+            }
+            let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+                Arc::new(roots),
+                provider,
+            )
+            .build()
+            .expect("the client verifier");
+            builder.with_client_cert_verifier(verifier)
+        }
+    };
+    let mut config = builder
+        .with_single_cert(certs, key)
+        .expect("the server config");
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    let config = Arc::new(config);
+    Arc::new(config)
+}
+
+/// A loopback TLS server that answers one connection with `reply` and sends what it read.
+fn serve_once(pki: &Pki, reply: Vec<u8>) -> (u16, mpsc::Receiver<Vec<u8>>) {
+    serve_with(server_config(pki, None), reply)
+}
+
+/// A loopback TLS server of `config` that answers one connection with `reply` and sends what it
+/// read. A connection that fails to complete the exchange sends nothing, and the receiver then
+/// reports the sender gone.
+fn serve_with(config: Arc<rustls::ServerConfig>, reply: Vec<u8>) -> (u16, mpsc::Receiver<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
     let port = listener.local_addr().expect("its address").port();
     let (sent, received) = mpsc::channel();
@@ -438,6 +480,7 @@ fn the_gateway_calls_over_tls() {
         request.ends_with("Authorization: Bearer t\r\n\r\n{}"),
         "{request}"
     );
+    assert_eq!(authorization(&request), ["Authorization: Bearer t"]);
 
     let other = crate::testutil::pki();
     let (port, _received) = serve_once(&other, response("200 OK", "{}"));
@@ -453,25 +496,13 @@ fn the_gateway_calls_over_tls() {
         .expect_err("another CA");
     assert_eq!(status.code(), Code::Unavailable, "{status:?}");
 
-    let closed = {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
-        listener.local_addr().expect("its address").port()
-    };
+    // A transport for a method that does not exist never connects, so a bound listener that
+    // is never accepted from is enough for its port.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let port = listener.local_addr().expect("its address").port();
     let transport = Network
-        .connect(&loopback_target(closed, TransportKind::Gateway, &ca, None))
+        .connect(&loopback_target(port, TransportKind::Gateway, &ca, None))
         .expect("a transport");
-    let status = transport
-        .call(
-            "/hostkeeper.operator.v1.Hosts/List",
-            Bytes::new(),
-            &MetadataMap::new(),
-        )
-        .expect_err("closed");
-    assert_eq!(status.code(), Code::Unavailable);
-    assert!(
-        status.message().starts_with("cannot connect to 127.0.0.1:"),
-        "{status:?}"
-    );
     let status = transport
         .call(
             "/hostkeeper.operator.v1.Nothing/List",
