@@ -2,30 +2,40 @@
 //!
 //! Each heartbeat, in this order:
 //!
-//! 1. The verdict of the order running on the worker, if it ended, becomes the service's
-//!    verdict to send, and its deferral is written or cleared.
+//! 1. A deferral write that failed earlier is tried again. The verdict of the order running on
+//!    the worker, if it ended, joins the service's verdicts to send; a deferral is written, and
+//!    a hooked verdict on the deferred target ends the deferral.
 //! 2. The certificate source is read. With no pair the loop says once what it waits for, and
 //!    makes no call; the first call after a pair appears is at the next period.
 //! 3. The facts are built from the step records and the observer: every installed service, its
-//!    version, health and running update, its verdict not yet acknowledged, and its deferral when
-//!    the last reply advertised `deferred-v1`. A service seen for the first time since the loop
-//!    started takes the verdict its step record kept, so a restart resends it.
+//!    version, health and running update, its newest verdict not yet acknowledged, and its
+//!    deferral when the last reply advertised `deferred-v1`. Step records that name a service
+//!    twice send nothing. A service listed again after it was not takes the verdict its step
+//!    record kept, unless that verdict was acknowledged, so a restart resends it; a kept
+//!    deferred verdict whose retry time is not on record starts its retry time again.
 //! 4. [`fit`] keeps the bound; a heartbeat over it is refused and logged, never sent cut short.
 //! 5. The heartbeat goes out through [`CoordinatorLink::heartbeat`], the one outbound call.
 //! 6. From the reply: the advertised features replace the last ones; a verdict whose order id and
 //!    try the reply acknowledges is not sent again; with `halt-v1`, a halt generation newer than
 //!    the held one is raised in [`HeldHalts`]; and the order goes to the executor.
 //!
+//! **Verdicts.** A service may have several verdicts not yet acknowledged (an order's, then a
+//! `busy` answer, then another order's). A heartbeat carries one per service: the newest. Once
+//! it is acknowledged the one before it is sent, so every verdict is sent until counted.
+//!
 //! **Orders.** One at a time, on a worker of the [`Dispatch`], so the loop keeps beating, and
-//! reports the running target as `updating`, while a step runs. The same order (id and try) is
-//! not started twice. An order that arrives while another runs is not started, and its verdict
-//! is `busy`; it takes the place of a verdict of its service not yet acknowledged, because a
-//! heartbeat carries one verdict per service. A forced order runs only while the reply advertises `forced-v1`; an update whose
-//! target a deferral declines runs only once the retry time has come, by the [`UnixClock`].
-//! Everything else about an order (its checks, the try rules) is the executor's.
+//! reports the running target as `updating`, while a step runs. An order equal in every field to
+//! the one running or the last one started is not started again; any other, even with the same
+//! id and try, goes to the executor, which owns the try rules (a resend answered from the
+//! record, `try_conflict`, `stale_try`). An order that arrives while another runs is not
+//! started, and its verdict is `busy`. An order for a service that is not installed is not run.
+//! A forced order runs only while the reply advertises `forced-v1`; an update whose target a
+//! deferral declines runs only once the retry time has come, by the [`UnixClock`]. A worker that
+//! ended with no verdict leaves no mark: the same order sent again runs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -33,27 +43,23 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use hostkeeper_config::names::{ServiceName, Version};
 
 use crate::beat::{ANNOUNCED, Feature, Features, Heartbeat, Observed, Platform, ServiceFacts, fit};
-use crate::deferral::{Deferral, Deferrals};
+use crate::deferral::{Book, Deferral};
 use crate::names::Reason;
-use crate::order::{DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply};
+use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
     RecordedService, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
 };
 
-/// The period when the daemon is given none, in seconds.
-pub const DEFAULT_HEARTBEAT_SECS: u64 = 15;
+/// The period when the daemon is given none: 15 seconds.
+pub const DEFAULT_HEARTBEAT_SECS: NonZeroU64 = NonZeroU64::MIN.saturating_add(14);
 
 /// The loop's flag on the daemon's command line.
 #[derive(Clone, Debug, PartialEq, Eq, clap::Args)]
 pub struct LoopFlags {
     /// Seconds between two heartbeats, at least 1.
-    #[arg(
-        long = "heartbeat-secs",
-        default_value_t = DEFAULT_HEARTBEAT_SECS,
-        value_parser = clap::value_parser!(u64).range(1..)
-    )]
-    pub heartbeat_secs: u64,
+    #[arg(long = "heartbeat-secs", default_value_t = DEFAULT_HEARTBEAT_SECS)]
+    pub heartbeat_secs: NonZeroU64,
 }
 
 /// What the loop is told about the daemon.
@@ -64,8 +70,8 @@ pub struct LoopConfig {
     pub agent_version: Version,
     /// The directory of the services' step-record directories, where the deferrals live.
     pub state_dir: PathBuf,
-    /// Seconds between two heartbeats.
-    pub period_secs: u64,
+    /// Seconds between two heartbeats; never 0, so the loop always waits.
+    pub period_secs: NonZeroU64,
 }
 
 /// Everything the loop talks to.
@@ -88,7 +94,7 @@ pub enum BeatOutcome {
     Sent,
     /// No certificate: nothing was sent.
     NotEnrolled,
-    /// The step records could not be read: nothing was sent.
+    /// The step records could not be read, or named a service twice: nothing was sent.
     NoFacts,
     /// Not sent, or sent with no reply.
     NotSent(LinkError),
@@ -96,9 +102,8 @@ pub enum BeatOutcome {
 
 /// The order on the worker.
 struct Running {
-    order: OrderRef,
+    order: Order,
     service: ServiceName,
-    target: Version,
     done: Receiver<OrderResult>,
 }
 
@@ -106,15 +111,20 @@ struct Running {
 pub struct Heartbeater {
     config: LoopConfig,
     ports: Ports,
-    deferrals: Deferrals,
+    book: Book,
     /// The features of the last reply.
     advertised: Features,
-    /// The verdict to send, by service, until it is acknowledged.
-    resend: BTreeMap<String, OrderResult>,
-    /// The last order started, by service: the same id and try is not started again.
-    started: BTreeMap<String, OrderRef>,
-    /// The services whose step record was read since the loop started.
+    /// The verdicts not yet acknowledged, by service, oldest first, one per order id and try.
+    pending: BTreeMap<String, Vec<OrderResult>>,
+    /// The last verdict acknowledged, by service: a step record that still holds it is not
+    /// sent again.
+    acked: BTreeMap<String, OrderRef>,
+    /// The last order started, by service, in every field.
+    started: BTreeMap<String, Order>,
+    /// The services of the last step records whose kept verdict was read.
     seen: BTreeSet<String>,
+    /// The services of the last step records.
+    installed: BTreeSet<String>,
     running: Option<Running>,
     /// The path the loop said it waits for, so that it says so once.
     waiting_for: Option<PathBuf>,
@@ -122,15 +132,17 @@ pub struct Heartbeater {
 
 impl Heartbeater {
     pub fn new(config: LoopConfig, ports: Ports) -> Heartbeater {
-        let deferrals = Deferrals::new(&config.state_dir);
+        let book = Book::new(&config.state_dir);
         Heartbeater {
             config,
             ports,
-            deferrals,
+            book,
             advertised: Features::default(),
-            resend: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            acked: BTreeMap::new(),
             started: BTreeMap::new(),
             seen: BTreeSet::new(),
+            installed: BTreeSet::new(),
             running: None,
             waiting_for: None,
         }
@@ -141,7 +153,7 @@ impl Heartbeater {
     pub fn run(mut self, sleeper: &dyn Sleeper) {
         loop {
             self.beat_once();
-            if sleeper.sleep(self.config.period_secs) == Tick::Stop {
+            if sleeper.sleep(self.config.period_secs.get()) == Tick::Stop {
                 return;
             }
         }
@@ -149,6 +161,7 @@ impl Heartbeater {
 
     /// One heartbeat, and what its reply asks for.
     pub fn beat_once(&mut self) -> BeatOutcome {
+        self.book.flush(self.ports.log.as_ref());
         self.collect();
         let identity = match self.ports.certs.current() {
             CertState::Enrolled(identity) => {
@@ -194,7 +207,8 @@ impl Heartbeater {
         self.ports.log.line(line);
     }
 
-    /// Takes the verdict of the running order, if it ended.
+    /// Takes the verdict of the running order, if it ended. A worker that ended with no verdict
+    /// leaves the order unstarted, so the same order sent again runs.
     fn collect(&mut self) {
         let Some(running) = self.running.take() else {
             return;
@@ -202,39 +216,87 @@ impl Heartbeater {
         match running.done.try_recv() {
             Ok(result) => self.finish(&running.service, result),
             Err(TryRecvError::Empty) => self.running = Some(running),
-            Err(TryRecvError::Disconnected) => self.log(&format!(
-                "error: order {} try {} of {} ended with no verdict",
-                running.order.id.as_str(),
-                running.order.order_try,
-                running.service
-            )),
+            Err(TryRecvError::Disconnected) => {
+                self.started.remove(running.service.as_str());
+                self.log(&format!(
+                    "error: order {} try {} of {} ended with no verdict",
+                    running.order.id.as_str(),
+                    running.order.order_try,
+                    running.service
+                ));
+            }
         }
     }
 
-    /// The verdict of an order that ran: sent until acknowledged; a deferral is written, any
-    /// other outcome clears it.
+    /// The verdict of an order that ran: sent until acknowledged. A deferral is the service's
+    /// deferral from now on; any other hooked verdict ends a deferral of the same target only,
+    /// and a forced one ends none.
     fn finish(&mut self, service: &ServiceName, result: OrderResult) {
         let now = self.ports.clock.unix_secs();
-        let kept = match result.outcome {
+        let log = self.ports.log.as_ref();
+        match result.outcome {
             Outcome::Deferred { retry_after_secs } => {
-                let reason = result.reason.clone().unwrap_or_else(Reason::deferred);
-                let deferral =
-                    Deferral::starting(result.target.clone(), reason, now, retry_after_secs);
-                self.deferrals.save(service, &deferral)
+                let deferral = deferral_of(&result, now, retry_after_secs);
+                self.book.set(service, deferral, log);
             }
-            Outcome::Succeeded | Outcome::Failed => self.deferrals.clear(service),
-        };
-        if let Err(e) = kept {
+            // A forced update runs no hook, so its verdict says nothing about the moment a
+            // deferral was about.
+            Outcome::Succeeded | Outcome::Failed if !result.forced => {
+                self.book.end(service, &result.target, now, log);
+            }
+            Outcome::Succeeded | Outcome::Failed => {}
+        }
+        if !self.installed.contains(service.as_str()) {
             self.log(&format!(
-                "error: the deferral of {service} is not written: {e}"
+                "the verdict of order {} try {} is kept until {service} is listed again",
+                result.order.id.as_str(),
+                result.order.order_try
             ));
         }
-        self.resend.insert(service.as_str().to_owned(), result);
+        self.push(service, result);
+    }
+
+    /// Adds `result` to the verdicts to send for `service`, in place of one of the same order
+    /// id and try.
+    fn push(&mut self, service: &ServiceName, result: OrderResult) {
+        let queue = self.pending.entry(service.as_str().to_owned()).or_default();
+        queue.retain(|kept| kept.order != result.order);
+        queue.push(result);
+    }
+
+    /// The verdict a step record kept, for a service listed again: sent unless it was
+    /// acknowledged. A deferral whose retry time is not on record starts again from now, so a
+    /// daemon that died between the step and the write of its deferral does not run the
+    /// target early.
+    fn recover(&mut self, service: &ServiceName, result: OrderResult, now: u64) {
+        if self.acked.get(service.as_str()) == Some(&result.order) {
+            return;
+        }
+        if let Outcome::Deferred { retry_after_secs } = result.outcome {
+            let log = self.ports.log.as_ref();
+            let active = self.book.get(service, now, log);
+            if !active.is_some_and(|deferral| deferral.declines(&result.target, now)) {
+                self.book
+                    .set(service, deferral_of(&result, now, retry_after_secs), log);
+            }
+        }
+        self.push(service, result);
     }
 
     /// The heartbeat: every installed service, from its step record and the observer.
     fn facts(&mut self) -> io::Result<Heartbeat> {
         let installed = self.ports.records.installed()?;
+        let mut names = BTreeSet::new();
+        for recorded in &installed {
+            if !names.insert(recorded.name.as_str().to_owned()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("the step records name {} twice", recorded.name),
+                ));
+            }
+        }
+        self.seen.retain(|name| names.contains(name));
+        self.installed = names;
         let now = self.ports.clock.unix_secs();
         let mut services = Vec::with_capacity(installed.len());
         for recorded in installed {
@@ -244,31 +306,32 @@ impl Heartbeater {
                 updating,
                 last_result,
             } = recorded;
-            let key = name.as_str().to_owned();
-            if self.seen.insert(key.clone())
+            if self.seen.insert(name.as_str().to_owned())
                 && let Some(result) = last_result
             {
-                self.started.insert(key.clone(), result.order.clone());
-                self.resend.insert(key.clone(), result);
+                self.recover(&name, result, now);
             }
             let observation = self.ports.observer.observe(&name);
             let running = self
                 .running
                 .as_ref()
                 .filter(|running| running.service == name)
-                .map(|running| running.target.clone());
+                .map(|running| running.order.target().version.clone());
+            let log = self.ports.log.as_ref();
             let deferred = self
                 .advertised
                 .has(Feature::DeferredV1)
-                .then(|| self.deferral_report(&name, now))
-                .flatten();
+                .then(|| self.book.get(&name, now, log))
+                .flatten()
+                .and_then(|deferral| deferral.report(now));
             services.push(ServiceFacts {
                 version,
                 health: observation.health,
                 updating: running.or(updating),
                 last_update: self
-                    .resend
-                    .get(&key)
+                    .pending
+                    .get(name.as_str())
+                    .and_then(|queue| queue.last())
                     .map(|result| result.shaped(&self.advertised)),
                 deferred,
                 health_detail: observation.health_detail,
@@ -287,30 +350,6 @@ impl Heartbeater {
         })
     }
 
-    fn deferral_report(&self, service: &ServiceName, now: u64) -> Option<DeferredReport> {
-        self.deferral(service, now)
-            .and_then(|deferral| deferral.report(now))
-    }
-
-    /// The deferral of `service`. A file that cannot be used is logged and removed: a deferral
-    /// only holds a target back for a while, so going on without it is safe.
-    fn deferral(&self, service: &ServiceName, now: u64) -> Option<Deferral> {
-        match self.deferrals.load(service, now) {
-            Ok(found) => found,
-            Err(e) => {
-                self.log(&format!(
-                    "error: the deferral of {service} is not used and is removed: {e}"
-                ));
-                if let Err(e) = self.deferrals.clear(service) {
-                    self.log(&format!(
-                        "error: the deferral of {service} is not removed: {e}"
-                    ));
-                }
-                None
-            }
-        }
-    }
-
     /// What the reply asks for.
     fn take(&mut self, reply: Reply) {
         let Reply {
@@ -320,8 +359,16 @@ impl Heartbeater {
             acknowledged,
         } = reply;
         self.advertised = Features::of(&features);
-        self.resend
-            .retain(|_, result| !acknowledged.contains(&result.order));
+        for (service, queue) in &mut self.pending {
+            queue.retain(|result| {
+                let counted = acknowledged.contains(&result.order);
+                if counted {
+                    self.acked.insert(service.clone(), result.order.clone());
+                }
+                !counted
+            });
+        }
+        self.pending.retain(|_, queue| !queue.is_empty());
         if self.advertised.has(Feature::HaltV1) {
             for (service, generation) in &halt_generations {
                 self.raise_halt(service, *generation);
@@ -346,27 +393,31 @@ impl Heartbeater {
 
     /// Hands `order` to the executor, on a worker, unless it must not run now.
     fn dispatch(&mut self, order: Order) {
-        let reference = order.reference();
         let service = order.target().service.clone();
-        let key = service.as_str().to_owned();
         let named = format!(
             "order {} try {} of {service}",
-            reference.id.as_str(),
-            reference.order_try
+            order.id.as_str(),
+            order.order_try
         );
         if let Some(running) = &self.running {
-            if running.order != reference {
+            if running.order != order {
                 self.log(&format!(
                     "{named} is not started: busy with order {} try {} of {}",
                     running.order.id.as_str(),
                     running.order.order_try,
                     running.service
                 ));
-                self.resend.insert(key, OrderResult::busy(&order));
+                self.push(&service, OrderResult::busy(&order));
             }
             return;
         }
-        if self.started.get(&key) == Some(&reference) {
+        if self.started.get(service.as_str()) == Some(&order) {
+            return;
+        }
+        if !self.installed.contains(service.as_str()) {
+            self.log(&format!(
+                "{named} is not run: {service} is not installed on this host"
+            ));
             return;
         }
         if order.is_forced() & !self.advertised.has(Feature::ForcedV1) {
@@ -376,8 +427,9 @@ impl Heartbeater {
             return;
         }
         let now = self.ports.clock.unix_secs();
+        let log = self.ports.log.as_ref();
         let declined = (!order.is_forced() & self.advertised.has(Feature::DeferredV1))
-            .then(|| self.deferral(&service, now))
+            .then(|| self.book.get(&service, now, log))
             .flatten()
             .filter(|deferral| deferral.declines(&order.target().version, now));
         if let Some(deferral) = declined {
@@ -393,12 +445,19 @@ impl Heartbeater {
         self.ports.dispatch.start(Box::new(move || {
             let _ = sender.send(orders.execute(&job_order));
         }));
-        self.started.insert(key, reference.clone());
+        self.started
+            .insert(service.as_str().to_owned(), order.clone());
         self.running = Some(Running {
-            order: reference,
+            order,
             service,
-            target: order.target().version.clone(),
             done: receiver,
         });
     }
+}
+
+/// The deferral a deferred verdict starts at `now`, under the verdict's reason, or `deferred`
+/// when it gave none.
+fn deferral_of(result: &OrderResult, now: u64, retry_after_secs: u64) -> Deferral {
+    let reason = result.reason.clone().unwrap_or_else(Reason::deferred);
+    Deferral::starting(result.target.clone(), reason, now, retry_after_secs)
 }

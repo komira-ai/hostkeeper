@@ -6,7 +6,8 @@ use std::sync::Arc;
 use hostkeeper_link::testing::{FakeClock, ScriptedSleeper, verdict};
 use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, ClockSleeper, Health, Heartbeat, LinkError, Liveness, Observation,
-    Observed, Outcome, Platform, RecordedService, ServiceFacts, Sleeper, StopFlag, Tick,
+    Observed, OrderResult, Outcome, Platform, RecordedService, Reply, ServiceFacts, Sleeper,
+    StopFlag, Tick,
 };
 use hostkeeper_steps::Clock;
 
@@ -152,4 +153,63 @@ fn a_clock_sleeper_waits_the_period_on_its_clock_and_stops_when_asked() {
     assert!(stop.is_stopped());
     assert_eq!(sleeper.sleep(15), Tick::Stop);
     assert_eq!(clock.waits(), [15, 15]);
+}
+
+/// Catches a service listed again after it left keeping what the loop knew before: its record's
+/// new verdict is sent, and a verdict already acknowledged is not sent again.
+#[test]
+fn a_service_listed_again_takes_its_record_and_keeps_what_was_counted() {
+    let rig = Rig::new("facts-return");
+    let old = verdict(&update("o-1", 1, "x", "2.0"), Outcome::Succeeded);
+    let new = verdict(&update("o-2", 1, "x", "3.0"), Outcome::Failed);
+    let with = |result: &OrderResult| RecordedService {
+        last_result: Some(result.clone()),
+        ..recorded("x", "2.0")
+    };
+    rig.install(vec![with(&old)]);
+    let mut heartbeater = rig.heartbeater();
+    rig.world.link.answer(Ok(Reply {
+        acknowledged: vec![old.order.clone()],
+        ..Reply::default()
+    }));
+    heartbeater.beat_once();
+    rig.world.records.set(Vec::new());
+    heartbeater.beat_once();
+    rig.world.records.set(vec![with(&old)]);
+    heartbeater.beat_once();
+    rig.world.records.set(Vec::new());
+    heartbeater.beat_once();
+    rig.world.records.set(vec![with(&new)]);
+    heartbeater.beat_once();
+    let shown: Vec<Option<OrderResult>> = rig
+        .world
+        .link
+        .beats()
+        .iter()
+        .map(|beat| {
+            beat.services
+                .first()
+                .and_then(|facts| facts.last_update.clone())
+        })
+        .collect();
+    assert_eq!(shown, [Some(old), None, None, None, Some(new)]);
+}
+
+/// Catches step records that name one service twice being sent (the coordinator refuses such a
+/// heartbeat, and the two entries would share one verdict): nothing is sent, and the line says
+/// which name.
+#[test]
+fn step_records_that_name_a_service_twice_send_nothing() {
+    let rig = Rig::new("facts-twice");
+    rig.install(vec![recorded("x", "1.0"), recorded("x", "2.0")]);
+    let mut heartbeater = rig.heartbeater();
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::NoFacts);
+    assert!(rig.world.link.calls().is_empty());
+    assert_eq!(
+        rig.world.log.lines(),
+        [
+            "error: no heartbeat: the installed services cannot be read: the step records name x \
+          twice"
+        ]
+    );
 }

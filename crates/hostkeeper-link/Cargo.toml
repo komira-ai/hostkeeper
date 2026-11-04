@@ -25,8 +25,9 @@ hostkeeper-hook = { path = "../hostkeeper-hook" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The monotonic clock the production sleeper waits on.
 hostkeeper-steps = { path = "../hostkeeper-steps" }
-# `O_NOFOLLOW`, so a link in the state directory is never read or written through.
-libc.workspace = true
+# The deferral file under a handle on its directory: `openat` without following a link or
+# waiting on a special file, `renameat`, `unlinkat`, `fsync`, and the owner check (`geteuid`).
+rustix = { workspace = true, features = ["fs", "process"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

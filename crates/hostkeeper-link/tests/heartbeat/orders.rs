@@ -2,8 +2,11 @@
 
 use std::sync::mpsc;
 
-use hostkeeper_link::testing::verdict;
-use hostkeeper_link::{Dispatch, Feature, OrderResult, Outcome, ThreadDispatch};
+use hostkeeper_link::testing::{identity, verdict};
+use hostkeeper_link::{
+    BeatOutcome, CertState, Dispatch, Feature, LinkError, OrderResult, Outcome, PackageDigest,
+    ThreadDispatch, Verb,
+};
 
 use crate::{Rig, forced, recorded, reply, update, version};
 
@@ -96,22 +99,20 @@ fn a_second_order_while_one_runs_is_not_started_and_is_reported_busy() {
     assert_eq!(rig.world.orders.orders(), [first]);
 }
 
-/// Catches a worker that died with its job holding the loop forever as busy, or a verdict
-/// made up for it: the loop says so, sends no verdict, and takes the next try.
+/// Catches a worker that died with its job holding the loop forever as busy, a verdict made up
+/// for it, or its order marked as started: the loop says so, sends no verdict, and runs the
+/// same order (same id and try) when the coordinator sends it again.
 #[test]
-fn an_order_whose_worker_dies_has_no_verdict_and_the_loop_goes_on() {
+fn an_order_whose_worker_dies_has_no_verdict_and_runs_when_sent_again() {
     let rig = Rig::new("orders-dropped");
     rig.install(vec![recorded("x", "1.0")]);
     let mut heartbeater = rig.heartbeater();
-    rig.world
-        .link
-        .answer(Ok(reply(Some(update("o-1", 1, "x", "2.0")), &[])));
+    let order = update("o-1", 1, "x", "2.0");
+    rig.world.link.answer(Ok(reply(Some(order.clone()), &[])));
+    rig.world.link.answer(Ok(reply(Some(order.clone()), &[])));
     heartbeater.beat_once();
     assert!(rig.world.dispatch.drop_next());
     assert!(!rig.world.dispatch.drop_next());
-    rig.world
-        .link
-        .answer(Ok(reply(Some(update("o-1", 2, "x", "2.0")), &[])));
     heartbeater.beat_once();
     assert_eq!(
         rig.world.log.lines(),
@@ -120,7 +121,134 @@ fn an_order_whose_worker_dies_has_no_verdict_and_the_loop_goes_on() {
     let beat = &rig.world.link.beats()[1].services[0];
     assert_eq!(beat.last_update, None);
     assert_eq!(beat.updating, None);
+    assert!(rig.world.dispatch.run_next());
+    assert_eq!(rig.world.orders.orders(), [order]);
+}
+
+/// Catches an order that differs from the last one only in its fields (version, digest, verb or
+/// service) under the same id and try being dropped as a resend: it goes to the executor, which
+/// answers `try_conflict`; while another runs it is answered `busy` and not started.
+#[test]
+fn an_order_with_the_same_id_and_try_but_other_fields_goes_to_the_executor() {
+    let rig = Rig::new("orders-conflict");
+    rig.install(vec![recorded("x", "1.0"), recorded("y", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    let first = update("o-1", 1, "x", "2.0");
+    let other_version = update("o-1", 1, "x", "3.0");
+    let mut other_digest = first.clone();
+    if let Verb::Update(target) = &mut other_digest.verb {
+        target.digest = PackageDigest::new(&"0b".repeat(32)).expect("a digest");
+    }
+    let other_verb = forced("o-1", 1, "x", "2.0");
+    let other_service = update("o-1", 1, "y", "2.0");
+    rig.world.link.answer(Ok(reply(Some(first.clone()), &[])));
+    rig.world
+        .link
+        .answer(Ok(reply(Some(other_version.clone()), &[])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
     assert_eq!(rig.world.dispatch.pending(), 1);
+    assert_eq!(
+        rig.world.log.lines(),
+        ["order o-1 try 1 of x is not started: busy with order o-1 try 1 of x"]
+    );
+    assert!(rig.world.dispatch.run_next());
+    for order in [other_version, other_digest, other_verb, other_service] {
+        rig.world
+            .link
+            .answer(Ok(reply(Some(order), &[Feature::ForcedV1])));
+        heartbeater.beat_once();
+        assert_eq!(rig.world.dispatch.pending(), 1);
+        assert!(rig.world.dispatch.run_next());
+    }
+    assert_eq!(rig.world.orders.orders().len(), 5);
+}
+
+/// Catches an order run for a service the host does not have (an order names a service the
+/// records list, never one the loop invents): it is not run and the line says so.
+#[test]
+fn an_order_for_a_service_not_installed_is_not_run() {
+    let rig = Rig::new("orders-absent");
+    rig.install(vec![recorded("x", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    rig.world
+        .link
+        .answer(Ok(reply(Some(update("o-1", 1, "y", "2.0")), &[])));
+    heartbeater.beat_once();
+    assert_eq!(rig.world.dispatch.pending(), 0);
+    assert_eq!(
+        rig.world.log.lines(),
+        ["order o-1 try 1 of y is not run: y is not installed on this host"]
+    );
+}
+
+/// Catches the verdict of an order whose service left the records while it ran being lost: it
+/// is kept, said, and sent once the service is listed again.
+#[test]
+fn a_verdict_of_a_service_that_left_is_kept_until_it_is_listed_again() {
+    let rig = Rig::new("orders-left");
+    rig.install(vec![recorded("x", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    let order = update("o-1", 1, "x", "2.0");
+    rig.world.link.answer(Ok(reply(Some(order.clone()), &[])));
+    heartbeater.beat_once();
+    rig.world.records.set(Vec::new());
+    heartbeater.beat_once();
+    assert!(rig.world.dispatch.run_next());
+    heartbeater.beat_once();
+    assert!(rig.world.link.beats()[2].services.is_empty());
+    assert_eq!(
+        rig.world.log.lines(),
+        ["the verdict of order o-1 try 1 is kept until x is listed again"]
+    );
+    rig.world.records.set(vec![recorded("x", "2.0")]);
+    heartbeater.beat_once();
+    assert_eq!(
+        rig.world.link.beats()[3].services[0].last_update,
+        Some(verdict(&order, Outcome::Succeeded))
+    );
+}
+
+/// Catches a step whose verdict is lost, or that is run again, when the coordinator cannot be
+/// reached, the certificate goes away or the records cannot be read while it runs and as it
+/// ends: the verdict is sent at the first heartbeat that goes out, the order ran once.
+#[test]
+fn a_running_order_survives_link_certificate_and_record_failures() {
+    let rig = Rig::new("orders-partition");
+    rig.install(vec![recorded("x", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    let order = update("o-1", 1, "x", "2.0");
+    rig.world.link.answer(Ok(reply(Some(order.clone()), &[])));
+    rig.world.link.answer(Err(LinkError::Transport(
+        std::io::ErrorKind::ConnectionReset,
+    )));
+    heartbeater.beat_once();
+    assert_eq!(
+        heartbeater.beat_once(),
+        BeatOutcome::NotSent(LinkError::Transport(std::io::ErrorKind::ConnectionReset))
+    );
+    rig.world.certs.set(CertState::NotEnrolled {
+        waiting_for: rig.state().join("pki"),
+    });
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::NotEnrolled);
+    assert!(rig.world.dispatch.run_next());
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::NotEnrolled);
+    rig.world.certs.set(CertState::Enrolled(identity("a")));
+    rig.world.records.fail(Some(std::io::ErrorKind::Other));
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::NoFacts);
+    rig.world.records.fail(None);
+    rig.world.link.answer(Ok(reply(Some(order.clone()), &[])));
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let beats = rig.world.link.beats();
+    assert_eq!(beats[1].services[0].updating, Some(version("2.0")));
+    let last = beats.last().expect("a beat");
+    assert_eq!(last.services[0].updating, None);
+    assert_eq!(
+        last.services[0].last_update,
+        Some(verdict(&order, Outcome::Succeeded))
+    );
+    assert_eq!(rig.world.dispatch.pending(), 0);
+    assert_eq!(rig.world.orders.orders(), [order]);
 }
 
 /// Catches a forced order refused although the reply advertises `forced-v1`, or reported as a

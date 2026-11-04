@@ -7,18 +7,84 @@ use hostkeeper_link::Feature;
 
 use crate::{Rig, recorded, reply, update};
 
-/// What a source of this crate would need to reach the outside without a port: a socket, a
-/// process, the wall clock.
-const OUTSIDE: [&str; 8] = [
-    "std::net",
+/// The names a source of this crate would need to reach the outside without a port: the
+/// standard library's network and process modules, their types and the DNS lookup, and the wall
+/// clock. Matched as whole identifiers, so a grouped import or an alias cannot hide them.
+const OUTSIDE: [&str; 13] = [
+    "net",
+    "process",
+    "ToSocketAddrs",
+    "to_socket_addrs",
     "TcpStream",
     "TcpListener",
     "UdpSocket",
     "UnixStream",
-    "std::process",
-    "Command::new",
+    "UnixListener",
+    "UnixDatagram",
+    "Command",
     "SystemTime",
+    "UNIX_EPOCH",
 ];
+
+/// The one use of a process module the crate makes: the effective uid, for the owner check of
+/// a step-record directory. It starts and signals nothing.
+const OWNER_CHECK: &str = "rustix::process::geteuid";
+
+/// The names of [`OUTSIDE`] the code of `source` uses, in order of first use: every identifier
+/// outside `//` comments, as a whole word, but for [`OWNER_CHECK`].
+fn outside_names(source: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for line in source.lines() {
+        let code = line
+            .split("//")
+            .next()
+            .unwrap_or_default()
+            .replace(OWNER_CHECK, "");
+        for word in code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+            if OUTSIDE.contains(&word) && !found.iter().any(|seen| seen == word) {
+                found.push(word.to_owned());
+            }
+        }
+    }
+    found
+}
+
+/// Catches a check that a grouped import, an alias or a method call slips past, and one that
+/// refuses a source using none of the names (a comment about a network, a type named `Network`).
+#[test]
+fn the_outside_check_refuses_each_way_in_and_passes_a_clean_source() {
+    let cases: [(&str, &[&str]); 8] = [
+        ("let me = rustix::process::geteuid();", &[]),
+        (
+            "use rustix::process;\nlet _ = process::getpid();",
+            &["process"],
+        ),
+        (
+            "use std::{net::ToSocketAddrs};\nfn f(a: &str) { let _ = a.to_socket_addrs(); }",
+            &["net", "ToSocketAddrs", "to_socket_addrs"],
+        ),
+        (
+            "use std::net as n;\nfn f() -> n::Shutdown { todo!() }",
+            &["net"],
+        ),
+        (
+            "use std::process::Command as Run;\nfn f() { Run::new(\"x\"); }",
+            &["process", "Command"],
+        ),
+        ("let t = std::time::SystemTime::now();", &["SystemTime"]),
+        (
+            "let s = std::os::unix::net::UnixStream::connect(p);",
+            &["net", "UnixStream"],
+        ),
+        (
+            "/// A network link of a process.\npub trait Link { fn heartbeat(&self) -> Network; }",
+            &[],
+        ),
+    ];
+    for (source, names) in cases {
+        assert_eq!(outside_names(source), names, "{source}");
+    }
+}
 
 /// Catches a second way out of the loop: a source of the crate that opens a socket, starts a
 /// process or reads the wall clock, or a dependency that brings a network client. A full round
@@ -44,9 +110,12 @@ fn the_loop_dials_only_the_coordinator_link_port() {
     for entry in std::fs::read_dir(root.join("src")).expect("the sources") {
         let path = entry.expect("an entry").path();
         let text = std::fs::read_to_string(&path).expect("a source");
-        for outside in OUTSIDE {
-            assert!(!text.contains(outside), "{} uses {outside}", path.display());
-        }
+        assert_eq!(
+            outside_names(&text),
+            Vec::<String>::new(),
+            "{}",
+            path.display()
+        );
         sources.insert(
             path.file_name()
                 .expect("a file name")
@@ -88,7 +157,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
             "hostkeeper-hook",
             "hostkeeper-proto",
             "hostkeeper-steps",
-            "libc",
+            "rustix",
             "serde",
             "serde_json",
             "thiserror",

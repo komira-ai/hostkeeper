@@ -365,7 +365,7 @@ dependencies = [
  "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",
- "libc",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror",

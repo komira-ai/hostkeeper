@@ -1,13 +1,15 @@
 //! The types of the loop: what an order can hold, the words of a heartbeat, the errors, and the
 //! flag.
 
+use std::num::NonZeroU64;
+
 use clap::Parser;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_link::testing::verdict;
 use hostkeeper_link::{
-    DeferredReport, Feature, Health, Heartbeat, LinkError, Liveness, LoopFlags, Observed, Order,
-    OrderId, OrderRef, Outcome, Oversize, PackageDigest, Platform, Reason, ReplyFault,
-    ServiceFacts, Target, Verb, WordError,
+    DEFAULT_HEARTBEAT_SECS, DeferredReport, Feature, Health, Heartbeat, LinkError, Liveness,
+    LoopFlags, Observed, Order, OrderId, OrderRef, Outcome, Oversize, PackageDigest, Platform,
+    Reason, ReplyFault, ServiceFacts, Target, Verb, WordError,
 };
 
 use crate::{digest, order_id, service, update, version};
@@ -232,13 +234,21 @@ struct Daemon {
 }
 
 /// Catches a period other than 15 seconds by default, a flag spelled otherwise, and a period of
-/// 0 (a loop that never waits) accepted.
+/// 0 (a loop that never waits) accepted, by the flag or by the type a library caller fills in.
 #[test]
 fn the_heartbeat_period_flag_defaults_to_15_seconds_and_refuses_0() {
     let parsed = Daemon::try_parse_from(["daemon"]).expect("no flag");
-    assert_eq!(parsed.heartbeat.heartbeat_secs, 15);
+    assert_eq!(parsed.heartbeat.heartbeat_secs.get(), 15);
+    assert_eq!(DEFAULT_HEARTBEAT_SECS.get(), 15);
     let parsed = Daemon::try_parse_from(["daemon", "--heartbeat-secs", "30"]).expect("30");
-    assert_eq!(parsed.heartbeat, LoopFlags { heartbeat_secs: 30 });
+    assert_eq!(
+        parsed.heartbeat,
+        LoopFlags {
+            heartbeat_secs: NonZeroU64::new(30).expect("not zero")
+        }
+    );
     assert!(Daemon::try_parse_from(["daemon", "--heartbeat-secs", "0"]).is_err());
     assert!(Daemon::try_parse_from(["daemon", "--heartbeat-secs", "x"]).is_err());
+    // `LoopConfig::period_secs` is a `NonZeroU64`: a period of 0 cannot be built.
+    assert_eq!(NonZeroU64::new(0), None);
 }

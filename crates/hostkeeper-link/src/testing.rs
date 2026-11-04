@@ -14,7 +14,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::Clock;
 
 use crate::beat::{Health, Heartbeat, Liveness, Platform};
-use crate::heartbeater::{Heartbeater, LoopConfig, Ports};
+use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::order::{Order, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, HeldHalts, Job, LinkError,
@@ -285,6 +285,12 @@ impl FakeClock {
         }
     }
 
+    /// Sets the unix clock to `unix`, forward or back, as a clock that was set would; the
+    /// monotonic clock does not move.
+    pub fn set_unix(&self, unix: u64) {
+        self.unix.store(unix, Ordering::SeqCst);
+    }
+
     /// Moves both clocks on by `secs`.
     pub fn advance(&self, secs: u64) {
         self.mono.fetch_add(secs, Ordering::SeqCst);
@@ -430,7 +436,7 @@ impl World {
                 platform: Platform::LinuxX86_64,
                 agent_version,
                 state_dir: PathBuf::from(state_dir),
-                period_secs: 15,
+                period_secs: DEFAULT_HEARTBEAT_SECS,
             },
             self.ports(),
         )

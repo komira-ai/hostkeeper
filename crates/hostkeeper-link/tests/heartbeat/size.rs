@@ -36,11 +36,7 @@ fn observed() -> Option<Observed> {
 /// `facts` with every optional fact, the health detail `health_len` bytes.
 fn with_optional(mut facts: ServiceFacts, health_len: usize) -> ServiceFacts {
     facts.health_detail = Some("h".repeat(health_len));
-    facts.deferred = Some(DeferredReport {
-        target: version("2.0"),
-        reason: Reason::new("drain_bound").expect("a reason"),
-        retry_after_secs: 60,
-    });
+    facts.deferred = report();
     facts.observed = observed();
     facts
 }
@@ -178,4 +174,68 @@ fn a_heartbeat_over_the_service_limit_is_refused_not_truncated() {
     );
     assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
     assert_eq!(rig.world.link.beats()[0].services.len(), 16);
+}
+
+fn report() -> Option<DeferredReport> {
+    Some(DeferredReport {
+        target: version("2.0"),
+        reason: Reason::new("drain_bound").expect("a reason"),
+        retry_after_secs: 60,
+    })
+}
+
+/// Catches a bound off by one (a heartbeat of exactly 16384 bytes is sent whole), a drop that
+/// goes on after the heartbeat fits (the observer's detail is kept when dropping the deferral
+/// detail is enough), bytes counted as characters (an escaped quote is two bytes, an `é` two),
+/// and a group dropped from one service only.
+#[test]
+fn the_bound_is_exact_and_dropping_stops_as_soon_as_the_heartbeat_fits() {
+    let base = beat(vec![required("x", 0)]).encoded_len();
+    let exact = beat(vec![required("x", MAX_HEARTBEAT_BYTES - base)]);
+    assert_eq!(exact.encoded_len(), MAX_HEARTBEAT_BYTES);
+    assert_eq!(
+        fit(exact.clone()),
+        Ok(Fitted {
+            beat: exact,
+            dropped: Vec::new(),
+        })
+    );
+
+    // Fits once the deferral detail is gone, with the observer's detail kept.
+    let mut observed_only = required("x", 0);
+    observed_only.observed = observed();
+    let pad = MAX_HEARTBEAT_BYTES - beat(vec![observed_only]).encoded_len();
+    let fitted = fit(beat(vec![with_optional(required("x", pad), 10)])).expect("it fits");
+    assert_eq!(
+        fitted.dropped,
+        [OptionalFact::HealthDetail, OptionalFact::DeferralDetail]
+    );
+    let mut kept = required("x", pad);
+    kept.observed = observed();
+    assert_eq!(fitted.beat, beat(vec![kept]));
+    assert_eq!(fitted.beat.encoded_len(), MAX_HEARTBEAT_BYTES);
+
+    // Bytes of the JSON text: escapes and multibyte characters count as what they take.
+    let sized = |detail: &str| {
+        let mut facts = required("x", 0);
+        facts.health_detail = Some(detail.to_owned());
+        beat(vec![facts]).encoded_len()
+    };
+    assert_eq!(sized(&"\"".repeat(10)) - sized(""), 20);
+    assert_eq!(sized(&"\u{e9}".repeat(10)) - sized(""), 20);
+    assert_eq!(sized(&"a".repeat(10)) - sized(""), 10);
+
+    // Several services: each group goes from every service at once.
+    let names: Vec<String> = (0..16).map(|n| format!("s{n}")).collect();
+    let many: Vec<ServiceFacts> = names
+        .iter()
+        .map(|name| with_optional(required(name, 0), MAX_HEARTBEAT_BYTES / 16))
+        .collect();
+    let fitted = fit(beat(many)).expect("it fits");
+    assert_eq!(fitted.dropped, [OptionalFact::HealthDetail]);
+    for facts in &fitted.beat.services {
+        assert_eq!(facts.health_detail, None);
+        assert_eq!(facts.deferred, report());
+        assert_eq!(facts.observed, observed());
+    }
 }

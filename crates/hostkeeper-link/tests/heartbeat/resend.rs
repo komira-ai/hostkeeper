@@ -61,8 +61,8 @@ fn a_verdict_is_resent_until_acknowledged_by_order_id_and_try() {
 }
 
 /// Catches a verdict lost with the daemon's memory: a new loop over the same step records
-/// resends the verdict the record kept, does not run its order again when the coordinator
-/// resends it, and stops once it is acknowledged, though the record still holds it.
+/// resends the verdict the record kept, and stops once it is acknowledged, though the record
+/// still holds it.
 #[test]
 fn a_verdict_survives_a_daemon_restart_and_is_resent() {
     let rig = Rig::new("resend-restart");
@@ -87,6 +87,66 @@ fn a_verdict_survives_a_daemon_restart_and_is_resent() {
     assert_eq!(last_update(&rig, 0), Some(kept.clone()));
     assert_eq!(last_update(&rig, 1), Some(kept));
     assert_eq!(last_update(&rig, 2), None);
-    assert_eq!(rig.world.dispatch.pending(), 0);
-    assert!(rig.world.orders.orders().is_empty());
+    // The coordinator's resend of the order goes to the executor, which answers it from its
+    // record (the try rules are the executor's); the loop has no memory of it to answer with.
+    assert_eq!(rig.world.dispatch.pending(), 1);
+}
+
+/// Catches a verdict lost because another came for the same service before it was counted: a
+/// `busy` answer then the verdict of the running order, in one heartbeat period; and two
+/// verdicts of finished orders. The newest is sent; once it is counted the one before it is.
+#[test]
+fn every_verdict_of_a_service_is_sent_until_acknowledged() {
+    let rig = Rig::new("resend-several");
+    rig.install(vec![recorded("x", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    let first = update("o-1", 1, "x", "2.0");
+    let second = update("o-2", 1, "x", "3.0");
+    rig.world.link.answer(Ok(reply(Some(first.clone()), &[])));
+    rig.world.link.answer(Ok(reply(Some(second.clone()), &[])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    // The busy answer to the second, then the first's verdict, before the next heartbeat.
+    assert!(rig.world.dispatch.run_next());
+    let done = verdict(&first, Outcome::Succeeded);
+    let busy = OrderResult::busy(&second);
+    rig.world
+        .link
+        .answer(Ok(acknowledging(vec![reference("o-1", 1)])));
+    heartbeater.beat_once();
+    rig.world
+        .link
+        .answer(Ok(acknowledging(vec![reference("o-2", 1)])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    assert_eq!(last_update(&rig, 2), Some(done));
+    assert_eq!(last_update(&rig, 3), Some(busy));
+    assert_eq!(last_update(&rig, 4), None);
+
+    // Two finished orders, neither counted: the newer first, then the older.
+    let third = update("o-3", 1, "x", "3.0");
+    let fourth = update("o-4", 1, "x", "4.0");
+    rig.world.link.answer(Ok(reply(Some(third.clone()), &[])));
+    heartbeater.beat_once();
+    assert!(rig.world.dispatch.run_next());
+    rig.world.link.answer(Ok(reply(Some(fourth.clone()), &[])));
+    heartbeater.beat_once();
+    assert!(rig.world.dispatch.run_next());
+    rig.world
+        .link
+        .answer(Ok(acknowledging(vec![reference("o-4", 1)])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    assert_eq!(
+        last_update(&rig, 6),
+        Some(verdict(&third, Outcome::Succeeded))
+    );
+    assert_eq!(
+        last_update(&rig, 7),
+        Some(verdict(&fourth, Outcome::Succeeded))
+    );
+    assert_eq!(
+        last_update(&rig, 8),
+        Some(verdict(&third, Outcome::Succeeded))
+    );
 }

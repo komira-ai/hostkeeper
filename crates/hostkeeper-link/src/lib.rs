@@ -34,7 +34,9 @@ pub use beat::{
     Observed, OptionalFact, Oversize, Platform, ServiceFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
-pub use heartbeater::{BeatOutcome, Heartbeater, LoopConfig, LoopFlags, Ports};
+pub use heartbeater::{
+    BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
+};
 pub use names::{OrderId, PackageDigest, Reason, WordError};
 pub use order::{DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb};
 pub use ports::{

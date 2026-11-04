@@ -6,12 +6,14 @@ mod deferral;
 mod facts;
 mod features;
 mod halts;
+mod kbf;
 mod orders;
 mod ports;
 mod resend;
 mod size;
 mod types;
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::names::{ServiceName, Version};
@@ -118,11 +120,17 @@ impl Rig {
         self.state().join(name)
     }
 
+    /// The step-record directory of `name`, as the daemon makes it: owner only.
+    pub fn make_service_dir(&self, name: &str) {
+        let dir = self.service_dir(name);
+        std::fs::create_dir_all(&dir).expect("a step-record directory");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    }
+
     /// Installs `services`: their records, and their step-record directories.
     pub fn install(&self, services: Vec<RecordedService>) {
         for recorded in &services {
-            std::fs::create_dir_all(self.service_dir(recorded.name.as_str()))
-                .expect("a step-record directory");
+            self.make_service_dir(recorded.name.as_str());
         }
         self.world.records.set(services);
     }
