@@ -23,7 +23,7 @@ fn no_certificate_says_once_that_it_is_not_enrolled_and_makes_no_call() {
     }
     assert!(rig.world.link.calls().is_empty());
     let waiting = format!("not enrolled: waiting for {}", current.display());
-    assert_eq!(rig.world.log.lines(), [waiting.clone()]);
+    assert_eq!(rig.world.log.lines(), std::slice::from_ref(&waiting));
 
     rig.world.certs.set(CertState::Enrolled(identity("a")));
     assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
