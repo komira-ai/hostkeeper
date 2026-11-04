@@ -47,7 +47,10 @@ pub struct StepExit {
     /// launcher reports that as no code. Either way a code that is not `0`, `75` or `76`, and
     /// no code, are a failed step.
     pub code: Option<i32>,
-    /// The last line the hook wrote to standard output, `None` when it wrote none.
+    /// The last line the hook wrote to standard output that is not blank, `None` when it wrote
+    /// none. [`crate::systemd::SystemdLauncher`] also gives `None` for a last line longer than
+    /// [`crate::LAST_LINE_MAX`] or one whose beginning fell out of the kept
+    /// [`crate::RING_BYTES`]: the report is then `{}` and the exit code decides.
     pub last_line: Option<String>,
 }
 

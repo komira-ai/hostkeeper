@@ -19,8 +19,8 @@ use crate::names::{
 
 /// The longest a step may be given: one day. B26 deletes this.
 pub const MAX_SECS: u64 = 86_400;
-/// The most leading arguments a hook may be given before the step. B3 rewrites launch.rs and
-/// deletes this.
+/// The most leading arguments a hook may be given before the step. B26 deletes
+/// this.
 pub const MAX_HOOK_ARGS: usize = 8;
 
 fn default_hook_args() -> Vec<String> {
@@ -76,8 +76,8 @@ impl StepCapabilities {
     }
 }
 
-/// The `[hook]` table: whom the hook runs as and with what rights. B3 rewrites launch.rs and
-/// deletes this.
+/// The `[hook]` table: whom the hook runs as and with what rights. B26 deletes
+/// this.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hook {

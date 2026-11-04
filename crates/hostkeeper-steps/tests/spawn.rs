@@ -132,6 +132,35 @@ fn a_long_last_line_from_a_pipe_is_read_only_within_its_bound() {
     assert_eq!(exit.unwrap().last_line, None);
 }
 
+/// Catches the real spawner giving the program other arguments than the line of the step, or
+/// any input: the fixture prints what it received, and its input is empty.
+#[test]
+fn systemd_run_is_given_the_line_of_the_step_and_no_input() {
+    let scratch = Scratch::new("spawn-args");
+    let params = scratch.path().join("params");
+    let (exit, captured) = run_mode(&scratch, "received");
+    assert_eq!(exit.unwrap().code, Some(0));
+    let mut want = vec![
+        "--system".to_owned(),
+        "--quiet".to_owned(),
+        "--wait".to_owned(),
+        "--collect".to_owned(),
+        "--pipe".to_owned(),
+        "--unit=updater-svc-cutover-3".to_owned(),
+        "--property=RuntimeMaxSec=600".to_owned(),
+        "--".to_owned(),
+        FIXTURE.to_owned(),
+        "cutover".to_owned(),
+        "--params".to_owned(),
+        params.display().to_string(),
+    ];
+    want.push("stdin:".to_owned());
+    assert_eq!(
+        String::from_utf8(captured.stdout.bytes()).unwrap(),
+        want.join("\n")
+    );
+}
+
 /// Catches the updater's environment reaching `systemd-run`: it is run with none.
 #[test]
 fn systemd_run_is_given_no_environment() {

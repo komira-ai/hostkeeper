@@ -10,10 +10,11 @@
 //! exits with the code; `flood <stdout bytes> <stderr bytes> <code>` writes that many bytes with
 //! no line feed, all of standard error first, then all of standard output; `line <len> <code>`
 //! prints a log line and then a last line of `len` bytes; `environ` prints the environment as
-//! `K=V` lines. Anything else exits 64.
+//! `K=V` lines; `received` prints its arguments, one per line, then a line `stdin:` and what it
+//! read from its input. Anything else exits 64.
 
 use std::ffi::OsString;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
@@ -81,6 +82,17 @@ fn main() -> ExitCode {
             let _ = out.write_all(b"starting\n");
             let _ = out.write_all(&last);
             exit(number(Some(*code)))
+        }
+        ["received"] => {
+            for arg in &args {
+                let _ = out.write_all(arg.as_bytes());
+                let _ = out.write_all(b"\n");
+            }
+            let mut input = Vec::new();
+            let _ = std::io::stdin().read_to_end(&mut input);
+            let _ = out.write_all(b"stdin:");
+            let _ = out.write_all(&input);
+            ExitCode::SUCCESS
         }
         ["environ"] => {
             for (key, value) in environment() {
