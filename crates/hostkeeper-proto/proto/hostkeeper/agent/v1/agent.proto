@@ -1,5 +1,6 @@
 // hostkeeper.agent.v1: the heartbeat a host's daemon sends the coordinator, and the reply,
-// which carries at most one order.
+// which carries at most one order; and how a host gets and keeps its certificate: `Enroll`,
+// `Poll` and `Renew`.
 //
 // Served by: the coordinator, on its heartbeat listener (gRPC over TCP with TLS). The JSON
 // route `POST /v1/heartbeat` that kbf's agents speak is an adapter onto the same handler: its
@@ -8,53 +9,108 @@
 // coordinator's legacy service (`kbf` on a kbf farm), its `services` are the other entries, and
 // its `agent_features` is `features`.
 //
-// Authentication: mutual TLS. The caller is the host its client certificate names, with the
-// role the certificate gives it (`agent`); no field of a heartbeat says who the host is, so a
-// heartbeat cannot speak for another host.
+// Authentication: the daemon checks the coordinator's certificate against the SHA-256 of the CA
+// certificate pinned in its config, on every RPC. `Heartbeat` and `Renew` need mutual TLS: the
+// caller is the host its client certificate names, with the role the certificate gives it
+// (`agent`); no field of a heartbeat or a renewal says who the host is, so neither can speak for
+// another host. `Enroll` and `Poll` must not require a client certificate, because the host has
+// none yet: the caller is authenticated by the key it proves, the CSR's own signature and then the
+// signed challenge of `Poll`.
 //
 // Refusals: a gRPC status whose message is exactly one token of `CoordinatorRefusal`, written
 // as the value's name without the `COORDINATOR_REFUSAL_` prefix, in lower case (for example
-// `forbidden`); the status code is the one each value names. Nothing else is ever in the
-// message. A bad optional fact (a step, a deferral, a pin, a feature list) is dropped and the
-// rest of the heartbeat is read, so a host never loses its updates to a field the coordinator
-// could do without.
+// `forbidden`, `pending_full`, `bad_signature`); the status code is the one each value names.
+// Nothing else is ever in the message. A bad optional fact (a step, a deferral, a pin, a feature
+// list) is dropped and the rest of the heartbeat is read, so a host never loses its updates to a
+// field the coordinator could do without. A signed `Poll` before approval is not refused: it
+// is answered PENDING; an unsigned one is answered as the Enrollment paragraph says.
 //
-// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
-// A version is the release's version string: 1 to 128 bytes, a digit first, then letters,
-// digits and `.+~-`. A service name is 1 to 64 bytes of `[a-z0-9-]`. A token (a reason, a
-// check, a step name) is 1 to 64 bytes of `[a-z0-9_]`; a step name at most 16. A commit is 40
-// lower-case hex digits; a package digest is SHA-256 as 64 lower-case hex characters. A heartbeat
-// lists at most 16 services.
+// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`). A
+// service name is 1 to 255 bytes of the POSIX portable filename characters (`A-Za-z0-9._-`), not
+// beginning with `-` or `.`; a version the same with `+` added. A token (a reason, a check, a step
+// name) is 1 to 64 bytes of `[a-z0-9_]`; a step name at most 16. A commit is 40 lower-case hex
+// digits; a package digest is SHA-256 as 64 lower-case hex characters. A heartbeat lists at most
+// 16 services. A host id is 1 to 63 bytes of `[a-z0-9-]`, not starting or ending with `-`. A CSR
+// is DER, at most 4096 bytes; a certificate is DER, at most 8192 bytes; a CA bundle is PEM. A
+// request id is the SHA-256 of the DER SubjectPublicKeyInfo of the CSR's key, as 64 lower-case hex
+// characters.
 //
 // Orders: an order is one verb with typed arguments (`Order`): a service name, a version, a
 // package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds
 // everything else (the release channel, the hook, the units) in its own configuration and in the
 // manifest of the package whose digest verified.
 //
+// Enrollment: a host with no certificate generates a P-256 key, keeps it, and sends `Enroll`
+// with a CSR for it and its claims. Its request is pending until an operator approves it
+// (`hostkeeper.operator.v1.Enrollment`), naming the SHA-256 of the key. Claims help an operator
+// recognise a machine and authorise nothing. The daemon then polls for its certificate with a
+// challenge, so the host needs no clock. A first `Poll` with an empty `nonce` and `signature` is
+// answered with the state UNSPECIFIED and a coordinator-chosen `nonce`, and nothing else; the
+// daemon then sends a `Poll` carrying that nonce and its signature by the request's key. Every
+// answer to a signed `Poll` carries a fresh `nonce` for the next one, and the daemon may always
+// start again with an unsigned `Poll`, after an answer it lost.
+//
+// The signature is ECDSA P-256 with SHA-256, DER encoded, by the private key of the CSR, over
+// exactly these bytes: the 25 ASCII bytes "hostkeeper-enroll-poll-v1", one 0x00 byte, the 64
+// ASCII characters of `request_id`, one 0x00 byte, and the `nonce`. The coordinator checks it
+// against the public key it stored for the request. A nonce is 16 to 64 bytes, chosen by the
+// coordinator, good for one `Poll`, and refused once the coordinator has answered a `Poll` with
+// it. The certificate fields of `PollResponse` are set only on ISSUED. Before the certificate's
+// half life the daemon sends `Renew` with a CSR for the key it holds.
+//
 // Extending: add fields, messages, enum values and RPCs; never renumber, rename, retype or
 // remove one, and never reuse a number (the compatibility test in this crate refuses each).
 // A reader treats an enum value it does not know as UNSPECIFIED; none of the enums here is
-// closed. Enrollment, renewal and re-key are added to `Coordinator` by their own change.
+// closed. Re-key is added to `Coordinator` by its own change.
 syntax = "proto3";
 
 package hostkeeper.agent.v1;
 
+import "hostkeeper/options.proto";
+
 service Coordinator {
   // What the host runs and how it is, and the coordinator's answer: at most one order.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // Ask for a certificate: a CSR, the host's claims and its image. No client certificate. The
+  // request is pending until an operator approves it; nothing is installed meanwhile.
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  // Ask whether a request was approved, and take its certificate, by the challenge the header
+  // describes. No client certificate.
+  rpc Poll(PollRequest) returns (PollResponse);
+  // Get a new certificate for the key the host holds, over mutual TLS with its current one.
+  rpc Renew(RenewRequest) returns (RenewResponse);
 }
 
-// Why the coordinator refused a heartbeat. The token is the value's name without the prefix,
-// in lower case.
+// Why the coordinator refused a heartbeat, an enrollment, a poll or a renewal. The token is the
+// value's name without the prefix, in lower case.
 enum CoordinatorRefusal {
   COORDINATOR_REFUSAL_UNSPECIFIED = 0;
-  // PERMISSION_DENIED: the client certificate names no host with the role `agent`. Refused
-  // before the request is read.
+  // PERMISSION_DENIED: a `Heartbeat` or a `Renew` with no client certificate, or with one that
+  // names no host with the role `agent`. Refused before the request is read.
   COORDINATOR_REFUSAL_FORBIDDEN = 1;
   // INVALID_ARGUMENT: a field every heartbeat needs is missing or broken: no platform, a service
   // entry with no name, version or health, a last update with no target or outcome, a name that
   // is no service name, or a name listed twice.
   COORDINATOR_REFUSAL_INVALID_HEARTBEAT = 2;
+  // RESOURCE_EXHAUSTED: an `Enroll` of a new request while the pending queue is full; the
+  // requests already pending are kept.
+  COORDINATOR_REFUSAL_PENDING_FULL = 3;
+  // INVALID_ARGUMENT: the key of the CSR is not an ECDSA P-256 key.
+  COORDINATOR_REFUSAL_KEY_NOT_P256 = 4;
+  // INVALID_ARGUMENT: the CSR is over 4096 bytes, does not parse, or is not signed by its own key.
+  COORDINATOR_REFUSAL_BAD_CSR = 5;
+  // PERMISSION_DENIED: a `Heartbeat` or a `Renew` by a host an operator revoked, with a
+  // certificate that has not yet expired.
+  COORDINATOR_REFUSAL_DENIED = 6;
+  // NOT_FOUND: a `Poll` for a request id the coordinator holds no request for.
+  COORDINATOR_REFUSAL_UNKNOWN_REQUEST = 7;
+  // UNAUTHENTICATED: a signed `Poll` whose signature does not verify by the request's key, or
+  // whose nonce is not one the coordinator gave for the request and has not yet answered.
+  COORDINATOR_REFUSAL_BAD_SIGNATURE = 8;
+  // FAILED_PRECONDITION: a `Renew` whose CSR is not for the key of the client certificate, or an
+  // `Enroll` whose `renewal_of` names a host that is unknown, revoked, or certified for another
+  // key.
+  COORDINATOR_REFUSAL_RENEWAL_NOT_ALLOWED = 9;
 }
 
 message HeartbeatRequest {
@@ -325,4 +381,101 @@ message ClearHalt {
   // The clear generation; the daemon lifts its hold only on one greater than the one it halted
   // under.
   uint64 halt_generation = 2;
+}
+
+// A request for a host's first certificate, or for one after its certificate expired.
+message EnrollRequest {
+  // A PKCS#10 CSR for the host's P-256 key, DER, at most 4096 bytes.
+  bytes csr_der = 1;
+  // What the host says it is.
+  Claims claims = 2;
+  // The boot image or installer the daemon came from, as the image names itself.
+  string image = 3;
+  // The host id of a host whose certificate expired while it was offline, posting again with the
+  // same key; empty for a first enrollment.
+  string renewal_of = 4;
+  // The one-time nonce MDM gave a Mac (one hour, one use); empty on any other host.
+  bytes mac_nonce = 5 [(hostkeeper.secret) = true];
+}
+
+// What a host says it is. Every claim is optional, by being empty. Claims help an operator
+// recognise a machine and authorise nothing.
+message Claims {
+  // `/etc/machine-id`.
+  string machine_id = 1;
+  // The DMI system serial number.
+  string dmi_serial = 2;
+  // The DMI product UUID.
+  string product_uuid = 3;
+  // The host's network addresses, as text.
+  repeated string addresses = 4;
+  // A Mac's serial number.
+  string mac_serial = 5;
+  // A Mac's platform UUID.
+  string platform_uuid = 6;
+}
+
+message EnrollResponse {
+  // The request's id: the SHA-256 of the CSR's key, 64 lower-case hex characters. Posting the
+  // same key again is the same request.
+  string request_id = 1;
+  EnrollState state = 2;
+}
+
+// Where an enrollment request stands once posted.
+enum EnrollState {
+  ENROLL_STATE_UNSPECIFIED = 0;
+  // Waiting for an operator.
+  ENROLL_STATE_PENDING = 1;
+  // Waiting for an operator, and another host presents the same machine id or key: the operator
+  // is alerted.
+  ENROLL_STATE_DUPLICATE_CLAIM = 2;
+}
+
+// One poll for a request's certificate; see the header for the challenge.
+message PollRequest {
+  // The request's id, as `EnrollResponse` gave it.
+  string request_id = 1;
+  // The nonce the coordinator gave; empty in an unsigned `Poll`.
+  bytes nonce = 2;
+  // The signature over the message the header fixes, by the request's key; empty in an unsigned
+  // `Poll`.
+  bytes signature = 3;
+}
+
+message PollResponse {
+  PollState state = 1;
+  // The host's certificate, DER, at most 8192 bytes. Only on ISSUED.
+  bytes certificate_der = 2;
+  // The host id the operator approved. Only on ISSUED.
+  string host_id = 3;
+  // The CA certificates the host trusts the coordinator by, PEM. Only on ISSUED.
+  string ca_bundle_pem = 4;
+  // A nonce for the next signed `Poll`, 16 to 64 bytes.
+  bytes nonce = 5;
+}
+
+// Where a polled request stands.
+enum PollState {
+  // The answer to an unsigned `Poll`: only its `nonce` is set.
+  POLL_STATE_UNSPECIFIED = 0;
+  // Not yet approved.
+  POLL_STATE_PENDING = 1;
+  // Approved: the certificate is in the answer.
+  POLL_STATE_ISSUED = 2;
+  // An operator denied the request or its key.
+  POLL_STATE_DENIED = 3;
+}
+
+// A renewal, over mutual TLS with the host's current certificate.
+message RenewRequest {
+  // A CSR for the key of the current certificate, DER, at most 4096 bytes.
+  bytes csr_der = 1;
+}
+
+message RenewResponse {
+  // The new certificate, DER, at most 8192 bytes.
+  bytes certificate_der = 1;
+  // The CA certificates, PEM.
+  string ca_bundle_pem = 2;
 }

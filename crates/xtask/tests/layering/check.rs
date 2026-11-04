@@ -22,7 +22,7 @@ const UNPACK: &str = "hostkeeper-unpack";
 const LAYERS: [(&str, &[&str]); 5] = [
     (HOOK, &[]),
     (CONFIG, &[]),
-    (STEPS, &[HOOK]),
+    (STEPS, &[CONFIG, HOOK]),
     (RIGHTS, &[CONFIG, HOOK]),
     (UNPACK, &[CONFIG, HOOK, STEPS]),
 ];

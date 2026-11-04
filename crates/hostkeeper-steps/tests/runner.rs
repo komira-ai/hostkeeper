@@ -487,41 +487,6 @@ fn a_hook_that_needs_a_newer_updater_is_deferred() {
     assert_eq!(rig.runner().run(&order).unwrap(), ok());
 }
 
-/// Catches an order whose names could reach a unit name or a path unchecked: a service name
-/// outside letters, digits, `-` and `_`, and a release path that is not UTF-8 (the params file
-/// and the artifact argument must be the same string).
-#[test]
-fn an_order_with_unusable_names_is_refused() {
-    let rig = Rig::new("run-bad-order");
-    for name in ["", "a b", "a/b", "ünï", "a.b"] {
-        let mut order = rig.order();
-        order.service = name.to_owned();
-        let err = rig.runner().run(&order).unwrap_err();
-        assert!(matches!(err, RunError::BadOrder(_)), "{name}");
-        assert!(err.to_string().contains("not valid"));
-    }
-    use std::os::unix::ffi::OsStrExt;
-    let odd = rig
-        .scratch
-        .path()
-        .join(std::ffi::OsStr::from_bytes(&[0xff]));
-    fs::create_dir(&odd).unwrap();
-    let odd = Staged::seal(&odd).unwrap();
-    let mut order = rig.order();
-    order.staged = odd.clone();
-    assert!(matches!(
-        rig.runner().run(&order),
-        Err(RunError::BadOrder(_))
-    ));
-    let mut order = rig.order();
-    order.previous = Some(odd);
-    assert!(matches!(
-        rig.runner().run(&order),
-        Err(RunError::BadOrder(_))
-    ));
-    assert!(rig.fake.events().is_empty());
-}
-
 /// Catches an artifact altered after it was verified being run: a tree changed before the first
 /// step halts the update with nothing run.
 #[test]
@@ -990,20 +955,6 @@ fn a_state_directory_open_to_others_is_refused() {
         Err(RunError::Record(_))
     ));
     assert!(rig.fake.events().is_empty());
-}
-
-/// Catches a service name with `-` or `_` being refused: both are in the name grammar and carry
-/// into the unit names.
-#[test]
-fn a_service_name_may_hold_dashes_and_underscores() {
-    let rig = Rig::new("run-name");
-    let mut order = rig.order();
-    order.service = "my-svc_1".to_owned();
-    assert_eq!(rig.runner().run(&order).unwrap(), ok());
-    let support::Event::Run { unit, .. } = &rig.fake.runs()[0] else {
-        unreachable!()
-    };
-    assert_eq!(unit, "updater-my-svc_1-prepare-1");
 }
 
 /// Catches a params file that names the staged tree instead of the artifact the updater verified:

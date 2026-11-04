@@ -100,9 +100,11 @@ pub fn unpack(
     let service = Path::new(order.service.as_str());
     let version = order.version.as_str();
     let layout = Layout::package(&fs.real_path(service));
-    if layout.check_name(version).is_err() {
-        return Err(UnpackError::ReservedVersion {
-            version: version.to_owned(),
+    if let Err(refused) = layout.check_name(version) {
+        let version = version.to_owned();
+        return Err(match refused.kind() {
+            io::ErrorKind::InvalidFilename => UnpackError::VersionTooLong { version },
+            _ => UnpackError::ReservedVersion { version },
         });
     }
     fs.create_service(service)

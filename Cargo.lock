@@ -728,6 +728,7 @@ dependencies = [
 name = "hostkeeper-steps"
 version = "0.1.0"
 dependencies = [
+ "hostkeeper-config",
  "hostkeeper-hook",
  "hostkeeper-testkit",
  "rustix",
