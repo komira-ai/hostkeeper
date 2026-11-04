@@ -526,3 +526,52 @@ fn a_pki_directory_debug_shows_its_root_and_owner() {
         "PkiDir { root: \"/srv/pki\", owner: 7, .. }"
     );
 }
+
+/// Catches recovery following a link out of the pki directory: with `pending/` or a generation
+/// already a link when the store opens, the open is refused and nothing outside is removed,
+/// neither a leftover temporary key nor a key equal to the current generation's.
+#[test]
+fn recovery_does_not_follow_a_link_out_of_the_tree() {
+    // `pending/` links to a directory holding a temporary key.
+    let world = World::new("pending-link-tmp");
+    drop(world.open());
+    let outside = world.dir.path().join("outside");
+    fs::create_dir(&outside).expect("outside");
+    fs::write(outside.join("key.tmp"), "theirs").expect("key.tmp");
+    symlink(&outside, world.pki().join("pending")).expect("link");
+    let refused = world.try_open().err().expect("a link");
+    assert!(
+        matches!(&refused, Error::Store(StoreError::NotPrivate(p)) if *p == world.pki().join("pending")),
+        "{refused:?}"
+    );
+    assert_eq!(fs::read(outside.join("key.tmp")).expect("kept"), b"theirs");
+
+    // `pending/` links to a directory holding a key equal to the current generation's.
+    let world = World::new("pending-link-key");
+    drop(world.enrolled());
+    let pki = world.pki();
+    let outside = world.dir.path().join("outside");
+    fs::create_dir(&outside).expect("outside");
+    fs::copy(pki.join("gen-1/key"), outside.join("key")).expect("copy");
+    fs::remove_dir(pki.join("pending")).expect("rmdir");
+    symlink(&outside, pki.join("pending")).expect("link");
+    assert!(world.try_open().is_err(), "a link");
+    assert_eq!(
+        fs::read(outside.join("key")).expect("kept"),
+        fs::read(pki.join("gen-1/key")).expect("key")
+    );
+
+    // A generation links to a directory outside, without `COMPLETE`.
+    let world = World::new("generation-link");
+    drop(world.open());
+    let outside = world.dir.path().join("outside");
+    fs::create_dir(&outside).expect("outside");
+    fs::write(outside.join("cert.pem"), "theirs").expect("cert");
+    symlink(&outside, world.pki().join("gen-2")).expect("link");
+    let refused = world.try_open().err().expect("a link");
+    assert!(
+        matches!(&refused, Error::Store(StoreError::NotPrivate(p)) if *p == world.pki().join("gen-2")),
+        "{refused:?}"
+    );
+    assert_eq!(fs::read(outside.join("cert.pem")).expect("kept"), b"theirs");
+}

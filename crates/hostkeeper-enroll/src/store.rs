@@ -24,7 +24,8 @@
 //! they are used.
 //!
 //! Opening the store first reads `SCHEMA`, so a newer layout is refused before anything in it is
-//! touched. It then takes the lock and finishes or discards what a crash left: a generation
+//! touched. It then takes the lock, checks `pending/` and every generation directory as above
+//! before it looks inside any of them, and finishes or discards what a crash left: a generation
 //! without `COMPLETE` is removed, `current` is pointed at the newest complete generation (or
 //! removed when there is none), and a pending key is removed only when it reads back equal to the
 //! newest generation's key (its enrollment finished). Any other pending key, and any key that
@@ -360,11 +361,17 @@ impl PkiDir {
 
     /// Finishes or discards what a crash left; see the module documentation.
     fn recover(&self) -> Result<(), StoreError> {
+        // Nothing inside `pending/` or a generation is touched before it is checked to be the
+        // daemon's own directory, so a link can never lead a removal out of the tree.
+        if fs::symlink_metadata(self.pending_dir()).is_ok() {
+            self.own_dir(&self.pending_dir())?;
+        }
         remove_file_if_present(&self.root.join(CURRENT_TMP))?;
         remove_file_if_present(&self.pending_dir().join(tmp_name(KEY)))?;
         let mut newest = None;
         for number in self.generations()? {
             let dir = self.generation_dir(number);
+            self.check_own(&dir, true)?;
             if dir.join(COMPLETE).is_file() {
                 newest = Some(number);
             } else {
@@ -378,8 +385,8 @@ impl PkiDir {
         let pending = self.pending_dir().join(KEY);
         if let Some(newest) = newest
             && let (Ok(held), Ok(waiting)) = (
-                fs::read(self.generation_dir(newest).join(KEY)),
-                fs::read(&pending),
+                self.read_key(&self.generation_dir(newest).join(KEY)),
+                self.read_key(&pending),
             )
             && held == waiting
         {

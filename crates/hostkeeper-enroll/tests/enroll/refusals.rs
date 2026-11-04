@@ -595,3 +595,40 @@ fn a_certificate_with_a_repeated_extension_is_refused() {
     });
     assert_eq!(refusal(&refused), Refusal::NoClientAuth);
 }
+
+/// Catches a critical subject alternative name being accepted although the daemon never reads
+/// it: one whose payload is not GeneralNames (DER NULL), and one repeated, are each refused; a
+/// proper one that is not critical is accepted.
+#[test]
+fn a_critical_subject_alternative_name_is_refused() {
+    use x509_cert::der::asn1::{Ia5String, OctetString};
+    use x509_cert::der::oid::db::rfc5280::ID_CE_SUBJECT_ALT_NAME;
+    use x509_cert::ext::pkix::SubjectAltName;
+    use x509_cert::ext::pkix::name::GeneralName;
+
+    let null = || Extension {
+        extn_id: ID_CE_SUBJECT_ALT_NAME,
+        critical: true,
+        extn_value: OctetString::new(vec![0x05, 0x00]).expect("DER NULL"),
+    };
+    let expected = Refusal::CriticalExtension(ID_CE_SUBJECT_ALT_NAME.to_string());
+    let refused = first_refusal("san-null", move |ca: &Ca, args: &Args| {
+        with_extensions(ca, args, vec![null(), eku(&[ID_KP_CLIENT_AUTH])])
+    });
+    assert_eq!(refusal(&refused), expected);
+    let refused = first_refusal("san-twice", move |ca: &Ca, args: &Args| {
+        with_extensions(ca, args, vec![null(), null(), eku(&[ID_KP_CLIENT_AUTH])])
+    });
+    assert_eq!(refusal(&refused), expected);
+
+    let world = issuing("san-plain", |ca: &Ca, args: &Args| {
+        let name = Ia5String::new("web-1").expect("a name");
+        let san = SubjectAltName(vec![GeneralName::DnsName(name)]);
+        with_extensions(ca, args, vec![extension(&san), eku(&[ID_KP_CLIENT_AUTH])])
+    });
+    let mut enroller = world.open();
+    assert_eq!(enroller.run_once().expect("post"), Outcome::Pending);
+    world.coordinator().approve(HOST);
+    let outcome = enroller.run_once().expect("enrolled");
+    assert!(matches!(outcome, Outcome::Enrolled(_)), "{outcome:?}");
+}

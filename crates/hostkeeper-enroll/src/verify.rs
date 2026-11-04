@@ -12,7 +12,8 @@
 //! - its subject is exactly `host:<id>`;
 //! - it is not a CA, each of the extensions read here decodes and appears once, every
 //!   extension it marks critical is one checked here (basic constraints,
-//!   key usage, extended key usage, subject alternative name), a key usage it carries allows
+//!   key usage and extended key usage, which are decoded; a critical subject alternative name
+//!   is refused, because the daemon does not read it), a key usage it carries allows
 //!   digital signatures, and its extended key usage allows client authentication.
 //!
 //! [`verify`] is [`check`] and the validity window on the wall clock.
@@ -26,8 +27,7 @@ use p256::pkcs8::DecodePublicKey;
 use sha2::{Digest, Sha256};
 use x509_cert::Certificate;
 use x509_cert::der::oid::db::rfc5280::{
-    ID_CE_BASIC_CONSTRAINTS, ID_CE_EXT_KEY_USAGE, ID_CE_KEY_USAGE, ID_CE_SUBJECT_ALT_NAME,
-    ID_KP_CLIENT_AUTH,
+    ID_CE_BASIC_CONSTRAINTS, ID_CE_EXT_KEY_USAGE, ID_CE_KEY_USAGE, ID_KP_CLIENT_AUTH,
 };
 use x509_cert::der::oid::db::rfc5912::ECDSA_WITH_SHA_256;
 use x509_cert::der::{DecodePem, Encode};
@@ -172,7 +172,6 @@ fn check_usage(leaf: &Certificate) -> Result<(), Refusal> {
         ID_CE_BASIC_CONSTRAINTS,
         ID_CE_KEY_USAGE,
         ID_CE_EXT_KEY_USAGE,
-        ID_CE_SUBJECT_ALT_NAME,
     ];
     let extensions = tbs.extensions().map_or(&[][..], Vec::as_slice);
     if let Some(unknown) = extensions
