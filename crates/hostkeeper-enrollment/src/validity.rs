@@ -58,9 +58,12 @@ impl Window {
     }
 }
 
-/// `secs` after the epoch, when it is before the year 10000 (the `time` crate's range without
-/// its `large-dates` feature).
+/// `secs` after the epoch, when it is before the year 10000: a certificate's GeneralizedTime
+/// has four digits of year. The bound is checked here, not left to the `time` crate, whose
+/// range grows past 9999 when any crate of the build turns on its `large-dates` feature.
 fn to_time(secs: u64) -> Option<OffsetDateTime> {
     let secs = i64::try_from(secs).ok()?;
-    OffsetDateTime::from_unix_timestamp(secs).ok()
+    OffsetDateTime::from_unix_timestamp(secs)
+        .ok()
+        .filter(|time| time.year() <= 9999)
 }
