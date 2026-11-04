@@ -36,9 +36,9 @@ const PLACEHOLDERS: [(&str, &str, &str); 7] = [
     (
         "SIGNER_WORKFLOW",
         "trusted_signers.workflow",
-        "\".github/workflows/release.yml\"",
+        "\".github/workflows/artifacts.yml\"",
     ),
-    ("SIGNER_REFS", "trusted_signers.refs", "\"refs/tags/*\""),
+    ("SIGNER_REFS", "trusted_signers.refs", "\"refs/heads/main\""),
     (
         "SIGNER_HOSTED_RUNNER",
         "trusted_signers.hosted_runner",
@@ -122,8 +122,8 @@ fn config_template_loads_once_placeholders_are_filled() {
         config.trusted_signers,
         TrustedSigners {
             organisation: "example-org".to_owned(),
-            workflow: ".github/workflows/release.yml".to_owned(),
-            refs: vec!["refs/tags/*".to_owned()],
+            workflow: ".github/workflows/artifacts.yml".to_owned(),
+            refs: vec!["refs/heads/main".to_owned()],
             hosted_runner: true,
         }
     );
