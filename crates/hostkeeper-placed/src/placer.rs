@@ -136,6 +136,7 @@ impl<'a> Placer<'a> {
     /// record itself (the tombstone of uninstall) holds it from its read to its write.
     pub fn lock(&self) -> Result<PlacedLock, PlacedError> {
         let path = self.roots.lock_file();
+        let host = self.fs.host_path(&path);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -143,7 +144,7 @@ impl<'a> Placer<'a> {
             .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(self.fs.host_path(&path))
+            .open(&host)
             .map_err(io_at("open", &path))?;
         file.try_lock().map_err(|e| PlacedError::Locked {
             path,
@@ -151,7 +152,7 @@ impl<'a> Placer<'a> {
         })?;
         Ok(PlacedLock {
             _file: file,
-            path: self.fs.host_path(&path),
+            path: host,
         })
     }
 
