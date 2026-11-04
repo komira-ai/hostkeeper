@@ -355,6 +355,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-placed"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-config",
+ "hostkeeper-testkit",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-proto"
 version = "0.1.0"
 dependencies = [
