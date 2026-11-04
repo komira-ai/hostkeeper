@@ -31,6 +31,9 @@ p256 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
 # The protobuf runtime of the code hostkeeper-proto generates, and the descriptor types its tests read.
 prost = "0.14.4"
 prost-types = "0.14.4"
+# The connection the tests of hostkeeper-daemon open to its admin server over an in-process pipe
+# (`TokioIo`); dev-dependency only.
+hyper-util = { version = "0.1.21", default-features = false }
 # Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests.
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's build script and tests.
@@ -49,17 +52,25 @@ tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
 # The `--params` file, the daemon config and the manifest are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
+# The daemon's runtime: the admin socket's server (hostkeeper-daemon). Members add the features
+# they use.
+tokio = { version = "1.54.1", default-features = false }
+# The admin socket's listener as a stream of connections (hostkeeper-daemon).
+tokio-stream = { version = "0.1.19", default-features = false }
+# gRPC: the service traits and clients hostkeeper-proto generates. Code generation only here: no
+# transport and no TLS. hostkeeper-daemon adds `server` for its admin socket (and `channel` in its
+# tests, for a client).
+tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
+tonic-prost = "0.14.6"
+tonic-prost-build = "0.14.6"
+# `service_fn`, the connector of the tests' gRPC client in hostkeeper-daemon; dev-dependency only.
+tower = { version = "0.5.3", default-features = false }
 # The package fetch's HTTPS client (hostkeeper-package): blocking, rustls with the ring provider and
 # the root certificates its caller gives it. No default features: no gzip, no cookies, no SOCKS,
 # and no webpki-roots (whose CDLA licence deny.toml does not allow). The ring provider is ureq's
 # `_ring` feature, which its public `rustls` feature turns on together with webpki-roots; a
 # feature with a leading underscore is not covered by semver, so the version is exact.
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls-no-provider", "_ring"] }
-# gRPC: the service traits and clients hostkeeper-proto generates. Code generation only: no
-# transport, so the crate pulls in no server, no TLS and no runtime.
-tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
-tonic-prost = "0.14.6"
-tonic-prost-build = "0.14.6"
 # The certificate request hostkeeper-enroll sends and the certificates it checks; `builder` makes the
 # PKCS#10 request (and the test CA's certificates).
 x509-cert = { version = "0.3.0", features = ["builder", "pem"] }
