@@ -10,8 +10,8 @@ fn spec() -> BundleSpec<'static> {
     BundleSpec {
         organisation: "example-org",
         repository: "tool",
-        workflow: "release.yml",
-        source_ref: "refs/tags/v1.2.3",
+        workflow: ".github/workflows/artifacts.yml",
+        source_ref: "refs/heads/main",
         certificate_commit: COMMIT,
         provenance_commit: COMMIT,
         runner: "github-hosted",
@@ -119,7 +119,7 @@ fn the_source_ref_is_read_from_its_fulcio_extension() {
     let cert = certificate(&spec());
     assert_eq!(
         utf8_extension(&cert, &fulcio(SOURCE_REPOSITORY_REF)),
-        Some("refs/tags/v1.2.3")
+        Some("refs/heads/main")
     );
     assert_eq!(
         utf8_extension(&cert, &fulcio(SOURCE_REPOSITORY_DIGEST)),
@@ -127,7 +127,7 @@ fn the_source_ref_is_read_from_its_fulcio_extension() {
     );
     assert_eq!(
         utf8_extension(&cert, &fulcio(BUILD_SIGNER_URI)),
-        Some("https://github.com/example-org/tool/release.yml@refs/tags/v1.2.3")
+        Some("https://github.com/example-org/tool/.github/workflows/artifacts.yml@refs/heads/main")
     );
     assert_eq!(
         utf8_extension(&cert, &fulcio(RUNNER_ENVIRONMENT)),

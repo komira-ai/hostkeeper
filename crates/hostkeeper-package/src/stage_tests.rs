@@ -249,10 +249,7 @@ fn the_deadline_is_checked_on_every_chunk_and_at_the_end() {
 fn a_network_error_or_an_unexplained_stop_is_a_fault() {
     let refused: crate::testing::Serve =
         Box::new(|_: &mut dyn Sink, _: &Limit| Err(NetError::Connect));
-    assert!(matches!(
-        fault_of("stage-net", refused, plain),
-        Fault::Net
-    ));
+    assert!(matches!(fault_of("stage-net", refused, plain), Fault::Net));
     let claims: crate::testing::Serve = Box::new(|_: &mut dyn Sink, _: &Limit| Ok(Got::Stopped));
     assert!(matches!(
         fault_of("stage-unexplained", claims, plain),

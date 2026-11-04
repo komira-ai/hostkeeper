@@ -26,7 +26,7 @@ fn read(relative: &str) -> String {
 }
 
 /// The crate's non-test sources, `(file name, text)`, sorted: every `src/*.rs` but the
-/// `*_tests.rs` files.
+/// `*_tests.rs` files and `testing.rs`, the test support compiled only with `cfg(test)`.
 fn sources() -> Vec<(String, String)> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut out: Vec<(String, String)> = std::fs::read_dir(&dir)
@@ -38,7 +38,9 @@ fn sources() -> Vec<(String, String)> {
                 .to_string_lossy()
                 .into_owned()
         })
-        .filter(|name| name.ends_with(".rs") & !name.ends_with("_tests.rs"))
+        .filter(|name| {
+            name.ends_with(".rs") & !name.ends_with("_tests.rs") & (name != "testing.rs")
+        })
         .map(|name| {
             let text = read(&format!("src/{name}"));
             (name, text)

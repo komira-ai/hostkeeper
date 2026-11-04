@@ -126,8 +126,8 @@ pub(crate) fn config(channel: &str, ca: &str) -> DaemonConfig {
          release_channel = \"{channel}\"\n\
          [trusted_signers]\n\
          organisation = \"example-org\"\n\
-         workflow = \"release.yml\"\n\
-         refs = [\"refs/tags/*\"]\n\
+         workflow = \".github/workflows/artifacts.yml\"\n\
+         refs = [\"refs/heads/main\"]\n\
          hosted_runner = true\n"
     );
     DaemonConfig::parse(&text).expect("a test config")
@@ -135,7 +135,7 @@ pub(crate) fn config(channel: &str, ca: &str) -> DaemonConfig {
 
 /// `hex` as a [`Sha256Hex`].
 pub(crate) fn digest(hex: &str) -> Sha256Hex {
-    config("https://releases.example", hex).ca_sha256
+    Sha256Hex::parse(hex).expect("a SHA-256")
 }
 
 /// The order of `service` at `version` for an archive whose bytes are `bytes`.

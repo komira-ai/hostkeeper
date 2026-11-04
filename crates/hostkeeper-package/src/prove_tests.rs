@@ -15,14 +15,14 @@ const ARCHIVE: &[u8] = b"the bytes of tierstore 1.5.0";
 const ARCHIVE_URL: &str = "https://releases.example/tierstore/tierstore-1.5.0.tar.zst";
 const BUNDLE_URL: &str = "https://releases.example/tierstore/tierstore-1.5.0.tar.zst.sigstore.json";
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-const REF: &str = "refs/tags/v1.5.0";
+const REF: &str = "refs/heads/main";
 
 /// A bundle that names `COMMIT` and `REF` and lists `sha256`.
 fn bundle_for(sha256: &str, commit: &str) -> String {
     bundle_json(&BundleSpec {
         organisation: "example-org",
         repository: "tierstore",
-        workflow: "release.yml",
+        workflow: ".github/workflows/artifacts.yml",
         source_ref: REF,
         certificate_commit: commit,
         provenance_commit: commit,
@@ -79,7 +79,11 @@ fn prove_in(
 ) -> Result<VerifiedArchive, PackageFailure> {
     let order = order("tierstore", "1.5.0", ARCHIVE);
     let staged = staged(fetcher, clock, root, &order);
-    let signers = signers("example-org", "release.yml", &["refs/tags/*"]);
+    let signers = signers(
+        "example-org",
+        ".github/workflows/artifacts.yml",
+        &["refs/heads/main"],
+    );
     let env = ProveEnv {
         fetcher,
         verifier,
@@ -150,7 +154,11 @@ fn a_verified_package_returns_the_archive_commit_and_ref() {
     );
     assert_eq!(
         seen[0].signers,
-        signers("example-org", "release.yml", &["refs/tags/*"])
+        signers(
+            "example-org",
+            ".github/workflows/artifacts.yml",
+            &["refs/heads/main"]
+        )
     );
     assert!(seen[0].files_existed);
     let name = verified
@@ -303,7 +311,11 @@ fn the_attestation_deadline_is_attestation_timeout_secs_on_the_injected_clock() 
     let order = order("tierstore", "1.5.0", ARCHIVE);
     let staged = staged(&fetcher, &clock, scratch.path(), &order);
     clock.advance(5);
-    let signers = signers("example-org", "release.yml", &["refs/tags/*"]);
+    let signers = signers(
+        "example-org",
+        ".github/workflows/artifacts.yml",
+        &["refs/heads/main"],
+    );
     let env = ProveEnv {
         fetcher: &fetcher,
         verifier: &verifier,
@@ -356,7 +368,11 @@ fn an_older_version_than_the_running_one_is_not_refused_here() {
         scratch.path(),
         &order("tierstore", "0.0.1", old),
     );
-    let signers = signers("example-org", "release.yml", &["refs/tags/*"]);
+    let signers = signers(
+        "example-org",
+        ".github/workflows/artifacts.yml",
+        &["refs/heads/main"],
+    );
     let env = ProveEnv {
         fetcher: &fetcher,
         verifier: &verifier,

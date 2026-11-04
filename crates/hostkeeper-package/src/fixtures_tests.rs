@@ -34,7 +34,7 @@ const ARCHIVE_SHA256: &str = "0945ab7be8afba90be37c6f80edcac4bc03ef09e31a0c4d616
 const OTHER_SHA256: &str = "06731cc028fadef66cec9b104b1753ff425ebec9c04d181fd36cc8d5ceb679fc";
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const OTHER_COMMIT: &str = "89abcdef0123456789abcdef0123456789abcdef";
-const WORKFLOW: &str = ".github/workflows/release.yml";
+const WORKFLOW: &str = ".github/workflows/artifacts.yml";
 
 /// One fixture: its file, what it was made from, the reason the test expects (the README's last
 /// column), and how many times `gh` runs for it.
@@ -50,7 +50,7 @@ fn good() -> BundleSpec<'static> {
         organisation: "example-org",
         repository: "tool-a",
         workflow: WORKFLOW,
-        source_ref: "refs/tags/v1.2.3",
+        source_ref: "refs/heads/main",
         certificate_commit: COMMIT,
         provenance_commit: COMMIT,
         runner: "github-hosted",
@@ -81,7 +81,7 @@ fn fixtures() -> Vec<Fixture> {
         fixture(
             "other-workflow.sigstore.json",
             BundleSpec {
-                workflow: ".github/workflows/nightly.yml",
+                workflow: ".github/workflows/release.yml",
                 ..good()
             },
             "gh: --cert-identity-regex",
@@ -108,10 +108,10 @@ fn fixtures() -> Vec<Fixture> {
         fixture(
             "disallowed-ref.sigstore.json",
             BundleSpec {
-                source_ref: "refs/heads/main",
+                source_ref: "refs/tags/v1.2.3",
                 ..good()
             },
-            "the ref refs/heads/main matches none of the trusted signer's refs",
+            "the ref refs/tags/v1.2.3 matches none of the trusted signer's refs",
             0,
         ),
         fixture(
@@ -132,7 +132,7 @@ fn fixtures_dir() -> PathBuf {
 
 /// The configured signer of the fixtures' README.
 fn configured() -> hostkeeper_config::daemon::TrustedSigners {
-    signers("example-org", WORKFLOW, &["refs/tags/*"])
+    signers("example-org", WORKFLOW, &["refs/heads/main"])
 }
 
 /// `text` with each `\` escape undone.
@@ -415,7 +415,7 @@ fn prove_fixture(file: &str, service: &str) -> (Result<String, PackageFailure>, 
 #[test]
 fn no_repository_to_service_comparison_exists() {
     let (proven, args) = prove_fixture("good.sigstore.json", "service-b");
-    assert_eq!(proven, Ok("refs/tags/v1.2.3".to_owned()));
+    assert_eq!(proven, Ok("refs/heads/main".to_owned()));
     assert!(args.iter().any(|arg| arg == "--owner"), "{args:?}");
     let named = args
         .iter()

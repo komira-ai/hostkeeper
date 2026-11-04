@@ -66,10 +66,10 @@ fn sample() -> Case {
     Case::new(
         signers(
             "example-org",
-            ".github/workflows/release.yml",
-            &["refs/tags/*"],
+            ".github/workflows/artifacts.yml",
+            &["refs/heads/main"],
         ),
-        "refs/tags/v1.2.3",
+        "refs/heads/main",
     )
 }
 
@@ -195,11 +195,11 @@ fn gh_is_asked_for_exactly_the_configured_signer() {
         "--owner",
         "example-org",
         "--cert-identity-regex",
-        r"^https://github\.com/example-org/[^/]+/\.github/workflows/release\.yml@",
+        r"^https://github\.com/example-org/[^/]+/\.github/workflows/artifacts\.yml@",
         "--cert-oidc-issuer",
         "https://token.actions.githubusercontent.com",
         "--source-ref",
-        "refs/tags/v1.2.3",
+        "refs/heads/main",
         "--source-digest",
         COMMIT,
         "--predicate-type",
@@ -265,18 +265,18 @@ fn gh_gets_a_fixed_environment_and_a_dead_proxy() {
 /// Catches a ref outside the config reaching `gh`, or only the first glob being consulted.
 #[test]
 fn each_configured_ref_pattern_is_matched_and_a_ref_outside_them_is_rejected_without_running_gh() {
-    let tag = sample();
-    let rig_tag = rig(exit_zero);
-    rig_tag.verifier.verify(&tag.request()).expect("attested");
-    assert_eq!(rig_tag.spawns.borrow().len(), 1);
-    assert_eq!(rig_tag.spawns.borrow()[0].args, expected_args(&tag));
+    let main = sample();
+    let rig_main = rig(exit_zero);
+    rig_main.verifier.verify(&main.request()).expect("attested");
+    assert_eq!(rig_main.spawns.borrow().len(), 1);
+    assert_eq!(rig_main.spawns.borrow()[0].args, expected_args(&main));
 
-    for outside in ["refs/heads/main", "refs/tags"] {
+    for outside in ["refs/tags/v1.2.3", "refs/heads/topic", "refs/heads"] {
         let case = Case::new(
             signers(
                 "example-org",
-                ".github/workflows/release.yml",
-                &["refs/tags/*"],
+                ".github/workflows/artifacts.yml",
+                &["refs/heads/main"],
             ),
             outside,
         );
@@ -290,12 +290,12 @@ fn each_configured_ref_pattern_is_matched_and_a_ref_outside_them_is_rejected_wit
         assert_eq!(rig_out.spawns.borrow().len(), 0);
     }
 
-    for allowed in ["refs/heads/main", "refs/tags/v1"] {
+    for allowed in ["refs/heads/main", "refs/heads/release/1"] {
         let case = Case::new(
             signers(
                 "example-org",
-                ".github/workflows/release.yml",
-                &["refs/heads/main", "refs/tags/*"],
+                ".github/workflows/artifacts.yml",
+                &["refs/heads/main", "refs/heads/release/*"],
             ),
             allowed,
         );
@@ -359,12 +359,12 @@ fn the_workflow_value_is_escaped_not_interpolated() {
     assert_eq!(quote_meta("release-1_a/b"), "release-1_a/b");
     assert_eq!(quote_meta(""), "");
 
-    let both = signers("a.b", "w[1]*.yml", &["refs/tags/*"]);
+    let both = signers("a.b", "w[1]*.yml", &["refs/heads/main"]);
     assert_eq!(
         signer_identity(&both),
         r"^https://github\.com/a\.b/[^/]+/w\[1\]\*\.yml@"
     );
-    let everything = signers(REGEX_META, REGEX_META, &["refs/tags/*"]);
+    let everything = signers(REGEX_META, REGEX_META, &["refs/heads/main"]);
     assert_eq!(
         signer_identity(&everything),
         format!("^https://github\\.com/{escaped}/[^/]+/{escaped}@")

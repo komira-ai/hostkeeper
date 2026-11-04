@@ -32,15 +32,15 @@ A bundle is one line of JSON: `mediaType` (bundle v0.3), `verificationMaterial.c
 `good.tar.zst` is 39 bytes of text, not a zstd archive: this crate never opens an archive.
 
 The good specification: organisation `example-org`, repository `tool-a`, workflow
-`.github/workflows/release.yml`, ref `refs/tags/v1.2.3`, commit
+`.github/workflows/artifacts.yml`, ref `refs/heads/main`, commit
 `0123456789abcdef0123456789abcdef01234567` in both the certificate and the provenance, runner
 `github-hosted`, subject `good.tar.zst` with the SHA-256 of `good.tar.zst`. Each bad one changes
 one thing.
 
 ## The fixtures
 
-The tests are configured with the trusted signer `example-org`, `.github/workflows/release.yml`,
-refs `refs/tags/*`, hosted runner required, for the service `service-b` (so the good bundle, from
+The tests are configured with the trusted signer `example-org`, `.github/workflows/artifacts.yml`,
+refs `refs/heads/main`, hosted runner required, for the service `service-b` (so the good bundle, from
 the repository `tool-a`, also shows that no repository is compared with the service). The last
 column is the reason the test expects, exactly.
 
@@ -48,8 +48,8 @@ column is the reason the test expects, exactly.
 |---|---|---|
 | `good.sigstore.json` | a good attestation of `good.tar.zst` | accepted |
 | `other-bytes.sigstore.json` | an attestation of other bytes (subject: the SHA-256 of `other bytes than the archive\n`): the channel serves a bundle that is not this archive's; refused before `gh` runs | the digest check before gh |
-| `other-workflow.sigstore.json` | signed by `.github/workflows/nightly.yml`, a workflow other than the configured one | gh: --cert-identity-regex |
+| `other-workflow.sigstore.json` | signed by `.github/workflows/release.yml`, a workflow other than the configured one | gh: --cert-identity-regex |
 | `other-organisation.sigstore.json` | from the repository `other-org/tool-a`, outside the configured organisation | gh: --owner |
 | `self-hosted.sigstore.json` | built on a `self-hosted` runner | gh: --deny-self-hosted-runners |
-| `disallowed-ref.sigstore.json` | made on `refs/heads/main`, which no configured ref glob matches; refused before `gh` runs | the ref refs/heads/main matches none of the trusted signer's refs |
+| `disallowed-ref.sigstore.json` | made on the tag `refs/tags/v1.2.3`, which no configured ref matches; refused before `gh` runs | the ref refs/tags/v1.2.3 matches none of the trusted signer's refs |
 | `commit-differs.sigstore.json` | the provenance names the commit `89abcdef0123456789abcdef0123456789abcdef`, the certificate another | gh: --source-digest |

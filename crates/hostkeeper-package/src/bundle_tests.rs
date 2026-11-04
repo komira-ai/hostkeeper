@@ -16,8 +16,8 @@ fn spec() -> BundleSpec<'static> {
     BundleSpec {
         organisation: "example-org",
         repository: "tool",
-        workflow: "release.yml",
-        source_ref: "refs/tags/v1.2.3",
+        workflow: ".github/workflows/artifacts.yml",
+        source_ref: "refs/heads/main",
         certificate_commit: COMMIT,
         provenance_commit: COMMIT,
         runner: "github-hosted",
@@ -66,7 +66,7 @@ fn a_bundle_yields_its_commit_ref_and_subjects() {
         facts,
         Facts {
             commit: CommitId::new(COMMIT).expect("a commit"),
-            source_ref: SourceRef::new("refs/tags/v1.2.3").expect("a ref"),
+            source_ref: SourceRef::new("refs/heads/main").expect("a ref"),
             subjects: vec![DIGEST.to_owned()],
         }
     );
@@ -101,7 +101,7 @@ fn the_certificate_is_read_from_the_older_chain_location() {
         "dsseEnvelope": { "payload": payload }
     });
     let facts = read(chain.to_string().as_bytes()).expect("a chain bundle");
-    assert_eq!(facts.source_ref.as_str(), "refs/tags/v1.2.3");
+    assert_eq!(facts.source_ref.as_str(), "refs/heads/main");
 
     let both = json!({
         "verificationMaterial": {
