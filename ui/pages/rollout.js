@@ -118,12 +118,29 @@ function forceReply(reply) {
     + ".";
 }
 
+// The force form and its phase, kept in this module rather than in one rendering of the page:
+// a page drawn again (a refresh after another action, a visit to another page and back) shows the
+// same form, and a force still in flight stays in flight there, so no second one can be counted
+// or sent before the first is answered.
+const force = {
+  force: { service: "", version: "", reason: "", targetKind: "fleet", role: "", hosts: "", includeHeld: false },
+  phase: "idle",
+  attempt: 0,
+  prepared: null,
+  typed: "",
+};
+
+// The newest rendering of the page: its context and the function that draws it again. What a
+// force's answer says is drawn and reported there, whichever rendering sent it.
+let latest = null;
+
 // The force form moves through phases: `idle`; `counting`, while Hosts.List counts the hosts;
 // `confirm`, while the dialog waits for the typed number; and `sending`, from the click on Force
 // until its answer. Each count is an attempt with its own number: a count that finishes after it
 // was cancelled or started again changes nothing. Cancel is offered while counting and
 // confirming, never once the force is sent: a sent force cannot be called back.
-function forceSection(ctx, services, state, redraw) {
+function forceSection(ctx, services, state) {
+  const redraw = () => latest.redraw();
   const form = state.force;
   const reset = () => {
     state.attempt += 1;
@@ -152,18 +169,21 @@ function forceSection(ctx, services, state, redraw) {
       if (error.code === "NETWORK" || error.code === "BAD_REPLY") {
         reset();
         redraw();
-        return `The force may have been sent (${describeError(error)}). Look at this page and the audit`
-          + " log before forcing again; a new force needs a new count.";
+        latest.ctx.report(`The force may have been sent (${describeError(error)}). Look at this page and the`
+          + " audit log before forcing again; a new force needs a new count.");
+        return undefined;
       }
       state.phase = "confirm";
       state.typed = "";
       redraw();
-      return `Not forced: ${describeError(error)}. Type ${prepared.count} again to retry.`;
+      latest.ctx.report(`Not forced: ${describeError(error)}. Type ${prepared.count} again to retry.`);
+      return undefined;
     }
     reset();
     redraw();
-    ctx.refresh();
-    return forceReply(reply);
+    latest.ctx.report(forceReply(reply));
+    latest.ctx.refresh();
+    return undefined;
   };
   const confirmation = () => {
     if (state.phase === "counting") {
@@ -325,18 +345,12 @@ export async function render(ctx) {
     return errorView("Rollout", error);
   }
   const services = list(status, "services");
-  const state = {
-    force: { service: "", version: "", reason: "", targetKind: "fleet", role: "", hosts: "", includeHeld: false },
-    phase: "idle",
-    attempt: 0,
-    prepared: null,
-    typed: "",
-  };
   const page = () => h("section", { class: "page" },
     h("h2", {}, "Rollout"),
     h("p", { class: "note" }, "CI sets the desired version; this page does not."),
     status.quiet === true ? h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.") : null,
     services.map((svc) => serviceSection(ctx, svc)),
-    forceSection(ctx, services, state, () => ctx.show(page())));
+    forceSection(ctx, services, force));
+  latest = { ctx, redraw: () => ctx.show(page()) };
   return page();
 }

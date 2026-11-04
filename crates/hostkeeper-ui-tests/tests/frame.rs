@@ -6,7 +6,7 @@ mod support;
 
 use serde_json::{Value, json};
 use support::Ui;
-use support::pages::{m, status_reply};
+use support::pages::{hosts_reply, m, status_reply};
 
 /// A driver that starts the app in a fake document kept as `globalThis.doc`, signs in with
 /// `token` through the form, and opens `page` from the page list.
@@ -272,4 +272,98 @@ return {
             "target": [false, true, false],
         })
     );
+}
+
+#[test]
+fn a_force_in_flight_survives_a_refresh_and_a_visit_elsewhere() {
+    // Catches: a force whose sending state lives in one rendering of the page, so that a refresh
+    // after another action (or a visit to another page and back) shows an idle form from which a
+    // second force can be counted and sent before the first is answered.
+    let mut ui = Ui::start();
+    // The Fleet page at sign-in, the Rollout page, its refresh after Mark bad, the Fleet page
+    // again, the Rollout page again and its refresh after the force: six Status calls; the
+    // Fleet page twice and the count: three Hosts.List calls.
+    for _ in 0..6 {
+        ui.reply(&m("Releases/Status"), status_reply());
+    }
+    for _ in 0..3 {
+        ui.reply(&m("Hosts/List"), hosts_reply());
+    }
+    ui.reply(&m("Releases/MarkBad"), json!({}));
+    ui.hold(
+        &m("Releases/Force"),
+        200,
+        &json!({"targeted": 1}).to_string(),
+    );
+    ui.run(&start("tok_a", "rollout"));
+    ui.run(&steps(
+        r#"
+fire(domNamed(doc.root, "force-service"), "change", { target: { value: "api" } });
+type("force-version", "1.3.0");
+type("force-reason", "roll back");
+fire(domNamed(doc.root, "force-target"), "change", { target: { value: "role" } });
+type("force-role", "web");
+click("force-prepare");"#,
+    ));
+    ui.run(&steps(
+        r#"
+type("force-count", "1");
+click("force-send");"#,
+    ));
+    ui.run(&steps(
+        r#"
+type("reason", "bad build");
+type("bad-version", "1.4.0");
+click("mark-bad");"#,
+    ));
+    let refreshed = ui.run(&steps(
+        r#"
+const shown = { text: text(), status: status() };
+click("force-prepare");
+const send = domNamed(doc.root, "force-send");
+return Object.assign(shown, {
+  refused: status(),
+  disabled: send.disabled === true,
+  listeners: Object.keys(send.listeners).length,
+  cancel: elements(doc.root).some((e) => e.attributes["name"] === "force-cancel"),
+});"#,
+    ));
+    assert_eq!(refreshed["status"], "Marked api 1.4.0 bad.");
+    let text = refreshed["text"].as_str().expect("text");
+    assert!(
+        text.contains("Sending the force of api to 1.3.0 on 1 hosts. It cannot be cancelled."),
+        "the refreshed page still shows the force in flight: {text}"
+    );
+    assert_eq!(
+        refreshed["refused"],
+        "A force is being sent: wait for its answer."
+    );
+    assert_eq!(refreshed["disabled"], true);
+    assert_eq!(refreshed["listeners"], 0);
+    assert_eq!(refreshed["cancel"], false);
+    ui.run(&steps(r#"click("page-fleet");"#));
+    ui.run(&steps(r#"click("page-rollout");"#));
+    let back = ui.run(&steps(r#"return text();"#));
+    assert!(
+        back.as_str()
+            .expect("text")
+            .contains("Sending the force of api to 1.3.0 on 1 hosts."),
+        "{back}"
+    );
+    let released = ui.run(&steps(
+        r#"return gatewayRelease("hostkeeper.operator.v1.Releases/Force");"#,
+    ));
+    assert_eq!(released, true);
+    let answered = ui.run(&steps(r#"return { text: text(), status: status() };"#));
+    assert_eq!(answered["status"], "Force sent: 1 hosts ordered.");
+    assert!(
+        !answered["text"]
+            .as_str()
+            .expect("text")
+            .contains("Sending the force"),
+        "{answered}"
+    );
+    assert_eq!(bodies_of(&ui, &m("Releases/Force")).len(), 1);
+    assert_eq!(bodies_of(&ui, &m("Hosts/List")).len(), 3);
+    assert_eq!(bodies_of(&ui, &m("Releases/Status")).len(), 6);
 }
