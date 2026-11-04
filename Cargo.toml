@@ -41,8 +41,10 @@ thiserror = "2.0.21"
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
 # The package fetch's HTTPS client (hostkeeper-package): blocking, rustls with the ring provider and
 # the root certificates its caller gives it. No default features: no gzip, no cookies, no SOCKS,
-# and no webpki-roots (whose CDLA licence deny.toml does not allow).
-ureq = { version = "3.4.2", default-features = false, features = ["rustls-no-provider", "_ring"] }
+# and no webpki-roots (whose CDLA licence deny.toml does not allow). The ring provider is ureq's
+# `_ring` feature, which its public `rustls` feature turns on together with webpki-roots; a
+# feature with a leading underscore is not covered by semver, so the version is exact.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls-no-provider", "_ring"] }
 # gRPC: the service traits and clients hostkeeper-proto generates. Code generation only: no
 # transport, so the crate pulls in no server, no TLS and no runtime.
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }

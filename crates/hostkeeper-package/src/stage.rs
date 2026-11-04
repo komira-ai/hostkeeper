@@ -234,7 +234,8 @@ pub(crate) fn download(job: &Job<'_>, writer: OpenWriter) -> Result<Download, Fa
     }
 }
 
-/// Whether `e` is a full disk (`ENOSPC`).
+/// Whether `e` is a full disk (`ENOSPC`). A quota that is reached (`EDQUOT`) is not: it is
+/// `fetch_failed`, as the design names `ENOSPC` alone for `no_space`.
 pub(crate) fn is_full(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::StorageFull
 }

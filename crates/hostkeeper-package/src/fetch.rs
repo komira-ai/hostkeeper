@@ -79,7 +79,8 @@ pub fn package_url(channel: &HttpsUrl, service: &ServiceName, version: &Version)
 /// nothing to remove.
 ///
 /// The daemon calls this at start for each service directory, and [`fetch_package`] calls it
-/// before each fetch, under the service's lock.
+/// before each fetch. The caller holds the service's lock: a sweep while another fetch of the
+/// same service runs would remove that fetch's staging file.
 pub fn remove_orphan_fetches(packages_root: &Path, service: &ServiceName) -> io::Result<()> {
     let dir = packages_root.join(service.as_str());
     if !stage::is_dir(&dir)? {
@@ -100,7 +101,8 @@ pub fn remove_orphan_fetches(packages_root: &Path, service: &ServiceName) -> io:
 }
 
 /// Downloads the archive `order` names into a staging file in `packages/<service>/`, which it
-/// makes when it is missing. See the module's table for every refusal.
+/// makes when it is missing. See the module's table for every refusal. The caller holds the
+/// service's lock (see [`remove_orphan_fetches`]).
 ///
 /// The deadline is `fetch_timeout_secs` from the start of this call on the injected clock: it is
 /// passed to the fetcher and checked again on every chunk. The connect timeout is 30 s.

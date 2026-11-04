@@ -4,7 +4,8 @@ Synthetic Sigstore bundles for the tests of `hostkeeper-package`, and the tiny a
 They are **not signed**: the certificate holds only what this crate and the tests' fake `gh` read,
 and the DSSE envelope has no signature. No real Sigstore verification runs in the hermetic tests,
 so no Sigstore trusted root was used or captured. A run of the real `gh attestation verify` against
-a real attestation belongs to the privileged workflow (design build order B12 and B15).
+a real attestation belongs to the privileged workflow and the privileged proof of the design's build
+order (section 12.2).
 
 ## How they were made
 

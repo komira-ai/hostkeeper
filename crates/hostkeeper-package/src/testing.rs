@@ -89,7 +89,7 @@ impl Clock for FakeClock {
     fn sleep_secs(&self, secs: u64) {
         self.sleeps.fetch_add(1, Ordering::SeqCst);
         if self.yields {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::yield_now();
         }
         self.advance(secs);
     }
