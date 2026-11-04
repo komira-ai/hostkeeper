@@ -6,6 +6,8 @@
 //!   exit codes as outcomes through [`hostkeeper_hook::next`].
 //! - [`Staged`] is the verified artifact: nothing from a release runs unless the tree still has
 //!   the digest it had when it was verified.
+//! - [`resume_action`] is the table of what becomes of an unfinished update at the daemon's
+//!   start, after a death of the daemon or a reboot, and [`resume`] rewrites the record for it.
 //! - [`DeadMan`] enforces the bound of the running step on a thread of its own.
 //! - [`selfupdate`] is the updater's own update with its fallback, and [`Layout`] the directory
 //!   of versions with `current` and `previous` that it and every package share.
@@ -20,6 +22,7 @@ pub mod clock;
 pub mod deadman;
 pub mod launcher;
 pub mod record;
+pub mod resume;
 pub mod runner;
 pub mod seal;
 pub mod selfupdate;
@@ -27,8 +30,9 @@ pub mod selfupdate;
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
 pub use clock::{Clock, Stamp, SystemClock};
 pub use deadman::{DeadMan, Watch};
-pub use launcher::{LaunchError, StepCall, StepExit, StepLauncher};
-pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore};
+pub use launcher::{AdditiveCall, LaunchError, StepCall, StepExit, StepLauncher};
+pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore, WriteFault};
+pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
 pub use runner::{Bounds, Finished, RunError, StepRunner, UpdateOrder};
 pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
 pub use selfupdate::Layout;

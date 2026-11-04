@@ -46,12 +46,16 @@ only, never from the environment:
 | `--state-dir` | `/var/lib/updater/state` | a directory per service with its step record, params file and held halt generation, and the daemon's lock file `lock` |
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
 | `--admin-socket` | `/run/hostkeeper/admin.sock` | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
+| `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
-(one daemon per state directory), binds the admin socket and serves it. This build has no step
-launcher or package store wired in and no order source yet, so it serves the admin socket's
-`Status` and runs no order.
+(one daemon per state directory) and does its boot work: it reads every step record against the
+host's boot id (kept in `.boot-id` in the state directory), runs each update left unfinished by a
+crash or a reboot to its verdict, restarts the post-success watchers, runs each service's
+`[hook] boot` step from `current`, and only then tells systemd it is ready. It then serves the
+admin socket. This build has no step launcher or package store wired in and no order source yet,
+so it serves the admin socket's `Status` and runs no order.
 
 | exit status | meaning |
 |---|---|
