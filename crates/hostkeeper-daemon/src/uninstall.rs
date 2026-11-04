@@ -313,10 +313,10 @@ fn run_hook(
     release: &Release,
     bound: NonZeroU64,
 ) -> Result<StepExit, Reply> {
-    let store_failed = |error: String| interrupted(Refusal::StoreFailed, error);
     let params = boot_params(&release.manifest, &release.dir, &release.version)
         .map_err(|why| Reply::refused(Refusal::ManifestMismatch, why))?;
-    files::make_private(&ctx.service_dir(service)).map_err(|e| store_failed(text(e)))?;
+    files::make_private(&ctx.service_dir(service))
+        .map_err(|e| interrupted(Refusal::StoreFailed, e))?;
     let store = ctx.store(service);
     let generation = match store.load() {
         Ok(Loaded::Current(rec)) => rec.generation,
@@ -328,7 +328,7 @@ fn run_hook(
         .map_err(|e| interrupted(Refusal::LauncherFailed, e))?;
     store
         .save_params(&params.to_toml())
-        .map_err(|e| store_failed(text(e)))?;
+        .map_err(|e| interrupted(Refusal::StoreFailed, e))?;
     let command = &release.manifest.hook.command;
     let ran = ctx.launcher.run_additive(&AdditiveCall {
         service: service.as_str(),
@@ -349,7 +349,9 @@ fn run_hook(
             format!("{error}; its unit {unit} could not be stopped ({stop})"),
         ),
     })?;
-    store.remove_params().map_err(|e| store_failed(text(e)))?;
+    store
+        .remove_params()
+        .map_err(|e| interrupted(Refusal::StoreFailed, e))?;
     Ok(exit)
 }
 

@@ -434,6 +434,8 @@ fn uninstall_leaves_other_services_placed_paths_and_versions_alone() {
     HaltStore::new(&rig.state)
         .raise(&name("web"), 4)
         .expect("a held halt");
+    // What else a crash may leave in the state directory goes; the held halt stays.
+    fs::write(rig.state.join("web/params.toml.tmp"), "x").expect("a stray file");
     let api_entries: Vec<(PathBuf, Entry)> = rig
         .placed_record()
         .of_service("api")
@@ -475,6 +477,7 @@ fn uninstall_leaves_other_services_placed_paths_and_versions_alone() {
         fs::read_to_string(rig.state.join("web/held-halt")).expect("the held halt"),
         "4\n"
     );
+    assert!(!rig.state.join("web/params.toml.tmp").exists());
 }
 
 /// Catches a tombstone that waits for an order to be finished, or that the start resumes from

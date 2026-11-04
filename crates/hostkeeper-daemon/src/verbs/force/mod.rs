@@ -352,6 +352,7 @@ fn locked<'c>(
     mut guard: Option<ServiceGuard<'c>>,
 ) -> Result<ServiceGuard<'c>, Reply> {
     drop(ctx.watchers.stop(service));
+    let holder = Holder::Package(package.clone());
     loop {
         stop_running(ctx, service)?;
         if let Some(guard) = guard.take() {
@@ -360,11 +361,7 @@ fn locked<'c>(
         match ctx.locks.take_over(service, package.clone()) {
             Ok(guard) => return Ok(guard),
             Err(held) if held.is_force() => {
-                return Err(while_held(
-                    service,
-                    &held,
-                    &Holder::Package(package.clone()),
-                ));
+                return Err(while_held(service, &held, &holder));
             }
             Err(_) => ctx.clock.sleep_secs(FORCE_POLL_SECS),
         }

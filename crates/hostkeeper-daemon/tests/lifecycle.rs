@@ -330,9 +330,11 @@ fn a_tombstone_whose_release_cannot_run_the_hook_is_interrupted() {
         daemon.order(&install("api", "1.0.0", &d(), 1)),
         Reply::Finished { .. }
     ));
+    installed(&rig, &daemon, "db");
     fs::remove_file(rig.packages.join("web/current")).expect("current gone");
+    fs::remove_file(rig.packages.join("db/1.0.0.seal")).expect("the seal gone");
     let mut record = rig.placed_record();
-    for service in ["web", "api"] {
+    for service in ["web", "api", "db"] {
         record
             .uninstalling
             .insert(service.to_owned(), Tombstone::default());
@@ -341,6 +343,7 @@ fn a_tombstone_whose_release_cannot_run_the_hook_is_interrupted() {
     let rows = [
         ("web", Refusal::ReleaseUnreadable),
         ("api", Refusal::UninstallUnsupported),
+        ("db", Refusal::ReleaseUnreadable),
     ];
     for (service, refusal) in rows {
         let reply = daemon.order(&uninstall(service, 1));
@@ -348,11 +351,11 @@ fn a_tombstone_whose_release_cannot_run_the_hook_is_interrupted() {
         assert!(matches!(reply, Reply::Interrupted { .. }), "{reply:?}");
         assert!(rig.packages.join(service).join("1.0.0").exists());
     }
-    assert_eq!(rig.placed_record().uninstalling.len(), 2);
+    assert_eq!(rig.placed_record().uninstalling.len(), 3);
     assert!(rig.launcher.additive_runs().is_empty());
     // The start resumes neither, and says why.
     let report = daemon.boot_pass().expect("the start pass");
-    for service in ["web", "api"] {
+    for service in ["web", "api", "db"] {
         assert!(
             matches!(
                 &report.services[service].outcome,
