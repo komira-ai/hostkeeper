@@ -23,6 +23,7 @@ use support::{
 /// watcher when the daemon died: its record is in the watcher.
 fn watched(rig: &Rig) {
     let ceiling = manifest_with("web", "2.0.0", "promotion_ceiling_secs = 100");
+    rig.running("web", support::BASE);
     rig.store.add("web", "2.0.0", &ceiling);
     let (_, _) = rig.booted();
     rig.launcher

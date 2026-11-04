@@ -9,6 +9,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     Claims, EnrollRequest, EnrollResponse, EnrollState, PollRequest, PollResponse, PollState,
     RenewRequest, RenewResponse,
 };
+use hostkeeper_proto::hostkeeper::local::v1::{Lifecycle, ServiceRecord, StepRecord};
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
 
 /// The descriptor set the last release committed: what a reader of that release knows.
@@ -246,4 +247,42 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         let read = DynamicMessage::decode(blind.clone(), bytes.as_slice()).expect("decodes");
         assert_eq!(read.encode_to_vec(), bytes, "{name}");
     }
+}
+
+/// Catches a service's lifecycle that an admin client of the release before cannot read past, or
+/// drops: a `ServiceRecord` that says `REMOVING` is read by the baseline's `ServiceRecord`, which
+/// has no `lifecycle`, with every field it knows, and written back with the lifecycle kept; a
+/// record of the release before reads with the lifecycle UNSPECIFIED.
+#[test]
+fn an_older_admin_reader_keeps_the_lifecycle_of_a_service() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.ServiceRecord")
+        .expect("released");
+    assert!(message.get_field_by_name("lifecycle").is_none());
+    let removing = ServiceRecord {
+        service: "web".to_owned(),
+        last: Some(StepRecord {
+            step: "uninstall".to_owned(),
+            reason: "unit_stuck".to_owned(),
+            ..StepRecord::default()
+        }),
+        lifecycle: Lifecycle::Removing.into(),
+        ..ServiceRecord::default()
+    };
+    let read = DynamicMessage::decode(message, round_trip(&removing).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("service").as_deref(),
+        Some(&Value::String("web".to_owned()))
+    );
+    let back = ServiceRecord::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, removing);
+    assert_eq!(back.lifecycle(), Lifecycle::Removing);
+
+    let before = ServiceRecord {
+        service: "web".to_owned(),
+        ..ServiceRecord::default()
+    };
+    let read = ServiceRecord::decode(round_trip(&before).as_slice()).expect("decodes");
+    assert_eq!(read.lifecycle(), Lifecycle::Unspecified);
 }

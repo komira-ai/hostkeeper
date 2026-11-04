@@ -8,6 +8,10 @@
 //! | `verify` | `cleanup` | `rollback`, then `Failed` with the hook's class | `verify` again with the backoff until the deadline, then `rollback` | stop, `halt` |
 //! | `rollback` | report the original `Failed` or `Deferred` | before the commit: `halt`; after it: `Failed(after_commit)` if the hook says `reversible: false`, else `halt` | `rollback` again up to its bound, then as for failure | stop, `halt` |
 //! | `cleanup` | `Succeeded` (with `promotion_pending` of the last `verify`) | if its line states `reversible: true` (and nothing committed): `rollback`, and the host's result is the rollback's; otherwise (`false`, or the field left out) `cleanup` again, up to `cleanup_retries`, then `Failed(after_commit)` | `cleanup` again later, within the same retries | stop, `halt` |
+//! | `uninstall` | `Succeeded` | `Failed(before_commit)` with the hook's class | `Deferred` | stop, `halt` |
+//!
+//! `uninstall` is no step of an update: it runs alone, and what it reports is the verdict of the
+//! uninstall (design section 4.7, "Uninstall").
 //!
 //! The function holds no clock and no counter: the updater says whether the verify deadline has
 //! passed and whether a retry is left ([`Context`]), and does the waiting itself.
@@ -159,5 +163,12 @@ pub fn next(step: Step, outcome: Outcome, report: &Report, ctx: &Context) -> Nex
         (Step::Cleanup, Outcome::Failure | Outcome::Deferred) => {
             Next::Report(failed(Phase::AfterCommit))
         }
+        (Step::Uninstall, Outcome::Success) => Next::Report(Verdict::Succeeded {
+            promotion_pending: false,
+        }),
+        (Step::Uninstall, Outcome::Failure) => Next::Report(failed(Phase::BeforeCommit)),
+        (Step::Uninstall, Outcome::Deferred) => Next::Report(Verdict::Deferred {
+            retry_after_secs: after_secs,
+        }),
     }
 }

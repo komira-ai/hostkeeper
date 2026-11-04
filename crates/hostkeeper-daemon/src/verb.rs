@@ -37,13 +37,15 @@ impl fmt::Display for PackageDigest {
     }
 }
 
-/// The two verbs that run a package's hook to a verdict through the step runner.
+/// The verbs that run a package's hook to a verdict through the step runner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookedVerb {
     /// Refused below the running version.
     Update,
     /// A hooked update to any version, lower ones included (automatic rollback sends it).
     ForceRollback,
+    /// The update path with no previous release, for a service with none installed.
+    Install,
 }
 
 impl HookedVerb {
@@ -52,6 +54,7 @@ impl HookedVerb {
         match self {
             HookedVerb::Update => "update",
             HookedVerb::ForceRollback => "force_rollback",
+            HookedVerb::Install => "install",
         }
     }
 }
@@ -63,6 +66,14 @@ pub struct Hooked {
     pub version: Version,
     pub digest: PackageDigest,
     /// The coordinator's try of the order, from 1.
+    pub order_try: NonZeroU64,
+}
+
+/// The arguments of an `uninstall`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unhooked {
+    pub service: ServiceName,
+    /// The coordinator's try of the order, from 1: reported with the uninstall's verdict.
     pub order_try: NonZeroU64,
 }
 
@@ -81,7 +92,7 @@ pub enum Verb {
     Update(Hooked),
     ForceRollback(Hooked),
     Install(Hooked),
-    Uninstall(ServiceName),
+    Uninstall(Unhooked),
     Force(Forced),
     Abort(ServiceName),
     ClearHalt {
@@ -173,7 +184,10 @@ impl TryFrom<&Order> for Verb {
                 )?,
                 halt_generation: a.halt_generation,
             }),
-            order::Verb::Uninstall(a) => Verb::Uninstall(service("uninstall", &a.service)?),
+            order::Verb::Uninstall(a) => Verb::Uninstall(Unhooked {
+                service: service("uninstall", &a.service)?,
+                order_try,
+            }),
             order::Verb::Abort(a) => Verb::Abort(service("abort", &a.service)?),
             order::Verb::ClearHalt(a) => Verb::ClearHalt {
                 service: service("clear_halt", &a.service)?,

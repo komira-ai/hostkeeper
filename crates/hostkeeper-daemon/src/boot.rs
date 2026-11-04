@@ -14,7 +14,9 @@
 //!    daemon killed before that reads every record as after a boot on its next start. A record
 //!    that could not be read, or whose rewrite could not be written, keeps the old boot id for
 //!    the same reason;
-//! 5. the tombstoned uninstalls ([`Daemon::boot_pass_into`] leaves their place empty);
+//! 5. once the boot id is written, each uninstall a tombstone in `placed.json` left unfinished,
+//!    resumed under its service's lock without waiting for an order ([`crate::uninstall`]); its
+//!    reply is the service's outcome ([`Outcome::Uninstall`] for a verdict);
 //! 6. run each unfinished update to its verdict, through the step runner, under the service's
 //!    lock and the step lock, the order rebuilt from the record and the sealed version
 //!    directory. An update that reaches the post-success watcher is left to step 7;
@@ -50,7 +52,7 @@ use hostkeeper_steps::{
     RunError, Seal, Staged, StepExit, UpdateOrder, read_seal, resume,
 };
 
-use crate::executor::{Ctx, Daemon};
+use crate::executor::{Ctx, Daemon, Reply};
 use crate::files::{self, WriteStep};
 use crate::installed::{self, CURRENT};
 use crate::locks::{Package, ServiceGuard};
@@ -134,7 +136,7 @@ pub enum Stage {
     ReadRecords,
     /// The boot id is written.
     WriteBootId,
-    /// Tombstoned uninstalls are resumed (a later change fills this place).
+    /// Tombstoned uninstalls are resumed.
     ResumeUninstalls,
     /// Each unfinished update runs to its verdict.
     RunUpdates,
@@ -164,6 +166,9 @@ pub enum Outcome {
     JournalUnavailable(String),
     /// The update ran to this verdict.
     Finished(Finished),
+    /// The uninstall a tombstone left unfinished was resumed and ran to this verdict. Its
+    /// `boot` step does not run.
+    Uninstall(Finished),
     /// The update is in the post-success watcher, which runs on a thread of the daemon.
     Watching,
     /// The runner stopped without a verdict; the record says where. After `unstopped` the
@@ -211,7 +216,7 @@ impl ServiceBoot {
     /// The verdict the start reached for the service's update, if it reached one.
     pub fn verdict(&self) -> Option<Finished> {
         match &self.outcome {
-            Outcome::Finished(finished) => Some(finished.clone()),
+            Outcome::Finished(finished) | Outcome::Uninstall(finished) => Some(finished.clone()),
             Outcome::JournalUnavailable(_) => Some(journal_unavailable()),
             _ => None,
         }
@@ -413,7 +418,11 @@ fn current_version(dir: &Path) -> Result<Option<Version>, String> {
 }
 
 /// The params of a `boot` step: the manifest's `[params]` and the release it runs from.
-fn boot_params(manifest: &Manifest, dir: &Path, version: &Version) -> Result<Params, String> {
+pub(crate) fn boot_params(
+    manifest: &Manifest,
+    dir: &Path,
+    version: &Version,
+) -> Result<Params, String> {
     let mut params = Params::parse_declared(&manifest.params.to_string()).map_err(text)?;
     params.insert(
         STAGED_RELEASE_KEY,
@@ -518,7 +527,9 @@ impl Daemon {
             }
         };
         report.stages.push(Stage::ResumeUninstalls);
-        self.resume_uninstalls();
+        if report.boot_id_written {
+            self.resume_uninstalls(report);
+        }
         report.stages.push(Stage::RunUpdates);
         let mut watch = Vec::new();
         for (service, rec, action) in unfinished {
@@ -545,9 +556,24 @@ impl Daemon {
         Ok(())
     }
 
-    /// The place of the uninstalls a tombstone in `placed.json` left unfinished, resumed before
-    /// any update (design section 4.7). Nothing yet.
-    fn resume_uninstalls(&self) {}
+    /// The uninstalls a tombstone in `placed.json` left unfinished, resumed before any update
+    /// (design section 4.7), each reply the service's outcome.
+    fn resume_uninstalls(&self, report: &mut BootReport) {
+        for (service, reply) in crate::uninstall::resume_all(self.ctx()) {
+            let outcome = match reply {
+                Reply::Finished {
+                    verdict, reason, ..
+                } => Outcome::Uninstall(Finished { verdict, reason }),
+                other => Outcome::Interrupted {
+                    refusal: other.refusal().unwrap_or(Refusal::Busy),
+                    detail: format!("service={service}: the uninstall did not finish: {other:?}"),
+                },
+            };
+            report
+                .services
+                .insert(service.to_string(), ServiceBoot::of(None, outcome));
+        }
+    }
 
     /// Runs the unfinished update `rec` holds to its verdict, or to the post-success watcher.
     fn run_update(&self, service: &ServiceName, rec: &Record) -> Outcome {
@@ -562,11 +588,7 @@ impl Daemon {
             Err(held) => {
                 return Outcome::Interrupted {
                     refusal: Refusal::Busy,
-                    detail: format!(
-                        "service={service}: locked by an order to {} it to {}",
-                        held.package.verb.name(),
-                        held.package.version
-                    ),
+                    detail: format!("service={service}: locked by {}", held.holder),
                 };
             }
         };

@@ -545,6 +545,8 @@ impl Hook {
                 }
                 report.reversible = self.defect("reversible-flips") && seen;
             }
+            // This hook has no `uninstall` step: its manifest would have no `uninstall` bound.
+            Step::Uninstall => return Ok((Outcome::Failure, report)),
         }
         Ok(self.finish(step, report))
     }

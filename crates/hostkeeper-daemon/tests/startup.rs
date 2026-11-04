@@ -18,6 +18,7 @@ use hostkeeper_daemon::cli::{
 use hostkeeper_daemon::packages::{PackageError, Packages};
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_daemon::verb::PackageDigest;
+use hostkeeper_placed::UnitControl;
 use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::{LaunchError, StepLauncher};
@@ -261,6 +262,18 @@ fn the_locked_and_config_errors_exit_with_distinct_codes() {
 #[test]
 fn the_unwired_ports_refuse_everything() {
     assert!(matches!(Unwired.stop("u"), Err(LaunchError::Launcher(why)) if why == UNWIRED));
+    let reload = Unwired.daemon_reload().expect_err("no service manager");
+    assert_eq!(
+        (reload.action.as_str(), reload.why.as_str()),
+        ("daemon-reload", UNWIRED)
+    );
+    let stop = Unwired
+        .stop_unit("web.service")
+        .expect_err("no service manager");
+    assert_eq!(
+        (stop.action.as_str(), stop.why.as_str()),
+        ("stop web.service", UNWIRED)
+    );
     let refused = Unwired.version_dir(
         &ServiceName::new("web").expect("name"),
         &Version::new("1.0.0").expect("version"),

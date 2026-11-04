@@ -1,9 +1,9 @@
-//! The five steps of the hook contract and the command line a hook is run with.
+//! The five steps of an update, the `uninstall` step, and the command line a hook is run with.
 //!
 //! The updater runs `<executable> <hook_args> <step> [args]`. `hook_args` is declared (default
 //! `["update-hook"]`, the convention of our own services); everything from the step on is what
 //! [`Invocation`] parses and prints: `prepare <artifact> [--params <file>]` and
-//! `<cutover|verify|rollback|cleanup> [--params <file>]`.
+//! `<cutover|verify|rollback|cleanup|uninstall> [--params <file>]`.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -12,8 +12,13 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// One of the five steps, in the order a successful update runs them (`Rollback` runs instead of
-/// the rest after a failure).
+/// One of the five steps of an update, in the order a successful update runs them (`Rollback`
+/// runs instead of the rest after a failure), or `Uninstall`.
+///
+/// `Uninstall` is additive: it is no step of an update, and the updater runs it once, from the
+/// installed release, when the service is removed from the host (design section 4.7,
+/// "Uninstall"), bounded by the manifest's `[hook.timeout_secs] uninstall`. A manifest without
+/// that bound does not run it, and the updater refuses the uninstall.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Step {
@@ -22,10 +27,12 @@ pub enum Step {
     Verify,
     Rollback,
     Cleanup,
+    Uninstall,
 }
 
 impl Step {
-    /// Every step, in the order of the table of the contract.
+    /// The five steps of an update, in the order of the table of the contract. `Uninstall` is
+    /// not among them.
     pub const ALL: [Step; 5] = [
         Step::Prepare,
         Step::Cutover,
@@ -42,6 +49,7 @@ impl Step {
             Step::Verify => "verify",
             Step::Rollback => "rollback",
             Step::Cleanup => "cleanup",
+            Step::Uninstall => "uninstall",
         }
     }
 }
@@ -58,6 +66,7 @@ impl FromStr for Step {
     fn from_str(s: &str) -> Result<Step, ArgsError> {
         Step::ALL
             .into_iter()
+            .chain([Step::Uninstall])
             .find(|step| step.name() == s)
             .ok_or_else(|| ArgsError::UnknownStep(s.to_owned()))
     }

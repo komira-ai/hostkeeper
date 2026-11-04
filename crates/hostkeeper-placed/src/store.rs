@@ -13,7 +13,7 @@
 //!       "link_target": "/var/lib/hostkeeper/packages/tierstore/current/files/tierstore.conf"
 //!     }
 //!   },
-//!   "uninstalling": { "other": {} }
+//!   "uninstalling": { "other": {}, "old": { "hook_done": true } }
 //! }
 //! ```
 //!
@@ -116,9 +116,18 @@ impl Entry {
 }
 
 /// The tombstone of a service being uninstalled (design section 4.7, "Uninstall", step 1). Its
-/// paths are not linked while it stands.
+/// paths are not linked while it stands. Its fields say how far the uninstall got, so that a
+/// restart resumes it from what is on disk; each is written only when set, so a tombstone of an
+/// uninstall that has not run its hook is `{}`, as the release before these fields wrote it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Tombstone {
+    /// The `uninstall` step of the hook exited 0: a resumed uninstall does not run it again.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hook_done: bool,
+    /// The `uninstall` step exited 76 (halt): nothing more of the uninstall runs until the halt
+    /// is cleared.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub halted: bool,
     /// The keys of a newer writer, kept on rewrite.
     #[serde(flatten)]
     extra: Map<String, Value>,

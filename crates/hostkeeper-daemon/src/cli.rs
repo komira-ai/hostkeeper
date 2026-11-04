@@ -17,9 +17,11 @@ use std::sync::Arc;
 use clap::{Args, Parser, Subcommand};
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_placed::roots::SYSTEMD_UNIT_DIR;
+use hostkeeper_placed::{RealFs, UnitControl, UnitControlError};
 use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, SystemClock};
 
-use crate::executor::Ports;
+use crate::executor::{Placement, Ports};
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::packages::{PackageError, Packages, VersionDir};
 use crate::start::{self, Settings, StartError};
@@ -154,24 +156,32 @@ async fn start_and_serve(
     start::serve(started).await
 }
 
-/// The ports of this build. The host's step launcher and package store are not part of it yet,
-/// and no order reaches the daemon yet (the heartbeat loop that brings them comes later): until
-/// both are wired in, an order that did come would be refused, never run.
+/// The ports of this build. The host's step launcher, package store and service manager are not
+/// part of it yet, and no order reaches the daemon yet (the heartbeat loop that brings them comes
+/// later): until they are wired in, an order that did come would be refused or fail, never run.
+/// Placement reads and writes the host's own paths (`RealFs` at `/`), units in
+/// `/etc/systemd/system`.
 fn host_ports() -> Ports {
     Ports {
         launcher: Arc::new(Unwired),
         packages: Arc::new(Unwired),
+        placement: Placement {
+            unit_dir: PathBuf::from(SYSTEMD_UNIT_DIR),
+            fs: Arc::new(RealFs::new(std::path::Path::new("/"))),
+            units: Arc::new(Unwired),
+        },
         clock: Arc::new(SystemClock),
         deadman_poll_secs: Some(DEADMAN_POLL_SECS),
     }
 }
 
-/// The launcher and package store of a build that has neither: each refuses.
+/// The launcher, package store and service manager of a build that has none: each refuses.
 #[derive(Debug)]
 pub struct Unwired;
 
 /// What [`Unwired`] answers.
-pub const UNWIRED: &str = "this build of hostkeeper has no step launcher or package store";
+pub const UNWIRED: &str =
+    "this build of hostkeeper has no step launcher, package store or service manager";
 
 impl StepLauncher for Unwired {
     fn run(&self, _call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
@@ -191,5 +201,22 @@ impl Packages for Unwired {
         _digest: &PackageDigest,
     ) -> Result<VersionDir, PackageError> {
         Err(PackageError::Other(UNWIRED.to_owned()))
+    }
+}
+
+impl UnitControl for Unwired {
+    fn daemon_reload(&self) -> Result<(), UnitControlError> {
+        Err(unwired_units("daemon-reload"))
+    }
+
+    fn stop_unit(&self, unit: &str) -> Result<(), UnitControlError> {
+        Err(unwired_units(&format!("stop {unit}")))
+    }
+}
+
+fn unwired_units(action: &str) -> UnitControlError {
+    UnitControlError {
+        action: action.to_owned(),
+        why: UNWIRED.to_owned(),
     }
 }

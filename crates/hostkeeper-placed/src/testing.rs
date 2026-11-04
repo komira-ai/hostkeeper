@@ -3,7 +3,8 @@
 //! - [`FaultFs`]: the real filesystem under a root, recording every write in a [`Log`] and
 //!   failing the n-th write and every one after it, as a crash there would leave the disk;
 //! - [`FakeUnitControl`]: a [`UnitControl`] that records each call in the same [`Log`], so that
-//!   a test reads the order of writes and calls in one list;
+//!   a test reads the order of writes and calls in one list (a test puts the calls of its own
+//!   fakes among them with [`Event::Mark`]);
 //! - [`FakeLauncher`]: a [`CommandLauncher`] that records each argument vector.
 //!
 //! None of them runs a program, opens a socket or reads a clock.
@@ -25,6 +26,7 @@ pub enum FsWrite {
     Rename { from: PathBuf, to: PathBuf },
     Symlink { target: PathBuf, link: PathBuf },
     Remove(PathBuf),
+    RemoveDir(PathBuf),
     CreateDirs(PathBuf),
 }
 
@@ -40,6 +42,9 @@ pub enum UnitCall {
 pub enum Event {
     Fs(FsWrite),
     Unit(UnitCall),
+    /// What a test wrote to the log itself: the call of another fake, put in its place among
+    /// these.
+    Mark(String),
 }
 
 /// The events of the fakes that share it, in the order they happened.
@@ -222,6 +227,12 @@ impl Fs for FaultFs {
         })
     }
 
+    fn remove_dir(&self, dir: &Path) -> io::Result<()> {
+        self.write_op(FsWrite::RemoveDir(dir.to_path_buf()), || {
+            self.inner.remove_dir(dir)
+        })
+    }
+
     fn create_dirs(&self, dir: &Path) -> io::Result<()> {
         self.write_op(FsWrite::CreateDirs(dir.to_path_buf()), || {
             self.inner.create_dirs(dir)
@@ -230,10 +241,13 @@ impl Fs for FaultFs {
 }
 
 /// A [`UnitControl`] that records each call in its [`Log`]; built with
-/// [`FakeUnitControl::failing`], every call is recorded and then fails.
+/// [`FakeUnitControl::failing`], every call is recorded and then fails; built with
+/// [`FakeUnitControl::refusing_to_stop`], the stop of one unit is recorded and then fails, as a
+/// unit still active after its stop bound would.
 pub struct FakeUnitControl {
     log: Log,
     failing: bool,
+    stuck: Option<String>,
 }
 
 impl FakeUnitControl {
@@ -241,17 +255,30 @@ impl FakeUnitControl {
         FakeUnitControl {
             log,
             failing: false,
+            stuck: None,
         }
     }
 
     pub fn failing(log: Log) -> FakeUnitControl {
-        FakeUnitControl { log, failing: true }
+        FakeUnitControl {
+            failing: true,
+            ..FakeUnitControl::new(log)
+        }
+    }
+
+    /// Every call goes through but the stop of `unit`, which fails.
+    pub fn refusing_to_stop(log: Log, unit: &str) -> FakeUnitControl {
+        FakeUnitControl {
+            stuck: Some(unit.to_owned()),
+            ..FakeUnitControl::new(log)
+        }
     }
 
     fn call(&self, call: UnitCall) -> Result<(), UnitControlError> {
         let action = format!("{call:?}");
+        let stuck = matches!(&call, UnitCall::Stop(unit) if self.stuck.as_ref() == Some(unit));
         self.log.push(Event::Unit(call));
-        match self.failing {
+        match self.failing | stuck {
             true => Err(UnitControlError {
                 action,
                 why: "the fake fails every call".to_owned(),

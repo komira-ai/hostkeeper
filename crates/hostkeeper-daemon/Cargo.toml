@@ -12,7 +12,7 @@ description = "The hostkeeper daemon: start-up, the order executor with its lock
 # 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3). Everything the daemon does is here, so that it is measured;
 # the `hostkeeper` binary only forwards to `cli::main`. Everything privileged comes in through
 # ports it is given: the step launcher (`hostkeeper_steps::StepLauncher`) and the package store
-# (`packages::Packages`).
+# (`packages::Packages`), and the placement of packages (`executor::Placement`).
 
 [features]
 # The test doubles in `hostkeeper_daemon::testing` (a scripted launcher, a fake clock, fake
@@ -23,6 +23,8 @@ testing = []
 clap.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# Placed-path linking: a first install placed, and everything of a service removed on uninstall.
+hostkeeper-placed = { path = "../hostkeeper-placed" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # `O_NOFOLLOW` for the lock file.
