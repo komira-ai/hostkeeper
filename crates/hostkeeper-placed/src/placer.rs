@@ -1,13 +1,13 @@
 //! The write-ahead protocol of design section 4.7, "Placed paths", one function per step so that
 //! a caller (a hooked update, a force) sequences them around the switch of `current`:
 //!
-//! 1. [`Placer::begin`]: `placed.json` with the target's paths `pending`, each with the owning
-//!    service and version, after the [`check`] of the claims;
-//! 2. [`Placer::link`]: each link made under a temporary name in its directory and renamed into
-//!    place;
-//! 3. [`Placer::switch_current`]: `previous` set first, `current` second;
-//! 4. [`Placer::reload`]: `daemon-reload`;
-//! 5. [`Placer::commit`]: the paths marked `placed`.
+//! 1. [`Placer::begin`] writes `placed.json` with the target's paths `pending`, each with the
+//!    owning service and version, after the [`check`] of the claims;
+//! 2. [`Placer::link`] makes each link under a temporary name in its directory and renames it
+//!    into place;
+//! 3. [`Placer::switch_current`] sets `previous` first, `current` second;
+//! 4. [`Placer::reload`] runs `daemon-reload`;
+//! 5. [`Placer::commit`] marks the paths `placed`.
 //!
 //! Every placed link points into `<packages>/<service>/current/`, never into a version directory,
 //! so the switch of `current` re-points them all. A crash between any two writes leaves only
