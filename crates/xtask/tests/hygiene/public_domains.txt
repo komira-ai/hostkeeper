@@ -46,3 +46,8 @@ yaml.org
 =f.v1.login.pin
 # A protobuf type path in hostkeeper-proto's operator.proto, not a host.
 =hostkeeper.agent.v1.health
+# systemd targets in packaging/linux/hostkeeper.service and its test (`target` is a top-level
+# domain), not hosts.
+=default.target
+=multi-user.target
+=network-online.target
