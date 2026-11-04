@@ -99,6 +99,13 @@ the per-service signer, the declaration digest, and the shipped declarations of
 `tests/fixtures/updater.d`. What is left is the transient unit of one step and the part of the
 declaration it reads (the crate's README lists each kept item and why); B3 rewrites it.
 
+The tree digest of `hostkeeper-steps` (`tree_digest`, which `Staged` and the step record hold)
+is now the package format of `docs/package-format.md`: kind, name, mode, size and bytes, no owner
+and no times, and a tree with a link has none. kbf's format, imported at first, hashed owners and
+links. No release of hostkeeper wrote a record with the earlier digest; a record that holds one
+is another update to the runner (`Busy` while it is unfinished, so no step runs from it; a new
+update after its verdict), which `tests/digest_change.rs` holds.
+
 ## Tests that hold this file
 
 - `constants_match_kbf_at_the_tag` (in each of `hostkeeper-hook`, `hostkeeper-rights` and
