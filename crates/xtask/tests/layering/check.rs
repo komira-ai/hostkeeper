@@ -16,13 +16,15 @@ const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
 const RIGHTS: &str = "hostkeeper-rights";
 const TESTKIT: &str = "hostkeeper-testkit";
+const UNPACK: &str = "hostkeeper-unpack";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
-const LAYERS: [(&str, &[&str]); 4] = [
+const LAYERS: [(&str, &[&str]); 5] = [
     (HOOK, &[]),
     (CONFIG, &[]),
     (STEPS, &[HOOK]),
     (RIGHTS, &[CONFIG, HOOK]),
+    (UNPACK, &[CONFIG, HOOK, STEPS]),
 ];
 
 /// A package name to the names of the packages it depends on.
