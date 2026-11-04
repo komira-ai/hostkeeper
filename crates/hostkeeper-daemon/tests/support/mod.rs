@@ -6,15 +6,21 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
+use hostkeeper_config::names::ServiceName;
+use hostkeeper_daemon::boot::BootReport;
 use hostkeeper_daemon::start::Settings;
 use hostkeeper_daemon::testing::{FakeClock, FakePackages, ScriptedLauncher, manifest};
-use hostkeeper_daemon::{Daemon, Dirs, Ports};
+use hostkeeper_daemon::{Daemon, Dirs, Ports, StoreSeam};
+use hostkeeper_hook::Verdict;
 use hostkeeper_proto::hostkeeper::agent::v1::{ForceRollback, Order, Update, order};
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
+use hostkeeper_steps::record::{Loaded, Record, State};
+use hostkeeper_steps::{CrashPoint, Finished, RecordStore};
 use hyper_util::rt::TokioIo;
 use tokio::io::DuplexStream;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -179,6 +185,103 @@ impl Rig {
         self.store.link(service, "current", version);
         dir
     }
+
+    /// The package of `service` at `version` with `manifest`, sealed with the package digest
+    /// [`d`].
+    pub fn add_with(&self, service: &str, version: &str, manifest: &str) -> PathBuf {
+        let dir = self.store.add(service, version, manifest);
+        self.store.seal(service, version, &d());
+        dir
+    }
+
+    /// A daemon on the rig's directories whose start pass ran: the boot id of the rig's clock
+    /// is written.
+    pub fn booted(&self) -> (Daemon, BootReport) {
+        fs::create_dir_all(&self.state).expect("the state dir");
+        fs::set_permissions(&self.state, fs::Permissions::from_mode(0o700)).expect("its mode");
+        let daemon = self.daemon();
+        let report = daemon.boot_pass().expect("the start pass");
+        (daemon, report)
+    }
+
+    /// The host booted again: the clock's boot id is `boot-2`.
+    pub fn reboot(&self) {
+        self.clock.set_boot_id("boot-2");
+    }
+
+    /// The step record of `service`, `None` when there is none.
+    pub fn record(&self, service: &str) -> Option<Record> {
+        match RecordStore::new(&self.state.join(service)).load() {
+            Ok(Loaded::Current(rec)) => Some(*rec),
+            _ => None,
+        }
+    }
+
+    /// How the last update of `service` ended, `None` while it is unfinished or there is none.
+    pub fn verdict(&self, service: &str) -> Option<Finished> {
+        match self.record(service)?.state {
+            State::Finished { verdict, reason } => Some(Finished { verdict, reason }),
+            _ => None,
+        }
+    }
+}
+
+pub fn name(text: &str) -> ServiceName {
+    ServiceName::new(text).expect("a service name")
+}
+
+/// The last line of a step that committed the update.
+pub const IRREVERSIBLE: &str = r#"{"reversible":false}"#;
+/// The last line of a `verify` whose promotion is pending.
+pub const PENDING_LINE: &str = r#"{"promotion_pending":true}"#;
+
+pub fn finished(verdict: Verdict, reason: Option<&str>) -> Finished {
+    Finished {
+        verdict,
+        reason: reason.map(str::to_owned),
+    }
+}
+
+pub fn ok() -> Finished {
+    finished(
+        Verdict::Succeeded {
+            promotion_pending: false,
+        },
+        None,
+    )
+}
+
+/// `manifest` of `service` at `version` with these lines added to its `[hook]` table.
+pub fn manifest_with(service: &str, version: &str, hook_lines: &str) -> String {
+    manifest(service, version).replace("[hook]\n", &format!("[hook]\n{hook_lines}\n"))
+}
+
+/// A seam that stops the daemon at `at`, the writes of step records counted across every store
+/// it makes; `count` counts them.
+pub fn crash_at(at: Option<CrashPoint>, count: Arc<AtomicU64>) -> StoreSeam {
+    Arc::new(move |_: &ServiceName, store: RecordStore| {
+        let count = Arc::clone(&count);
+        store.with_crash_gate(Arc::new(move |point| match point {
+            CrashPoint::BeforeWrite(_) => {
+                let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+                at == Some(CrashPoint::BeforeWrite(n))
+            }
+            CrashPoint::AfterWrite(_) => {
+                at == Some(CrashPoint::AfterWrite(count.load(Ordering::SeqCst)))
+            }
+        }))
+    })
+}
+
+/// A seam that stops the daemon after the first write of `record` whose text holds `needle`.
+pub fn crash_after_writing(record: PathBuf, needle: &'static str) -> StoreSeam {
+    Arc::new(move |_: &ServiceName, store: RecordStore| {
+        let record = record.clone();
+        store.with_crash_gate(Arc::new(move |point| {
+            matches!(point, CrashPoint::AfterWrite(_))
+                && fs::read_to_string(&record).is_ok_and(|text| text.contains(needle))
+        }))
+    })
 }
 
 /// Every entry under `dir`, with its kind and its bytes for a file: what a test compares to

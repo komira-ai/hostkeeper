@@ -28,6 +28,25 @@ pub struct StepCall<'a> {
     pub timeout_secs: u64,
 }
 
+/// One run of an additive step: a step of the hook that is not one of the five of an update, named
+/// by the package's manifest (the `[hook] boot` step, which the daemon runs from `current` at its
+/// start). The hook is run as `<executable> <hook_args> <step> --params <params>`.
+#[derive(Clone, Debug)]
+pub struct AdditiveCall<'a> {
+    /// The service the step belongs to.
+    pub service: &'a str,
+    /// The step's name, as the manifest gives it: a token that is none of the five steps.
+    pub step: &'a str,
+    /// The params file of the run.
+    pub params: &'a Path,
+    /// The hook executable, a file of a verified release (see [`StepCall::executable`]).
+    pub executable: &'a Path,
+    /// The deterministic name of the transient unit: `updater-<service>-<step>-<generation>`.
+    pub unit: &'a str,
+    /// The bound of the run, in seconds.
+    pub timeout_secs: u64,
+}
+
 /// How a step ended, as the launcher saw it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepExit {
@@ -93,4 +112,14 @@ pub trait StepLauncher: Send + Sync {
     /// returns while this is under way is not read until this has returned, so the time this
     /// takes is also the time the runner waits.
     fn stop(&self, unit: &str) -> Result<(), LaunchError>;
+
+    /// Runs an additive step and waits for it to end, under the same rules as [`Self::run`]. A
+    /// launcher that does not run additive steps keeps this default, which starts nothing and
+    /// answers [`LaunchError::NoStart`] naming the step: the caller reports that step as failed.
+    fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
+        Err(LaunchError::NoStart(format!(
+            "this launcher runs no additive step, so `{}` of {} did not start",
+            call.step, call.service
+        )))
+    }
 }

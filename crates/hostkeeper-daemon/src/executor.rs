@@ -16,7 +16,9 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Verdict;
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
-use hostkeeper_steps::{Clock, DeadMan, Finished, RecordStore, StepLauncher, StepRunner, Watch};
+use hostkeeper_steps::{
+    Clock, DeadMan, Finished, RecordStore, StepLauncher, StepRunner, UpdateOrder, Watch,
+};
 
 use crate::checks;
 use crate::halt::HaltStore;
@@ -26,6 +28,12 @@ use crate::packages::Packages;
 use crate::refusal::Refusal;
 use crate::verb::Verb;
 use crate::verbs;
+use crate::watchers::{SlicedClock, Watchers, Yielding};
+
+/// A test's way to change every step record store the daemon makes, as it is made: to stop the
+/// daemon at a write ([`RecordStore::with_crash_gate`]) or fail one
+/// ([`RecordStore::with_write_fault`]). It can only make a store fail.
+pub type StoreSeam = Arc<dyn Fn(&ServiceName, RecordStore) -> RecordStore + Send + Sync>;
 
 /// What the daemon runs on: the ports of everything privileged, and the clock.
 pub struct Ports {
@@ -63,7 +71,10 @@ pub struct Ctx {
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
+    /// The post-success watchers, one per service at most.
+    pub watchers: Watchers,
     runners: Mutex<BTreeMap<String, Arc<StepRunner>>>,
+    stores: Option<StoreSeam>,
     deadman_poll_secs: Option<u64>,
     /// Ends the dead-men when the daemon is dropped.
     stop: Arc<AtomicBool>,
@@ -77,11 +88,18 @@ impl Ctx {
 
     /// The step record store of `service`.
     pub fn store(&self, service: &ServiceName) -> RecordStore {
-        RecordStore::new(&self.service_dir(service))
+        let store = RecordStore::new(&self.service_dir(service));
+        match &self.stores {
+            Some(seam) => seam(service, store),
+            None => store,
+        }
     }
 
-    /// The step runner of `service`, made with its dead-man on first use.
+    /// The step runner of `service`, made with its dead-man on first use. A watcher of the
+    /// service is stopped first, and waited for: whoever asks for the runner is about to run an
+    /// order, and a new order replaces the watcher (design section 6.4).
     pub fn runner(&self, service: &ServiceName) -> Arc<StepRunner> {
+        drop(self.watchers.stop(service));
         let mut runners = self.runners.lock().unwrap_or_else(PoisonError::into_inner);
         let made = runners.entry(service.to_string()).or_insert_with(|| {
             let runner = StepRunner::new(
@@ -93,6 +111,24 @@ impl Ctx {
             Arc::new(runner)
         });
         Arc::clone(made)
+    }
+
+    /// Starts the post-success watcher of `service` for `order` on a thread of its own, with a
+    /// runner of its own that a new order can stop ([`crate::watchers`]). `false`, and nothing
+    /// started, while a watcher of the service runs.
+    pub fn start_watcher(&self, service: &ServiceName, order: UpdateOrder) -> bool {
+        let stop = Arc::new(AtomicBool::new(false));
+        let launcher = Yielding {
+            inner: Arc::clone(&self.launcher),
+            stop: Arc::clone(&stop),
+        };
+        let clock = SlicedClock {
+            inner: Arc::clone(&self.clock),
+            stop: Arc::clone(&stop),
+        };
+        let runner = StepRunner::new(Arc::new(launcher), Arc::new(clock), self.store(service));
+        self.watch(runner.watch());
+        self.watchers.start(service, runner, order, stop)
     }
 
     /// Starts the dead-man of a runner's watch, when the daemon has dead-men.
@@ -181,6 +217,8 @@ pub struct ServiceStatus {
     pub held_halt: Option<u64>,
     /// An order holds the service's lock now (or a step that could not be stopped holds it).
     pub locked: bool,
+    /// The lock is held by a step that could not be stopped: it stays held until `abort`.
+    pub stuck: bool,
     pub record: RecordState,
 }
 
@@ -242,11 +280,20 @@ impl Daemon {
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,
+                watchers: Watchers::default(),
                 runners: Mutex::default(),
+                stores: None,
                 deadman_poll_secs: ports.deadman_poll_secs,
                 stop: Arc::new(AtomicBool::new(false)),
             },
         }
+    }
+
+    /// The same daemon, every step record store it makes changed by `seam` as it is made: the
+    /// seam of the tests that stop the daemon at a write of a record, or fail one.
+    pub fn with_stores(mut self, seam: StoreSeam) -> Daemon {
+        self.ctx.stores = Some(seam);
+        self
     }
 
     /// What every verb works with.
@@ -263,8 +310,21 @@ impl Daemon {
         }
     }
 
-    /// One verb.
+    /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service
+    /// stays locked and its record `running`.
     pub fn execute(&self, verb: Verb) -> Reply {
+        let reply = self.dispatch(verb);
+        if let Reply::Interrupted {
+            refusal: Refusal::Unstopped,
+            detail,
+        } = &reply
+        {
+            crate::boot::alert(crate::boot::ALERT_UNSTOPPABLE, detail);
+        }
+        reply
+    }
+
+    fn dispatch(&self, verb: Verb) -> Reply {
         let ctx = &self.ctx;
         match verb {
             Verb::Update(order) => verbs::update::run(ctx, order),
@@ -294,12 +354,20 @@ impl Daemon {
         names.extend(listed(&ctx.dirs.state)?);
         let services = names
             .into_values()
-            .map(|service| ServiceStatus {
-                running_version: installed::linked_version(&ctx.dirs.packages, &service, CURRENT),
-                held_halt: ctx.halts.get(&service).ok(),
-                locked: ctx.locks.holder(&service).is_some(),
-                record: RecordState::of(ctx.store(&service).load()),
-                service,
+            .map(|service| {
+                let holder = ctx.locks.holder(&service);
+                ServiceStatus {
+                    running_version: installed::linked_version(
+                        &ctx.dirs.packages,
+                        &service,
+                        CURRENT,
+                    ),
+                    held_halt: ctx.halts.get(&service).ok(),
+                    locked: holder.is_some(),
+                    stuck: holder.is_some_and(|held| held.stuck),
+                    record: RecordState::of(ctx.store(&service).load()),
+                    service,
+                }
             })
             .collect();
         Ok(DaemonStatus {
