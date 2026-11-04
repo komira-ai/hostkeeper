@@ -96,8 +96,15 @@ impl Gateway {
 impl CtlTransport for Gateway {
     fn call(&self, path: &str, request: Bytes, metadata: &MetadataMap) -> Result<Bytes, Status> {
         let method = method(&self.pool, path)?;
-        let stream = self.open()?;
-        exchange(stream, &self.authority, &method, path, request, metadata)
+        let mut stream = self.open()?;
+        exchange(
+            &mut stream,
+            &self.authority,
+            &method,
+            path,
+            request,
+            metadata,
+        )
     }
 }
 
@@ -113,9 +120,15 @@ pub(crate) fn method(pool: &DescriptorPool, path: &str) -> Result<MethodDescript
         .ok_or_else(|| Status::internal(format!("the descriptors have no method at {path:?}")))
 }
 
+/// A connection a request is written to and its response read from. One trait object, so that
+/// [`exchange`] and the readers are compiled once whatever the connection is.
+pub(crate) trait Stream: Read + Write {}
+
+impl<S: Read + Write> Stream for S {}
+
 /// One request and its response on `stream`.
-pub(crate) fn exchange<S: Read + Write>(
-    mut stream: S,
+pub(crate) fn exchange(
+    stream: &mut dyn Stream,
     authority: &str,
     method: &MethodDescriptor,
     path: &str,
@@ -143,7 +156,7 @@ pub(crate) fn exchange<S: Read + Write>(
     stream.write_all(&bytes).map_err(lost)?;
     stream.flush().map_err(lost)?;
 
-    let (status, body) = read_response(BufReader::new(stream)).map_err(|e| match e {
+    let (status, body) = read_response(&mut BufReader::new(stream)).map_err(|e| match e {
         ReadError::Io(e) => lost(e),
         ReadError::Malformed(why) => Status::internal(format!("malformed reply: {why}")),
     })?;
@@ -192,12 +205,9 @@ fn malformed(why: impl Into<String>) -> ReadError {
 }
 
 /// One line of the head, without its CRLF, counted against `budget`.
-fn line<R: BufRead>(reader: &mut R, budget: &mut usize) -> Result<String, ReadError> {
+fn line(reader: &mut dyn BufRead, budget: &mut usize) -> Result<String, ReadError> {
     let mut raw = Vec::new();
-    reader
-        .by_ref()
-        .take(*budget as u64)
-        .read_until(b'\n', &mut raw)?;
+    Read::take(&mut *reader, *budget as u64).read_until(b'\n', &mut raw)?;
     *budget = budget.saturating_sub(raw.len());
     if raw.last() != Some(&b'\n') {
         return Err(malformed(
@@ -213,9 +223,9 @@ fn line<R: BufRead>(reader: &mut R, budget: &mut usize) -> Result<String, ReadEr
 
 /// The status and body of an HTTP/1.1 response: by `Content-Length`, by chunks, or to the end of
 /// the connection; at most [`MAX_RESPONSE_BYTES`] in all.
-pub(crate) fn read_response<R: BufRead>(mut reader: R) -> Result<(u16, Vec<u8>), ReadError> {
+pub(crate) fn read_response(reader: &mut dyn BufRead) -> Result<(u16, Vec<u8>), ReadError> {
     let mut budget = MAX_RESPONSE_BYTES;
-    let status_line = line(&mut reader, &mut budget)?;
+    let status_line = line(reader, &mut budget)?;
     let status = status_line
         .strip_prefix("HTTP/1.1 ")
         .or_else(|| status_line.strip_prefix("HTTP/1.0 "))
@@ -225,7 +235,7 @@ pub(crate) fn read_response<R: BufRead>(mut reader: R) -> Result<(u16, Vec<u8>),
     let mut length: Option<usize> = None;
     let mut chunked = false;
     loop {
-        let header = line(&mut reader, &mut budget)?;
+        let header = line(reader, &mut budget)?;
         if header.is_empty() {
             break;
         }
@@ -247,7 +257,7 @@ pub(crate) fn read_response<R: BufRead>(mut reader: R) -> Result<(u16, Vec<u8>),
         }
     }
     let body = match (chunked, length) {
-        (true, _) => chunks(&mut reader, &mut budget)?,
+        (true, _) => chunks(reader, &mut budget)?,
         (false, Some(n)) => {
             if n > budget {
                 return Err(malformed("the body is over the limit"));
@@ -259,10 +269,7 @@ pub(crate) fn read_response<R: BufRead>(mut reader: R) -> Result<(u16, Vec<u8>),
         (false, None) => {
             // To the end of the connection; one byte past the limit tells a body over it.
             let mut body = Vec::new();
-            reader
-                .by_ref()
-                .take(budget as u64 + 1)
-                .read_to_end(&mut body)?;
+            Read::take(&mut *reader, budget as u64 + 1).read_to_end(&mut body)?;
             if body.len() > budget {
                 return Err(malformed("the body is over the limit"));
             }
@@ -273,7 +280,7 @@ pub(crate) fn read_response<R: BufRead>(mut reader: R) -> Result<(u16, Vec<u8>),
 }
 
 /// A chunked body.
-fn chunks<R: BufRead>(reader: &mut R, budget: &mut usize) -> Result<Vec<u8>, ReadError> {
+fn chunks(reader: &mut dyn BufRead, budget: &mut usize) -> Result<Vec<u8>, ReadError> {
     let mut body = Vec::new();
     loop {
         let size_line = line(reader, budget)?;

@@ -103,20 +103,20 @@ where
             .and_then(|s| s.subcommand_matches(c.method_command))
             .map(|leaf| (c, leaf))
     });
-    let result = match found {
-        Some((command, leaf)) => execute(
-            command,
-            leaf,
-            descriptors,
-            connect,
-            &mut *io.stdin,
-            &mut *io.stdout,
-            &mut *io.stderr,
-        ),
-        None => Err(Failure::Usage(
-            "name a service and one of its RPCs".to_owned(),
-        )),
-    };
+    // clap requires a service and an RPC, so a leaf is always found; the error is never made.
+    let result = found
+        .ok_or_else(|| Failure::Usage("name a service and one of its RPCs".to_owned()))
+        .and_then(|(command, leaf)| {
+            execute(
+                command,
+                leaf,
+                descriptors,
+                connect,
+                &mut *io.stdin,
+                &mut *io.stdout,
+                &mut *io.stderr,
+            )
+        });
     match result {
         Ok(()) => exit::SUCCESS,
         Err(Failure::Usage(message)) => {

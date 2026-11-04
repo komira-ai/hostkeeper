@@ -81,19 +81,46 @@ where
     S::ResponseBody: HttpBody<Data = Bytes> + Send + 'static,
     <S::ResponseBody as HttpBody>::Error: Into<StdError> + Send,
 {
+    // Everything that can branch is in the functions below, which are not generic, so that each
+    // is compiled once for every service this is called with.
+    let (path, call) = request_of(path, request, metadata, peer)?;
+    let mut grpc = Grpc::new(service);
+    grpc.ready()
+        .await
+        .map_err(Into::<StdError>::into)
+        .map_err(not_ready)?;
+    Ok(grpc.unary(call, path, RawCodec).await?.into_inner())
+}
+
+/// The path and request of a call: the bytes, the metadata, and the peer identity of an
+/// in-memory call.
+fn request_of(
+    path: &str,
+    request: Bytes,
+    metadata: &MetadataMap,
+    peer: Option<PeerIdentity>,
+) -> Result<(PathAndQuery, tonic::Request<Bytes>), Status> {
     let path = PathAndQuery::try_from(path)
         .map_err(|_| Status::internal(format!("{path:?} is not a gRPC path")))?;
-    let mut grpc = Grpc::new(service);
-    grpc.ready().await.map_err(|e| {
-        let e: StdError = e.into();
-        Status::unavailable(format!("the channel is not ready: {e}"))
-    })?;
     let mut call = tonic::Request::new(request);
     *call.metadata_mut() = metadata.clone();
     if let Some(peer) = peer {
         call.extensions_mut().insert(peer);
     }
-    Ok(grpc.unary(call, path, RawCodec).await?.into_inner())
+    Ok((path, call))
+}
+
+/// A runtime on the current thread, for one call.
+fn runtime() -> Result<tokio::runtime::Runtime, Status> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Status::internal(format!("cannot start a runtime: {e}")))
+}
+
+/// The status of a channel that is not ready.
+fn not_ready(e: StdError) -> Status {
+    Status::unavailable(format!("the channel is not ready: {e}"))
 }
 
 /// gRPC over TLS to `--endpoint`. The runtime and the connection are made in each call.
@@ -126,10 +153,7 @@ impl Tonic {
 
 impl CtlTransport for Tonic {
     fn call(&self, path: &str, request: Bytes, metadata: &MetadataMap) -> Result<Bytes, Status> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| Status::internal(format!("cannot start a runtime: {e}")))?;
+        let runtime = runtime()?;
         runtime.block_on(async {
             let channel = self.endpoint.connect().await.map_err(|e| {
                 Status::unavailable(format!("cannot connect to {}: {e}", self.endpoint.uri()))
@@ -238,9 +262,7 @@ impl Service<http::Request<Body>> for Router {
 impl CtlTransport for InMemory {
     fn call(&self, path: &str, request: Bytes, metadata: &MetadataMap) -> Result<Bytes, Status> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .map_err(|e| Status::internal(format!("cannot start a runtime: {e}")))?;
+        let runtime = runtime()?;
         let router = Router(self.services.clone());
         runtime.block_on(unary(
             router,

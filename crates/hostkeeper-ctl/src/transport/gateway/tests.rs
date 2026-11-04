@@ -251,7 +251,7 @@ fn a_bad_request_a_lost_connection_and_a_bad_body() {
 
 /// The status and body of a response, or why it was refused.
 fn read(bytes: &[u8]) -> Result<(u16, Vec<u8>), String> {
-    read_response(BufReader::new(bytes)).map_err(|e| match e {
+    read_response(&mut BufReader::new(bytes)).map_err(|e| match e {
         ReadError::Io(e) => format!("io: {e}"),
         ReadError::Malformed(why) => why,
     })

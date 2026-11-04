@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use prost_reflect::{DynamicMessage, Kind, MapKey, Value};
 
-use super::{base64, compact, pretty, scalar_text, write_single, write_string};
+use super::{
+    base64, compact, map_key, pretty, pretty_field, scalar_text, write_single, write_string,
+};
 use crate::testutil::{from_json, message};
 
 /// Catches a kind written in another form than canonical JSON: 64-bit integers as numbers,
@@ -142,5 +144,34 @@ fn a_list_or_map_as_a_single_value_is_null() {
         let mut out = String::new();
         write_single(&mut out, &value, &Kind::Int32, None);
         assert_eq!(out, "null");
+    }
+}
+
+/// Catches a map key of any kind written in another form than its text: a number of 64 bits
+/// quoted twice or cut, a bool as a number. The fixture has no map with a `uint64` or `int32` key.
+#[test]
+fn every_map_key_kind_is_its_text() {
+    let cases = [
+        (MapKey::Bool(true), "true"),
+        (MapKey::I32(-3), "-3"),
+        (MapKey::I64(i64::MIN), "-9223372036854775808"),
+        (MapKey::U32(u32::MAX), "4294967295"),
+        (MapKey::U64(u64::MAX), "18446744073709551615"),
+        (MapKey::String("k".into()), "k"),
+    ];
+    for (key, text) in cases {
+        assert_eq!(map_key(&key), text, "{key:?}");
+    }
+}
+
+/// Catches an empty list or map written on its own (a text output of one field) as anything but
+/// `[]` or `{}`: a line break inside, or nothing.
+#[test]
+fn an_empty_list_or_map_field_alone_is_brackets() {
+    let widget = message("Widget");
+    let empty = DynamicMessage::new(widget.clone());
+    for (name, text) in [("tags", "[]"), ("labels", "{}"), ("inners", "[]")] {
+        let field = widget.get_field_by_name(name).expect(name);
+        assert_eq!(pretty_field(&empty, &field, 2), text, "{name}");
     }
 }
