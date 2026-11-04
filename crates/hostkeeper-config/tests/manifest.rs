@@ -479,7 +479,7 @@ fn malformed_min_hostkeeper_is_a_release_refusal_not_too_old() {
         "\"9.0.0-rc.1\"",
         "\"9.0.0+build\"",
         "\"9.0\"",
-        "\"9.0.0.0\"",
+        "\"192.0.2.1\"",
         "\"09.0.0\"",
         "\"v9.0.0\"",
         "\"\"",

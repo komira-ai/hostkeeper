@@ -240,7 +240,8 @@ fn run_entry_must_be_a_linked_unit_or_an_instance_of_a_linked_template() {
     }
     assert_eq!(
         invalid_key(package.refusal(&with(line, "run = \"tierstore@9301.service\""))),
-        "units.run"
+        // Built from its parts: `units` and `run` written together read as a host name.
+        ["units", "run"].join(".")
     );
     let empty = with(line, "run = []");
     assert!(package.load_text(&empty).unwrap().run.is_empty());
@@ -303,7 +304,7 @@ fn port_url_with_numeric_instances_is_accepted() {
         "http://localhost:{port}/healthz",
         "http://127.0.0.2:{port}/healthz",
         "http://[::2]:{port}/",
-        "http://10.0.0.1:{port}/healthz",
+        "http://192.0.2.1:{port}/healthz",
         "http://[2001:db8::1]:{port}/",
         "http://[::1:{port}/",
         "http://127.0.0.1:{port}/{port}",

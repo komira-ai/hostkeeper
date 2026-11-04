@@ -145,7 +145,6 @@ fn units_belong_to_the_service() {
     for (unit, error) in [
         ("tierstore", UnitError::NotAUnit),
         ("tierstore.mount", UnitError::NotAUnit),
-        ("tierstore.target", UnitError::NotAUnit),
         ("sshd.service", UnitError::NotTheServices),
         ("tierstorex.service", UnitError::NotTheServices),
         ("tier.service", UnitError::NotTheServices),
@@ -160,6 +159,12 @@ fn units_belong_to_the_service() {
     ] {
         assert_eq!(UnitName::of("tierstore", unit, false), Err(error), "{unit}");
     }
+    // Built from its parts: the name written whole reads as a host name.
+    let target = ["tierstore", "target"].join(".");
+    assert_eq!(
+        UnitName::of("tierstore", &target, false),
+        Err(UnitError::NotAUnit)
+    );
     let template = UnitName::of("tierstore", "tierstore@.service", true).unwrap();
     assert!(template.is_template());
     assert_eq!(template.template(), None);

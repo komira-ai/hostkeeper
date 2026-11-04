@@ -616,7 +616,7 @@ fn check_target(path: &str) -> Result<(), ManifestRefusal> {
     {
         Some(prefix) => Err(ManifestRefusal::ReservedPath {
             path: path.to_owned(),
-            prefix: *prefix,
+            prefix,
         }),
         None => Ok(()),
     }

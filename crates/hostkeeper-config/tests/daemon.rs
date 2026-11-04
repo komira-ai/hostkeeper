@@ -400,7 +400,7 @@ fn bad_ca_digest_and_non_https_urls_are_refused() {
     }
     for url in [
         "https://releases.example/channel/stable",
-        "https://10.0.0.1:443",
+        "https://192.0.2.1:443",
         "https://[2001:db8::1]:8443/x",
         "https://[2001:db8::1]",
     ] {
