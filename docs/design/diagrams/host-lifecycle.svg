@@ -93,7 +93,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="159.538" y="633" width="22" height="14" rx="3" class="box-b"/>
 <text x="189.538" y="645" class="t-m" text-anchor="start">parses network input</text>
 <rect x="340.769" y="633" width="22" height="14" rx="3" class="box"/>
-<text x="370.769" y="645" class="t-m" text-anchor="start">unprivileged local</text>
+<text x="370.769" y="645" class="t-m" text-anchor="start">local only</text>
 <rect x="509.077" y="633" width="22" height="14" rx="3" class="box-p"/>
 <text x="539.077" y="645" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
 <path d="M787.231,641 L817.231,641" class="ln" marker-end="url(#host-lifecycle-ak)"/>

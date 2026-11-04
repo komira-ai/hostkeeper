@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1200" width="1200" height="1200" role="img" aria-label="Enrollment and remote install: a boot image carrying the agent, the coordinator URL and the CA fingerprint and no secret; a pending request; approval by the operator, a batch token or a Mac nonce; a certificate; an assignment; and an install order that runs through the update path.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1040" width="1200" height="1040" role="img" aria-label="Enrollment and remote install: a boot image carrying the daemon, the coordinator URL, the CA fingerprint and the services file but no secret; a pending request; approval by the operator or a Mac nonce; a certificate; an assignment; and an install order that runs through the update path.">
 <title>Enrollment and remote install</title>
-<desc>A new host makes its own key and asks to enroll; nothing is installed until an operator or a pre-registered token approves the request and the CA signs a short-lived certificate. After that the operator assigns a service and the coordinator sends an install order, which the root part verifies and runs through the same steps as an update.</desc>
+<desc>A new host makes its own key and asks to enroll; nothing is installed until an operator approves the request and the coordinator signs a short-lived certificate. After that the operator assigns a service the host's services file names, and the coordinator sends an install order that the daemon verifies and runs through the same steps as an update.</desc>
 <defs><marker id="enrollment-and-remote-install-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="enrollment-and-remote-install-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -20,115 +20,84 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 .t-m{fill:#5A5A57;font-size:12px}
 .lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
 </style>
-<rect x="0" y="0" width="1200" height="1200" fill="#FFFFFF"/>
+<rect x="0" y="0" width="1200" height="1040" fill="#FFFFFF"/>
 <text x="20" y="28" class="b" font-size="16" text-anchor="start">Enrollment and remote install: from a bare image to a running service</text>
-<path d="M120,76 L120,1150" class="life"/>
-<path d="M400,76 L400,1150" class="life"/>
-<path d="M680,76 L680,1150" class="life"/>
-<path d="M940,76 L940,1150" class="life"/>
-<path d="M1110,76 L1110,1150" class="life"/>
-<rect x="45" y="44" width="150" height="32" rx="5" class="box-b"/>
-<text x="120" y="65" class="b" text-anchor="middle">Boot image / agent</text>
-<rect x="345" y="44" width="110" height="32" rx="5" class="box-b"/>
-<text x="400" y="65" class="b" text-anchor="middle">Coordinator</text>
-<rect x="625" y="44" width="110" height="32" rx="5" class="box"/>
-<text x="680" y="65" class="b" text-anchor="middle">Operator</text>
-<rect x="885" y="44" width="110" height="32" rx="5" class="box"/>
-<text x="940" y="65" class="b" text-anchor="middle">CA signer</text>
-<rect x="1055" y="44" width="110" height="32" rx="5" class="box-o"/>
-<text x="1110" y="65" class="b" text-anchor="middle">Root part</text>
-<circle cx="30" cy="112" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="30" y="116" class="b" font-size="12" text-anchor="middle">1</text>
-<rect x="44" y="96" width="230" height="40" rx="5" class="box" style="stroke:none"/>
-<rect x="44" y="96" width="230" height="40" rx="5" class="box-b"/>
-<text x="159" y="113" class="t-m" text-anchor="middle">carries agent, coordinator URL,</text>
-<text x="159" y="128" class="t-m" text-anchor="middle">CA hash; no secret</text>
-<path d="M120,155 L156,155 L156,175 L120,175" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<text x="166" y="162" class="t-m lbl" text-anchor="start">make P-256 key,</text>
-<text x="166" y="177" class="t-m lbl" text-anchor="start">collect claims</text>
-<circle cx="104" cy="165" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="104" y="169" class="b" font-size="12" text-anchor="middle">2</text>
-<path d="M120,215 L400,215" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<circle cx="134" cy="201" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="134" y="205" class="b" font-size="12" text-anchor="middle">3</text>
-<text x="152" y="209" class="t-m lbl" text-anchor="start">POST request {csr, claims}</text>
-<text x="415" y="205" class="t-m lbl" text-anchor="start">first contact pinned to CA hash</text>
-<path d="M400,248 L120,248" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<text x="134" y="242" class="t-m lbl" text-anchor="start">202 pending</text>
-<circle cx="284" cy="291" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="284" y="295" class="b" font-size="12" text-anchor="middle">4</text>
-<rect x="300" y="276" width="210" height="40" rx="5" class="box" style="stroke:none"/>
-<rect x="300" y="276" width="210" height="40" rx="5" class="box-b"/>
-<text x="405" y="293" class="t-m" text-anchor="middle">pending: nothing installed;</text>
-<text x="405" y="308" class="t-m" text-anchor="middle">cap, then pending_full</text>
-<rect x="524" y="276" width="148" height="40" rx="4" class="box" style="stroke:none"/>
-<rect x="524" y="276" width="148" height="40" rx="4" class="box-p"/>
-<text x="598" y="300" class="t-m" text-anchor="middle">claims are not proof</text>
-<path d="M680,368 L400,368" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<circle cx="414" cy="354" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="414" y="358" class="b" font-size="12" text-anchor="middle">5</text>
-<text x="432" y="362" class="t-m lbl" text-anchor="start">approve host id, role, key hash</text>
-<rect x="330" y="386" width="520" height="64" rx="3" class="box" style="stroke:none"/>
-<rect x="330" y="386" width="520" height="64" rx="3" class="box-p"/>
-<text x="338" y="402" class="b" font-size="12" text-anchor="start">alt</text>
-<text x="364" y="402" class="t-m lbl" text-anchor="start">or batch token: hardware allowlist + CIDR, entry consumed</text>
-<text x="364" y="422" class="t-m lbl" text-anchor="start">or Mac nonce: consumed with the approval</text>
-<path d="M400,500 L940,500" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<circle cx="414" cy="486" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="414" y="490" class="b" font-size="12" text-anchor="middle">6</text>
-<text x="432" y="494" class="t-m lbl" text-anchor="start">sign agent cert (7 days)</text>
-<path d="M940,530 L400,530" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<text x="414" y="524" class="t-m lbl" text-anchor="start">certificate</text>
-<path d="M120,582 L400,582" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<circle cx="134" cy="568" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="134" y="572" class="b" font-size="12" text-anchor="middle">7</text>
-<text x="152" y="576" class="t-m lbl" text-anchor="start">poll with signed nonce</text>
-<path d="M400,612 L120,612" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<text x="134" y="606" class="t-m lbl" text-anchor="start">cert, host id, CA bundle</text>
-<path d="M120,668 L400,668" class="ln" marker-end="url(#enrollment-and-remote-install-ak)" marker-start="url(#enrollment-and-remote-install-ak)"/>
-<circle cx="134" cy="648" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="134" y="652" class="b" font-size="12" text-anchor="middle">8</text>
-<text x="152" y="644" class="t-m lbl" text-anchor="start">mutual TLS heartbeats;</text>
-<text x="152" y="659" class="t-m lbl" text-anchor="start">renew at half life</text>
-<path d="M680,736 L400,736" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<circle cx="414" cy="722" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="414" y="726" class="b" font-size="12" text-anchor="middle">9</text>
-<text x="432" y="730" class="t-m lbl" text-anchor="start">assign service + signed approval</text>
-<path d="M400,796 L120,796" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<circle cx="134" cy="782" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="134" y="786" class="b" font-size="12" text-anchor="middle">10</text>
-<text x="152" y="790" class="t-m lbl" text-anchor="start">Install{service, version, digest}</text>
-<circle cx="190" cy="813" r="6" fill="#FFFAF5" stroke="#FD4F1D" stroke-width="1.6"/>
-<text x="202" y="817" class="t-m" text-anchor="start">only if the slot is free</text>
-<path d="M120,862 L1110,862" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<circle cx="134" cy="848" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="134" y="852" class="b" font-size="12" text-anchor="middle">11</text>
-<text x="152" y="856" class="t-m lbl" text-anchor="start">RunStep INSTALL</text>
-<path d="M1110,905 L1074,905 L1074,925 L1110,925" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<text x="1064" y="912" class="t-m lbl" text-anchor="end">fetch, verify,</text>
-<text x="1064" y="927" class="t-m lbl" text-anchor="end">compare declaration</text>
-<text x="1064" y="942" class="t-m lbl" text-anchor="end">digest</text>
-<circle cx="1126" cy="915" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="1126" y="919" class="b" font-size="12" text-anchor="middle">12</text>
-<rect x="1030" y="954" width="160" height="40" rx="5" class="box" style="stroke:none"/>
-<rect x="1030" y="954" width="160" height="40" rx="5" class="box-p"/>
-<text x="1110" y="971" class="t-m" text-anchor="middle">mismatch: Deferred</text>
-<text x="1110" y="986" class="t-m" text-anchor="middle">rights_change</text>
-<path d="M1110,1030 L1074,1030 L1074,1050 L1110,1050" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<text x="1064" y="1037" class="t-m lbl" text-anchor="end">prepare, cutover, verify,</text>
-<text x="1064" y="1052" class="t-m lbl" text-anchor="end">cleanup (no previous)</text>
-<circle cx="1126" cy="1040" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="1126" y="1044" class="b" font-size="12" text-anchor="middle">13</text>
-<rect x="150" y="1074" width="860" height="56" rx="4" class="box" style="stroke:none"/>
-<rect x="150" y="1074" width="860" height="56" rx="4" class="box-p"/>
-<circle cx="166" cy="1094" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="166" y="1098" class="b" font-size="12" text-anchor="middle">14</text>
-<text x="186" y="1098" class="t-m" text-anchor="start">optional: the coordinator asks the CA for a service identity cert (8 h);</text>
-<text x="186" y="1118" class="t-m" text-anchor="start">the root part delivers it to the service by a handoff file</text>
-<path d="M30,1176 L60,1176" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<text x="68" y="1180" class="t-m" text-anchor="start">request</text>
-<path d="M137.169,1176 L167.169,1176" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
-<text x="175.169" y="1180" class="t-m" text-anchor="start">reply or report</text>
-<rect x="298.246" y="1168" width="22" height="14" rx="3" class="box-p"/>
-<text x="328.246" y="1180" class="t-m" text-anchor="start">optional or designed</text>
+<path d="M150,76 L150,990" class="life"/>
+<path d="M520,76 L520,990" class="life"/>
+<path d="M900,76 L900,990" class="life"/>
+<rect x="75" y="44" width="150" height="32" rx="5" class="box-o"/>
+<text x="150" y="65" class="b" text-anchor="middle">Boot image / daemon</text>
+<rect x="455" y="44" width="130" height="32" rx="5" class="box-b"/>
+<text x="520" y="65" class="b" text-anchor="middle">Coordinator</text>
+<rect x="845" y="44" width="110" height="32" rx="5" class="box"/>
+<text x="900" y="65" class="b" text-anchor="middle">Operator</text>
+<circle cx="30" cy="116" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="30" y="120" class="b" font-size="12" text-anchor="middle">1</text>
+<rect x="44" y="96" width="330" height="50" rx="5" class="box-b"/>
+<text x="209" y="113" class="t-m" text-anchor="middle">image carries the daemon, coordinator URL,</text>
+<text x="209" y="129" class="t-m" text-anchor="middle">CA hash and services.toml; no secret</text>
+<path d="M150,175 L190,175 L190,195 L150,195" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<circle cx="134" cy="185" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="134" y="189" class="b" font-size="12" text-anchor="middle">2</text>
+<text x="200" y="182" class="t-m lbl" text-anchor="start">make P-256 key,</text>
+<text x="200" y="197" class="t-m lbl" text-anchor="start">collect claims</text>
+<path d="M150,235 L520,235" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<circle cx="164" cy="221" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="164" y="225" class="b" font-size="12" text-anchor="middle">3</text>
+<text x="182" y="229" class="t-m lbl" text-anchor="start">POST request {csr, claims}</text>
+<text x="535" y="229" class="t-m lbl" text-anchor="start">first contact pinned to CA hash</text>
+<path d="M520,268 L150,268" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<text x="164" y="262" class="t-m lbl" text-anchor="start">202 pending</text>
+<circle cx="300" cy="310" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="300" y="314" class="b" font-size="12" text-anchor="middle">4</text>
+<rect x="316" y="292" width="230" height="40" rx="5" class="box-b"/>
+<text x="431" y="309" class="t-m" text-anchor="middle">pending: nothing installed;</text>
+<text x="431" y="324" class="t-m" text-anchor="middle">cap, then pending_full</text>
+<rect x="560" y="292" width="170" height="40" rx="4" class="box-p"/>
+<text x="645" y="316" class="t-m" text-anchor="middle">claims are not proof</text>
+<path d="M900,390 L520,390" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<circle cx="534" cy="376" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="534" y="380" class="b" font-size="12" text-anchor="middle">5</text>
+<text x="552" y="384" class="t-m lbl" text-anchor="start">approve host id, role, key hash</text>
+<text x="890" y="410" class="t-m lbl" text-anchor="end">UI or CLI, operator token</text>
+<rect x="440" y="424" width="430" height="44" rx="3" class="box-p"/>
+<text x="448" y="442" class="b" text-anchor="start">alt</text>
+<text x="474" y="442" class="t-m lbl" text-anchor="start">Mac only: MDM nonce, consumed with the approval</text>
+<circle cx="534" cy="516" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="534" y="520" class="b" font-size="12" text-anchor="middle">6</text>
+<rect x="552" y="498" width="300" height="40" rx="5" class="box-b"/>
+<text x="702" y="515" class="t-m" text-anchor="middle">CA module signs a host certificate</text>
+<text x="702" y="530" class="t-m" text-anchor="middle">(7 days), one per request id</text>
+<path d="M150,580 L520,580" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<circle cx="164" cy="566" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="164" y="570" class="b" font-size="12" text-anchor="middle">7</text>
+<text x="182" y="574" class="t-m lbl" text-anchor="start">poll with signed nonce</text>
+<path d="M520,610 L150,610" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<text x="164" y="604" class="t-m lbl" text-anchor="start">certificate, host id, CA bundle</text>
+<path d="M150,682 L520,682" class="ln" marker-end="url(#enrollment-and-remote-install-ak)" marker-start="url(#enrollment-and-remote-install-ak)"/>
+<circle cx="164" cy="642" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="164" y="646" class="b" font-size="12" text-anchor="middle">8</text>
+<text x="182" y="650" class="t-m lbl" text-anchor="start">mutual TLS heartbeats;</text>
+<text x="182" y="665" class="t-m lbl" text-anchor="start">renew at half life</text>
+<path d="M900,752 L520,752" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<circle cx="534" cy="724" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="534" y="728" class="b" font-size="12" text-anchor="middle">9</text>
+<text x="552" y="732" class="t-m lbl" text-anchor="start">assign service (named in the</text>
+<text x="552" y="747" class="t-m lbl" text-anchor="start">host's own services file)</text>
+<path d="M520,800 L150,800" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<circle cx="164" cy="786" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="164" y="790" class="b" font-size="12" text-anchor="middle">10</text>
+<text x="182" y="794" class="t-m lbl" text-anchor="start">order: install S V D</text>
+<text x="535" y="822" class="t-m lbl" text-anchor="start">only if the one live update slot is free</text>
+<path d="M150,870 L190,870 L190,890 L150,890" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<circle cx="134" cy="880" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="134" y="884" class="b" font-size="12" text-anchor="middle">11</text>
+<text x="200" y="866" class="t-m lbl" text-anchor="start">fetch, verify against the pinned signer, seal</text>
+<text x="200" y="882" class="t-m lbl" text-anchor="start">then prepare, cutover, verify, cleanup</text>
+<text x="200" y="898" class="t-m lbl" text-anchor="start">(no previous release)</text>
+<text x="150" y="950" class="t-m" text-anchor="start">The coordinator cannot make the daemon run anything the services file does not name.</text>
+<path d="M30,1018 L60,1018" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<text x="68" y="1022" class="t-m" text-anchor="start">request</text>
+<path d="M130,1018 L160,1018" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
+<text x="168" y="1022" class="t-m" text-anchor="start">reply or report</text>
 </svg>

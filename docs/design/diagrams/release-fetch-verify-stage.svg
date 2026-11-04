@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="Release fetch, verify and stage: order with version only, fetch child, size and digest check, attestation, archive shape check, unpack and hash, binary self-report, tree seal, with what is root-written at each step.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="Release fetch, verify and stage: order with version only, fetch by the daemon, size and digest check, attestation, archive shape check, unpack and hash, binary self-report, tree seal, with what is root-written at each step.">
 <title>Release fetch, verify and stage</title>
-<desc>The root part turns an order that names only a service and a version into a sealed release tree in eight steps, and a failure in the checks leaves nothing behind. The seal is checked again before every later step, so a changed tree halts the service instead of running.</desc>
+<desc>The daemon turns an order that names only a service and a version into a sealed release tree in eight steps, and a failure in the checks leaves nothing behind. The seal is checked again before every later step, so a changed tree halts the service instead of running.</desc>
 <defs><marker id="release-fetch-verify-stage-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="release-fetch-verify-stage-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -30,13 +30,13 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="30" y="84" class="b" font-size="12" text-anchor="middle">1</text>
 <rect x="320" y="80" width="220" height="100" rx="5" class="box"/>
 <text x="430" y="104" class="b" text-anchor="middle">Resolve location</text>
-<text x="430" y="122" class="t-m" text-anchor="middle">from the host&#x27;s channel config</text>
+<text x="430" y="122" class="t-m" text-anchor="middle">from the services file</text>
 <circle cx="320" cy="80" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="320" y="84" class="b" font-size="12" text-anchor="middle">2</text>
 <rect x="610" y="80" width="220" height="100" rx="5" class="box dash"/>
-<text x="720" y="104" class="b" text-anchor="middle">Fetch child, unprivileged</text>
-<text x="720" y="122" class="t-m" text-anchor="middle">bytes to a pipe</text>
-<text x="720" y="138" class="t-m" text-anchor="middle">isolated process</text>
+<text x="720" y="104" class="b" text-anchor="middle">Fetch by the daemon</text>
+<text x="720" y="122" class="t-m" text-anchor="middle">bytes to a staging file</text>
+<text x="720" y="138" class="t-m" text-anchor="middle">as root, counted</text>
 <circle cx="610" cy="80" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="610" y="84" class="b" font-size="12" text-anchor="middle">3</text>
 <rect x="900" y="80" width="220" height="100" rx="5" class="box-o"/>
@@ -53,9 +53,9 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="900" y="254" class="b" font-size="12" text-anchor="middle">5</text>
 <rect x="610" y="250" width="220" height="100" rx="5" class="box-o"/>
 <text x="720" y="274" class="b" text-anchor="middle">Archive shape</text>
-<text x="720" y="292" class="t-m" text-anchor="middle">one binary, optional</text>
-<text x="720" y="308" class="t-m" text-anchor="middle">updater.d files; no links,</text>
-<text x="720" y="324" class="t-m" text-anchor="middle">no absolute or .. paths</text>
+<text x="720" y="292" class="t-m" text-anchor="middle">one binary; no links,</text>
+<text x="720" y="308" class="t-m" text-anchor="middle">no declaration or extension</text>
+<text x="720" y="324" class="t-m" text-anchor="middle">file; no .. paths</text>
 <circle cx="610" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="610" y="254" class="b" font-size="12" text-anchor="middle">6</text>
 <rect x="320" y="250" width="220" height="100" rx="5" class="box-o"/>
@@ -65,7 +65,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="320" y="254" class="b" font-size="12" text-anchor="middle">7</text>
 <rect x="30" y="250" width="220" height="100" rx="5" class="box-o"/>
 <text x="140" y="274" class="b" text-anchor="middle">Seal</text>
-<text x="140" y="292" class="t-m" text-anchor="middle">self-report version, mode 0555,</text>
+<text x="140" y="292" class="t-m" text-anchor="middle">run binary for version, mode 0555,</text>
 <text x="140" y="308" class="t-m" text-anchor="middle">rename, write .seal</text>
 <circle cx="30" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="30" y="254" class="b" font-size="12" text-anchor="middle">8</text>
@@ -85,7 +85,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="460" y="430" width="660" height="50" rx="5" class="box-o" style="stroke-width:2.2"/>
 <text x="790" y="452" class="b" text-anchor="middle">refused: nothing exists</text>
 <text x="790" y="468" class="t-m" text-anchor="middle">Failed before any hook</text>
-<text x="772" y="414" class="t-m lbl" text-anchor="start">steps 4 to 7 fail</text>
+<text x="772" y="414" class="t-m lbl" text-anchor="start">steps 4 to 8 fail</text>
 <path d="M195,350 L195,380" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
 <path d="M90,389 v70 a105,9 0 0 0 210,0 v-70 a105,9 0 0 0 -210,0 z" class="box-b"/>
 <ellipse cx="195" cy="389" rx="105" ry="9" class="box-b"/>
@@ -108,7 +108,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="162.862" y="688" width="22" height="14" rx="3" class="box-b"/>
 <text x="192.862" y="700" class="t-m" text-anchor="start">parses network input</text>
 <rect x="349.631" y="688" width="22" height="14" rx="3" class="box"/>
-<text x="379.631" y="700" class="t-m" text-anchor="start">unprivileged local</text>
+<text x="379.631" y="700" class="t-m" text-anchor="start">local only</text>
 <rect x="522.923" y="688" width="22" height="14" rx="3" class="box-p"/>
 <text x="552.923" y="700" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
 <path d="M810.769,696 L840.769,696" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>

@@ -91,7 +91,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="800" y="390" class="b lbl" font-size="12" text-anchor="middle">slot passes</text>
 <text x="600" y="618" class="b" text-anchor="middle">A deferred host holds no slot. A failed host holds it until healthy. An abandoned host holds none.</text>
 <rect x="30" y="668" width="22" height="14" rx="3" class="box"/>
-<text x="60" y="680" class="t-m" text-anchor="start">unprivileged local</text>
+<text x="60" y="680" class="t-m" text-anchor="start">local only</text>
 <rect x="203.292" y="668" width="22" height="14" rx="3" class="box-o"/>
 <text x="233.292" y="680" class="t-m" text-anchor="start">active update</text>
 <rect x="342.892" y="668" width="22" height="14" rx="3" class="box-p"/>

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780" role="img" aria-label="Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and launchd jobs for agent and root part.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780" role="img" aria-label="Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and the one launchd daemon.">
 <title>Mac path</title>
 <desc>A Mac is enrolled by the MDM gate, which installs the hostkeeper package by digest and pushes a one-time nonce. The coordinator auto-approves the Mac only when every nonce and serial condition holds, otherwise the request stays pending.</desc>
 <defs><marker id="mac-path-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="mac-path-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
@@ -58,18 +58,16 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="1040" y="166" class="t-m" text-anchor="middle">(no secret)</text>
 <circle cx="910" cy="90" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="910" y="94" class="b" font-size="12" text-anchor="middle">4</text>
-<rect x="910" y="250" width="260" height="60" rx="5" class="box dash"/>
-<text x="1040" y="275" class="b" text-anchor="middle">launchd job: agent</text>
-<text x="1040" y="293" class="t-m" text-anchor="middle">user _hostkeeper</text>
-<rect x="910" y="350" width="260" height="60" rx="5" class="box-o dash"/>
-<text x="1040" y="375" class="b" text-anchor="middle">launchd job: root part</text>
-<text x="1040" y="393" class="t-m" text-anchor="middle">user root</text>
-<path d="M1040,310 L1040,350" class="ln" marker-end="url(#mac-path-ak)"/>
-<text x="1050" y="334" class="t-m lbl" text-anchor="start">RunStep</text>
-<rect x="910" y="450" width="260" height="70" rx="5" class="box-b dash"/>
+<rect x="910" y="250" width="260" height="160" rx="5" class="box-o dash"/>
+<text x="1040" y="275" class="b" text-anchor="middle">launchd daemon: hostkeeper</text>
+<text x="1040" y="293" class="t-m" text-anchor="middle">user root, one process</text>
+<text x="1040" y="318" class="t-m" text-anchor="middle">heartbeats, verifies releases,</text>
+<text x="1040" y="334" class="t-m" text-anchor="middle">runs hooks as root</text>
+<text x="1040" y="350" class="t-m" text-anchor="middle">no unprivileged part</text>
+<rect x="910" y="450" width="260" height="70" rx="5" class="box-o dash"/>
 <text x="1040" y="474" class="b" text-anchor="middle">Each step</text>
-<text x="1040" y="492" class="t-m" text-anchor="middle">launchd job + sandbox profile</text>
-<text x="1040" y="508" class="t-m" text-anchor="middle">from the declaration</text>
+<text x="1040" y="492" class="t-m" text-anchor="middle">launchd job as root: timeout,</text>
+<text x="1040" y="508" class="t-m" text-anchor="middle">kill, log capture; no sandbox</text>
 <text x="1040" y="540" class="t-m" text-anchor="middle">(a transient unit on Linux)</text>
 <rect x="410" y="250" width="380" height="208" rx="5" class="box-b"/>
 <text x="600" y="272" class="b" text-anchor="middle">Coordinator</text>
@@ -117,7 +115,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="162.862" y="738" width="22" height="14" rx="3" class="box-b"/>
 <text x="192.862" y="750" class="t-m" text-anchor="start">parses network input</text>
 <rect x="349.631" y="738" width="22" height="14" rx="3" class="box"/>
-<text x="379.631" y="750" class="t-m" text-anchor="start">unprivileged local</text>
+<text x="379.631" y="750" class="t-m" text-anchor="start">local only</text>
 <rect x="522.923" y="738" width="22" height="14" rx="3" class="box-p"/>
 <text x="552.923" y="750" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
 <path d="M810.769,746 L840.769,746" class="ln" marker-end="url(#mac-path-ak)"/>
