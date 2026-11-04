@@ -30,3 +30,6 @@ yaml.org
 =tool.download
 =hook.group
 =hook.environment.name
+
+# The SVG namespace URI every diagram under docs/design/diagrams declares; a namespace name, not a host the code reaches.
+=www.w3.org

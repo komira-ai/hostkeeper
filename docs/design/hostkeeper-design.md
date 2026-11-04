@@ -53,7 +53,7 @@ hostkeeper replaces all of that with one daemon per host, one coordinator per fa
 1. **One updater that knows no service.** Per-service behaviour lives in a hook shipped in the service's own release.
 2. **A fixed, small contract.** Five steps, four exit codes, one JSON line. Every step is safe to run twice. A hook is a subcommand of the service's own binary.
 3. **Trust is the release.** Code runs as root on a host only if it came from a release whose digest and attestation verified against the signer pinned for that service in the host's root-owned services file. There is no filter between the root daemon and the hook.
-4. **One live update at a time across the whole farm,** every service and every role. No setting widens it.
+4. **One live ordinary update at a time across the whole farm,** every service and every role. No setting widens it. The one exception is an operator's `Force`, which may start while another host is updating (section 5.4).
 5. **A release never runs code from the release it leaves,** and a bad release can be put back with the coordinator down.
 6. **Work is never cut to finish an update.** A service with live work drains in its own `prepare`. The default is to wait with no deadline; a deadline is a per-service option.
 7. **Enrollment and remote install.** A host that boots a hostkeeper image appears as pending; an operator approves it; the coordinator installs the services the host's services file names through the same path that updates them.
@@ -225,7 +225,7 @@ The file is larger than the minimum (name, binary, signer, timeouts, boot behavi
 7. The verdict goes in the step record and in `last_update` in the next heartbeat.
 8. If the last `verify` said `promotion_pending`, a watcher keeps running `verify` until it passes without the flag, or the promotion ceiling passes (Failed after commit), or a new order replaces it.
 
-A release cannot change the services file: signer and bounds come only from the host's file. The step contract:
+No daemon verb takes a services file from a release: signer and bounds come only from the host's file. This limits what the daemon does, not what a hook can do: a hook runs as unrestricted root, so a compromised signed release can overwrite the services file and the installed daemon (section 5.1). The step contract:
 
 | Step | Argument | Meaning |
 |---|---|---|
@@ -306,7 +306,7 @@ A broken release must be recoverable with the coordinator down, with no code fro
 
 **Kept releases.** A host keeps the release it runs, the previous one, every pinned release, the coordinator's `last_good` when known, and the newest four others. Pruning happens only after a switch is confirmed, takes the step lock, and never removes the `updater.previous_release` of an unfinished record, a pinned release, or the target of a switch on trial. A release that is not kept cannot be activated: recover through an ordinary update, or `ctl fetch` (B13), which stages without switching.
 
-**`activate`.** On the host, as root: `hostkeeper ctl activate --service S --version V --release-digest D [--pin]`. The daemon takes the service lock and the step lock without waiting (a live holder is named and the call is refused; a stuck holder is ended with `abort`), requires the target to be a kept release at or above `min_version`, switches links, restarts the service's `observe_units`, and returns. No fetch, no trial, never reverted. It is a forced update in the record, so the runner's crash safety applies. The binary doing the switch is the installed `hostkeeper`, which a service release cannot write, so the swap runs nothing from the release it leaves. The coordinator can send the same verb when it is up.
+**`activate`.** On the host, as root: `hostkeeper ctl activate --service S --version V --release-digest D [--pin]`. The daemon takes the service lock and the step lock without waiting (a live holder is named and the call is refused; a stuck holder is ended with `abort`), requires the target to be a kept release at or above `min_version`, switches links, restarts the service's `observe_units`, and returns. No fetch, no trial, never reverted. It is a forced update in the record, so the runner's crash safety applies. The binary doing the switch is the installed `hostkeeper`, and the swap runs nothing from the release it leaves. A service release is not expected to write that binary, but its hook runs as root and could; only the signer pin stands between a bad release and the daemon (section 5.1). The coordinator can send the same verb when it is up.
 
 **Pin.** `--pin` writes a root-owned hold file first and marks the release pinned second, so a crash between the two leaves a pinned host. `pin` and `unpin` take the service lock; the daemon reads the hold file again under the step lock before the first step of every order. A pin written while an update is in flight lets that update finish and is reported as `pinned_after_inflight`. A pinned service takes no order except `unpin` and `activate` naming exactly the pinned release. Lock order: service lock, then the step lock. The step lock is global to the host; an unbounded `prepare` on service A blocks `activate` for service B, which `abort` escapes.
 
@@ -548,7 +548,7 @@ Naming: `updater` names (`/var/lib/updater`, unit names, reserved keys) are stor
 
 ## 11. Limits
 
-1. **One update at a time, farm-wide.** A farm of N hosts with a ten-minute update takes at least N times ten minutes for one service. Canary and bake add to it.
+1. **One ordinary update at a time, farm-wide.** A farm of N hosts with a ten-minute update takes at least N times ten minutes for one service (an operator's `Force` is not held behind it). Canary and bake add to it.
 2. **A slow drain blocks the farm** unless the service declares a bound (8.9).
 3. **Wire.** A heartbeat lists at most 16 services in the imported coordinator; the protobuf schema says 17. They must agree before the protobuf API is served (B1). Heartbeat bodies are capped at 16 KiB, control bodies at 4 KiB, a bearer at 8 KiB.
 4. **Single coordinator,** no failover; its state is a handful of files; a restart costs the quiet start and resets bake and deferral backoff.
