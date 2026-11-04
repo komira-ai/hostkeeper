@@ -3,6 +3,8 @@
 //! pipe.
 #![allow(dead_code, reason = "each test binary uses part of the shared support")]
 
+pub mod force;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -13,11 +15,14 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
+use hostkeeper_daemon::prune::NoPrune;
 use hostkeeper_daemon::start::Settings;
 use hostkeeper_daemon::testing::{FakeClock, FakePackages, Log, ScriptedLauncher, manifest};
-use hostkeeper_daemon::{Daemon, Dirs, Ports, StoreSeam};
+use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
 use hostkeeper_hook::Verdict;
-use hostkeeper_proto::hostkeeper::agent::v1::{ForceRollback, Order, Update, order};
+use hostkeeper_placed::Roots;
+use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log as PlacedLog};
+use hostkeeper_proto::hostkeeper::agent::v1::{Force, ForceRollback, Order, Update, order};
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::{CrashPoint, Finished, RecordStore};
@@ -110,6 +115,46 @@ pub fn force_rollback(service: &str, version: &str, package_digest: &str, order_
     }
 }
 
+/// A `force` order.
+pub fn force(
+    service: &str,
+    version: &str,
+    package_digest: &str,
+    order_try: u64,
+    halt_generation: u64,
+) -> Order {
+    Order {
+        order_id: format!("force-{service}-{version}"),
+        r#try: order_try,
+        verb: Some(order::Verb::Force(Force {
+            service: service.to_owned(),
+            version: version.to_owned(),
+            package_digest: package_digest.to_owned(),
+            halt_generation,
+        })),
+    }
+}
+
+/// A unit's `WantedBy=` target, spelt in two pieces so that this file names no host.
+pub const TARGET: &str = concat!("multi-user.", "target");
+
+/// A systemd unit wanted by [`TARGET`].
+pub fn unit_text() -> String {
+    format!(
+        "[Unit]\nDescription=a test unit\n\n[Service]\nExecStart=/usr/bin/true\n\n[Install]\nWantedBy={TARGET}\n"
+    )
+}
+
+/// The directories placed-path linking works in, as the rig's host names them: the rig's
+/// scratch directory is that host's root, so `/packages` is [`Rig::packages`].
+pub fn roots() -> Roots {
+    Roots::new(
+        Path::new("/placed"),
+        Path::new("/units"),
+        Path::new("/packages"),
+    )
+}
+
 /// A scratch directory with the daemon's directories, its config and fakes for its ports.
 pub struct Rig {
     pub scratch: Scratch,
@@ -120,6 +165,12 @@ pub struct Rig {
     pub clock: Arc<FakeClock>,
     pub launcher: Arc<ScriptedLauncher>,
     pub store: Arc<FakePackages>,
+    /// The service manager; its calls are in [`Rig::placed_log`].
+    pub units: Arc<FakeUnitControl>,
+    /// The writes of placed-path linking and the calls of the service manager, in order.
+    pub placed_log: PlacedLog,
+    /// The filesystem placed-path linking goes through: the scratch directory as `/`.
+    pub placed_fs: Arc<FaultFs>,
 }
 
 impl Rig {
@@ -130,6 +181,8 @@ impl Rig {
         fs::write(&config, CONFIG).expect("write the config");
         fs::set_permissions(&config, fs::Permissions::from_mode(0o644)).expect("its mode");
         let packages = root.join("packages");
+        fs::create_dir(root.join("placed")).expect("the directory of placed.json");
+        let placed_log = PlacedLog::new();
         Rig {
             state: root.join("state"),
             store: FakePackages::new(&packages),
@@ -138,6 +191,9 @@ impl Rig {
             socket: root.join("r").join("a.sock"),
             clock: FakeClock::new(),
             launcher: ScriptedLauncher::new(),
+            units: Arc::new(FakeUnitControl::new(placed_log.clone())),
+            placed_fs: Arc::new(FaultFs::new(&root, placed_log.clone())),
+            placed_log,
             scratch,
         }
     }
@@ -148,7 +204,48 @@ impl Rig {
             packages: self.store.clone(),
             clock: self.clock.clone(),
             deadman_poll_secs: None,
+            units: self.units.clone(),
+            placement: Placement {
+                roots: roots(),
+                fs: self.placed_fs.clone(),
+            },
+            prune: Arc::new(NoPrune),
         }
+    }
+
+    /// A version of `service` with units, sealed with the package digest [`d`]: each of `units`
+    /// is a file of `units/` wanted by [`TARGET`], `run` are the units its manifest starts, and
+    /// each of `files` is a file `files/<name>` placed at its path.
+    pub fn add_units(
+        &self,
+        service: &str,
+        version: &str,
+        units: &[&str],
+        run: &[&str],
+        files: &[(&str, &str)],
+    ) -> PathBuf {
+        let mut text = manifest(service, version);
+        if !run.is_empty() {
+            let run: Vec<String> = run.iter().map(|unit| format!("\"{unit}\"")).collect();
+            text.push_str(&format!("\n[units]\nrun = [{}]\n", run.join(", ")));
+        }
+        for (name, path) in files {
+            text.push_str(&format!(
+                "\n[[files]]\nsource = \"files/{name}\"\npath = \"{path}\"\n"
+            ));
+        }
+        let dir = self.store.add(service, version, &text);
+        for (sub, names) in [
+            ("units", units.to_vec()),
+            ("files", files.iter().map(|(name, _)| *name).collect()),
+        ] {
+            fs::create_dir_all(dir.join(sub)).expect("a directory of the package");
+            for name in names {
+                fs::write(dir.join(sub).join(name), unit_text()).expect("a file of the package");
+            }
+        }
+        self.store.seal(service, version, &d());
+        dir
     }
 
     pub fn dirs(&self) -> Dirs {

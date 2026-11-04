@@ -13,6 +13,9 @@
 //!   of versions with `current` and `previous` that it and every package share.
 //! - [`seal`] is the seal file of an unpacked package version, and [`tree_digest`] the digest
 //!   it holds (both public formats, docs/package-format.md).
+//! - [`force`] is the journal of a hookless `force` ([`ForceRecord`]), an optional field of the
+//!   step record; a force that stops a running update flags its record `forced`, and the runner
+//!   then closes it `forced_over` and launches nothing more.
 //!
 //! The crate names no service and reads no declaration: the launcher that runs a step under the
 //! rights of a declaration, and the loader of declarations, plug in through [`StepLauncher`].
@@ -20,6 +23,7 @@
 pub mod artifact;
 pub mod clock;
 pub mod deadman;
+pub mod force;
 pub mod launcher;
 pub mod record;
 pub mod resume;
@@ -30,6 +34,7 @@ pub mod selfupdate;
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
 pub use clock::{Clock, Stamp, SystemClock};
 pub use deadman::{DeadMan, Watch};
+pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{AdditiveCall, LaunchError, StepCall, StepExit, StepLauncher};
 pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore, WriteFault};
 pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};

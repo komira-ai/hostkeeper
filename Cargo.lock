@@ -1011,6 +1011,7 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-daemon",
  "hostkeeper-hook",
+ "hostkeeper-placed",
  "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",

@@ -70,6 +70,54 @@ so it serves the admin socket's `Status` and runs no order.
 | 3 | the daemon config did not load |
 | 4 | another daemon holds the state directory's lock |
 
+## Force on a host
+
+A `force` order (design section 5.6) switches one service to a version with no hook, because a
+broken hook is often the thing that is broken. It names the service, the version, the package
+digest and a halt generation. **A force cuts running work**: a hooked step of the service that is
+running is stopped and its units stop without a drain, the one exception to "drains never cut
+work". It takes the service's lock only, never the step lock, so it never waits for another
+service's step.
+
+Before anything changes the daemon refuses a force of `hostkeeper` itself (`self_service`), an
+order whose service, version or digest breaks its grammar (`invalid_order`), and a resend whose
+try conflicts with the step record (`try_conflict`, `stale_try`); a resend of a force that
+ended is answered from the record. A force is not refused for a running hooked update of its
+service (it stops it), for a standing halt (an order whose halt generation is above the held
+one lifts the hold), or for a version below the running one: the host keeps no floor of its
+own.
+
+| Step | What changes | What a crash there leaves | What resumes |
+|---|---|---|---|
+| 1. Have the package | the package is fetched, verified, unpacked and sealed if the host does not hold it under a seal of the order's digest | at most a staging directory, removed later | the resend starts again |
+| 2. Read the manifest | nothing | nothing | the resend starts again |
+| 3. Check the paths against `placed.json` | nothing | nothing | the resend starts again |
+| 4. Flag the running hooked step | the step record of the service gets `forced` | a flagged record; its runner, or the force, closes it `forced_over` | the resend flags it again, which writes nothing |
+| 5. Stop that step's unit by name | the unit stops (tried twice) | a stopped unit | the resend stops it again |
+| 6. Wait for the runner to yield | the record is closed `Failed`, `forced_over`; no `rollback` or `cleanup` runs | the closed record | the resend goes on to step 7 |
+| 7. Take the service's lock | nothing on disk | nothing | from step 7 |
+| 8. Write the force record | the step record becomes the force's journal, phase `started` | the journal | the start pass, or the resend, runs steps 9 to 16 from the top |
+| 9. Stop the units the version left runs | its `run` units, and those `placed.json` holds enabled, stop | stopped units | the same, again from step 9 |
+| 10. Unlink what the target does not list | units are stopped, disabled and unlinked, files unlinked, `daemon-reload` | some links gone, `placed.json` saying which | again from step 9; an absent link is no error |
+| 11. Switch `current` | `previous` names the version left, `current` the target | either link whole | again from step 9; a switch to the version `current` names changes nothing |
+| 12. Link the target | its units, `WantedBy=` links and files are linked, written ahead in `placed.json` | links that `placed.json` lists | again from step 9; a link already right is left |
+| 13. `daemon-reload` | the service manager reads the units | a reload owed in `placed.json` | again from step 9 |
+| 14. Start the target's `run` units | the units start | started units | again from step 9 |
+| 15. Wait until each is active | each must be seen active once within `force_start_secs`, polled every second | nothing more | again from step 9 |
+| 16. Record the verdict | phase `verdicted` with `Succeeded`, or `Failed` with its reason | the verdict | nothing: a resend is answered from it |
+| 17. Report | the verdict, with the order's id and try, is what the daemon's status gives the heartbeat until the next order | the verdict | nothing |
+| 18. Prune | when `current` moved, the versions but `current` and `previous` are deleted (this build deletes nothing yet); a failed prune is an alert and leaves the verdict | the versions | nothing |
+
+The reasons a force reports: before anything changed, `Failed` before the commit with the
+reason of what refused it (`digest_mismatch`, `package_not_found`, `no_space`, `package_failed`,
+`manifest_mismatch`, `daemon_too_old`, `path_conflict`), or `unstopped` when the running step's
+unit could not be stopped; once the host began to change, `Failed` with `link_failed` (steps 9
+to 12, before the commit up to the switch and after it from then on), `daemon_reload_failed`
+(step 13) or `start_failed` (steps 14 and 15, blamed on the release). After a failure the host
+stays where it is: nothing is rolled back and the daemon does not try again. The repair is a
+second force, for instance to the version `previous` names, which is on the host and needs no
+fetch.
+
 hostkeeper is licensed under [Apache-2.0](LICENSE). How to contribute is in
 [CONTRIBUTING.md](CONTRIBUTING.md), and how to report a vulnerability is in
 [SECURITY.md](SECURITY.md). The rules every change to this repository is written and reviewed

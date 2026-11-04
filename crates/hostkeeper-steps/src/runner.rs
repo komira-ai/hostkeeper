@@ -6,6 +6,12 @@
 //! release it has checked against the digest the updater verified, and a crash at any point
 //! leaves a record that [`StepRunner::run`] picks up: a step found `running` has its unit
 //! stopped by name and is run again, a step found `done` is not.
+//!
+//! A `force` of the service may flag the record `forced` while an update runs (design section
+//! 5.6, steps 4 to 6). The runner reads the flag on disk, under the record lock, before it
+//! launches any step (a resumed one included) and in every write after a step returns: once it
+//! is set, the update is closed `Failed`, `forced_over` ([`Record::close_forced_over`]), its
+//! params file is removed, and nothing more is launched, `rollback` and `cleanup` included.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -371,6 +377,8 @@ impl StepRunner {
             hook: HookSel::New,
             progress: Progress::default(),
             order_try: order.order_try,
+            forced: false,
+            force: None,
         };
         self.store.save(&rec)?;
         Ok(rec)
@@ -384,6 +392,10 @@ impl StepRunner {
     ) -> Result<Finished, RunError> {
         loop {
             let finished = matches!(rec.state, State::Finished { .. });
+            // A force flagged the update: it ends here, before anything else is launched.
+            if !finished && self.forced(&mut rec)? {
+                continue;
+            }
             // The watcher is left to a later run ([`StepRunner::run_until_watching`]).
             if handoff & rec.progress.watching.is_some() & !finished {
                 return Ok(Finished {
@@ -404,7 +416,7 @@ impl StepRunner {
                     self.launcher.stop(&rec.unit(rec.step))?;
                     rec.attempt = rec.attempt.saturating_add(1);
                     rec.state = State::Pending;
-                    self.store.save(&rec)?;
+                    self.write(&mut rec)?;
                 }
                 State::Pending => self.start(order, &mut rec)?,
                 State::Done { code, last_line } => self.after(order, &mut rec, code, last_line)?,
@@ -423,7 +435,11 @@ impl StepRunner {
             None => release.check(&order.hook_binary),
         };
         let ran = match checked {
-            Ok(executable) => self.launch(order, rec, &executable)?,
+            Ok(executable) => match self.launch(order, rec, &executable)? {
+                Some(ran) => ran,
+                // A force flagged the update before its step was launched: it is closed.
+                None => return Ok(()),
+            },
             // The hook cannot be started: a failed step, and for `rollback` the one case to go
             // to the previous release's hook (3.3).
             Err(ArtifactError::BadHookPath(_) | ArtifactError::HookMissing(_)) => Ran::NoStart,
@@ -441,7 +457,7 @@ impl StepRunner {
                     verdict: Verdict::Halt,
                     reason: Some(REASON_ARTIFACT_CHANGED.to_owned()),
                 };
-                return Ok(self.store.save(rec)?);
+                return self.write(rec);
             }
         };
         rec.state = match ran {
@@ -464,31 +480,36 @@ impl StepRunner {
                 }
             }
         };
-        Ok(self.store.save(rec)?)
+        self.write(rec)
     }
 
+    /// Launches the step `rec` is at. `None`, and nothing launched, when the write of the record
+    /// as `running` found it flagged by a force: the record is closed instead.
     fn launch(
         &self,
         order: &UpdateOrder,
         rec: &mut Record,
         executable: &Path,
-    ) -> Result<Ran, RunError> {
+    ) -> Result<Option<Ran>, RunError> {
         let started = Stamp::now(&*self.clock);
         let timeout = self.timeout(order, rec);
         // Nothing is left of the bound (the verify window has passed): the step is not started,
         // and never with a bound of 0, which systemd reads as no limit. It ends as a failure.
         if timeout == 0 {
-            return Ok(Ran::Exit(StepExit {
+            return Ok(Some(Ran::Exit(StepExit {
                 code: None,
                 last_line: None,
-            }));
+            })));
         }
         let deadline_secs = started.mono_secs.saturating_add(timeout);
         rec.state = State::Running {
             started,
             deadline_secs,
         };
-        self.store.save(rec)?;
+        self.write(rec)?;
+        if rec.forced {
+            return Ok(None);
+        }
         let unit = rec.unit(rec.step);
         let artifact = (rec.step == Step::Prepare).then(|| order.staged.dir().to_path_buf());
         self.watch.arm(&unit, deadline_secs);
@@ -509,10 +530,42 @@ impl StepRunner {
             return Err(RunError::Unstopped { unit, error });
         }
         match result {
-            Ok(exit) => Ok(Ran::Exit(exit)),
-            Err(LaunchError::NoStart(_)) => Ok(Ran::NoStart),
+            Ok(exit) => Ok(Some(Ran::Exit(exit))),
+            Err(LaunchError::NoStart(_)) => Ok(Some(Ran::NoStart)),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Whether the record on disk is this update's and a force flagged it `forced`. The caller
+    /// holds the record lock.
+    fn flagged(&self, rec: &Record) -> Result<bool, RunError> {
+        Ok(match self.store.load()? {
+            Loaded::Current(disk) => {
+                disk.forced & disk.force.is_none() & (disk.generation == rec.generation)
+            }
+            Loaded::Absent | Loaded::Newer { .. } => false,
+        })
+    }
+
+    /// Writes `rec`, under the record lock; when a force flagged the update meanwhile, `rec` is
+    /// closed `forced_over` first, so that the write never clears the flag.
+    fn write(&self, rec: &mut Record) -> Result<(), RunError> {
+        let _held = self.store.hold();
+        if self.flagged(rec)? {
+            rec.close_forced_over();
+        }
+        Ok(self.store.save(rec)?)
+    }
+
+    /// When a force flagged the update, closes `rec` `forced_over` and writes it: `true`.
+    fn forced(&self, rec: &mut Record) -> Result<bool, RunError> {
+        let _held = self.store.hold();
+        if !self.flagged(rec)? {
+            return Ok(false);
+        }
+        rec.close_forced_over();
+        self.store.save(rec)?;
+        Ok(true)
     }
 
     /// The bound of the step about to run: its own, and for `verify` before the update has
@@ -544,7 +597,7 @@ impl StepRunner {
         let outcome = Outcome::from_exit(code);
         if rec.progress.watching.is_some() {
             self.watching(order, rec, outcome, &report);
-            return Ok(self.store.save(rec)?);
+            return self.write(rec);
         }
         let mut ctx = Context {
             committed: rec.progress.committed,
@@ -588,7 +641,7 @@ impl StepRunner {
                 self.report(rec, verdict, reason);
             }
         }
-        Ok(self.store.save(rec)?)
+        self.write(rec)
     }
 
     fn move_to(&self, rec: &mut Record, step: Step) {
