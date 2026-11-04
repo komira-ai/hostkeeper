@@ -7,7 +7,10 @@
 //! - [`Staged`] is the verified artifact: nothing from a release runs unless the tree still has
 //!   the digest it had when it was verified.
 //! - [`DeadMan`] enforces the bound of the running step on a thread of its own.
-//! - [`selfupdate`] is the updater's own update with its fallback.
+//! - [`selfupdate`] is the updater's own update with its fallback, and [`Layout`] the directory
+//!   of versions with `current` and `previous` that it and every package share.
+//! - [`seal`] is the seal file of an unpacked package version, and [`tree_digest`] the digest
+//!   it holds (both public formats, docs/package-format.md).
 //!
 //! The crate names no service and reads no declaration: the launcher that runs a step under the
 //! rights of a declaration, and the loader of declarations, plug in through [`StepLauncher`].
@@ -18,11 +21,14 @@ pub mod deadman;
 pub mod launcher;
 pub mod record;
 pub mod runner;
+pub mod seal;
 pub mod selfupdate;
 
-pub use artifact::{ArtifactError, Staged, tree_digest, tree_digest_with};
+pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
 pub use clock::{Clock, Stamp, SystemClock};
 pub use deadman::{DeadMan, Watch};
 pub use launcher::{LaunchError, StepCall, StepExit, StepLauncher};
 pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore};
 pub use runner::{Bounds, Finished, RunError, StepRunner, UpdateOrder};
+pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
+pub use selfupdate::Layout;

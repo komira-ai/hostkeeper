@@ -110,6 +110,12 @@ impl HttpsUrl {
 pub struct Sha256Hex(String);
 
 impl Sha256Hex {
+    /// `text` as a SHA-256: 64 hex digits, either case, kept in lowercase. `None` otherwise.
+    pub fn parse(text: &str) -> Option<Sha256Hex> {
+        let hex = (text.len() == 64) & text.bytes().all(|b| b.is_ascii_hexdigit());
+        hex.then(|| Sha256Hex(text.to_ascii_lowercase()))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -224,9 +230,7 @@ fn https(fields: &Fields<'_>, key: &str) -> Result<HttpsUrl, Problem> {
 
 fn sha256(fields: &Fields<'_>, key: &str) -> Result<Sha256Hex, Problem> {
     let text = fields.string(key)?;
-    let hex = (text.len() == 64) & text.bytes().all(|b| b.is_ascii_hexdigit());
-    hex.then(|| Sha256Hex(text.to_ascii_lowercase()))
-        .ok_or_else(|| fields.invalid(key, "is not a SHA-256 of 64 hex digits"))
+    Sha256Hex::parse(text).ok_or_else(|| fields.invalid(key, "is not a SHA-256 of 64 hex digits"))
 }
 
 /// A string from 1 to 256 bytes with no control character or white space.
