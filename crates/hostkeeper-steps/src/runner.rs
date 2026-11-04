@@ -8,6 +8,7 @@
 //! stopped by name and is run again, a step found `done` is not.
 
 use std::io;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -20,7 +21,7 @@ use hostkeeper_hook::{
 use crate::artifact::{ArtifactError, Staged};
 use crate::clock::{Clock, Stamp};
 use crate::deadman::Watch;
-use crate::launcher::{LaunchError, StepCall, StepExit, StepLauncher};
+use crate::launcher::{Bound, LaunchError, StepCall, StepExit, StepLauncher};
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
 
 /// The protocol version of this updater: a declaration's `min_updater_protocol` above it is
@@ -44,6 +45,7 @@ pub const REASON_UPDATER_OLD: &str = "updater_old";
 /// The bounds of the declaration the runner reads (and no other key of it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bounds {
+    /// `0` is no bound ([`Bound::Unbounded`]); `0` for any other step is a step not started.
     pub prepare_secs: u64,
     pub cutover_secs: u64,
     pub verify_secs: u64,
@@ -66,6 +68,17 @@ impl Bounds {
             Step::Verify => self.verify_secs,
             Step::Rollback => self.rollback_secs,
             Step::Cleanup => self.cleanup_secs,
+        }
+    }
+
+    /// The bound of one step as it runs: [`Bound::Unbounded`] for a `prepare` of 0, the seconds
+    /// otherwise, and `None` for 0 of any other step (a step with nothing left of its bound is
+    /// not started).
+    pub fn bound(&self, step: Step) -> Option<Bound> {
+        match (step, NonZeroU64::new(self.timeout(step))) {
+            (_, Some(secs)) => Some(Bound::Secs(secs)),
+            (Step::Prepare, None) => Some(Bound::Unbounded),
+            (_, None) => None,
         }
     }
 }
@@ -430,24 +443,33 @@ impl StepRunner {
         executable: &Path,
     ) -> Result<Ran, RunError> {
         let started = Stamp::now(&*self.clock);
-        let timeout = self.timeout(order, rec);
         // Nothing is left of the bound (the verify window has passed): the step is not started,
-        // and never with a bound of 0, which systemd reads as no limit. It ends as a failure.
-        if timeout == 0 {
+        // and never as unbounded, which only a `prepare` declared with 0 is. It ends as a
+        // failure.
+        let Some(bound) = self.bound(order, rec) else {
             return Ok(Ran::Exit(StepExit {
                 code: None,
                 last_line: None,
             }));
-        }
-        let deadline_secs = started.mono_secs.saturating_add(timeout);
+        };
+        let (deadline_secs, unbounded) = match bound {
+            Bound::Secs(secs) => (started.mono_secs.saturating_add(secs.get()), false),
+            Bound::Unbounded => (started.mono_secs, true),
+        };
+        // Recorded `running` before the launch either way, so that a crash is resumed by
+        // stopping the unit by name.
         rec.state = State::Running {
             started,
             deadline_secs,
+            unbounded,
         };
         self.store.save(rec)?;
         let unit = rec.unit(rec.step);
         let artifact = (rec.step == Step::Prepare).then(|| order.staged.dir().to_path_buf());
-        self.watch.arm(&unit, deadline_secs);
+        // An unbounded step has no second to be stopped at: the dead-man is not armed for it.
+        if !unbounded {
+            self.watch.arm(&unit, deadline_secs);
+        }
         let result = self.launcher.run(&StepCall {
             service: &order.service,
             invocation: Invocation {
@@ -457,7 +479,7 @@ impl StepRunner {
             },
             executable,
             unit: &unit,
-            timeout_secs: timeout,
+            bound,
         });
         // A step the dead-man could not stop at its bound ran past it: what it reports is not
         // read. It stays `running` in the record, and the next run stops its unit by name first.
@@ -472,18 +494,18 @@ impl StepRunner {
     }
 
     /// The bound of the step about to run: its own, and for `verify` before the update has
-    /// succeeded no more than the time left of the verify window.
-    fn timeout(&self, order: &UpdateOrder, rec: &Record) -> u64 {
-        let own = order.bounds.timeout(rec.step);
-        match (&rec.progress.verify_started, rec.step) {
-            (Some(began), Step::Verify) => {
+    /// succeeded no more than the time left of the verify window. `None` when nothing is left.
+    fn bound(&self, order: &UpdateOrder, rec: &Record) -> Option<Bound> {
+        let own = order.bounds.bound(rec.step)?;
+        match (&rec.progress.verify_started, own) {
+            (Some(began), Bound::Secs(secs)) if rec.step == Step::Verify => {
                 let left = order
                     .bounds
                     .verify_deadline_secs
                     .saturating_sub(began.elapsed_secs(&*self.clock));
-                own.min(left)
+                NonZeroU64::new(secs.get().min(left)).map(Bound::Secs)
             }
-            _ => own,
+            _ => Some(own),
         }
     }
 

@@ -54,13 +54,13 @@ fn a_successful_update_runs_the_four_steps_from_the_new_release() {
             support::Event::Run {
                 unit,
                 executable,
-                timeout_secs,
+                bound,
                 artifact,
                 ..
             } => (
                 unit.clone(),
                 executable.clone(),
-                *timeout_secs,
+                support::secs_of(*bound),
                 artifact.clone(),
             ),
             support::Event::Stop(_) => unreachable!(),
@@ -247,9 +247,9 @@ fn verify_that_defers_past_the_window_rolls_back() {
         .filter_map(|e| match e {
             support::Event::Run {
                 step: Step::Verify,
-                timeout_secs,
+                bound,
                 ..
-            } => Some(*timeout_secs),
+            } => Some(support::secs_of(*bound)),
             _ => None,
         })
         .collect();
@@ -365,9 +365,9 @@ fn a_pending_promotion_is_watched_until_it_clears() {
         .filter_map(|e| match e {
             support::Event::Run {
                 step: Step::Verify,
-                timeout_secs,
+                bound,
                 ..
-            } => Some(*timeout_secs),
+            } => Some(support::secs_of(*bound)),
             _ => None,
         })
         .collect();
@@ -751,9 +751,9 @@ fn the_verify_window_restarts_after_a_reboot() {
             .filter_map(|e| match e {
                 support::Event::Run {
                     step: Step::Verify,
-                    timeout_secs,
+                    bound,
                     ..
-                } => Some(*timeout_secs),
+                } => Some(support::secs_of(*bound)),
                 _ => None,
             })
             .collect();
@@ -905,11 +905,11 @@ fn a_halt_holds_the_service_until_it_is_cleared() {
     ));
 }
 
-/// Catches a zero bound handed to a launcher (systemd reads `RuntimeMaxSec=0` as no limit): a
-/// `verify` resumed after its window has passed is not started, the update rolls back, and no
-/// run is given a bound of 0.
+/// Catches the unbounded form leaking from `prepare` to another step: a `verify` resumed after
+/// its window has passed (a computed bound of 0) is not started, the update rolls back, and no
+/// run is unbounded.
 #[test]
-fn a_verify_resumed_after_its_window_is_not_started() {
+fn a_verify_whose_window_is_used_up_is_still_not_started() {
     let rig = Rig::new("run-window-gone");
     let order = rig.order();
     rig.fake
@@ -925,10 +925,10 @@ fn a_verify_resumed_after_its_window_is_not_started() {
     assert_eq!(rig.fake.steps(), [Step::Rollback]);
     assert_eq!(rig.fake.stops(), ["updater-svc-verify-1"]);
     for e in rig.fake.runs() {
-        let support::Event::Run { timeout_secs, .. } = e else {
+        let support::Event::Run { bound, .. } = e else {
             unreachable!()
         };
-        assert_ne!(timeout_secs, 0);
+        assert_ne!(bound, hostkeeper_steps::Bound::Unbounded);
     }
 }
 

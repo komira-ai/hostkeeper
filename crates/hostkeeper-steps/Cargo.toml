@@ -6,14 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The step runner of the host updater: the step record and its resume, the dead-man, the staged-artifact check and the updater's own update."
+description = "The step runner of the host updater: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the transient systemd unit that runs one step."
 
 # The step runner of the generic host updater (docs/design/host-updates.md, sections 3.2 to 3.5):
 # the persisted step record and its resume, the dead-man that enforces the bounds on a thread of
 # its own, the exit codes read as outcomes through `hostkeeper-hook`, the check of the staged
 # artifact before any run, and the updater's own update with its fallback. It runs a step through
-# a `StepLauncher` it is given and knows no service and no declaration. Synchronous, threads and
-# blocking files. It depends on `hostkeeper-hook` alone (crates/xtask/tests/layering keeps it so).
+# a `StepLauncher` it is given and knows no service and no declaration; `systemd.rs` is the
+# launcher of the host (one transient unit per step, `RuntimeMaxSec=` and nothing else).
+# Synchronous, threads and blocking files. It depends on `hostkeeper-hook` alone (crates/xtask/tests/layering keeps it so).
 [dependencies]
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The effective uid (the owner checks) and the monotonic clock; `fs` for the tests' special files.
@@ -23,7 +24,23 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 
+# The program the spawner tests run in place of the real `systemd-run` and `systemctl`
+# (tests/spawn.rs): it floods its output, prints a report or a long last line, prints its
+# environment, or answers a stop, so the tests need no program of the host. A program of the
+# tests, not shipped: it is built only with `test-support`, which only the tests of this crate
+# turn on.
+[[bin]]
+name = "hostkeeper-steps-spawn-fixture"
+path = "tests/bin/spawn_fixture.rs"
+required-features = ["test-support"]
+
+[features]
+# Builds the spawner tests' fixture program. Off for everything else.
+test-support = []
+
 [dev-dependencies]
+# Its own tests turn on `test-support`.
+hostkeeper-steps = { path = ".", features = ["test-support"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 
 [lints]

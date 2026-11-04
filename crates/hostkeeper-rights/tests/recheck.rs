@@ -1,8 +1,8 @@
-//! The reserved-path rules `run_step` repeats before every launch (`recheck_targets`, kept in
-//! `load.rs` until B3 rewrites launch.rs): the deny list on what an entry points to, and the rules
+//! The reserved-path rules the deleted `run_step` repeated before every launch (`recheck_targets`,
+//! kept in `load.rs` until B26 deletes it): the deny list on what an entry points to, and the rules
 //! of a hook that runs as root. These are the deny-list cases of the deleted `reserved.rs`, kept
-//! because `run_step` still applies the list, and the root cases of the deleted loader tests,
-//! driven through `Declared::recheck`.
+//! while the list is, and the root cases of the deleted loader tests, driven through
+//! `Declared::recheck`.
 
 mod support;
 

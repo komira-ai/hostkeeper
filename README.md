@@ -6,8 +6,9 @@ It is planned as:
 - a **coordinator** that holds the desired version of each service and moves hosts to it a group
   at a time;
 - an **agent** on each host, with a separate root part, that updates each service through the
-  service's own update hook (`prepare`, `cutover`, `verify`, `cleanup`, `rollback`), within the
-  rights the service declares in `/etc/updater.d`;
+  service's own update hook (`prepare`, `cutover`, `verify`, `cleanup`, `rollback`), run as root
+  from the package a trusted signer attested, each step in a transient systemd unit that bounds
+  its time;
 - **enrollment**: a new host asks to join, and an operator approves it;
 - **device management** of Macs through a self-hosted MDM server.
 
@@ -22,8 +23,8 @@ today. So far this repository holds the generic half of the host updater, moved 
 |---|---|
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the updater and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of the host's daemon config (`/etc/hostkeeper/hostkeeper.toml`) and of the `manifest.toml` a package carries, the owner and mode check of a trusted file, and the name and path grammars |
-| [`hostkeeper-rights`](crates/hostkeeper-rights) | the transient unit that runs one step of a hook, and the part of the old declaration it is still built from |
-| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update |
+| [`hostkeeper-rights`](crates/hostkeeper-rights) | what is left of the old per-service declaration (its parser, the reserved-path rules, the name grammars), used by nothing and to be deleted |
+| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the transient systemd unit that runs one step |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), and the test that keeps them compatible |
 | `hostkeeper-testkit` | helpers the tests share |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |

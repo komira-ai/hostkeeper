@@ -1,5 +1,5 @@
 //! The grammars that keep a value from becoming something else in a systemd property, as far as
-//! the declaration left for `launch.rs` still has them. The service name and path cases moved
+//! the declaration that is left still has them. The service name and path cases moved
 //! with their grammar to `hostkeeper-config` (`crates/hostkeeper-config/tests/names.rs`).
 
 use hostkeeper_rights::names::{Capability, Family, is_account_name, is_env_name, is_env_value};

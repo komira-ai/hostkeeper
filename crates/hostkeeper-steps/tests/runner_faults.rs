@@ -125,7 +125,7 @@ fn a_step_the_dead_man_could_not_stop_is_left_running() {
     let (clock, seen, once) = (rig.clock.clone(), man.clone(), first.clone());
     rig.fake.on_run(move |call| {
         if call.invocation.step == Step::Cutover && once.swap(false, Ordering::SeqCst) {
-            clock.advance(call.timeout_secs);
+            clock.advance(support::secs_of(call.bound));
             assert!(seen.tick().is_err());
         }
     });
@@ -215,7 +215,7 @@ fn a_stop_that_fails_after_the_step_ended_still_stops_the_runner() {
         if call.invocation.step != Step::Cutover || !once.swap(false, Ordering::SeqCst) {
             return;
         }
-        clock.advance(call.timeout_secs);
+        clock.advance(support::secs_of(call.bound));
         let man = seen.clone();
         *tick_slot.lock().unwrap() = Some(std::thread::spawn(move || man.tick()));
         // The stop has begun; it fails once the runner, the step's exit in hand, waits for it.

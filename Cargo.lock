@@ -386,6 +386,7 @@ name = "hostkeeper-steps"
 version = "0.1.0"
 dependencies = [
  "hostkeeper-hook",
+ "hostkeeper-steps",
  "hostkeeper-testkit",
  "rustix",
  "serde",

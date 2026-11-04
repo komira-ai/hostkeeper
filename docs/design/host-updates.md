@@ -256,17 +256,7 @@ Defaults, for an absent field or one read as invalid: `class` `release`, `reason
 
 ### 3.4 Rights: how a hook runs
 
-The updater runs each step as a **transient systemd unit** with the properties its declaration fixes and nothing else (`systemd-run --wait --collect --pipe` with properties). From the declaration:
-
-| declaration | systemd property |
-|---|---|
-| `hook.user`, `hook.group` | `User=`, `Group=` |
-| `hook.step_capabilities.<step>`, falling back to `hook.capabilities` | `AmbientCapabilities=` and `CapabilityBoundingSet=` set to exactly the list for that step; `NoNewPrivileges=yes`. A step with no `step_capabilities` entry holds the hook-wide `capabilities`; the table narrows the grant for steps that need less (tierstore needs none: all five steps and the boot entry call `nft`, so it declares `CAP_NET_ADMIN` hook-wide) |
-| `hook.read_paths`, `hook.write_paths` | `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `ReadOnlyPaths=`, `ReadWritePaths=` |
-| `hook.address_families` | `RestrictAddressFamilies=` |
-| `hook.environment` | `Environment=` of exactly those, and no inherited environment |
-| `hook.timeout_secs.<step>` | `RuntimeMaxSec=` |
-| (fixed) | `ProtectKernelTunables=yes`, `ProtectKernelModules=yes`, `ProtectKernelLogs=yes`, `ProtectControlGroups=yes`, `RestrictNamespaces=yes`, `RestrictRealtime=yes`, `LockPersonality=yes`, `MemoryDenyWriteExecute=yes`, `SystemCallFilter=@system-service`, `SystemCallArchitectures=native` |
+The updater runs each step as a **transient systemd unit** (`systemd-run --wait --collect --pipe`). *Superseded in hostkeeper:* the table of systemd properties that kbf derived from the declaration at v0.0.64 is not carried here. hostkeeper runs a hook as root in a unit whose one property is `RuntimeMaxSec=` (`infinity` for an unbounded `prepare`), with no user, capability, sandbox or path property (`docs/design/hostkeeper-design.md`, section 5.3; `crates/hostkeeper-steps/src/systemd.rs`). The passages below that rely on those properties describe kbf at that tag.
 
 **Controlling units.** A hook that must start or stop a unit (`hook.units`) needs authority over those units and no others. The first way: the updater installs a polkit rule generated from the declaration that grants `org.freedesktop.systemd1.manage-units` for exactly the listed units; the root job of migration step 3 shows `pkcheck` holds that rule to the listed units. **A hook never masks or unmasks a unit**: `mask` needs `manage-unit-files`, from which systemd's policy implies `manage-units` for every unit, so a rule that allows it cannot be held to the listed units (the same probe shows it); the updater never grants `manage-unit-files`. A hook that must keep a unit from starting does it with a condition the hook controls (for example `ConditionPathExists=` on a link in its `state_dir`, as the tierstore hook does). If a service's units cannot be covered by a unit-scoped rule on a supported host, the second way is a declaration with `user = "root"`, which is the widest right there is: it is accepted only with the approval of 3.3, and it keeps every other property above (a read-only filesystem except the declared paths, only the declared capabilities, a bounded environment). The kbf daemon's hook (4.3) is of the second kind today.
 
