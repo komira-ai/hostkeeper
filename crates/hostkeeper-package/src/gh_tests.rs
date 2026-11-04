@@ -23,7 +23,7 @@ fn staging_files(dir: &Path) -> Vec<String> {
 }
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-const IDENTITY: &str = r"^https://github\.com/example-org/[^/]+/\.github/workflows/release\.yml@";
+const IDENTITY: &str = r"^https://github\.com/example-org/[^/]+/\.github/workflows/artifacts\.yml@";
 
 /// What a test asks the verifier about.
 struct Case {
@@ -73,10 +73,13 @@ fn sample() -> Case {
     )
 }
 
+/// How the fake runner answers a spawn.
+type Answer = Box<dyn Fn(&Spawn) -> io::Result<Ran>>;
+
 /// A [`Runner`] that records each spawn and answers as the closure says.
 struct FakeRunner {
     spawns: Rc<RefCell<Vec<Spawn>>>,
-    answer: Box<dyn Fn(&Spawn) -> io::Result<Ran>>,
+    answer: Answer,
 }
 
 impl Runner for FakeRunner {
@@ -119,7 +122,7 @@ fn rig_refusing(answer: impl Fn(&Spawn) -> io::Result<Ran> + 'static, refuse: &[
     let verifier = GhVerifier::new(
         PathBuf::from("tools/gh"),
         PathBuf::from("tools/trusted_root.json"),
-        PathBuf::from("state/home"),
+        PathBuf::from("state/gh-scratch"),
         Box::new(runner),
         Box::new(trust),
     );
@@ -182,7 +185,7 @@ fn gh_is_asked_for_exactly_the_configured_signer() {
     assert_eq!(spawns.len(), 1);
     let spawn = &spawns[0];
     assert_eq!(spawn.program, PathBuf::from("tools/gh"));
-    assert_eq!(spawn.cwd, PathBuf::from("state/home"));
+    assert_eq!(spawn.cwd, PathBuf::from("state/gh-scratch"));
     assert_eq!(spawn.deadline, case.deadline);
     let want = os(&[
         "attestation",
@@ -248,10 +251,10 @@ fn gh_gets_a_fixed_environment_and_a_dead_proxy() {
     let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
     let want = vec![
         pair("ALL_PROXY", "http://127.0.0.1:9"),
-        pair("GH_CONFIG_DIR", "state/home/config"),
+        pair("GH_CONFIG_DIR", "state/gh-scratch/config"),
         pair("GH_NO_UPDATE_NOTIFIER", "1"),
         pair("GH_PROMPT_DISABLED", "1"),
-        pair("HOME", "state/home"),
+        pair("HOME", "state/gh-scratch"),
         pair("HTTPS_PROXY", "http://127.0.0.1:9"),
         pair("HTTP_PROXY", "http://127.0.0.1:9"),
         pair("NO_COLOR", "1"),
