@@ -305,9 +305,11 @@ impl Placer<'_> {
             report.stopped.extend(removal.stopped);
             report.removed.extend(removal.removed);
             report.left_alone.extend(removal.left_alone);
-            if let Some(intent) = intent
-                && self.unswitch(service, &intent.target)?
-            {
+            // Only an intent undoes to no version, so there is always one here.
+            let unswitched = intent
+                .map(|intent| self.unswitch(service, &intent.target))
+                .transpose()?;
+            if unswitched == Some(true) {
                 report.current_removed.push(service.to_owned());
             }
             return Ok(());

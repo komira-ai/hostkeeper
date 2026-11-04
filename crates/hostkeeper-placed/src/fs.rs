@@ -103,11 +103,13 @@ impl Fs for RealFs {
     }
 
     fn list(&self, dir: &Path) -> io::Result<Vec<OsString>> {
-        let mut names = fs::read_dir(self.host_path(dir))?
+        fs::read_dir(self.host_path(dir))?
             .map(|entry| entry.map(|entry| entry.file_name()))
-            .collect::<io::Result<Vec<_>>>()?;
-        names.sort();
-        Ok(names)
+            .collect::<io::Result<Vec<_>>>()
+            .map(|mut names| {
+                names.sort();
+                names
+            })
     }
 
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {

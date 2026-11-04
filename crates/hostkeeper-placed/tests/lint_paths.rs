@@ -413,3 +413,25 @@ fn xml_references_are_decoded_in_a_plist() {
         assert_eq!(judge_plist(&plist("", written)), Ok(()), "{written}");
     }
 }
+
+/// Catches an empty command line read as a path, or a crash on it: the reset `ExecStart=` and a
+/// command of prefixes only name no file, and are accepted.
+#[test]
+fn an_empty_command_line_is_accepted() {
+    for text in [
+        "[Service]\nExecStart=\n",
+        "[Service]\nExecStart=-\n",
+        "[Service]\nExecStartPre=@-+\n",
+    ] {
+        assert_eq!(
+            check_unit_text(
+                Path::new(PACKAGES_DIR),
+                "tierstore",
+                "tierstore.service",
+                text
+            ),
+            Ok(()),
+            "{text:?}"
+        );
+    }
+}
