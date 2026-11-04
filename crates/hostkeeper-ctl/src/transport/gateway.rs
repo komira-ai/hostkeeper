@@ -98,7 +98,7 @@ impl Gateway {
                     .to_socket_addrs()
                     .map(|found| found.collect())
             },
-            |address, left| TcpStream::connect_timeout(address, left),
+            TcpStream::connect_timeout,
         )?;
         let connection = ClientConnection::new(self.tls.clone(), self.server_name.clone())
             .map_err(|e| Status::internal(format!("cannot start TLS: {e}")))?;

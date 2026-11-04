@@ -4,7 +4,8 @@
 //! `ctl.md` in this test's scratch directory (under the target directory) and prints it, so it
 //! can be copied over. The golden file may only grow: every line it holds (a command, a flag
 //! with its value, a secret's flags, a request-file field, a global flag, the exit code of a gRPC
-//! code) must still be generated, so a renamed flag or a changed exit code fails here.
+//! code) must still be generated, so a renamed flag or a changed exit code fails here; and every
+//! line generated now must be in it, so a new RPC or flag records its names in the same change.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -33,6 +34,46 @@ fn missing<'a>(golden: &'a str, current: &[String]) -> Vec<&'a str> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter(|l| !current.contains(l))
         .collect()
+}
+
+/// The lines of `current` the golden file does not hold yet.
+fn unrecorded<'a>(golden: &str, current: &'a [String]) -> Vec<&'a str> {
+    let golden: BTreeSet<&str> = golden.lines().collect();
+    current
+        .iter()
+        .map(String::as_str)
+        .filter(|l| !golden.contains(l))
+        .collect()
+}
+
+/// Catches a new command, flag or value whose names were not added to the golden file, which
+/// would leave them free to change later without this test noticing.
+#[test]
+fn every_generated_line_is_in_the_golden_file() {
+    let current = tree_lines(COMMANDS);
+    let new = unrecorded(GOLDEN, &current);
+    assert!(
+        new.is_empty(),
+        "lines generated but not in tests/golden/command_tree.txt; append them:\n{}",
+        new.join("\n")
+    );
+    // A line missing from the golden file is caught; a comment or blank line is not a line.
+    let without_last: String = GOLDEN
+        .lines()
+        .filter(|l| Some(*l) != current.last().map(String::as_str))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(
+        unrecorded(&without_last, &current),
+        [current.last().map(String::as_str).unwrap_or_default()]
+    );
+    assert_eq!(
+        unrecorded(
+            "# a comment\n\nglobal --help\n",
+            &["global --help".to_owned()]
+        ),
+        Vec::<&str>::new()
+    );
 }
 
 /// Catches `docs/ctl.md` left behind when a proto, a flag rule or an exit code changes.

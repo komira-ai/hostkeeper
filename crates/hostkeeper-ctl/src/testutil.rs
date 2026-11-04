@@ -291,7 +291,9 @@ pub fn pki() -> Pki {
     }
 }
 
-/// A target for the gRPC or gateway transport at `127.0.0.1:port`, trusting `ca_file`.
+/// A target for the gRPC or gateway transport at `127.0.0.1:port`, trusting `ca_file`. Port 0
+/// is for a target that is never dialled: its endpoint is `https://127.0.0.1`, as `--endpoint`
+/// refuses port 0.
 pub fn loopback_target(
     port: u16,
     transport: crate::TransportKind,
@@ -299,7 +301,11 @@ pub fn loopback_target(
     client: Option<(&str, &str)>,
 ) -> Target {
     Target {
-        endpoint: crate::Endpoint::parse(&format!("https://127.0.0.1:{port}")).expect("endpoint"),
+        endpoint: crate::Endpoint::parse(&match port {
+            0 => "https://127.0.0.1".to_owned(),
+            port => format!("https://127.0.0.1:{port}"),
+        })
+        .expect("endpoint"),
         transport,
         ca_file: ca_file.into(),
         client_identity: client.map(|(c, k)| (c.into(), k.into())),

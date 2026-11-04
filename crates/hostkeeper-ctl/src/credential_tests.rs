@@ -491,17 +491,10 @@ fn an_unprefixed_unspecified_enum_value_is_refused_and_the_valid_ones_are_listed
         b"",
     );
     assert_eq!((ran.code, ran.stdout.as_str()), (2, ""), "{ran:?}");
-    assert!(
-        ran.stderr.starts_with(
-            "error: invalid value 'unspecified' for '--speed <VALUE>'\n  \
-             [possible values: slow, fast]\n\nUsage: "
-        ),
-        "{}",
-        ran.stderr
-    );
-    assert!(
-        ran.stderr
-            .ends_with("For more information, try '--help'.\n")
+    assert_eq!(
+        ran.stderr,
+        "error: invalid value 'unspecified' for '--speed <VALUE>'\n  \
+         [possible values: slow, fast]\n\nFor more information, try '--help'.\n"
     );
     assert!(fake.calls().is_empty());
     for (word, number) in [("slow", 1_u8), ("fast", 2_u8)] {

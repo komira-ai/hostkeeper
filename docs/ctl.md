@@ -41,6 +41,25 @@ The response goes to stdout; diagnostics go to stderr. A refusal prints `refused
 
 ## Commands
 
+### `audit`
+
+The service `Audit` of the package `hostkeeper.operator.v1`. The coordinator's audit log.
+
+#### `hostkeeper ctl audit list`
+
+`/hostkeeper.operator.v1.Audit/List`
+
+The entries after `since_seq` that match every filter set, newest last. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--since-seq` | UINT64 | Only entries with a greater `seq`; 0 for the oldest the log keeps. |
+| `--limit` | UINT32 | The most entries to return; capped at 256, and 0 means the cap. |
+| `--actor` | STRING | Only entries by this actor, by the token of `Actor` (`operator`, `ci`, `coordinator`). |
+| `--action` | STRING | Only entries of this action (`AuditEntry.action`). |
+| `--service` | STRING |  |
+| `--node-id` | STRING |  |
+
 ### `coordinator`
 
 The service `Coordinator` of the package `hostkeeper.agent.v1`.
@@ -57,6 +76,75 @@ What the host runs and how it is, and the coordinator's answer: at most one orde
 | `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
 
 Through `--request` only: `agent` (hostkeeper.agent.v1.AgentInfo), `services` (repeated hostkeeper.agent.v1.ServiceBeat).
+
+#### `hostkeeper ctl coordinator enroll`
+
+`/hostkeeper.agent.v1.Coordinator/Enroll`
+
+Ask for a certificate: a CSR, the host's claims and its image. No client certificate. The
+request is pending until an operator approves it; nothing is installed meanwhile.
+
+| flag | value | meaning |
+|---|---|---|
+| `--image` | STRING | The boot image or installer the daemon came from, as the image names itself. |
+| `--renewal-of` | STRING | The host id of a host whose certificate expired while it was offline, posting again with the same key; empty for a first enrollment. |
+| `--mac-nonce-file` | PATH | secret `mac_nonce`, from a file. The one-time nonce MDM gave a Mac (one hour, one use); empty on any other host. |
+| `--mac-nonce-stdin` | | secret `mac_nonce`, from stdin |
+
+Through `--request` only: `csr_der` (bytes), `claims` (hostkeeper.agent.v1.Claims).
+
+#### `hostkeeper ctl coordinator poll`
+
+`/hostkeeper.agent.v1.Coordinator/Poll`
+
+Ask whether a request was approved, and take its certificate, by the challenge the header
+describes. No client certificate.
+
+| flag | value | meaning |
+|---|---|---|
+| `--request-id` | STRING | The request's id, as `EnrollResponse` gave it. |
+
+Through `--request` only: `nonce` (bytes), `signature` (bytes).
+
+#### `hostkeeper ctl coordinator renew`
+
+`/hostkeeper.agent.v1.Coordinator/Renew`
+
+Get a new certificate for the key the host holds, over mutual TLS with its current one.
+
+Through `--request` only: `csr_der` (bytes).
+
+### `enrollment`
+
+The service `Enrollment` of the package `hostkeeper.operator.v1`. The hosts waiting for an operator to approve their enrollment.
+
+#### `hostkeeper ctl enrollment list`
+
+`/hostkeeper.operator.v1.Enrollment/List`
+
+The pending requests, oldest first, a page at a time.
+
+| flag | value | meaning |
+|---|---|---|
+| `--limit` | UINT32 | The most requests to return; capped at 256, and 0 means the cap. |
+| `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
+
+#### `hostkeeper ctl enrollment approve`
+
+`/hostkeeper.operator.v1.Enrollment/Approve`
+
+Approve a pending request: the host gets its certificate at its next `Poll`, with the host
+id, role and services the approval names.
+
+| flag | value | meaning |
+|---|---|---|
+| `--request-id` | STRING |  |
+| `--key-sha256` | STRING | The SHA-256 of the pending request's key, as `PendingEnrollment.key_sha256` lists it. |
+| `--host-id` | STRING | The host id the certificate names. |
+| `--role` | STRING |  |
+| `--services` | STRING, repeated | Services to assign to the host; may be empty. |
+| `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. |
+| `--reason` | STRING |  |
 
 ### `hosts`
 
@@ -90,6 +178,7 @@ ordered. A second exclusion of the same host and service replaces the first.
 | `--service` | STRING |  |
 | `--node-id` | STRING |  |
 | `--reason` | STRING |  |
+| `--abandon` | true\|false | Also free the one live update slot the host holds for the service mid-update, for a host that is gone and will not report its update final. False (the default) keeps the slot. |
 
 #### `hostkeeper ctl hosts include`
 
@@ -113,6 +202,19 @@ Replace a host's labels, which service selectors match. An empty set removes the
 |---|---|---|
 | `--node-id` | STRING |  |
 | `--labels` | KEY=VALUE, repeated | At most 8; each key and value 1 to 32 bytes of `[a-z0-9-]`. |
+
+#### `hostkeeper ctl hosts abort`
+
+`/hostkeeper.operator.v1.Hosts/Abort`
+
+Queue an `abort` order of a service for the host's next heartbeat; it takes no slot. An
+abort of a host that runs nothing of the service is accepted and changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING |  |
+| `--service` | STRING |  |
+| `--reason` | STRING |  |
 
 ### `releases`
 
