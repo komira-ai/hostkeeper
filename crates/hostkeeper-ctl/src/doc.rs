@@ -120,7 +120,8 @@ pub fn markdown(commands: &[Command]) -> String {
             ));
         }
     }
-    out
+    // No line ends in a space, which an editor would strip.
+    out.lines().map(|l| format!("{}\n", l.trim_end())).collect()
 }
 
 /// One line per name a caller or a script depends on: each command, each flag with its value,
@@ -129,7 +130,11 @@ pub fn markdown(commands: &[Command]) -> String {
 pub fn tree_lines(commands: &[Command]) -> Vec<String> {
     let mut lines: Vec<String> = GLOBALS
         .iter()
-        .map(|g| format!("global --{} {}", g.flag, g.value))
+        .map(|g| {
+            format!("global --{} {}", g.flag, g.value)
+                .trim_end()
+                .to_owned()
+        })
         .collect();
     for (code, name) in codes::ALL {
         lines.push(format!("exit {name} {}", exit::code(code)));

@@ -38,6 +38,9 @@ fn an_endpoint_is_https_host_and_port_only() {
     }
 }
 
+/// A CA file, a client pair, and the start of the error they give.
+type Case<'a> = (&'a str, Option<(&'a str, &'a str)>, String);
+
 /// Catches a CA or client file that is missing, holds no certificate, holds a broken one, or a
 /// key that is no key, getting as far as a connection; and a client key of another
 /// certificate accepted by the gateway's TLS.
@@ -65,7 +68,7 @@ fn unusable_tls_files_are_refused_before_connecting() {
     let gone = dir.path().join("gone.pem");
     let gone = gone.to_str().expect("UTF-8");
 
-    let cases: Vec<(&str, Option<(&str, &str)>, String)> = vec![
+    let cases: Vec<Case<'_>> = vec![
         (gone, None, format!("cannot read the CA from {gone}: ")),
         (
             empty.as_str(),

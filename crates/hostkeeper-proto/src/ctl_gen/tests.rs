@@ -467,6 +467,7 @@ fn local_services_are_listed_and_others_ordered_by_command() {
     chain.add(IncludeFileResolver::new(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("proto"),
     ));
+    chain.add(GoogleFileResolver::new());
     let mut compiler = protox::Compiler::with_file_resolver(chain);
     compiler.include_imports(true).include_source_info(true);
     compiler
