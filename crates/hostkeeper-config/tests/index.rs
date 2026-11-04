@@ -191,17 +191,51 @@ fn an_unknown_key_is_refused() {
     }
 }
 
-/// A key written twice is refused, even with the same value.
+/// A key written twice is refused, with the same value or another, at the top (the schema the
+/// first pass reads, and the service) and in a package.
 #[test]
 fn a_repeated_key_is_refused() {
-    let bad = with(
-        r#""service":"tierstore","#,
-        r#""service":"tierstore","service":"tierstore","#,
+    for (from, to) in [
+        (r#""schema":1,"#, r#""schema":1,"schema":1,"#),
+        (r#""schema":1,"#, r#""schema":1,"schema":2,"#),
+        (
+            r#""service":"tierstore","#,
+            r#""service":"tierstore","service":"tierstore","#,
+        ),
+        (
+            r#""platform":"linux-arm64","#,
+            r#""platform":"linux-arm64","platform":"linux-arm64","#,
+        ),
+        (r#"{"bytes":1,"#, r#"{"bytes":1,"bytes":7,"#),
+        (
+            &format!(r#""sha256":"{A}""#),
+            &format!(r#""sha256":"{A}","sha256":"{B}""#),
+        ),
+    ] {
+        let bad = with(from, to);
+        let IndexError::Syntax(why) = refusal(&bad) else {
+            panic!("not a syntax refusal: {bad}");
+        };
+        assert!(why.contains("duplicate field"), "{why}");
+    }
+}
+
+/// The index and each package must be JSON objects: a package written as an array of its
+/// values in field order, and an index written as an array, are refused, not read by position.
+#[test]
+fn an_array_in_place_of_an_object_is_refused() {
+    let positional_package = format!(
+        r#"{{"schema":1,"service":"tierstore","version":"1.5.0","packages":[["linux-x86_64","tierstore-1.5.0-linux-x86_64.tar.zst","{A}",1]]}}"#
     );
-    let IndexError::Syntax(why) = refusal(&bad) else {
-        panic!("not a syntax refusal");
-    };
-    assert!(why.contains("duplicate field"), "{why}");
+    let positional_index = format!(
+        r#"[1,"tierstore","1.5.0",[{{"platform":"linux-x86_64","file":"tierstore-1.5.0-linux-x86_64.tar.zst","sha256":"{A}","bytes":1}}]]"#
+    );
+    for bad in [positional_package, positional_index] {
+        let IndexError::Syntax(why) = refusal(&bad) else {
+            panic!("not a syntax refusal: {bad}");
+        };
+        assert!(why.contains("expected a JSON object"), "{why}");
+    }
 }
 
 /// A missing key is refused, at the top and in a package; a missing schema too.
@@ -219,7 +253,8 @@ fn a_missing_key_is_refused() {
     }
 }
 
-/// A value of the wrong type is refused: a size that is text, negative or a fraction, a platform
+/// A value of the wrong type is refused: a size that is text, negative, a fraction or one more
+/// than the largest 64-bit size (never rounded or cut to fit), a platform
 /// that is not text, and a service that is a list.
 #[test]
 fn a_value_of_the_wrong_type_is_refused() {
@@ -227,6 +262,7 @@ fn a_value_of_the_wrong_type_is_refused() {
         with(r#""bytes":1,"#, r#""bytes":"1","#),
         with(r#""bytes":1,"#, r#""bytes":-1,"#),
         with(r#""bytes":1,"#, r#""bytes":1.5,"#),
+        with(r#""bytes":1,"#, r#""bytes":18446744073709551616,"#),
         with(r#""platform":"linux-arm64""#, r#""platform":3"#),
         with(r#""service":"tierstore""#, r#""service":["tierstore"]"#),
     ] {

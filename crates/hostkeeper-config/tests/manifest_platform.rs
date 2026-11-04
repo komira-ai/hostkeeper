@@ -99,3 +99,49 @@ fn a_manifest_for_another_platform_is_manifest_mismatch() {
         "the manifest is for the platform linux-x86_64, not macos-arm64"
     );
 }
+
+/// A platform refusal is a refusal of the package, never mistaken for a daemon too old: with a
+/// `min_hostkeeper` above the running daemon, a missing platform, an unknown spelling and a
+/// mismatching platform are each still their own refusal, class release, `manifest_mismatch`,
+/// and not `daemon_too_old`.
+#[test]
+fn a_platform_refusal_wins_over_a_daemon_too_old() {
+    let package = Package::new("platform-too-old");
+    let too_old = with("min_hostkeeper = \"0.4.0\"", "min_hostkeeper = \"9.0.0\"");
+    assert!(matches!(
+        package.refusal(&too_old),
+        ManifestRefusal::DaemonTooOld { .. }
+    ));
+    let line = "platform       = \"linux-x86_64\"\n";
+    let unknown =
+        "\"linux-amd64\" is not a platform: one of linux-x86_64, linux-arm64, macos-arm64";
+    for (to, expected) in [
+        (
+            String::new(),
+            ManifestRefusal::Invalid {
+                key: "platform".to_owned(),
+                why: "is missing".to_owned(),
+            },
+        ),
+        (
+            "platform = \"linux-amd64\"\n".to_owned(),
+            ManifestRefusal::Invalid {
+                key: "platform".to_owned(),
+                why: unknown.to_owned(),
+            },
+        ),
+        (
+            "platform = \"macos-arm64\"\n".to_owned(),
+            ManifestRefusal::PlatformMismatch {
+                expected: Platform::LinuxX86_64,
+                found: Platform::MacosArm64,
+            },
+        ),
+    ] {
+        let text = too_old.replacen(line, &to, 1);
+        let refusal = package.refusal(&text);
+        assert_eq!(refusal, expected, "{to:?}");
+        assert_eq!(refusal.class(), Class::Release, "{to:?}");
+        assert_eq!(refusal.reason(), "manifest_mismatch", "{to:?}");
+    }
+}

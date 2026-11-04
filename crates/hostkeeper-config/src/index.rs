@@ -24,8 +24,12 @@
 //! no white space.
 
 use std::collections::BTreeSet;
+use std::fmt;
+use std::marker::PhantomData;
 
 use serde::Deserialize;
+use serde::de::value::MapAccessDeserializer;
+use serde::de::{Deserializer, MapAccess, Visitor};
 
 use crate::daemon::Sha256Hex;
 use crate::names::{ServiceName, Version};
@@ -150,7 +154,7 @@ struct RawIndex {
     _schema: serde::de::IgnoredAny,
     service: String,
     version: String,
-    packages: Vec<RawEntry>,
+    packages: Vec<Object<RawEntry>>,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +164,31 @@ struct RawEntry {
     file: String,
     sha256: String,
     bytes: u64,
+}
+
+/// A `T` read only from a JSON object. A derived `Deserialize` also takes a struct from an array
+/// of its fields in order, which the index must refuse; this reads `T` from the object's keys,
+/// with the derived checks of unknown, missing and repeated keys.
+struct Object<T>(T);
+
+struct ObjectVisitor<T>(PhantomData<T>);
+
+impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
+    type Value = Object<T>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a JSON object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Object<T>, A::Error> {
+        T::deserialize(MapAccessDeserializer::new(map)).map(Object)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Object<T>, D::Error> {
+        deserializer.deserialize_map(ObjectVisitor(PhantomData))
+    }
 }
 
 /// `text` as a JSON string, escaped.
@@ -199,13 +228,13 @@ impl ReleaseIndex {
         version: &Version,
     ) -> Result<ReleaseIndex, IndexError> {
         let syntax = |e: serde_json::Error| IndexError::Syntax(e.to_string());
-        let probe: Probe = serde_json::from_str(text).map_err(syntax)?;
+        let Object(probe): Object<Probe> = serde_json::from_str(text).map_err(syntax)?;
         if probe.schema != SCHEMA {
             return Err(IndexError::Schema {
                 found: probe.schema.to_string(),
             });
         }
-        let raw: RawIndex = serde_json::from_str(text).map_err(syntax)?;
+        let Object(raw): Object<RawIndex> = serde_json::from_str(text).map_err(syntax)?;
         if raw.service != service.as_str() {
             return Err(IndexError::ServiceMismatch {
                 expected: service.to_string(),
@@ -219,7 +248,7 @@ impl ReleaseIndex {
             });
         }
         let mut packages: Vec<PackageEntry> = Vec::new();
-        for entry in raw.packages {
+        for Object(entry) in raw.packages {
             let platform: Platform = entry.platform.parse()?;
             if let Some(before) = packages.last().map(|last| last.platform) {
                 if before == platform {
