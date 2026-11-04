@@ -8,7 +8,7 @@
 //! only.
 //!
 //! Times are whole seconds since the Unix epoch. A certificate is valid from `not_before` through
-//! `not_after`, both included (RFC 5280, section 4.1.2.5).
+//! `not_after`, both included (the Validity field of RFC 5280).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

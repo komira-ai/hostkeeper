@@ -238,6 +238,9 @@ pub struct Args {
 /// Makes the certificate the coordinator sends.
 pub type Issue = Box<dyn FnMut(&Ca, &Args) -> Issued + Send>;
 
+/// Sees each `Enroll` request as it arrives.
+pub type OnEnroll = Box<dyn FnMut(&EnrollRequest) + Send>;
+
 /// What a well-behaved coordinator issues: a seven-day certificate from now for the request's
 /// key, subject `host:<id>`, client authentication, and the CA as the bundle.
 pub fn proper(ca: &Ca, args: &Args) -> Issued {
@@ -294,7 +297,7 @@ pub struct Coordinator {
     /// Every call fails with this transport error.
     pub down: Option<String>,
     /// Called with each `Enroll` request before it is answered.
-    pub on_enroll: Option<Box<dyn FnMut(&EnrollRequest) + Send>>,
+    pub on_enroll: Option<OnEnroll>,
     /// Answers `Enroll` with this request id instead of the request's.
     pub answer_id: Option<RequestId>,
     /// Answers an unsigned poll with this instead of a nonce.
