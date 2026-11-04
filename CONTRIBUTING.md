@@ -73,6 +73,12 @@ Tests assert behaviour, cover failure and boundary cases, and are hermetic. A bu
 a test that failed before the fix. A new lint or check comes with a case it refuses. The rules
 are T1 to T19 in [AGENTS.md](AGENTS.md).
 
+Nothing the updater decides reads the wall clock: decisions read `hostkeeper_steps::Clock`
+(monotonic seconds and the boot id). `cargo test -p xtask --test wallclock` refuses a wall-clock
+read (`SystemTime::now()` and its equivalents) in any non-test source under `crates/*/src/`, except
+in a path listed, with its reason, in `crates/xtask/tests/wallclock/allowed.txt`: certificate, OIDC
+or enrollment-nonce validity only.
+
 ## Small pull requests
 
 Keep pull requests small and about one thing, so a reviewer can read the whole diff in one
