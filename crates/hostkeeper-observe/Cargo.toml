@@ -1,0 +1,32 @@
+[package]
+name = "hostkeeper-observe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The service observer of the host daemon: liveness from the service manager, the version from the step record confirmed by the running executable, and the health URL."
+
+# Design section 5.8: the daemon observes each installed service itself instead of trusting the
+# service to say it is alive. Ports and pure logic; the real adapters (systemd, /proc, the HTTP
+# probe over TCP) are thin modules, and the fakes every test drives live here too. Synchronous
+# and blocking, like the step runner.
+[dependencies]
+# The manifest of `current`: its `[units] run` and `[health] url`.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# The heartbeat's `Health`, which `beat_health` maps an observation to.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+hex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# A real step record whose `verify` ended `Succeeded`, for the test that a hook's verdict never
+# reaches the beat.
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true

@@ -545,6 +545,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-observe"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hostkeeper-config",
+ "hostkeeper-hook",
+ "hostkeeper-proto",
+ "hostkeeper-steps",
+ "hostkeeper-testkit",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-proto"
 version = "0.1.0"
 dependencies = [
