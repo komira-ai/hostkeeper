@@ -24,7 +24,7 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::Manifest;
 use hostkeeper_config::names::{ServiceName, Version, is_version};
@@ -57,6 +57,15 @@ pub fn is_temporary(name: &str) -> bool {
 #[derive(Debug)]
 pub struct PlacedLock {
     _file: File,
+    /// The lock file on disk, which says whose record the lock is for.
+    path: PathBuf,
+}
+
+impl PlacedLock {
+    /// The lock file on disk this lock holds.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// Points the link `<dir>/<name>` at `target`: a link made under the temporary name of `owner`,
@@ -140,7 +149,10 @@ impl<'a> Placer<'a> {
             path,
             source: io::Error::from(e),
         })?;
-        Ok(PlacedLock { _file: file })
+        Ok(PlacedLock {
+            _file: file,
+            path: self.fs.host_path(&path),
+        })
     }
 
     /// The version the link `link` names, `None` when there is no link. The link must name a
@@ -205,8 +217,9 @@ impl<'a> Placer<'a> {
     /// whose command line names a package file other than through `current`
     /// ([`crate::LintError`]) and the claims [`check`] refuses, then records every path of
     /// `claims` `pending` for its service and version, with a `daemon-reload` owed. A path
-    /// already recorded with the same link is left as it is, and a record that would not change
-    /// is not written.
+    /// already recorded with the same link is left as it is; when every entry is already
+    /// recorded but a link on disk is missing or wrong, the record is written only to owe the
+    /// reload its repair needs. A record that would not change is not written.
     pub fn begin(&self, claims: &Claims) -> Result<Linking, PlacedError> {
         let lock = self.lock()?;
         let mut record = self.store().load()?;
@@ -253,6 +266,15 @@ impl<'a> Placer<'a> {
                 }
             }
         }
+        // A link that is missing or wrong is repaired by the link that follows, and that repair
+        // owes a reload whatever the entries say: the debt is recorded before the repair.
+        let mut repairs = false;
+        for claim in claims.iter() {
+            let right =
+                occupant(self.fs, &claim.path)? == Some(Owner::Link(claim.link_target.clone()));
+            repairs |= !right;
+        }
+        changed |= repairs & !record.reload_pending;
         if changed {
             record.reload_pending = true;
             self.store().save(record, lock)?;

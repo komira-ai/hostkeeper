@@ -571,9 +571,10 @@ fn unit_name_of_len(len: usize) -> String {
 }
 
 /// Catches a unit-name check that is too loose or too strict: a stem of letters, digits and
-/// `_ . @ : -` with a unit type as suffix is a name; a name with no suffix or a suffix that is no
-/// unit type, an empty or dotted stem, an `@` with no prefix or no instance or a second `@`, other
-/// characters and one byte over `MAX_UNIT_NAME` are not.
+/// `_ . @ -` with a unit type as suffix is a name; a name with no suffix or a suffix that is no
+/// unit type, an empty or dotted stem, an `@` with no prefix or no instance or a second `@`, a
+/// `:` (outside the grammar of the paths the record keeps), other characters and one byte over
+/// `MAX_UNIT_NAME` are not.
 #[test]
 fn is_unit_name_accepts_only_unit_names() {
     let longest = unit_name_of_len(MAX_UNIT_NAME);
@@ -582,8 +583,8 @@ fn is_unit_name_accepts_only_unit_names() {
         "a.service",
         "a.b.service",
         "x@9301.service",
-        "x:y-1_z.socket",
-        "x@y:z_w-1.service",
+        "x-y-1_z.socket",
+        "x@y-z_w-1.service",
         "A0.timer",
         longest.as_str(),
     ] {
@@ -611,6 +612,9 @@ fn is_unit_name_accepts_only_unit_names() {
         "a\u{e9}.service",
         "a$.service",
         "a%i.service",
+        "x:y.service",
+        "x@y:z.service",
+        ":x.service",
         too_long.as_str(),
     ] {
         assert!(!is_unit_name(name), "{name:?}");

@@ -6,13 +6,15 @@
 mod support;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::{Expected, Manifest};
-use hostkeeper_placed::Roots;
 use hostkeeper_placed::lint::{LintError, check_unit_text, lint, through_current};
 use hostkeeper_placed::roots::PACKAGES_DIR;
-use support::{RUNNING, Spec, World, manifest_text, service, unit_text, version};
+use hostkeeper_placed::{BootView, PlacedError, Roots};
+use support::{
+    RUNNING, Spec, TARGET, WANTS, World, install, manifest_text, service, unit_text, version,
+};
 
 const GOOD: &str = "/var/lib/hostkeeper/packages/tierstore/current/bin/tierstore";
 const BAD: &str = "/var/lib/hostkeeper/packages/tierstore/1.5.0/bin/tierstore";
@@ -434,4 +436,106 @@ fn an_empty_command_line_is_accepted() {
             "{text:?}"
         );
     }
+}
+
+/// Catches a `\u` or `\U` escape getting past the check undecoded: `\u002f` and `\U0000002f` for
+/// the first `/` are refused with the decoded path, a short `\u2f` is read to its last hex digit,
+/// the same escape of a `current` path is accepted; `\u` with no digit and `\uZZ` stand for `u`
+/// with the letters after it kept, and an escape of four or eight digits that is no character
+/// (`\uD800`, `\UFFFFFFFF`) stands for `u` or `U` with its digits consumed.
+#[test]
+fn unicode_escapes_are_decoded_before_the_check() {
+    let tail = "var/lib/hostkeeper/packages/tierstore/1.5.0/bin/tierstore";
+    for head in [r"\u002f", r"\U0000002f", r"\u2f"] {
+        assert_eq!(
+            service_line(&format!("ExecStart={head}{tail}")),
+            refused(BAD),
+            "{head}"
+        );
+    }
+    assert_eq!(
+        service_line(
+            r"ExecStart=\u002fvar/lib/hostkeeper/packages/tierstore/current/bin/tierstore"
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        service_line(
+            r"ExecStart=\U0000002fvar/lib/hostkeeper/packages/tierstore/current/bin/tierstore"
+        ),
+        Ok(())
+    );
+    let dir = "/var/lib/hostkeeper/packages/tierstore";
+    for (escape, kept) in [(r"\uZZ", "uZZ"), (r"\UFFFFFFFF", "U"), (r"\uD800", "u")] {
+        assert_eq!(
+            service_line(&format!("ExecStart={dir}/{escape}1.5.0/bin/tierstore")),
+            refused(&format!("{dir}/{kept}1.5.0/bin/tierstore")),
+            "{escape}"
+        );
+    }
+    assert_eq!(
+        service_line(r"ExecStart=\u/var/lib/x/1.5.0/tierstore"),
+        Ok(())
+    );
+    assert_eq!(
+        service_line(r"ExecStart=\U/var/lib/x/1.5.0/tierstore"),
+        Ok(())
+    );
+}
+
+/// Catches a `WantedBy=` name with a `:` being enabled: the unit `tierstore.service` wanted by
+/// `x:y.<target>` is `BadTarget` from `lint` and from `enable_run_units`, nothing is written and
+/// `placed.json` still loads; with a plain target the same flow enables, records and loads the
+/// link, `disable` removes it and `reconcile` reports nothing wrong.
+#[test]
+fn a_colon_in_a_wantedby_name_is_refused_before_anything_is_written() {
+    let world = World::new("colon-wantedby");
+    let colon = format!("x:y.{}", "target");
+    let spec = |wanted: &str| {
+        let text = format!("[Service]\nExecStart={GOOD}\n[Install]\nWantedBy={wanted}\n");
+        Spec::new()
+            .unit("tierstore.service", &text)
+            .run("tierstore.service")
+    };
+    let manifest = world.package("tierstore", "1.5.0", &spec(&colon));
+    world.log.clear();
+    let refusal = LintError::BadTarget {
+        file: "tierstore.service".to_owned(),
+        target: colon,
+    };
+    assert_eq!(
+        lint(&world.fs, &world.roots, &manifest),
+        Err(refusal.clone())
+    );
+    match world.placer().enable_run_units(&manifest) {
+        Err(PlacedError::Lint(seen)) => assert_eq!(seen, refusal),
+        other => panic!("expected BadTarget, got {other:?}"),
+    }
+    assert!(world.writes().is_empty());
+    assert_eq!(world.placed_bytes(), None);
+    assert!(world.record().paths.is_empty());
+
+    let manifest = install(&world, "tierstore", "1.5.0", &spec(TARGET));
+    assert_eq!(lint(&world.fs, &world.roots, &manifest), Ok(()));
+    let wants = format!("{WANTS}/tierstore.service");
+    assert_eq!(
+        world.read_link(&wants),
+        Some(PathBuf::from("/etc/systemd/system/tierstore.service"))
+    );
+    assert!(world.record().paths.contains_key(Path::new(&wants)));
+
+    let removal = world
+        .placer()
+        .disable(&service("tierstore"))
+        .expect("disable");
+    assert_eq!(removal.removed, [PathBuf::from(&wants)]);
+    assert_eq!(world.read_link(&wants), None);
+
+    let view = BootView {
+        intents: Vec::new(),
+        running: RUNNING,
+    };
+    let report = world.placer().reconcile(&view).expect("reconcile");
+    assert!(report.conflicts.is_empty() && report.unresolved.is_empty());
+    assert!(!world.record().reload_pending);
 }

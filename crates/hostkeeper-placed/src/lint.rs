@@ -10,7 +10,8 @@
 //!   directory (a version directory, another service's) would pin the unit to a version or to
 //!   another package. The command line is read as systemd reads it: the prefixes before the
 //!   command (`-`, `@`, `+`, `!`, `:`) are stripped, words are split with their quotes and
-//!   backslash escapes (`\xNN`, `\NNN`, `\n`, `\t`, `\s` and an escaped character) decoded, and
+//!   backslash escapes (`\xNN`, `\uNNNN`, `\UNNNNNNNN`, `\NNN`, `\n`, `\t`, `\s` and an escaped
+//!   character) decoded, and
 //!   each word, and the value of a `--flag=<path>` word, is judged after its `.`, `..` and empty
 //!   components are resolved. A launchd plist's first `ProgramArguments` element is held to the
 //!   same rule, with XML comments skipped and character references decoded.
@@ -148,8 +149,9 @@ fn assignments(text: &str) -> Vec<(String, String, String)> {
 }
 
 /// The character a backslash escape stands for, the backslash already read: `\xNN` (two hex
-/// digits), `\NNN` (three octal digits), `\n`, `\t`, `\s` (a space), and any other character
-/// for itself. A backslash at the end stands for itself.
+/// digits), `\uNNNN` and `\UNNNNNNNN` (four and eight hex digits), `\NNN` (three octal
+/// digits), `\n`, `\t`, `\s` (a space), and any other character for itself. A backslash at the
+/// end stands for itself.
 fn unescape(chars: &mut Peekable<Chars<'_>>) -> char {
     let first = chars.next().unwrap_or('\\');
     let mut digits = |radix: u32, count: usize, start: Option<char>| {
@@ -167,6 +169,8 @@ fn unescape(chars: &mut Peekable<Chars<'_>>) -> char {
     };
     match first {
         'x' => digits(16, 2, None).unwrap_or('x'),
+        'u' => digits(16, 4, None).unwrap_or('u'),
+        'U' => digits(16, 8, None).unwrap_or('U'),
         '0'..='7' => digits(8, 3, Some(first)).unwrap_or(first),
         'n' => '\n',
         't' => '\t',
@@ -374,9 +378,9 @@ pub fn wanted_by(text: &str) -> Vec<String> {
 }
 
 /// Whether `name` is a plain unit name: at most [`MAX_UNIT_NAME`] bytes of `A-Za-z0-9` and
-/// `_ . @ : -`, a stem not starting with `.` and a suffix of [`UNIT_TYPES`], with at most one
-/// `@`, which has a prefix before it and an instance after it. Templates, specifiers (`%`),
-/// escapes and quotes are not.
+/// `_ . @ -` (characters of the path grammar, which every recorded path keeps), a stem not
+/// starting with `.` and a suffix of [`UNIT_TYPES`], with at most one `@`, which has a prefix
+/// before it and an instance after it. Templates, specifiers (`%`), escapes and quotes are not.
 pub fn is_unit_name(name: &str) -> bool {
     let Some((stem, kind)) = name.rsplit_once('.') else {
         return false;
@@ -391,7 +395,7 @@ pub fn is_unit_name(name: &str) -> bool {
         & instance_ok
         & name
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() | b"_.@:-".contains(&b))
+            .all(|b| b.is_ascii_alphanumeric() | b"_.@-".contains(&b))
 }
 
 /// The unit file a `run` entry is started from: the entry itself when it is a file of `units/`,

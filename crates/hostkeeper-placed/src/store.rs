@@ -23,8 +23,8 @@
 //! every path and link target absolute in the path grammar, services and versions in their
 //! grammars), is an error naming the file, and the file is left as it is. `reload_pending`,
 //! written only when set, says a `daemon-reload` is owed. A write needs the lock of the file
-//! ([`crate::PlacedLock`]). Every write is a temporary file in the same directory, an `fsync` of the file, a
-//! rename and an `fsync` of the directory.
+//! ([`crate::PlacedLock`]). Every write is a temporary file in the same directory, an `fsync`
+//! of the file, a rename and an `fsync` of the directory.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -37,7 +37,7 @@ use serde_json::{Map, Value};
 use crate::error::{PlacedError, io_at};
 use crate::fs::Fs;
 use crate::placer::PlacedLock;
-use crate::roots::PLACED_FILE;
+use crate::roots::{LOCK_FILE, PLACED_FILE};
 
 /// The schema this daemon reads and writes.
 pub const SCHEMA: u64 = 1;
@@ -179,7 +179,9 @@ fn require(ok: bool, why: impl FnOnce() -> String) -> Result<(), String> {
 
 /// Checks that `path` is an absolute path in the path grammar (no `.` or `..` component).
 fn require_path(what: &str, path: &Path) -> Result<(), String> {
-    let text = path.to_str().unwrap_or_default();
+    let text = path
+        .to_str()
+        .ok_or_else(|| format!("{what} {} is not UTF-8", path.display()))?;
     check_path(text).map_err(|why| format!("{what} {} {why}", path.display()))
 }
 
@@ -257,8 +259,22 @@ impl<'a> Store<'a> {
     /// Writes the record: the temporary file, its `fsync`, the rename, the directory's `fsync`.
     /// The caller holds the lock of `placed.json` ([`crate::Placer::lock`]), which the signature
     /// asks for, so that two writers never interleave a read and a write.
-    pub fn save(&self, record: &PlacedRecord, _lock: &PlacedLock) -> Result<(), PlacedError> {
+    /// A lock of another state directory, or of another root, is
+    /// [`PlacedError::ForeignLock`], and a record whose known fields break their rules is
+    /// [`PlacedError::Corrupt`], each before anything is written.
+    pub fn save(&self, record: &PlacedRecord, lock: &PlacedLock) -> Result<(), PlacedError> {
         let path = self.path();
+        let own = self.fs.host_path(&self.dir.join(LOCK_FILE));
+        if lock.path() != own {
+            return Err(PlacedError::ForeignLock {
+                lock: lock.path().to_path_buf(),
+                record: path,
+            });
+        }
+        validate(record).map_err(|why| PlacedError::Corrupt {
+            path: path.clone(),
+            why,
+        })?;
         let tmp = self.dir.join(TEMPORARY_FILE);
         let mut bytes = serde_json::to_vec_pretty(record).map_err(corrupt(&path))?;
         bytes.push(b'\n');

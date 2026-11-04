@@ -662,7 +662,11 @@ fn a_service_or_version_that_is_not_a_name_is_reported_unresolved() {
         }]
     );
 
-    put(&world, "/etc/badname/x.conf", "bad name", PathState::Placed);
+    fs::write(
+        world.host("/var/lib/hostkeeper/placed.json"),
+        r#"{"schema":1,"paths":{"/etc/badname/x.conf":{"service":"bad name","version":"1.0.0","kind":"file","state":"placed","link_target":"/nowhere"}}}"#,
+    )
+    .expect("write a record that Store::save would refuse");
     match world.placer().reconcile(&view(vec![])) {
         Err(PlacedError::Corrupt { .. }) => {}
         other => panic!("expected a corrupt record, got {other:?}"),

@@ -139,17 +139,12 @@ fn a_failed_write_of_a_save_names_its_step_and_path() {
 #[test]
 fn a_save_into_a_missing_directory_is_an_io_error() {
     let world = World::new("store-missing-dir");
-    let error = save_in(
-        &world,
-        &world.fs,
-        Path::new("/nowhere"),
-        &PlacedRecord::default(),
-    )
-    .expect_err("no such directory");
-    assert_eq!(
-        io_parts(error),
-        ("write", PathBuf::from("/nowhere/.hk~placed.json~tmp"))
-    );
+    let lock = world.placer().lock().expect("the lock is free");
+    fs::remove_dir_all(world.host(STATE)).expect("remove the state directory under the lock");
+    let error = Store::new(&world.fs, Path::new(STATE))
+        .save(&PlacedRecord::default(), &lock)
+        .expect_err("no such directory");
+    assert_eq!(io_parts(error), ("write", PathBuf::from(TMP)));
 }
 
 /// Catches a record that holds a path which is not UTF-8 being written as a lossy or empty file
@@ -164,7 +159,7 @@ fn a_record_that_cannot_be_serialised_is_refused_before_any_write() {
     match error {
         PlacedError::Corrupt { path, why } => {
             assert_eq!(path, PathBuf::from(PLACED));
-            assert!(why.contains("invalid UTF-8"), "{why}");
+            assert!(why.starts_with("the path /etc/"), "{why}");
         }
         other => panic!("expected Corrupt, got {other:?}"),
     }

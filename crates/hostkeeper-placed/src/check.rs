@@ -54,8 +54,8 @@ pub(crate) fn check_path(
 /// Refuses `claims` with [`PlacedError::PathConflict`] when one of its paths is listed in
 /// `record` for another service, or is above or below such a path, or is occupied on disk by
 /// anything but a link `record` lists for the claimant: a regular file, a directory, another
-/// kind of file, or a link the record does not list. A path the claimant already owns is accepted, for a repeat or a new version.
-/// Nothing is written.
+/// kind of file, or a link the record does not list. A path the claimant already owns is
+/// accepted, for a repeat or a new version. Nothing is written.
 pub fn check(claims: &Claims, record: &PlacedRecord, fs: &dyn Fs) -> Result<(), PlacedError> {
     let service = claims.service().as_str();
     claims

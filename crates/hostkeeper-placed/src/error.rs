@@ -105,6 +105,9 @@ pub enum PlacedError {
     /// The caller passed two different switch intents for one service.
     #[error("two different switch intents name the service {service}")]
     ConflictingIntents { service: String },
+    /// [`crate::Store::save`] was given the lock of another record.
+    #[error("the lock {} is not the lock of {}", .lock.display(), .record.display())]
+    ForeignLock { lock: PathBuf, record: PathBuf },
 }
 
 impl PlacedError {
@@ -117,7 +120,8 @@ impl PlacedError {
             | PlacedError::NewerSchema { .. }
             | PlacedError::Io { .. }
             | PlacedError::Locked { .. }
-            | PlacedError::ConflictingIntents { .. } => (Class::Environment, "link_failed"),
+            | PlacedError::ConflictingIntents { .. }
+            | PlacedError::ForeignLock { .. } => (Class::Environment, "link_failed"),
             PlacedError::Units(_) => (Class::Environment, "daemon_reload_failed"),
         }
     }

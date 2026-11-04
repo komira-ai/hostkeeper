@@ -662,6 +662,17 @@ fn overlap_bad_source_and_conflicting_intents_have_class_reason_and_text() {
     );
     assert_eq!(conflicting.class(), Class::Environment);
     assert_eq!(conflicting.reason(), "link_failed");
+
+    let foreign = PlacedError::ForeignLock {
+        lock: PathBuf::from("/var/lib/other/placed.lock"),
+        record: PathBuf::from("/var/lib/hostkeeper/placed.json"),
+    };
+    assert_eq!(
+        foreign.to_string(),
+        "the lock /var/lib/other/placed.lock is not the lock of /var/lib/hostkeeper/placed.json"
+    );
+    assert_eq!(foreign.class(), Class::Environment);
+    assert_eq!(foreign.reason(), "link_failed");
 }
 
 /// What one read of a [`FaultFs`] does on the scratch tree of [`read_world`].
