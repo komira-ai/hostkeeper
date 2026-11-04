@@ -158,7 +158,7 @@ fn field_args(field: &Field) -> Vec<Arg> {
             if matches!(field.label, Label::Repeated | Label::Map) {
                 arg = arg.action(ArgAction::Append);
             }
-            match field.kind {
+            let arg = match field.kind {
                 FieldKind::Bool => arg.value_parser(["true", "false"]),
                 FieldKind::String | FieldKind::Bytes | FieldKind::Message => arg,
                 FieldKind::Enum => {
@@ -168,7 +168,8 @@ fn field_args(field: &Field) -> Vec<Arg> {
                 }
                 // A number: `-1` is a value, not a flag; the parse says what is wrong with it.
                 _ => arg.allow_negative_numbers(true),
-            }
+            };
+            vec![arg]
         }
     }
 }

@@ -15,10 +15,10 @@ use tonic::Code;
 use tonic::metadata::{MetadataMap, MetadataValue};
 
 use super::{MAX_RESPONSE_BYTES, ReadError, error_status, exchange, method, read_response};
+use crate::TransportKind;
 use crate::codes;
 use crate::testutil::{Pki, file, from_json, loopback_target, pki, pool, scratch};
 use crate::transport::{Connect as _, Network};
-use crate::{CtlTransport, TransportKind};
 
 /// A connection whose peer has already written `reply`; what is written to it is kept.
 struct FakeStream {
