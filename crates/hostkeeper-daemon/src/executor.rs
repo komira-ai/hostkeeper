@@ -17,23 +17,29 @@ use hostkeeper_hook::Verdict;
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::{
-    Clock, DeadMan, Finished, RecordStore, StepLauncher, StepRunner, UpdateOrder, Watch,
+    Clock, DeadMan, Finished, LaunchError, RecordStore, RunError, StepLauncher, StepRunner,
+    UpdateOrder, Watch,
 };
 
+use crate::boot::{ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
 use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT};
-use crate::locks::{ServiceLocks, StepLock};
+use crate::locks::{Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::packages::Packages;
 use crate::refusal::Refusal;
 use crate::verb::Verb;
 use crate::verbs;
-use crate::watchers::{SlicedClock, Watchers, Yielding};
+use crate::watchers::{STOPPED, SlicedClock, WatchEnd, Watchers, Yielding};
 
 /// A test's way to change every step record store the daemon makes, as it is made: to stop the
 /// daemon at a write ([`RecordStore::with_crash_gate`]) or fail one
 /// ([`RecordStore::with_write_fault`]). It can only make a store fail.
 pub type StoreSeam = Arc<dyn Fn(&ServiceName, RecordStore) -> RecordStore + Send + Sync>;
+
+/// Where the daemon's alerts go, one line each ([`alert_line`]): standard error, unless a test
+/// gives another sink ([`Daemon::with_alerts`]).
+pub type AlertSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// What the daemon runs on: the ports of everything privileged, and the clock.
 pub struct Ports {
@@ -75,6 +81,7 @@ pub struct Ctx {
     pub watchers: Watchers,
     runners: Mutex<BTreeMap<String, Arc<StepRunner>>>,
     stores: Option<StoreSeam>,
+    alerts: AlertSink,
     deadman_poll_secs: Option<u64>,
     /// Ends the dead-men when the daemon is dropped.
     stop: Arc<AtomicBool>,
@@ -93,6 +100,11 @@ impl Ctx {
             Some(seam) => seam(service, store),
             None => store,
         }
+    }
+
+    /// Logs an alert: error level, with its `alert=` field.
+    pub fn alert(&self, alert: &str, detail: &str) {
+        (self.alerts)(&alert_line(alert, detail));
     }
 
     /// The step runner of `service`, made with its dead-man on first use. A watcher of the
@@ -116,7 +128,19 @@ impl Ctx {
     /// Starts the post-success watcher of `service` for `order` on a thread of its own, with a
     /// runner of its own that a new order can stop ([`crate::watchers`]). `false`, and nothing
     /// started, while a watcher of the service runs.
-    pub fn start_watcher(&self, service: &ServiceName, order: UpdateOrder) -> bool {
+    ///
+    /// How the watcher ends is handled on its thread: a `verify` the dead-man could not stop
+    /// locks the service for good, as `package`, unless an order holds its lock (that order's
+    /// run stops the unit first), and is an alert (`unstoppable_unit`); a record that cannot be
+    /// written (`journal_unavailable`) and any other stop without a verdict
+    /// (`watcher_interrupted`) are alerts. A watcher stopped by a new order or the daemon's end is
+    /// not.
+    pub fn start_watcher(
+        &self,
+        service: &ServiceName,
+        order: UpdateOrder,
+        package: Package,
+    ) -> bool {
         let stop = Arc::new(AtomicBool::new(false));
         let launcher = Yielding {
             inner: Arc::clone(&self.launcher),
@@ -128,7 +152,28 @@ impl Ctx {
         };
         let runner = StepRunner::new(Arc::new(launcher), Arc::new(clock), self.store(service));
         self.watch(runner.watch());
-        self.watchers.start(service, runner, order, stop)
+        let (locks, alerts, name) = (
+            self.locks.clone(),
+            Arc::clone(&self.alerts),
+            service.clone(),
+        );
+        let supervise = move |end: &WatchEnd| {
+            let alert = |kind: &str, error: &dyn std::fmt::Display| {
+                alerts(&alert_line(kind, &format!("service={name}: {error}")));
+            };
+            match end {
+                Ok(_) => {}
+                Err(RunError::Launch(LaunchError::Launcher(why))) if why == STOPPED => {}
+                Err(error @ RunError::Unstopped { .. }) => {
+                    drop(locks.take(&name, package).map(ServiceGuard::keep));
+                    alert(ALERT_UNSTOPPABLE, error);
+                }
+                Err(RunError::Record(error)) => alert(ALERT_JOURNAL, error),
+                Err(error) => alert(ALERT_WATCHER, error),
+            }
+        };
+        self.watchers
+            .start(service, runner, order, stop, Box::new(supervise))
     }
 
     /// Starts the dead-man of a runner's watch, when the daemon has dead-men.
@@ -283,6 +328,7 @@ impl Daemon {
                 watchers: Watchers::default(),
                 runners: Mutex::default(),
                 stores: None,
+                alerts: Arc::new(|line: &str| eprintln!("{line}")),
                 deadman_poll_secs: ports.deadman_poll_secs,
                 stop: Arc::new(AtomicBool::new(false)),
             },
@@ -293,6 +339,13 @@ impl Daemon {
     /// seam of the tests that stop the daemon at a write of a record, or fail one.
     pub fn with_stores(mut self, seam: StoreSeam) -> Daemon {
         self.ctx.stores = Some(seam);
+        self
+    }
+
+    /// The same daemon, its alerts sent to `sink` in place of standard error: the seam of the
+    /// tests that read what the daemon alerted.
+    pub fn with_alerts(mut self, sink: AlertSink) -> Daemon {
+        self.ctx.alerts = sink;
         self
     }
 
@@ -311,15 +364,33 @@ impl Daemon {
     }
 
     /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service
-    /// stays locked and its record `running`.
+    /// stays locked and its record `running`, and every hooked order of the service, the same
+    /// update's resend included, is `busy` until `abort` clears it.
     pub fn execute(&self, verb: Verb) -> Reply {
+        let hooked = match &verb {
+            Verb::Update(order) | Verb::ForceRollback(order) => Some(order.service.clone()),
+            _ => None,
+        };
+        let stuck = hooked
+            .and_then(|service| self.ctx.locks.holder(&service).map(|held| (service, held)))
+            .filter(|(_, held)| held.stuck);
+        if let Some((service, held)) = stuck {
+            return Reply::refused(
+                Refusal::Busy,
+                format!(
+                    "a step of {service} that could not be stopped holds it, for an order to {} it to {}",
+                    held.package.verb.name(),
+                    held.package.version
+                ),
+            );
+        }
         let reply = self.dispatch(verb);
         if let Reply::Interrupted {
             refusal: Refusal::Unstopped,
             detail,
         } = &reply
         {
-            crate::boot::alert(crate::boot::ALERT_UNSTOPPABLE, detail);
+            self.ctx.alert(ALERT_UNSTOPPABLE, detail);
         }
         reply
     }

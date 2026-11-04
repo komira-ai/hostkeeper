@@ -51,7 +51,7 @@ only, never from the environment:
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
 (one daemon per state directory) and does its boot work: it reads every step record against the
-host's boot id (kept in `boot-id` in the state directory), runs each update left unfinished by a
+host's boot id (kept in `.boot-id` in the state directory), runs each update left unfinished by a
 crash or a reboot to its verdict, restarts the post-success watchers, runs each service's
 `[hook] boot` step from `current`, and only then tells systemd it is ready. It then serves the
 admin socket. This build has no step launcher or package store wired in and no order source yet,

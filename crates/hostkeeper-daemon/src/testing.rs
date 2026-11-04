@@ -50,6 +50,8 @@ pub struct FakeClock {
     boot: Mutex<String>,
     /// A sleep does not move the clock: only [`FakeClock::advance`] does.
     frozen: bool,
+    /// The next sleep waits here until the test releases it.
+    parked: Mutex<Option<Hold>>,
 }
 
 impl FakeClock {
@@ -69,7 +71,23 @@ impl FakeClock {
             mono: AtomicU64::new(1000),
             boot: Mutex::new("boot-1".to_owned()),
             frozen,
+            parked: Mutex::default(),
         })
+    }
+
+    /// Holds the next sleep on this clock until the test releases it: the test sees a waiter
+    /// enter its wait.
+    pub fn park_next_sleep(&self) -> Gate {
+        let (entered, on_entered) = mpsc::channel();
+        let (release, on_release) = mpsc::channel();
+        *lock(&self.parked) = Some(Hold {
+            entered,
+            release: Mutex::new(on_release),
+        });
+        Gate {
+            entered: on_entered,
+            release,
+        }
     }
 
     pub fn advance(&self, secs: u64) {
@@ -93,6 +111,11 @@ impl Clock for FakeClock {
 
     /// Moves the clock by `secs` at once, or, frozen, only yields.
     fn sleep_secs(&self, secs: u64) {
+        let parked = lock(&self.parked).take();
+        if let Some(hold) = parked {
+            hold.entered.send(()).unwrap_or_default();
+            lock(&hold.release).recv().unwrap_or_default();
+        }
         match self.frozen {
             true => std::thread::yield_now(),
             false => self.advance(secs),
@@ -111,7 +134,8 @@ pub struct Ran {
     pub artifact: Option<PathBuf>,
 }
 
-/// A step held inside the launcher until the test releases it.
+/// A step held inside the launcher, or a sleep held on the clock, until the test releases it.
+#[derive(Debug)]
 struct Hold {
     entered: Sender<()>,
     release: Mutex<Receiver<()>>,
@@ -145,10 +169,25 @@ pub struct AdditiveRan {
     pub step: String,
     pub unit: String,
     pub executable: PathBuf,
+    /// The arguments given before the step.
+    pub hook_args: Vec<String>,
     /// The params file's text, as the step would have read it.
     pub params: String,
     pub timeout_secs: u64,
 }
+
+/// How the next run of an additive step of a service goes wrong in [`ScriptedLauncher`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdditiveFault {
+    /// The hook does not start ([`LaunchError::NoStart`]).
+    NoStart,
+    /// The unit started, and the launcher lost it ([`LaunchError::Launcher`]); it can be stopped.
+    Lost,
+    /// As `Lost`, and from then on no unit of the service can be stopped.
+    LostUnstoppable,
+}
+
+type AdditiveEffect = Box<dyn Fn(&AdditiveCall<'_>) + Send + Sync>;
 
 /// A launcher that plays a script: per service and step, the exit codes in order (with a last
 /// line, when one is given), then `0`.
@@ -157,6 +196,8 @@ pub struct ScriptedLauncher {
     exits: Mutex<BTreeMap<Key, VecDeque<i32>>>,
     lines: Mutex<BTreeMap<Key, VecDeque<String>>>,
     additive_exits: Mutex<BTreeMap<String, VecDeque<i32>>>,
+    additive_faults: Mutex<BTreeMap<String, AdditiveFault>>,
+    during_additive: Mutex<Option<AdditiveEffect>>,
     additive: Mutex<Vec<AdditiveRan>>,
     log: Mutex<Option<Log>>,
     holds: Mutex<BTreeMap<Key, Hold>>,
@@ -191,6 +232,16 @@ impl ScriptedLauncher {
     /// The exit codes of the next runs of an additive step for `service`.
     pub fn additive_exits(&self, service: &str, codes: &[i32]) {
         lock(&self.additive_exits).insert(service.to_owned(), codes.iter().copied().collect());
+    }
+
+    /// The next run of an additive step of `service` goes wrong as `fault` says.
+    pub fn additive_fault(&self, service: &str, fault: AdditiveFault) {
+        lock(&self.additive_faults).insert(service.to_owned(), fault);
+    }
+
+    /// Runs `effect` inside every run of an additive step, as the step would act on the world.
+    pub fn during_additive(&self, effect: impl Fn(&AdditiveCall<'_>) + Send + Sync + 'static) {
+        *lock(&self.during_additive) = Some(Box::new(effect));
     }
 
     /// Every run of an additive step, in order.
@@ -309,17 +360,31 @@ impl StepLauncher for ScriptedLauncher {
             step: call.step.to_owned(),
             unit: call.unit.to_owned(),
             executable: call.executable.to_path_buf(),
+            hook_args: call.hook_args.to_vec(),
             params: fs::read_to_string(call.params).unwrap_or_default(),
             timeout_secs: call.timeout_secs,
         });
+        if let Some(effect) = &*lock(&self.during_additive) {
+            effect(call);
+        }
         let code = lock(&self.additive_exits)
             .get_mut(call.service)
             .and_then(VecDeque::pop_front)
             .unwrap_or(0);
-        Ok(StepExit {
-            code: Some(code),
-            last_line: None,
-        })
+        let fault = lock(&self.additive_faults).remove(call.service);
+        let lost = || LaunchError::Launcher(format!("{} was lost", call.unit));
+        match fault {
+            None => Ok(StepExit {
+                code: Some(code),
+                last_line: None,
+            }),
+            Some(AdditiveFault::NoStart) => Err(LaunchError::NoStart("no such file".to_owned())),
+            Some(AdditiveFault::Lost) => Err(lost()),
+            Some(AdditiveFault::LostUnstoppable) => {
+                self.fail_stops(call.service);
+                Err(lost())
+            }
+        }
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {

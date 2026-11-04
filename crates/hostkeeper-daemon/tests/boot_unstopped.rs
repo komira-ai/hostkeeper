@@ -17,14 +17,15 @@ use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::Step;
 use hostkeeper_steps::CrashPoint;
 use hostkeeper_steps::record::State;
-use support::{Rig, crash_at, d, name, ok, update};
+use support::{Rig, alerting, crash_at, d, lines, name, ok, update};
 
 /// Catches a daemon that exits, lets go of the service, or rewrites the record when a step of
 /// the start pass cannot be stopped: `alpha`'s resumed `prepare` runs past its bound and the
 /// dead-man's stop fails. The start pass ends with `alpha` interrupted `unstopped`; the status
 /// still answers, for `beta` too, and reports `alpha` under way with the reason
 /// `unstoppable_unit`; `alpha`'s record is still `running`; its lock is held (a second take
-/// fails); another order of it is `busy`, the same one is answered as running, and `beta`'s runs.
+/// fails); another order of it is `busy`, and so is a resend of the same update, which nothing
+/// runs any more; `beta`'s order runs, and the alert names the unit.
 /// Once stops work again, the next start stops the unit first and finishes the update.
 #[test]
 fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
@@ -51,12 +52,13 @@ fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
     let mut ports = rig.ports();
     ports.clock = clock.clone();
     ports.deadman_poll_secs = Some(1);
-    let daemon = Arc::new(Daemon::new(
+    let (daemon, alerts) = alerting(Daemon::new(
         support::config(),
         rig.dirs(),
         ports,
         support::OWN,
     ));
+    let daemon = Arc::new(daemon);
     let pass = {
         let daemon = Arc::clone(&daemon);
         thread::spawn(move || daemon.boot_pass().expect("the start pass"))
@@ -101,9 +103,13 @@ fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
     assert!(daemon.ctx().locks.take(&alpha, package).is_err());
     let other = daemon.order(&update("alpha", "3.0.0", &d(), 2));
     assert_eq!(other.refusal(), Some(Refusal::Busy));
+    let resend = daemon.order(&update("alpha", "2.0.0", &d(), 1));
     assert_eq!(
-        daemon.order(&update("alpha", "2.0.0", &d(), 1)),
-        Reply::Running
+        resend,
+        Reply::Refused {
+            refusal: Refusal::Busy,
+            detail: "a step of alpha that could not be stopped holds it, for an order to update it to 2.0.0".to_owned()
+        }
     );
     assert_eq!(
         daemon.order(&update("beta", "2.0.0", &d(), 1)),
@@ -113,6 +119,8 @@ fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
             resent: false
         }
     );
+    let unstoppable = "hostkeeper daemon: level=error alert=unstoppable_unit service=alpha: the dead-man could not stop updater-alpha-prepare-1 at its bound (the launcher failed: updater-alpha-prepare-1 could not be stopped); the step is left running";
+    assert_eq!(lines(&alerts), [unstoppable]);
     drop(daemon);
 
     rig.launcher.allow_stops("alpha");

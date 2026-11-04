@@ -544,6 +544,7 @@ fn a_launcher_runs_no_additive_step_by_default() {
     let call = AdditiveCall {
         service: "svc",
         step: "restore",
+        hook_args: &["update-hook".to_owned()],
         params: Path::new("/state/svc/params.toml"),
         executable: Path::new("/packages/svc/1.0.0/hook"),
         unit: "updater-svc-restore-0",

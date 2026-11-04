@@ -684,7 +684,8 @@ fn exit_75_reports_deferred_and_exit_76_reports_halt() {
 
 /// Catches a daemon that exits, or lets go of the service, when the dead-man cannot stop a step
 /// at its bound: the order is interrupted `unstopped`, the service stays locked (another
-/// package is `busy`, the same one a resend), and another service and the status still work.
+/// package is `busy`, and so is a resend of the same one, which nothing runs any more), and
+/// another service and the status still work.
 #[test]
 fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
     let rig = Rig::new("unstopped");
@@ -719,10 +720,8 @@ fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
     assert!(daemon.ctx().locks.holder(&alpha).expect("held").stuck);
     let other = daemon.order(&update("alpha", "3.0.0", &d(), 2));
     assert_eq!(other.refusal(), Some(Refusal::Busy));
-    assert_eq!(
-        daemon.order(&update("alpha", "2.0.0", &d(), 1)),
-        Reply::Running
-    );
+    let resend = daemon.order(&update("alpha", "2.0.0", &d(), 1));
+    assert_eq!(resend.refusal(), Some(Refusal::Busy), "{resend:?}");
     assert_eq!(daemon.order(&update("beta", "2.0.0", &d(), 1)), succeeded());
     let status = daemon.status().expect("status");
     let names: Vec<_> = status

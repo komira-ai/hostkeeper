@@ -21,9 +21,10 @@ use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Refusal, Reply, WriteStep};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{RECORD_FILE, State};
-use hostkeeper_steps::{Finished, RecordStore, ResumeAction};
+use hostkeeper_steps::{CrashPoint, Finished, RecordStore, ResumeAction};
 use support::{
-    IRREVERSIBLE, OWN, Rig, crash_after_writing, crash_at, d, finished, name, ok, update,
+    IRREVERSIBLE, OWN, Rig, alerting, crash_after_writing, crash_at, d, finished, lines, name, ok,
+    update,
 };
 
 fn failed(phase: Phase) -> Finished {
@@ -386,14 +387,19 @@ fn a_record_that_cannot_be_written_runs_no_hook() {
     let log = Log::default();
     rig.launcher.log_to(log.clone());
     let full = Arc::new(|_: u64| Some(io::Error::from_raw_os_error(28)));
-    let daemon = rig
-        .daemon()
-        .with_stores(Arc::new(move |_: &ServiceName, store: RecordStore| {
-            store.with_write_fault(full.clone())
-        }));
+    let (daemon, alerts) = alerting(rig.daemon().with_stores(Arc::new(
+        move |_: &ServiceName, store: RecordStore| store.with_write_fault(full.clone()),
+    )));
     let mut report = daemon.boot_pass().expect("the start pass");
     let notifier = FakeNotifier::new(log.clone());
     daemon.after_boot(&mut report, &*notifier);
+    assert_eq!(
+        lines(&alerts),
+        [
+            "hostkeeper daemon: level=error alert=journal_unavailable service=web: cannot use the state directory: No space left on device (os error 28)",
+            "hostkeeper daemon: level=error alert=journal_unavailable the boot id is not written: a step record could not be read or rewritten, so the old boot id is kept; no hook runs in this start",
+        ]
+    );
     assert!(matches!(
         web(&report).outcome,
         Outcome::JournalUnavailable(_)
@@ -653,4 +659,161 @@ fn a_release_with_a_link_in_it_halts_the_update_and_a_halt_needs_its_record() {
     ));
     assert_eq!(rig.verdict("web"), None);
     assert_eq!(rig.launcher.steps("web"), [Step::Prepare]);
+}
+
+/// Catches the daemon's own file taking the place of a service: a service named `boot-id` has
+/// its directory and record read as any other, the boot id is written beside it, and a new
+/// update of that service runs.
+#[test]
+fn a_service_named_boot_id_keeps_its_directory_and_takes_orders() {
+    let rig = Rig::new("boot-named-boot-id");
+    rig.add("boot-id", "2.0.0");
+    let (daemon, _) = rig.booted();
+    rig.launcher.lose("boot-id", Step::Prepare);
+    let reply = daemon.order(&update("boot-id", "2.0.0", &d(), 1));
+    assert_eq!(reply.refusal(), Some(Refusal::LauncherFailed));
+    let (daemon, report, _) = restart(&rig);
+    assert_eq!(report.services["boot-id"].verdict(), Some(ok()));
+    assert!(report.boot_id_written);
+    assert!(rig.state.join("boot-id").is_dir());
+    assert_eq!(boot_id(&rig), "boot-1");
+
+    rig.add("boot-id", "3.0.0");
+    let reply = daemon.order(&update("boot-id", "3.0.0", &d(), 2));
+    assert_eq!(
+        reply,
+        Reply::Finished {
+            verdict: ok().verdict,
+            reason: None,
+            resent: false
+        }
+    );
+}
+
+/// Catches a daemon killed between the rewrites of two services that writes the boot id, or
+/// reads one record twice as after a boot: the first record is rewritten and the daemon dies;
+/// the boot id stays, and the next start reads both as after a boot, each reaching its cell's
+/// verdict.
+#[test]
+fn a_daemon_killed_between_two_rewrites_reads_both_as_after_a_boot() {
+    let rig = Rig::new("boot-two-rewrites");
+    two_unfinished(&rig);
+    rig.reboot();
+    let dying = rig.daemon().with_stores(crash_at(
+        Some(CrashPoint::AfterWrite(1)),
+        Arc::new(AtomicU64::new(0)),
+    ));
+    let report = dying.boot_pass().expect("the start pass");
+    assert!(matches!(
+        report.services["beta"].outcome,
+        Outcome::JournalUnavailable(_)
+    ));
+    assert!(!report.boot_id_written);
+    drop(dying);
+    let (_, report, log) = restart(&rig);
+    assert!(report.rebooted);
+    assert_eq!(
+        report.services["alpha"].action,
+        Some(ResumeAction::RerunStep)
+    );
+    assert_eq!(
+        report.services["alpha"].verdict(),
+        Some(rebooted_deferred())
+    );
+    assert_eq!(
+        report.services["beta"].verdict(),
+        Some(failed(Phase::BeforeCommit))
+    );
+    assert_eq!(
+        calls(&log),
+        [
+            "run updater-alpha-rollback-1",
+            "run updater-beta-rollback-1"
+        ]
+    );
+}
+
+/// Catches a stale temporary file of the boot id that stops every later start, is followed, or
+/// leaves hooks running when it cannot be cleared: a stale file and a stale link are replaced
+/// (the link's target untouched); a stale directory, and a directory where the boot id goes,
+/// keep the old boot id, no hook runs, the readiness notice still goes out, and once cleared the
+/// next start reads the records as after a boot.
+#[test]
+fn stale_entries_of_the_boot_id_are_cleared_or_keep_the_old_boot_id() {
+    let tmp = format!("{BOOT_ID_FILE}.tmp");
+    let rig = Rig::new("boot-stale-file");
+    fs::create_dir_all(&rig.state).expect("the state dir");
+    fs::write(rig.state.join(&tmp), "stale").expect("a stale file");
+    let target = rig.scratch.path().join("target");
+    fs::write(&target, "kept").expect("a target");
+    let (_, report) = rig.booted();
+    assert!(report.boot_id_written);
+    let rig2 = Rig::new("boot-stale-link");
+    fs::create_dir_all(&rig2.state).expect("the state dir");
+    std::os::unix::fs::symlink(&target, rig2.state.join(&tmp)).expect("a stale link");
+    let (_, report) = rig2.booted();
+    assert!(report.boot_id_written);
+    assert_eq!(fs::read_to_string(&target).expect("the target"), "kept");
+    assert_eq!(boot_id(&rig2), "boot-1");
+
+    for (case, blocked) in [("dir", tmp.as_str()), ("id-dir", BOOT_ID_FILE)] {
+        let rig = Rig::new(&format!("boot-stale-{case}"));
+        lost_in(&rig, Step::Prepare);
+        fs::remove_file(rig.state.join(BOOT_ID_FILE)).expect("no boot id");
+        fs::create_dir_all(rig.state.join(blocked).join("inside")).expect("a directory");
+        rig.reboot();
+        let log = Log::default();
+        rig.launcher.log_to(log.clone());
+        let mut report = rig.daemon().boot_pass().expect("the start pass");
+        assert!(!report.boot_id_written, "{case}");
+        assert!(matches!(
+            web(&report).outcome,
+            Outcome::JournalUnavailable(_)
+        ));
+        let notifier = FakeNotifier::new(log.clone());
+        rig.daemon().after_boot(&mut report, &*notifier);
+        assert_eq!(calls(&log), ["ready"], "{case}");
+        fs::remove_dir_all(rig.state.join(blocked)).expect("clear it");
+        let (_, report, _) = restart(&rig);
+        assert!(report.rebooted, "{case}");
+        assert_eq!(web(&report).verdict(), Some(rebooted_deferred()), "{case}");
+    }
+}
+
+/// Catches a record trusted for a service it does not name, or a counter at its end that stops
+/// the start: a record naming another service is held as corrupt while the other services go on;
+/// a cut-off `rollback` whose attempt is the largest count runs again and the update ends.
+#[test]
+fn a_record_of_another_service_is_held_and_a_full_attempt_count_is_kept() {
+    let rig = Rig::new("boot-misfiled");
+    two_unfinished(&rig);
+    let mut alpha = rig.record("alpha").expect("alpha's record");
+    alpha.service = "beta".to_owned();
+    RecordStore::new(&rig.state.join("alpha"))
+        .save(&alpha)
+        .expect("misfile it");
+    let notifier = FakeNotifier::new(Log::default());
+    let started = start::startup_notifying(&rig.settings(), rig.ports(), OWN, &*notifier)
+        .expect("the daemon starts");
+    let report = started.boot_report();
+    assert_eq!(
+        report.services["alpha"].outcome,
+        Outcome::Corrupt("the step record names the service \"beta\"".to_owned())
+    );
+    assert_eq!(report.services["beta"].verdict(), Some(ok()));
+    assert_eq!(notifier.sent(), 1);
+    drop(started);
+
+    let rig = Rig::new("boot-full-attempt");
+    rig.launcher.exits("web", Step::Verify, &[1]);
+    lost_in(&rig, Step::Rollback);
+    let mut rec = rig.record("web").expect("a record");
+    rec.attempt = u32::MAX;
+    RecordStore::new(&rig.state.join("web"))
+        .save(&rec)
+        .expect("a full count");
+    rig.reboot();
+    let (_, report, _) = restart(&rig);
+    assert_eq!(web(&report).verdict(), Some(failed(Phase::GateRelease)));
+    assert_eq!(rig.record("web").expect("a record").attempt, u32::MAX);
 }

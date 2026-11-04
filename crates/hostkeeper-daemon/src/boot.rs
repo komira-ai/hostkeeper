@@ -4,8 +4,8 @@
 //!
 //! [`Daemon::boot_pass`] does, in this order:
 //!
-//! 1. list every service state directory, and read each step record. A record that is corrupt
-//!    (`corrupt`) or of a newer schema (`record_newer`) holds its service, and only `clear_record`
+//! 1. list every service state directory, and read each step record. A record that is corrupt,
+//!    or that names another service, (`corrupt`) or of a newer schema (`record_newer`) holds its service, and only `clear_record`
 //!    clears it; one that cannot be read at all (`unreadable`) holds its service too;
 //! 2. compare the boot id with the one the last pass wrote ([`boot_changed`]), once;
 //! 3. rewrite every unfinished record for its cell of the resume table
@@ -21,7 +21,9 @@
 //! 7. restart the watchers, each on a thread the daemon owns ([`crate::watchers`]).
 //!
 //! [`Daemon::after_boot`] then runs the `boot` step of each service whose `current` manifest
-//! names one, and sends the readiness notice, once, whatever the pass found.
+//! names one, and sends the readiness notice, once, whatever the pass found. A `current` that is
+//! not a link to a version directory beside it fails that service's boot step
+//! (`boot_step_failed`) and runs nothing.
 //!
 //! A record that cannot be written means no hook of that service runs: not the step, not
 //! `rollback`, not the boot step; its update is reported `Deferred` with the reason
@@ -36,7 +38,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::num::NonZeroU64;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use hostkeeper_config::manifest::{Expected, Hook, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
@@ -44,22 +46,23 @@ use hostkeeper_hook::{Params, STAGED_RELEASE_KEY, Scalar, TARGET_VERSION_KEY, Ve
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::runner::REASON_ARTIFACT_CHANGED;
 use hostkeeper_steps::{
-    AdditiveCall, ArtifactError, Bounds, Clock, Finished, Layout, ResumeAction, RunError, Seal,
-    Staged, StepExit, UpdateOrder, read_seal, resume,
+    AdditiveCall, ArtifactError, Bounds, Clock, Finished, LaunchError, Layout, ResumeAction,
+    RunError, Seal, Staged, StepExit, UpdateOrder, read_seal, resume,
 };
 
 use crate::executor::{Ctx, Daemon};
 use crate::files::{self, WriteStep};
 use crate::installed::{self, CURRENT};
-use crate::locks::Package;
+use crate::locks::{Package, ServiceGuard};
 use crate::notify::ReadyNotifier;
 use crate::refusal::Refusal;
 use crate::verb::{HookedVerb, PackageDigest};
 use crate::verbs;
 
 /// The file of the boot id the last start pass wrote, in the state directory beside the
-/// services' directories (design section 10). It holds the id alone.
-pub const BOOT_ID_FILE: &str = "boot-id";
+/// services' directories (design section 10). It holds the id alone. Its name begins with `.`,
+/// which no service name has, so it never takes the place of a service's directory.
+pub const BOOT_ID_FILE: &str = ".boot-id";
 /// The reason of the `Deferred` of an update whose step record cannot be written.
 pub const REASON_JOURNAL_UNAVAILABLE: &str = "journal_unavailable";
 /// The alert of a step the dead-man could not stop.
@@ -68,20 +71,18 @@ pub const ALERT_UNSTOPPABLE: &str = "unstoppable_unit";
 pub const ALERT_JOURNAL: &str = "journal_unavailable";
 /// The alert of a release that is not the one its seal or step record names: a halt.
 pub const ALERT_ARTIFACT_CHANGED: &str = "artifact_changed";
+/// The alert of a post-success watcher that stopped without a verdict for another reason.
+pub const ALERT_WATCHER: &str = "watcher_interrupted";
 /// The alert of a `boot` step that failed or could not be run.
 pub const ALERT_BOOT_STEP: &str = "boot_step_failed";
 /// The alert of a readiness notice that could not be sent, or a package directory that could not
 /// be listed for the boot steps.
 pub const ALERT_START: &str = "start_incomplete";
 
-/// The log line of an alert: error level, with its `alert=` field.
+/// The log line of an alert: error level, with its `alert=` field. The daemon logs it through
+/// [`Ctx::alert`].
 pub fn alert_line(alert: &str, detail: &str) -> String {
     format!("hostkeeper daemon: level=error alert={alert} {detail}")
-}
-
-/// Logs an alert on standard error.
-pub fn alert(alert: &str, detail: &str) {
-    eprintln!("{}", alert_line(alert, detail));
 }
 
 /// Whether the host booted since the last start pass wrote the boot id: the id in
@@ -277,8 +278,8 @@ fn sealed(error: ArtifactError) -> NotRebuilt {
 }
 
 /// The record of `service` cannot be written: an alert, and the outcome that runs no hook.
-fn journal(service: &ServiceName, error: &dyn fmt::Display) -> Outcome {
-    alert(ALERT_JOURNAL, &format!("service={service}: {error}"));
+fn journal(ctx: &Ctx, service: &ServiceName, error: &dyn fmt::Display) -> Outcome {
+    ctx.alert(ALERT_JOURNAL, &format!("service={service}: {error}"));
     Outcome::JournalUnavailable(error.to_string())
 }
 
@@ -365,7 +366,7 @@ fn rebuild(
 }
 
 /// The outcome of a run of the step runner.
-fn ran(service: &ServiceName, result: Result<Finished, RunError>) -> Outcome {
+fn ran(ctx: &Ctx, service: &ServiceName, result: Result<Finished, RunError>) -> Outcome {
     match result {
         // The update reached the post-success watcher, which is left to its own thread.
         Ok(Finished {
@@ -375,18 +376,40 @@ fn ran(service: &ServiceName, result: Result<Finished, RunError>) -> Outcome {
             ..
         }) => Outcome::Watching,
         Ok(finished) => Outcome::Finished(finished),
-        Err(RunError::Record(error)) => journal(service, &error),
+        Err(RunError::Record(error)) => journal(ctx, service, &error),
         Err(error) => {
             let detail = format!("service={service}: {error}");
             let refusal = verbs::update::interrupted(error)
                 .refusal()
                 .unwrap_or(Refusal::StoreFailed);
             if refusal == Refusal::Unstopped {
-                alert(ALERT_UNSTOPPABLE, &detail);
+                ctx.alert(ALERT_UNSTOPPABLE, &detail);
             }
             Outcome::Interrupted { refusal, detail }
         }
     }
+}
+
+/// The version `current` names in the package directory `dir`: `None` when there is no
+/// `current`. A `current` that is not a link, or not a link to a version directory beside it (one
+/// plain name that is a version), is refused: its tree is never run.
+fn current_version(dir: &Path) -> Result<Option<Version>, String> {
+    let target = match fs::read_link(dir.join(CURRENT)) {
+        Ok(target) => target,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("`current` is not a link: {error}")),
+    };
+    let mut parts = target.components();
+    let name = match (parts.next(), parts.next()) {
+        (Some(Component::Normal(name)), None) => name.to_string_lossy().into_owned(),
+        _ => {
+            return Err(format!(
+                "`current` links to {}, not to a version directory beside it",
+                target.display()
+            ));
+        }
+    };
+    Version::new(&name).map(Some).map_err(text)
 }
 
 /// The params of a `boot` step: the manifest's `[params]` and the release it runs from.
@@ -427,6 +450,10 @@ impl Daemon {
         let mut loaded = Vec::new();
         for service in names.into_values() {
             let outcome = match ctx.store(&service).load() {
+                // A record of another service is not this service's: it is held as corrupt.
+                Ok(Loaded::Current(rec)) if rec.service != service.as_str() => Outcome::Corrupt(
+                    format!("the step record names the service {:?}", rec.service),
+                ),
                 Ok(Loaded::Current(rec)) => {
                     loaded.push((service, *rec));
                     continue;
@@ -450,7 +477,7 @@ impl Daemon {
                 false => Ok(()),
             };
             let outcome = match (written, action) {
-                (Err(error), _) => journal(&service, &error),
+                (Err(error), _) => journal(ctx, &service, &error),
                 (Ok(()), ResumeAction::NothingFinished) => Outcome::Idle,
                 (Ok(()), _) => {
                     unfinished.push((service, rec, action));
@@ -480,9 +507,9 @@ impl Daemon {
             Ok(()) => unfinished,
             Err(error) => {
                 let why = format!("the boot id is not written: {error}");
-                alert(ALERT_JOURNAL, &format!("{why}; no hook runs in this start"));
+                ctx.alert(ALERT_JOURNAL, &format!("{why}; no hook runs in this start"));
                 for (service, _, action) in unfinished {
-                    let outcome = journal(&service, &why);
+                    let outcome = journal(ctx, &service, &why);
                     report
                         .services
                         .insert(service.to_string(), ServiceBoot::of(Some(action), outcome));
@@ -547,7 +574,7 @@ impl Daemon {
             let _step = guard.step(&ctx.step_lock);
             ctx.runner(service).run_until_watching(&order)
         };
-        let outcome = ran(service, result);
+        let outcome = ran(ctx, service, result);
         match &outcome {
             // The step could not be stopped: the service stays locked, and its record running.
             Outcome::Interrupted {
@@ -562,8 +589,8 @@ impl Daemon {
     /// Starts the post-success watcher of the update `rec` holds.
     fn restart_watcher(&self, service: &ServiceName, rec: &Record) -> Outcome {
         match rebuild(self.ctx(), service, rec) {
-            Ok((order, _)) => {
-                self.ctx().start_watcher(service, order);
+            Ok((order, package)) => {
+                self.ctx().start_watcher(service, order, package);
                 Outcome::Watching
             }
             Err(NotRebuilt::Changed(why)) => self.halt_changed(service, rec, &why),
@@ -582,7 +609,7 @@ impl Daemon {
                 detail: format!("service={service}: {error}"),
             };
         }
-        alert(ALERT_ARTIFACT_CHANGED, &format!("service={service}: {why}"));
+        ctx.alert(ALERT_ARTIFACT_CHANGED, &format!("service={service}: {why}"));
         let finished = Finished {
             verdict: Verdict::Halt,
             reason: Some(REASON_ARTIFACT_CHANGED.to_owned()),
@@ -594,7 +621,7 @@ impl Daemon {
         };
         match ctx.store(service).save(&halted) {
             Ok(()) => Outcome::Finished(finished),
-            Err(error) => journal(service, &error),
+            Err(error) => journal(ctx, service, &error),
         }
     }
 
@@ -605,7 +632,7 @@ impl Daemon {
         let ctx = self.ctx();
         report.stages.push(Stage::BootSteps);
         let names = installed::service_dirs(&ctx.dirs.packages).unwrap_or_else(|error| {
-            alert(
+            ctx.alert(
                 ALERT_START,
                 &format!("the package directory cannot be listed, so no boot step runs: {error}"),
             );
@@ -626,7 +653,7 @@ impl Daemon {
         report.stages.push(Stage::Ready);
         let sent = notifier.ready().map_err(text);
         if let Err(error) = &sent {
-            alert(
+            ctx.alert(
                 ALERT_START,
                 &format!("the readiness notice was not sent: {error}"),
             );
@@ -637,7 +664,8 @@ impl Daemon {
     /// The `boot` step of `service`, run and judged.
     fn boot_step(&self, service: &ServiceName) -> BootStep {
         let failed = |why: String| {
-            alert(ALERT_BOOT_STEP, &format!("service={service}: {why}"));
+            self.ctx()
+                .alert(ALERT_BOOT_STEP, &format!("service={service}: {why}"));
             BootStep::Failed(why)
         };
         match self.run_boot_step(service) {
@@ -657,12 +685,18 @@ impl Daemon {
     /// `updater-<service>-boot-<generation>` (a unit of that name left by an earlier start is
     /// stopped first), bounded by the manifest's `cutover` bound. `None` when there is nothing to
     /// run.
+    ///
+    /// A launcher that fails after it may have started the unit (anything but `NoStart`) leaves
+    /// the unit possibly alive: it is stopped before its params file goes, and when it cannot be
+    /// stopped the params file stays and the service is locked for good (`unstoppable_unit`), so
+    /// that no order of it runs beside the step.
     fn run_boot_step(&self, service: &ServiceName) -> Result<Option<StepExit>, String> {
         let ctx = self.ctx();
-        let Some(version) = installed::linked_version(&ctx.dirs.packages, service, CURRENT) else {
+        let package_dir = ctx.dirs.packages.join(service.as_str());
+        let Some(version) = current_version(&package_dir)? else {
             return Ok(None);
         };
-        let layout = Layout::package(&ctx.dirs.packages.join(service.as_str()));
+        let layout = Layout::package(&package_dir);
         let dir = layout.version_path(version.as_str());
         let expected = Expected {
             name: service.clone(),
@@ -681,12 +715,9 @@ impl Daemon {
                 dir.display()
             ));
         }
-        let hook = manifest
-            .hook
-            .command
-            .first()
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let command = &manifest.hook.command;
+        let hook = command.first().map(PathBuf::from).unwrap_or_default();
+        let hook_args = command.get(1..).unwrap_or_default();
         let executable = staged.check(&hook).map_err(text)?;
         let params = boot_params(&manifest, &dir, &version)?;
         files::make_private(&ctx.service_dir(service)).map_err(text)?;
@@ -698,18 +729,39 @@ impl Daemon {
         let unit = format!("updater-{service}-boot-{generation}");
         ctx.launcher.stop(&unit).map_err(text)?;
         store.save_params(&params.to_toml()).map_err(text)?;
-        let exit = ctx
-            .launcher
-            .run_additive(&AdditiveCall {
-                service: service.as_str(),
-                step,
-                params: &store.params_path(),
-                executable: &executable,
-                unit: &unit,
-                timeout_secs: manifest.hook.timeout_secs.cutover.get(),
-            })
-            .map_err(text);
+        let ran = ctx.launcher.run_additive(&AdditiveCall {
+            service: service.as_str(),
+            step,
+            hook_args,
+            params: &store.params_path(),
+            executable: &executable,
+            unit: &unit,
+            timeout_secs: manifest.hook.timeout_secs.cutover.get(),
+        });
+        let ended = match ran {
+            Ok(exit) => Ok(Some(exit)),
+            Err(error @ LaunchError::NoStart(_)) => Err(error.to_string()),
+            // The unit may have started and run on: it is stopped before its params file goes.
+            Err(error) => match ctx.launcher.stop(&unit) {
+                Ok(()) => Err(format!("{error}; its unit {unit} was stopped")),
+                Err(stop) => {
+                    // The seal's package digest was checked when the seal was read.
+                    let package = PackageDigest::new(seal.package_digest()).map(|digest| Package {
+                        verb: HookedVerb::Update,
+                        version,
+                        digest,
+                    });
+                    let locked = package.and_then(|package| ctx.locks.take(service, package).ok());
+                    drop(locked.map(ServiceGuard::keep));
+                    let why = format!(
+                        "{error}; its unit {unit} could not be stopped ({stop}), so {service} stays locked"
+                    );
+                    ctx.alert(ALERT_UNSTOPPABLE, &format!("service={service}: {why}"));
+                    return Err(why);
+                }
+            },
+        };
         store.remove_params().map_err(text)?;
-        exit.map(Some)
+        ended
     }
 }

@@ -29,6 +29,9 @@ pub const STOPPED: &str =
 /// What a watcher's thread ends with: the runner's verdict, or why it stopped without one.
 pub type WatchEnd = Result<Finished, RunError>;
 
+/// What the daemon does on the watcher's thread with how it ended, before the thread ends.
+pub type Supervise = Box<dyn FnOnce(&WatchEnd) + Send>;
+
 struct Watcher {
     stop: Arc<AtomicBool>,
     thread: JoinHandle<WatchEnd>,
@@ -45,15 +48,17 @@ impl Watchers {
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Starts the watcher of `service`, `order` run by `runner` on a thread of its own; `stop`
-    /// must be the flag `runner`'s launcher and clock were made with ([`Yielding`],
-    /// [`SlicedClock`]). `false`, and nothing started, while a watcher of the service runs.
+    /// Starts the watcher of `service`, `order` run by `runner` on a thread of its own, and
+    /// `supervise` given how it ended; `stop` must be the flag `runner`'s launcher and clock were
+    /// made with ([`Yielding`], [`SlicedClock`]). `false`, and nothing started, while a watcher of
+    /// the service runs. Only the start pass starts watchers, before any order is taken.
     pub(crate) fn start(
         &self,
         service: &ServiceName,
         runner: StepRunner,
         order: UpdateOrder,
         stop: Arc<AtomicBool>,
+        supervise: Supervise,
     ) -> bool {
         let mut map = self.map();
         let alive = map
@@ -62,7 +67,11 @@ impl Watchers {
         if alive {
             return false;
         }
-        let thread = thread::spawn(move || runner.run(&order));
+        let thread = thread::spawn(move || {
+            let end = runner.run(&order);
+            supervise(&end);
+            end
+        });
         // A watcher that had ended is replaced; what it ended with was already reported.
         map.insert(service.to_string(), Watcher { stop, thread });
         true

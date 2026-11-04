@@ -22,7 +22,8 @@ pub trait ReadyNotifier: Send + Sync {
 pub const READY: &[u8] = b"READY=1";
 
 /// The readiness notice of systemd: `READY=1` in one datagram to the notify socket, a path, or
-/// an abstract name after `@`.
+/// an abstract name after `@`. The datagram is sent without waiting: a socket whose queue is full
+/// is an error the daemon reports, never a start that hangs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SystemdNotifier {
     socket: OsString,
@@ -49,7 +50,9 @@ impl SystemdNotifier {
 impl ReadyNotifier for SystemdNotifier {
     fn ready(&self) -> io::Result<()> {
         let address = self.address()?;
-        UnixDatagram::unbound()?.send_to_addr(READY, &address)?;
+        let socket = UnixDatagram::unbound()?;
+        socket.set_nonblocking(true)?;
+        socket.send_to_addr(READY, &address)?;
         Ok(())
     }
 }

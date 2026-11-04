@@ -30,13 +30,16 @@ pub struct StepCall<'a> {
 
 /// One run of an additive step: a step of the hook that is not one of the five of an update, named
 /// by the package's manifest (the `[hook] boot` step, which the daemon runs from `current` at its
-/// start). The hook is run as `<executable> <hook_args> <step> --params <params>`.
+/// start). The hook is run as `<executable> <hook_args...> <step> --params <params>`.
 #[derive(Clone, Debug)]
 pub struct AdditiveCall<'a> {
     /// The service the step belongs to.
     pub service: &'a str,
     /// The step's name, as the manifest gives it: a token that is none of the five steps.
     pub step: &'a str,
+    /// The arguments of the manifest's hook command after its program, given before the step
+    /// (`update-hook` in `["bin/tierstore", "update-hook"]`).
+    pub hook_args: &'a [String],
     /// The params file of the run.
     pub params: &'a Path,
     /// The hook executable, a file of a verified release (see [`StepCall::executable`]).

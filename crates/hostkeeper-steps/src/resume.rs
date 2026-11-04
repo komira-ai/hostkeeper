@@ -184,10 +184,11 @@ fn move_to_rollback(rec: &mut Record) {
     rec.progress.retry = 0;
 }
 
-/// A step whose unit ended with the host runs again as its next attempt; a pending one is left.
+/// A step whose unit ended with the host runs again as its next attempt (a count that has
+/// reached its largest value stays there); a pending one is left.
 fn restart(rec: &mut Record) {
     if let State::Running { .. } = rec.state {
-        rec.attempt += 1;
+        rec.attempt = rec.attempt.saturating_add(1);
         rec.state = State::Pending;
     }
 }

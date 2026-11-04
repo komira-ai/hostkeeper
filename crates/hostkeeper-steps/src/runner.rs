@@ -391,7 +391,7 @@ impl StepRunner {
                     // The updater died with the step's unit possibly alive: stop it by name and
                     // wait for it to end before the step is started again (3.5).
                     self.launcher.stop(&rec.unit(rec.step))?;
-                    rec.attempt += 1;
+                    rec.attempt = rec.attempt.saturating_add(1);
                     rec.state = State::Pending;
                     self.store.save(&rec)?;
                 }
@@ -563,7 +563,7 @@ impl StepRunner {
                 if step != Step::Verify {
                     rec.progress.retry += 1;
                 }
-                rec.attempt += 1;
+                rec.attempt = rec.attempt.saturating_add(1);
                 rec.state = State::Pending;
             }
             Next::Rollback { then } => {
@@ -628,7 +628,7 @@ impl StepRunner {
             Outcome::Success if !over => {
                 self.clock
                     .sleep_secs(wait_secs(report.retry_after_secs, WATCH_POLL_SECS));
-                rec.attempt += 1;
+                rec.attempt = rec.attempt.saturating_add(1);
                 rec.state = State::Pending;
                 return;
             }

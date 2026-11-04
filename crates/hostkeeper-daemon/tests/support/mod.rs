@@ -14,7 +14,7 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
 use hostkeeper_daemon::start::Settings;
-use hostkeeper_daemon::testing::{FakeClock, FakePackages, ScriptedLauncher, manifest};
+use hostkeeper_daemon::testing::{FakeClock, FakePackages, Log, ScriptedLauncher, manifest};
 use hostkeeper_daemon::{Daemon, Dirs, Ports, StoreSeam};
 use hostkeeper_hook::Verdict;
 use hostkeeper_proto::hostkeeper::agent::v1::{ForceRollback, Order, Update, order};
@@ -226,6 +226,21 @@ impl Rig {
     }
 }
 
+/// `daemon`, its alerts written to the returned log, one line each.
+pub fn alerting(daemon: Daemon) -> (Daemon, Log) {
+    let log = Log::default();
+    let sink = log.clone();
+    let daemon = daemon.with_alerts(Arc::new(move |line: &str| {
+        sink.lock().expect("the log").push(line.to_owned());
+    }));
+    (daemon, log)
+}
+
+/// The lines of `log`.
+pub fn lines(log: &Log) -> Vec<String> {
+    log.lock().expect("the log").clone()
+}
+
 pub fn name(text: &str) -> ServiceName {
     ServiceName::new(text).expect("a service name")
 }
@@ -257,18 +272,22 @@ pub fn manifest_with(service: &str, version: &str, hook_lines: &str) -> String {
 }
 
 /// A seam that stops the daemon at `at`, the writes of step records counted across every store
-/// it makes; `count` counts them.
+/// it makes; `count` counts them. Once stopped, the daemon is dead: every later write fails too.
 pub fn crash_at(at: Option<CrashPoint>, count: Arc<AtomicU64>) -> StoreSeam {
+    let dead = Arc::new(std::sync::atomic::AtomicBool::new(false));
     Arc::new(move |_: &ServiceName, store: RecordStore| {
-        let count = Arc::clone(&count);
-        store.with_crash_gate(Arc::new(move |point| match point {
-            CrashPoint::BeforeWrite(_) => {
-                let n = count.fetch_add(1, Ordering::SeqCst) + 1;
-                at == Some(CrashPoint::BeforeWrite(n))
-            }
-            CrashPoint::AfterWrite(_) => {
-                at == Some(CrashPoint::AfterWrite(count.load(Ordering::SeqCst)))
-            }
+        let (count, dead) = (Arc::clone(&count), Arc::clone(&dead));
+        store.with_crash_gate(Arc::new(move |point| {
+            let here = match point {
+                CrashPoint::BeforeWrite(_) => {
+                    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+                    at == Some(CrashPoint::BeforeWrite(n))
+                }
+                CrashPoint::AfterWrite(_) => {
+                    at == Some(CrashPoint::AfterWrite(count.load(Ordering::SeqCst)))
+                }
+            };
+            dead.fetch_or(here, Ordering::SeqCst) | here
         }))
     })
 }

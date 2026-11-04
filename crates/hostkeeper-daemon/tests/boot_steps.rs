@@ -13,10 +13,10 @@ use clap::Parser;
 use hostkeeper_daemon::boot::{BootStep, Outcome};
 use hostkeeper_daemon::cli::{self, Cli, Command, EXIT_CONFIG, EXIT_FAILED};
 use hostkeeper_daemon::start::{self, StartError};
-use hostkeeper_daemon::testing::{FakeNotifier, Log};
+use hostkeeper_daemon::testing::{AdditiveFault, FakeNotifier, Log};
 use hostkeeper_daemon::{NoNotifier, ReadyNotifier, Refusal, SystemdNotifier};
 use hostkeeper_hook::Step;
-use support::{OWN, Rig, d, manifest_with, update};
+use support::{OWN, Rig, alerting, d, lines, manifest_with, name, update};
 
 const RESTORE: &str = r#"boot = "restore""#;
 
@@ -38,7 +38,12 @@ fn logged(log: &Log) -> Vec<String> {
 #[test]
 fn the_boot_hook_runs_from_current_after_all_updates_and_before_ready() {
     let rig = Rig::new("steps-order");
-    restoring(&rig, "alpha", "1.0.0");
+    let with_args = manifest_with("alpha", "1.0.0", RESTORE).replace(
+        r#"command = ["bin/hook", "update-hook"]"#,
+        r#"command = ["bin/hook", "update-hook", "boot-mode"]"#,
+    );
+    rig.add_with("alpha", "1.0.0", &with_args);
+    rig.store.link("alpha", "current", "1.0.0");
     rig.add("beta", "2.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.lose("beta", Step::Prepare);
@@ -75,6 +80,7 @@ fn the_boot_hook_runs_from_current_after_all_updates_and_before_ready() {
     );
     assert_eq!(ran[0].executable, current.join("bin/hook"));
     assert_eq!(ran[0].timeout_secs, 300);
+    assert_eq!(ran[0].hook_args, ["update-hook", "boot-mode"]);
     let params = hostkeeper_hook::Params::parse(&ran[0].params).expect("the params file");
     assert_eq!(params.staged_release(), Some(current.clone()));
     assert_eq!(params.target_version(), Some("1.0.0"));
@@ -327,4 +333,187 @@ fn the_boot_step_unit_carries_the_generation_of_the_last_update() {
     assert_eq!(ran.len(), 1);
     assert_eq!(ran[0].unit, "updater-alpha-boot-1");
     assert_eq!(rig.launcher.stops(), ["updater-alpha-boot-1"]);
+}
+
+/// A daemon whose start pass ran on `rig`, its alerts in a log, and the report after its boot
+/// steps and readiness notice.
+fn after_boot(
+    rig: &Rig,
+) -> (
+    hostkeeper_daemon::Daemon,
+    hostkeeper_daemon::BootReport,
+    Log,
+) {
+    fs::create_dir_all(&rig.state).expect("the state dir");
+    let (daemon, alerts) = alerting(rig.daemon());
+    let mut report = daemon.boot_pass().expect("the start pass");
+    daemon.after_boot(&mut report, &*FakeNotifier::new(Log::default()));
+    (daemon, report, alerts)
+}
+
+/// Catches a boot step whose launcher lost it being forgotten while its unit may still run, or a
+/// failure that goes unlogged: a hook that cannot start fails the step with its params file gone;
+/// a unit the launcher lost is stopped before its params file goes; one that cannot be stopped
+/// keeps its params file and its service locked, so an order of it is `busy`; each failure is
+/// one exact alert.
+#[test]
+fn a_boot_step_the_launcher_lost_is_stopped_or_its_service_held() {
+    let rig = Rig::new("steps-lost");
+    for service in ["lost", "nostart", "stuck"] {
+        restoring(&rig, service, "1.0.0");
+    }
+    rig.launcher.additive_fault("lost", AdditiveFault::Lost);
+    rig.launcher
+        .additive_fault("nostart", AdditiveFault::NoStart);
+    rig.launcher
+        .additive_fault("stuck", AdditiveFault::LostUnstoppable);
+    let (daemon, report, alerts) = after_boot(&rig);
+    let failed = |service: &str| match &report.services[service].boot_step {
+        BootStep::Failed(why) => why.clone(),
+        other => panic!("{service}: {other:?}"),
+    };
+    assert_eq!(
+        failed("lost"),
+        "the launcher failed: updater-lost-boot-0 was lost; its unit updater-lost-boot-0 was stopped"
+    );
+    assert_eq!(failed("nostart"), "the hook did not start: no such file");
+    let stuck = "the launcher failed: updater-stuck-boot-0 was lost; its unit updater-stuck-boot-0 could not be stopped (the launcher failed: updater-stuck-boot-0 could not be stopped), so stuck stays locked";
+    assert_eq!(failed("stuck"), stuck);
+    assert_eq!(
+        rig.launcher.stops(),
+        [
+            "updater-lost-boot-0",
+            "updater-lost-boot-0",
+            "updater-nostart-boot-0",
+            "updater-stuck-boot-0",
+            "updater-stuck-boot-0",
+        ]
+    );
+    assert!(!rig.state.join("lost/params.toml").exists());
+    assert!(!rig.state.join("nostart/params.toml").exists());
+    assert!(rig.state.join("stuck/params.toml").exists());
+    assert!(
+        daemon
+            .ctx()
+            .locks
+            .holder(&name("stuck"))
+            .expect("held")
+            .stuck
+    );
+    let line = |alert: &str, service: &str, why: &str| {
+        format!("hostkeeper daemon: level=error alert={alert} service={service}: {why}")
+    };
+    assert_eq!(
+        lines(&alerts),
+        [
+            line(
+                "boot_step_failed",
+                "lost",
+                "the launcher failed: updater-lost-boot-0 was lost; its unit updater-lost-boot-0 was stopped"
+            ),
+            line(
+                "boot_step_failed",
+                "nostart",
+                "the hook did not start: no such file"
+            ),
+            line("unstoppable_unit", "stuck", stuck),
+            line("boot_step_failed", "stuck", stuck),
+        ]
+    );
+    rig.add("stuck", "2.0.0");
+    let reply = daemon.order(&update("stuck", "2.0.0", &d(), 1));
+    assert_eq!(reply.refusal(), Some(Refusal::Busy), "{reply:?}");
+}
+
+/// Catches a boot step run without its params file, or one whose params file cannot be removed
+/// taken for a success: params that cannot be written (a directory is in the way) run nothing;
+/// params the step leaves unremovable fail the step after it ran; each is reported, the notice
+/// goes out, and once the way is clear the next start runs the step.
+#[test]
+fn a_boot_step_whose_params_cannot_be_written_or_removed_fails() {
+    let rig = Rig::new("steps-params");
+    restoring(&rig, "alpha", "1.0.0");
+    let params = rig.state.join("alpha/params.toml");
+    fs::create_dir_all(params.join("inside")).expect("a directory in the way");
+    let (_, report, _) = after_boot(&rig);
+    assert!(matches!(
+        report.services["alpha"].boot_step,
+        BootStep::Failed(_)
+    ));
+    assert!(rig.launcher.additive_runs().is_empty());
+    assert_eq!(report.ready, Some(Ok(())));
+    fs::remove_dir_all(&params).expect("clear the way");
+
+    let in_the_way = params.clone();
+    rig.launcher.during_additive(move |_| {
+        fs::remove_file(&in_the_way).expect("the params file");
+        fs::create_dir_all(in_the_way.join("inside")).expect("a directory in its place");
+    });
+    let (_, report, _) = after_boot(&rig);
+    assert!(matches!(
+        report.services["alpha"].boot_step,
+        BootStep::Failed(_)
+    ));
+    assert_eq!(rig.launcher.additive_runs().len(), 1);
+
+    fs::remove_dir_all(&params).expect("clear the way");
+    rig.launcher.during_additive(|_| {});
+    let (_, report, _) = after_boot(&rig);
+    assert_eq!(report.services["alpha"].boot_step, BootStep::Succeeded);
+    assert_eq!(rig.launcher.additive_runs().len(), 2);
+}
+
+/// Catches a `current` that leads the boot step out of the service's versions: a `current` that
+/// is a directory, that links out of the package directory, that is absolute, or whose name is not
+/// a version fails the boot step and runs nothing; one that links to a version that is not there
+/// fails it too.
+#[test]
+fn a_current_that_is_not_a_version_of_the_service_runs_no_boot_step() {
+    let rig = Rig::new("steps-current");
+    restoring(&rig, "other", "1.0.0");
+    let elsewhere = rig.packages.join("other/1.0.0");
+    let cases: [(&str, Option<std::path::PathBuf>); 5] = [
+        ("dir", None),
+        ("outside", Some("../other/1.0.0".into())),
+        ("absolute", Some(elsewhere)),
+        ("dotted", Some(".hidden".into())),
+        ("dangling", Some("9.9.9".into())),
+    ];
+    for (service, target) in &cases {
+        restoring(&rig, service, "1.0.0");
+        let current = rig.packages.join(service).join("current");
+        fs::remove_file(&current).expect("remove current");
+        match target {
+            Some(target) => std::os::unix::fs::symlink(target, &current).expect("a link"),
+            None => fs::create_dir(&current).expect("a directory"),
+        }
+    }
+    rig.store.link("other", "current", "missing");
+    let (_, report, _) = after_boot(&rig);
+    for (service, _) in &cases {
+        let step = &report.services[*service].boot_step;
+        assert!(matches!(step, BootStep::Failed(_)), "{service}: {step:?}");
+    }
+    let BootStep::Failed(why) = &report.services["outside"].boot_step else {
+        unreachable!()
+    };
+    assert_eq!(
+        why,
+        "`current` links to ../other/1.0.0, not to a version directory beside it"
+    );
+    assert!(rig.launcher.additive_runs().is_empty());
+}
+
+/// Catches a readiness notice that hangs the start on a full queue: the notify socket's queue is
+/// filled, and the notice fails at once with an error the daemon reports.
+#[test]
+fn a_full_notify_queue_fails_the_notice_without_waiting() {
+    let rig = Rig::new("steps-full-queue");
+    let path = rig.scratch.path().join("q.sock");
+    let _receiver = UnixDatagram::bind(&path).expect("bind the socket");
+    // Each notice is a socket of its own, so only the receiver's queue stops the fill.
+    let notifier = SystemdNotifier::new(path.as_os_str());
+    while notifier.ready().is_ok() {}
+    let error = notifier.ready().expect_err("a full queue");
+    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
 }
