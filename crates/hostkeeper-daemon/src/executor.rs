@@ -165,7 +165,10 @@ impl Ctx {
                 Ok(_) => {}
                 Err(RunError::Launch(LaunchError::Launcher(why))) if why == STOPPED => {}
                 Err(error @ RunError::Unstopped { .. }) => {
-                    drop(locks.take(&name, package).map(ServiceGuard::keep));
+                    locks
+                        .take(&name, package)
+                        .into_iter()
+                        .for_each(ServiceGuard::keep);
                     alert(ALERT_UNSTOPPABLE, error);
                 }
                 Err(RunError::Record(error)) => alert(ALERT_JOURNAL, error),

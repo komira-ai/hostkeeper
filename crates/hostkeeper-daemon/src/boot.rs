@@ -752,7 +752,7 @@ impl Daemon {
                         digest,
                     });
                     let locked = package.and_then(|package| ctx.locks.take(service, package).ok());
-                    drop(locked.map(ServiceGuard::keep));
+                    locked.into_iter().for_each(ServiceGuard::keep);
                     let why = format!(
                         "{error}; its unit {unit} could not be stopped ({stop}), so {service} stays locked"
                     );
