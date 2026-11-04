@@ -1,56 +1,32 @@
-//! The declaration: `/etc/updater.d/<service>.toml`, typed.
+//! The declaration, reduced to what `launch.rs` reads.
 //!
-//! The field names and the tables are those of the example in docs/design/host-updates.md,
-//! section 2.4. Every table refuses a key it does not know, so a misspelt or misplaced key
-//! (`read_paths` at the top level, `verify_deadline_secs` under `[hook]`) refuses the file
-//! instead of being ignored. [`Declaration::parse`] reads the text and applies the rules that
-//! need nothing but the text; the rules that need the host (accounts, files, other
-//! declarations) are the loader's (`crate::load`).
+//! B3 rewrites launch.rs and deletes this. The per-service declaration is replaced by the daemon
+//! config and the package manifest (`hostkeeper-config`); what is left here is the part of the
+//! old declaration that the transient unit of one step is still built from, and the rules on the
+//! values that reach a unit property. Every table refuses a key it does not know.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hostkeeper_hook::{Params, Step};
+use hostkeeper_hook::Step;
 use serde::{Deserialize, Serialize};
 
+use crate::load::Violation;
 use crate::names::{
-    Capability, Family, PathError, SYSTEM_NAMES, UnitError, check_path, check_relative, check_unit,
-    env_allowed, is_account_name, is_env_name, is_env_value, is_service_name,
+    Capability, Family, PathError, check_path, check_relative, env_allowed, is_account_name,
+    is_env_name, is_env_value, is_service_name,
 };
-use crate::reserved::{self, Kind};
 
-/// The longest a step, a deadline or a registration may be given: one day.
+/// The longest a step may be given: one day. B3 rewrites launch.rs and deletes this.
 pub const MAX_SECS: u64 = 86_400;
-/// The longest promotion ceiling: one week.
-pub const MAX_CEILING_SECS: u64 = 604_800;
-/// The most times `cleanup` may be re-run.
-pub const MAX_CLEANUP_RETRIES: u32 = 10;
-/// The most leading arguments a hook may be given before the step.
+/// The most leading arguments a hook may be given before the step. B3 rewrites launch.rs and
+/// deletes this.
 pub const MAX_HOOK_ARGS: usize = 8;
 
 fn default_hook_args() -> Vec<String> {
     vec!["update-hook".to_owned()]
 }
 
-const fn default_ttl() -> u64 {
-    300
-}
-
-const fn default_retries() -> u32 {
-    3
-}
-
-/// Whose attestation the artifact must carry.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Signer {
-    /// `owner/name` of the repository.
-    pub repository: String,
-    /// The file name of the workflow that signs.
-    pub workflow: String,
-}
-
-/// The bound of each step, in seconds. All five are required: a step with no bound would run
-/// for ever.
+/// The bound of each step, in seconds. B3 rewrites launch.rs and deletes this.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Timeouts {
@@ -62,6 +38,7 @@ pub struct Timeouts {
 }
 
 impl Timeouts {
+    /// The bound of `step`. B3 rewrites launch.rs and deletes this.
     pub fn get(&self, step: Step) -> u64 {
         match step {
             Step::Prepare => self.prepare,
@@ -74,7 +51,8 @@ impl Timeouts {
 }
 
 /// The capabilities of each step. A step with no entry falls back to the hook-wide
-/// `capabilities`; an entry with an empty list is a step that holds none.
+/// `capabilities`; an entry with an empty list is a step that holds none. B3 rewrites launch.rs
+/// and deletes this.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepCapabilities {
@@ -86,6 +64,7 @@ pub struct StepCapabilities {
 }
 
 impl StepCapabilities {
+    /// The entry of `step`, if any. B3 rewrites launch.rs and deletes this.
     pub fn get(&self, step: Step) -> Option<&BTreeSet<Capability>> {
         match step {
             Step::Prepare => self.prepare.as_ref(),
@@ -97,11 +76,11 @@ impl StepCapabilities {
     }
 }
 
-/// The `[hook]` table: whom the hook runs as and with what rights.
+/// The `[hook]` table: whom the hook runs as and with what rights. B3 rewrites launch.rs and
+/// deletes this.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hook {
-    /// Not the service's account (its record must not be the service's to write), unless root.
     pub user: String,
     pub group: String,
     /// The hook-wide grant: the fallback of a step with no entry in `step_capabilities`.
@@ -113,22 +92,16 @@ pub struct Hook {
     pub read_paths: BTreeSet<String>,
     #[serde(default)]
     pub write_paths: BTreeSet<String>,
-    /// The only units the hook may start, stop or mask.
-    #[serde(default)]
-    pub units: BTreeSet<String>,
     #[serde(default)]
     pub address_families: BTreeSet<Family>,
     /// Exactly these variables; nothing is inherited.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     pub timeout_secs: Timeouts,
-    /// Opaque to the updater: written to a file and passed as `--params <file>`.
-    #[serde(default)]
-    pub params: toml::Table,
 }
 
 impl Hook {
-    /// The capabilities the hook holds in `step`.
+    /// The capabilities the hook holds in `step`. B3 rewrites launch.rs and deletes this.
     pub fn capabilities_for(&self, step: Step) -> &BTreeSet<Capability> {
         self.step_capabilities
             .get(step)
@@ -136,43 +109,23 @@ impl Hook {
     }
 }
 
-/// A declaration. The top-level keys come first in the file: in TOML a key after a table header
-/// belongs to that table.
+/// What one step's unit is built from. The top-level keys come first in the file: in TOML a key
+/// after a table header belongs to that table. B3 rewrites launch.rs and deletes this.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Declaration {
     pub name: String,
-    /// The hook executable, a path within the verified release.
+    /// The hook executable, a path within the staged release.
     pub binary: String,
     /// Leading arguments before the step; `["update-hook"]` when absent.
     #[serde(default = "default_hook_args")]
     pub hook_args: Vec<String>,
-    pub signer: Signer,
-    /// The account the service runs as.
-    pub uid: String,
-    /// The lifetime of a registration on kbf's registration socket, which this repository does
-    /// not carry; kept so that every declaration that loaded before still loads.
-    #[serde(default = "default_ttl")]
-    pub registration_ttl_secs: u64,
-    /// The loopback ports a health address of the service may name; none for a service with no listener.
-    #[serde(default)]
-    pub health_ports: BTreeSet<u16>,
-    /// After `cutover` succeeds, `verify` must succeed by then or the updater runs `rollback`.
-    pub verify_deadline_secs: u64,
-    /// The only ceiling on a pending promotion; none means none.
-    pub promotion_ceiling_secs: Option<u64>,
-    #[serde(default = "default_retries")]
-    pub cleanup_retries: u32,
     /// The hook's record directory.
     pub state_dir: String,
-    /// A boot-time entry point, run at the updater's start.
-    pub boot: Option<String>,
-    /// The first release that carries a hook.
-    pub min_version: Option<String>,
     pub hook: Hook,
 }
 
-/// Why a declaration, or a set of them, was refused. A refusal makes one service `unmanaged`.
+/// Why a declaration was refused, or a launch from one. B3 rewrites launch.rs and deletes this.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
     #[error("not a declaration: {0}")]
@@ -189,22 +142,8 @@ pub enum Refusal {
     Reserved {
         field: &'static str,
         path: String,
-        why: reserved::Violation,
+        why: Violation,
     },
-    #[error("hook.units: {unit:?} {why}")]
-    Unit { unit: String, why: UnitError },
-    #[error(
-        "verify_deadline_secs {deadline} is less than the verify and rollback bounds together ({needed})"
-    )]
-    Deadline { deadline: u64, needed: u64 },
-    #[error("the file is not a regular file owned by the trusted account: {0}")]
-    File(String),
-    #[error("the directory {0} is not owned by the trusted account or is writable by others")]
-    DirectoryUnsafe(String),
-    #[error("{0}")]
-    Account(String),
-    #[error("the state directory {path:?} can be written by the service's account")]
-    StateDirWritable { path: String },
     #[error(
         "{field}: path {path:?} is below {ancestor:?}, which an account other than root owns or can write, so it can be swapped for a link"
     )]
@@ -221,14 +160,6 @@ fn value(field: &str, why: impl Into<String>) -> Refusal {
     Refusal::Value {
         field: field.to_owned(),
         why: why.into(),
-    }
-}
-
-fn in_range(field: &str, number: u64, max: u64) -> Result<(), Refusal> {
-    if (1..=max).contains(&number) {
-        Ok(())
-    } else {
-        Err(value(field, format!("{number} is not within 1 to {max}")))
     }
 }
 
@@ -255,13 +186,8 @@ fn account(field: &str, name: &str) -> Result<(), Refusal> {
     }
 }
 
-fn path(kind: Kind, field: &'static str, entry: &str) -> Result<(), Refusal> {
+fn path(field: &'static str, entry: &str) -> Result<(), Refusal> {
     check_path(entry).map_err(|why| Refusal::Path {
-        field,
-        path: entry.to_owned(),
-        why,
-    })?;
-    reserved::check(kind, entry).map_err(|why| Refusal::Reserved {
         field,
         path: entry.to_owned(),
         why,
@@ -269,7 +195,8 @@ fn path(kind: Kind, field: &'static str, entry: &str) -> Result<(), Refusal> {
 }
 
 impl Declaration {
-    /// Reads the text of a declaration and applies every rule that needs nothing but the text.
+    /// Reads the text of a declaration and applies [`Declaration::check`]. B3 rewrites launch.rs
+    /// and deletes this.
     pub fn parse(text: &str) -> Result<Declaration, Refusal> {
         let declaration: Declaration =
             toml::from_str(text).map_err(|e| Refusal::Syntax(e.message().to_owned()))?;
@@ -277,18 +204,14 @@ impl Declaration {
         Ok(declaration)
     }
 
-    /// The rules of the text alone: grammars, bounds, the reserved paths, the deadline.
+    /// The rules on the values that reach a unit property: the grammars of the name, the
+    /// binary, the arguments, the accounts, the paths and the environment, and a bound from 1 s
+    /// to a day for each step. B3 rewrites launch.rs and deletes this.
     pub fn check(&self) -> Result<(), Refusal> {
         if !is_service_name(&self.name) {
             return Err(value(
                 "name",
                 format!("{:?} is not a service name", self.name),
-            ));
-        }
-        if SYSTEM_NAMES.contains(&self.name.as_str()) {
-            return Err(value(
-                "name",
-                format!("{:?} is the name of a directory of the system", self.name),
             ));
         }
         check_relative(&self.binary).map_err(|why| value("binary", format!("{why}")))?;
@@ -301,69 +224,23 @@ impl Declaration {
         for arg in &self.hook_args {
             plain_word("hook_args", arg)?;
         }
-        plain_word("signer.repository", &self.signer.repository)?;
-        plain_word("signer.workflow", &self.signer.workflow)?;
-        account("uid", &self.uid)?;
         account("hook.user", &self.hook.user)?;
         account("hook.group", &self.hook.group)?;
-        in_range(
-            "registration_ttl_secs",
-            self.registration_ttl_secs,
-            MAX_SECS,
-        )?;
-        if self.health_ports.contains(&0) {
-            return Err(value("health_ports", "port 0 is not a port"));
+        for step in Step::ALL {
+            let seconds = self.hook.timeout_secs.get(step);
+            if !(1..=MAX_SECS).contains(&seconds) {
+                return Err(value(
+                    &format!("hook.timeout_secs.{step}"),
+                    format!("{seconds} is not within 1 to {MAX_SECS}"),
+                ));
+            }
         }
-        if self.cleanup_retries > MAX_CLEANUP_RETRIES {
-            return Err(value(
-                "cleanup_retries",
-                format!(
-                    "{} is more than {MAX_CLEANUP_RETRIES}",
-                    self.cleanup_retries
-                ),
-            ));
-        }
-        for (field, number) in [
-            ("hook.timeout_secs.prepare", self.hook.timeout_secs.prepare),
-            ("hook.timeout_secs.cutover", self.hook.timeout_secs.cutover),
-            ("hook.timeout_secs.verify", self.hook.timeout_secs.verify),
-            (
-                "hook.timeout_secs.rollback",
-                self.hook.timeout_secs.rollback,
-            ),
-            ("hook.timeout_secs.cleanup", self.hook.timeout_secs.cleanup),
-            ("verify_deadline_secs", self.verify_deadline_secs),
-        ] {
-            in_range(field, number, MAX_SECS)?;
-        }
-        let needed = self.hook.timeout_secs.verify + self.hook.timeout_secs.rollback;
-        if self.verify_deadline_secs < needed {
-            return Err(Refusal::Deadline {
-                deadline: self.verify_deadline_secs,
-                needed,
-            });
-        }
-        self.promotion_ceiling_secs.iter().try_for_each(|ceiling| {
-            in_range("promotion_ceiling_secs", *ceiling, MAX_CEILING_SECS)
-        })?;
-        self.boot
-            .iter()
-            .try_for_each(|text| plain_word("boot", text))?;
-        self.min_version
-            .iter()
-            .try_for_each(|text| plain_word("min_version", text))?;
-        path(Kind::State, "state_dir", &self.state_dir)?;
+        path("state_dir", &self.state_dir)?;
         for entry in &self.hook.read_paths {
-            path(Kind::Read, "hook.read_paths", entry)?;
+            path("hook.read_paths", entry)?;
         }
         for entry in &self.hook.write_paths {
-            path(Kind::Write, "hook.write_paths", entry)?;
-        }
-        for unit in &self.hook.units {
-            check_unit(&self.name, unit).map_err(|why| Refusal::Unit {
-                unit: unit.clone(),
-                why,
-            })?;
+            path("hook.write_paths", entry)?;
         }
         for (key, text) in &self.hook.environment {
             if !(is_env_name(key) & is_env_value(text) & env_allowed(key, text)) {
@@ -373,17 +250,6 @@ impl Declaration {
                 ));
             }
         }
-        // The table is opaque, but it is scalars, and the `updater.` keys are the updater's.
-        // The design allows a string only for a key a schema lists, and none exists: a hook that
-        // runs as root takes numbers and booleans.
-        if self.hook.user == "root" && self.hook.params.values().any(toml::Value::is_str) {
-            return Err(value(
-                "hook.params",
-                "a hook that runs as root takes numbers and booleans, not strings",
-            ));
-        }
-        Params::parse_declared(&self.hook.params.to_string())
-            .map_err(|e| value("hook.params", e.to_string()))?;
         Ok(())
     }
 }

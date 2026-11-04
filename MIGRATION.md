@@ -17,7 +17,7 @@ release replaces them there.
 | kbf | hostkeeper | what it holds |
 |---|---|---|
 | `update-hook` | `hostkeeper-hook` | the hook contract (steps, exit codes, the JSON last line, the params table, the next-step table) and, behind the feature `conformance`, the conformance harness |
-| `update-rights` | `hostkeeper-rights` | the declaration, its loader, the widening check, approvals, the gate and the transient unit of one step |
+| `update-rights` | `hostkeeper-rights` | the declaration, its loader, the widening check, approvals, the gate and the transient unit of one step, as imported; since cut down to the transient unit (see "Since the import") |
 | `kbf-step-runner` | `hostkeeper-steps` | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update |
 | (the `Scratch` helpers of the three crates' tests) | `hostkeeper-testkit` | the scratch directory the tests share; a dev-dependency only |
 
@@ -38,7 +38,8 @@ The names a host, a hook or a file on disk sees are the same bytes as in kbf at 
 - the reserved `updater.*` params keys;
 - `update-hook`, the default `hook_args`;
 - the conformance harness's environment variables and the line a parked step writes;
-- `/etc/updater.d`, `/etc/updater.d/approved` and `/var/lib/updater/{state,hooks,releases}`;
+- `/var/lib/updater/{state,hooks,releases}` (and, until the declaration was deleted,
+  `/etc/updater.d` and `/etc/updater.d/approved`);
 - the transient unit names `updater-<service>-<step>-<generation>`;
 - the step record: `SCHEMA` stays 1, and a record of a newer schema is read, never rewritten.
 
@@ -82,6 +83,21 @@ this repository's rules require it:
 - **Scratch directories.** The tests' scratch directories come from `hostkeeper-testkit`, with a
   name of their own per process and per directory, so two runs never share one.
 - Crate names, paths in comments and READMEs, and the doc references to kbf's layering test.
+
+## Since the import
+
+The daemon config (`/etc/hostkeeper/hostkeeper.toml`) and the package manifest (`manifest.toml`)
+replace the per-service declaration (design `docs/design/hostkeeper-design.md`, sections 4.1 and
+4.7). Their loaders are the new crate `hostkeeper-config`, which also took `trust.rs` and the
+service name and path grammars from `hostkeeper-rights`; the service name grammar is now
+`A-Za-z0-9_-` (design 11.8), wider than the lowercase grammar imported from kbf.
+
+Deleted from `hostkeeper-rights`, with their tests: the declaration loader (`load_dir`,
+`DECLARATION_DIR`), the widening check, the gate (`FIRST_INSTALL`, `RIGHTS_CHANGE`), the approval
+store (`APPROVALS_FILE`) and its `approve` command, the account checks, the record-directory check,
+the per-service signer, the declaration digest, and the shipped declarations of
+`tests/fixtures/updater.d`. What is left is the transient unit of one step and the part of the
+declaration it reads (the crate's README lists each kept item and why); B3 rewrites it.
 
 ## Tests that hold this file
 

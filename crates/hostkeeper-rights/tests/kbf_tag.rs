@@ -7,19 +7,17 @@ mod support;
 use std::path::Path;
 
 use hostkeeper_hook::Step;
-use hostkeeper_rights::reserved::{HOOKS_ROOT, Kind, RESERVED, Violation, check};
-use hostkeeper_rights::{
-    APPROVALS_FILE, DECLARATION_DIR, FIRST_INSTALL, Launch, RIGHTS_CHANGE, command, unit_name,
-};
+use hostkeeper_rights::load::{HOOKS_ROOT, Kind, RESERVED, Violation, check};
+use hostkeeper_rights::{Launch, command, unit_name};
 
 /// The kbf tag the crate was imported from.
 const KBF_TAG: &str = "v0.0.64";
 /// The kbf commit of that tag.
 const KBF_COMMIT: &str = "8f90d0604794f3fee057e71647c7e1c1e034fa2e";
 
-/// Catches a rename or edit of a name that a host, a hook or a file on disk already sees:
-/// the declaration directory, the approvals file, the default hook arguments, the unit name of a
-/// step, the hooks root, the reserved updater directory and the two reasons a deferral reports.
+/// Catches a rename or edit of a name that a host, a hook or a file on disk already sees: the
+/// default hook arguments, the unit name of a step, the hooks root and the reserved updater
+/// directories.
 /// The kbf source at the tag has no boot unit and no constant for `/var/lib/updater/state` or
 /// `/var/lib/updater/releases`; those two paths appear only in the design document, so this test
 /// asserts instead that the reserved-path rules refuse each as a write path or a record
@@ -27,11 +25,7 @@ const KBF_COMMIT: &str = "8f90d0604794f3fee057e71647c7e1c1e034fa2e";
 #[test]
 fn constants_match_kbf_at_the_tag() {
     let at = format!("kbf {KBF_TAG} ({KBF_COMMIT})");
-    assert_eq!(DECLARATION_DIR, "/etc/updater.d", "{at}");
-    assert_eq!(APPROVALS_FILE, "/etc/updater.d/approved", "{at}");
     assert_eq!(HOOKS_ROOT, "/var/lib/updater/hooks", "{at}");
-    assert_eq!(FIRST_INSTALL, "first_install", "{at}");
-    assert_eq!(RIGHTS_CHANGE, "rights_change", "{at}");
     assert_eq!(support::sample().hook_args, ["update-hook"], "{at}");
 
     assert!(RESERVED.contains(&"/var/lib/updater"), "{at}");

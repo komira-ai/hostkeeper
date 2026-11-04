@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process::Command;
 
 const HOOK: &str = "hostkeeper-hook";
+const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
 const RIGHTS: &str = "hostkeeper-rights";
 const TESTKIT: &str = "hostkeeper-testkit";
@@ -21,10 +22,11 @@ const TLS: &str = "hostkeeper-tls";
 const COORDINATOR: &str = "hostkeeper-coordinator";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
-const LAYERS: [(&str, &[&str]); 7] = [
+const LAYERS: [(&str, &[&str]); 8] = [
     (HOOK, &[]),
+    (CONFIG, &[]),
     (STEPS, &[HOOK]),
-    (RIGHTS, &[HOOK]),
+    (RIGHTS, &[CONFIG, HOOK]),
     (WIRE, &[]),
     (OIDC, &[]),
     (TLS, &[]),
@@ -280,7 +282,7 @@ fn chain_to(edges: &Edges, members: &[&str], target: &str) -> Vec<String> {
 }
 
 /// Every rule the workspace breaks, one line each: first the kbf names (all of `lock`), then
-/// the layer crates (hook, steps, rights, wire, oidc, tls, coordinator), then the testkit.
+/// the layer crates (hook, config, steps, rights, wire, oidc, tls, coordinator), then the testkit.
 fn violations(members: &Members, lock: &Edges) -> Vec<String> {
     let mut out = Vec::new();
     let member_names: Vec<&str> = members.keys().map(String::as_str).collect();
