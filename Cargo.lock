@@ -664,6 +664,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-daemon",
+ "hostkeeper-testkit",
+]
+
+[[package]]
 name = "hostkeeper-config"
 version = "0.1.0"
 dependencies = [
@@ -691,6 +699,29 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+]
+
+[[package]]
+name = "hostkeeper-daemon"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hostkeeper-config",
+ "hostkeeper-daemon",
+ "hostkeeper-hook",
+ "hostkeeper-proto",
+ "hostkeeper-steps",
+ "hostkeeper-testkit",
+ "hyper-util",
+ "libc",
+ "rustix",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tonic",
+ "tower",
 ]
 
 [[package]]
@@ -741,6 +772,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-observe"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hostkeeper-config",
+ "hostkeeper-hook",
+ "hostkeeper-proto",
+ "hostkeeper-steps",
+ "hostkeeper-testkit",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-proto"
 version = "0.1.0"
 dependencies = [
@@ -771,6 +816,7 @@ dependencies = [
 name = "hostkeeper-steps"
 version = "0.1.0"
 dependencies = [
+ "hostkeeper-config",
  "hostkeeper-hook",
  "hostkeeper-testkit",
  "rustix",

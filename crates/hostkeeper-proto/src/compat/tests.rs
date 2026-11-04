@@ -675,3 +675,91 @@ fn the_baseline_check_refuses_the_real_set_with_a_field_taken_out() {
         }]
     );
 }
+
+/// The real set with one file's descriptors changed by `change`.
+fn with_file(
+    package: &str,
+    change: impl FnOnce(&mut prost_types::FileDescriptorProto),
+) -> FileDescriptorSet {
+    let mut set = current();
+    let file = set
+        .file
+        .iter_mut()
+        .find(|f| f.package() == package)
+        .expect("the file");
+    change(file);
+    set
+}
+
+/// Catches: an addition that changes what the last release shipped. The new RPCs, messages,
+/// fields and enum values are additions only, against the baseline as committed (writing a new
+/// one is the release's step); and on the real set, renaming a released RPC, renumbering a
+/// released enum value, or renumbering a released field is refused, each named.
+#[test]
+fn the_compat_test_passes_against_the_unchanged_baseline() {
+    let baseline = baseline();
+    assert_eq!(breaks(&baseline, &current()), Vec::<Break>::new());
+
+    let renamed = with_file("hostkeeper.agent.v1", |agent| {
+        let coordinator = agent
+            .service
+            .iter_mut()
+            .find(|s| s.name() == "Coordinator")
+            .expect("the coordinator");
+        let heartbeat = coordinator
+            .method
+            .iter_mut()
+            .find(|m| m.name() == "Heartbeat")
+            .expect("the heartbeat");
+        heartbeat.name = Some(s("Beat"));
+        let refusal = agent
+            .enum_type
+            .iter_mut()
+            .find(|e| e.name() == "CoordinatorRefusal")
+            .expect("the refusal");
+        let forbidden = refusal
+            .value
+            .iter_mut()
+            .find(|v| v.name() == "COORDINATOR_REFUSAL_FORBIDDEN")
+            .expect("forbidden");
+        forbidden.number = Some(30);
+    });
+    assert_eq!(
+        breaks(&baseline, &renamed),
+        [
+            Break::EnumValueRenumbered {
+                name: s(".hostkeeper.agent.v1.CoordinatorRefusal"),
+                value: s("COORDINATOR_REFUSAL_FORBIDDEN"),
+                from: 1,
+                to: 30,
+            },
+            Break::RpcRemoved {
+                service: s(".hostkeeper.agent.v1.Coordinator"),
+                rpc: s("Heartbeat"),
+            },
+        ]
+    );
+
+    let renumbered = with_file("hostkeeper.operator.v1", |operator| {
+        let exclude = operator
+            .message_type
+            .iter_mut()
+            .find(|m| m.name() == "ExcludeRequest")
+            .expect("the exclusion");
+        let reason = exclude
+            .field
+            .iter_mut()
+            .find(|f| f.name() == "reason")
+            .expect("its reason");
+        reason.number = Some(30);
+    });
+    assert_eq!(
+        breaks(&baseline, &renumbered),
+        [Break::FieldRenumbered {
+            message: s(".hostkeeper.operator.v1.ExcludeRequest"),
+            name: s("reason"),
+            from: 3,
+            to: 30,
+        }]
+    );
+}

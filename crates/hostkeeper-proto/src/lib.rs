@@ -5,11 +5,13 @@
 //! Each `.proto` file opens with a header that says who serves it, how a caller is
 //! authenticated, how refusals are expressed, its units and how it may be extended:
 //!
-//! - `hostkeeper.agent.v1`: `Coordinator`, the heartbeat an agent sends the coordinator.
+//! - `hostkeeper.agent.v1`: `Coordinator`, the heartbeat an agent sends the coordinator, and
+//!   how a host gets and keeps its certificate (`Enroll`, `Poll`, `Renew`).
 //! - `hostkeeper.operator.v1`: `Hosts` and `Releases`, what an operator and CI ask of the
 //!   coordinator.
 //! - `hostkeeper.operator.v1` also holds `Services`: which hosts run each service, and the
-//!   operator's holds.
+//!   operator's holds; `Enrollment`, the hosts waiting for an operator's approval; and `Audit`,
+//!   the log of every change.
 //! - `hostkeeper.local.v1`: `Admin`, what root on the host may ask of its daemon with the
 //!   coordinator down (status, abort, clear a corrupt step record).
 //!
@@ -27,13 +29,15 @@
 )]
 pub mod hostkeeper {
     pub mod agent {
-        /// The heartbeat a host's agent sends the coordinator, and the reply.
+        /// The heartbeat a host's agent sends the coordinator, and the reply; enrollment and
+        /// renewal.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.agent.v1");
         }
     }
     pub mod operator {
-        /// What an operator and CI ask of the coordinator: `Hosts` and `Releases`.
+        /// What an operator and CI ask of the coordinator: `Hosts`, `Releases`, `Services`,
+        /// `Enrollment` and `Audit`.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.operator.v1");
         }

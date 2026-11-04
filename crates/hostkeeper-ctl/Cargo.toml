@@ -21,7 +21,7 @@ rustls.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # `time` bounds a whole call by `--timeout-secs`.
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["rt", "time"] }
 # The gRPC client over rustls (ring), and the generic client the in-memory transport also uses.
 tonic = { workspace = true, features = ["channel", "tls-ring"] }
 

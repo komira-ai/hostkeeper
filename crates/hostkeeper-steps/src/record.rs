@@ -93,13 +93,24 @@ pub struct Record {
     pub state: State,
     pub hook: HookSel,
     pub progress: Progress,
+    /// The coordinator's try of the order this update runs for (`Order.try`), when the daemon was
+    /// given one. Additive: a record written before the field existed loads with `None`, and a
+    /// record without a try is written without the key, byte for byte as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_try: Option<u64>,
 }
 
 impl Record {
     /// The deterministic name of the unit a step of this update runs in.
     pub fn unit(&self, step: Step) -> String {
-        format!("updater-{}-{}-{}", self.service, step, self.generation)
+        step_unit(&self.service, step, self.generation)
     }
+}
+
+/// The name of the unit `step` of `service` runs in, in generation `generation`, without the
+/// `.service` systemd adds.
+pub(crate) fn step_unit(service: &str, step: Step, generation: u64) -> String {
+    format!("updater-{service}-{step}-{generation}")
 }
 
 /// What a state directory holds.
