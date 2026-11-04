@@ -2,10 +2,11 @@
 //!
 //! - no package anywhere in the graph (any kind, any platform) is named `kbf`, `kbf-*` or
 //!   `kbf_*`;
-//! - `hostkeeper-hook` depends on no other crate of this workspace (its dev-dependencies hold
-//!   only itself and `hostkeeper-testkit`);
-//! - `hostkeeper-steps` and `hostkeeper-rights` depend on `hostkeeper-hook` and on no other
-//!   workspace crate (dev-dependencies: themselves and `hostkeeper-testkit`);
+//! - `hostkeeper-hook` and `hostkeeper-config` depend on no other crate of this workspace (their
+//!   dev-dependencies hold only themselves and `hostkeeper-testkit`);
+//! - `hostkeeper-steps` depends on `hostkeeper-hook`, and `hostkeeper-rights` on
+//!   `hostkeeper-config` and `hostkeeper-hook`, and on no other workspace crate
+//!   (dev-dependencies: themselves and `hostkeeper-testkit`);
 //! - `hostkeeper-testkit` depends on no workspace crate, and no crate has it but as a
 //!   dev-dependency.
 //!
@@ -23,6 +24,7 @@ use check::{cargo, check, check_hook_harness, metadata_of, parse_lock, read_lock
 use testdir::TestDir;
 
 const HOOK_DEP: &str = "hostkeeper-hook = { path = \"../hostkeeper-hook\" }\n";
+const CONFIG_DEP: &str = "hostkeeper-config = { path = \"../hostkeeper-config\" }\n";
 const RIGHTS_DEP: &str = "hostkeeper-rights = { path = \"../hostkeeper-rights\" }\n";
 const TESTKIT_DEP: &str = "hostkeeper-testkit = { path = \"../hostkeeper-testkit\" }\n";
 
@@ -130,7 +132,7 @@ fn the_workspace_keeps_its_layers() {
 }
 
 /// Catches: a check that refuses the shape the real workspace has (self dev-dependencies, the
-/// testkit as a dev-dependency, steps and rights on the hook).
+/// testkit as a dev-dependency, steps on the hook, rights on the hook and the config crate).
 #[test]
 fn a_clean_fixture_passes() {
     let dir = fixture("clean", vec![]);
@@ -283,7 +285,7 @@ fn a_build_only_kbf_dependency_is_refused() {
         "hostkeeper-rights",
         layered(
             "hostkeeper-rights",
-            HOOK_DEP,
+            &format!("{CONFIG_DEP}{HOOK_DEP}"),
             &vendored_dep("kbf-types"),
             &format!("hostkeeper-rights = {{ path = \".\" }}\n{TESTKIT_DEP}"),
         ),
@@ -325,7 +327,7 @@ fn the_testkit_as_a_normal_dependency_is_refused() {
             "hostkeeper-rights",
             layered(
                 "hostkeeper-rights",
-                &format!("{HOOK_DEP}{TESTKIT_DEP}"),
+                &format!("{CONFIG_DEP}{HOOK_DEP}{TESTKIT_DEP}"),
                 "",
                 "",
             ),
@@ -335,7 +337,8 @@ fn the_testkit_as_a_normal_dependency_is_refused() {
         check(&dir),
         refused(
             "hostkeeper-rights depends (normal or build) on the workspace crates \
-             {hostkeeper-hook, hostkeeper-testkit}, but must depend on exactly {hostkeeper-hook}\n\
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-testkit}, but must depend on exactly \
+             {hostkeeper-config, hostkeeper-hook}\n\
              hostkeeper-rights has a normal or build dependency on hostkeeper-testkit, \
              which is a dev-dependency only"
         )
@@ -388,22 +391,68 @@ fn steps_with_an_extra_workspace_dependency_is_refused() {
     );
 }
 
-/// Catches: the rights crate losing its dependency on the hook contract (the set must be
-/// exactly the hook, not merely a subset of it).
+/// Catches: the rights crate losing its dependency on the hook contract or on the config crate
+/// (the set must be exactly the two, not merely a subset of them).
 #[test]
 fn rights_without_the_hook_is_refused() {
     let dir = fixture(
         "clean",
         vec![manifest_of(
             "hostkeeper-rights",
-            layered("hostkeeper-rights", "", "", TESTKIT_DEP),
+            layered("hostkeeper-rights", CONFIG_DEP, "", TESTKIT_DEP),
         )],
     );
     assert_eq!(
         check(&dir),
         refused(
-            "hostkeeper-rights depends (normal or build) on the workspace crates {}, \
-             but must depend on exactly {hostkeeper-hook}"
+            "hostkeeper-rights depends (normal or build) on the workspace crates \
+             {hostkeeper-config}, but must depend on exactly {hostkeeper-config, hostkeeper-hook}"
+        )
+    );
+}
+
+/// Catches: the config crate depending on a workspace crate. It holds the loaders the rights
+/// crate builds on, so a dependency on the rights crate would turn the layers around, and one on
+/// the hook contract would tie the file formats to the hook's.
+#[test]
+fn config_depending_on_a_workspace_crate_is_refused() {
+    let dir = fixture(
+        "clean",
+        vec![manifest_of(
+            "hostkeeper-config",
+            layered("hostkeeper-config", HOOK_DEP, "", TESTKIT_DEP),
+        )],
+    );
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-config depends (normal or build) on the workspace crates \
+             {hostkeeper-hook}, but must depend on exactly {}"
+        )
+    );
+}
+
+/// Catches: the config crate as a dev-dependency of the hook contract or the step runner, which
+/// may hold only themselves and the testkit.
+#[test]
+fn steps_with_a_dev_dependency_on_config_is_refused() {
+    let dir = fixture(
+        "clean",
+        vec![manifest_of(
+            "hostkeeper-steps",
+            layered(
+                "hostkeeper-steps",
+                HOOK_DEP,
+                "",
+                &format!("{TESTKIT_DEP}{CONFIG_DEP}"),
+            ),
+        )],
+    );
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-steps has a dev-dependency on the workspace crate hostkeeper-config, \
+             which is neither itself nor hostkeeper-testkit"
         )
     );
 }
@@ -481,7 +530,7 @@ fn a_missing_layer_crate_is_refused() {
     let root = (
         "Cargo.toml".to_string(),
         "[workspace]\nresolver = \"3\"\nexclude = [\"vendored\"]\nmembers = [\n    \
-         \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
+         \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
          \"crates/hostkeeper-testkit\",\n]\n"
             .to_string(),
     );

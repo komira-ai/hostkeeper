@@ -1,8 +1,19 @@
-//! The reserved-path deny list: what no declaration may read, write or keep its record in.
+//! The reserved-path rules `run_step` repeats before every launch (`recheck_targets`, kept in
+//! `load.rs` until B3 rewrites launch.rs): the deny list on what an entry points to, and the rules
+//! of a hook that runs as root. These are the deny-list cases of the deleted `reserved.rs`, kept
+//! because `run_step` still applies the list, and the root cases of the deleted loader tests,
+//! driven through `Declared::recheck`.
 
-use hostkeeper_rights::reserved::{
-    HOOKS_ROOT, Kind, RESERVED, Violation, WRITE_FORBIDDEN, WRITE_ROOTS, check, is_within,
+mod support;
+
+use hostkeeper_rights::Refusal;
+use hostkeeper_rights::load::{
+    HOOKS_ROOT, Kind, RESERVED, Violation, WRITE_FORBIDDEN, WRITE_ROOTS, check,
+    check_service_write, is_within,
 };
+use std::os::unix::fs::symlink;
+
+use support::{Scratch, declared, with};
 
 const KINDS: [Kind; 3] = [Kind::Read, Kind::Write, Kind::State];
 
@@ -151,6 +162,12 @@ fn violations_read_as_sentences() {
     ] {
         assert!(violation.to_string().contains("/etc"));
     }
+    assert!(
+        Violation::NotTheServices
+            .to_string()
+            .contains("named for the service")
+    );
+    assert!(Violation::NotAllowed.to_string().contains("/var/lib"));
 }
 
 /// Catches a reserved directory dropped from the list: the list is pinned entry by entry, so
@@ -351,7 +368,6 @@ fn the_deny_list_still_catches_names_inside_the_write_roots() {
 /// the same, not the service's name further down.
 #[test]
 fn a_root_hook_writes_at_or_below_a_directory_named_for_its_service() {
-    use hostkeeper_rights::reserved::check_service_write;
     for path in [
         "/var/lib/svc",
         "/var/lib/svc/x/y",
@@ -414,4 +430,53 @@ fn the_directories_of_the_system_under_the_write_roots_are_reserved() {
             "{below}"
         );
     }
+}
+
+/// Catches a record directory re-pointed after the declaration was made: a link that leads to a
+/// directory of the test is accepted, the same link pointed at `/etc` is refused naming
+/// `state_dir`, and pointed back it is accepted again.
+#[test]
+fn a_state_directory_link_retargeted_and_restored_is_judged_each_time() {
+    let scratch = Scratch::new("recheck-state");
+    let real = scratch.dir("real", 0o755);
+    let link = scratch.path().join("state");
+    symlink(&real, &link).unwrap();
+    let text = with(
+        "state_dir = \"/var/lib/updater/hooks/tierstore\"",
+        &format!("state_dir = \"{}\"", link.display()),
+    )
+    .replace(
+        "read_paths = [\"/usr/libexec/kbf\", \"/usr/sbin/nft\", \"/etc/tierstore\", \"/etc/updater.d/tierstore.toml\"]",
+        "read_paths = []",
+    );
+    let loaded = declared(
+        hostkeeper_rights::Declaration::parse(&text).unwrap(),
+        65534,
+        &["tierstore"],
+    );
+    assert_eq!(loaded.recheck(), Ok(()));
+    std::fs::remove_file(&link).unwrap();
+    symlink("/etc", &link).unwrap();
+    assert_eq!(
+        loaded.recheck(),
+        Err(Refusal::Reserved {
+            field: "state_dir",
+            path: format!("{} (which is /etc)", link.display()),
+            why: Violation::Names("/etc"),
+        })
+    );
+    std::fs::remove_file(&link).unwrap();
+    symlink(&real, &link).unwrap();
+    assert_eq!(loaded.recheck(), Ok(()));
+}
+
+/// Catches what a loaded declaration reports: its hook uid, its names and its declaration.
+#[test]
+fn a_declared_reports_what_it_was_made_with() {
+    let d = support::sample();
+    let loaded = declared(d.clone(), 991, &["tierstore", "other"]);
+    assert_eq!(loaded.hook_uid(), 991);
+    assert_eq!(loaded.declaration(), &d);
+    let names: Vec<&str> = loaded.names().iter().map(String::as_str).collect();
+    assert_eq!(names, ["other", "tierstore"]);
 }

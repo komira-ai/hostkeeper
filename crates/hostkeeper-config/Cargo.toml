@@ -1,0 +1,25 @@
+[package]
+name = "hostkeeper-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The host's daemon config (hostkeeper.toml) and the manifest a package carries (manifest.toml), each read by a strict loader."
+
+# The two files of docs/design/hostkeeper-design.md sections 4.1 and 4.7: the daemon config, the
+# host's only trust root, and the manifest inside each package. The crate also holds the owner and
+# mode check of a trusted file and the name and path grammars. It depends on no crate of this
+# workspace (crates/xtask/tests/layering keeps it so).
+[dependencies]
+# `O_NOFOLLOW` and `O_NONBLOCK`, to open a file without following a link or waiting on a pipe.
+libc.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true

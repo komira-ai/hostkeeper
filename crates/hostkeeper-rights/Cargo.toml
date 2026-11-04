@@ -6,25 +6,20 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "What the host updater lets a hook do: the declaration, its loader, approvals and the transient unit of one step."
+description = "The transient unit that runs one step of a hook, and the part of the old declaration it is still built from."
 
-# What the host updater lets a hook do (docs/design/host-updates.md, sections 2.4, 3.3 and 3.4):
-# the declaration file a package installs, the rules it is loaded under, the comparison that
-# says a new declaration asks for more than the approved one, the record of approvals, and the
-# transient systemd unit that runs one step of a hook with exactly the declared rights. The crate
-# names no product and depends on no crate of this workspace but the hook contract
-# (crates/xtask/tests/layering keeps both true).
+# The transient systemd unit that runs one step of a hook, and the part of the old declaration it
+# is built from (`Declaration`, `Declared`, `recheck_targets`). The declaration loader, the
+# widening check, the approvals and the gate were deleted when the daemon config and the package
+# manifest (hostkeeper-config) replaced the declaration; B3 rewrites what is left. The crate
+# names no product and depends on no crate of this workspace but the hook contract and the config
+# crate (crates/xtask/tests/layering keeps both true).
 [dependencies]
-# `Step`, `Invocation`, `Outcome`, `Report` and the `updater.*` reserved params keys.
+# The service name and path grammars.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# `Step`, `Invocation`, `Outcome` and `Report`.
 hostkeeper-hook = { path = "../hostkeeper-hook" }
-# `O_NOFOLLOW`, to open a declaration without following a link.
-libc.workspace = true
-# The effective uid of the process that approves, and the lock it holds while it does.
-rustix = { workspace = true, features = ["process", "fs"] }
 serde.workspace = true
-# The digest of a declaration file.
-sha2.workspace = true
-hex.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 
@@ -46,8 +41,8 @@ path = "tests/bin/spawn_fixture.rs"
 required-features = ["test-support"]
 
 [features]
-# `Declared::by_hand`, for the tests of this crate: a loaded declaration made without a directory.
-# Off for everything else, so a `Declared` comes only from `load_dir`.
+# `Declared::by_hand`, for the tests of this crate: a declaration with a hook uid and the host's
+# names. Off for everything else.
 test-support = []
 
 [dev-dependencies]
