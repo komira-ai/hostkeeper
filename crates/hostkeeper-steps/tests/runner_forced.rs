@@ -12,6 +12,7 @@ use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{
     Loaded, PARAMS_FILE, REASON_FORCED_OVER, RECORD_FILE, Record, State,
 };
+use hostkeeper_steps::runner::CheckFault;
 use hostkeeper_steps::{CrashPoint, Finished, ForcePhase, ForceRecord, RecordStore};
 use support::{Event, FAIL, IRREVERSIBLE_OK, Rig, io_err};
 
@@ -229,4 +230,46 @@ fn only_an_unfinished_hooked_update_is_flagged() {
         fs::read_to_string(&path).expect("the record"),
         r#"{"schema": 2}"#
     );
+}
+
+/// Catches a runner that checks the flag only at the top of its loop, or that refuses to write a
+/// record a step removed: the release check before a step is the last thing before the record
+/// is written `running`. A flag set there stops the step from being launched. A record removed
+/// there is written again, and the step runs.
+#[test]
+fn the_write_that_marks_a_step_running_reads_the_flag() {
+    let rig = Rig::new("forced-at-launch");
+    let state = rig.state.clone();
+    let flag: CheckFault = Arc::new(move |step: Step| {
+        if step == Step::Cutover {
+            let flagged = RecordStore::new(&state)
+                .mark_forced()
+                .expect("flag the record");
+            assert!(flagged.is_some(), "an unfinished update is flagged");
+        }
+        None
+    });
+    let runner = rig.runner().with_check_fault(flag);
+    let ended = runner.run(&rig.order()).expect("the update ends");
+    assert_eq!(ended, forced_over(Phase::BeforeCommit));
+    assert_eq!(rig.fake.steps(), [Step::Prepare]);
+    assert!(record(&rig).forced);
+
+    let rig = Rig::new("forced-record-gone");
+    let path = rig.state.join(RECORD_FILE);
+    let remove: CheckFault = Arc::new(move |step: Step| {
+        if step == Step::Cutover {
+            fs::remove_file(&path).expect("remove the record");
+        }
+        None
+    });
+    let runner = rig.runner().with_check_fault(remove);
+    let ended = runner.run(&rig.order()).expect("the update ends");
+    assert_eq!(
+        ended.verdict,
+        Verdict::Succeeded {
+            promotion_pending: false
+        }
+    );
+    assert!(rig.fake.steps().contains(&Step::Cutover));
 }
