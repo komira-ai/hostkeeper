@@ -95,8 +95,8 @@ fn read_back(package: &[u8]) -> Vec<Seen> {
     seen
 }
 
-/// The shape rules of design section 5.5 as the unpacker will apply them, checked on the bytes
-/// of a package: every entry that breaks one, and the list when it is not sorted and unique.
+/// The shape rules of design section 5.5, checked on the bytes of a package by this test alone (a
+/// quick check beside the daemon's own unpacker, which the last test of this file runs): every entry that breaks one, and the list when it is not sorted and unique.
 fn shape_problems(package: &[u8], mtime: u64) -> Vec<String> {
     let seen = read_back(package);
     let mut problems = Vec::new();
@@ -135,7 +135,8 @@ fn shape_problems(package: &[u8], mtime: u64) -> Vec<String> {
     problems
 }
 
-/// Unpacks `package` into `dir` the way a daemon would.
+/// Unpacks `package` into `dir` as plain files, for the manifest loader (no bounds, no seal: the
+/// daemon's own unpacker is run by the last test of this file).
 fn unpack(package: &[u8], dir: &Path) {
     for e in read_back(package) {
         if e.kind.is_dir() {

@@ -414,14 +414,16 @@ fn the_notes_name_the_release_the_commit_the_signer_and_the_verify_command() {
     assert_eq!(
         notes(&version(), &commit),
         format!(
-            "hostkeeper v0.1.5, built from commit {commit}.\n\
+            "hostkeeper v0.1.5, built from commit {commit}. Each binary was built with \
+             RELEASE_COMMIT set to that commit and prints `hostkeeper 0.1.5+{}` for --version.\n\
              \n\
              The assets were built and signed by .github/workflows/artifacts.yml on main. To \
              verify a file:\n\
              \n\
              gh attestation verify <file> --repo komira-ai/hostkeeper --signer-workflow \
              komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main \
-             --source-digest {commit}\n"
+             --source-digest {commit}\n",
+            commit.short()
         )
     );
 }

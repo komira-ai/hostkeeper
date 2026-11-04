@@ -18,8 +18,8 @@ use std::path::Path;
 
 use super::check::check;
 use super::contract::{
-    ARTIFACTS_WORKFLOW, Commit, Platform, REPO, Repo, SIGNER_REF, SIGNER_WORKFLOW, Version,
-    asset_names,
+    ARTIFACTS_WORKFLOW, Commit, Platform, RELEASE_COMMIT, REPO, Repo, SIGNER_REF, SIGNER_WORKFLOW,
+    Version, asset_names, stamp_string,
 };
 use super::ports::{Ports, Release, StoredAsset};
 use super::{Error, file_sha256};
@@ -123,13 +123,15 @@ pub(crate) fn publish(
 /// the command that verifies a file of it.
 pub(crate) fn notes(version: &Version, commit: &Commit) -> String {
     format!(
-        "hostkeeper v{version}, built from commit {commit}.\n\
+        "hostkeeper v{version}, built from commit {commit}. Each binary was built with \
+         {RELEASE_COMMIT} set to that commit and prints `{}` for --version.\n\
          \n\
          The assets were built and signed by .github/workflows/{ARTIFACTS_WORKFLOW} on main. \
          To verify a file:\n\
          \n\
          gh attestation verify <file> --repo {REPO} --signer-workflow {SIGNER_WORKFLOW} \
-         --source-ref {SIGNER_REF} --source-digest {commit}\n"
+         --source-ref {SIGNER_REF} --source-digest {commit}\n",
+        stamp_string(version, commit)
     )
 }
 

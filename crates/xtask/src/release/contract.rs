@@ -4,7 +4,7 @@
 //!
 //! - the version `X.Y.Z` ([`Version`]) and the tag `v<X.Y.Z>` ([`Version::tag`]);
 //! - the text a shipped binary prints for `--version`, `hostkeeper X.Y.Z+<12 hex>`
-//!   ([`stamp_string`]);
+//!   ([`stamp_string`]), and [`RELEASE_COMMIT`], the build-time input that carries the commit;
 //! - the identity that signs every attestation: [`SIGNER_WORKFLOW`] on [`SIGNER_REF`] of
 //!   [`REPO`];
 //! - the asset names of a release ([`asset_names`], the one function that lists them; the
@@ -39,6 +39,10 @@ pub(crate) const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 /// The three workflows a commit needs a successful push run of on [`MAIN`] to be released.
 pub(crate) const REQUIRED_WORKFLOWS: [&str; 3] =
     [CI_WORKFLOW, PRIVILEGED_WORKFLOW, ARTIFACTS_WORKFLOW];
+
+/// The name of the build-time input that carries the full commit into a shipped binary, which
+/// prints its first [`SHORT_COMMIT`] digits in [`stamp_string`]. The release notes name it.
+pub(crate) const RELEASE_COMMIT: &str = "RELEASE_COMMIT";
 
 /// The program name a shipped binary prints first for `--version`.
 pub(crate) const PROGRAM: &str = "hostkeeper";

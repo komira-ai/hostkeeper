@@ -73,6 +73,7 @@ fn tag_and_version_string_formats_are_pinned() {
     assert_eq!(v.tag(), "v0.1.27");
     assert_eq!(Version::of_tag("v0.1.27"), Some(v));
     assert_eq!(stamp_string(&v, &c), "hostkeeper 0.1.27+0123456789ab");
+    assert_eq!(RELEASE_COMMIT, "RELEASE_COMMIT");
     assert_eq!(
         SIGNER_WORKFLOW,
         "komira-ai/hostkeeper/.github/workflows/artifacts.yml"

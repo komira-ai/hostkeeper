@@ -180,8 +180,8 @@ pub(crate) struct Ports<'a> {
     pub(crate) run_version: &'a dyn RunVersion,
 }
 
-/// What owns a set of adapters and lends them as [`Ports`]: the real ones (`real::Real`) or
-/// the fakes of a test.
+/// What owns a set of adapters and lends them as [`Ports`]: the wired adapters (`Wired`, over
+/// `real::SystemExec` outside a test) or the fakes of a test.
 pub(crate) trait Adapters {
     fn ports(&self) -> Ports<'_>;
 }
