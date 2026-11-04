@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780" role="img" aria-label="Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and the one launchd daemon.">
 <title>Mac path</title>
-<desc>A Mac is enrolled by the MDM gate, which installs the hostkeeper package by digest and pushes a one-time nonce. The coordinator auto-approves the Mac only when every nonce and serial condition holds, otherwise the request stays pending.</desc>
+<desc>A Mac is enrolled by the MDM gate, which installs the hostkeeper installer pkg by digest and pushes a one-time nonce. The coordinator auto-approves the Mac only when every nonce and serial condition holds, otherwise the request stays pending.</desc>
 <defs><marker id="mac-path-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="mac-path-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -54,8 +54,9 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="910" y="90" width="260" height="120" rx="5" class="box"/>
 <text x="1040" y="116" class="b" text-anchor="middle">Mac, supervised</text>
 <text x="1040" y="134" class="t-m" text-anchor="middle">pkg postinstall writes</text>
-<text x="1040" y="150" class="t-m" text-anchor="middle">bootstrap: CA hash, URL</text>
-<text x="1040" y="166" class="t-m" text-anchor="middle">(no secret)</text>
+<text x="1040" y="150" class="t-m" text-anchor="middle">hostkeeper.toml: coordinator, CA hash,</text>
+<text x="1040" y="166" class="t-m" text-anchor="middle">release channel, trusted signers;</text>
+<text x="1040" y="182" class="t-m" text-anchor="middle">no secret</text>
 <circle cx="910" cy="90" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="910" y="94" class="b" font-size="12" text-anchor="middle">4</text>
 <rect x="910" y="250" width="260" height="160" rx="5" class="box-o dash"/>

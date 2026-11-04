@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1040" width="1200" height="1040" role="img" aria-label="Enrollment and remote install: a boot image carrying the daemon, the coordinator URL, the CA fingerprint and the services file but no secret; a pending request; approval by the operator or a Mac nonce; a certificate; an assignment; and an install order that runs through the update path.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1040" width="1200" height="1040" role="img" aria-label="Enrollment and remote install: a boot image carrying the daemon and its daemon config with the coordinator address and CA fingerprint but no secret; a pending request; approval by the operator or a Mac nonce; a certificate; an assignment; and an install order that runs through the update path.">
 <title>Enrollment and remote install</title>
-<desc>A new host makes its own key and asks to enroll; nothing is installed until an operator approves the request and the coordinator signs a short-lived certificate. After that the operator assigns a service the host's services file names, and the coordinator sends an install order that the daemon verifies and runs through the same steps as an update.</desc>
+<desc>A new host makes its own key and asks to enroll; nothing is installed until an operator approves the request and the coordinator signs a short-lived certificate. After that the operator assigns services to the host or its role, and the coordinator sends an install order that the daemon verifies and runs through the same steps as an update.</desc>
 <defs><marker id="enrollment-and-remote-install-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="enrollment-and-remote-install-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -34,8 +34,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <circle cx="30" cy="116" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="30" y="120" class="b" font-size="12" text-anchor="middle">1</text>
 <rect x="44" y="96" width="330" height="50" rx="5" class="box-b"/>
-<text x="209" y="113" class="t-m" text-anchor="middle">image carries the daemon, coordinator URL,</text>
-<text x="209" y="129" class="t-m" text-anchor="middle">CA hash and services.toml; no secret</text>
+<text x="209" y="113" class="t-m" text-anchor="middle">image carries the daemon and hostkeeper.toml:</text>
+<text x="209" y="129" class="t-m" text-anchor="middle">coordinator, CA hash, signers; no secret</text>
 <path d="M150,175 L190,175 L190,195 L150,195" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
 <circle cx="134" cy="185" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="134" y="189" class="b" font-size="12" text-anchor="middle">2</text>
@@ -82,8 +82,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M900,752 L520,752" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
 <circle cx="534" cy="724" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="534" y="728" class="b" font-size="12" text-anchor="middle">9</text>
-<text x="552" y="732" class="t-m lbl" text-anchor="start">assign service (named in the</text>
-<text x="552" y="747" class="t-m lbl" text-anchor="start">host's own services file)</text>
+<text x="552" y="732" class="t-m lbl" text-anchor="start">assign services to the host</text>
+<text x="552" y="747" class="t-m lbl" text-anchor="start">or its role (a coordinator change)</text>
 <path d="M520,800 L150,800" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>
 <circle cx="164" cy="786" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="164" y="790" class="b" font-size="12" text-anchor="middle">10</text>
@@ -92,10 +92,10 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M150,870 L190,870 L190,890 L150,890" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
 <circle cx="134" cy="880" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="134" y="884" class="b" font-size="12" text-anchor="middle">11</text>
-<text x="200" y="866" class="t-m lbl" text-anchor="start">fetch, verify against the pinned signer, seal</text>
+<text x="200" y="866" class="t-m lbl" text-anchor="start">fetch, verify against the trusted signers, unpack</text>
 <text x="200" y="882" class="t-m lbl" text-anchor="start">then prepare, cutover, verify, cleanup</text>
-<text x="200" y="898" class="t-m lbl" text-anchor="start">(no previous release)</text>
-<text x="150" y="950" class="t-m" text-anchor="start">The coordinator cannot make the daemon run anything the services file does not name.</text>
+<text x="200" y="898" class="t-m lbl" text-anchor="start">(no previous version)</text>
+<text x="150" y="950" class="t-m" text-anchor="start">The coordinator cannot make the daemon run code that no trusted signer signed.</text>
 <path d="M30,1018 L60,1018" class="ln" marker-end="url(#enrollment-and-remote-install-ak)"/>
 <text x="68" y="1022" class="t-m" text-anchor="start">request</text>
 <path d="M130,1018 L160,1018" class="ln-d" marker-end="url(#enrollment-and-remote-install-ak)"/>

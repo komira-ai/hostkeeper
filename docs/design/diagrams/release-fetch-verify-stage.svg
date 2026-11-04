@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="Release fetch, verify and stage: order with version only, fetch by the daemon, size and digest check, attestation, archive shape check, unpack and hash, binary self-report, tree seal, with what is root-written at each step.">
-<title>Release fetch, verify and stage</title>
-<desc>The daemon turns an order that names only a service and a version into a sealed release tree in eight steps, and a failure in the checks leaves nothing behind. The seal is checked again before every later step, so a changed tree halts the service instead of running.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="Package fetch, verify and unpack: order with version and digest only, fetch by the daemon, size and digest check, attestation, archive shape check, unpack and hash, manifest read, seal and rename into the version directory, with what is root-written at each step.">
+<title>Package fetch, verify and unpack</title>
+<desc>The daemon turns an order that names only a service, a version and a digest into a sealed, read-only version directory in eight steps, and a failure in the checks leaves nothing behind. Linking units and files happens later, at cutover. The seal is checked again before every later step, so a changed tree halts the service instead of running.</desc>
 <defs><marker id="release-fetch-verify-stage-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="release-fetch-verify-stage-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -21,7 +21,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 .lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
 </style>
 <rect x="0" y="0" width="1200" height="720" fill="#FFFFFF"/>
-<text x="20" y="28" class="b" font-size="16" text-anchor="start">Fetch, verify and stage: eight steps from an order to a sealed release</text>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Fetch, verify and unpack: eight steps from an order to a sealed package version</text>
 <rect x="30" y="80" width="220" height="100" rx="5" class="box-b"/>
 <text x="140" y="104" class="b" text-anchor="middle">Order</text>
 <text x="140" y="122" class="t-m" text-anchor="middle">service, version, digest</text>
@@ -30,7 +30,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="30" y="84" class="b" font-size="12" text-anchor="middle">1</text>
 <rect x="320" y="80" width="220" height="100" rx="5" class="box"/>
 <text x="430" y="104" class="b" text-anchor="middle">Resolve location</text>
-<text x="430" y="122" class="t-m" text-anchor="middle">from the services file</text>
+<text x="430" y="122" class="t-m" text-anchor="middle">release channel from the</text>
+<text x="430" y="138" class="t-m" text-anchor="middle">daemon config</text>
 <circle cx="320" cy="80" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="320" y="84" class="b" font-size="12" text-anchor="middle">2</text>
 <rect x="610" y="80" width="220" height="100" rx="5" class="box dash"/>
@@ -42,31 +43,33 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="900" y="80" width="220" height="100" rx="5" class="box-o"/>
 <text x="1010" y="104" class="b" text-anchor="middle">Size cap and SHA-256</text>
 <text x="1010" y="122" class="t-m" text-anchor="middle">SHA-256 equals the order</text>
-<text x="1010" y="138" class="t-m" text-anchor="middle">and the child&#x27;s count</text>
+<text x="1010" y="138" class="t-m" text-anchor="middle">and the byte count</text>
 <circle cx="900" cy="80" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="900" y="84" class="b" font-size="12" text-anchor="middle">4</text>
 <rect x="900" y="250" width="220" height="100" rx="5" class="box-o"/>
 <text x="1010" y="274" class="b" text-anchor="middle">Attestation</text>
-<text x="1010" y="292" class="t-m" text-anchor="middle">repo, workflow, hosted runner,</text>
-<text x="1010" y="308" class="t-m" text-anchor="middle">source commit, lists SHA-256</text>
+<text x="1010" y="292" class="t-m" text-anchor="middle">trusted signer: org, workflow,</text>
+<text x="1010" y="308" class="t-m" text-anchor="middle">ref, commit; lists SHA-256</text>
 <circle cx="900" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="900" y="254" class="b" font-size="12" text-anchor="middle">5</text>
 <rect x="610" y="250" width="220" height="100" rx="5" class="box-o"/>
 <text x="720" y="274" class="b" text-anchor="middle">Archive shape</text>
-<text x="720" y="292" class="t-m" text-anchor="middle">one binary; no links,</text>
-<text x="720" y="308" class="t-m" text-anchor="middle">no declaration or extension</text>
-<text x="720" y="324" class="t-m" text-anchor="middle">file; no .. paths</text>
+<text x="720" y="292" class="t-m" text-anchor="middle">manifest.toml, bin/, units/,</text>
+<text x="720" y="308" class="t-m" text-anchor="middle">files/ only; no links,</text>
+<text x="720" y="324" class="t-m" text-anchor="middle">no .. paths</text>
 <circle cx="610" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="610" y="254" class="b" font-size="12" text-anchor="middle">6</text>
 <rect x="320" y="250" width="220" height="100" rx="5" class="box-o"/>
 <text x="430" y="274" class="b" text-anchor="middle">Unpack and hash</text>
-<text x="430" y="292" class="t-m" text-anchor="middle">in one pass into .stage-*</text>
+<text x="430" y="292" class="t-m" text-anchor="middle">in one pass into .stage-*,</text>
+<text x="430" y="308" class="t-m" text-anchor="middle">writes only inside it</text>
 <circle cx="320" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="320" y="254" class="b" font-size="12" text-anchor="middle">7</text>
 <rect x="30" y="250" width="220" height="100" rx="5" class="box-o"/>
-<text x="140" y="274" class="b" text-anchor="middle">Seal</text>
-<text x="140" y="292" class="t-m" text-anchor="middle">run binary for version, mode 0555,</text>
-<text x="140" y="308" class="t-m" text-anchor="middle">rename, write .seal</text>
+<text x="140" y="274" class="b" text-anchor="middle">Manifest and seal</text>
+<text x="140" y="292" class="t-m" text-anchor="middle">read manifest.toml, name and</text>
+<text x="140" y="308" class="t-m" text-anchor="middle">version match; path claims;</text>
+<text x="140" y="324" class="t-m" text-anchor="middle">0555, rename, write .seal</text>
 <circle cx="30" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="30" y="254" class="b" font-size="12" text-anchor="middle">8</text>
 <path d="M250,130 L320,130" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
@@ -89,8 +92,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M195,350 L195,380" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
 <path d="M90,389 v70 a105,9 0 0 0 210,0 v-70 a105,9 0 0 0 -210,0 z" class="box-b"/>
 <ellipse cx="195" cy="389" rx="105" ry="9" class="box-b"/>
-<text x="195" y="407" class="b" text-anchor="middle">sealed release tree</text>
-<text x="195" y="424" class="t-m" text-anchor="middle">releases/&lt;service&gt;/&lt;version&gt;/</text>
+<text x="195" y="407" class="b" text-anchor="middle">sealed version dir</text>
+<text x="195" y="424" class="t-m" text-anchor="middle">packages/&lt;service&gt;/&lt;version&gt;/</text>
 <text x="195" y="439" class="t-m" text-anchor="middle">+ .seal (root-owned)</text>
 <rect x="30" y="520" width="400" height="50" rx="5" class="box-o"/>
 <text x="230" y="542" class="b" font-size="12" text-anchor="middle">ENOSPC: remove .stage, Deferred no_space</text>
@@ -99,6 +102,9 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M60,350 L60,520" class="ln-o" marker-end="url(#release-fetch-verify-stage-ao)"/>
 <text x="352" y="500" class="t-m lbl" text-anchor="start">step 7</text>
 <text x="72" y="500" class="t-m lbl" text-anchor="start">step 8</text>
+<rect x="470" y="520" width="650" height="50" rx="5" class="box-b"/>
+<text x="795" y="542" class="b" text-anchor="middle">Not part of staging: linking</text>
+<text x="795" y="558" class="t-m" text-anchor="middle">at cutover the daemon switches current and links units/ and files/ into system paths</text>
 <rect x="30" y="610" width="1090" height="50" rx="5" class="box-b"/>
 <text x="575" y="632" class="b" text-anchor="middle">Before every step: re-seal and compare.</text>
 <text x="575" y="650" class="t-m" text-anchor="middle">Changed: Halt artifact_changed. Unreadable: retry, never halt.</text>
