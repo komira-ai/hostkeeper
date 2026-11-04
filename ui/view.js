@@ -1,0 +1,232 @@
+// Views as plain data, and the one function that turns them into the page's elements.
+//
+// A page builds a tree of `{tag, attrs, on, children}` elements and `{text}` nodes with `h` and
+// returns it; `mount` makes it real with `createElement`, `createTextNode` and `setAttribute`.
+// Text from the API (claims, reasons, log lines) only ever becomes a text node, so it is shown as
+// typed and never parsed as markup. Tags and attribute names come from the fixed lists below; a
+// tree naming anything else is refused before anything is mounted.
+
+import { ApiError } from "./api.js";
+
+const TAGS = new Set([
+  "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
+  "legend", "li", "main", "nav", "option", "p", "pre", "section", "select", "small", "span",
+  "strong", "table", "tbody", "td", "th", "thead", "tr", "ul",
+]);
+const ATTRIBUTES = new Set([
+  "aria-label", "autocomplete", "class", "id", "inputmode", "maxlength", "name", "placeholder",
+  "role", "spellcheck", "type",
+]);
+// Set as properties, not attributes: what the element shows now.
+const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);
+const EVENTS = new Set(["change", "click", "input", "submit"]);
+
+function flatten(children, out) {
+  for (const child of children) {
+    if (child === null || child === undefined || child === false) {
+      continue;
+    }
+    if (Array.isArray(child)) {
+      flatten(child, out);
+    } else if (typeof child === "object") {
+      out.push(child);
+    } else {
+      out.push({ text: String(child) });
+    }
+  }
+  return out;
+}
+
+// An element. `props` holds attributes and properties by name, and `on`, the event handlers by
+// event name. Children are elements, text (any string or number), arrays of them, or nothing.
+export function h(tag, props, ...children) {
+  const attrs = {};
+  let on = {};
+  for (const [key, value] of Object.entries(props || {})) {
+    if (key === "on") {
+      on = value;
+    } else {
+      attrs[key] = value;
+    }
+  }
+  return { tag, attrs, on, children: flatten(children, []) };
+}
+
+function build(doc, node) {
+  if (typeof node.text === "string") {
+    return doc.createTextNode(node.text);
+  }
+  if (!TAGS.has(node.tag)) {
+    throw new Error(`no tag ${node.tag}`);
+  }
+  const element = doc.createElement(node.tag);
+  for (const [key, value] of Object.entries(node.attrs)) {
+    if (PROPERTIES.has(key)) {
+      element[key] = value;
+    } else if (ATTRIBUTES.has(key)) {
+      element.setAttribute(key, String(value));
+    } else {
+      throw new Error(`no attribute ${key}`);
+    }
+  }
+  for (const [event, handler] of Object.entries(node.on)) {
+    if (!EVENTS.has(event)) {
+      throw new Error(`no event ${event}`);
+    }
+    element.addEventListener(event, (e) => {
+      if (event === "submit") {
+        e.preventDefault();
+      }
+      handler(e);
+    });
+  }
+  for (const child of node.children) {
+    element.appendChild(build(doc, child));
+  }
+  return element;
+}
+
+// Replaces what `root` shows with `tree`.
+export function mount(doc, root, tree) {
+  root.replaceChildren(build(doc, tree));
+}
+
+// The words an operator reads for an error: the code and the refusal token, never more.
+export function describeError(error) {
+  if (error instanceof ApiError) {
+    return error.reason === "" ? error.code : `${error.code} ${error.reason}`;
+  }
+  return "the app failed unexpectedly";
+}
+
+// A page that could not load: its title and why.
+export function errorView(title, error) {
+  return h("section", { class: "page" },
+    h("h2", {}, title),
+    h("p", { class: "error", role: "alert" }, describeError(error)));
+}
+
+// An enum value's name without its prefix, in lower case (`HEALTH_HEALTHY` -> `healthy`).
+// Absent (the default value, which canonical JSON leaves out) and UNSPECIFIED read as "-".
+export function enumLabel(value, prefix) {
+  if (typeof value !== "string" || value === `${prefix}UNSPECIFIED`) {
+    return "-";
+  }
+  const name = value.startsWith(prefix) ? value.slice(prefix.length) : value;
+  return name.toLowerCase();
+}
+
+// Unix seconds (canonical JSON writes 64-bit numbers as strings) as UTC time.
+export function fmtUnix(value) {
+  const seconds = Number(value);
+  if (value === undefined || value === "" || !Number.isFinite(seconds) || seconds <= 0) {
+    return "-";
+  }
+  return new Date(seconds * 1000).toISOString().replace("T", " ").replace(".000Z", " UTC");
+}
+
+// A hold's scope in words.
+export function scopeLabel(scope) {
+  const { host, role, fleet } = scope || {};
+  if (typeof host === "string") {
+    return `host ${host}`;
+  }
+  if (typeof role === "string") {
+    return `role ${role}`;
+  }
+  return fleet ? "fleet" : "-";
+}
+
+// The list `obj[key]`, or an empty one when it is absent (canonical JSON leaves out an empty
+// repeated field) or `obj` is.
+export function list(obj, key) {
+  return obj && Array.isArray(obj[key]) ? obj[key] : [];
+}
+
+// The bound controls below keep their own view node up to date as the operator types, ticks or
+// chooses, so a tree mounted again (after a status line changes) shows what the state holds.
+
+// A text field bound to `state[key]`.
+export function field(label, name, state, key, extra) {
+  const input = h("input", Object.assign({
+    type: "text", name, autocomplete: "off", spellcheck: "false", value: state[key] || "",
+  }, extra || {}));
+  input.on = {
+    input: (e) => {
+      state[key] = e.target.value;
+      input.attrs.value = state[key];
+    },
+  };
+  return h("label", {}, label, input);
+}
+
+// A checkbox bound to `state[key]`, off unless set.
+export function checkbox(label, name, state, key) {
+  const box = h("input", { type: "checkbox", name, checked: state[key] === true });
+  box.on = {
+    change: (e) => {
+      state[key] = e.target.checked === true;
+      box.attrs.checked = state[key];
+    },
+  };
+  return h("label", { class: "check" }, box, label);
+}
+
+// A select bound to `state[key]`; `options` are `[value, label]` pairs.
+export function select(label, name, state, key, options) {
+  const choices = options.map(([value, text]) => h("option", { value, selected: state[key] === value }, text));
+  const chooser = h("select", { name }, choices);
+  chooser.on = {
+    change: (e) => {
+      state[key] = e.target.value;
+      for (const choice of choices) {
+        choice.attrs.selected = choice.attrs.value === state[key];
+      }
+    },
+  };
+  return h("label", {}, label, chooser);
+}
+
+// A button that runs `run` once per click and reports what it says or why it failed. A click
+// while the run it started is unfinished is ignored, so a double click sends one call.
+export function action(ctx, label, name, run, extra) {
+  let running = false;
+  return h("button", Object.assign({
+    type: "button",
+    name,
+    on: {
+      click: async () => {
+        if (running) {
+          return;
+        }
+        running = true;
+        try {
+          const said = await run();
+          if (typeof said === "string") {
+            ctx.report(said);
+          }
+        } catch (error) {
+          ctx.report(describeError(error));
+        } finally {
+          running = false;
+        }
+      },
+    },
+  }, extra || {}), label);
+}
+
+// A trimmed text, or "" for anything that is not a string.
+export function trimmed(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+// A list typed as words separated by commas or spaces, without empty entries.
+export function words(value) {
+  return trimmed(value).split(/[\s,]+/).filter((w) => w !== "");
+}
+
+export function table(headings, rows) {
+  return h("table", {},
+    h("thead", {}, h("tr", {}, headings.map((title) => h("th", {}, title)))),
+    h("tbody", {}, rows));
+}
