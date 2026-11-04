@@ -1,0 +1,20 @@
+[package]
+name = "hostkeeper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The hostkeeper binary: `hostkeeper daemon`, the one root process of a host."
+
+# The binary only forwards to `hostkeeper_daemon::cli::main`: everything it does is in the
+# library, where coverage measures it (AGENTS.md T4).
+[dependencies]
+hostkeeper-daemon = { path = "../hostkeeper-daemon" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true

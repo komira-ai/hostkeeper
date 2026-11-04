@@ -93,6 +93,11 @@ pub struct Record {
     pub state: State,
     pub hook: HookSel,
     pub progress: Progress,
+    /// The coordinator's try of the order this update runs for (`Order.try`), when the daemon was
+    /// given one. Additive: a record written before the field existed loads with `None`, and a
+    /// record without a try is written without the key, byte for byte as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_try: Option<u64>,
 }
 
 impl Record {

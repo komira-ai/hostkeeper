@@ -2,8 +2,9 @@
 //! move; the service-name and version cases are the rules of design section 11.8.
 
 use hostkeeper_config::names::{
-    MAX_NAME, MAX_PATH, MAX_UNIT_NAME, NameError, PathError, ServiceName, UnitError, UnitName,
-    Version, check_path, check_relative, is_service_name, is_version, is_within,
+    MAX_NAME, MAX_PATH, MAX_UNIT_NAME, NameError, PathError, SERVICE_NAME_RULE, ServiceName,
+    UnitError, UnitName, VERSION_RULE, Version, check_path, check_relative, is_service_name,
+    is_version, is_within,
 };
 
 /// Strings both rules of design 11.8 accept: a service name and a version alike.
@@ -111,6 +112,8 @@ fn a_refused_name_states_the_rule() {
     );
     assert_eq!(ServiceName::new("web").unwrap().to_string(), "web");
     assert_eq!(Version::new("1.5.0").unwrap().to_string(), "1.5.0");
+    assert!(SERVICE_NAME_RULE.contains(&format!("1 to {MAX_NAME} bytes")));
+    assert!(VERSION_RULE.contains(&format!("1 to {MAX_NAME} bytes")));
 }
 
 /// Catches a path that systemd would read as something else: a `-`, `+` or `!` prefix, a

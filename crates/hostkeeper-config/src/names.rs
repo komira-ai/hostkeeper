@@ -57,16 +57,17 @@ pub fn is_version(version: &str) -> bool {
     is_portable(version, true)
 }
 
+/// What a string that is not a service name breaks, as [`NameError::Service`] says it.
+pub const SERVICE_NAME_RULE: &str = "is not a service name: 1 to 255 bytes of A-Z, a-z, 0-9, `.`, `_` and `-`, not beginning with `-` or `.`";
+/// What a string that is not a version breaks, as [`NameError::Version`] says it.
+pub const VERSION_RULE: &str = "is not a version: 1 to 255 bytes of A-Z, a-z, 0-9, `.`, `_`, `+` and `-`, not beginning with `-` or `.`";
+
 /// Why a name was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NameError {
-    #[error(
-        "{0:?} is not a service name: 1 to {MAX_NAME} bytes of A-Z, a-z, 0-9, `.`, `_` and `-`, not beginning with `-` or `.`"
-    )]
+    #[error("{0:?} {SERVICE_NAME_RULE}")]
     Service(String),
-    #[error(
-        "{0:?} is not a version: 1 to {MAX_NAME} bytes of A-Z, a-z, 0-9, `.`, `_`, `+` and `-`, not beginning with `-` or `.`"
-    )]
+    #[error("{0:?} {VERSION_RULE}")]
     Version(String),
 }
 
