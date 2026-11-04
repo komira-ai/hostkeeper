@@ -13,6 +13,8 @@ publish = false
 # Every external dependency is declared here once and used from a member as
 # `name.workspace = true` (members add features they need).
 [workspace.dependencies]
+# The attestation bundle's DSSE payload and certificate are base64 (hostkeeper-package).
+base64 = "0.23.1"
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
@@ -37,6 +39,10 @@ tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
 # The `--params` file, the daemon config and the manifest are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
+# The package fetch's HTTPS client (hostkeeper-package): blocking, rustls with the ring provider and
+# the root certificates its caller gives it. No default features: no gzip, no cookies, no SOCKS,
+# and no webpki-roots (whose CDLA licence deny.toml does not allow).
+ureq = { version = "3.4.2", default-features = false, features = ["rustls-no-provider", "_ring"] }
 # gRPC: the service traits and clients hostkeeper-proto generates. Code generation only: no
 # transport, so the crate pulls in no server, no TLS and no runtime.
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
