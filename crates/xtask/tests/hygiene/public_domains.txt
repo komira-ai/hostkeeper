@@ -7,6 +7,15 @@
 github.com
 crates.io
 
+# What a package attestation names (hostkeeper-package): the OIDC issuer of GitHub Actions
+# (token.actions.githubusercontent.com), the SLSA provenance predicate type and the in-toto
+# statement type.
+githubusercontent.com
+slsa.dev
+in-toto.io
+# The Sigstore transparency log a captured attestation bundle's checkpoint names (rekor.sigstore.dev).
+sigstore.dev
+
 # Licence texts.
 apache.org
 developercertificate.org

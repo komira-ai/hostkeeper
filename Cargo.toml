@@ -13,6 +13,8 @@ publish = false
 # Every external dependency is declared here once and used from a member as
 # `name.workspace = true` (members add features they need).
 [workspace.dependencies]
+# The attestation bundle's DSSE payload and certificate are base64 (hostkeeper-package).
+base64 = "0.23.1"
 # A JavaScript engine in pure Rust, in which the tests of hostkeeper-ui-tests run the web app's
 # data layer and pages (`ui/`) against a fake gateway; dev-dependency only. Pinned exactly: its
 # embedding API changes between minor versions.
@@ -48,11 +50,17 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem
 # ECDSA P-256 / SHA-256 signature checks and SHA-256 digests (hostkeeper-enrollment: a CSR's
 # self-signature, a poll's signed nonce, the request id).
 ring = "0.17.14"
-# Dev only: hostkeeper-enrollment's tests verify the certificates it issues as TLS would.
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 # The zstd decoder of hostkeeper-unpack: pure Rust (MIT); `hash` (twox-hash, MIT) to check a
 # frame's content checksum; no dictionary builder.
 ruzstd = { version = "0.9.1", default-features = false, features = ["hash", "std"] }
+# hostkeeper-package's tests: the signer identity it passes to `gh` is compiled and matched as
+# the regular expression `gh` reads it as.
+regex = "1.13.1"
+# hostkeeper-package's tests: a TLS server on loopback for its HTTPS client, with the ring
+# provider ureq already brings; and reading the test certificates. hostkeeper-enrollment's
+# tests (dev only): verify the certificates its CA issues as TLS would.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.
@@ -83,6 +91,12 @@ tracing = "0.1.44"
 x509-parser = "0.18.1"
 # `service_fn`, the connector of the tests' gRPC client in hostkeeper-daemon; dev-dependency only.
 tower = { version = "0.5.3", default-features = false }
+# The package fetch's HTTPS client (hostkeeper-package): blocking, rustls with the ring provider and
+# the root certificates its caller gives it. No default features: no gzip, no cookies, no SOCKS,
+# and no webpki-roots (whose CDLA licence deny.toml does not allow). The ring provider is ureq's
+# `_ring` feature, which its public `rustls` feature turns on together with webpki-roots; a
+# feature with a leading underscore is not covered by semver, so the version is exact.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls-no-provider", "_ring"] }
 # The certificate request hostkeeper-enroll sends and the certificates it checks; `builder` makes the
 # PKCS#10 request (and the test CA's certificates).
 x509-cert = { version = "0.3.0", features = ["builder", "pem"] }
