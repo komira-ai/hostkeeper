@@ -163,10 +163,8 @@ impl GitHistory for FakeHistory {
     ) -> Result<Vec<String>, PortError> {
         let tree = &self.get(commit)?.tree;
         let empty = BTreeMap::new();
-        let before = match parent {
-            Some(p) => &self.get(p)?.tree,
-            None => &empty,
-        };
+        let parent = parent.map(|p| self.get(p)).transpose()?;
+        let before = parent.map_or(&empty, |p| &p.tree);
         let mut paths: Vec<String> = tree
             .iter()
             .filter(|(path, text)| before.get(*path) != Some(*text))
@@ -312,7 +310,7 @@ impl FakeStore {
         let draft = releases
             .iter_mut()
             .find(|r| (r.tag == tag) & r.draft)
-            .ok_or_else(|| PortError::new(format!("release {tag}"), "no such draft"))?;
+            .expect("the verb uploads to and publishes only a draft it saw");
         edit(draft);
         Ok(())
     }

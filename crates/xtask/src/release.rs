@@ -44,8 +44,11 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use check_binary::VersionOf;
 use contract::{Commit, Platform, Repo, Version};
-use ports::{Adapters, PortError, Ports, Run};
+use git::GitCli;
+use github::Gh;
+use ports::{Adapters, Exec, PortError, Ports, Run};
 
 /// Why a release verb failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -283,6 +286,38 @@ struct Lent<'a>(Ports<'a>);
 impl Adapters for Lent<'_> {
     fn ports(&self) -> Ports<'_> {
         self.0
+    }
+}
+
+/// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations) and
+/// the `--version` of a binary, each running its program through a copy of `exec`. The real
+/// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
+/// fake one.
+struct Wired<E> {
+    git: GitCli<E>,
+    gh: Gh<E>,
+    version_of: VersionOf<E>,
+}
+
+impl<E: Exec + Clone> Wired<E> {
+    fn new(exec: E) -> Wired<E> {
+        Wired {
+            git: GitCli::new(exec.clone()),
+            gh: Gh::new(exec.clone()),
+            version_of: VersionOf::new(exec),
+        }
+    }
+}
+
+impl<E: Exec> Adapters for Wired<E> {
+    fn ports(&self) -> Ports<'_> {
+        Ports {
+            git: &self.git,
+            runs: &self.gh,
+            store: &self.gh,
+            verifier: &self.gh,
+            run_version: &self.version_of,
+        }
     }
 }
 

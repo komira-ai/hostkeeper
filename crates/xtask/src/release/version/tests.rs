@@ -81,7 +81,7 @@ fn a_commit_without_the_version_file_is_an_error() {
         Err(Error::Failed(format!("VERSION does not exist at {c1}")))
     );
     assert_eq!(
-        base_of(&h, &[c1.clone()], "VERSION"),
+        base_of(&h, std::slice::from_ref(&c1), "VERSION"),
         Err(Error::Failed(format!("VERSION does not exist at {c1}")))
     );
 }

@@ -7,12 +7,11 @@
 
 use std::process::Command;
 
-use super::check_binary::VersionOf;
-use super::git::GitCli;
-use super::github::Gh;
-use super::ports::{Adapters, Exec, Ports, Ran};
+use super::Wired;
+use super::ports::{Exec, Ran};
 
 /// Starts processes.
+#[derive(Clone, Copy)]
 struct SystemExec;
 
 impl Exec for SystemExec {
@@ -26,30 +25,8 @@ impl Exec for SystemExec {
     }
 }
 
-/// The adapters a release verb runs against outside a test.
-pub(crate) struct Real {
-    git: GitCli<SystemExec>,
-    gh: Gh<SystemExec>,
-    version_of: VersionOf<SystemExec>,
-}
-
-/// The real adapters: `git` and `gh` from the `PATH`, in the current directory.
-pub(crate) fn connect() -> Real {
-    Real {
-        git: GitCli::new(SystemExec),
-        gh: Gh::new(SystemExec),
-        version_of: VersionOf::new(SystemExec),
-    }
-}
-
-impl Adapters for Real {
-    fn ports(&self) -> Ports<'_> {
-        Ports {
-            git: &self.git,
-            runs: &self.gh,
-            store: &self.gh,
-            verifier: &self.gh,
-            run_version: &self.version_of,
-        }
-    }
+/// The real adapters: `git` and `gh` from the `PATH`, in the current directory, and the
+/// binary a `check-binary` names, each run as a process.
+pub(crate) fn connect() -> impl super::ports::Adapters {
+    Wired::new(SystemExec)
 }

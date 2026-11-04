@@ -616,3 +616,58 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
     );
     assert!(fakes.store.all().iter().all(|r| !r.draft));
 }
+
+/// An [`Exec`] that starts nothing: every program fails to start, with its name in the error.
+#[derive(Clone)]
+struct StartsNothing;
+
+impl Exec for StartsNothing {
+    fn spawn(&self, program: &str, _args: &[String]) -> std::io::Result<ports::Ran> {
+        Err(std::io::Error::other(format!(
+            "{program} is not started in a test"
+        )))
+    }
+}
+
+#[test]
+fn the_wired_adapters_route_each_port_to_its_program() {
+    // Catches: a port of the real adapters wired to the wrong adapter (the runs, the store or
+    // the verifier answered by git, the history by gh, or `--version` run through gh).
+    let wired = Wired::new(StartsNothing);
+    let ports = wired.ports();
+    let c = nth_commit(7);
+    let repo: Repo = REPO.parse().expect("repo");
+    let why = |program: &str| format!("{program} is not started in a test");
+    assert_eq!(
+        ports.git.is_shallow(),
+        Err(PortError::new(
+            "git rev-parse --is-shallow-repository",
+            why("git")
+        ))
+    );
+    assert_eq!(
+        ports.runs.on_main(&repo, &c),
+        Err(PortError::new(
+            format!("gh api repos/{REPO}/compare/main...{c}"),
+            why("gh")
+        ))
+    );
+    assert_eq!(
+        ports.store.publish(&repo, "v0.1.2"),
+        Err(PortError::new(
+            format!("gh release edit v0.1.2 --repo {REPO} --draft=false"),
+            why("gh")
+        ))
+    );
+    assert_eq!(
+        ports
+            .verifier
+            .verify(Path::new("a.deb"), None)
+            .map_err(|e| e.why),
+        Err(why("gh"))
+    );
+    assert_eq!(
+        ports.run_version.version_of(Path::new("bin/x")),
+        Err(PortError::new("bin/x --version", why("bin/x")))
+    );
+}
