@@ -8,3 +8,6 @@
 # Each entry has a `#` line directly above it saying which of these it serves and why. The test
 # no_decision_reads_the_wall_clock in crates/xtask/tests/wallclock reads this file; it refuses
 # an entry that matches no file or whose files read no wall clock.
+# Certificate validity: the enroller reads the wall clock only to decide whether its host
+# certificate is due for renewal at half life, has expired, and whether one just issued is valid now.
+crates/hostkeeper-enroll/src/validity.rs
