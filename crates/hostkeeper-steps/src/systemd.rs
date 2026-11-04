@@ -207,9 +207,37 @@ impl<S: Spawner> SystemdLauncher<S> {
     }
 
     fn spawn(&self, program: Program, args: &[OsString]) -> Result<Captured, LaunchError> {
-        self.spawner
-            .spawn(program, args)
-            .map_err(|e| LaunchError::Launcher(format!("{program:?} could not be run: {e}")))
+        spawned(program, self.spawner.spawn(program, args))
+    }
+}
+
+// The decisions of the launcher are in the functions below, which are not generic: every
+// spawner (the host's and a test's) runs the same code, measured as one function.
+
+/// A spawn that failed is the launcher's failure, not the hook's.
+fn spawned(program: Program, spawn: io::Result<Captured>) -> Result<Captured, LaunchError> {
+    spawn.map_err(|e| LaunchError::Launcher(format!("{program:?} could not be run: {e}")))
+}
+
+/// How a step ended, after `log` (if any) was given what was captured.
+fn step_exit(log: Option<&StepLog>, unit: &str, captured: &Captured) -> StepExit {
+    if let Some(log) = log {
+        log(unit, captured);
+    }
+    StepExit {
+        code: captured.code,
+        last_line: captured.stdout.last_line(),
+    }
+}
+
+/// Whether `systemctl stop` stopped the unit: exit `0`, or [`EXIT_NOT_LOADED`] (nothing to stop).
+fn stopped(unit: &str, captured: &Captured) -> Result<(), LaunchError> {
+    match captured.code {
+        Some(0 | EXIT_NOT_LOADED) => Ok(()),
+        code => Err(LaunchError::Launcher(format!(
+            "systemctl stop {unit} exited with {code:?}: {}",
+            String::from_utf8_lossy(&captured.stderr.bytes()).trim()
+        ))),
     }
 }
 
@@ -232,23 +260,11 @@ impl<S: Spawner> StepLauncher for SystemdLauncher<S> {
         let args = command(call)?;
         executable(call.executable)?;
         let captured = self.spawn(Program::SystemdRun, &args)?;
-        if let Some(log) = &self.log {
-            log(call.unit, &captured);
-        }
-        Ok(StepExit {
-            code: captured.code,
-            last_line: captured.stdout.last_line(),
-        })
+        Ok(step_exit(self.log.as_ref(), call.unit, &captured))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {
         let captured = self.spawn(Program::Systemctl, &stop_command(unit))?;
-        match captured.code {
-            Some(0 | EXIT_NOT_LOADED) => Ok(()),
-            code => Err(LaunchError::Launcher(format!(
-                "systemctl stop {unit} exited with {code:?}: {}",
-                String::from_utf8_lossy(&captured.stderr.bytes()).trim()
-            ))),
-        }
+        stopped(unit, &captured)
     }
 }
