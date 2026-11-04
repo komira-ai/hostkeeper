@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 
 use crate::der;
 use crate::fetch::PackageOrder;
+use crate::index::Platform;
 use crate::ports::{
     Attest, Attested, CommitId, Fetcher, Got, Limit, NetError, Sink, SourceRef, Url, Verifier,
     VerifyError,
@@ -138,13 +139,62 @@ pub(crate) fn digest(hex: &str) -> Sha256Hex {
     Sha256Hex::parse(hex).expect("a SHA-256")
 }
 
-/// The order of `service` at `version` for an archive whose bytes are `bytes`.
-pub(crate) fn order(service: &str, version: &str, bytes: &[u8]) -> PackageOrder {
+/// The order of `service` at `version`.
+pub(crate) fn order(service: &str, version: &str) -> PackageOrder {
     PackageOrder {
         service: ServiceName::new(service).expect("a service name"),
         version: Version::new(version).expect("a version"),
-        digest: digest(&sha256_hex(bytes)),
     }
+}
+
+/// The platform the tests' hosts run on.
+pub(crate) const HOST: Platform = Platform::LinuxX86_64;
+/// The release channel of the tests.
+pub(crate) const CHANNEL: &str = "https://releases.example";
+
+/// The canonical release index of `service` at `version` with one package per `(platform,
+/// bytes)`, given in platform order: keys sorted, no white space.
+pub(crate) fn index_json(service: &str, version: &str, packages: &[(Platform, &[u8])]) -> String {
+    let entries: Vec<String> = packages
+        .iter()
+        .map(|(platform, bytes)| {
+            format!(
+                "{{\"bytes\":{},\"file\":\"{service}-{version}-{}.tar.zst\",\"platform\":\"{}\",\"sha256\":\"{}\"}}",
+                bytes.len(),
+                platform.name(),
+                platform.name(),
+                sha256_hex(bytes)
+            )
+        })
+        .collect();
+    format!(
+        "{{\"packages\":[{}],\"schema\":1,\"service\":\"{service}\",\"version\":\"{version}\"}}",
+        entries.join(",")
+    )
+}
+
+/// The URL of the release index of `service` at `version` on [`CHANNEL`].
+pub(crate) fn index_at(service: &str, version: &str) -> String {
+    format!("{CHANNEL}/{service}/{version}/index.json")
+}
+
+/// The URL of the package of `service` at `version` for [`HOST`] on [`CHANNEL`].
+pub(crate) fn package_at(service: &str, version: &str) -> String {
+    format!(
+        "{CHANNEL}/{service}/{version}/{service}-{version}-{}.tar.zst",
+        HOST.name()
+    )
+}
+
+/// A fake channel that serves `service` at `version`: an index naming `archive` for [`HOST`],
+/// and the archive.
+pub(crate) fn published(service: &str, version: &str, archive: &[u8]) -> FakeFetcher {
+    FakeFetcher::new()
+        .route(
+            &index_at(service, version),
+            serve(index_json(service, version, &[(HOST, archive)]).as_bytes()),
+        )
+        .route(&package_at(service, version), serve(archive))
 }
 
 /// How the fake fetcher answers one URL.

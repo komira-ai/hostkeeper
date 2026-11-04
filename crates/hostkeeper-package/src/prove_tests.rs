@@ -7,13 +7,12 @@ use super::*;
 use crate::fetch::{FetchEnv, PackageOrder, fetch_package};
 use crate::ports::{Limit, NetError, Sink};
 use crate::testing::{
-    BundleSpec, FakeClock, FakeFetcher, FakeVerifier, Seen, Serve, bundle_json, config, deliver,
-    full, listing, order, scratch, serve, sha256_hex, signers,
+    BundleSpec, CHANNEL, FakeClock, FakeFetcher, FakeVerifier, HOST, Seen, Serve, bundle_json,
+    config, deliver, full, index_at, listing, order, package_at, published, scratch, serve,
+    sha256_hex, signers,
 };
 
 const ARCHIVE: &[u8] = b"the bytes of tierstore 1.5.0";
-const ARCHIVE_URL: &str = "https://releases.example/tierstore/tierstore-1.5.0.tar.zst";
-const BUNDLE_URL: &str = "https://releases.example/tierstore/tierstore-1.5.0.tar.zst.sigstore.json";
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const REF: &str = "refs/heads/main";
 
@@ -32,6 +31,11 @@ fn bundle_for(sha256: &str, commit: &str) -> String {
     })
 }
 
+/// The URL of the bundle of the package of `service` at `version`.
+fn bundle_at(service: &str, version: &str) -> String {
+    format!("{}.sigstore.json", package_at(service, version))
+}
+
 fn good_bundle() -> Vec<u8> {
     bundle_for(&sha256_hex(ARCHIVE), COMMIT).into_bytes()
 }
@@ -43,11 +47,10 @@ fn bounds() -> Bounds {
     }
 }
 
-/// A fetcher that serves the archive and `bundle` as the bundle.
+/// A fetcher that publishes tierstore 1.5.0 (its index and the archive) and serves `bundle` as
+/// the bundle.
 fn channel(bundle: Serve) -> FakeFetcher {
-    FakeFetcher::new()
-        .route(ARCHIVE_URL, serve(ARCHIVE))
-        .route(BUNDLE_URL, bundle)
+    published("tierstore", "1.5.0", ARCHIVE).route(&bundle_at("tierstore", "1.5.0"), bundle)
 }
 
 /// Fetches the archive of `order` into `root` with `fetcher`.
@@ -57,13 +60,14 @@ fn staged(
     root: &Path,
     order: &PackageOrder,
 ) -> StagedArchive {
-    let channel = config("https://releases.example", &"0".repeat(64)).release_channel;
+    let channel = config(CHANNEL, &"0".repeat(64)).release_channel;
     let env = FetchEnv {
         fetcher,
         clock,
         bounds: &bounds(),
         release_channel: &channel,
         packages_root: root,
+        platform: HOST,
     };
     fetch_package(&env, order).expect("fetched")
 }
@@ -77,7 +81,7 @@ fn prove_in(
     clock: &FakeClock,
     writer: OpenWriter,
 ) -> Result<VerifiedArchive, PackageFailure> {
-    let order = order("tierstore", "1.5.0", ARCHIVE);
+    let order = order("tierstore", "1.5.0");
     let staged = staged(fetcher, clock, root, &order);
     let signers = signers(
         "example-org",
@@ -139,6 +143,7 @@ fn a_verified_package_returns_the_archive_commit_and_ref() {
     );
     assert_eq!(verified.sha256().as_str(), sha256_hex(ARCHIVE));
     assert_eq!(verified.size(), 28);
+    assert_eq!(verified.platform(), HOST);
     assert_eq!(verified.commit().as_str(), COMMIT);
     assert_eq!(verified.source_ref().as_str(), REF);
 
@@ -169,7 +174,14 @@ fn a_verified_package_returns_the_archive_commit_and_ref() {
         .into_owned();
     assert_eq!(left(scratch.path()), [name]);
     let urls: Vec<String> = fetcher.calls().into_iter().map(|call| call.url).collect();
-    assert_eq!(urls, [ARCHIVE_URL, BUNDLE_URL]);
+    assert_eq!(
+        urls,
+        [
+            index_at("tierstore", "1.5.0"),
+            package_at("tierstore", "1.5.0"),
+            bundle_at("tierstore", "1.5.0"),
+        ]
+    );
     drop(verified);
     assert!(left(scratch.path()).is_empty());
 }
@@ -308,7 +320,7 @@ fn the_attestation_deadline_is_attestation_timeout_secs_on_the_injected_clock() 
     let fetcher = channel(serve(&good_bundle()));
     let verifier = FakeVerifier::answering(Ok(()));
     let clock = FakeClock::at(1000);
-    let order = order("tierstore", "1.5.0", ARCHIVE);
+    let order = order("tierstore", "1.5.0");
     let staged = staged(&fetcher, &clock, scratch.path(), &order);
     clock.advance(5);
     let signers = signers(
@@ -325,7 +337,7 @@ fn the_attestation_deadline_is_attestation_timeout_secs_on_the_injected_clock() 
     };
     prove(&env, staged).expect("proven");
     assert_eq!(verifier.seen()[0].deadline, clock.stamp(1065));
-    assert_eq!(fetcher.calls()[1].limit.deadline, clock.stamp(1065));
+    assert_eq!(fetcher.calls()[2].limit.deadline, clock.stamp(1065));
 }
 
 /// Catches a full disk while the bundle is written reported as anything but `no_space`, or
@@ -351,22 +363,17 @@ fn an_older_version_than_the_running_one_is_not_refused_here() {
     std::fs::create_dir_all(dir.join("9.9.9")).expect("a newer version");
     std::os::unix::fs::symlink("9.9.9", dir.join("current")).expect("current");
     let old = b"the bytes of tierstore 0.0.1";
-    let fetcher = FakeFetcher::new()
-        .route(
-            "https://releases.example/tierstore/tierstore-0.0.1.tar.zst",
-            serve(old),
-        )
-        .route(
-            "https://releases.example/tierstore/tierstore-0.0.1.tar.zst.sigstore.json",
-            serve(bundle_for(&sha256_hex(old), COMMIT).as_bytes()),
-        );
+    let fetcher = published("tierstore", "0.0.1", old).route(
+        &bundle_at("tierstore", "0.0.1"),
+        serve(bundle_for(&sha256_hex(old), COMMIT).as_bytes()),
+    );
     let verifier = FakeVerifier::answering(Ok(()));
     let clock = FakeClock::at(1);
     let staged = staged(
         &fetcher,
         &clock,
         scratch.path(),
-        &order("tierstore", "0.0.1", old),
+        &order("tierstore", "0.0.1"),
     );
     let signers = signers(
         "example-org",

@@ -9,8 +9,10 @@ use crate::testing::tlv;
 
 /// The reason tokens that have shipped. A token is never removed or renamed (formats change
 /// additively only), so this list only grows, and each entry must stay in `REASONS`.
-const SHIPPED: [&str; 5] = [
-    "digest_mismatch",
+const SHIPPED: [&str; 7] = [
+    "index_invalid",
+    "no_package_for_platform",
+    "package_digest_mismatch",
     "fetch_failed",
     "attestation_unavailable",
     "no_space",
@@ -84,8 +86,8 @@ fn outcome_tokens_are_the_documented_set() {
     }
     assert!(REASONS.iter().all(|r| hostkeeper_hook::is_reason_token(r)));
 
-    let extra = "# x\n\n## Failures\n\n| token |\n|---|\n| `digest_mismatch` |\n| `new_token` |\n\n## Next\n\n| `fetch` |\n";
-    assert_eq!(documented_tokens(extra), ["digest_mismatch", "new_token"]);
+    let extra = "# x\n\n## Failures\n\n| token |\n|---|\n| `index_invalid` |\n| `new_token` |\n\n## Next\n\n| `fetch` |\n";
+    assert_eq!(documented_tokens(extra), ["index_invalid", "new_token"]);
     assert!(documented_tokens("no such section").is_empty());
 }
 

@@ -4,12 +4,18 @@ use std::fmt;
 
 use hostkeeper_hook::{Class, Outcome};
 
-/// The package is larger than `max_package_bytes`, or its bytes do not hash to the order's
-/// digest.
-pub const DIGEST_MISMATCH: &str = "digest_mismatch";
-/// The archive could not be downloaded: no connection, a status other than 2xx, a body cut
-/// short, the deadline, or a staging file that could not be written for a reason other than a
-/// full disk.
+/// The release index is not the index of the version asked for: not JSON, another schema,
+/// service or version, a field too many or too few, a file or digest that is not one, a platform
+/// listed twice or out of order, or no package. Also an index over 64 KiB.
+pub const INDEX_INVALID: &str = "index_invalid";
+/// The release index lists no package for this host's platform.
+pub const NO_PACKAGE_FOR_PLATFORM: &str = "no_package_for_platform";
+/// The package's size or SHA-256 is not what the index says, or its size is over
+/// `max_package_bytes`.
+pub const PACKAGE_DIGEST_MISMATCH: &str = "package_digest_mismatch";
+/// The index or the archive could not be downloaded: no connection, a status other than 2xx, a
+/// body cut short, the deadline, or a staging file that could not be written for a reason other
+/// than a full disk.
 pub const FETCH_FAILED: &str = "fetch_failed";
 /// The attestation bundle could not be downloaded, or the verifier could not run or ran out of
 /// time.
@@ -22,8 +28,10 @@ pub const NOT_ATTESTED: &str = "not_attested";
 
 /// Every reason token this crate reports. The crate README lists the same set; a token is only
 /// ever added (`outcome_tokens_are_the_documented_set`).
-pub const REASONS: [&str; 5] = [
-    DIGEST_MISMATCH,
+pub const REASONS: [&str; 7] = [
+    INDEX_INVALID,
+    NO_PACKAGE_FOR_PLATFORM,
+    PACKAGE_DIGEST_MISMATCH,
     FETCH_FAILED,
     ATTESTATION_UNAVAILABLE,
     NO_SPACE,

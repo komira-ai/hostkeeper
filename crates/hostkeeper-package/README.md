@@ -1,13 +1,25 @@
 # hostkeeper-package
 
 Steps 1 and 2 of fetching a package ([docs/design/hostkeeper-design.md](../../docs/design/hostkeeper-design.md),
-section 5.5): download the archive an order names from the release channel, and prove that a
-trusted signer built it. The result is a `VerifiedArchive`, a staging file whose bytes hash to the
-order's digest and are attested; nothing in this crate opens, decompresses or unpacks it.
+section 5.5): download the package an order names from the release channel, and prove that a
+trusted signer built it. A version of a service is one package per OS and CPU family, listed in a
+release index; the order names only the service and the version, and the daemon takes the package
+of its own platform. The result is a `VerifiedArchive`, a staging file whose size and SHA-256 are
+the index's and which is attested; nothing in this crate opens, decompresses or unpacks it.
+
+```
+{release_channel}/{S}/{V}/index.json
+{release_channel}/{S}/{V}/{S}-{V}-{platform}.tar.zst
+{release_channel}/{S}/{V}/{S}-{V}-{platform}.tar.zst.sigstore.json
+```
+
+The platforms are exactly `linux-x86_64`, `linux-arm64` and `macos-arm64`; the daemon knows its
+own from the target it was compiled for (`Platform::current`).
 
 | module | what it holds |
 |---|---|
-| `fetch` | `fetch_package`: the URL `<release_channel>/<service>/<service>-<version>.tar.zst` (`package_url`, the one place it is built), the staging file `packages/<service>/.fetch-<pid>-<n>` (created exclusively, never through a link, mode 0600), byte counting and SHA-256 in the pass that writes it, the size cap and the deadline. `remove_orphan_fetches`, which the daemon calls at start and the fetch calls first |
+| `index` | `Platform`, `ReleaseIndex` (read strictly: exactly its fields, schema 1, the service and version asked for, each platform once and in order, at least one), `index_url` and `package_url` (the one place each is built). Held here under the names the shared `hostkeeper-config` types take, until those land |
+| `fetch` | `fetch_package`: reads the index, takes the entry for the host's platform, downloads that package into the staging file `packages/<service>/.fetch-<pid>-<n>` (created exclusively, never through a link, mode 0600), byte counting and SHA-256 in the pass that writes it, checked against the entry's size and SHA-256, the size cap and the deadline. `remove_orphan_fetches`, which the daemon calls at start and the fetch calls first |
 | `prove` | `prove`: downloads the attestation bundle, reads the commit and ref it names, asks the `Verifier`, and returns the `VerifiedArchive`, which has no other constructor |
 | `ports` | `Fetcher` (one GET into a `Sink`, bounded by a `Limit`) and `Verifier` (one attestation, offline), and the data that crosses them |
 | `net` | the real `Fetcher`: the adapter's rules over a `Transport`, and `UreqTransport` (rustls, HTTPS only, no redirect, no proxy, no cookies, no credentials, the roots the daemon gives it) |
@@ -21,18 +33,28 @@ class `environment`, means nothing changed on the host and the coordinator retri
 
 | token | outcome, class | when |
 |---|---|---|
-| `digest_mismatch` | `Failure`, `release` | the announced length or the bytes received pass `max_package_bytes` (the transfer stops at once), or the bytes do not hash to the order's digest |
-| `fetch_failed` | `Deferred`, `environment` | no connection, a status other than 2xx (a 404 included: the channel may not have the version yet), a body cut short, `fetch_timeout_secs` passed, or a staging file that cannot be made or written for a reason other than a full disk |
-| `no_space` | `Deferred`, `environment` | the disk is full while the archive or the bundle is written. Nothing else is removed to make room |
+| `index_invalid` | `Failure`, `release` | the release index is over 64 KiB, is not JSON, has a field too many or too few, another schema, service or version, a file name or digest that is not the package's form, no package, or a platform listed twice or out of order |
+| `no_package_for_platform` | `Failure`, `release` | the index lists no package for the host's platform |
+| `package_digest_mismatch` | `Failure`, `release` | the entry's size is over `max_package_bytes`, the announced length or the bytes received pass the entry's size (the transfer stops at once), or the bytes received are fewer than it or do not hash to its SHA-256 |
+| `fetch_failed` | `Deferred`, `environment` | the index or the package: no connection, a status other than 2xx (a 404 included: the channel may not have the version yet), a body cut short, `fetch_timeout_secs` passed, or a staging file that cannot be made, written or read for a reason other than a full disk |
+| `no_space` | `Deferred`, `environment` | the disk is full while the index, the package or the bundle is written. Nothing else is removed to make room |
 | `attestation_unavailable` | `Deferred`, `environment` | the bundle cannot be downloaded, or the verifier cannot run, is not trusted, gives no verdict or runs past `attestation_timeout_secs` |
-| `not_attested` | `Failure`, `release` | the bundle is over 1 MiB, is not a bundle, names no commit or no ref, or does not list the archive's digest (the verifier is not run), or the verifier rejects it |
+| `not_attested` | `Failure`, `release` | the bundle is over 1 MiB, is not a bundle, names no commit or no ref, or does not list the package's SHA-256 (the verifier is not run), or the verifier rejects it |
+
+The fourth refusal of the release layout, `package_manifest_mismatch` (the archive's manifest names
+another service, version or platform than asked for), belongs to the manifest step after unpacking;
+`VerifiedArchive::platform` gives that step the platform to compare.
 
 A token is only ever added: `outcome_tokens_are_the_documented_set` checks that this table and the
 crate's `REASONS` hold the same set, and that no token that shipped is gone.
 
 ## Where the attestation comes from, and what is checked
 
-The bundle is fetched from the same release channel, at the archive's URL with `.sigstore.json`
+The index is a lookup, not a trust anchor, and is not signed: a tampered index can only cause a
+refusal, because the package must still have the size and SHA-256 the index gives, be attested by
+the trusted signer, and name in its manifest the service, version and platform asked for.
+
+The bundle is fetched from the same release channel, at the package's URL with `.sigstore.json`
 appended, through the same bounded downloader: at most 1 MiB, within `attestation_timeout_secs`,
 which bounds the whole proof (not `fetch_timeout_secs`). The suffix is one constant.
 

@@ -8,9 +8,10 @@ use std::time::Duration;
 use hostkeeper_config::daemon::{Sha256Hex, TrustedSigners};
 use hostkeeper_steps::{Clock, Stamp};
 
-/// A URL on the release channel, made by [`crate::fetch::package_url`] from the daemon config's
-/// channel and an order's service and version. Nothing else makes one, so a fetch can only reach
-/// the configured channel.
+/// A URL on the release channel, made by [`crate::index::index_url`] or
+/// [`crate::index::package_url`] from the daemon config's channel, an order's service and version,
+/// and the host's platform (the bundle's adds a suffix to the package's). Nothing else makes one,
+/// so a fetch can only reach the configured channel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Url(String);
 

@@ -1,10 +1,11 @@
 //! Steps 1 and 2 of fetching a package (docs/design/hostkeeper-design.md, section 5.5): download
 //! the archive from the release channel and prove that it is ours.
 //!
-//! - [`fetch::fetch_package`] downloads `<release_channel>/<service>/<service>-<version>.tar.zst`
+//! - [`fetch::fetch_package`] reads the release index
+//!   `<release_channel>/<service>/<version>/index.json` ([`index`]), takes the entry for the host's [`index::Platform`], and downloads that package
 //!   into a root-only staging file under `packages/<service>/`, counting and hashing the bytes as
-//!   they arrive, within `max_package_bytes` and `fetch_timeout_secs`, and refuses bytes that do
-//!   not hash to the order's digest. It returns a [`fetch::StagedArchive`].
+//!   they arrive, within `max_package_bytes` and `fetch_timeout_secs`, and refuses bytes whose size
+//!   or SHA-256 are not the entry's. It returns a [`fetch::StagedArchive`].
 //! - [`prove::prove`] downloads the attestation bundle beside it, reads the commit and the ref it
 //!   names, and asks the [`ports::Verifier`] whether the daemon config's trusted signer attested
 //!   the archive's digest, within `attestation_timeout_secs`. It returns a
@@ -21,6 +22,7 @@
 
 pub mod fetch;
 pub mod gh;
+pub mod index;
 pub mod net;
 pub mod ports;
 pub mod prove;
@@ -39,8 +41,9 @@ mod crate_tests;
 mod fixtures_tests;
 
 pub use failure::{
-    ATTESTATION_UNAVAILABLE, DIGEST_MISMATCH, FETCH_FAILED, NO_SPACE, NOT_ATTESTED, PackageFailure,
-    REASONS,
+    ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_INVALID, NO_PACKAGE_FOR_PLATFORM, NO_SPACE,
+    NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure, REASONS,
 };
-pub use fetch::{PackageOrder, StagedArchive, fetch_package, package_url, remove_orphan_fetches};
+pub use fetch::{PackageOrder, StagedArchive, fetch_package, remove_orphan_fetches};
+pub use index::{IndexEntry, IndexInvalid, Platform, ReleaseIndex, index_url, package_url};
 pub use prove::{VerifiedArchive, prove};

@@ -272,3 +272,20 @@ fn the_first_reason_to_stop_is_kept() {
         Fault::TooLarge
     ));
 }
+
+/// Catches a read-back of the staging file that reads past its cap or follows a link: only the
+/// first `cap` bytes are returned (all of them when the file is shorter), and a link is refused
+/// with an I/O error (`ELOOP`), not read.
+#[test]
+fn read_back_reads_at_most_cap_bytes_and_refuses_a_link() {
+    let scratch = scratch("stage-read-back");
+    let file = scratch.path().join("staged");
+    std::fs::write(&file, b"0123456789").expect("the staged file");
+    assert_eq!(read_back(&file, 4).expect("the first bytes"), b"0123");
+    assert_eq!(read_back(&file, 100).expect("all bytes"), b"0123456789");
+
+    let link = scratch.path().join("link");
+    symlink(&file, &link).expect("a link");
+    let refused = read_back(&link, 100).expect_err("a link");
+    assert_eq!(refused.raw_os_error(), Some(libc::ELOOP));
+}

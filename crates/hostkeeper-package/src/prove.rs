@@ -20,9 +20,6 @@
 //! it proved is kept in the [`VerifiedArchive`]. The attested repository is never compared with
 //! the service (design Q12, option (a)), and no version is compared with anything (Q13).
 
-use std::fs::OpenOptions;
-use std::io::{self, Read};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use hostkeeper_config::daemon::{Bounds, Sha256Hex, TrustedSigners};
@@ -31,6 +28,7 @@ use hostkeeper_steps::{Clock, Stamp};
 use crate::bundle::{self, BUNDLE_SUFFIX, MAX_BUNDLE_BYTES};
 use crate::failure::{ATTESTATION_UNAVAILABLE, NO_SPACE, NOT_ATTESTED, PackageFailure};
 use crate::fetch::StagedArchive;
+use crate::index::Platform;
 use crate::ports::{Attest, CommitId, Fetcher, SourceRef, Verifier, VerifyError, after};
 use crate::stage::{self, Download, Fault, Job, OpenWriter, TempFile};
 
@@ -45,7 +43,7 @@ pub struct ProveEnv<'a> {
     pub signers: &'a TrustedSigners,
 }
 
-/// An archive whose bytes hash to the order's digest and are attested by the trusted signer,
+/// The package for the host's platform, whose size and SHA-256 are the release index's and which is attested by the trusted signer,
 /// for the commit and on the ref named here. The file is removed when this is dropped.
 ///
 /// It has no public constructor and is not `Clone`: [`prove`] is the only way to get one, so
@@ -53,6 +51,7 @@ pub struct ProveEnv<'a> {
 #[derive(Debug)]
 pub struct VerifiedArchive {
     file: TempFile,
+    platform: Platform,
     sha256: Sha256Hex,
     size: u64,
     commit: CommitId,
@@ -63,6 +62,12 @@ impl VerifiedArchive {
     /// The staging file that holds the archive.
     pub fn path(&self) -> &Path {
         self.file.path()
+    }
+
+    /// The platform the package is for: the host's own. The manifest step checks that the
+    /// archive's manifest names it.
+    pub fn platform(&self) -> Platform {
+        self.platform
     }
 
     pub fn sha256(&self) -> &Sha256Hex {
@@ -109,7 +114,7 @@ pub(crate) fn prove_with(
         deadline: deadline.clone(),
     };
     let Download { file: bundle, .. } = stage::download(&job, writer).map_err(bundle_failure)?;
-    let bytes = read_bundle(bundle.path())
+    let bytes = stage::read_back(bundle.path(), MAX_BUNDLE_BYTES)
         .map_err(|_| PackageFailure::deferred(ATTESTATION_UNAVAILABLE))?;
     let facts = bundle::read(&bytes)
         .ok()
@@ -126,28 +131,20 @@ pub(crate) fn prove_with(
     };
     let attested = env.verifier.verify(&request).map_err(verify_failure)?;
     let StagedArchive {
-        file, sha256, size, ..
+        file,
+        platform,
+        sha256,
+        size,
+        ..
     } = staged;
     Ok(VerifiedArchive {
         file,
+        platform,
         sha256,
         size,
         commit: attested.commit,
         source_ref: attested.source_ref,
     })
-}
-
-/// The bundle's bytes, read without following a link; the download already held it to
-/// [`MAX_BUNDLE_BYTES`].
-fn read_bundle(path: &Path) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?
-        .take(MAX_BUNDLE_BYTES)
-        .read_to_end(&mut bytes)?;
-    Ok(bytes)
 }
 
 /// The refusal a fault of the bundle's download is.

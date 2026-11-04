@@ -7,7 +7,7 @@
 //! The bytes are counted and hashed in the pass that writes them.
 
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -232,6 +232,19 @@ pub(crate) fn download(job: &Job<'_>, writer: OpenWriter) -> Result<Download, Fa
             })
         }
     }
+}
+
+/// The bytes of the staging file at `path`, at most `cap` of them, read without following a
+/// link.
+pub(crate) fn read_back(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?
+        .take(cap)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// Whether `e` is a full disk (`ENOSPC`). A quota that is reached (`EDQUOT`) is not: it is

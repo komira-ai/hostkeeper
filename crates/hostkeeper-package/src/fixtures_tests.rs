@@ -21,9 +21,9 @@ use crate::gh::{FileTrust, GhVerifier, Ran, Runner, Spawn};
 use crate::ports::{Attest, Verifier};
 use crate::prove::{ProveEnv, prove};
 use crate::testing::{
-    BUILD_SIGNER_URI, BundleSpec, FakeClock, FakeFetcher, RUNNER_ENVIRONMENT,
+    BUILD_SIGNER_URI, BundleSpec, CHANNEL, FakeClock, HOST, RUNNER_ENVIRONMENT,
     SOURCE_REPOSITORY_DIGEST, SOURCE_REPOSITORY_OWNER_URI, bundle_json, config, digest, listing,
-    order, scratch, serve, sha256_hex, signers,
+    order, package_at, published, scratch, serve, sha256_hex, signers,
 };
 use crate::{NOT_ATTESTED, PackageFailure};
 
@@ -379,22 +379,23 @@ fn fixture_bundles_parse_and_the_bad_ones_are_rejected_for_the_reason_the_readme
 /// the real verifier and the fake `gh`; returns the result and the arguments `gh` got.
 fn prove_fixture(file: &str, service: &str) -> (Result<String, PackageFailure>, Vec<String>) {
     let scratch = scratch("fixture-prove");
-    let url = format!("https://releases.example/{service}/{service}-1.2.3.tar.zst");
     let bundle = std::fs::read(fixtures_dir().join(file)).expect("the fixture");
-    let fetcher = FakeFetcher::new()
-        .route(&url, serve(ARCHIVE))
-        .route(&format!("{url}.sigstore.json"), serve(&bundle));
+    let fetcher = published(service, "1.2.3", ARCHIVE).route(
+        &format!("{}.sigstore.json", package_at(service, "1.2.3")),
+        serve(&bundle),
+    );
     let clock = FakeClock::at(1);
     let bounds = Bounds::default();
-    let channel = config("https://releases.example", &"0".repeat(64)).release_channel;
+    let channel = config(CHANNEL, &"0".repeat(64)).release_channel;
     let fetch_env = FetchEnv {
         fetcher: &fetcher,
         clock: &clock,
         bounds: &bounds,
         release_channel: &channel,
         packages_root: scratch.path(),
+        platform: HOST,
     };
-    let staged = fetch_package(&fetch_env, &order(service, "1.2.3", ARCHIVE)).expect("fetched");
+    let staged = fetch_package(&fetch_env, &order(service, "1.2.3")).expect("fetched");
     let gh = gh();
     let signers = configured();
     let env = ProveEnv {

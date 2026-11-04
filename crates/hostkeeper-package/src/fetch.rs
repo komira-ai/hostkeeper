@@ -1,17 +1,23 @@
-//! Step 1 of section 5.5: download the archive an order names into a staging file, and refuse it
-//! unless it is within `max_package_bytes` and hashes to the order's digest.
+//! Step 1 of section 5.5, under the release layout of one package per platform: read the release
+//! index of the version an order names, take the entry for this host's platform, download that
+//! package into a staging file, and refuse it unless its size and SHA-256 are the entry's (and its
+//! size is within `max_package_bytes`).
 //!
 //! | what happened | outcome, class, reason |
 //! |---|---|
-//! | announced length or bytes received over `max_package_bytes` (the transfer stops at once) | `Failure`, `release`, `digest_mismatch` |
-//! | the bytes, all received, do not hash to the order's digest | `Failure`, `release`, `digest_mismatch` |
-//! | no connection, a status other than 2xx (404 included), a body cut short, `fetch_timeout_secs` passed | `Deferred`, `environment`, `fetch_failed` |
-//! | the disk is full while the staging file is written | `Deferred`, `environment`, `no_space` |
-//! | the staging file cannot be made or written for another reason | `Deferred`, `environment`, `fetch_failed` |
+//! | the index is not the index of this version (see [`crate::index`]), or is over 64 KiB | `Failure`, `release`, `index_invalid` |
+//! | the index lists no package for this host's platform | `Failure`, `release`, `no_package_for_platform` |
+//! | the entry's size, the announced length or the bytes received pass `max_package_bytes` or the entry's size (the transfer stops at once) | `Failure`, `release`, `package_digest_mismatch` |
+//! | the bytes, all received, are fewer than the entry's size or do not hash to its SHA-256 | `Failure`, `release`, `package_digest_mismatch` |
+//! | no connection, a status other than 2xx (404 included), a body cut short, `fetch_timeout_secs` passed, for the index or the package | `Deferred`, `environment`, `fetch_failed` |
+//! | the disk is full while a staging file is written | `Deferred`, `environment`, `no_space` |
+//! | a staging file cannot be made, written or read for another reason | `Deferred`, `environment`, `fetch_failed` |
 //!
-//! Every refusal removes the staging file. Nothing else is removed to make room, and no version
+//! Every refusal removes the staging files. Nothing else is removed to make room, and no version
 //! is compared with anything: the downgrade bound is the coordinator's `min_version` (design
-//! Q13).
+//! Q13). The index is not trusted: whatever it says, the package must still be attested
+//! ([`crate::prove`]) and its manifest must name the service, version and platform asked for (the
+//! manifest step).
 
 use std::fs;
 use std::io;
@@ -21,16 +27,17 @@ use hostkeeper_config::daemon::{Bounds, HttpsUrl, Sha256Hex};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::{Clock, Stamp};
 
-use crate::failure::{DIGEST_MISMATCH, FETCH_FAILED, NO_SPACE, PackageFailure};
+use crate::failure::{
+    FETCH_FAILED, INDEX_INVALID, NO_PACKAGE_FOR_PLATFORM, NO_SPACE, PACKAGE_DIGEST_MISMATCH,
+    PackageFailure,
+};
+use crate::index::{MAX_INDEX_BYTES, Platform, ReleaseIndex, index_url, package_url};
 use crate::ports::{Fetcher, Url, after};
 use crate::stage::{self, Download, Fault, Job, OpenWriter, PREFIX, TempFile};
 
-/// The name every archive ends in. The compression is design Q10, decided as zstd; this crate
-/// never decompresses, so the suffix is all it fixes.
-pub const ARCHIVE_SUFFIX: &str = ".tar.zst";
-
 /// What a fetch needs from the daemon: the network, the clock, the config's bounds and channel,
-/// and where packages live (`/var/lib/hostkeeper/packages` on a host).
+/// where packages live (`/var/lib/hostkeeper/packages` on a host), and the host's platform
+/// ([`Platform::current`] on a host).
 #[derive(Clone, Copy)]
 pub struct FetchEnv<'a> {
     pub fetcher: &'a dyn Fetcher,
@@ -38,39 +45,28 @@ pub struct FetchEnv<'a> {
     pub bounds: &'a Bounds,
     pub release_channel: &'a HttpsUrl,
     pub packages_root: &'a Path,
+    pub platform: Platform,
 }
 
-/// The package an order names, already checked by the order grammar.
+/// The package an order names, already checked by the order grammar: a service and a version,
+/// never a platform, a place or a digest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageOrder {
     pub service: ServiceName,
     pub version: Version,
-    /// The SHA-256 of the archive, as CI set it with the version.
-    pub digest: Sha256Hex,
 }
 
-/// An archive whose bytes hash to the order's digest, in a staging file that is removed when
-/// this is dropped. Its bytes are not yet attested: the only thing to do with it is
-/// [`crate::prove::prove`].
+/// The package for this host's platform, whose size and SHA-256 are the release index's, in a
+/// staging file that is removed when this is dropped. Its bytes are not yet attested: the only
+/// thing to do with it is [`crate::prove::prove`].
 #[derive(Debug)]
 pub struct StagedArchive {
     pub(crate) file: TempFile,
     pub(crate) dir: PathBuf,
     pub(crate) url: Url,
+    pub(crate) platform: Platform,
     pub(crate) sha256: Sha256Hex,
     pub(crate) size: u64,
-}
-
-/// The URL of the archive of `service` at `version`:
-/// `<release_channel>/<service>/<service>-<version>.tar.zst`. One `/` at the end of the channel
-/// is dropped; nothing else is changed. The grammars of a service name and a version allow no
-/// `/`, so neither can add a segment.
-pub fn package_url(channel: &HttpsUrl, service: &ServiceName, version: &Version) -> Url {
-    let base = channel.as_str();
-    let base = base.strip_suffix('/').unwrap_or(base);
-    Url::new(format!(
-        "{base}/{service}/{service}-{version}{ARCHIVE_SUFFIX}"
-    ))
 }
 
 /// Removes the staging files (`.fetch-*`) left in `packages_root/<service>/` by a fetch that did
@@ -100,12 +96,14 @@ pub fn remove_orphan_fetches(packages_root: &Path, service: &ServiceName) -> io:
     Ok(())
 }
 
-/// Downloads the archive `order` names into a staging file in `packages/<service>/`, which it
-/// makes when it is missing. See the module's table for every refusal. The caller holds the
-/// service's lock (see [`remove_orphan_fetches`]).
+/// Reads the release index of the version `order` names and downloads the package for
+/// `env.platform` into a staging file in `packages/<service>/`, which it makes when it is
+/// missing. See the module's table for every refusal. The caller holds the service's lock (see
+/// [`remove_orphan_fetches`]).
 ///
-/// The deadline is `fetch_timeout_secs` from the start of this call on the injected clock: it is
-/// passed to the fetcher and checked again on every chunk. The connect timeout is 30 s.
+/// The deadline is `fetch_timeout_secs` from the start of this call on the injected clock, for
+/// the index and the package together: it is passed to the fetcher and checked again on every
+/// chunk. The connect timeout is 30 s.
 pub fn fetch_package(
     env: &FetchEnv<'_>,
     order: &PackageOrder,
@@ -113,49 +111,88 @@ pub fn fetch_package(
     fetch_with(env, order, stage::plain)
 }
 
-/// [`fetch_package`], writing the staging file through `writer`.
+/// [`fetch_package`], writing the staging files through `writer`.
 pub(crate) fn fetch_with(
     env: &FetchEnv<'_>,
     order: &PackageOrder,
     writer: OpenWriter,
 ) -> Result<StagedArchive, PackageFailure> {
     let start = Stamp::now(env.clock);
+    let deadline = after(&start, env.bounds.fetch_timeout_secs);
     let dir = env.packages_root.join(order.service.as_str());
     stage::make_dir(&dir).map_err(|e| failure(Fault::Storage(e)))?;
     remove_orphan_fetches(env.packages_root, &order.service)
         .map_err(|e| failure(Fault::Storage(e)))?;
-    let url = package_url(env.release_channel, &order.service, &order.version);
+
+    let index_at = index_url(env.release_channel, &order.service, &order.version);
+    let index_job = Job {
+        fetcher: env.fetcher,
+        clock: env.clock,
+        dir: &dir,
+        url: &index_at,
+        cap: MAX_INDEX_BYTES,
+        deadline: deadline.clone(),
+    };
+    let fetched = stage::download(&index_job, writer).map_err(index_failure)?;
+    let text = stage::read_back(fetched.file.path(), MAX_INDEX_BYTES)
+        .map_err(|e| failure(Fault::Storage(e)))?;
+    drop(fetched);
+    let index = ReleaseIndex::parse(&text, &order.service, &order.version)
+        .map_err(|_| PackageFailure::release(INDEX_INVALID))?;
+    let entry = index
+        .package(env.platform)
+        .ok_or(PackageFailure::release(NO_PACKAGE_FOR_PLATFORM))?;
+    if entry.bytes > env.bounds.max_package_bytes {
+        return Err(PackageFailure::release(PACKAGE_DIGEST_MISMATCH));
+    }
+
+    let url = package_url(
+        env.release_channel,
+        &order.service,
+        &order.version,
+        env.platform,
+    );
     let job = Job {
         fetcher: env.fetcher,
         clock: env.clock,
         dir: &dir,
         url: &url,
-        cap: env.bounds.max_package_bytes,
-        deadline: after(&start, env.bounds.fetch_timeout_secs),
+        cap: entry.bytes,
+        deadline,
     };
     let Download { file, sha256, size } = stage::download(&job, writer).map_err(failure)?;
-    if sha256 != order.digest.as_str() {
-        return Err(PackageFailure::release(DIGEST_MISMATCH));
+    if (size != entry.bytes) | (sha256 != entry.sha256.as_str()) {
+        return Err(PackageFailure::release(PACKAGE_DIGEST_MISMATCH));
     }
     Ok(StagedArchive {
         file,
         dir,
         url,
-        sha256: order.digest.clone(),
+        platform: env.platform,
+        sha256: entry.sha256.clone(),
         size,
     })
 }
 
-/// The refusal a fault of the archive's download is.
+/// The refusal a fault of the package's download is.
 fn failure(fault: Fault) -> PackageFailure {
     match fault {
-        Fault::TooLarge => PackageFailure::release(DIGEST_MISMATCH),
+        Fault::TooLarge => PackageFailure::release(PACKAGE_DIGEST_MISMATCH),
         Fault::Storage(e) if stage::is_full(&e) => PackageFailure::deferred(NO_SPACE),
-        // A 404 is `Net(Status(404))`, deferred like any other status: the channel may not have
-        // the version yet, and the coordinator retries a deferred order.
+        // A 404 is `Net`, deferred like any other status: the channel may not have the version
+        // yet, and the coordinator retries a deferred order.
         Fault::Storage(_) | Fault::Deadline | Fault::Net | Fault::Unexplained => {
             PackageFailure::deferred(FETCH_FAILED)
         }
+    }
+}
+
+/// The refusal a fault of the index's download is: an index over its cap is not one; anything
+/// else is as for the package.
+fn index_failure(fault: Fault) -> PackageFailure {
+    match fault {
+        Fault::TooLarge => PackageFailure::release(INDEX_INVALID),
+        other => failure(other),
     }
 }
 
