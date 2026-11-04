@@ -17,9 +17,9 @@
 //! `placed.json` is read and written, and `daemon-reload` run, under a short lock of its own
 //! (`<state dir>/placed.lock`, design section 8.7), taken by each call for its duration; the
 //! caller holds the service lock around the whole sequence. Temporary names are
-//! `.hk~<owner>~tmp`, `<owner>` being the service (or `placed.json`): `~` is outside the path
-//! grammar, so no placed path has such a name, and the name stays short whatever the length of
-//! the link's own name.
+//! `.hk~<owner>~tmp`, `<owner>` being the service (or `placed.json`), or a hash of a long
+//! service name ([`temporary_name`]): `~` is outside the path grammar, so no placed path has
+//! such a name, and the name stays short whatever the length of the link's own name.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -43,9 +43,29 @@ pub const TEMPORARY_PREFIX: &str = ".hk~";
 /// The suffix of every temporary name this crate writes.
 pub const TEMPORARY_SUFFIX: &str = "~tmp";
 
-/// The temporary name the links of `owner` are made under, in the directory of each.
+/// The longest owner a temporary name spells out; a longer one is named by its hash.
+pub const MAX_SPELLED_OWNER: usize = 64;
+
+/// The 64-bit FNV-1a hash of `bytes`.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// The temporary name the links of `owner` are made under, in the directory of each:
+/// `.hk~<owner>~tmp` for an owner of at most [`MAX_SPELLED_OWNER`] bytes, else
+/// `.hk~#<16 hex digits of its hash>~tmp`, so that the name stays far below a path component's
+/// 255 bytes whatever the length of a service name. `#` is in no service name, so the two forms
+/// never meet.
 pub fn temporary_name(owner: &str) -> String {
-    format!("{TEMPORARY_PREFIX}{owner}{TEMPORARY_SUFFIX}")
+    match owner.len() <= MAX_SPELLED_OWNER {
+        true => format!("{TEMPORARY_PREFIX}{owner}{TEMPORARY_SUFFIX}"),
+        false => format!(
+            "{TEMPORARY_PREFIX}#{:016x}{TEMPORARY_SUFFIX}",
+            fnv1a(owner.as_bytes())
+        ),
+    }
 }
 
 /// Whether `name` is a temporary name this crate writes.

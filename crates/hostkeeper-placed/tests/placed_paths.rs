@@ -14,7 +14,7 @@ use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use hostkeeper_placed::placer::is_temporary;
+use hostkeeper_placed::placer::{MAX_SPELLED_OWNER, is_temporary, temporary_name};
 use hostkeeper_placed::testing::{FakeUnitControl, FsWrite, UnitCall};
 use hostkeeper_placed::{
     Claims, FileKind, Fs, LintError, Owner, PathState, PlacedError, Placer, RealFs, Tombstone,
@@ -543,4 +543,59 @@ fn writes_under_the_lock_do_not_lose_each_other() {
     let tombstones: Vec<&str> = record.uninstalling.keys().map(String::as_str).collect();
     assert_eq!(tombstones, ["gone", "later"]);
     assert_eq!(record.paths[Path::new(A_CONF)].state, PathState::Pending);
+}
+
+/// Catches a temporary name that grows with the service name past a path component's 255 bytes
+/// (a service name may be 255 bytes), or two long names sharing one temporary name: an owner of
+/// up to 64 bytes is spelled out, a longer one is named by a hash, and every form is a
+/// temporary name.
+#[test]
+fn temporary_names_stay_short_for_long_service_names() {
+    assert_eq!(temporary_name("tierstore"), ".hk~tierstore~tmp");
+    let spelled = "s".repeat(MAX_SPELLED_OWNER);
+    assert_eq!(temporary_name(&spelled), format!(".hk~{spelled}~tmp"));
+    let long = "s".repeat(MAX_SPELLED_OWNER + 1);
+    let longest = "s".repeat(255);
+    let other = format!("{}t", "s".repeat(254));
+    for owner in [&long, &longest, &other] {
+        let name = temporary_name(owner);
+        assert_eq!(name.len(), ".hk~#~tmp".len() + 16, "{name}");
+        assert!(name.starts_with(".hk~#") && is_temporary(&name), "{name}");
+        assert_eq!(temporary_name(owner), name, "the same owner, the same name");
+    }
+    assert_ne!(temporary_name(&longest), temporary_name(&other));
+    assert_ne!(temporary_name(&long), temporary_name(&longest));
+}
+
+/// Catches a switch that fails for a long service name because its temporary link name is too
+/// long for the file system: `current` of a 200-byte service switches, `previous` first.
+#[test]
+fn a_service_with_a_200_byte_name_switches_current() {
+    let world = World::new("long-service");
+    let name = "s".repeat(200);
+    let dir = world.host(format!("/var/lib/hostkeeper/packages/{name}"));
+    fs::create_dir_all(dir.join("1.0.0")).expect("the old version");
+    fs::create_dir_all(dir.join("2.0.0")).expect("the new version");
+    world.set_link(&name, "current", "1.0.0");
+    let switched = world
+        .placer()
+        .switch_current(&service(&name), &version("2.0.0"))
+        .expect("switch");
+    assert!(switched);
+    assert_eq!(
+        fs::read_link(dir.join("current")).expect("current"),
+        Path::new("2.0.0")
+    );
+    assert_eq!(
+        fs::read_link(dir.join("previous")).expect("previous"),
+        Path::new("1.0.0")
+    );
+    let names: Vec<OsString> = fs::read_dir(&dir)
+        .expect("list")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert!(
+        names.iter().all(|n| !is_temporary(&n.to_string_lossy())),
+        "{names:?}"
+    );
 }
