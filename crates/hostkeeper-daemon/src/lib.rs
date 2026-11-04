@@ -10,8 +10,11 @@
 //!   ([`verb`]) and handed to its module under [`verbs`]. `update`, `force_rollback` and
 //!   `install` are checked by the daemon itself ([`checks`]) and run through the step runner of
 //!   `hostkeeper-steps` under the service's lock and the host's step lock ([`locks`]); a first
-//!   install is placed by the runner's switch ([`place`]). `uninstall` runs the sequence of
-//!   design section 4.7 ([`uninstall`]), resumed from its tombstone in `placed.json`.
+//!   install is placed by the runner's switch ([`place`]). `force` is checked the same way but for
+//!   `busy` and the standing halt, runs no hook, and switches the service under its lock alone,
+//!   through the placed-path linker of `hostkeeper-placed` ([`verbs::force`]); [`prune`] is its
+//!   last step. `uninstall` runs the sequence of design section 4.7 ([`uninstall`]), resumed from
+//!   its tombstone in `placed.json`.
 //! - [`halt`]: the held halt generation of each service, persisted, never lowered.
 //! - [`packages`]: the port of the package store, and [`installed`] what the host runs.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
@@ -19,9 +22,9 @@
 //! - [`refusal`]: the closed set of reason tokens.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
-//! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]) and the
-//! placement of packages ([`executor::Placement`]: the host's filesystem and the write side of
-//! its service manager). Time is the `hostkeeper_steps::Clock`; nothing here reads the wall
+//! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
+//! manager (`hostkeeper_placed::UnitControl`) and the filesystem placed paths are linked through
+//! (`hostkeeper_placed::Fs`). Time is the `hostkeeper_steps::Clock`; nothing here reads the wall
 //! clock.
 
 pub mod admin;
@@ -36,6 +39,7 @@ pub mod locks;
 pub mod notify;
 pub mod packages;
 pub mod place;
+pub mod prune;
 pub mod refusal;
 pub mod socket;
 pub mod start;
@@ -48,8 +52,8 @@ pub mod watchers;
 
 pub use boot::{BootError, BootReport, BootStep, Outcome, ServiceBoot, Stage};
 pub use executor::{
-    Ctx, Daemon, DaemonStatus, Dirs, LastUninstall, Placement, Ports, Reply, ServiceStatus,
-    StoreSeam,
+    Ctx, Daemon, DaemonStatus, Dirs, ForcedResult, LastUninstall, Placement, Ports, Reply,
+    ServiceStatus, StoreSeam,
 };
 pub use files::WriteStep;
 pub use notify::{NoNotifier, ReadyNotifier, SystemdNotifier};

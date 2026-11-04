@@ -11,8 +11,9 @@ description = "The hostkeeper daemon: start-up, the order executor with its lock
 # The library of the one root process of a host (docs/design/hostkeeper-design.md, sections 4.1,
 # 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3). Everything the daemon does is here, so that it is measured;
 # the `hostkeeper` binary only forwards to `cli::main`. Everything privileged comes in through
-# ports it is given: the step launcher (`hostkeeper_steps::StepLauncher`) and the package store
-# (`packages::Packages`), and the placement of packages (`executor::Placement`).
+# ports it is given: the step launcher (`hostkeeper_steps::StepLauncher`), the package store
+# (`packages::Packages`), the service manager (`hostkeeper_placed::UnitControl`) and the
+# filesystem placed-path linking writes through (`hostkeeper_placed::Fs`).
 
 [features]
 # The test doubles in `hostkeeper_daemon::testing` (a scripted launcher, a fake clock, fake
@@ -23,7 +24,9 @@ testing = []
 clap.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
-# Placed-path linking: a first install placed, and everything of a service removed on uninstall.
+# The placed-path linker a `force` and a first install link, unlink and switch through, an
+# uninstall removes a service's paths through, and the service-manager port it stops, starts and
+# asks after units with.
 hostkeeper-placed = { path = "../hostkeeper-placed" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }

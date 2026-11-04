@@ -4,17 +4,14 @@
 mod support;
 
 use std::fs;
-use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::packages::PackageError;
 use hostkeeper_daemon::testing::{FakeClock, manifest};
-use hostkeeper_daemon::verb::{
-    DIGEST_RULE, Forced, Hooked, NO_TRY, NO_VERB, PackageDigest, SERVICE_RULE, VERSION_RULE,
-};
+use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE};
 use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply, Verb};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -64,28 +61,14 @@ fn no_record(rig: &Rig, service: &str) -> bool {
 
 /// Catches a verb that is not built doing something anyway (or panicking): each answers
 /// `not_implemented`, takes no lock, asks for no package and writes nothing, whether it comes as
-/// an order or as a verb (`clear_record` comes only from the admin socket). The service runs a
-/// release, so that `force` passes the executor's lifecycle rule and reaches its verb.
+/// an order or as a verb (`clear_record` comes only from the admin socket). `force`, `install`
+/// and `uninstall` are built (tests/force.rs, tests/install.rs, tests/uninstall.rs).
 #[test]
 fn unimplemented_verbs_are_refused_not_implemented_and_touch_nothing() {
     let rig = Rig::new("unimpl");
-    rig.running("web", "1.0.0");
     let daemon = rig.daemon();
     let web = name("web");
-    let hooked = Hooked {
-        service: web.clone(),
-        version: Version::new("2.0.0").expect("a version"),
-        digest: PackageDigest::new(&d()).expect("a digest"),
-        order_try: NonZeroU64::MIN,
-    };
     let verbs = [
-        (
-            "force",
-            Verb::Force(Forced {
-                package: hooked.clone(),
-                halt_generation: 1,
-            }),
-        ),
         ("abort", Verb::Abort(web.clone())),
         (
             "clear_halt",
@@ -107,14 +90,8 @@ fn unimplemented_verbs_are_refused_not_implemented_and_touch_nothing() {
             "{verb_name}"
         );
     }
-    let (service, version, package_digest) = ("web".to_owned(), "2.0.0".to_owned(), d());
+    let service = "web".to_owned();
     let orders = [
-        order::Verb::Force(Force {
-            service: service.clone(),
-            version,
-            package_digest,
-            halt_generation: 2,
-        }),
         order::Verb::Abort(Abort {
             service: service.clone(),
         }),

@@ -52,11 +52,14 @@ pub enum Refusal {
     ReleaseUnreadable,
     /// The step launcher failed; the step is left `running` in the record and a resend resumes it.
     LauncherFailed,
-    /// The dead-man could not stop a step at its bound: the service stays locked.
+    /// The dead-man could not stop a step at its bound: the service stays locked. A `force` that
+    /// could not stop the running step of its service ends with it too.
     Unstopped,
+    /// A `force` of the service `hostkeeper`, which updates itself by its own path.
+    SelfService,
     /// An `install` of a service that has a release installed (`current` names one).
     AlreadyInstalled,
-    /// An `update`, `force_rollback` or `force` of a service with no release installed.
+    /// An `update` or `force_rollback` of a service with no release installed.
     NotInstalled,
     /// A `force` of a service whose first install is under way.
     Installing,
@@ -77,7 +80,7 @@ pub enum Refusal {
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 27] = [
+    pub const ALL: [Refusal; 28] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -98,6 +101,7 @@ impl Refusal {
         Refusal::ReleaseUnreadable,
         Refusal::LauncherFailed,
         Refusal::Unstopped,
+        Refusal::SelfService,
         Refusal::AlreadyInstalled,
         Refusal::NotInstalled,
         Refusal::Installing,
@@ -130,6 +134,7 @@ impl Refusal {
             Refusal::ReleaseUnreadable => "release_unreadable",
             Refusal::LauncherFailed => "launcher_failed",
             Refusal::Unstopped => "unstopped",
+            Refusal::SelfService => "self_service",
             Refusal::AlreadyInstalled => "already_installed",
             Refusal::NotInstalled => "not_installed",
             Refusal::Installing => "installing",

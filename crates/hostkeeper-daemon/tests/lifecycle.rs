@@ -51,7 +51,8 @@ fn installed(rig: &Rig, daemon: &hostkeeper_daemon::Daemon, service: &str) {
 
 /// Catches the lifecycle rules applied to the wrong verb or the wrong state: a tombstone refuses
 /// every hooked order; `install` needs no release installed and the others one; a resumed order
-/// passes whatever `current` says; `force` runs only for a service that runs a release.
+/// passes whatever `current` says; `force` is refused while an install or an uninstall is under
+/// way.
 #[test]
 fn the_lifecycle_rules_refuse_by_where_the_service_is() {
     use HookedVerb::{ForceRollback, Install, Update};
@@ -81,7 +82,7 @@ fn the_lifecycle_rules_refuse_by_where_the_service_is() {
     }
     let forces = [
         (Lifecycle::Running, Ok(())),
-        (Lifecycle::Absent, Err(Refusal::NotInstalled)),
+        (Lifecycle::Absent, Ok(())),
         (Lifecycle::Installing, Err(Refusal::Installing)),
         (Lifecycle::Removing, Err(Refusal::Uninstalling)),
     ];
@@ -137,10 +138,9 @@ fn each_failure_of_linking_has_its_token() {
     }
 }
 
-/// Catches a force that reaches a service with nothing to switch, or changes anything while it
-/// is refused: a force of a tombstoned service is `uninstalling`, of one with no release
-/// installed `not_installed`, of one whose first install is under way `installing`, each with
-/// nothing on disk changed; a force of a service that runs a release reaches the verb.
+/// Catches a force that cuts into an install or an uninstall, or changes anything while it is
+/// refused: a force of a tombstoned service is `uninstalling`, and of one whose first install is
+/// under way `installing`, each with nothing on disk changed.
 #[test]
 fn force_is_refused_while_a_service_is_tombstoned() {
     let rig = Rig::new("force-refused");
@@ -154,8 +154,6 @@ fn force_is_refused_while_a_service_is_tombstoned() {
             ..
         }
     ));
-    rig.stage("api", "1.0.0");
-    rig.running("db", "1.0.0");
     rig.placed("new", "1.0.0", None);
     let gate = rig.launcher.hold("new", Step::Prepare);
     let installing = {
@@ -164,12 +162,7 @@ fn force_is_refused_while_a_service_is_tombstoned() {
     };
     gate.entered();
     let before = snapshot(rig.scratch.path());
-    let rows = [
-        ("web", Refusal::Uninstalling),
-        ("api", Refusal::NotInstalled),
-        ("new", Refusal::Installing),
-        ("db", Refusal::NotImplemented),
-    ];
+    let rows = [("web", Refusal::Uninstalling), ("new", Refusal::Installing)];
     for (service, refusal) in rows {
         let reply = daemon.order(&force(service));
         assert_eq!(reply.refusal(), Some(refusal), "{service}: {reply:?}");
@@ -300,7 +293,7 @@ fn a_placed_json_that_cannot_be_read_holds_every_change() {
     let rig = Rig::new("placed-garbled");
     rig.running("web", "1.0.0");
     rig.add("api", "2.0.0");
-    fs::write(rig.scratch.path().join("placed.json"), "{").expect("garbled");
+    fs::write(rig.host("/placed/placed.json"), "{").expect("garbled");
     let (daemon, alerts) = alerting(rig.daemon());
     for order in [
         uninstall("web", 1),

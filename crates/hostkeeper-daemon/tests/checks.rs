@@ -140,6 +140,8 @@ fn record(version: &str, order_try: Option<u64>, state: State) -> Record {
         hook: HookSel::New,
         progress: Progress::default(),
         order_try,
+        forced: false,
+        force: None,
     }
 }
 

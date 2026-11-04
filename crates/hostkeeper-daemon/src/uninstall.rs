@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Outcome, Phase, Report, Step, Verdict};
-use hostkeeper_placed::{FileKind, Fs, PlacedError, Tombstone};
+use hostkeeper_placed::{FileKind, Fs, PlacedError, RealFs, Tombstone};
 use hostkeeper_steps::record::{Loaded, PARAMS_FILE, RECORD_FILE};
 use hostkeeper_steps::{AdditiveCall, Finished, Layout, Seal, Staged, StepExit, read_seal};
 
@@ -266,7 +266,7 @@ fn stop_and_run_hook(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
         )
     })?;
     for unit in &release.manifest.run {
-        ctx.placement.units.stop_unit(unit).map_err(|error| {
+        ctx.units.stop_unit(unit).map_err(|error| {
             ctx.alert(REASON_UNIT_STUCK, &format!("service={service}: {error}"));
             let environment = Verdict::Failed {
                 phase: Phase::BeforeCommit,
@@ -358,9 +358,11 @@ fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
     if let Err(error) = ctx.placer().remove_all(service) {
         return link_failed(error);
     }
-    let fs = &*ctx.placement.fs;
-    let removed = remove_package(fs, &ctx.dirs.packages, service)
-        .and_then(|()| remove_records(fs, &ctx.dirs.state, service));
+    // The package directory as the placement's filesystem reaches it; the daemon's own state
+    // directory, which is no placed path, as this process sees it.
+    let packages = ctx.placement.roots.packages().dir();
+    let removed = remove_package(&*ctx.placement.fs, packages, service)
+        .and_then(|()| remove_records(&RealFs::new(Path::new("/")), &ctx.dirs.state, service));
     if let Err(error) = removed {
         return link_failed(format!(
             "the files of {service} could not be removed: {error}"

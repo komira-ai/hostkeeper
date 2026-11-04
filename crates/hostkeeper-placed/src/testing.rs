@@ -3,16 +3,17 @@
 //! - [`FaultFs`]: the real filesystem under a root, recording every write in a [`Log`] and
 //!   failing the n-th write and every one after it, as a crash there would leave the disk;
 //! - [`FakeUnitControl`]: a [`UnitControl`] that records each call in the same [`Log`], so that
-//!   a test reads the order of writes and calls in one list (a test puts the calls of its own
-//!   fakes among them with [`Event::Mark`]);
+//!   a test reads the order of writes and calls in one list, and keeps which units are active
+//!   (a test puts the calls of its own fakes among them with [`Event::Mark`]);
 //! - [`FakeLauncher`]: a [`CommandLauncher`] that records each argument vector.
 //!
 //! None of them runs a program, opens a socket or reads a clock.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::fs::{FileKind, Fs, RealFs};
 use crate::unit_control::{CommandLauncher, UnitControl, UnitControlError};
@@ -35,6 +36,8 @@ pub enum FsWrite {
 pub enum UnitCall {
     DaemonReload,
     Stop(String),
+    Start(String),
+    IsActive(String),
 }
 
 /// One event of a [`Log`].
@@ -240,14 +243,28 @@ impl Fs for FaultFs {
     }
 }
 
-/// A [`UnitControl`] that records each call in its [`Log`]; built with
-/// [`FakeUnitControl::failing`], every call is recorded and then fails; built with
-/// [`FakeUnitControl::refusing_to_stop`], the stop of one unit is recorded and then fails, as a
-/// unit still active after its stop bound would.
+/// What a [`FakeUnitControl`] holds besides its log: the units active now, and the faults a
+/// test asked for.
+#[derive(Debug, Default)]
+struct Units {
+    active: BTreeSet<String>,
+    /// For a unit: how many more times [`UnitControl::is_active`] answers `false` once it is
+    /// started.
+    late: BTreeMap<String, u64>,
+    fail_reload: bool,
+    fail_start: BTreeSet<String>,
+    fail_stop: BTreeSet<String>,
+}
+
+/// A [`UnitControl`] that records each call in its [`Log`] and keeps which units are active: a
+/// start makes a unit active, a stop makes it inactive. Built with [`FakeUnitControl::failing`],
+/// every call is recorded and then fails; [`FakeUnitControl::fail_reload`],
+/// [`FakeUnitControl::fail_start`], [`FakeUnitControl::fail_stop`] and
+/// [`FakeUnitControl::active_after`] fail or delay one kind of call.
 pub struct FakeUnitControl {
     log: Log,
     failing: bool,
-    stuck: Option<String>,
+    units: Mutex<Units>,
 }
 
 impl FakeUnitControl {
@@ -255,7 +272,7 @@ impl FakeUnitControl {
         FakeUnitControl {
             log,
             failing: false,
-            stuck: None,
+            units: Mutex::default(),
         }
     }
 
@@ -266,35 +283,91 @@ impl FakeUnitControl {
         }
     }
 
-    /// Every call goes through but the stop of `unit`, which fails.
-    pub fn refusing_to_stop(log: Log, unit: &str) -> FakeUnitControl {
-        FakeUnitControl {
-            stuck: Some(unit.to_owned()),
-            ..FakeUnitControl::new(log)
-        }
+    fn units(&self) -> MutexGuard<'_, Units> {
+        self.units.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn call(&self, call: UnitCall) -> Result<(), UnitControlError> {
+    /// `daemon-reload` fails from now on; every other call works.
+    pub fn fail_reload(&self) {
+        self.units().fail_reload = true;
+    }
+
+    /// A start of `unit` fails from now on, and leaves it inactive.
+    pub fn fail_start(&self, unit: &str) {
+        self.units().fail_start.insert(unit.to_owned());
+    }
+
+    /// A stop of `unit` fails from now on, and leaves it as it was: a unit still active after its
+    /// stop bound.
+    pub fn fail_stop(&self, unit: &str) {
+        self.units().fail_stop.insert(unit.to_owned());
+    }
+
+    /// Once `unit` is started, [`UnitControl::is_active`] answers `false` for it `asks` times
+    /// before it answers `true`.
+    pub fn active_after(&self, unit: &str, asks: u64) {
+        self.units().late.insert(unit.to_owned(), asks);
+    }
+
+    /// `unit` is active, as if it had been started before the test.
+    pub fn set_active(&self, unit: &str) {
+        self.units().active.insert(unit.to_owned());
+    }
+
+    /// The units active now.
+    pub fn active(&self) -> BTreeSet<String> {
+        self.units().active.clone()
+    }
+
+    /// Records `call`, and fails it when the fake fails every call or `fault` says so.
+    fn call(&self, call: UnitCall, fault: bool) -> Result<(), UnitControlError> {
         let action = format!("{call:?}");
-        let stuck = matches!(&call, UnitCall::Stop(unit) if self.stuck.as_ref() == Some(unit));
         self.log.push(Event::Unit(call));
-        match self.failing | stuck {
-            true => Err(UnitControlError {
-                action,
-                why: "the fake fails every call".to_owned(),
-            }),
-            false => Ok(()),
-        }
+        let why = match (self.failing, fault) {
+            (true, _) => "the fake fails every call",
+            (false, true) => "the fake fails this call",
+            (false, false) => return Ok(()),
+        };
+        Err(UnitControlError {
+            action,
+            why: why.to_owned(),
+        })
     }
 }
 
 impl UnitControl for FakeUnitControl {
     fn daemon_reload(&self) -> Result<(), UnitControlError> {
-        self.call(UnitCall::DaemonReload)
+        let fault = self.units().fail_reload;
+        self.call(UnitCall::DaemonReload, fault)
     }
 
     fn stop_unit(&self, unit: &str) -> Result<(), UnitControlError> {
-        self.call(UnitCall::Stop(unit.to_owned()))
+        let fault = self.units().fail_stop.contains(unit);
+        self.call(UnitCall::Stop(unit.to_owned()), fault)?;
+        self.units().active.remove(unit);
+        Ok(())
+    }
+
+    fn start_unit(&self, unit: &str) -> Result<(), UnitControlError> {
+        let fault = self.units().fail_start.contains(unit);
+        self.call(UnitCall::Start(unit.to_owned()), fault)?;
+        self.units().active.insert(unit.to_owned());
+        Ok(())
+    }
+
+    fn is_active(&self, unit: &str) -> Result<bool, UnitControlError> {
+        self.call(UnitCall::IsActive(unit.to_owned()), false)?;
+        let mut units = self.units();
+        if !units.active.contains(unit) {
+            return Ok(false);
+        }
+        match units.late.get_mut(unit) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                Ok(false)
+            }
+            _ => Ok(true),
+        }
     }
 }
 

@@ -158,13 +158,23 @@ fn lifecycle(lifecycle: Lifecycle) -> Life {
     }
 }
 
-/// An order as its step record holds it. The record keeps no order id and no wall-clock times.
+/// An order as its step record holds it. The record keeps no wall-clock times, and an order id
+/// only for a force. A force, or a hooked update a force stopped, is `forced`; a force runs no
+/// hook step, so its `step` is empty.
 pub fn step_record(rec: &Record) -> StepRecord {
+    let force = rec.force.as_ref();
     let mut out = StepRecord {
+        order_id: force
+            .and_then(|force| force.order_id.clone())
+            .unwrap_or_default(),
         order_try: rec.order_try.unwrap_or(0),
         version: rec.target_version.clone(),
         package_digest: rec.tarball_digest.clone(),
-        step: rec.step.name().to_owned(),
+        forced: rec.forced | force.is_some(),
+        step: match force {
+            Some(_) => String::new(),
+            None => rec.step.name().to_owned(),
+        },
         attempt: rec.attempt,
         committed: rec.progress.committed,
         ..StepRecord::default()

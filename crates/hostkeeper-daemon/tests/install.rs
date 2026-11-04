@@ -33,10 +33,6 @@ fn link(rig: &Rig, service: &str, link: &str) -> Option<String> {
         .map(|target| target.to_string_lossy().into_owned())
 }
 
-fn exists(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok()
-}
-
 /// Catches an install that needs a release to replace, or that tells the hook of one: the hook
 /// is given no `updater.previous_*` key, the step record names no previous release, and on
 /// `Succeeded` the service runs the target: `current` names it, there is no `previous`, its unit,
@@ -71,14 +67,18 @@ fn install_runs_the_update_path_with_no_previous_version() {
     assert_eq!(link(&rig, "web", "current").as_deref(), Some("1.0.0"));
     assert_eq!(link(&rig, "web", "previous"), None);
     let [unit, wants, conf] = rig.placed_paths("web");
-    let current = rig.packages.join("web").join("current");
+    // Each link is written as the host names its target: into `current`.
+    let current = Path::new("/packages/web/current");
     assert_eq!(
-        fs::read_link(&unit).expect("the unit link"),
+        fs::read_link(rig.host(&unit)).expect("the unit link"),
         current.join("units/web.service")
     );
-    assert_eq!(fs::read_link(&wants).expect("the WantedBy link"), unit);
     assert_eq!(
-        fs::read_link(&conf).expect("the file link"),
+        fs::read_link(rig.host(&wants)).expect("the WantedBy link"),
+        unit
+    );
+    assert_eq!(
+        fs::read_link(rig.host(&conf)).expect("the file link"),
         current.join("files/web.conf")
     );
     let record = rig.placed_record();
@@ -167,7 +167,7 @@ fn a_failed_first_install_rolls_back_or_declines_with_no_previous_release() {
     for service in ["web", "api", "db"] {
         assert_eq!(link(&rig, service, "current"), None, "{service}");
         for path in rig.placed_paths(service) {
-            assert!(!exists(&path), "{}", path.display());
+            assert!(!rig.there(&path), "{}", path.display());
             assert!(!record.paths.contains_key(&path), "{}", path.display());
         }
         assert!(
@@ -293,17 +293,17 @@ fn an_install_whose_switch_fails_stops_before_cutover_and_resumes() {
     let rig = Rig::new("install-switch-fails");
     rig.placed("web", "1.0.0", None);
     let failing = Arc::new(FaultFs::failing_at(
-        Path::new("/"),
+        rig.scratch.path(),
         1,
         rig.placed_log.clone(),
     ));
-    let daemon = rig.daemon_on(rig.placement_on(failing, rig.units.clone()));
+    let daemon = rig.daemon_with(failing, rig.units.clone());
     let reply = daemon.order(&install("web", "1.0.0", &d(), 1));
     assert_eq!(reply.refusal(), Some(Refusal::LinkFailed), "{reply:?}");
     assert!(matches!(reply, Reply::Interrupted { .. }), "{reply:?}");
     assert_eq!(rig.launcher.steps("web"), [Step::Prepare]);
     assert_eq!(link(&rig, "web", "current"), None);
-    assert!(rig.placed_paths("web").iter().all(|path| !exists(path)));
+    assert!(rig.placed_paths("web").iter().all(|path| !rig.there(path)));
 
     let daemon = rig.daemon();
     assert_eq!(daemon.order(&install("web", "1.0.0", &d(), 1)), succeeded());

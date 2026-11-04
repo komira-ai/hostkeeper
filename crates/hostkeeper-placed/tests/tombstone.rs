@@ -138,18 +138,19 @@ fn an_empty_directory_is_removed_through_the_port() {
 }
 
 /// Catches a fake that cannot stand for a unit that will not stop, or that stops failing other
-/// calls: `refusing_to_stop` fails the stop of its one unit and records it, and passes the stop
-/// of every other unit and `daemon-reload`; a mark a test writes lands in its place among them.
+/// calls: after `fail_stop`, the stop of that one unit is recorded and fails, the stop of every
+/// other unit and `daemon-reload` pass; a mark a test writes lands in its place among them.
 #[test]
 fn the_fake_unit_control_can_refuse_to_stop_one_unit() {
     let log = Log::new();
-    let units = FakeUnitControl::refusing_to_stop(log.clone(), "web.service");
+    let units = FakeUnitControl::new(log.clone());
+    units.fail_stop("web.service");
     units.stop_unit("api.service").expect("another unit stops");
     log.push(Event::Mark("hook".to_owned()));
     let refused = units
         .stop_unit("web.service")
         .expect_err("it will not stop");
-    assert_eq!(refused.why, "the fake fails every call");
+    assert_eq!(refused.why, "the fake fails this call");
     units.daemon_reload().expect("a reload goes through");
     assert_eq!(
         log.events(),

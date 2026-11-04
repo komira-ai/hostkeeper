@@ -10,20 +10,21 @@
 //! when another daemon holds the state directory.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_placed::roots::SYSTEMD_UNIT_DIR;
-use hostkeeper_placed::{RealFs, UnitControl, UnitControlError};
+use hostkeeper_placed::roots::{STATE_DIR, SYSTEMD_UNIT_DIR};
+use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
 use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, SystemClock};
 
 use crate::executor::{Placement, Ports};
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::packages::{PackageError, Packages, VersionDir};
+use crate::prune::NoPrune;
 use crate::start::{self, Settings, StartError};
 use crate::verb::PackageDigest;
 
@@ -152,26 +153,32 @@ async fn start_and_serve(
     own_version: HostkeeperVersion,
     notifier: &dyn ReadyNotifier,
 ) -> Result<(), StartError> {
-    let started = start::startup_notifying(settings, host_ports(), own_version, notifier)?;
+    let ports = host_ports(&settings.packages_dir);
+    let started = start::startup_notifying(settings, ports, own_version, notifier)?;
     start::serve(started).await
 }
 
 /// The ports of this build. The host's step launcher, package store and service manager are not
 /// part of it yet, and no order reaches the daemon yet (the heartbeat loop that brings them comes
-/// later): until they are wired in, an order that did come would be refused or fail, never run.
-/// Placement reads and writes the host's own paths (`RealFs` at `/`), units in
-/// `/etc/systemd/system`.
-fn host_ports() -> Ports {
+/// later): until they are wired in, an order that did come would be refused, never run. Placed
+/// paths are linked under the host's own directories, `packages_dir` being `--packages-dir`; the
+/// prune of step 18 of a force deletes nothing yet.
+fn host_ports(packages_dir: &Path) -> Ports {
     Ports {
         launcher: Arc::new(Unwired),
         packages: Arc::new(Unwired),
-        placement: Placement {
-            unit_dir: PathBuf::from(SYSTEMD_UNIT_DIR),
-            fs: Arc::new(RealFs::new(std::path::Path::new("/"))),
-            units: Arc::new(Unwired),
-        },
         clock: Arc::new(SystemClock),
         deadman_poll_secs: Some(DEADMAN_POLL_SECS),
+        units: Arc::new(Unwired),
+        placement: Placement {
+            roots: Roots::new(
+                Path::new(STATE_DIR),
+                Path::new(SYSTEMD_UNIT_DIR),
+                packages_dir,
+            ),
+            fs: Arc::new(RealFs::new(Path::new("/"))),
+        },
+        prune: Arc::new(NoPrune),
     }
 }
 
@@ -180,8 +187,7 @@ fn host_ports() -> Ports {
 pub struct Unwired;
 
 /// What [`Unwired`] answers.
-pub const UNWIRED: &str =
-    "this build of hostkeeper has no step launcher, package store or service manager";
+pub const UNWIRED: &str = "this build of hostkeeper has no step launcher or package store";
 
 impl StepLauncher for Unwired {
     fn run(&self, _call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
@@ -193,6 +199,33 @@ impl StepLauncher for Unwired {
     }
 }
 
+impl Unwired {
+    fn refuse<T>(action: &str) -> Result<T, UnitControlError> {
+        Err(UnitControlError {
+            action: action.to_owned(),
+            why: UNWIRED.to_owned(),
+        })
+    }
+}
+
+impl UnitControl for Unwired {
+    fn daemon_reload(&self) -> Result<(), UnitControlError> {
+        Unwired::refuse("daemon-reload")
+    }
+
+    fn stop_unit(&self, unit: &str) -> Result<(), UnitControlError> {
+        Unwired::refuse(&format!("stop {unit}"))
+    }
+
+    fn start_unit(&self, unit: &str) -> Result<(), UnitControlError> {
+        Unwired::refuse(&format!("start {unit}"))
+    }
+
+    fn is_active(&self, unit: &str) -> Result<bool, UnitControlError> {
+        Unwired::refuse(&format!("is-active {unit}"))
+    }
+}
+
 impl Packages for Unwired {
     fn version_dir(
         &self,
@@ -201,22 +234,5 @@ impl Packages for Unwired {
         _digest: &PackageDigest,
     ) -> Result<VersionDir, PackageError> {
         Err(PackageError::Other(UNWIRED.to_owned()))
-    }
-}
-
-impl UnitControl for Unwired {
-    fn daemon_reload(&self) -> Result<(), UnitControlError> {
-        Err(unwired_units("daemon-reload"))
-    }
-
-    fn stop_unit(&self, unit: &str) -> Result<(), UnitControlError> {
-        Err(unwired_units(&format!("stop {unit}")))
-    }
-}
-
-fn unwired_units(action: &str) -> UnitControlError {
-    UnitControlError {
-        action: action.to_owned(),
-        why: UNWIRED.to_owned(),
     }
 }

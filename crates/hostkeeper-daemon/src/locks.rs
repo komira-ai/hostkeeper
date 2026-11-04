@@ -1,5 +1,6 @@
-//! The daemon's locks (design section 8.1): one per service, taken for the whole of an order and
-//! never waited for, and one step lock for the host, held while a step runs.
+//! The daemon's locks (design sections 8.1 and 8.7): one per service, taken for the whole of an
+//! order and never waited for, and one step lock for the host, held while a step runs. A `force`
+//! takes its service's lock only, never the step lock.
 //!
 //! The order is service, then step, and the types keep it: the step lock is taken only through
 //! [`ServiceGuard::step`] ([`StepLock`] has no other way to be taken), so no code can hold it
@@ -52,6 +53,13 @@ pub struct Held {
     pub stuck: bool,
 }
 
+impl Held {
+    /// Whether the lock is held for a `force`.
+    pub fn is_force(&self) -> bool {
+        matches!(&self.holder, Holder::Package(package) if package.verb == HookedVerb::Force)
+    }
+}
+
 /// One lock per service, made when a service's first order comes. A clone shares the locks: a
 /// post-success watcher's thread keeps a service locked through it.
 #[derive(Clone, Debug, Default)]
@@ -81,6 +89,31 @@ impl ServiceLocks {
         }
         let held = Held {
             holder,
+            stuck: false,
+        };
+        map.insert(service.to_string(), held);
+        Ok(ServiceGuard {
+            locks: self,
+            service: service.clone(),
+            kept: false,
+        })
+    }
+
+    /// Takes the lock of `service` for `package` when it is free, or when it is held for good by
+    /// a step that could not be stopped ([`ServiceGuard::keep`]): a `force` that stopped that
+    /// step's unit takes the lock over (design section 5.6, steps 4 to 7). Never waits; `Err`
+    /// says who holds it otherwise.
+    pub fn take_over(
+        &self,
+        service: &ServiceName,
+        package: Package,
+    ) -> Result<ServiceGuard<'_>, Held> {
+        let mut map = self.map();
+        if let Some(held) = map.get(service.as_str()).filter(|held| !held.stuck) {
+            return Err(held.clone());
+        }
+        let held = Held {
+            holder: Holder::Package(package),
             stuck: false,
         };
         map.insert(service.to_string(), held);

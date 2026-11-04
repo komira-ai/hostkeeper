@@ -17,9 +17,11 @@
 //! 5. once the boot id is written, each uninstall a tombstone in `placed.json` left unfinished,
 //!    resumed under its service's lock without waiting for an order ([`crate::uninstall`]); its
 //!    reply is the service's outcome ([`Outcome::Uninstall`] for a verdict);
-//! 6. run each unfinished update to its verdict, through the step runner, under the service's
-//!    lock and the step lock, the order rebuilt from the record and the sealed version
-//!    directory. An update that reaches the post-success watcher is left to step 7;
+//! 6. run each force whose record holds no verdict again from its top ([`verbs::force::resume`],
+//!    under the service's lock only); then run each unfinished update to its verdict, through the
+//!    step runner, under the service's lock and the step lock, the order rebuilt from the record
+//!    and the sealed version directory. An update that reaches the post-success watcher is left
+//!    to step 7;
 //! 7. restart the watchers, each on a thread the daemon owns ([`crate::watchers`]).
 //!
 //! [`Daemon::after_boot`] then runs the `boot` step of each service whose `current` manifest
@@ -288,6 +290,19 @@ fn journal(ctx: &Ctx, service: &ServiceName, error: &dyn fmt::Display) -> Outcom
     Outcome::JournalUnavailable(error.to_string())
 }
 
+/// The outcome of a force the start pass ran again: its verdict, or why it did not reach one.
+fn forced(service: &ServiceName, reply: Reply) -> Outcome {
+    match reply {
+        Reply::Finished {
+            verdict, reason, ..
+        } => Outcome::Finished(Finished { verdict, reason }),
+        other => Outcome::Interrupted {
+            refusal: other.refusal().unwrap_or(Refusal::Busy),
+            detail: format!("service={service}: the force reached no verdict: {other:?}"),
+        },
+    }
+}
+
 /// The bounds of a manifest's `[hook]`, as an order of it has them.
 fn bounds(hook: &Hook) -> Bounds {
     let timeouts = &hook.timeout_secs;
@@ -479,7 +494,13 @@ impl Daemon {
         let rebooted = boot_changed(state, &*ctx.clock);
         report.rebooted = rebooted;
         let mut unfinished = Vec::new();
+        // A force under way is not in the resume table: it runs again from the top of its record.
+        let mut forces = Vec::new();
         for (service, mut rec) in loaded {
+            if let Some(force) = rec.force.clone().filter(|force| force.verdict.is_none()) {
+                forces.push((service, rec, force));
+                continue;
+            }
             let (action, changed) = resume(&mut rec, rebooted, &*ctx.clock);
             let written = match changed {
                 true => ctx.store(&service).save(&rec),
@@ -523,6 +544,12 @@ impl Daemon {
                         .services
                         .insert(service.to_string(), ServiceBoot::of(Some(action), outcome));
                 }
+                for (service, _, _) in forces.drain(..) {
+                    let outcome = journal(ctx, &service, &why);
+                    report
+                        .services
+                        .insert(service.to_string(), ServiceBoot::of(None, outcome));
+                }
                 Vec::new()
             }
         };
@@ -531,6 +558,13 @@ impl Daemon {
             self.resume_uninstalls(report);
         }
         report.stages.push(Stage::RunUpdates);
+        for (service, rec, force) in forces {
+            let reply = verbs::force::resume(ctx, &service, rec, force);
+            let outcome = forced(&service, reply);
+            report
+                .services
+                .insert(service.to_string(), ServiceBoot::of(None, outcome));
+        }
         let mut watch = Vec::new();
         for (service, rec, action) in unfinished {
             let outcome = match action {

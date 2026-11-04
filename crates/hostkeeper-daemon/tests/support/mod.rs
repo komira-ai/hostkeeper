@@ -3,6 +3,8 @@
 //! pipe.
 #![allow(dead_code, reason = "each test binary uses part of the shared support")]
 
+pub mod force;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -13,13 +15,15 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
+use hostkeeper_daemon::prune::NoPrune;
 use hostkeeper_daemon::start::Settings;
 use hostkeeper_daemon::testing::{FakeClock, FakePackages, Log, ScriptedLauncher, manifest};
 use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
 use hostkeeper_hook::Verdict;
+use hostkeeper_placed::Roots;
 use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log as PlacedLog};
 use hostkeeper_proto::hostkeeper::agent::v1::{
-    ForceRollback, Install, Order, Uninstall, Update, order,
+    Force, ForceRollback, Install, Order, Uninstall, Update, order,
 };
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::record::{Loaded, Record, State};
@@ -141,6 +145,46 @@ pub fn force_rollback(service: &str, version: &str, package_digest: &str, order_
     }
 }
 
+/// A `force` order.
+pub fn force(
+    service: &str,
+    version: &str,
+    package_digest: &str,
+    order_try: u64,
+    halt_generation: u64,
+) -> Order {
+    Order {
+        order_id: format!("force-{service}-{version}"),
+        r#try: order_try,
+        verb: Some(order::Verb::Force(Force {
+            service: service.to_owned(),
+            version: version.to_owned(),
+            package_digest: package_digest.to_owned(),
+            halt_generation,
+        })),
+    }
+}
+
+/// A unit's `WantedBy=` target, spelt in two pieces so that this file names no host.
+pub const TARGET: &str = concat!("multi-user.", "target");
+
+/// A systemd unit wanted by [`TARGET`].
+pub fn unit_text() -> String {
+    format!(
+        "[Unit]\nDescription=a test unit\n\n[Service]\nExecStart=/usr/bin/true\n\n[Install]\nWantedBy={TARGET}\n"
+    )
+}
+
+/// The directories placed-path linking works in, as the rig's host names them: the rig's
+/// scratch directory is that host's root, so `/packages` is [`Rig::packages`].
+pub fn roots() -> Roots {
+    Roots::new(
+        Path::new("/placed"),
+        Path::new("/units"),
+        Path::new("/packages"),
+    )
+}
+
 /// A scratch directory with the daemon's directories, its config and fakes for its ports.
 ///
 /// Placement reads and writes the real paths under the scratch directory (a `FaultFs` rooted at
@@ -156,10 +200,12 @@ pub struct Rig {
     pub clock: Arc<FakeClock>,
     pub launcher: Arc<ScriptedLauncher>,
     pub store: Arc<FakePackages>,
-    pub unit_dir: PathBuf,
-    pub placed_log: PlacedLog,
-    pub fs: Arc<FaultFs>,
+    /// The service manager; its calls are in [`Rig::placed_log`].
     pub units: Arc<FakeUnitControl>,
+    /// The writes of placed-path linking and the calls of the service manager, in order.
+    pub placed_log: PlacedLog,
+    /// The filesystem placed-path linking goes through: the scratch directory as `/`.
+    pub placed_fs: Arc<FaultFs>,
 }
 
 impl Rig {
@@ -170,6 +216,7 @@ impl Rig {
         fs::write(&config, CONFIG).expect("write the config");
         fs::set_permissions(&config, fs::Permissions::from_mode(0o644)).expect("its mode");
         let packages = root.join("packages");
+        fs::create_dir(root.join("placed")).expect("the directory of placed.json");
         let placed_log = PlacedLog::new();
         Rig {
             state: root.join("state"),
@@ -179,41 +226,80 @@ impl Rig {
             socket: root.join("r").join("a.sock"),
             clock: FakeClock::new(),
             launcher: ScriptedLauncher::new(),
-            unit_dir: root.join("units"),
-            fs: Arc::new(FaultFs::new(Path::new("/"), placed_log.clone())),
             units: Arc::new(FakeUnitControl::new(placed_log.clone())),
+            placed_fs: Arc::new(FaultFs::new(&root, placed_log.clone())),
             placed_log,
             scratch,
         }
     }
 
-    /// The rig's placement: its filesystem and unit control.
-    pub fn placement(&self) -> Placement {
-        self.placement_on(self.fs.clone(), self.units.clone())
-    }
-
-    /// A placement of the rig's unit directory on `fs` and `units`.
-    pub fn placement_on(&self, fs: Arc<FaultFs>, units: Arc<FakeUnitControl>) -> Placement {
-        Placement {
-            unit_dir: self.unit_dir.clone(),
-            fs,
-            units,
-        }
-    }
-
     pub fn ports(&self) -> Ports {
-        self.ports_on(self.placement())
-    }
-
-    /// The rig's ports with `placement`.
-    pub fn ports_on(&self, placement: Placement) -> Ports {
         Ports {
             launcher: self.launcher.clone(),
             packages: self.store.clone(),
-            placement,
             clock: self.clock.clone(),
             deadman_poll_secs: None,
+            units: self.units.clone(),
+            placement: Placement {
+                roots: roots(),
+                fs: self.placed_fs.clone(),
+            },
+            prune: Arc::new(NoPrune),
         }
+    }
+
+    /// A daemon on the rig's directories whose placement goes through `fs` and `units`, with no
+    /// dead-men.
+    pub fn daemon_with(&self, fs: Arc<FaultFs>, units: Arc<FakeUnitControl>) -> Daemon {
+        let ports = Ports {
+            units,
+            placement: Placement { roots: roots(), fs },
+            ..self.ports()
+        };
+        Daemon::new(config(), self.dirs(), ports, OWN)
+    }
+
+    /// Where the host path `path` is on disk: the scratch directory is the rig's host's root.
+    pub fn host(&self, path: impl AsRef<Path>) -> PathBuf {
+        let path = path.as_ref();
+        self.scratch
+            .path()
+            .join(path.strip_prefix("/").unwrap_or(path))
+    }
+
+    /// A version of `service` with units, sealed with the package digest [`d`]: each of `units`
+    /// is a file of `units/` wanted by [`TARGET`], `run` are the units its manifest starts, and
+    /// each of `files` is a file `files/<name>` placed at its path.
+    pub fn add_units(
+        &self,
+        service: &str,
+        version: &str,
+        units: &[&str],
+        run: &[&str],
+        files: &[(&str, &str)],
+    ) -> PathBuf {
+        let mut text = manifest(service, version);
+        if !run.is_empty() {
+            let run: Vec<String> = run.iter().map(|unit| format!("\"{unit}\"")).collect();
+            text.push_str(&format!("\n[units]\nrun = [{}]\n", run.join(", ")));
+        }
+        for (name, path) in files {
+            text.push_str(&format!(
+                "\n[[files]]\nsource = \"files/{name}\"\npath = \"{path}\"\n"
+            ));
+        }
+        let dir = self.store.add(service, version, &text);
+        for (sub, names) in [
+            ("units", units.to_vec()),
+            ("files", files.iter().map(|(name, _)| *name).collect()),
+        ] {
+            fs::create_dir_all(dir.join(sub)).expect("a directory of the package");
+            for name in names {
+                fs::write(dir.join(sub).join(name), unit_text()).expect("a file of the package");
+            }
+        }
+        self.store.seal(service, version, &d());
+        dir
     }
 
     pub fn dirs(&self) -> Dirs {
@@ -226,11 +312,6 @@ impl Rig {
     /// A daemon on the rig's directories, with no dead-men.
     pub fn daemon(&self) -> Daemon {
         Daemon::new(config(), self.dirs(), self.ports(), OWN)
-    }
-
-    /// A daemon on the rig's directories with `placement`, with no dead-men.
-    pub fn daemon_on(&self, placement: Placement) -> Daemon {
-        Daemon::new(config(), self.dirs(), self.ports_on(placement), OWN)
     }
 
     pub fn settings(&self) -> Settings {
@@ -309,18 +390,11 @@ impl Rig {
     }
 }
 
-/// A unit's `WantedBy=` target, spelt in two pieces so that this file names no host.
-pub const TARGET: &str = concat!("multi-user.", "target");
-
 impl Rig {
     /// Where the `[[files]]` entry of a package of `service` that [`Rig::placed`] makes is
-    /// placed: below the scratch directory.
+    /// placed, as the host names it.
     pub fn conf_path(&self, service: &str) -> PathBuf {
-        self.scratch
-            .path()
-            .join("opt")
-            .join(service)
-            .join(format!("{service}.conf"))
+        PathBuf::from(format!("/opt/{service}/{service}.conf"))
     }
 
     /// The text of the unit `<service>.service`: its `ExecStart=` through `current`, wanted by
@@ -328,7 +402,7 @@ impl Rig {
     pub fn unit_text(&self, service: &str) -> String {
         format!(
             "[Unit]\nDescription=a test unit\n\n[Service]\nExecStart={}/{service}/current/bin/hook serve\n\n[Install]\nWantedBy={TARGET}\n",
-            self.packages.display()
+            roots().packages().dir().display()
         )
     }
 
@@ -362,20 +436,26 @@ impl Rig {
         dir
     }
 
-    /// The paths a package of `service` from [`Rig::placed`] places: its unit, its `WantedBy=`
-    /// link and its file.
+    /// The paths a package of `service` from [`Rig::placed`] places, as the host names them: its
+    /// unit, its `WantedBy=` link and its file.
     pub fn placed_paths(&self, service: &str) -> [PathBuf; 3] {
         let unit = format!("{service}.service");
+        let units = roots().unit_dir().to_path_buf();
         [
-            self.unit_dir.join(&unit),
-            self.unit_dir.join(format!("{TARGET}.wants")).join(&unit),
+            units.join(&unit),
+            units.join(format!("{TARGET}.wants")).join(&unit),
             self.conf_path(service),
         ]
     }
 
+    /// Whether anything is at the host path `path`, a link included.
+    pub fn there(&self, path: impl AsRef<Path>) -> bool {
+        fs::symlink_metadata(self.host(path)).is_ok()
+    }
+
     /// `placed.json` as it is on disk.
     pub fn placed_record(&self) -> hostkeeper_placed::PlacedRecord {
-        hostkeeper_placed::Store::new(&*self.fs, self.scratch.path())
+        hostkeeper_placed::Store::new(&*self.placed_fs, roots().state_dir())
             .load()
             .expect("placed.json loads")
     }

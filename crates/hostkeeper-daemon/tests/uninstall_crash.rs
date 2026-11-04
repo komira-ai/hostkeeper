@@ -6,7 +6,7 @@ mod support;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use hostkeeper_daemon::{Outcome, Reply};
@@ -47,10 +47,7 @@ fn removed(log: &Log) -> BTreeSet<PathBuf> {
 /// Whether nothing of `web` is left on the host.
 fn gone(rig: &Rig) -> bool {
     let record = rig.placed_record();
-    let links = rig
-        .placed_paths("web")
-        .iter()
-        .any(|path| fs::symlink_metadata(path).is_ok());
+    let links = rig.placed_paths("web").iter().any(|path| rig.there(path));
     !rig.packages.join("web").exists()
         & !rig.state.join("web").exists()
         & !links
@@ -70,8 +67,8 @@ fn gone(rig: &Rig) -> bool {
 fn a_crash_during_uninstall_resumes_at_the_tombstone() {
     // How many writes a whole uninstall makes.
     let rig = installed("crash-count");
-    let counting = Arc::new(FaultFs::new(Path::new("/"), Log::new()));
-    let daemon = rig.daemon_on(rig.placement_on(counting.clone(), rig.units.clone()));
+    let counting = Arc::new(FaultFs::new(rig.scratch.path(), Log::new()));
+    let daemon = rig.daemon_with(counting.clone(), rig.units.clone());
     assert!(matches!(
         daemon.order(&uninstall("web", 1)),
         Reply::Finished {
@@ -86,8 +83,8 @@ fn a_crash_during_uninstall_resumes_at_the_tombstone() {
     for n in 1..=total {
         let rig = installed(&format!("crash-{n}"));
         let first = Log::new();
-        let failing = Arc::new(FaultFs::failing_at(Path::new("/"), n, first.clone()));
-        let dying = rig.daemon_on(rig.placement_on(failing, rig.units.clone()));
+        let failing = Arc::new(FaultFs::failing_at(rig.scratch.path(), n, first.clone()));
+        let dying = rig.daemon_with(failing, rig.units.clone());
         let reply = dying.order(&uninstall("web", 1));
         assert!(
             !matches!(
@@ -109,8 +106,8 @@ fn a_crash_during_uninstall_resumes_at_the_tombstone() {
         let hooks_before = rig.launcher.additive_runs().len();
 
         let second = Log::new();
-        let fs = Arc::new(FaultFs::new(Path::new("/"), second.clone()));
-        let restarted = rig.daemon_on(rig.placement_on(fs, rig.units.clone()));
+        let fs = Arc::new(FaultFs::new(rig.scratch.path(), second.clone()));
+        let restarted = rig.daemon_with(fs, rig.units.clone());
         fs::create_dir_all(&rig.state).expect("the state directory");
         let report = restarted.boot_pass().expect("the start pass");
         match &tombstone {

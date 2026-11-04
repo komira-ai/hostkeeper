@@ -76,6 +76,14 @@ impl UnitControl for Swapper {
         *self.inode.lock().unwrap_or_else(PoisonError::into_inner) = Some(ino);
         Ok(())
     }
+
+    fn start_unit(&self, unit: &str) -> Result<(), UnitControlError> {
+        panic!("removal starts no unit, and started {unit}")
+    }
+
+    fn is_active(&self, unit: &str) -> Result<bool, UnitControlError> {
+        panic!("removal asks after no unit, and asked after {unit}")
+    }
 }
 
 /// A unit manager that stops units and refuses to reload.
@@ -91,6 +99,14 @@ impl UnitControl for ReloadFails {
 
     fn stop_unit(&self, _unit: &str) -> Result<(), UnitControlError> {
         Ok(())
+    }
+
+    fn start_unit(&self, unit: &str) -> Result<(), UnitControlError> {
+        panic!("removal starts no unit, and started {unit}")
+    }
+
+    fn is_active(&self, unit: &str) -> Result<bool, UnitControlError> {
+        panic!("removal asks after no unit, and asked after {unit}")
     }
 }
 

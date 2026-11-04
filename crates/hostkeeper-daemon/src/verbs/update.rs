@@ -62,9 +62,9 @@ pub fn hooked(ctx: &Ctx, verb: HookedVerb, order: Hooked) -> Reply {
     reply
 }
 
-/// The answer to an order for a service whose lock is held: running, when it is held for this
-/// order, and `busy` otherwise.
-pub fn while_held(service: &ServiceName, held: &Held, holder: &Holder) -> Reply {
+/// The answer to an order for a service whose lock is held: a resend of the order that holds
+/// it runs nothing, any other is `busy`.
+pub(crate) fn while_held(service: &ServiceName, held: &Held, holder: &Holder) -> Reply {
     match held.holder == *holder {
         true => Reply::Running,
         false => Reply::refused(
@@ -164,7 +164,7 @@ fn steps(
         .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
     let previous = match verb {
         HookedVerb::Install => None,
-        HookedVerb::Update | HookedVerb::ForceRollback => {
+        HookedVerb::Update | HookedVerb::ForceRollback | HookedVerb::Force => {
             previous(ctx, service, &order.version, running)?
         }
     };

@@ -18,24 +18,27 @@ use std::sync::Arc;
 
 use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_placed::{Fs, Placer, Roots};
+use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
 use hostkeeper_steps::{Switch, Toward, UpdateOrder};
-
-use crate::executor::Placement;
 
 fn text(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-/// The switch of a first install on the host `placement` and `roots` describe; a manifest is
-/// read against the daemon's version `own`.
-pub fn first_install(placement: Placement, roots: Roots, own: HostkeeperVersion) -> Switch {
+/// The switch of a first install on the host of `roots`, through `fs` and `units`; a manifest
+/// is read against the daemon's version `own`.
+pub fn first_install(
+    roots: Roots,
+    fs: Arc<dyn Fs + Send + Sync>,
+    units: Arc<dyn UnitControl + Send + Sync>,
+    own: HostkeeperVersion,
+) -> Switch {
     Arc::new(move |toward: Toward, order: &UpdateOrder| {
-        let placer = Placer::new(roots.clone(), &*placement.fs, &*placement.units);
+        let placer = Placer::new(roots.clone(), &*fs, &*units);
         match (&order.previous, toward) {
             (Some(_), _) => Ok(()),
             (None, Toward::Target) => forward(&placer, order, &own),
-            (None, Toward::Back) => back(&placer, &*placement.fs, order),
+            (None, Toward::Back) => back(&placer, &*fs, order),
         }
     })
 }

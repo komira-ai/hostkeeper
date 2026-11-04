@@ -42,6 +42,8 @@ fn record() -> Record {
             reason: Some("remote_down".to_owned()),
         },
         order_try: None,
+        forced: false,
+        force: None,
     }
 }
 
@@ -311,6 +313,8 @@ fn the_record_on_disk_has_this_shape() {
             reason: Some("remote_down".to_owned()),
         },
         order_try: None,
+        forced: false,
+        force: None,
     };
     let json = r#"{"schema":1,"service":"svc","target_version":"2.0.0","artifact_digest":"abc","tarball_digest":"0123","previous_digest":"def","generation":7,"params":"/state/params.toml","step":"verify","attempt":2,"state":{"state":"pending"},"hook":"previous","progress":{"committed":true,"promotion_pending":false,"then":{"Deferred":{"retry_after_secs":null}},"retry":2,"verify_started":{"boot_id":"b","mono_secs":7},"watching":null,"reason":"remote_down"}}"#;
     assert_eq!(serde_json::to_string(&rec).unwrap(), json);

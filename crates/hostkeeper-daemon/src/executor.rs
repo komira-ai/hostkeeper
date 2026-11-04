@@ -3,9 +3,7 @@
 //! [`Daemon::status`] reports what the daemon holds for each service.
 //!
 //! The executor only dispatches: each verb is one module with one function taking the shared
-//! [`Ctx`] and its typed arguments, so that a later verb fills one file and one arm. The one
-//! check it makes itself is the lifecycle rule of `force` ([`checks::force_allowed`]), until the
-//! `force` verb applies it.
+//! [`Ctx`] and its typed arguments, so that a later verb fills one file and one arm.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -20,8 +18,8 @@ use hostkeeper_placed::{Fs, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::{
-    Clock, DeadMan, Finished, LaunchError, RecordStore, RunError, StepLauncher, StepRunner,
-    UpdateOrder, Watch,
+    Clock, DeadMan, Finished, ForceVerdict, LaunchError, RecordStore, RunError, StepLauncher,
+    StepRunner, UpdateOrder, Watch,
 };
 
 use crate::boot::{ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
@@ -30,6 +28,7 @@ use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT, Lifecycle};
 use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::packages::Packages;
+use crate::prune::Prune;
 use crate::refusal::Refusal;
 use crate::verb::Verb;
 use crate::verbs;
@@ -44,34 +43,32 @@ pub type StoreSeam = Arc<dyn Fn(&ServiceName, RecordStore) -> RecordStore + Send
 /// gives another sink ([`Daemon::with_alerts`]).
 pub type AlertSink = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// The host's side of placing a package (design section 4.7, "Placed paths"): where units are
-/// placed, the filesystem every placed path, `current` and a service's directories are read and
-/// written through, and the write side of the service manager. `placed.json` and its lock are
-/// in the directory above the packages directory (`/var/lib/hostkeeper` on a host).
-#[derive(Clone)]
-pub struct Placement {
-    /// Where units are placed: `/etc/systemd/system` on a Linux host.
-    pub unit_dir: PathBuf,
-    /// The host's filesystem with every path spelt as the host spells it (`RealFs` at `/` on a
-    /// host), so that the daemon's own directories are spelt the same in it.
-    pub fs: Arc<dyn Fs + Send + Sync>,
-    /// `daemon-reload` and the stop of a unit.
-    pub units: Arc<dyn UnitControl + Send + Sync>,
-}
-
 /// What the daemon runs on: the ports of everything privileged, and the clock.
 pub struct Ports {
     /// Runs one step of a hook.
     pub launcher: Arc<dyn StepLauncher>,
     /// Fetches, verifies, unpacks and seals packages.
     pub packages: Arc<dyn Packages>,
-    /// Places packages into the system, and removes what an uninstall removes.
-    pub placement: Placement,
     /// Monotonic seconds and the boot id; nothing the daemon decides reads the wall clock.
     pub clock: Arc<dyn Clock>,
     /// How often each service's dead-man looks at its running step, in seconds; `None` starts
     /// none (a test that drives the bounds itself).
     pub deadman_poll_secs: Option<u64>,
+    /// The service manager: the units a `force` stops, starts and asks after, and
+    /// `daemon-reload`.
+    pub units: Arc<dyn UnitControl + Send + Sync>,
+    /// Where placed-path linking works, and the filesystem it goes through.
+    pub placement: Placement,
+    /// Step 18 of a `force`: the prune of the versions a switch of `current` leaves behind.
+    pub prune: Arc<dyn Prune>,
+}
+
+/// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
+/// host names them, and the filesystem every path is read and written through. The packages
+/// directory of `roots`, as `fs` reaches it, is [`Dirs::packages`].
+pub struct Placement {
+    pub roots: Roots,
+    pub fs: Arc<dyn Fs + Send + Sync>,
 }
 
 /// Where the daemon keeps and finds things.
@@ -93,8 +90,10 @@ pub struct Ctx {
     pub own_version: HostkeeperVersion,
     pub launcher: Arc<dyn StepLauncher>,
     pub packages: Arc<dyn Packages>,
-    pub placement: Placement,
     pub clock: Arc<dyn Clock>,
+    pub units: Arc<dyn UnitControl + Send + Sync>,
+    pub placement: Placement,
+    pub prune: Arc<dyn Prune>,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
@@ -104,6 +103,8 @@ pub struct Ctx {
     /// How the last uninstall of each service ended, while the daemon runs: what `Status` reports
     /// for a service being removed.
     uninstalls: Mutex<BTreeMap<String, LastUninstall>>,
+    /// The record lock of each service's state directory, shared by every store made for it.
+    record_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
     stores: Option<StoreSeam>,
     alerts: AlertSink,
     deadman_poll_secs: Option<u64>,
@@ -115,19 +116,6 @@ impl Ctx {
     /// The state directory of `service`.
     pub fn service_dir(&self, service: &ServiceName) -> PathBuf {
         self.dirs.state.join(service.as_str())
-    }
-
-    /// The directories of placed-path linking: `placed.json` and its lock in the directory above
-    /// the packages directory, units in the placement's unit directory.
-    pub fn roots(&self) -> Roots {
-        let packages = &self.dirs.packages;
-        let state = packages.parent().unwrap_or(packages.as_path());
-        Roots::new(state, &self.placement.unit_dir, packages)
-    }
-
-    /// The placer of this host.
-    pub fn placer(&self) -> Placer<'_> {
-        Placer::new(self.roots(), &*self.placement.fs, &*self.placement.units)
     }
 
     /// Where `service` is in its life (design section 6.1); `Err` when `placed.json` cannot be
@@ -198,13 +186,30 @@ impl Ctx {
         uninstalls.get(service.as_str()).cloned()
     }
 
-    /// The step record store of `service`.
+    /// The step record store of `service`, with the record lock every store of the service
+    /// shares: the runner's writes and a `force`'s flag on the record take turns.
     pub fn store(&self, service: &ServiceName) -> RecordStore {
-        let store = RecordStore::new(&self.service_dir(service));
+        let lock = {
+            let mut locks = self
+                .record_locks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            Arc::clone(locks.entry(service.to_string()).or_default())
+        };
+        let store = RecordStore::new(&self.service_dir(service)).with_lock(lock);
         match &self.stores {
             Some(seam) => seam(service, store),
             None => store,
         }
+    }
+
+    /// The placed-path linker of this host.
+    pub fn placer(&self) -> Placer<'_> {
+        Placer::new(
+            self.placement.roots.clone(),
+            &*self.placement.fs,
+            &*self.units,
+        )
     }
 
     /// Logs an alert: error level, with its `alert=` field.
@@ -220,8 +225,12 @@ impl Ctx {
         drop(self.watchers.stop(service));
         let mut runners = self.runners.lock().unwrap_or_else(PoisonError::into_inner);
         let made = runners.entry(service.to_string()).or_insert_with(|| {
-            let switch =
-                crate::place::first_install(self.placement.clone(), self.roots(), self.own_version);
+            let switch = crate::place::first_install(
+                self.placement.roots.clone(),
+                Arc::clone(&self.placement.fs),
+                Arc::clone(&self.units),
+                self.own_version,
+            );
             let runner = StepRunner::new(
                 Arc::clone(&self.launcher),
                 Arc::clone(&self.clock),
@@ -372,6 +381,17 @@ impl RecordState {
     }
 }
 
+/// How a `force` ended, with the order it answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForcedResult {
+    /// The coordinator's id of the order, when it gave one.
+    pub order_id: Option<String>,
+    pub order_try: u64,
+    /// The version the force switched to.
+    pub target: String,
+    pub verdict: ForceVerdict,
+}
+
 /// What the daemon holds about one service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceStatus {
@@ -398,6 +418,23 @@ impl ServiceStatus {
             RecordState::Finished(rec) => checks::finished_of(rec),
             _ => None,
         }
+    }
+
+    /// The verdict of the last order, when it was a `force` that ended (design section 5.6, step
+    /// 17): what the heartbeat reports as a forced verdict (`UpdateResult.forced`), with the
+    /// order's id and try, beside [`ServiceStatus::last_result`]. The record keeps it until the
+    /// next order of the service, so every read until then returns it again.
+    pub fn forced(&self) -> Option<ForcedResult> {
+        let RecordState::Finished(rec) = &self.record else {
+            return None;
+        };
+        let force = rec.force.as_ref()?;
+        Some(ForcedResult {
+            order_id: force.order_id.clone(),
+            order_try: force.order_try,
+            target: force.target_version.clone(),
+            verdict: force.verdict?,
+        })
     }
 
     /// Whether a step of the service is running: an order holds its lock, or its record holds
@@ -445,14 +482,17 @@ impl Daemon {
                 own_version,
                 launcher: ports.launcher,
                 packages: ports.packages,
-                placement: ports.placement,
                 clock: ports.clock,
+                units: ports.units,
+                placement: ports.placement,
+                prune: ports.prune,
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,
                 watchers: Watchers::default(),
                 runners: Mutex::default(),
                 uninstalls: Mutex::default(),
+                record_locks: Mutex::default(),
                 stores: None,
                 alerts: Arc::new(|line: &str| eprintln!("{line}")),
                 deadman_poll_secs: ports.deadman_poll_secs,
@@ -530,10 +570,7 @@ impl Daemon {
             Verb::ForceRollback(order) => verbs::force_rollback::run(ctx, order),
             Verb::Install(order) => verbs::install::run(ctx, order),
             Verb::Uninstall(order) => verbs::uninstall::run(ctx, order),
-            Verb::Force(order) => match force_check(ctx, &order.package.service) {
-                Ok(()) => verbs::force::run(ctx, order),
-                Err(refused) => refused,
-            },
+            Verb::Force(order) => verbs::force::run(ctx, order),
             Verb::Abort(service) => verbs::abort::run(ctx, service),
             Verb::ClearHalt {
                 service,
@@ -600,16 +637,4 @@ impl Drop for Daemon {
     fn drop(&mut self) {
         self.ctx.stop.store(true, Ordering::Release);
     }
-}
-
-/// The lifecycle rule of `force` ([`checks::force_allowed`]), applied before the verb: a force
-/// of a service with no release installed, one being installed or one being uninstalled is
-/// refused, and nothing changes. A `placed.json` that cannot be read refuses it too.
-fn force_check(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
-    let lifecycle = ctx
-        .lifecycle(service)
-        .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
-    checks::force_allowed(lifecycle).map_err(|refusal| {
-        Reply::refused(refusal, format!("force of {service}: it is {lifecycle:?}"))
-    })
 }

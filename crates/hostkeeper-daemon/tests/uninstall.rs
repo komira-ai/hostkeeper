@@ -50,7 +50,7 @@ fn gone(rig: &Rig, service: &str) -> bool {
     let placed = rig
         .placed_paths(service)
         .iter()
-        .any(|path| fs::symlink_metadata(path).is_ok() | record.paths.contains_key(path));
+        .any(|path| rig.there(path) | record.paths.contains_key(path));
     !rig.packages.join(service).exists()
         & !rig.state.join(service).join("step-record.json").exists()
         & !placed
@@ -59,16 +59,11 @@ fn gone(rig: &Rig, service: &str) -> bool {
 }
 
 /// The events of the rig's placement log as a test reads them: each write of `placed.json` as
-/// `placed.json`, each removal as `remove <path below the scratch directory>` (a directory with
-/// a `/`), each stop and reload, each mark; the temporary files and fsyncs are left out.
+/// `placed.json`, each removal as `remove <host path without its leading />` (a directory with
+/// a `/`), each stop and reload, each mark; the temporary files, fsyncs, starts and queries of
+/// units are left out.
 fn effects(rig: &Rig) -> Vec<String> {
-    let root = rig.scratch.path();
-    let below = |path: &Path| {
-        path.strip_prefix(root)
-            .unwrap_or(path)
-            .display()
-            .to_string()
-    };
+    let below = |path: &Path| path.strip_prefix("/").unwrap_or(path).display().to_string();
     rig.placed_log
         .events()
         .into_iter()
@@ -81,7 +76,7 @@ fn effects(rig: &Rig) -> Vec<String> {
             Event::Unit(UnitCall::Stop(unit)) => Some(format!("stop {unit}")),
             Event::Unit(UnitCall::DaemonReload) => Some("daemon-reload".to_owned()),
             Event::Mark(mark) => Some(mark),
-            Event::Fs(_) => None,
+            Event::Fs(_) | Event::Unit(_) => None,
         })
         .collect()
 }
@@ -108,8 +103,8 @@ fn uninstall_runs_the_sequence_in_the_documented_order() {
     let wants = format!("units/{TARGET}.wants/web.service");
     let conf = rig
         .conf_path("web")
-        .strip_prefix(rig.scratch.path())
-        .expect("below the scratch directory")
+        .strip_prefix("/")
+        .expect("absolute")
         .display()
         .to_string();
     let version = "packages/web/1.0.0";
@@ -130,8 +125,9 @@ fn uninstall_runs_the_sequence_in_the_documented_order() {
         "placed.json".to_owned(),
         "daemon-reload".to_owned(),
         "placed.json".to_owned(),
-        // 6. Last: `current`, the seal, the version directory, the package directory, the step
-        // record and its directory; then the tombstone goes.
+        // 6. Last: `current`, the seal, the version directory, the package directory; then the
+        // step record and its directory (the daemon's own, not through the placement's
+        // filesystem); then the tombstone goes.
         "remove packages/web/current".to_owned(),
         "remove packages/web/1.0.0.seal".to_owned(),
         format!("remove {version}/bin/hook"),
@@ -143,11 +139,10 @@ fn uninstall_runs_the_sequence_in_the_documented_order() {
         format!("remove {version}/units/"),
         format!("remove {version}/"),
         "remove packages/web/".to_owned(),
-        "remove state/web/step-record.json".to_owned(),
-        "remove state/web/".to_owned(),
         "placed.json".to_owned(),
     ];
     assert_eq!(effects(&rig), want);
+    assert!(!rig.state.join("web").exists());
     assert!(gone(&rig, "web"));
     let ran = rig.launcher.additive_runs();
     assert_eq!(ran.len(), 1);
@@ -183,11 +178,9 @@ fn a_stuck_unit_ends_failed_unit_stuck_with_nothing_removed() {
     let rig = Rig::new("uninstall-stuck");
     installed(&rig, &rig.daemon(), "web", "1.0.0");
     let before = snapshot(rig.scratch.path());
-    let stuck = Arc::new(FakeUnitControl::refusing_to_stop(
-        rig.placed_log.clone(),
-        "web.service",
-    ));
-    let daemon = rig.daemon_on(rig.placement_on(rig.fs.clone(), stuck));
+    let stuck = Arc::new(FakeUnitControl::new(rig.placed_log.clone()));
+    stuck.fail_stop("web.service");
+    let daemon = rig.daemon_with(rig.placed_fs.clone(), stuck);
     assert_eq!(
         daemon.order(&uninstall("web", 1)),
         finished(
@@ -201,7 +194,7 @@ fn a_stuck_unit_ends_failed_unit_stuck_with_nothing_removed() {
     assert!(rig.launcher.additive_runs().is_empty());
     assert!(rig.placed_record().uninstalling.contains_key("web"));
     // Only `placed.json` changed: it holds the tombstone.
-    let placed = rig.scratch.path().join("placed.json");
+    let placed = rig.host("/placed/placed.json");
     let changed: Vec<PathBuf> = snapshot(rig.scratch.path())
         .into_iter()
         .filter(|entry| !before.contains(entry))
@@ -291,7 +284,7 @@ fn uninstall_hook_exit_codes_map_to_verdicts() {
             "{service}"
         );
         assert!(
-            rig.placed_paths(service).iter().all(|p| p.exists()),
+            rig.placed_paths(service).iter().all(|p| rig.there(p)),
             "{service}"
         );
     }
@@ -399,6 +392,7 @@ fn uninstall_never_touches_the_services_data_directory() {
             "the service's own\n"
         );
     }
+    let (data_host, config_host) = (Path::new("/var/lib/web"), Path::new("/etc/web"));
     let touched: Vec<Event> = rig
         .placed_log
         .events()
@@ -421,7 +415,7 @@ fn uninstall_never_touches_the_services_data_directory() {
             };
             paths
                 .iter()
-                .any(|p| p.starts_with(&data) | p.starts_with(&config))
+                .any(|p| p.starts_with(data_host) | p.starts_with(config_host))
         })
         .collect();
     assert_eq!(touched, Vec::<Event>::new());
@@ -469,7 +463,7 @@ fn uninstall_leaves_other_services_placed_paths_and_versions_alone() {
             .any(|(_, entry)| entry.kind == PathKind::WantsLink)
     );
     for path in rig.placed_paths("api") {
-        assert!(fs::symlink_metadata(&path).is_ok(), "{}", path.display());
+        assert!(rig.there(&path), "{}", path.display());
     }
     assert_eq!(snapshot(&api_dir), api_before);
     assert_eq!(

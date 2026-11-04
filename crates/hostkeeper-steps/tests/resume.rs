@@ -53,6 +53,8 @@ fn record(step: Step, state: State, committed: bool, watching: bool) -> Record {
             ..Progress::default()
         },
         order_try: Some(1),
+        forced: false,
+        force: None,
     }
 }
 
