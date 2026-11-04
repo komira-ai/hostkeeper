@@ -1,6 +1,6 @@
 //! Services as data: the file that defines them, and the decision across two services.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ use hostkeeper_wire::wire::{MAX_SERVICE_NAME, MAX_SERVICES, Reply};
 use crate::decide::decide_in;
 use crate::desired::Desired;
 use crate::fleet::{Fleet, ORDER_AGE};
-use crate::services::{RoleDef, Services, ServicesError};
+use crate::services::{Services, ServicesError, VersionScheme};
 use crate::testutil::{beat, desired, id, kbf_def, kbf_services, role, scratch, updating, version};
 
 const NOW: Duration = Duration::from_secs(1_000);
@@ -17,16 +17,12 @@ const NOW: Duration = Duration::from_secs(1_000);
 const TWO: &str = r#"
 [[service]]
 name = "server"
-[service.roles.daemon]
-max_updating = 1
-min_up = 0
+roles = ["daemon"]
 
 [[service]]
 name = "agent"
-after = ["server"]
-[service.roles.daemon]
-max_updating = 2
-min_up = 0
+roles = ["daemon", "storage"]
+priority = 3
 "#;
 
 fn update(target: &str) -> Reply {
@@ -50,44 +46,41 @@ fn refusal(text: &str) -> String {
     Services::parse(text).expect_err("refused").to_string()
 }
 
+/// Proves: kbf's definition is the recorded file's data: its four roles and nothing else.
+///
 /// Catches: a service built in to the coordinator: nothing is defined by default or by an
-/// empty file, and kbf's rules are the recorded file's data: its definition names all four
-/// roles, makes only the frontend never the last one up, has the frontend wait for the other
-/// three roles and nothing else wait for anything, and requires the two minimums.
+/// empty file, and kbf's definition names all four roles and no other setting.
 #[test]
 fn no_service_is_built_in_and_kbf_is_data() {
     assert_eq!(Services::default().names().count(), 0);
     assert_eq!(Services::parse("").expect("empty"), Services::default());
     let kbf = kbf_def();
     assert_eq!(kbf.name, "kbf");
-    assert!(kbf.after.is_empty());
-    assert_eq!(kbf.require_min_up, ["storage", "frontend"]);
-    assert_eq!(kbf.roles.len(), 4);
-    for name in ["storage", "daemon", "mac-daemon"] {
-        assert_eq!(kbf.roles[name], RoleDef::plain(), "{name}");
-    }
-    let frontend = &kbf.roles["frontend"];
-    assert!(frontend.never_last);
-    assert_eq!(frontend.after, ["storage", "daemon", "mac-daemon"]);
+    assert_eq!(kbf.version_scheme, VersionScheme::Semver);
+    assert_eq!(
+        kbf.roles,
+        BTreeSet::from(["frontend", "storage", "daemon", "mac-daemon"].map(str::to_owned))
+    );
     assert_eq!(kbf_services().get("kbf"), Some(&kbf));
 }
 
-/// Catches: a services file that is read wrongly: the two services of the file are defined
-/// with their limits, roles and `after`, and only those (no kbf); and a file that cannot be
-/// read is refused.
+/// Catches: a rollout file that is read wrongly: the two services of the file are defined
+/// with their roles and priority, and only those (no kbf); and a file that cannot be read is
+/// refused.
 #[test]
-fn a_services_file_defines_further_services() {
+fn a_rollout_file_defines_further_services() {
     let s = Services::parse(TWO).expect("parsed");
     let agent = s.get("agent").expect("defined");
-    assert_eq!(agent.after, ["server"]);
-    let daemon = &agent.roles["daemon"];
-    assert_eq!((daemon.max_updating, daemon.min_up), (Some(2), Some(0)));
-    assert!(!daemon.never_last);
+    assert_eq!(
+        agent.roles,
+        BTreeSet::from(["daemon".to_owned(), "storage".to_owned()])
+    );
+    assert_eq!(agent.priority, 3);
     assert!(s.get("server").is_some());
     assert!(s.get("kbf").is_none());
     assert_eq!(s.names().collect::<Vec<_>>(), ["agent", "server"]);
 
-    let dir = scratch("services-file");
+    let dir = scratch("rollout-file");
     let path = dir.path().join("services.toml");
     std::fs::write(&path, TWO).expect("written");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
@@ -100,7 +93,7 @@ fn a_services_file_defines_further_services() {
 /// Catches: a service name using digits or `-` being refused, as if names were letters only.
 #[test]
 fn a_service_name_may_hold_digits_and_hyphens() {
-    let text = "[[service]]\nname = \"web-2\"\n[service.roles.daemon]\nmin_up = 0\n";
+    let text = "[[service]]\nname = \"web-2\"\nroles = [\"daemon\"]\n";
     assert!(
         Services::parse(text)
             .expect("parsed")
@@ -109,14 +102,12 @@ fn a_service_name_may_hold_digits_and_hyphens() {
     );
 }
 
-/// Catches: a services file that is accepted although it cannot work: each refusal names
-/// what is wrong (not TOML or an unknown key, a bad or repeated name, no roles, a role that
-/// is no role name, a count over the limit, a role waiting for a role the service lacks, a
-/// `require_min_up` naming a role the service lacks, an `after` that names an unknown or
-/// later service, and a CI service that does not exist).
+/// Catches: a rollout file that is accepted although it cannot work: each refusal names what
+/// is wrong (not TOML or an unknown key, a bad or repeated name, no roles, a role that is no
+/// role name or is listed twice, and a CI service that does not exist).
 #[test]
-fn a_services_file_that_cannot_work_is_refused() {
-    let role = "[service.roles.daemon]\n";
+fn a_rollout_file_that_cannot_work_is_refused() {
+    let role = "roles = [\"daemon\"]\n";
     let svc = |name: &str, extra: &str, roles: &str| {
         format!("[[service]]\nname = \"{name}\"\n{extra}\n{roles}")
     };
@@ -140,77 +131,145 @@ fn a_services_file_that_cannot_work_is_refused() {
     let twice = format!("{}{}", svc("a", "", role), svc("a", "", role));
     assert!(refusal(&twice).contains("twice"));
     assert!(refusal(&svc("a", "", "")).contains("no roles"));
-    assert!(refusal(&svc("a", "", "[service.roles.Cook]\n")).contains("Cook is not a role name"));
-    assert!(refusal(&svc("a", "", "[service.roles.a--b]\n")).contains("a--b is not a role name"));
+    assert!(refusal(&svc("a", "", "roles = [\"Cook\"]\n")).contains("Cook is not a role name"));
+    assert!(refusal(&svc("a", "", "roles = [\"a--b\"]\n")).contains("a--b is not a role name"));
     // Roles are open: any well-formed name is a role.
-    Services::parse(&svc(
-        "a",
-        "",
-        "[service.roles.cook]\n[service.roles.cache]\n",
-    ))
-    .expect("roles are open");
+    Services::parse(&svc("a", "", "roles = [\"cook\", \"cache\"]\n")).expect("roles are open");
     assert!(
-        refusal(&svc("a", "", "[service.roles.daemon]\nmin_up = 10001\n")).contains("over 10000")
+        refusal(&svc("a", "", "roles = [\"daemon\", \"daemon\"]\n"))
+            .contains("roles lists daemon twice")
     );
-    assert!(
-        refusal(&svc(
-            "a",
-            "",
-            "[service.roles.daemon]\nmax_updating = 10001\n"
-        ))
-        .contains("over 10000")
-    );
-    assert!(
-        refusal(&svc(
-            "a",
-            "",
-            "[service.roles.daemon]\nafter = [\"Cook\"]\n"
-        ))
-        .contains("Cook is not a role name")
-    );
-    assert!(
-        refusal(&svc(
-            "a",
-            "",
-            "[service.roles.daemon]\nafter = [\"storage\"]\n"
-        ))
-        .contains("a role it does not have")
-    );
-    assert!(refusal(&svc("a", "after = [\"b\"]", role)).contains("not defined earlier"));
-    assert!(
-        refusal(&svc("a", "require_min_up = [\"storage\"]", role))
-            .contains("require_min_up names storage, a role it does not have")
-    );
-    Services::parse(&svc("a", "require_min_up = [\"daemon\"]", role)).expect("a role it has");
-    let later = format!(
-        "{}{}",
-        svc("a", "after = [\"b\"]", role),
-        svc("b", "", role)
-    );
-    assert!(refusal(&later).contains("defined earlier"));
     // Which services a token may set is the allow-list's: the old key is refused by name.
     assert!(
         refusal(&format!("ci_services = [\"kbf\"]\n{}", svc("a", "", role)))
             .contains("ci_services")
     );
-    // `kbf` may be waited for only as any service may: when the file defines it earlier.
-    let after_kbf = svc(
-        "a",
-        "after = [\"kbf\"]",
-        "[service.roles.daemon]\nafter = []\n",
-    );
-    assert!(refusal(&after_kbf).contains("not defined earlier"));
-    Services::parse(&format!("{}{after_kbf}", svc("kbf", "", role))).expect("defined earlier");
     Services::parse(&svc("js-server2", "", role)).expect("letters, digits and - make a name");
 }
 
-/// Catches: `after` not holding the second service until the first has converged: the agent
-/// host is told nothing while a server host is behind, while it is updating, and while a
-/// server host is ordered; once every live server host runs the desired version it is told
-/// to update. A silent server host does not hold it, and a first service with no desired
-/// state holds nothing.
+/// Proves: a key an earlier build read and the rollout file no longer has is refused with its
+/// name, never ignored, and the table form of `roles` is refused with the text that says what
+/// to write.
+///
+/// Catches: a removed key silently dropped, which would leave an operator believing a limit
+/// still holds.
 #[test]
-fn a_service_waits_for_the_services_it_comes_after() {
+fn each_removed_key_is_refused_by_name() {
+    for key in [
+        "after",
+        "require_min_up",
+        "max_updating",
+        "min_up",
+        "never_last",
+    ] {
+        let text = format!("[[service]]\nname = \"a\"\nroles = [\"daemon\"]\n{key} = 1\n");
+        let why = Services::parse(&text).expect_err("refused");
+        assert!(matches!(why, ServicesError::Parse(_)), "{key}");
+        assert!(
+            why.to_string().contains(&format!("unknown field `{key}`")),
+            "{key}: {why}"
+        );
+    }
+    // The table form of roles, with each key an earlier build read in it.
+    for key in ["max_updating", "min_up", "never_last", "after"] {
+        let text = format!("[[service]]\nname = \"a\"\n[service.roles.daemon]\n{key} = 1\n");
+        let why = Services::parse(&text).expect_err("refused");
+        assert!(matches!(why, ServicesError::Invalid(_)), "{key}");
+        let said = why.to_string();
+        assert!(
+            said.contains("roles must be a list of role names"),
+            "{key}: {said}"
+        );
+        assert!(said.contains("of type table"), "{key}: {said}");
+        assert!(said.contains(key), "{key}: {said}");
+    }
+    assert_eq!(
+        refusal("[[service]]\nname = \"a\"\n[service.roles.daemon]\n"),
+        "services: a: roles must be a list of role names, roles = [\"daemon\"], not a value of \
+         type table; the [service.roles.<name>] tables, with their max_updating, min_up, \
+         never_last and after keys, are no longer read"
+    );
+}
+
+/// Proves: `version_scheme` is optional, `semver` is its default and its only value, and any
+/// other value is refused naming the key.
+///
+/// Catches: a scheme the coordinator cannot order versions by being accepted, so that a
+/// release would be compared by the wrong rule.
+#[test]
+fn version_scheme_defaults_to_semver_and_any_other_value_is_refused() {
+    let role = "roles = [\"daemon\"]\n";
+    let svc = |extra: &str| format!("[[service]]\nname = \"a\"\n{extra}\n{role}");
+    let named = Services::parse(&svc("version_scheme = \"semver\"")).expect("semver");
+    let absent = Services::parse(&svc("")).expect("no scheme");
+    assert_eq!(named, absent);
+    assert_eq!(
+        absent.get("a").expect("defined").version_scheme,
+        VersionScheme::Semver
+    );
+    assert_eq!(VersionScheme::default(), VersionScheme::Semver);
+    assert_eq!(
+        refusal(&svc("version_scheme = \"calver\"")),
+        "services: a: version_scheme is \"calver\", and \"semver\" is the only scheme"
+    );
+    assert_eq!(
+        refusal(&svc("version_scheme = \"\"")),
+        "services: a: version_scheme is \"\", and \"semver\" is the only scheme"
+    );
+    let why = Services::parse(&svc("version_scheme = 2")).expect_err("refused");
+    assert!(matches!(why, ServicesError::Parse(_)));
+    assert!(why.to_string().contains("version_scheme"), "{why}");
+}
+
+/// Proves: `roles` is a list of role names: any other value is refused with the type it was,
+/// an empty or missing list is a service with no roles, and the roles come back in the order
+/// of the desired-state format first and by name after.
+///
+/// Catches: a string, a mixed array or a table read as roles, and a role order that follows
+/// the file and not the format.
+#[test]
+fn roles_are_a_list_of_role_names() {
+    let svc = |roles: &str| format!("[[service]]\nname = \"a\"\n{roles}");
+    for (roles, kind) in [
+        ("roles = \"daemon\"\n", "string"),
+        ("roles = [\"daemon\", 3]\n", "array"),
+        ("roles = { daemon = 1 }\n", "table"),
+    ] {
+        let why = Services::parse(&svc(roles)).expect_err("refused");
+        assert!(matches!(why, ServicesError::Invalid(_)), "{roles}");
+        let said = why.to_string();
+        assert!(
+            said.contains("roles must be a list of role names"),
+            "{roles}: {said}"
+        );
+        assert!(said.contains(&format!("of type {kind}")), "{roles}: {said}");
+    }
+    assert!(refusal(&svc("roles = []\n")).contains("has no roles"));
+    assert!(refusal(&svc("")).contains("has no roles"));
+    let names = |roles: &str| {
+        let services = Services::parse(&svc(roles)).expect("parsed");
+        let def = services.get("a").expect("defined");
+        def.role_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names("roles = [\"storage\", \"daemon\"]\n"),
+        ["storage", "daemon"]
+    );
+    assert_eq!(
+        names("roles = [\"zeta\", \"alpha\", \"daemon\", \"frontend\"]\n"),
+        ["frontend", "daemon", "alpha", "zeta"]
+    );
+}
+
+/// Catches: `after` read again: the second service is held for the first. The agent host is
+/// told to update while a server host is behind, and with no desired state for the server; it
+/// is told nothing only while a server host is updating (the one live update), and a silent
+/// server host does not hold it.
+#[test]
+fn a_service_waits_for_no_other_service() {
     let s = Services::parse(TWO).expect("parsed");
     let want = desired("2.0", 0, 0);
     let w = wants(&[("server", &want), ("agent", &want)]);
@@ -227,7 +286,7 @@ fn a_service_waits_for_the_services_it_comes_after() {
         f
     };
     let behind = fleet_of(beat("1.0"), 1_000);
-    assert_eq!(ask(&s, &w, &behind, "agent", "a1"), Reply::Nothing);
+    assert_eq!(ask(&s, &w, &behind, "agent", "a1"), update("2.0"));
     assert_eq!(ask(&s, &w, &behind, "server", "s1"), update("2.0"));
     let busy = fleet_of(updating(beat("1.0"), "2.0"), 1_000);
     assert_eq!(ask(&s, &w, &busy, "agent", "a1"), Reply::Nothing);
@@ -245,8 +304,8 @@ fn a_service_waits_for_the_services_it_comes_after() {
 /// the host's heartbeat of the other.
 #[test]
 fn a_host_updates_one_service_at_a_time() {
-    let text = "[[service]]\nname = \"one\"\n[service.roles.daemon]\nmin_up = 0\n\
-                [[service]]\nname = \"two\"\n[service.roles.daemon]\nmin_up = 0\n";
+    let text = "[[service]]\nname = \"one\"\nroles = [\"daemon\"]\n\
+                [[service]]\nname = \"two\"\nroles = [\"daemon\"]\n";
     let s = Services::parse(text).expect("parsed");
     let want = desired("2.0", 0, 0);
     let w = wants(&[("one", &want), ("two", &want)]);
@@ -301,25 +360,19 @@ fn a_host_updates_one_service_at_a_time() {
     assert_eq!(ask(&s, &w, &f, "two", "h"), update("2.0"));
 }
 
-/// Catches: the lone-host guard not following the definition: a lone host of a role with
-/// `min_up` 0 is ordered; with `min_up` 1 it is not until a second host is up; a role the
-/// service lacks, a service with no definition and one with no desired state order nothing.
+/// Catches: a lone host refused (no minimum is read), a role the service lacks ordered, and a
+/// service with no definition or no desired state ordered: a host is ordered only for a
+/// service that runs on its role.
 #[test]
-fn a_lone_host_is_ordered_only_when_the_definition_allows_it() {
-    let text = "[[service]]\nname = \"loose\"\n[service.roles.daemon]\nmin_up = 0\n\
-                [[service]]\nname = \"tight\"\n[service.roles.daemon]\nmin_up = 1\n";
+fn a_host_is_ordered_only_for_a_service_that_runs_on_its_role() {
+    let text = "[[service]]\nname = \"loose\"\nroles = [\"daemon\"]\n";
     let s = Services::parse(text).expect("parsed");
     let want = desired("2.0", 0, 0);
-    let w = wants(&[("loose", &want), ("tight", &want)]);
+    let w = wants(&[("loose", &want)]);
     let mut f = Fleet::new(Duration::ZERO);
-    for service in ["loose", "tight"] {
-        f.record_in(service, id("d1"), role("daemon"), beat("1.0"), NOW);
-        f.record_in(service, id("m1"), role("mac-daemon"), beat("1.0"), NOW);
-    }
+    f.record_in("loose", id("d1"), role("daemon"), beat("1.0"), NOW);
+    f.record_in("loose", id("m1"), role("mac-daemon"), beat("1.0"), NOW);
     assert_eq!(ask(&s, &w, &f, "loose", "d1"), update("2.0"));
-    assert_eq!(ask(&s, &w, &f, "tight", "d1"), Reply::Nothing);
-    f.record_in("tight", id("d2"), role("daemon"), beat("1.0"), NOW);
-    assert_eq!(ask(&s, &w, &f, "tight", "d1"), update("2.0"));
     assert_eq!(
         ask(&s, &w, &f, "loose", "m1"),
         Reply::Nothing,
@@ -329,55 +382,11 @@ fn a_lone_host_is_ordered_only_when_the_definition_allows_it() {
     assert_eq!(ask(&s, &BTreeMap::new(), &f, "loose", "d1"), Reply::Nothing);
 }
 
-/// Catches: a definition's limits being ignored: `max_updating` of the definition, not the
-/// desired state's, caps the role; `never_last` keeps one host up although `min_up` is 0;
-/// and a role waits for the roles its definition names.
-#[test]
-fn a_definitions_limits_and_waits_decide_over_the_desired_state() {
-    let text = "[[service]]\nname = \"svc\"\n\
-        [service.roles.daemon]\nmax_updating = 1\nmin_up = 0\nnever_last = true\n\
-        [service.roles.storage]\nmax_updating = 1\nafter = [\"daemon\"]\nmin_up = 0\n";
-    let s = Services::parse(text).expect("parsed");
-    let mut want = desired("2.0", 0, 0);
-    want.max_updating.set("daemon", 4);
-    let w = wants(&[("svc", &want)]);
-    let mut f = Fleet::new(Duration::ZERO);
-    f.record_in("svc", id("d1"), role("daemon"), beat("1.0"), NOW);
-    assert_eq!(
-        ask(&s, &w, &f, "svc", "d1"),
-        Reply::Nothing,
-        "never the last"
-    );
-    f.record_in(
-        "svc",
-        id("d2"),
-        role("daemon"),
-        updating(beat("1.0"), "2.0"),
-        NOW,
-    );
-    f.record_in("svc", id("d3"), role("daemon"), beat("1.0"), NOW);
-    assert_eq!(
-        ask(&s, &w, &f, "svc", "d3"),
-        Reply::Nothing,
-        "the definition allows one at a time"
-    );
-    f.record_in("svc", id("d2"), role("daemon"), beat("2.0"), NOW);
-    f.record_in("svc", id("t1"), role("storage"), beat("1.0"), NOW);
-    assert_eq!(
-        ask(&s, &w, &f, "svc", "t1"),
-        Reply::Nothing,
-        "storage waits for daemons"
-    );
-    f.record_in("svc", id("d1"), role("daemon"), beat("2.0"), NOW);
-    f.record_in("svc", id("d3"), role("daemon"), beat("2.0"), NOW);
-    assert_eq!(ask(&s, &w, &f, "svc", "t1"), update("2.0"));
-}
-
-/// Catches: the services file's name check drifting from the wire's: a name of exactly
+/// Catches: the rollout file's name check drifting from the wire's: a name of exactly
 /// `MAX_SERVICE_NAME` bytes is defined, one byte more is refused and the refusal says why.
 #[test]
 fn a_service_name_has_the_wires_length_cap() {
-    let role = "[service.roles.daemon]\n";
+    let role = "roles = [\"daemon\"]\n";
     let svc = |name: &str| format!("[[service]]\nname = \"{name}\"\n{role}");
     Services::parse(&svc(&"a".repeat(MAX_SERVICE_NAME))).expect("at the cap");
     let why = refusal(&svc(&"a".repeat(MAX_SERVICE_NAME + 1)));
@@ -387,62 +396,13 @@ fn a_service_name_has_the_wires_length_cap() {
 /// Catches: no cap on the services a file defines, or one off by one: exactly
 /// `MAX_SERVICES` are defined, one more is refused.
 #[test]
-fn a_services_file_defines_at_most_the_most_services() {
+fn a_rollout_file_defines_at_most_the_most_services() {
     let file = |n: usize| {
         (0..n)
-            .map(|i| format!("[[service]]\nname = \"svc-{i}\"\n[service.roles.daemon]\n"))
+            .map(|i| format!("[[service]]\nname = \"svc-{i}\"\nroles = [\"daemon\"]\n"))
             .collect::<Vec<_>>()
             .concat()
     };
     Services::parse(&file(MAX_SERVICES)).expect("at the cap");
     assert!(refusal(&file(MAX_SERVICES + 1)).contains("more than 16 services"));
-}
-
-/// Catches: roles that wait on each other being accepted, so that their hosts would wait for
-/// ever: a role after itself, two roles after each other and a three-role cycle (with a role
-/// outside it, which is not named) are each refused naming the service and the roles of the
-/// cycle; a chain of open role names, a role after two roles that share a root, and roles with
-/// no `after` load.
-#[test]
-fn roles_that_wait_on_each_other_are_refused_and_a_chain_loads() {
-    let file = |roles: &[(&str, &[&str])]| {
-        let mut text = "[[service]]\nname = \"pipeline\"\n".to_owned();
-        for (name, after) in roles {
-            let quoted: Vec<String> = after.iter().map(|a| format!("\"{a}\"")).collect();
-            text.push_str(&format!(
-                "[service.roles.{name}]\nafter = [{}]\n",
-                quoted.join(", ")
-            ));
-        }
-        text
-    };
-    let cycle = "pipeline: roles {} wait on each other through after, which is a cycle";
-    assert_eq!(
-        refusal(&file(&[("cook", &["cook"])])),
-        format!("services: {}", cycle.replace("{}", "cook"))
-    );
-    assert_eq!(
-        refusal(&file(&[("cook", &["cache"]), ("cache", &["cook"])])),
-        format!("services: {}", cycle.replace("{}", "cache, cook"))
-    );
-    assert_eq!(
-        refusal(&file(&[
-            ("ingest", &["serve"]),
-            ("serve", &["index"]),
-            ("index", &["ingest"]),
-            ("edge", &["ingest"]),
-            ("base", &[]),
-        ])),
-        format!("services: {}", cycle.replace("{}", "index, ingest, serve"))
-    );
-    let chain = Services::parse(&file(&[
-        ("base", &[]),
-        ("cache", &["base"]),
-        ("cook", &["base", "cache"]),
-        ("edge", &["cook"]),
-    ]))
-    .expect("a chain");
-    let def = chain.get("pipeline").expect("the service");
-    assert_eq!(def.roles["edge"].after, ["cook"]);
-    assert_eq!(def.roles["cook"].after, ["base", "cache"]);
 }

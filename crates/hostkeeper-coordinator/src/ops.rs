@@ -22,7 +22,9 @@
 //! memory only if the file holds it, so a failed write never leaves it cleared.
 //!
 //! Every change carries an [`AuditEntry`]: the store numbers it, keeps the last
-//! [`AUDIT_RING`] in the file and logs it on the target `hostkeeper_coordinator::audit`.
+//! [`AUDIT_RING`] in the file and logs it on the target `hostkeeper_coordinator::audit`, and
+//! appends it as one JSON line to the audit file beside the ops file (`<ops-file>.audit`,
+//! [`crate::audit_file`]), which keeps every change; the ring is what `/v1/status` shows.
 //!
 //! The caps on the counts (`MAX_HOSTS`, `MAX_EXCLUDED`) are checked under the same lock as the
 //! write ([`OpsStore::try_change`]), on the state the change is applied to.
@@ -40,11 +42,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use hostkeeper_oidc::{Clock as UnixClock, system_clock};
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::UpdateResult;
 use serde::{Deserialize, Serialize};
 
+use crate::audit_file::{self, AuditLine, AuditLog};
 use crate::desired::StoreError;
 use crate::ops_file;
 use crate::service::Unauthorized;
@@ -55,9 +59,6 @@ pub const SCHEMA: u32 = 1;
 
 /// How many changes the file remembers.
 pub const AUDIT_RING: usize = 64;
-
-/// Who an operator change is logged as: the holder of the operator token.
-pub const OPERATOR: &str = "operator";
 
 /// The most hosts with labels the file holds. Raise it here if a farm needs more.
 pub const MAX_HOSTS: usize = 4096;
@@ -198,7 +199,8 @@ pub struct ServiceOps {
 pub struct AuditEntry {
     /// Its number: one more than the entry before it, for the life of the file.
     pub seq: u64,
-    /// Who made it.
+    /// Who made it: the name of the operator's token (`operator` for `--operator-token-file`),
+    /// `coordinator` for the coordinator's own changes, `ci` for CI's.
     pub by: String,
     /// What it was (`exclude`, `include`, `set_labels`, `clear_halt`, `halt`; the
     /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`; CI's: `unmark_bad`).
@@ -320,6 +322,10 @@ pub struct OpsStore {
     /// `current` is only locked to read or to swap, never across the file's fsyncs.
     writing: Mutex<()>,
     write: Writer,
+    /// The audit file, for a store over a file; the others have none.
+    audit: Option<AuditLog>,
+    /// Seconds since the epoch, for the lines of the audit file.
+    unix: UnixClock,
     /// A change another writer makes between a caller's read and its change, applied once at
     /// the start of the next change, under the writers' lock: what a race would do there.
     #[cfg(test)]
@@ -363,7 +369,8 @@ impl OpsStore {
     /// # Errors
     /// [`OpsError`]: the file exists and cannot be read, holds a key this build does not
     /// know, or has another schema; or a halts file a change staged cannot be settled, or the
-    /// halts file exists and cannot be read or parsed.
+    /// halts file exists and cannot be read or parsed, or the audit file beside it
+    /// ([`crate::audit_file`]) exists and cannot be read.
     pub fn open(path: &Path) -> Result<Self, OpsError> {
         let state = match fs::read(path) {
             Ok(bytes) => parse(path, &bytes)?,
@@ -377,11 +384,12 @@ impl OpsStore {
             }
         };
         let (state, _skipped) = ops_file::joined(path, state)?;
+        let log = AuditLog::open(audit_file::path_of(path))?;
         let path = path.to_owned();
-        Ok(Self::with_writer(
-            state,
-            Box::new(move |state| ops_file::write(&path, state)),
-        ))
+        Ok(Self {
+            audit: Some(log),
+            ..Self::with_writer(state, Box::new(move |state| ops_file::write(&path, state)))
+        })
     }
 
     /// A store over `state` that puts every change through `write` instead of a file.
@@ -391,6 +399,8 @@ impl OpsStore {
             current: Mutex::new(state),
             writing: Mutex::new(()),
             write,
+            audit: None,
+            unix: system_clock(),
             #[cfg(test)]
             interleave: Mutex::new(None),
         }
@@ -482,28 +492,53 @@ impl OpsStore {
         self.interleaved();
         let mut next = self.state();
         let mut entry = edit(&mut next)?;
-        entry.seq = next.audit.last().map_or(1, |last| last.seq + 1);
+        let filed = self.audit.as_ref().map_or(0, AuditLog::last_seq);
+        let ringed = next.audit.last().map_or(0, |last| last.seq);
+        entry.seq = filed.max(ringed) + 1;
         next.audit.push(entry.clone());
         let surplus = next.audit.len().saturating_sub(AUDIT_RING);
         next.audit.drain(..surplus);
         match write {
             Write::AfterMemory => {
                 *self.lock() = next.clone();
-                announce(&entry);
+                self.record(&entry);
                 (self.write)(&next)?;
             }
             Write::BeforeMemory => {
                 (self.write)(&next)?;
                 *self.lock() = next;
-                announce(&entry);
+                self.record(&entry);
             }
         }
         Ok(entry)
+    }
+
+    /// Logs `entry` and appends it to the audit file, if the store has one. A line that cannot be
+    /// appended is an error in the log and the change stands: the ring holds it.
+    fn record(&self, entry: &AuditEntry) {
+        announce(entry);
+        let Some(audit) = &self.audit else {
+            return;
+        };
+        if let Err(why) = audit.append(&AuditLine::of(entry, (self.unix)())) {
+            tracing::error!(
+                target: "hostkeeper_coordinator::audit",
+                seq = entry.seq,
+                %why,
+                "the audit file could not be appended to: the change stands, and the ring holds it"
+            );
+        }
     }
 }
 
 #[cfg(test)]
 impl OpsStore {
+    /// The store with `unix` as its clock for the audit file.
+    pub(crate) fn with_unix(mut self, unix: UnixClock) -> Self {
+        self.unix = unix;
+        self
+    }
+
     /// Makes `change` at the start of the next change, under the writers' lock, as another
     /// writer that got there between that caller's read and its change would.
     pub(crate) fn interleave(&self, change: impl FnOnce(&mut OpsState) + Send + 'static) {

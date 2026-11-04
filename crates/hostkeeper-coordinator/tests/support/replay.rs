@@ -1,8 +1,8 @@
 //! The recorded sequences (`fixtures/recorded/sequences/*.json`) and the engine that replays
 //! one against a coordinator built the way `config::build` builds it.
 //!
-//! A sequence is `{"from", "steps": [...]}` and, where kbf's test used a services file of its
-//! own, `services_fixture` (a recorded services file to start from), `services_text` (text added
+//! A sequence is `{"from", "steps": [...]}` and, where kbf's test used a rollout file of its
+//! own, `services_fixture` (a recorded rollout file to start from), `services_text` (text added
 //! after it, or the whole file when there is no fixture) and `oidc_services` (the services the
 //! allow-list entry of CI's token names). A step is one call at one time of the fake clock; its
 //! expectations are the status, the body bytes (`expect_body`) or fragments of them
@@ -15,6 +15,11 @@
 //! status does not have: it is `"agent":{"name":"kbf-updater"},` for a host that sent no
 //! agent, which is every host of a recorded sequence, and is taken out of a status before it
 //! is compared.
+//!
+//! A step may keep what kbf's coordinator answered where a rule this coordinator cut decided the
+//! answer: `kbf_status` and `kbf_body`. They are never compared with an answer; they document
+//! the difference, and `check_changed_list` holds the sequences that keep them to the list in
+//! `tests/replay.rs`.
 
 use std::path::{Path, PathBuf};
 
@@ -86,6 +91,13 @@ pub struct Step {
     pub expect_contains: Vec<String>,
     #[serde(default)]
     pub expect_not_contains: Vec<String>,
+    /// What kbf's coordinator answered (status), where a rule this coordinator cut decided and
+    /// the answer differs. Documentation: never compared.
+    #[serde(default)]
+    pub kbf_status: Option<u16>,
+    /// What kbf's coordinator answered (body), where it differs. Documentation: never compared.
+    #[serde(default)]
+    pub kbf_body: Option<String>,
 }
 
 impl Sequence {
@@ -124,9 +136,10 @@ fn bearer(step: &Step, default: &str) -> Option<String> {
 }
 
 /// Replays `sequence` on a fresh coordinator whose files are in a scratch directory called
-/// `name`: `Err` says the first step whose answer is not the recorded one.
+/// `name`: `Err` says every step whose answer is not the recorded one, with the answer in full.
 pub async fn replay(sequence: &Sequence, name: &str) -> Result<(), String> {
     let mut rig = Rig::new(name, sequence.spec());
+    let mut differences: Vec<String> = Vec::new();
     for (n, step) in sequence.steps.iter().enumerate() {
         rig.at(step.at_secs);
         let body = step.body.as_deref().unwrap_or("");
@@ -163,36 +176,93 @@ pub async fn replay(sequence: &Sequence, name: &str) -> Result<(), String> {
                 };
                 rig.control("GET", &path, token.as_deref(), "").await
             }
-            other => return Err(format!("step {n}: no call named {other}")),
+            other => return Err(format!("{name}: step {n}: no call named {other}")),
         };
-        let at = format!(
-            "{}: step {n} ({} at {})",
-            sequence.from, step.call, step.at_secs
-        );
-        let want_status = step
-            .expect_status
-            .ok_or(format!("{at}: no expect_status"))?;
+        let at = format!("{name}: step {n} ({} at {})", step.call, step.at_secs);
+        let Some(want_status) = step.expect_status else {
+            return Err(format!("{at}: no expect_status"));
+        };
         if code != want_status {
-            return Err(format!(
+            differences.push(format!(
                 "{at}: status {code}, recorded {want_status}: {got}"
             ));
         }
         if let Some(want) = &step.expect_body {
             let want = want.replace("{COMMIT}", hostkeeper_coordinator::BUILD_COMMIT);
             if got != want {
-                return Err(format!("{at}: body\n  {got}\nrecorded\n  {want}"));
+                differences.push(format!(
+                    "{at}: body (status {code})\n  {got}\nrecorded\n  {want}"
+                ));
             }
         }
         for part in &step.expect_contains {
             if !got.contains(part.as_str()) {
-                return Err(format!("{at}: the body lacks {part}: {got}"));
+                differences.push(format!("{at}: the body lacks {part}: {got}"));
             }
         }
         for part in &step.expect_not_contains {
             if got.contains(part.as_str()) {
-                return Err(format!("{at}: the body has {part}: {got}"));
+                differences.push(format!("{at}: the body has {part}: {got}"));
             }
         }
     }
-    Ok(())
+    if differences.is_empty() {
+        Ok(())
+    } else {
+        Err(differences.join("\n"))
+    }
+}
+
+/// Whether the list `changed` agrees with what the sequences keep of kbf's answers: every name is
+/// a recorded sequence; a listed sequence has a step that keeps kbf's answer (`kbf_status` or
+/// `kbf_body`) and each answer kept differs from this coordinator's; an unlisted sequence keeps
+/// none. `Err` says every disagreement, one per line.
+pub fn check_changed_list(
+    changed: &[&str],
+    sequences: &[(String, Sequence)],
+) -> Result<(), String> {
+    let mut problems = Vec::new();
+    for name in changed {
+        if !sequences.iter().any(|(stem, _)| stem == name) {
+            problems.push(format!(
+                "CHANGED names {name}, which is no recorded sequence"
+            ));
+        }
+    }
+    for (stem, sequence) in sequences {
+        let kept: Vec<(usize, &Step)> = sequence
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| step.kbf_status.is_some() || step.kbf_body.is_some())
+            .collect();
+        let listed = changed.contains(&stem.as_str());
+        if listed && kept.is_empty() {
+            problems.push(format!(
+                "{stem} is in CHANGED but no step keeps kbf's answer (kbf_status or kbf_body)"
+            ));
+        }
+        if !listed && !kept.is_empty() {
+            problems.push(format!(
+                "{stem} keeps kbf's answer in a step but is not in CHANGED"
+            ));
+        }
+        for (n, step) in kept {
+            if step.kbf_status.is_some() && step.kbf_status == step.expect_status {
+                problems.push(format!(
+                    "{stem}: step {n}: kbf_status is the same as this coordinator's"
+                ));
+            }
+            if step.kbf_body.is_some() && step.kbf_body == step.expect_body {
+                problems.push(format!(
+                    "{stem}: step {n}: kbf_body is the same as this coordinator's"
+                ));
+            }
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
+    }
 }

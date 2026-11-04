@@ -9,23 +9,20 @@ use std::time::Duration;
 
 use hostkeeper_wire::wire::{DeferredReport, Health, Heartbeat, Outcome, Token};
 
-use crate::decide::{Decision, Hold, decide_why};
+use crate::decide::{Decision, Gate, decide_why};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::services::Services;
 use crate::testutil::{beat, id, last, role, secs, unhealthy, updating, version};
 
-/// `a` bakes for two beats and wants 2.0; `b` bakes for three and wants 5.0; `c` does not
-/// bake and wants 2.0; `third` has no desired state; `paused` holds its daemons
-/// (`max_updating = 0`). Each runs on daemons and storage hosts, and none keeps a host up.
-const SERVICES: &str = "[[service]]\nname = \"a\"\nbake_beats = 2\n\
-     [service.roles.daemon]\nmin_up = 0\n[service.roles.storage]\nmin_up = 0\n\
-     [[service]]\nname = \"b\"\nbake_beats = 3\n\
-     [service.roles.daemon]\nmin_up = 0\n[service.roles.storage]\nmin_up = 0\n\
-     [[service]]\nname = \"c\"\n\
-     [service.roles.daemon]\nmin_up = 0\n[service.roles.storage]\nmin_up = 0\n\
-     [[service]]\nname = \"third\"\n[service.roles.daemon]\nmin_up = 0\n\
-     [[service]]\nname = \"paused\"\n[service.roles.daemon]\nmax_updating = 0\nmin_up = 0\n";
+/// `a` bakes for two beats and wants 2.0; `b` bakes for three and wants 5.0; `c` does not bake
+/// and wants 2.0; `third` has no desired state; `broken` wants 2.0 and is the service of a host
+/// that failed it. All but `third` run on daemons and storage hosts, `third` on daemons.
+const SERVICES: &str = "[[service]]\nname = \"a\"\nbake_beats = 2\nroles = [\"daemon\", \"storage\"]\n\
+     [[service]]\nname = \"b\"\nbake_beats = 3\nroles = [\"daemon\", \"storage\"]\n\
+     [[service]]\nname = \"c\"\nroles = [\"daemon\", \"storage\"]\n\
+     [[service]]\nname = \"third\"\nroles = [\"daemon\"]\n\
+     [[service]]\nname = \"broken\"\nroles = [\"daemon\"]\n";
 
 fn want(target: &str) -> Desired {
     let text = format!(r#"{{"version":"{target}","min_up":{{"storage":0,"frontend":0}}}}"#);
@@ -34,7 +31,7 @@ fn want(target: &str) -> Desired {
 
 /// The desired states: every service of [`SERVICES`] but `third`.
 fn all() -> BTreeMap<String, Desired> {
-    [("a", "2.0"), ("b", "5.0"), ("c", "2.0"), ("paused", "2.0")]
+    [("a", "2.0"), ("b", "5.0"), ("c", "2.0"), ("broken", "2.0")]
         .into_iter()
         .map(|(s, v)| (s.to_owned(), want(v)))
         .collect()
@@ -93,8 +90,8 @@ fn go(target: &str) -> Decision {
     }
 }
 
-fn held(why: Hold) -> Decision {
-    Decision::Hold(why)
+fn gate(why: Gate) -> Decision {
+    Decision::Gate(why)
 }
 
 fn pending(running: &str) -> Heartbeat {
@@ -119,13 +116,13 @@ fn a_pending_promotion_holds_other_services_on_its_host_and_on_another_role() {
     f.daemon("c", "d1", beat("1.0"), 100);
     f.storage("a", "s1", beat("1.0"), 100);
     for at in [100, 160] {
-        assert_eq!(f.why("c", "d1", at), held(Hold::NoSlot), "c on d1 at {at}");
-        assert_eq!(f.why("a", "s1", at), held(Hold::NoSlot), "a on s1 at {at}");
+        assert_eq!(f.why("c", "d1", at), gate(Gate::NoSlot), "c on d1 at {at}");
+        assert_eq!(f.why("a", "s1", at), gate(Gate::NoSlot), "a on s1 at {at}");
     }
     for (beat_no, at) in [(1, 160), (2, 175)] {
         f.daemon("b", "d1", beat("5.0"), at);
-        assert_eq!(f.why("c", "d1", at), held(Hold::Baking), "beat {beat_no}");
-        assert_eq!(f.why("a", "s1", at), held(Hold::Baking), "beat {beat_no}");
+        assert_eq!(f.why("c", "d1", at), gate(Gate::Baking), "beat {beat_no}");
+        assert_eq!(f.why("a", "s1", at), gate(Gate::Baking), "beat {beat_no}");
     }
     f.daemon("b", "d1", beat("5.0"), 190);
     assert_eq!(f.why("c", "d1", 190), go("2.0"));
@@ -144,17 +141,17 @@ fn a_bake_is_counted_with_its_own_services_version_and_beats() {
     f.daemon("b", "d1", updating(beat("1.0"), "5.0"), 100);
     f.daemon("a", "d2", beat("1.0"), 100);
     f.all.insert("b".to_owned(), want("6.0"));
-    assert_eq!(f.why("a", "d2", 100), held(Hold::NoSlot), "updating to 5.0");
+    assert_eq!(f.why("a", "d2", 100), gate(Gate::NoSlot), "updating to 5.0");
     f.all.insert("b".to_owned(), want("5.0"));
 
     f.daemon("b", "d1", beat("5.0"), 115);
     f.daemon("b", "d1", beat("5.0"), 130);
-    assert_eq!(f.why("a", "d2", 130), held(Hold::Baking), "two of three");
+    assert_eq!(f.why("a", "d2", 130), gate(Gate::Baking), "two of three");
     f.daemon("b", "d1", unhealthy(beat("5.0")), 145);
-    assert_eq!(f.why("a", "d2", 145), held(Hold::Baking), "unhealthy");
+    assert_eq!(f.why("a", "d2", 145), gate(Gate::Baking), "unhealthy");
     for at in [160, 175] {
         f.daemon("b", "d1", beat("5.0"), at);
-        assert_eq!(f.why("a", "d2", at), held(Hold::Baking), "again at {at}");
+        assert_eq!(f.why("a", "d2", at), gate(Gate::Baking), "again at {at}");
     }
     f.daemon("b", "d1", beat("5.0"), 190);
     assert_eq!(f.why("a", "d2", 190), go("2.0"), "baked");
@@ -162,7 +159,7 @@ fn a_bake_is_counted_with_its_own_services_version_and_beats() {
     let mut moved = Farm::new();
     moved.daemon("b", "d1", beat("5.0"), 100);
     moved.daemon("a", "d2", beat("1.0"), 100);
-    assert_eq!(moved.why("a", "d2", 100), held(Hold::Baking));
+    assert_eq!(moved.why("a", "d2", 100), gate(Gate::Baking));
     moved.all.insert("b".to_owned(), want("6.0"));
     assert_eq!(moved.why("a", "d2", 100), go("2.0"), "b wants 6.0 now");
 }
@@ -179,7 +176,7 @@ fn an_order_of_one_service_holds_another_until_it_ages_out() {
     assert_eq!(f.ask("c", "d1", 100), go("2.0"));
     f.daemon("c", "d1", beat("1.0"), 160);
     assert_eq!(f.ask("c", "d1", 160), go("2.0"), "told again");
-    assert_eq!(f.why("a", "d2", 219), held(Hold::NoSlot));
+    assert_eq!(f.why("a", "d2", 219), gate(Gate::NoSlot));
     assert_eq!(f.why("a", "d2", 220), go("2.0"));
 }
 
@@ -202,7 +199,7 @@ fn a_deferral_of_the_ordered_version_frees_the_slot_for_another_service() {
     f.daemon("a", "d2", beat("1.0"), 100);
     assert_eq!(f.ask("c", "d1", 100), go("2.0"));
     f.daemon("c", "d1", deferred("1.5"), 110);
-    assert_eq!(f.why("a", "d2", 110), held(Hold::NoSlot), "another version");
+    assert_eq!(f.why("a", "d2", 110), gate(Gate::NoSlot), "another version");
     f.daemon("c", "d1", deferred("2.0"), 115);
     assert_eq!(f.why("a", "d2", 115), go("2.0"));
 }
@@ -221,42 +218,42 @@ fn a_silent_holder_keeps_the_slot_unless_it_was_only_baking() {
         let mut f = Farm::new();
         f.daemon("c", "d1", b, 100);
         f.daemon("a", "d2", beat("1.0"), 100);
-        assert_eq!(f.why("a", "d2", 1_000), held(Hold::NoSlot), "{holder}");
+        assert_eq!(f.why("a", "d2", 1_000), gate(Gate::NoSlot), "{holder}");
     }
     let mut f = Farm::new();
     f.daemon("b", "d1", beat("5.0"), 100);
     f.daemon("a", "d2", beat("1.0"), 100);
-    assert_eq!(f.why("a", "d2", 144), held(Hold::Baking));
+    assert_eq!(f.why("a", "d2", 144), gate(Gate::Baking));
     assert_eq!(f.why("a", "d2", 145), go("2.0"));
 }
 
 /// Behaviour: holders of services the coordinator does not order keep the slot all the same:
-/// a host updating `third`, which has no desired state, and a host whose update of `paused`
-/// (its daemons held) failed and is unhealthy, each hold `c` on another host until they are
-/// done or healthy. Catches the count taken only over services that can be ordered.
+/// a host updating `third`, which has no desired state, and a host whose update of `broken`
+/// failed and is unhealthy, each hold `c` on another host until they are done or healthy.
+/// Catches the count taken only over services that can be ordered.
 #[test]
-fn a_service_with_no_desired_state_or_a_held_role_still_holds_its_slot() {
+fn a_service_with_no_desired_state_or_a_failed_host_still_holds_its_slot() {
     let mut f = Farm::new();
     f.daemon("third", "d1", updating(beat("1.0"), "2.0"), 100);
     f.daemon("c", "d2", beat("1.0"), 100);
-    assert_eq!(f.why("c", "d2", 100), held(Hold::NoSlot), "third updating");
+    assert_eq!(f.why("c", "d2", 100), gate(Gate::NoSlot), "third updating");
     f.daemon("third", "d1", beat("2.0"), 115);
     assert_eq!(f.why("c", "d2", 115), go("2.0"), "third done");
 
     let mut f = Farm::new();
-    f.daemon("paused", "d1", failed_unhealthy("2.0"), 100);
+    f.daemon("broken", "d1", failed_unhealthy("2.0"), 100);
     f.daemon("c", "d2", beat("1.0"), 100);
-    assert_eq!(f.why("c", "d2", 100), held(Hold::NoSlot), "paused failed");
-    f.daemon("paused", "d3", beat("1.0"), 100);
+    assert_eq!(f.why("c", "d2", 100), gate(Gate::NoSlot), "broken failed");
+    f.daemon("broken", "d3", beat("1.0"), 100);
     assert_eq!(
-        f.why("paused", "d3", 100),
-        held(Hold::NoSlot),
-        "a held role"
+        f.why("broken", "d3", 100),
+        gate(Gate::NoSlot),
+        "its own service's failed host"
     );
     let mut healthy = failed_unhealthy("2.0");
     healthy.health = Health::Healthy;
-    f.daemon("paused", "d1", healthy, 115);
-    assert_eq!(f.why("c", "d2", 115), go("2.0"), "paused healthy");
+    f.daemon("broken", "d1", healthy, 115);
+    assert_eq!(f.why("c", "d2", 115), go("2.0"), "broken healthy");
 }
 
 /// Behaviour: a fleet that a coordinator allowing several updates left with several holders,
@@ -274,25 +271,25 @@ fn several_holders_release_the_fleet_only_when_the_last_one_does() {
     f.fleet.order("a", id("d3"), version("2.0"), secs(100));
     f.daemon("b", "d3", beat("5.0"), 100);
     f.daemon("c", "d4", beat("1.0"), 100);
-    assert_eq!(f.why("c", "d4", 100), held(Hold::NoSlot), "all four");
+    assert_eq!(f.why("c", "d4", 100), gate(Gate::NoSlot), "all four");
 
     f.daemon("a", "d1", beat("2.0"), 110);
-    assert_eq!(f.why("c", "d4", 110), held(Hold::NoSlot), "d1 done");
+    assert_eq!(f.why("c", "d4", 110), gate(Gate::NoSlot), "d1 done");
     let mut healthy = failed_unhealthy("5.0");
     healthy.health = Health::Healthy;
     f.storage("b", "s1", healthy, 110);
-    assert_eq!(f.why("c", "d4", 110), held(Hold::NoSlot), "s1 healthy");
+    assert_eq!(f.why("c", "d4", 110), gate(Gate::NoSlot), "s1 healthy");
     f.daemon("c", "d2", beat("2.0"), 110);
-    assert_eq!(f.why("c", "d4", 110), held(Hold::NoSlot), "d3's order");
+    assert_eq!(f.why("c", "d4", 110), gate(Gate::NoSlot), "d3's order");
     f.daemon("b", "d3", beat("5.0"), 110);
     f.daemon("a", "d3", updating(beat("1.0"), "2.0"), 110);
-    assert_eq!(f.why("c", "d4", 110), held(Hold::NoSlot), "d3 updating");
+    assert_eq!(f.why("c", "d4", 110), gate(Gate::NoSlot), "d3 updating");
     f.daemon("a", "d3", beat("2.0"), 120);
-    assert_eq!(f.why("c", "d4", 120), held(Hold::Baking), "only bakes left");
+    assert_eq!(f.why("c", "d4", 120), gate(Gate::Baking), "only bakes left");
 
     f.daemon("a", "d1", beat("2.0"), 125);
     f.daemon("a", "d3", beat("2.0"), 125);
-    assert_eq!(f.why("c", "d4", 125), held(Hold::Baking), "d3 bakes b");
+    assert_eq!(f.why("c", "d4", 125), gate(Gate::Baking), "d3 bakes b");
     f.daemon("b", "d3", beat("5.0"), 130);
     assert_eq!(f.why("c", "d4", 130), go("2.0"), "the last bake ended");
 }

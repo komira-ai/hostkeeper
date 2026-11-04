@@ -12,12 +12,17 @@
 //!   and the time;
 //! - [`reconcile`]: the last good version, the bad ones, and the automatic rollback;
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
-//!   last good versions and the audit ring, in the operations file; the halt reports and clear
-//!   generations in the halts file beside it (`ops_file`);
-//! - [`services`]: services as data: roles, limits and the order between services;
+//!   last good versions and the audit ring, in the operations file, and every change as a line of
+//!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
+//!   file beside it (`ops_file`);
+//! - [`services`]: services as data, from the rollout file: the roles each runs on and the
+//!   settings of its rollout;
+//! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
+//!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
 //!   token, the status read by the operator token;
-//! - [`http`] and [`listen`]: the two HTTP surfaces and the TLS listeners under them;
+//! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
+//!   surface of CI and the operator) and the TLS listeners under them;
 //! - [`config`]: the flags and the start.
 //!
 //! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
@@ -28,6 +33,7 @@
 pub const BUILD_COMMIT: &str = env!("HOSTKEEPER_BUILD_COMMIT");
 
 pub mod acks;
+pub(crate) mod audit_file;
 pub mod bake;
 pub mod canary;
 pub mod config;
@@ -46,19 +52,18 @@ pub(crate) mod ops_file;
 pub mod reconcile;
 pub mod service;
 pub mod services;
+pub mod tokens;
 
+#[cfg(test)]
+mod audit_file_tests;
 #[cfg(test)]
 mod bake_canary_tests;
 #[cfg(test)]
 mod bake_review_tests;
 #[cfg(test)]
-mod converge_role_tests;
-#[cfg(test)]
 mod converge_tests;
 #[cfg(test)]
 mod decide_golden_tests;
-#[cfg(test)]
-mod decide_role_tests;
 #[cfg(test)]
 mod decide_tests;
 #[cfg(test)]
@@ -67,8 +72,6 @@ mod decide_why_tests;
 mod defer_tests;
 #[cfg(test)]
 mod desired_dropped_tests;
-#[cfg(test)]
-mod desired_role_tests;
 #[cfg(test)]
 mod desired_sync_tests;
 #[cfg(test)]
@@ -123,3 +126,5 @@ mod status_service_tests;
 mod testutil;
 #[cfg(test)]
 mod tierstore_service_tests;
+#[cfg(test)]
+mod tokens_tests;

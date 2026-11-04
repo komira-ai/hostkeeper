@@ -4,7 +4,7 @@
 use hostkeeper_wire::wire::{Heartbeat, ServiceBeat};
 use serde_json::json;
 
-use crate::decide::Hold;
+use crate::decide::{Gate, Why};
 use crate::membership_tests::{DAEMONS, V2, ZONE_A, labels, rig, who};
 use crate::rollback_tests::{
     AUTO, ONE, TWO, marks, restart, rig as rollback_rig, round, seed, status, two_failed, wanted,
@@ -98,7 +98,12 @@ async fn a_halted_service_with_a_bad_desired_version_holds_at_halted() {
         Some(&hostkeeper_wire::wire::ServiceReply::Nothing)
     );
     for host in &status(&rig).per_service[LEGACY].hosts {
-        assert_eq!(host.hold, Some(Hold::Halted), "{}", host.host.node_id);
+        assert_eq!(
+            host.hold,
+            Some(Why::Gate(Gate::Halted)),
+            "{}",
+            host.host.node_id
+        );
     }
 }
 

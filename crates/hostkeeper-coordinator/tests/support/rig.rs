@@ -1,4 +1,4 @@
-//! A coordinator built the way `config::build` builds one (the services file, the legacy service
+//! A coordinator built the way `config::build` builds one (the rollout file, the legacy service
 //! and the certificate namespaces of the flags, the state file and the ops file of a directory),
 //! driven through `http::handle` on a clock the test sets. The verifier is the testkit's static
 //! one, so CI's token needs no network.
@@ -29,7 +29,7 @@ pub const PATIENCE: Duration = Duration::from_secs(30);
 /// What a coordinator is built from besides its directory.
 #[derive(Clone, Debug)]
 pub struct Spec {
-    /// The text of the services file.
+    /// The text of the rollout file.
     pub services: String,
     /// The services the allow-list entry of CI's token names, if it names any.
     pub oidc_services: Option<Vec<String>>,
@@ -47,7 +47,7 @@ impl Spec {
         }
     }
 
-    /// The same with the services file `text`.
+    /// The same with the rollout file `text`.
     pub fn with_services(mut self, text: &str) -> Self {
         self.services = text.to_owned();
         self

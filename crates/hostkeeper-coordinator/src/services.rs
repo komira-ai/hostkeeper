@@ -1,27 +1,27 @@
-//! Services as data: what the coordinator updates, the roles each service runs on, and the
-//! order between services (`docs/design/host-updates.md`).
+//! Services as data: what the coordinator updates and the roles each service runs on
+//! (`docs/design/host-updates.md`).
 //!
-//! A [`ServiceDef`] has a name, the roles it runs on (each with its limits and the roles it
-//! waits for) and `after`, the services whose live hosts must have converged before any host
-//! of this one is ordered. The decision reads these and branches on no service name.
+//! The rollout file (`--rollout-file`) is TOML with one `[[service]]` table for each service the
+//! coordinator manages. A [`ServiceDef`] has a name, a version scheme, the roles it runs on (a
+//! plain list of role names) and the settings of its rollout: its priority, the hosts it is
+//! selected for, whether a host on which it never registered is ordered, how long an updated
+//! host holds its slot, the canary, the automatic rollback and the backoff of a deferral. The
+//! decision reads these and branches on no service name.
 //!
-//! No service is built in: the services are the ones the file named by `--services-file` defines
-//! (an empty file defines none), and an entry's `after` names a service defined earlier in the
-//! file. A role is any [`RoleName`]. `require_min_up` lists the `min_up` keys a desired state of
-//! the service must name. Which services a CI token may set is not here: the allow-list entry
-//! that admits the token says (`services = [...]`, default the coordinator's legacy service).
+//! No service is built in: the services are the ones the file defines (an empty file defines
+//! none). A role is any [`RoleName`]. Every table refuses a key it does not know, naming it, so
+//! a key an earlier build read and this one does not (`after`, `require_min_up`, and the
+//! `max_updating`, `min_up`, `never_last` and `after` of a role's table) is refused, never
+//! ignored. Which services a CI token may set is not here: the allow-list entry that admits the
+//! token says (`services = [...]`, default the coordinator's legacy service).
 //!
 //! ```toml
 //! [[service]]
 //! name = "agent"
-//! after = ["server"]             # services defined earlier in the file
-//! require_min_up = ["storage"]   # default none; roles whose `min_up` a desired state must name
+//! version_scheme = "semver"      # default semver, the only scheme there is
+//! roles = ["storage", "daemon"]  # a host of any other role is never ordered for the service
 //! priority = 0                   # default 0; a host is offered the higher number first
 //! install_when_absent = false    # default false; order a host whose copy never registered
-//!
-//! [service.selector]             # optional; absent: a host belongs if it announces the service
-//! roles = ["daemon"]             # default: every role of the service
-//! labels = { zone = "a" }        # operator-set labels the host must carry
 //! bake_beats = 0                 # default 0, at most 100: healthy beats before a slot frees
 //! canary = { count = 1 }         # optional: only this many hosts go until they have baked
 //! rollback = "manual"            # or "automatic": the coordinator sets the last good version
@@ -31,13 +31,9 @@
 //!                                # desired state to it forgets the last good version
 //! defer_backoff = { initial_secs = 300, factor = 2, max_secs = 3600 }   # the defaults
 //!
-//! [service.roles.daemon]
-//! max_updating = 2               # optional; absent: the desired state's number. Only 0
-//!                                # matters (it holds the role): one update is live at a
-//!                                # time across every service and role (crate::decide)
-//! min_up = 0                     # optional; absent: the desired state's number
-//! never_last = false             # default false
-//! after = ["storage"]            # roles of this service this role waits for
+//! [service.selector]             # optional; absent: a host belongs if it announces the service
+//! roles = ["daemon"]             # default: every role of the service
+//! labels = { zone = "a" }        # operator-set labels the host must carry
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,62 +48,20 @@ use serde::Deserialize;
 use crate::bake::MAX_BAKE_BEATS;
 use crate::canary::Canary;
 use crate::defer::DeferBackoff;
-use crate::desired::{Desired, FORMAT_ROLES, MAX_COUNT};
+use crate::desired::{FORMAT_ROLES, MAX_COUNT};
 use crate::membership::{RawSelector, Selector};
 use crate::reconcile::{FailThreshold, Rollback};
 
-/// The most bytes of a services file.
+/// The most bytes of a rollout file.
 const MAX_FILE_BYTES: u64 = 1 << 20;
 
-/// What one role of a service is allowed and required to do.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RoleDef {
-    /// How many hosts of the role may update at once. `None`: the desired state's number.
-    /// Superseded above 1: one update is live at a time across every service and role, so only
-    /// 0 (the role is held) changes a decision ([`crate::decide`]).
-    pub max_updating: Option<u32>,
-    /// How many other hosts of the role must be up while one updates. `None`: the desired
-    /// state's number.
-    pub min_up: Option<u32>,
-    /// Never order the last host of the role that is up, whatever `min_up` says.
-    pub never_last: bool,
-    /// The roles of the same service whose live hosts must all run the desired version, and
-    /// not be updating, before a host of this role is ordered.
-    pub after: Vec<String>,
-}
-
-impl RoleDef {
-    /// A role with no limits of its own and no wait.
-    #[must_use]
-    pub const fn plain() -> Self {
-        Self {
-            max_updating: None,
-            min_up: None,
-            never_last: false,
-            after: Vec::new(),
-        }
-    }
-
-    /// The limit on hosts of the role `role` updating at once under `desired`: the
-    /// definition's number, else the desired state's, else the default (2 for the daemon
-    /// roles, 1 for any other). The decision reads it only as 0 or not: one update is live at
-    /// a time whatever it says. A role the service does not name is never ordered, whatever
-    /// these say ([`crate::decide`]).
-    #[must_use]
-    pub fn max_updating(&self, role: &str, desired: &Desired) -> usize {
-        self.max_updating
-            .unwrap_or_else(|| desired.max_updating.max_updating_of(role)) as usize
-    }
-
-    /// How many other hosts of the role must be up while one updates under `desired`.
-    #[must_use]
-    pub fn required_up(&self, role: &str, desired: &Desired) -> usize {
-        let floor = usize::from(self.never_last);
-        (self
-            .min_up
-            .unwrap_or_else(|| desired.min_up.min_up_of(role)) as usize)
-            .max(floor)
-    }
+/// How the versions of a service are told apart and ordered. There is one scheme, and it is the
+/// default; the key `version_scheme` of the rollout file names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VersionScheme {
+    /// Semantic versions, as [`Version`] reads them.
+    #[default]
+    Semver,
 }
 
 /// A service.
@@ -115,17 +69,15 @@ impl RoleDef {
 pub struct ServiceDef {
     /// Its name.
     pub name: String,
+    /// How its versions are ordered.
+    pub version_scheme: VersionScheme,
     /// The roles it runs on. A host of any other role is never ordered for it.
-    pub roles: BTreeMap<String, RoleDef>,
-    /// The services that must have converged before any host of this one is ordered.
-    pub after: Vec<String>,
-    /// The `min_up` keys a desired state of the service must name (each a role of the
-    /// service); a body without one is refused. A service that lists none may omit `min_up`.
-    pub require_min_up: Vec<String>,
+    pub roles: BTreeSet<String>,
     /// Which service a host is offered first when more than one is behind: the higher
     /// number first, and services with the same number in the tie order of
-    /// [`crate::service::Coordinator::heartbeat`]. It orders offers only: a service that
-    /// must wait (`after`, its slots) yields to the next one whatever its priority.
+    /// [`crate::service::Coordinator::heartbeat`]. It orders offers only: a service whose
+    /// order cannot be given yet (the one live update, its canary) yields to the next one
+    /// whatever its priority.
     pub priority: i32,
     /// Which hosts should run the service (`None`: the hosts that announce it).
     pub selector: Option<Selector>,
@@ -147,17 +99,14 @@ pub struct ServiceDef {
 }
 
 impl ServiceDef {
-    /// A service named `name` with the roles `roles`, each by name.
+    /// A service named `name` that runs on the roles `roles`, with every other setting at its
+    /// default.
     #[cfg(test)]
-    pub(crate) fn new(name: &str, roles: &[(&str, RoleDef)]) -> Self {
+    pub(crate) fn new(name: &str, roles: &[&str]) -> Self {
         Self {
             name: name.to_owned(),
-            roles: roles
-                .iter()
-                .map(|(role, def)| ((*role).to_owned(), def.clone()))
-                .collect(),
-            after: Vec::new(),
-            require_min_up: Vec::new(),
+            version_scheme: VersionScheme::Semver,
+            roles: roles.iter().map(|role| (*role).to_owned()).collect(),
             priority: 0,
             selector: None,
             install_when_absent: false,
@@ -171,22 +120,23 @@ impl ServiceDef {
     }
 
     /// The names of its roles: the desired-state format's four roles first, in their order
-    /// (frontend, storage, daemon, mac-daemon), then any other by name. Every list of roles is in this order.
+    /// (frontend, storage, daemon, mac-daemon), then any other by name. Every list of roles is
+    /// in this order.
     #[must_use]
     pub fn role_names(&self) -> Vec<&str> {
         let legacy = FORMAT_ROLES
             .into_iter()
-            .filter(|role| self.roles.contains_key(*role));
+            .filter(|role| self.roles.contains(*role));
         let rest = self
             .roles
-            .keys()
+            .iter()
             .map(String::as_str)
             .filter(|role| !FORMAT_ROLES.contains(role));
         legacy.chain(rest).collect()
     }
 }
 
-/// Why a services file is refused.
+/// Why a rollout file is refused.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ServicesError {
     /// The file cannot be read.
@@ -211,12 +161,8 @@ struct RawFile {
 #[serde(deny_unknown_fields)]
 struct RawService {
     name: String,
-    #[serde(default)]
-    after: Vec<String>,
-    #[serde(default)]
-    require_min_up: Vec<String>,
-    #[serde(default)]
-    roles: BTreeMap<String, RawRole>,
+    version_scheme: Option<String>,
+    roles: Option<RawRoles>,
     #[serde(default)]
     priority: i32,
     selector: Option<RawSelector>,
@@ -234,6 +180,15 @@ struct RawService {
     defer_backoff: DeferBackoff,
 }
 
+/// The `roles` key: a list of role names. Anything else, the `[service.roles.<name>]` tables of
+/// an earlier build included, is kept as it is to be refused with a text that says what to write.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawRoles {
+    Names(Vec<String>),
+    Other(toml::Value),
+}
+
 /// The count form of the canary. The roles and labels form is refused as an unknown field
 /// until it is implemented.
 #[derive(Deserialize)]
@@ -242,22 +197,11 @@ struct RawCanary {
     count: u32,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawRole {
-    max_updating: Option<u32>,
-    min_up: Option<u32>,
-    #[serde(default)]
-    never_last: bool,
-    #[serde(default)]
-    after: Vec<String>,
-}
-
 fn invalid<T>(why: String) -> Result<T, ServicesError> {
     Err(ServicesError::Invalid(why))
 }
 
-/// The one place that says which role names a services file may use: any [`RoleName`].
+/// The one place that says which role names a rollout file may use: any [`RoleName`].
 fn role_of(name: &str) -> Result<String, ServicesError> {
     name.parse::<RoleName>().map_or_else(
         |_| invalid(format!("{name} is not a role name")),
@@ -265,67 +209,28 @@ fn role_of(name: &str) -> Result<String, ServicesError> {
     )
 }
 
-fn role_def(
-    service: &str,
-    raw: RawRole,
-    roles: &BTreeSet<String>,
-) -> Result<RoleDef, ServicesError> {
-    if [raw.max_updating, raw.min_up]
-        .into_iter()
-        .flatten()
-        .any(|n| n > MAX_COUNT)
-    {
-        return invalid(format!("{service}: a count is over {MAX_COUNT}"));
+/// The roles of `service` from its `roles` key: each a role name, none listed twice. No key is
+/// no role (the caller refuses a service with none).
+fn role_set(service: &str, roles: Option<RawRoles>) -> Result<BTreeSet<String>, ServicesError> {
+    let names = match roles {
+        None => Vec::new(),
+        Some(RawRoles::Names(names)) => names,
+        Some(RawRoles::Other(value)) => {
+            return invalid(format!(
+                "{service}: roles must be a list of role names, roles = [\"daemon\"], not a value \
+                 of type {}; the [service.roles.<name>] tables, with their max_updating, min_up, \
+                 never_last and after keys, are no longer read",
+                value.type_str()
+            ));
+        }
+    };
+    let mut roles = BTreeSet::new();
+    for name in names {
+        if !roles.insert(role_of(&name)?) {
+            return invalid(format!("{service}: roles lists {name} twice"));
+        }
     }
-    let after = raw
-        .after
-        .iter()
-        .map(|name| {
-            let role = role_of(name)?;
-            if roles.contains(&role) {
-                Ok(role)
-            } else {
-                invalid(format!(
-                    "{service}: after names {name}, a role it does not have"
-                ))
-            }
-        })
-        .collect::<Result<_, _>>()?;
-    Ok(RoleDef {
-        max_updating: raw.max_updating,
-        min_up: raw.min_up,
-        never_last: raw.never_last,
-        after,
-    })
-}
-
-/// Refuses roles that wait on each other, a role after itself included: a host of a role in a
-/// cycle would wait for ever. Roles that wait on nothing, and then the ones nothing waits on,
-/// are set aside until only the roles on a cycle are left.
-fn check_role_order(service: &str, roles: &BTreeMap<String, RoleDef>) -> Result<(), ServicesError> {
-    let mut stuck: BTreeSet<&str> = roles.keys().map(String::as_str).collect();
-    while let Some(free) = stuck
-        .iter()
-        .copied()
-        .find(|r| roles[*r].after.iter().all(|a| !stuck.contains(a.as_str())))
-    {
-        stuck.remove(free);
-    }
-    while let Some(last) = stuck.iter().copied().find(|r| {
-        !stuck
-            .iter()
-            .any(|other| roles[*other].after.iter().any(|a| a == r))
-    }) {
-        stuck.remove(last);
-    }
-    let cycle = stuck.into_iter().collect::<Vec<_>>().join(", ");
-    if cycle.is_empty() {
-        Ok(())
-    } else {
-        invalid(format!(
-            "{service}: roles {cycle} wait on each other through after, which is a cycle"
-        ))
-    }
+    Ok(roles)
 }
 
 fn service_def(
@@ -334,8 +239,7 @@ fn service_def(
 ) -> Result<ServiceDef, ServicesError> {
     let RawService {
         name,
-        after,
-        require_min_up,
+        version_scheme,
         roles,
         priority,
         selector,
@@ -358,13 +262,17 @@ fn service_def(
     defer_backoff
         .check()
         .or_else(|why| invalid(format!("{name}: defer_backoff: {why}")))?;
+    let version_scheme = match version_scheme.as_deref() {
+        None | Some("semver") => VersionScheme::Semver,
+        Some(other) => {
+            return invalid(format!(
+                "{name}: version_scheme is {other:?}, and \"semver\" is the only scheme"
+            ));
+        }
+    };
+    let roles = role_set(&name, roles)?;
     if roles.is_empty() {
         return invalid(format!("{name} has no roles"));
-    }
-    if let Some(unknown) = after.iter().find(|a| !defined.contains_key(*a)) {
-        return invalid(format!(
-            "{name}: after names {unknown}, which is not defined earlier in the file"
-        ));
     }
     if bake_beats > MAX_BAKE_BEATS {
         return invalid(format!("{name}: bake_beats is over {MAX_BAKE_BEATS}"));
@@ -385,29 +293,14 @@ fn service_def(
             "{name}: rollback_after_failed min_hosts is not 1 to {MAX_COUNT}"
         ));
     }
-    let names = roles
-        .keys()
-        .map(|r| role_of(r))
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    if let Some(missing) = require_min_up.iter().find(|r| !names.contains(*r)) {
-        return invalid(format!(
-            "{name}: require_min_up names {missing}, a role it does not have"
-        ));
-    }
     let selector = selector
-        .map(|raw| Selector::new(raw, &names))
+        .map(|raw| Selector::new(raw, &roles))
         .transpose()
         .or_else(|why| invalid(format!("{name}: selector {why}")))?;
-    let roles = roles
-        .into_iter()
-        .map(|(r, raw)| Ok((role_of(&r)?, role_def(&name, raw, &names)?)))
-        .collect::<Result<BTreeMap<_, _>, ServicesError>>()?;
-    check_role_order(&name, &roles)?;
     Ok(ServiceDef {
         name,
+        version_scheme,
         roles,
-        after,
-        require_min_up,
         priority,
         selector,
         install_when_absent,
@@ -422,7 +315,7 @@ fn service_def(
 
 /// Every service the coordinator manages, and the ones CI's token may set.
 ///
-/// The default is no service: the services are the ones a services file defines.
+/// The default is no service: the services are the ones a rollout file defines.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Services {
     defs: BTreeMap<String, ServiceDef>,
@@ -439,11 +332,10 @@ impl Services {
     /// The services of the file text `text`, exactly the ones it defines.
     ///
     /// # Errors
-    /// [`ServicesError`]: the text is not TOML of the shape, a name is bad or repeated, a
-    /// service has no roles, there are more than [`MAX_SERVICES`] services, a role name or
-    /// count is unusable, a `require_min_up` names a role the service lacks, or an `after`
-    /// names what does not exist (or is defined later, which also forbids a cycle of services), or
-    /// the roles of a service wait on each other through `after`.
+    /// [`ServicesError`]: the text is not TOML of the shape, a key is unknown (a key an
+    /// earlier build read included), a name is bad or repeated, a service has no roles or lists
+    /// one twice, there are more than [`MAX_SERVICES`] services, a role name, a count or the
+    /// `version_scheme` is unusable, or a selector or the backoff is refused.
     pub fn parse(text: &str) -> Result<Self, ServicesError> {
         let file: RawFile =
             toml::from_str(text).map_err(|e| ServicesError::Parse(e.to_string()))?;
@@ -458,7 +350,7 @@ impl Services {
         Ok(services)
     }
 
-    /// The services in the file at `path`. The file is read under the rule of the operator's
+    /// The services in the rollout file at `path`. The file is read under the rule of the operator's
     /// token file: a regular file, not a symlink, owned by this process's user, mode `0600`
     /// or `0400`. Whoever can write it controls the rollout limits (a replaced definition can
     /// drop every gate), so it is held to the same rule as a secret.

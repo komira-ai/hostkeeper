@@ -5,7 +5,7 @@
 //! in-memory ones. Each listener holds a [`TlsSource`], so a certificate the farm CA renewed is picked up
 //! without a restart (the files are looked at every interval, and a pair that does not make
 //! a working configuration leaves the one in use). A heartbeat listener's source requires a
-//! client certificate that chains to the farm CA; a control listener's asks for none. A
+//! client certificate that chains to the farm CA; the private listener's asks for none. A
 //! connection speaks HTTP/1.1 only, and has a limit on its handshake, its request head, its
 //! request body and on any single write of a response that its peer does not read; a listener
 //! has a limit on its connections.
@@ -31,6 +31,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::http::{Peer, Surface, handle};
 use crate::service::Coordinator;
+use crate::tokens::OperatorTokens;
 
 /// How long a client has to finish its TLS handshake, and then to send a request head.
 pub const CLIENT_PATIENCE: Duration = Duration::from_secs(10);
@@ -261,20 +262,32 @@ pub async fn connection<S>(
     }
 }
 
-/// Looks at the TLS files of `sources` every `interval`, for as long as the future is polled.
-/// It never returns.
-pub async fn reload_every(sources: Vec<TlsSource>, interval: Duration) -> Infallible {
+/// Looks at everything that is re-read while the coordinator runs, every `interval`, for as long
+/// as the future is polled: the TLS files of `sources` and the tokens file of `tokens`. It never
+/// returns.
+pub async fn reload_every(
+    sources: Vec<TlsSource>,
+    tokens: OperatorTokens,
+    interval: Duration,
+) -> Infallible {
     let mut ticks = tokio::time::interval(interval);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ticks.tick().await;
     loop {
         ticks.tick().await;
-        for source in &sources {
-            let source = source.clone();
-            // File reads and a key parse: off the runtime's threads.
-            let _ = tokio::task::spawn_blocking(move || source.reload()).await;
-        }
+        reload_all(&sources, &tokens).await;
     }
+}
+
+/// One look of the tick: each TLS source reloads, then the tokens file is read again.
+pub(crate) async fn reload_all(sources: &[TlsSource], tokens: &OperatorTokens) {
+    for source in sources {
+        let source = source.clone();
+        // File reads and a key parse: off the runtime's threads.
+        let _ = tokio::task::spawn_blocking(move || source.reload()).await;
+    }
+    let tokens = tokens.clone();
+    let _ = tokio::task::spawn_blocking(move || tokens.reload()).await;
 }
 
 #[cfg(test)]

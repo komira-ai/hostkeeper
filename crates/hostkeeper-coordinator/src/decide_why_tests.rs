@@ -1,12 +1,13 @@
 //! The decision names the rule that held. One test per rule, each with a fleet where only
-//! that rule fails, so a reply of nothing can be told from every other nothing.
+//! that rule fails, so a reply of nothing can be told from every other nothing; a gate and a
+//! skip are told apart.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use hostkeeper_wire::wire::{Outcome, Reply};
 
-use crate::decide::{Decision, Hold, decide_in, decide_why};
+use crate::decide::{Decision, Gate, Skip, Why, decide_in, decide_why};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::services::Services;
@@ -16,23 +17,14 @@ use crate::testutil::{
 
 const NOW: Duration = Duration::from_secs(1_000);
 
-const TWO: &str = r#"
-[[service]]
-name = "server"
-[service.roles.daemon]
-max_updating = 1
-min_up = 0
+const TWO: &str = "[[service]]\nname = \"server\"\nroles = [\"daemon\"]\n\n[[service]]\nname = \"agent\"\nroles = [\"daemon\"]\n";
 
-[[service]]
-name = "agent"
-after = ["server"]
-[service.roles.daemon]
-max_updating = 1
-min_up = 0
-"#;
+fn gate(why: Gate) -> Decision {
+    Decision::Gate(why)
+}
 
-fn held(why: Hold) -> Decision {
-    Decision::Hold(why)
+fn skip(why: Skip) -> Decision {
+    Decision::Skip(why)
 }
 
 fn update(target: &str) -> Decision {
@@ -59,7 +51,7 @@ fn why(
                 version: version.clone()
             }
         ),
-        Decision::Hold(_) => assert_eq!(reply, Reply::Nothing),
+        Decision::Gate(_) | Decision::Skip(_) => assert_eq!(reply, Reply::Nothing),
     }
     decision
 }
@@ -93,7 +85,7 @@ fn a_service_without_a_definition_holds_as_no_definition() {
     let services = kbf_services();
     assert_eq!(
         why(&services, &all, "ghost", &f, "d1", NOW),
-        held(Hold::NoDefinition)
+        skip(Skip::NoDefinition)
     );
 }
 
@@ -104,7 +96,7 @@ fn a_service_without_a_desired_state_holds_as_no_desired() {
     let services = kbf_services();
     assert_eq!(
         why(&services, &BTreeMap::new(), LEGACY, &f, "d1", NOW),
-        held(Hold::NoDesired)
+        skip(Skip::NoDesired)
     );
 }
 
@@ -114,7 +106,7 @@ fn a_host_that_has_not_heartbeated_holds_as_not_a_member() {
     let f = fleet(NOW, &[("d1", role("daemon"), beat("1.0"))]);
     assert_eq!(
         kbf(&desired("2.0", 1, 1), &f, "d2", NOW),
-        held(Hold::NotAMember)
+        skip(Skip::NotAMember)
     );
 }
 
@@ -128,7 +120,7 @@ fn a_host_whose_role_the_service_does_not_run_on_holds_as_not_a_member() {
     f.record_in("server", id("s1"), role("storage"), beat("1.0"), NOW);
     assert_eq!(
         why(&services, &all, "server", &f, "s1", NOW),
-        held(Hold::NotAMember)
+        skip(Skip::NotAMember)
     );
 }
 
@@ -139,8 +131,8 @@ fn the_first_thirty_seconds_hold_as_quiet() {
     let d = desired("2.0", 1, 1);
     let mut f = Fleet::new(secs(1_000));
     f.record_in(LEGACY, id("d1"), role("daemon"), beat("1.0"), secs(1_029));
-    assert_eq!(kbf(&d, &f, "d1", secs(1_000)), held(Hold::Quiet));
-    assert_eq!(kbf(&d, &f, "d1", secs(1_029)), held(Hold::Quiet));
+    assert_eq!(kbf(&d, &f, "d1", secs(1_000)), gate(Gate::Quiet));
+    assert_eq!(kbf(&d, &f, "d1", secs(1_029)), gate(Gate::Quiet));
     assert_eq!(kbf(&d, &f, "d1", secs(1_030)), update("2.0"));
 }
 
@@ -150,7 +142,7 @@ fn a_host_that_is_updating_holds_as_updating() {
     let f = fleet(NOW, &[("d1", role("daemon"), updating(beat("1.0"), "2.0"))]);
     assert_eq!(
         kbf(&desired("2.0", 1, 1), &f, "d1", NOW),
-        held(Hold::Updating)
+        gate(Gate::Updating)
     );
 }
 
@@ -166,7 +158,7 @@ fn a_host_busy_with_another_service_holds_as_busy_elsewhere() {
     f.order("server", id("h"), version("2.0"), NOW);
     assert_eq!(
         why(&services, &all, "agent", &f, "h", NOW),
-        held(Hold::BusyElsewhere)
+        gate(Gate::BusyElsewhere)
     );
     assert_eq!(why(&services, &all, "server", &f, "h", NOW), update("2.0"));
 }
@@ -177,7 +169,7 @@ fn a_host_at_the_desired_version_holds_as_up_to_date() {
     let f = fleet(NOW, &[("d1", role("daemon"), beat("2.0"))]);
     assert_eq!(
         kbf(&desired("2.0", 1, 1), &f, "d1", NOW),
-        held(Hold::UpToDate)
+        skip(Skip::UpToDate)
     );
 }
 
@@ -195,12 +187,13 @@ fn a_host_that_failed_this_version_holds_as_failed_here() {
     );
     assert_eq!(
         kbf(&desired("2.0", 1, 1), &f, "d1", NOW),
-        held(Hold::FailedHere)
+        skip(Skip::FailedHere)
     );
     assert_eq!(kbf(&desired("3.0", 1, 1), &f, "d1", NOW), update("3.0"));
 }
 
-/// A storage host asked while another storage host updates (one slot) holds with `NoSlot`.
+/// A storage host asked while another storage host updates (the one live update) holds with
+/// `NoSlot`.
 #[test]
 fn a_role_with_no_free_slot_holds_as_no_slot() {
     let f = fleet(
@@ -212,50 +205,8 @@ fn a_role_with_no_free_slot_holds_as_no_slot() {
     );
     assert_eq!(
         kbf(&desired("2.0", 0, 0), &f, "s2", NOW),
-        held(Hold::NoSlot)
+        gate(Gate::NoSlot)
     );
-}
-
-/// A frontend asked while a storage host is behind holds with `WaitingForRole`.
-#[test]
-fn a_role_that_waits_for_another_holds_as_waiting_for_role() {
-    let f = fleet(
-        NOW,
-        &[
-            ("s1", role("storage"), beat("1.0")),
-            ("f1", role("frontend"), beat("1.0")),
-            ("f2", role("frontend"), beat("1.0")),
-        ],
-    );
-    assert_eq!(
-        kbf(&desired("2.0", 0, 1), &f, "f1", NOW),
-        held(Hold::WaitingForRole)
-    );
-}
-
-/// A service whose `after` service has a host behind holds with `WaitingForService`; with
-/// that host at the desired version the host is ordered.
-#[test]
-fn a_service_that_waits_for_another_holds_as_waiting_for_service() {
-    let want = desired("2.0", 0, 0);
-    let (services, all) = two(&want);
-    let mut f = Fleet::new(Duration::ZERO);
-    f.record_in("server", id("h"), role("daemon"), beat("1.0"), NOW);
-    f.record_in("agent", id("h"), role("daemon"), beat("1.0"), NOW);
-    assert_eq!(
-        why(&services, &all, "agent", &f, "h", NOW),
-        held(Hold::WaitingForService)
-    );
-    f.record_in("server", id("h"), role("daemon"), beat("2.0"), NOW);
-    assert_eq!(why(&services, &all, "agent", &f, "h", NOW), update("2.0"));
-}
-
-/// The only storage host, with one storage host required up besides it, holds with `MinUp`.
-#[test]
-fn too_few_others_up_holds_as_min_up() {
-    let f = fleet(NOW, &[("s1", role("storage"), beat("1.0"))]);
-    assert_eq!(kbf(&desired("2.0", 1, 1), &f, "s1", NOW), held(Hold::MinUp));
-    assert_eq!(kbf(&desired("2.0", 0, 1), &f, "s1", NOW), update("2.0"));
 }
 
 /// The first failing rule is the one named: a host that is both up to date and in a role
@@ -270,7 +221,7 @@ fn the_first_failing_rule_is_the_one_named() {
         ],
     );
     let d = desired("2.0", 0, 0);
-    assert_eq!(kbf(&d, &f, "s2", NOW), held(Hold::UpToDate));
+    assert_eq!(kbf(&d, &f, "s2", NOW), skip(Skip::UpToDate));
     let mut quiet = Fleet::new(secs(1_000));
     quiet.record_in(
         LEGACY,
@@ -279,5 +230,16 @@ fn the_first_failing_rule_is_the_one_named() {
         updating(beat("1.0"), "2.0"),
         secs(1_000),
     );
-    assert_eq!(kbf(&d, &quiet, "s1", secs(1_000)), held(Hold::Quiet));
+    assert_eq!(kbf(&d, &quiet, "s1", secs(1_000)), gate(Gate::Quiet));
+}
+
+/// A host that would be ordered says no reason; a gate and a skip say theirs, each in its own
+/// words, through [`Decision::why`] (the status's `hold`).
+///
+/// Catches: a decision whose reason is dropped, or a gate and a skip reported as one another.
+#[test]
+fn the_decision_says_why_it_holds_for_the_status() {
+    assert_eq!(update("2.0").why(), None);
+    assert_eq!(gate(Gate::NoSlot).why(), Some(Why::Gate(Gate::NoSlot)));
+    assert_eq!(skip(Skip::UpToDate).why(), Some(Why::Skip(Skip::UpToDate)));
 }

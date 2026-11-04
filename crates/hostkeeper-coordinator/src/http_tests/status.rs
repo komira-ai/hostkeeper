@@ -3,7 +3,7 @@
 
 use super::*;
 
-const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n";
+const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 async fn beat_from(rig: &Rig, name: &str, role: &str, body: &str) {
     let (code, _) = call(

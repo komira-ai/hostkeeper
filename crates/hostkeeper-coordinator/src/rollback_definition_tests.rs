@@ -8,7 +8,7 @@ use crate::services::{ServiceDef, Services};
 use crate::testutil::kbf_def;
 
 fn service(extra: &str) -> String {
-    format!("[[service]]\nname = \"a\"\n{extra}\n[service.roles.daemon]\n")
+    format!("[[service]]\nname = \"a\"\n{extra}\nroles = [\"daemon\"]\n")
 }
 
 fn parsed(extra: &str) -> ServiceDef {

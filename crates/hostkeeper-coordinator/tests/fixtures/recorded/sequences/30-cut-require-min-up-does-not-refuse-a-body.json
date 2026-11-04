@@ -1,0 +1,14 @@
+{
+ "from": "kbf-coordinator/src/desired.rs (v0.0.64), Desired::parse_request: the legacy service required the min_up keys storage and frontend in the body. This coordinator cut the requirement; kbf's answer is in kbf_status and kbf_body (derived from the rules at the tag, not a kbf test)",
+ "steps": [
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\"}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "kbf_status": 400,
+   "kbf_body": "{\"error\":\"bad_request\"}"
+  }
+ ]
+}

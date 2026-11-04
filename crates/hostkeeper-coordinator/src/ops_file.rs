@@ -84,7 +84,7 @@ pub(crate) fn staged_path(ops: &Path) -> PathBuf {
 }
 
 /// The SHA-256 of `text`, in lowercase hex.
-fn digest(text: &[u8]) -> String {
+pub(crate) fn digest(text: &[u8]) -> String {
     Sha256::digest(text)
         .iter()
         .map(|b| format!("{b:02x}"))

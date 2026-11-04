@@ -1,6 +1,6 @@
 {
  "from": "kbf-coordinator/src/defer_tests.rs::the_definitions_backoff_is_the_one_used (the first two waits, 10 and 30 s; service `svc` is the legacy service kbf here; the host repeats its report at the end of the wait, which the test's `hold` stands for, and goes on with a plain heartbeat when the wait is over)",
- "services_text": "[[service]]\nname = \"kbf\"\ndefer_backoff = { initial_secs = 10, factor = 3, max_secs = 100 }\n[service.roles.daemon]\nmax_updating = 1\nmin_up = 0\n",
+ "services_text": "[[service]]\nname = \"kbf\"\ndefer_backoff = { initial_secs = 10, factor = 3, max_secs = 100 }\nroles = [\"daemon\"]\n",
  "steps": [
   {
    "at_secs": 2000,

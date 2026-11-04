@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use support::rig::{Rig, Spec};
 
 /// Two services that run on daemons, and nothing else: neither is special.
-const TWO: &str = "[[service]]\nname = \"alpha\"\n[service.roles.daemon]\nmin_up = 0\n\n\
-                   [[service]]\nname = \"beta\"\n[service.roles.daemon]\nmin_up = 0\n";
+const TWO: &str = "[[service]]\nname = \"alpha\"\nroles = [\"daemon\"]\n\n\
+                   [[service]]\nname = \"beta\"\nroles = [\"daemon\"]\n";
 
 const BEAT: &str = support::BEAT;
 

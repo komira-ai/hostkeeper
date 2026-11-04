@@ -35,7 +35,3 @@ yaml.org
 =tool.download
 =hook.group
 =hook.environment.name
-
-# A services-file table in the coordinator's tests: a configuration path, not a host (the
-# IANA list delegates `storage`).
-=service.roles.storage

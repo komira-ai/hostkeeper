@@ -1,7 +1,7 @@
 {
  "from": "kbf-coordinator/src/http_tests/halt.rs::the_generation_counts_clears_per_service_and_survives_a_restart (the clears' audit entries are asserted by their fields, as in kbf's other halt tests)",
  "services_fixture": "kbf.services.toml",
- "services_text": "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n",
+ "services_text": "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n",
  "oidc_services": [
   "kbf",
   "other"

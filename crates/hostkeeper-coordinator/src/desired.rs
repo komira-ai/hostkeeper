@@ -5,13 +5,14 @@
 //! `crate::ops_file`), which holds operator actions, version marks and the audit log; and the
 //! halts file beside it, which holds halt reports and clear generations.
 //!
-//! CI sets a desired state with one call: the version every host should run, how many hosts of
-//! a kind may update at once (only 0, which holds the role, matters: one update is live at a
-//! time across every service, [`crate::decide`]), and how many hosts of a role must stay up.
-//! The store keeps one such state per service name; a service must be one the services file
-//! defines (`crate::services`). The file is small JSON, replaced whole by a temporary file,
-//! fsync, rename and a directory fsync, so a crash leaves the old state or the new one. A
-//! directory fsync that fails after the rename leaves the new state in place
+//! CI sets a desired state with one call: the version every host should run, and two maps the
+//! file format carries, how many hosts of a kind may update at once and how many of a role must
+//! stay up. Both are read, kept and printed as CI sent them, and no decision reads either: one
+//! update is live at a time across every service ([`crate::decide`]), and the convergence needs
+//! no number of hosts up. The store keeps one such state per service name; a service must be one
+//! the rollout file defines (`crate::services`). The file is small JSON, replaced whole by a
+//! temporary file, fsync, rename and a directory fsync, so a crash leaves the old state or the
+//! new one. A directory fsync that fails after the rename leaves the new state in place
 //! ([`StoreError::NotSynced`]). While the legacy service (the coordinator's `--legacy-service`)
 //! is the only service the file is the single state itself (the format earlier builds read and
 //! wrote, so a downgrade keeps working); a file with `{"services": {name: state}}` is the map.
@@ -42,7 +43,7 @@ pub const MAX_COUNT: u32 = 10_000;
 pub const FORMAT_ROLES: [&str; 4] = ["frontend", "storage", "daemon", "mac-daemon"];
 
 /// The `min_up` keys the file format names in every state it writes, 0 when the state sets none,
-/// first and in this order (part of the file format: earlier builds require both).
+/// first and in this order (part of the file format: earlier builds need both).
 pub const FORMAT_MIN_UP: [&str; 2] = ["storage", "frontend"];
 
 /// Whether `name` can name a role: the grammar of a role name ([`RoleName`]'s parse), which
@@ -170,15 +171,16 @@ pub struct Desired {
     /// The version every host should run. An older one than the hosts run is a rollback.
     pub version: Version,
     /// The per-role limit on hosts updating at once. Kept, read and written as before so
-    /// older states load and older coordinators read this one's, but only 0 (the role is held)
-    /// matters: one update is live at a time across every service ([`crate::decide`]).
+    /// older states load and older coordinators read this one's; no decision reads it: one
+    /// update is live at a time across every service ([`crate::decide`]).
     #[serde(
         default = "RoleLimits::max_updating_default",
         deserialize_with = "read_max_updating",
         serialize_with = "write_max_updating"
     )]
     pub max_updating: RoleLimits,
-    /// The minimum number of hosts that stay up.
+    /// The minimum number of hosts that stay up. Kept, read and written as before; nothing
+    /// decides on it, and the convergence needs no number of hosts up.
     #[serde(serialize_with = "write_min_up")]
     pub min_up: RoleLimits,
 }
@@ -208,7 +210,7 @@ impl Desired {
     pub fn parse(bytes: &[u8]) -> Result<Self, DesiredError> {
         let desired: Self =
             serde_json::from_slice(bytes).map_err(|e| DesiredError::Malformed(e.to_string()))?;
-        desired.checked(&[])?;
+        desired.checked()?;
         Ok(desired)
     }
 
@@ -216,10 +218,9 @@ impl Desired {
     /// optional `service` (absent means `legacy`, the coordinator's legacy service), for the
     /// services of `services`.
     ///
-    /// The body is the one every service gets: a service takes the `min_up` keys its definition
-    /// requires and may omit the map when it requires none. A limit for a role the service does
-    /// not have is dropped, so that one body does for all services; the format's four roles'
-    /// keys stay as sent, the form earlier builds read.
+    /// The body is the one every service gets; the map may be omitted. A limit for a role the
+    /// service does not have is dropped, so that one body does for all services; the format's
+    /// four roles' keys stay as sent, the form earlier builds read.
     ///
     /// # Errors
     /// [`DesiredError`]; [`DesiredError::UnknownService`] for a service `services` lacks.
@@ -255,13 +256,15 @@ impl Desired {
             Some(_) => return Err(DesiredError::Malformed("service is not text".to_owned())),
         };
         let def = services.get(&service).ok_or(DesiredError::UnknownService)?;
-        if def.require_min_up.is_empty() && !fields.contains_key("min_up") {
-            fields.insert("min_up".to_owned(), serde_json::json!({}));
-        }
+        // `min_up` is optional for every service: nothing decides on it any more, and the file
+        // written names the format's two keys either way (`write_min_up`).
+        fields
+            .entry("min_up")
+            .or_insert_with(|| serde_json::json!({}));
         let mut desired: Self = serde_json::from_value(fields.into()).map_err(malformed)?;
-        desired.checked(&def.require_min_up)?;
+        desired.checked()?;
         desired.refuse_unnamed(services)?;
-        let has = |role: &str| def.roles.contains_key(role);
+        let has = |role: &str| def.roles.contains(role);
         let mut dropped = desired.max_updating.retain(&FORMAT_ROLES, has);
         dropped.extend(desired.min_up.retain(&FORMAT_MIN_UP, has));
         dropped.sort();
@@ -282,7 +285,7 @@ impl Desired {
         for (map, limits, legacy) in maps {
             let unnamed = limits.0.keys().find(|role| {
                 !legacy.contains(&role.as_str())
-                    && !services.defs().any(|def| def.roles.contains_key(*role))
+                    && !services.defs().any(|def| def.roles.contains(role.as_str()))
             });
             if let Some(role) = unnamed {
                 return Err(DesiredError::Malformed(format!(
@@ -294,8 +297,8 @@ impl Desired {
     }
 
     /// Whether the state is acceptable: every limit key a role name, every count within
-    /// [`MAX_COUNT`], and every minimum in `require` named.
-    fn checked(&self, require: &[String]) -> Result<(), DesiredError> {
+    /// [`MAX_COUNT`].
+    fn checked(&self) -> Result<(), DesiredError> {
         let limits = [&self.max_updating, &self.min_up];
         for role in limits.iter().flat_map(|l| l.0.keys()) {
             if !is_role_name(role) {
@@ -303,9 +306,6 @@ impl Desired {
                     "{role:?} is not a role name"
                 )));
             }
-        }
-        if let Some(role) = require.iter().find(|r| !self.min_up.0.contains_key(*r)) {
-            return Err(DesiredError::Malformed(format!("min_up lacks {role}")));
         }
         if limits
             .iter()
@@ -340,7 +340,7 @@ fn parse_file(
     let file: MapFile =
         serde_json::from_slice(bytes).map_err(|e| DesiredError::Malformed(e.to_string()))?;
     for desired in file.services.values() {
-        desired.checked(&[])?;
+        desired.checked()?;
     }
     Ok(file.services)
 }

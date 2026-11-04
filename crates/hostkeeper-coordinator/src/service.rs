@@ -12,19 +12,19 @@ use hostkeeper_wire::identity::SanPrefixes;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Agent, Answer, Heartbeat, LEGACY_AGENT_NAME, ServiceReply};
 use serde::Serialize;
-use subtle::ConstantTimeEq;
 
 use crate::acks::{clear_bad, release_ack};
 use crate::converge::{Convergence, RoleCounts, converge_service, role_counts};
-use crate::decide::{Decision, Hold};
+use crate::decide::{Decision, Why};
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::fleet::{Fleet, Host, Node};
 use crate::halt;
 use crate::identity::Identity;
 use crate::membership::{Member, Standing, account, deferred_count, members, standing};
-use crate::ops::{self, AuditEntry, OPERATOR, OperateError, OpsError, OpsState, OpsStore};
+use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsState, OpsStore};
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
+use crate::tokens::{OperatorTokens, TokenName};
 
 /// The time since the coordinator started.
 pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
@@ -147,8 +147,9 @@ pub struct ServiceHostStatus {
     #[serde(flatten)]
     pub host: HostStatus,
     /// The rule that holds an order for the service back at this moment, or `None` when the
-    /// host would be ordered at its next heartbeat.
-    pub hold: Option<Hold>,
+    /// host would be ordered at its next heartbeat. It is spelled in snake case: a gate such as
+    /// `no_slot` or a skip such as `up_to_date`.
+    pub hold: Option<Why>,
 }
 
 /// One service in the status.
@@ -259,7 +260,7 @@ pub struct Coordinator {
     prefixes: SanPrefixes,
     ops: OpsStore,
     verifier: Arc<Verifier>,
-    operator_token: String,
+    tokens: OperatorTokens,
     clock: Clock,
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
@@ -274,12 +275,13 @@ impl std::fmt::Debug for Coordinator {
 
 impl Coordinator {
     /// A coordinator that starts now, by `clock`, with the desired state of `desired`. CI's
-    /// token is checked by `verifier`; the operator's read is `operator_token`.
+    /// token is checked by `verifier`; an operator's by `operator`: the tokens of a tokens file
+    /// ([`OperatorTokens::from_file`]) or one token, a `String`, named `operator`.
     #[must_use]
     pub fn new(
         desired: DesiredStore,
         verifier: Arc<Verifier>,
-        operator_token: String,
+        operator: impl Into<OperatorTokens>,
         clock: Clock,
     ) -> Self {
         let started = clock();
@@ -291,7 +293,7 @@ impl Coordinator {
             prefixes: SanPrefixes::default(),
             ops: OpsStore::volatile(),
             verifier,
-            operator_token,
+            tokens: operator.into(),
             clock,
             services_dropped: AtomicU64::new(0),
             extras: Mutex::new(ExtrasDropped::default()),
@@ -333,6 +335,12 @@ impl Coordinator {
     #[must_use]
     pub fn legacy_service(&self) -> Option<&str> {
         self.legacy.as_deref()
+    }
+
+    /// The operator's tokens, which the tick that looks at the TLS files re-reads.
+    #[must_use]
+    pub fn tokens(&self) -> &OperatorTokens {
+        &self.tokens
     }
 
     /// The same coordinator over `ops` instead of a store that keeps nothing.
@@ -623,27 +631,28 @@ impl Coordinator {
         })
     }
 
-    /// Whether `bearer` is the operator token, compared in constant time. CI's token is no
-    /// operator token and the operator token is no CI token.
-    pub fn operator(&self, bearer: Option<&str>) -> Result<(), Unauthorized> {
-        let presented = bearer.ok_or(Unauthorized)?.as_bytes();
-        if bool::from(presented.ct_eq(self.operator_token.as_bytes())) {
-            Ok(())
-        } else {
-            Err(Unauthorized)
-        }
+    /// The name of the operator token in `bearer`: the token is compared by its SHA-256 in
+    /// constant time ([`OperatorTokens::name_of`]). CI's token is no operator token and an
+    /// operator token is no CI token.
+    ///
+    /// # Errors
+    /// [`Unauthorized`]: no bearer, or not a token.
+    pub fn operator(&self, bearer: Option<&str>) -> Result<TokenName, Unauthorized> {
+        bearer
+            .and_then(|presented| self.tokens.name_of(presented))
+            .ok_or(Unauthorized)
     }
 
     /// Does the operator action in `body` (`docs/design/host-updates.md`, section 5), if
-    /// `bearer` is the operator token, and answers the audit entry it made. The token is
-    /// checked here before the body is looked at; the transport checks it
-    /// ([`Self::operator`]) before it reads the body at all.
+    /// `bearer` is an operator token, and answers the audit entry it made, whose `by` is the
+    /// token's name. The token is checked here before the body is looked at; the transport
+    /// checks it ([`Self::operator`]) before it reads the body at all.
     ///
     /// # Errors
     /// [`OperateError`].
     pub fn operate(&self, bearer: Option<&str>, body: &[u8]) -> Result<AuditEntry, OperateError> {
-        self.operator(bearer)?;
-        let entry = ops::operate(&self.ops, &self.services, OPERATOR, body)?;
+        let by = self.operator(bearer)?;
+        let entry = ops::operate(&self.ops, &self.services, by.as_str(), body)?;
         self.reconcile();
         Ok(entry)
     }
@@ -701,7 +710,7 @@ impl Coordinator {
                     .hosts_of(&def.name)
                     .map(|(id, host)| ServiceHostStatus {
                         host: host_status(&fleet, &def.name, id, host, now),
-                        hold: match halt::decide(
+                        hold: halt::decide(
                             &self.ops,
                             &self.services,
                             &all,
@@ -709,10 +718,8 @@ impl Coordinator {
                             &fleet,
                             id,
                             now,
-                        ) {
-                            Decision::Update { .. } => None,
-                            Decision::Hold(why) => Some(why),
-                        },
+                        )
+                        .why(),
                     })
                     .collect();
                 let up = hosts.iter().filter(|h| h.host.up).count();
@@ -802,9 +809,8 @@ fn host_status(
 }
 
 /// Where the hosts of `def` stand: the one answer both `GET /v1/convergence` and the status
-/// give. Every service is counted by [`converge_service`]: the minimum of hosts up per role is
-/// the role's own `min_up`, else the desired state's. A halted service is `halted` whatever
-/// its hosts say.
+/// give. Every service is counted by [`converge_service`]: every live host at the desired
+/// version and none updating. A halted service is `halted` whatever its hosts say.
 pub(crate) fn convergence_of(
     def: &ServiceDef,
     desired: Option<&Desired>,

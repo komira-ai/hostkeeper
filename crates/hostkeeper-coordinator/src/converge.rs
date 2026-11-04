@@ -12,11 +12,9 @@
 //!   it. It stays so until the host is fixed or another version is set (the coordinator
 //!   does not tell it again, `decide`).
 //! - `converged`: past the quiet start, at least one live host, every live host at the
-//!   desired version, none updating or failed or still baking or waiting for a promotion,
-//!   and at least `min_up` hosts of every role up (the role's own `min_up`, else the desired
-//!   state's, never raised by a `never_last` role's floor; decisions do apply that floor, see
-//!   [`crate::services::RoleDef::required_up`]). The last two keep a coordinator that has just
-//!   restarted, and has heard from few hosts, from reporting a farm converged.
+//!   desired version, and none updating, failed, still baking or waiting for a promotion.
+//!   The last two keep a coordinator that has just restarted, and has heard from few hosts,
+//!   from reporting a farm converged. The desired state's `min_up` is not read.
 //! - `halted`: a host reported a failure no version can repair and an operator has not
 //!   cleared it. It wins over every other state, and the convergence names the halt
 //!   (`halt`: the host, the check and the version); see [`crate::halt`].
@@ -41,8 +39,8 @@ use crate::services::ServiceDef;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
-    /// Every live host runs the desired version, none is updating or failed, and the
-    /// minimums are met.
+    /// Every live host runs the desired version, and none is updating, failed, baking or
+    /// waiting for a promotion.
     Converged,
     /// A live host failed its update to the desired version.
     Blocked,
@@ -182,11 +180,9 @@ pub fn role_counts(
 }
 
 /// Where the hosts of the service `def` stand at `now` against its `desired`, over the hosts
-/// that heartbeated the service. The minimum of hosts up per role is the role's own `min_up`
-/// in the definition, else the desired state's `min_up` for it: the rule every service is read
-/// by. It does not apply the floor of a `never_last` role that
-/// [`crate::services::RoleDef::required_up`] applies to decisions, so a role that is
-/// `never_last` and has a `min_up` of 0 needs no host up to read `converged`.
+/// that heartbeated the service. One rule serves every service: converged when every live
+/// member runs the desired version and none is updating, failed, baking or waiting for a
+/// promotion; no number of hosts up is required.
 #[must_use]
 pub fn converge_service(
     def: &ServiceDef,
@@ -194,12 +190,6 @@ pub fn converge_service(
     fleet: &Fleet,
     now: Duration,
 ) -> Convergence {
-    let minimum = |d: &Desired, role: &str| {
-        def.roles
-            .get(role)
-            .and_then(|r| r.min_up)
-            .unwrap_or_else(|| d.min_up.min_up_of(role)) as usize
-    };
     let quiet = fleet.is_quiet(now);
     let Some(desired) = desired else {
         return Convergence {
@@ -216,7 +206,7 @@ pub fn converge_service(
     let roles = role_counts(def, Some(desired), fleet, now);
     let live = fleet
         .hosts_of(service)
-        .filter(|(_, h)| def.roles.contains_key(h.role_name()) && h.is_live(now))
+        .filter(|(_, h)| def.roles.contains(h.role_name()) && h.is_live(now))
         .count();
     let at_desired: usize = roles.iter().map(|c| c.at_desired).sum();
     let clear = roles.iter().all(|c| c.updating == 0 && c.failed == 0);
@@ -227,24 +217,9 @@ pub fn converge_service(
             || !(h.beat.promotion_pending
                 || fleet.is_baking(service, id, h, &desired.version, def.bake_beats, now))
     });
-    let up = |role: &str| {
-        fleet
-            .hosts_of(service)
-            .filter(|(_, h)| h.role_name() == role && h.is_up(now))
-            .count()
-    };
     let state = if roles.iter().any(|c| c.failed > 0) {
         State::Blocked
-    } else if !quiet
-        && live > 0
-        && at_desired == live
-        && clear
-        && settled
-        && def
-            .role_names()
-            .into_iter()
-            .all(|role| up(role) >= minimum(desired, role))
-    {
+    } else if !quiet && live > 0 && at_desired == live && clear && settled {
         State::Converged
     } else {
         State::InProgress

@@ -4,12 +4,15 @@
 //!   the answer is the reply as JSON. The caller is the certificate's updater identity
 //!   ([`identity_of`]); a certificate that names none is refused with 403 before the body
 //!   is read.
-//! - **Control** (TLS, no client certificate): `POST /v1/desired` with CI's OIDC token as
-//!   the bearer and the desired state as JSON; `GET /v1/status` with the operator token as
-//!   the bearer; `GET /v1/convergence[?service=<name>]` with CI's OIDC token as the bearer
-//!   (the operator token is refused there; no query means the coordinator's legacy service,
-//!   and is a bad request when there is none); `POST /v1/operator` with the operator token as
-//!   the bearer and an action as JSON (`crate::ops`; CI's token is refused).
+//! - **Private** (TLS, no client certificate; `Surface::Control`): the listener of
+//!   `--private-listen`, which serves CI's OIDC calls and the operator's. `POST /v1/desired` with
+//!   CI's OIDC token as the bearer and the desired state as JSON; `GET /v1/status` with an
+//!   operator token as the bearer; `GET /v1/convergence[?service=<name>]` with CI's OIDC token as
+//!   the bearer (an operator token is refused there; no query means the coordinator's legacy
+//!   service, and is a bad request when there is none); `POST /v1/operator` with an operator
+//!   token as the bearer and an action as JSON (`crate::ops`; CI's token is refused). An
+//!   operator token is one of the named tokens ([`crate::tokens`]); its name is the `by` of the
+//!   change.
 //!
 //! An answer is JSON, and an error is `{"error":"<code>"}` with a code from a closed set:
 //! never a claim value, a path or the text of an internal error. A heartbeat that lists no
@@ -53,7 +56,7 @@ pub const MAX_OPERATOR_BYTES: usize = 4096;
 pub enum Surface {
     /// The mutual-TLS listener of the updaters.
     Heartbeat,
-    /// The listener of CI and the operator.
+    /// The private listener: the listener of CI and the operator.
     Control,
 }
 

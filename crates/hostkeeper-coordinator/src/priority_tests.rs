@@ -1,6 +1,6 @@
 //! `priority`: which service a host is offered first when more than one is behind. The
 //! default keeps the order the coordinator always had (`kbf`, then the order the host listed
-//! its services), a higher number goes first, and no priority overrides `after`.
+//! its services); a higher number goes first.
 
 use std::collections::BTreeMap;
 
@@ -14,11 +14,9 @@ use crate::testutil::{Rig, beat, id, kbf_def, role, with_kbf};
 
 const BODY: &str = r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#;
 
-/// A service `name` running on daemons, with `extra` lines (priority, after) in its table.
+/// A service `name` running on daemons, with `extra` lines (priority) in its table.
 fn service(name: &str, extra: &str) -> String {
-    format!(
-        "[[service]]\nname = \"{name}\"\n{extra}\n[service.roles.daemon]\nmax_updating = 1\nmin_up = 0\n"
-    )
+    format!("[[service]]\nname = \"{name}\"\n{extra}\nroles = [\"daemon\"]\n")
 }
 
 /// A coordinator over `text`, CI allowed to set `kbf` and `names`, every one of them desired
@@ -130,16 +128,6 @@ async fn equal_priority_falls_back_to_the_announced_order() {
     let text = service("alpha", "priority = 3") + &service("beta", "priority = 3");
     let rig = rig("prio-equal", &text, &["alpha", "beta"]).await;
     assert_eq!(offered(&rig, &["beta", "alpha"]), ["beta", "alpha", "kbf"]);
-}
-
-/// A higher priority does not override `after`: `alpha` (priority 5) waits for `beta`, so
-/// while `beta` is behind the host is offered the next service, and `alpha` follows once
-/// `beta` is done.
-#[tokio::test]
-async fn priority_never_overrides_after() {
-    let text = service("beta", "") + &service("alpha", "priority = 5\nafter = [\"beta\"]");
-    let rig = rig("prio-after", &text, &["alpha", "beta"]).await;
-    assert_eq!(offered(&rig, &["alpha", "beta"]), ["kbf", "beta", "alpha"]);
 }
 
 fn parse(text: &str) -> Result<Services, String> {

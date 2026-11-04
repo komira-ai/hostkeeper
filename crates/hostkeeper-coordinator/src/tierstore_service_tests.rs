@@ -15,11 +15,11 @@ use crate::identity::Identity;
 use crate::membership::{RawSelector, Selector};
 use crate::ops::ServiceOps;
 use crate::reconcile::{FailThreshold, Rollback};
-use crate::services::{RoleDef, Services};
+use crate::services::{Services, VersionScheme};
 use crate::testutil::{OPERATOR, Rig, TIERSTORE_ENTRY, beat, id, role, version};
 
-/// The recorded services file: kbf's entry, then tierstore's.
-const SERVICES_FILE: &str = include_str!("../tests/fixtures/recorded/services.toml");
+/// The recorded rollout file: kbf's entry, then tierstore's.
+const ROLLOUT_FILE: &str = include_str!("../tests/fixtures/recorded/services.toml");
 const KBF_ENTRY: &str = include_str!("../tests/fixtures/recorded/kbf.services.toml");
 
 const STORAGE: [&str; 6] = ["s1", "s2", "s3", "s4", "s5", "s6"];
@@ -34,28 +34,16 @@ fn def() -> crate::services::ServiceDef {
         .clone()
 }
 
-/// The recorded entry is a definition of tierstore that the services file parser accepts and
-/// that says each of the values the rollout rests on: the storage role, one host at a time,
-/// four others up, a canary of one, a bake of three beats, automatic rollback at the default
-/// threshold, and a host that never registered is not ordered. A change to the recorded data
-/// shows here.
+/// The recorded entry is a definition of tierstore that the rollout file parser accepts and
+/// that says each of the values the rollout rests on: the storage role, a canary of one, a
+/// bake of three beats, automatic rollback at the default threshold, and a host that never
+/// registered is not ordered. A change to the recorded data shows here.
 #[test]
 fn the_recorded_definition_says_what_the_rollout_rests_on() {
     let def = def();
     assert_eq!(def.name, "tierstore");
-    let roles: Vec<(&String, &RoleDef)> = def.roles.iter().collect();
-    assert_eq!(
-        roles,
-        vec![(
-            &"storage".to_owned(),
-            &RoleDef {
-                max_updating: Some(1),
-                min_up: Some(4),
-                never_last: false,
-                after: Vec::new(),
-            }
-        )]
-    );
+    assert_eq!(def.version_scheme, VersionScheme::Semver);
+    assert_eq!(def.roles, BTreeSet::from(["storage".to_owned()]));
     let raw: RawSelector = toml::from_str("roles = [\"storage\"]").expect("a selector");
     let selector = Selector::new(raw, &BTreeSet::from(["storage".to_owned()])).expect("valid");
     assert_eq!(def.selector, Some(selector));
@@ -70,22 +58,20 @@ fn the_recorded_definition_says_what_the_rollout_rests_on() {
         }
     );
     assert!(!def.install_when_absent);
-    assert!(def.after.is_empty(), "tierstore waits for no service");
-    assert!(def.require_min_up.is_empty(), "its body names no min_up");
 }
 
-/// The definition is a services-file entry that may follow kbf's: alone it defines tierstore
+/// The definition is a rollout-file entry that may follow kbf's: alone it defines tierstore
 /// and nothing else, after kbf's own entry it defines both, and the recorded file of the two
 /// is exactly that.
 #[test]
-fn the_definition_follows_kbf_in_one_services_file() {
+fn the_definition_follows_kbf_in_one_rollout_file() {
     let alone = Services::parse(TIERSTORE_ENTRY).expect("alone");
     assert_eq!(alone.names().collect::<Vec<_>>(), ["tierstore"]);
     let joined = format!("{KBF_ENTRY}\n{TIERSTORE_ENTRY}");
     let both = Services::parse(&joined).expect("after kbf's own entry");
     assert_eq!(both.names().collect::<Vec<_>>(), ["kbf", "tierstore"]);
     assert_eq!(both.get("tierstore"), alone.get("tierstore"));
-    assert_eq!(Services::parse(SERVICES_FILE).expect("recorded file"), both);
+    assert_eq!(Services::parse(ROLLOUT_FILE).expect("recorded file"), both);
 }
 
 // ---- a coordinator that runs it ----------------------------------------------------------
@@ -99,7 +85,7 @@ fn rig(test: &str) -> Rig {
         hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER)
     );
     rig.coordinator = Rig::start_with_allow_list(&rig.dir, &rig.clock, &list)
-        .with_services(Services::parse(SERVICES_FILE).expect("the definitions"));
+        .with_services(Services::parse(ROLLOUT_FILE).expect("the definitions"));
     rig
 }
 
@@ -195,7 +181,7 @@ fn going(host: &str) -> (&str, &str, Option<&str>, Option<UpdateResult>) {
 async fn a_canary_goes_first_then_one_storage_host_at_a_time_each_baking() {
     let rig = rig("ts-roll");
     rig.set(TWO).await;
-    // Every host is heard once before any can be ordered: four others must be up.
+    // The first round already orders the canary, s1; the assertions below follow it.
     let _ = round(&rig, 2_000, &[]);
 
     let (ordered, daemon) = round(&rig, 2_015, &[]);
@@ -243,7 +229,7 @@ async fn a_canary_goes_first_then_one_storage_host_at_a_time_each_baking() {
 }
 
 /// One storage host of six that does not beat (drained, or out for a measurement) does not
-/// hold the roll: the canary goes on the five that do, four of which stay up while it updates.
+/// hold the roll: the canary goes on the five that do.
 #[tokio::test]
 async fn one_storage_host_out_does_not_hold_the_roll() {
     let rig = rig("ts-one-out");

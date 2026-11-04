@@ -40,7 +40,7 @@ use crate::services::ServiceDef;
 /// `absent`.
 pub const HEARTBEAT_V2: &str = "heartbeat-v2";
 
-/// A selector as a services file spells it.
+/// A selector as a rollout file spells it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawSelector {
@@ -146,7 +146,7 @@ pub fn membership(
         Some(selector) => {
             selector.selects(&node.role, ops.hosts.get(&key).map(|host| &host.labels))
         }
-        None => announced.is_some() && def.roles.contains_key(&node.role),
+        None => announced.is_some() && def.roles.contains(&node.role),
     };
     if !selected {
         Membership::NotSelected

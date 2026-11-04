@@ -8,7 +8,7 @@ use std::time::Duration;
 use hostkeeper_wire::wire::{DeferredReport, Heartbeat, Outcome, ServiceReply, Token};
 
 use crate::converge::{State, converge_service};
-use crate::decide::{Decision, Hold, decide_why};
+use crate::decide::{Decision, Gate, Skip, decide_why};
 use crate::defer::DeferBackoff;
 use crate::desired::Desired;
 use crate::fleet::Fleet;
@@ -18,11 +18,9 @@ use crate::testutil::{
     Rig, beat, desired, id, kbf_def, last, role, secs, unhealthy, updating, version,
 };
 
-/// One service on daemons, one host updating at a time, with `extra` lines in its table.
+/// One service on daemons with `extra` lines in its table.
 fn text(extra: &str) -> String {
-    format!(
-        "[[service]]\nname = \"svc\"\n{extra}\n[service.roles.daemon]\nmax_updating = 1\nmin_up = 0\n"
-    )
+    format!("[[service]]\nname = \"svc\"\n{extra}\nroles = [\"daemon\"]\n")
 }
 
 /// A heartbeat of a daemon running `running` that says it declined `target`.
@@ -89,8 +87,12 @@ fn update(target: &str) -> Decision {
     }
 }
 
-fn held(why: Hold) -> Decision {
-    Decision::Hold(why)
+fn gate(why: Gate) -> Decision {
+    Decision::Gate(why)
+}
+
+fn skip(why: Skip) -> Decision {
+    Decision::Skip(why)
 }
 
 /// Catches: a deferral that leaves the order standing, so the slot is held for the whole
@@ -103,13 +105,13 @@ fn a_deferred_report_ends_the_order_and_frees_the_slot() {
     farm.beat("d1", beat("1.0"), 1_000);
     farm.beat("d2", beat("1.0"), 1_000);
     assert_eq!(farm.ask("d1", 1_000), update("2.0"));
-    assert_eq!(farm.hold("d2", 1_001), held(Hold::NoSlot));
+    assert_eq!(farm.hold("d2", 1_001), gate(Gate::NoSlot));
     farm.beat("d1", deferred_beat("1.0", "2.0", 0), 1_005);
     let host = farm.fleet.get_in("svc", &id("d1")).expect("d1");
     assert!(!farm.fleet.is_ordered("svc", &id("d1"), secs(1_005)));
     assert!(!farm.fleet.holds_slot("svc", &id("d1"), host, secs(1_005)));
     assert_eq!(farm.ask("d2", 1_005), update("2.0"));
-    assert_eq!(farm.hold("d1", 1_006), held(Hold::Deferred));
+    assert_eq!(farm.hold("d1", 1_006), skip(Skip::Deferred));
 }
 
 /// Catches: a wait that ends early or late, and a repeated report moving it: the host that
@@ -121,7 +123,7 @@ fn a_deferred_host_is_not_ordered_before_not_before_and_is_at_it() {
     farm.beat("d1", deferred_beat("1.0", "2.0", 0), 1_000);
     farm.beat("d1", deferred_beat("1.0", "2.0", 0), 1_100);
     farm.beat("d1", deferred_beat("1.0", "2.0", 600), 1_200);
-    assert_eq!(farm.hold("d1", 1_299), held(Hold::Deferred));
+    assert_eq!(farm.hold("d1", 1_299), skip(Skip::Deferred));
     assert_eq!(farm.hold("d1", 1_300), update("2.0"));
 }
 
@@ -139,13 +141,13 @@ fn the_backoff_doubles_per_episode_and_stops_at_the_cap() {
         farm.beat("d1", deferred_beat("1.0", "2.0", 0), opened);
         assert_eq!(
             farm.hold("d1", opened + wait - 1),
-            held(Hold::Deferred),
+            skip(Skip::Deferred),
             "held for {wait}"
         );
         at = opened + wait;
     }
     farm.beat("d2", deferred_beat("1.0", "2.0", 0), at);
-    assert_eq!(farm.hold("d2", at + 299), held(Hold::Deferred));
+    assert_eq!(farm.hold("d2", at + 299), skip(Skip::Deferred));
     assert_eq!(farm.hold("d2", at + 300), update("2.0"));
 }
 
@@ -159,7 +161,7 @@ fn a_retry_after_over_the_cap_is_honoured() {
         farm.beat("d1", deferred_beat("1.0", "2.0", retry_after), 1_000);
         assert_eq!(
             farm.hold("d1", 1_000 + wait - 1),
-            held(Hold::Deferred),
+            skip(Skip::Deferred),
             "{retry_after}"
         );
         assert_eq!(
@@ -181,16 +183,16 @@ fn a_deferral_for_another_target_is_ignored_and_a_new_version_lifts_it() {
     farm.beat("d2", beat("1.0"), 1_000);
     assert_eq!(farm.ask("d1", 1_000), update("2.0"));
     farm.beat("d1", deferred_beat("1.0", "1.5", 0), 1_005);
-    assert_eq!(farm.hold("d2", 1_006), held(Hold::NoSlot));
+    assert_eq!(farm.hold("d2", 1_006), gate(Gate::NoSlot));
     farm.beat("d2", deferred_beat("1.0", "1.5", 0), 1_006);
-    assert_eq!(farm.hold("d2", 1_007), held(Hold::NoSlot));
+    assert_eq!(farm.hold("d2", 1_007), gate(Gate::NoSlot));
     farm.beat("d1", beat("2.0"), 1_010);
     farm.beat("d2", deferred_beat("1.0", "2.0", 0), 1_020);
-    assert_eq!(farm.hold("d2", 1_021), held(Hold::Deferred));
+    assert_eq!(farm.hold("d2", 1_021), skip(Skip::Deferred));
     farm.desire("3.0");
     assert_eq!(farm.hold("d2", 1_021), update("3.0"));
     farm.beat("d2", deferred_beat("1.0", "3.0", 0), 1_030);
-    assert_eq!(farm.hold("d2", 1_329), held(Hold::Deferred));
+    assert_eq!(farm.hold("d2", 1_329), skip(Skip::Deferred));
     assert_eq!(farm.hold("d2", 1_330), update("3.0"));
 }
 
@@ -205,7 +207,7 @@ fn an_update_that_starts_ends_the_episodes() {
     farm.beat("d1", deferred_beat("1.0", "2.0", 0), 1_305);
     farm.beat("d1", updating(beat("1.0"), "2.0"), 1_900);
     farm.beat("d1", deferred_beat("1.0", "2.0", 0), 2_000);
-    assert_eq!(farm.hold("d1", 2_299), held(Hold::Deferred));
+    assert_eq!(farm.hold("d1", 2_299), skip(Skip::Deferred));
     assert_eq!(farm.hold("d1", 2_300), update("2.0"));
 }
 
@@ -219,7 +221,7 @@ fn the_definitions_backoff_is_the_one_used() {
     for wait in [10, 30, 90, 100] {
         assert_eq!(farm.ask("d1", at), update("2.0"));
         farm.beat("d1", deferred_beat("1.0", "2.0", 0), at + 1);
-        assert_eq!(farm.hold("d1", at + wait), held(Hold::Deferred));
+        assert_eq!(farm.hold("d1", at + wait), skip(Skip::Deferred));
         at += wait + 1;
     }
 }
@@ -233,7 +235,7 @@ fn a_deferral_holds_its_own_host_and_service_only() {
     farm.beat("d2", beat("1.0"), 1_000);
     assert_eq!(farm.hold("d2", 1_001), update("2.0"));
     let other = Services::parse(&format!(
-        "{}[[service]]\nname = \"other\"\n[service.roles.daemon]\nmax_updating = 1\nmin_up = 0\n",
+        "{}[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n",
         text("")
     ))
     .expect("services");
@@ -272,7 +274,7 @@ fn an_old_agents_failed_report_still_blocks() {
     let mut farm = Farm::new("");
     let failed = unhealthy(last(beat("1.0"), "2.0", Outcome::Failed));
     farm.beat("d1", failed, 1_000);
-    assert_eq!(farm.hold("d1", 1_001), held(Hold::FailedHere));
+    assert_eq!(farm.hold("d1", 1_001), skip(Skip::FailedHere));
     let host = farm.fleet.get_in("svc", &id("d1")).expect("d1");
     assert!(host.holds_slot());
     let def = farm.services.get("svc").expect("svc").clone();
@@ -331,7 +333,7 @@ async fn a_restart_forgets_the_backoff() {
     assert_eq!(say(&rig, 3_400, deferred_beat("1.0", "2.0", 0)), update);
 }
 
-/// Catches: a services file that cannot set the backoff, or one that takes a value that
+/// Catches: a rollout file that cannot set the backoff, or one that takes a value that
 /// breaks it: the table is optional (the default is 300 s, doubling, capped at 3600 s), each
 /// key is optional, and a zero or a factor over 16, a cap under the initial wait or over a
 /// week, an unknown key and a wrong type are refused with the field named.
@@ -397,7 +399,8 @@ fn the_backoff_is_a_definition_field_with_checked_values() {
             "{bad}"
         );
     }
-    let kbf = "[[service]]\nname = \"kbf\"\ndefer_backoff = { initial_secs = 5 }\n[service.roles.daemon]\n";
+    let kbf =
+        "[[service]]\nname = \"kbf\"\ndefer_backoff = { initial_secs = 5 }\nroles = [\"daemon\"]\n";
     let replaced = Services::parse(kbf).expect("services");
     assert_eq!(
         replaced.get("kbf").expect("kbf").defer_backoff.initial_secs,
@@ -445,7 +448,7 @@ fn a_deferred_report_for_another_target_than_the_order_leaves_the_order() {
     assert_eq!(farm.ask("d1", 1_000), update("2.0"));
     farm.beat("d1", deferred_beat("1.0", "1.5", 0), 1_005);
     assert!(farm.fleet.is_ordered("svc", &id("d1"), secs(1_006)));
-    assert_eq!(farm.hold("d2", 1_006), held(Hold::NoSlot));
+    assert_eq!(farm.hold("d2", 1_006), gate(Gate::NoSlot));
     farm.beat("d1", beat("1.0"), 1_130);
     assert_eq!(farm.hold("d1", 1_131), update("2.0"));
 }

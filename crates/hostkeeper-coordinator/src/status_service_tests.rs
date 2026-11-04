@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use crate::identity::Identity;
 use crate::testutil::{OPERATOR, Rig, beat, ci_token, id, role, updating, version, with_kbf};
 
-const SERVICES: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n\
-                        [[service]]\nname = \"third\"\n[service.roles.daemon]\nmin_up = 0\n";
+const SERVICES: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n\
+                        [[service]]\nname = \"third\"\nroles = [\"daemon\"]\n";
 
 fn who(name: &str, role: RoleName) -> Identity {
     Identity {

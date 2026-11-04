@@ -12,7 +12,7 @@ fn with_services(rig: &mut Rig, text: &str) {
     rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_services(with_kbf(text));
 }
 
-const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\n";
+const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 /// The testkit's single table with `services` appended to it.
 fn single_table(services: &str) -> String {
@@ -69,9 +69,6 @@ async fn a_single_table_sets_kbf_and_is_refused_for_another_service() {
     rig.set(STATE).await;
 }
 
-const SERVICES_ONE_AT_A_TIME: &str =
-    "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmax_updating = 1\nmin_up = 0\n";
-
 /// A beat of a new updater: kbf at `kbf`, `other` at `other`.
 fn new_beat(kbf: &str, other: &str) -> hostkeeper_wire::wire::Heartbeat {
     let mut b = beat(kbf);
@@ -102,6 +99,8 @@ fn update_of(service: &str, target: &str) -> hostkeeper_wire::wire::ServiceReply
     }
 }
 
+/// A rig whose coordinator defines `other` beside kbf: `other` is rolled one host at a time
+/// (the one live update).
 async fn services_rig(name: &str) -> Rig {
     let mut rig = Rig::new(name);
     rig.coordinator = Rig::start_with_allow_list(
@@ -109,7 +108,7 @@ async fn services_rig(name: &str) -> Rig {
         &rig.clock,
         &single_table("services = [\"kbf\", \"other\"]"),
     )
-    .with_services(with_kbf(SERVICES_ONE_AT_A_TIME));
+    .with_services(with_kbf(OTHER_SERVICE));
     rig.set(STATE).await;
     rig.set(OTHER).await;
     rig.at(2_000);
@@ -212,8 +211,8 @@ async fn only_an_updater_that_announced_a_service_is_ordered_it() {
     );
 }
 
-const SERVER_AGENT: &str = "[[service]]\nname = \"js-server\"\n[service.roles.daemon]\n\
-    [[service]]\nname = \"js-agent\"\n[service.roles.daemon]\n";
+const SERVER_AGENT: &str = "[[service]]\nname = \"js-server\"\nroles = [\"daemon\"]\n\
+    [[service]]\nname = \"js-agent\"\nroles = [\"daemon\"]\n";
 
 fn body_for(service: &str) -> String {
     format!(r#"{{"service":"{service}","version":"3.0","min_up":{{"storage":0,"frontend":0}}}}"#)
@@ -284,14 +283,12 @@ async fn each_entry_sets_only_its_own_services() {
     assert_eq!(status.services.len(), 3);
 }
 
-const OTHER_PAIR: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 2\n";
-
 /// Behaviour: the convergence and the status of a second service come from the heartbeats
 /// that carry that service and from its own desired state. While `other` has one of its two
-/// required daemons at 3.0, kbf (all at 2.0) reads converged and `other` in progress; when
-/// the second daemon reports 3.0 `other` converges, and the status counts each service's
-/// hosts on their own. A name the coordinator does not manage is an error, and so is a
-/// read with a bad token.
+/// daemons at 3.0 and the other behind, kbf (all at 2.0) reads converged and `other` in
+/// progress; when the second daemon reports 3.0 `other` converges, and the status counts
+/// each service's hosts on their own. A name the coordinator does not manage is an error,
+/// and so is a read with a bad token.
 #[tokio::test]
 async fn a_second_services_convergence_and_status_come_from_its_own_hosts() {
     let mut rig = Rig::new("svc-converge-other");
@@ -300,7 +297,7 @@ async fn a_second_services_convergence_and_status_come_from_its_own_hosts() {
         &rig.clock,
         &single_table("services = [\"kbf\", \"other\"]"),
     )
-    .with_services(with_kbf(OTHER_PAIR));
+    .with_services(with_kbf(OTHER_SERVICE));
     rig.set(r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#)
         .await;
     rig.set(OTHER).await;
@@ -363,7 +360,7 @@ async fn a_second_services_convergence_and_status_come_from_its_own_hosts() {
 }
 
 /// Catches: a service matched by prefix or without regard to case. The entry names `kbf`
-/// and `js`, and the services file defines `js` and `js-server`: `js` is set, `js-server`
+/// and `js`, and the rollout file defines `js` and `js-server`: `js` is set, `js-server`
 /// (which starts with `js`) is a 403, and `JS` is no defined service, so a 400. An entry
 /// that names `JS` gets a 403 for `js`. Each refusal leaves the state as it was.
 #[tokio::test]
@@ -371,8 +368,8 @@ async fn a_service_is_allowed_by_its_exact_name_only() {
     let start = |rig: &Rig, named: &str| {
         let list = config_text(STATIC_ISSUER) + &format!("services = [\"kbf\", \"{named}\"]\n");
         Rig::start_with_allow_list(&rig.dir, &rig.clock, &list).with_services(with_kbf(
-            "[[service]]\nname = \"js\"\n[service.roles.daemon]\n\
-             [[service]]\nname = \"js-server\"\n[service.roles.daemon]\n",
+            "[[service]]\nname = \"js\"\nroles = [\"daemon\"]\n\
+             [[service]]\nname = \"js-server\"\nroles = [\"daemon\"]\n",
         ))
     };
     let mut rig = Rig::new("svc-exact");

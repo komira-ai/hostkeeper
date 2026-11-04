@@ -152,7 +152,7 @@ fn decide(
     let live = || {
         fleet
             .hosts_of(service)
-            .filter(|(_, h)| def.roles.contains_key(h.role_name()))
+            .filter(|(_, h)| def.roles.contains(h.role_name()))
             .filter(|(_, h)| h.is_live(now))
             // The hosts the service counts: not an excluded one, nor one its selector leaves out.
             .filter(|(id, _)| {

@@ -12,25 +12,25 @@ use crate::testutil::{LEGACY, OPERATOR, Rig, beat, id, kbf_def, role};
 
 pub(crate) const V2: &str = "heartbeat-v2";
 
-pub(crate) const DAEMONS: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n\
+pub(crate) const DAEMONS: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n\
     [service.selector]\nroles = [\"daemon\"]\n";
 
-const DAEMONS_OF_TWO_ROLES: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n\
-    [service.roles.storage]\nmin_up = 0\n[service.selector]\nroles = [\"daemon\"]\n";
+const DAEMONS_OF_TWO_ROLES: &str = "[[service]]\nname = \"other\"\n\
+    roles = [\"daemon\", \"storage\"]\n[service.selector]\nroles = [\"daemon\"]\n";
 
-const NO_SELECTOR: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n";
+const NO_SELECTOR: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
-pub(crate) const ZONE_A: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n\
+pub(crate) const ZONE_A: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n\
     [service.selector]\nlabels = { zone = \"a\" }\n";
 
-const TWO: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n\
+const TWO: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n\
     [service.selector]\nroles = [\"daemon\"]\n\
     [[service]]\nname = \"second\"\ninstall_when_absent = true\n\
-    [service.roles.daemon]\nmin_up = 0\n[service.selector]\nroles = [\"daemon\"]\n";
+    roles = [\"daemon\"]\n[service.selector]\nroles = [\"daemon\"]\n";
 
-const KBF_ZONE_B: &str = "[[service]]\nname = \"kbf\"\n[service.roles.daemon]\n\
+const KBF_ZONE_B: &str = "[[service]]\nname = \"kbf\"\nroles = [\"daemon\"]\n\
     [service.selector]\nlabels = { zone = \"b\" }\n\
-    [[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n";
+    [[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 /// The services of `text`, and the legacy service as the shipped definition unless `text`
 /// defines it.
@@ -387,7 +387,7 @@ async fn a_definition_without_a_selector_counts_exactly_as_before() {
 /// does not read being accepted: each is refused when the file is read.
 #[test]
 fn a_selector_naming_a_role_the_definition_lacks_is_refused() {
-    let head = "[[service]]\nname = \"other\"\n[service.roles.daemon]\n[service.selector]\n";
+    let head = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n[service.selector]\n";
     let why = |body: &str| match Services::parse(&format!("{head}{body}")) {
         Err(ServicesError::Invalid(why)) => why,
         other => panic!("not refused as invalid: {other:?}"),
@@ -456,7 +456,7 @@ async fn heartbeat_v2_is_advertised_and_acted_on() {
 
 /// Catches: `Selector::new` answering with free text instead of a typed refusal: a role the
 /// service lacks is `UnknownRole` naming it, a label outside the grammar is `BadLabel`, and
-/// each prints exactly the text the services file reports after the service name.
+/// each prints exactly the text the rollout file reports after the service name.
 #[test]
 fn selector_new_refuses_with_a_typed_error_that_prints_the_old_text() {
     let roles = std::collections::BTreeSet::from(["daemon".to_owned()]);

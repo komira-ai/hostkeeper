@@ -4,7 +4,7 @@
 
 use super::*;
 
-const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n";
+const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 const NEW_GOLDEN_BEAT: &str = concat!(
     r#"{"platform":"linux-x86_64","version":"0.0.19+g123456abcdef-1","health":"healthy","#,

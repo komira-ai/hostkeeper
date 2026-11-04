@@ -7,7 +7,7 @@ use super::*;
 use crate::services::Services;
 use crate::testutil::with_kbf;
 
-const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n";
+const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 const LISTS_OTHER: &str = r#"{"platform":"linux-x86_64","version":"1.0","health":"healthy","services":[{"name":"other","version":"1.0","health":"healthy"}]}"#;
 

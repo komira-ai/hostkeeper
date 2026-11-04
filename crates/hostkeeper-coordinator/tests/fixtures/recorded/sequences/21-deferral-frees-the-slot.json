@@ -1,6 +1,6 @@
 {
  "from": "kbf-coordinator/src/defer_tests.rs::a_deferred_report_ends_the_order_and_frees_the_slot (the test's service `svc` is the legacy service kbf here, so its fields are the top level of the heartbeat)",
- "services_text": "[[service]]\nname = \"kbf\"\n\n[service.roles.daemon]\nmax_updating = 1\nmin_up = 0\n",
+ "services_text": "[[service]]\nname = \"kbf\"\nroles = [\"daemon\"]\n",
  "steps": [
   {
    "at_secs": 2000,

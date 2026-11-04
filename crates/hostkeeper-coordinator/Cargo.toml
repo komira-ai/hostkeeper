@@ -15,7 +15,8 @@ description = "The update coordinator: tells each host's updater which version t
 # pure function (`decide`) over the heartbeats the coordinator has seen. On disk it keeps three
 # files: the desired state of each service, the operations file (operator actions, version
 # marks, the audit ring) and the halts file beside it (halt reports, clear generations).
-# The services it manages are data: the file named by `--services-file`.
+# The services it manages are data: the rollout file named by `--rollout-file`. An operator is
+# one of the named tokens of `--tokens-file`.
 [[bin]]
 name = "hostkeeper-coordinator"
 path = "src/main.rs"

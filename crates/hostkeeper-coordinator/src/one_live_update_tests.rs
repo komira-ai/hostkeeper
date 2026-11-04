@@ -1,6 +1,6 @@
 //! One live update at a time across every service and role (`decide.rs`, rule 7): a host
 //! holding an update slot for any service holds the next order of every service, whatever
-//! each role's `max_updating` says, and a restart mid-update resumes under the same rule.
+//! the desired state's `max_updating` says, and a restart mid-update resumes under the same rule.
 //! Every time is explicit; the fleets are built beat by beat.
 
 use std::collections::BTreeMap;
@@ -10,22 +10,18 @@ use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_wire::RoleName;
 use hostkeeper_wire::wire::{Health, Heartbeat, Outcome, ServiceBeat, ServiceReply};
 
-use crate::decide::{Decision, Hold, decide_why};
+use crate::decide::{Decision, Gate, Skip, Why, decide_why};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::identity::Identity;
 use crate::services::Services;
 use crate::testutil::{Rig, beat, id, kbf_def, last, role, secs, unhealthy, updating, version};
 
-/// `a` runs on daemons and bakes for two beats; `b` runs on daemons and storage hosts; `wide`
-/// lets three daemons update at once by its own number. None keeps a host up.
-const SERVICES: &str = "[[service]]\nname = \"a\"\nbake_beats = 2\n\
-                        [service.roles.daemon]\nmin_up = 0\n\
-                        [[service]]\nname = \"b\"\n\
-                        [service.roles.daemon]\nmin_up = 0\n\
-                        [service.roles.storage]\nmin_up = 0\n\
-                        [[service]]\nname = \"wide\"\n\
-                        [service.roles.daemon]\nmax_updating = 3\nmin_up = 0\n";
+/// `a` runs on daemons and bakes for two beats; `b` runs on daemons and storage hosts; `wide` runs
+/// on daemons, and the test rolls four of them. None keeps a host up.
+const SERVICES: &str = "[[service]]\nname = \"a\"\nbake_beats = 2\nroles = [\"daemon\"]\n\
+                        [[service]]\nname = \"b\"\nroles = [\"daemon\", \"storage\"]\n\
+                        [[service]]\nname = \"wide\"\nroles = [\"daemon\"]\n";
 
 fn services() -> Services {
     Services::parse(SERVICES).expect("services")
@@ -54,8 +50,12 @@ fn go() -> Decision {
     }
 }
 
-fn held(why: Hold) -> Decision {
-    Decision::Hold(why)
+fn gate(why: Gate) -> Decision {
+    Decision::Gate(why)
+}
+
+fn skip(why: Skip) -> Decision {
+    Decision::Skip(why)
 }
 
 /// The decision, noted as an order when it is one, as the coordinator does under its lock.
@@ -83,7 +83,7 @@ fn two_services_with_pending_updates_order_one_host_and_the_second_waits_for_the
     record(&mut f, "b", "d1", role("daemon"), beat("1.0"), 100);
     record(&mut f, "b", "d2", role("daemon"), beat("1.0"), 100);
     assert_eq!(ask(&mut f, "a", "d1", 100), go());
-    assert_eq!(ask(&mut f, "b", "d2", 100), held(Hold::NoSlot), "ordered");
+    assert_eq!(ask(&mut f, "b", "d2", 100), gate(Gate::NoSlot), "ordered");
 
     record(
         &mut f,
@@ -93,19 +93,19 @@ fn two_services_with_pending_updates_order_one_host_and_the_second_waits_for_the
         updating(beat("1.0"), "2.0"),
         115,
     );
-    assert_eq!(ask(&mut f, "b", "d2", 115), held(Hold::NoSlot), "updating");
+    assert_eq!(ask(&mut f, "b", "d2", 115), gate(Gate::NoSlot), "updating");
 
     record(&mut f, "a", "d1", role("daemon"), beat("2.0"), 130);
-    assert_eq!(ask(&mut f, "b", "d2", 130), held(Hold::Baking), "one beat");
+    assert_eq!(ask(&mut f, "b", "d2", 130), gate(Gate::Baking), "one beat");
     assert_eq!(
         ask(&mut f, "b", "d1", 130),
-        held(Hold::Baking),
+        gate(Gate::Baking),
         "its own bake"
     );
 
     record(&mut f, "a", "d1", role("daemon"), beat("2.0"), 145);
     assert_eq!(ask(&mut f, "b", "d2", 145), go(), "baked and released");
-    assert_eq!(ask(&mut f, "b", "d1", 145), held(Hold::NoSlot), "d2 has it");
+    assert_eq!(ask(&mut f, "b", "d1", 145), gate(Gate::NoSlot), "d2 has it");
 }
 
 /// Behaviour: `d1` failed `a` and is unhealthy. It holds the one slot against `a` on another
@@ -125,11 +125,11 @@ fn a_failed_unhealthy_host_blocks_every_services_next_order() {
     for (service, host) in blocked {
         assert_eq!(
             why(&f, &all(), service, host, 100),
-            held(Hold::NoSlot),
+            gate(Gate::NoSlot),
             "{service} on {host}"
         );
     }
-    assert_eq!(why(&f, &all(), "a", "d1", 100), held(Hold::FailedHere));
+    assert_eq!(why(&f, &all(), "a", "d1", 100), skip(Skip::FailedHere));
     let mut newer = all();
     newer.insert("a".to_owned(), want("3.0"));
     assert_eq!(
@@ -138,7 +138,7 @@ fn a_failed_unhealthy_host_blocks_every_services_next_order() {
             version: version("3.0")
         }
     );
-    assert_eq!(why(&f, &newer, "a", "d2", 100), held(Hold::NoSlot));
+    assert_eq!(why(&f, &newer, "a", "d2", 100), gate(Gate::NoSlot));
 
     let mut healthy = failed;
     healthy.health = Health::Healthy;
@@ -152,12 +152,11 @@ fn a_failed_unhealthy_host_blocks_every_services_next_order() {
     }
 }
 
-/// Behaviour: `wide` allows three daemons by its own number, yet of four daemons behind one
-/// is ordered at a time: each round asks every host, then the one ordered reports updating and
-/// then done. Every host is ordered exactly once, and never two in one round. Catches a
-/// `max_updating` above one still widening a roll.
+/// Behaviour: of four daemons behind one is ordered at a time: each round asks every host, then
+/// the one ordered reports updating and then done. Every host is ordered exactly once, and never
+/// two in one round. Catches a roll that widens past one host.
 #[test]
-fn one_service_with_max_updating_three_still_updates_one_host_at_a_time() {
+fn one_service_of_four_daemons_updates_one_host_at_a_time() {
     let hosts = ["d1", "d2", "d3", "d4"];
     let mut f = Fleet::new(Duration::ZERO);
     for host in hosts {
@@ -179,9 +178,9 @@ fn one_service_with_max_updating_three_still_updates_one_host_at_a_time() {
             assert_eq!(
                 why(&f, &all(), "wide", other, at + 10),
                 if f.get_in("wide", &id(other)).expect("known").beat.version == version("2.0") {
-                    held(Hold::UpToDate)
+                    skip(Skip::UpToDate)
                 } else {
-                    held(Hold::NoSlot)
+                    gate(Gate::NoSlot)
                 },
                 "{other} while {host} updates"
             );
@@ -191,8 +190,7 @@ fn one_service_with_max_updating_three_still_updates_one_host_at_a_time() {
     assert_eq!(order, hosts);
 }
 
-const RESTART_SERVICES: &str =
-    "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n";
+const RESTART_SERVICES: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 fn who(host: &str) -> Identity {
     Identity {
@@ -285,7 +283,7 @@ async fn a_restart_mid_update_resumes_with_the_one_update_rule() {
         .iter()
         .find(|h| h.host.node_id == "d2")
         .and_then(|h| h.hold);
-    assert_eq!(hold, Some(Hold::NoSlot));
+    assert_eq!(hold, Some(Why::Gate(Gate::NoSlot)));
 
     beat_at(&rig, 2_065, "d1", with_other(beat("2.0"), "3.0", None));
     let released = beat_at(&rig, 2_065, "d2", beat("1.0"));

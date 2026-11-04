@@ -2,11 +2,11 @@
 //! and the drop is reported: a warning in the log and the role names in the answer.
 
 use crate::desired::Desired;
-use crate::services::{RoleDef, ServiceDef, Services};
+use crate::services::{ServiceDef, Services};
 use crate::testutil::{LEGACY, Log, Rig, ci_token, kbf_services};
 
 fn services() -> Services {
-    kbf_services().with(ServiceDef::new("pool", &[("builder", RoleDef::plain())]))
+    kbf_services().with(ServiceDef::new("pool", &["builder"]))
 }
 
 /// A body for `kbf` with limits for `builder`, a role only `pool` has.
@@ -22,7 +22,7 @@ const WITHOUT_BUILDER: &str = r#"{"version":"1.0","max_updating":{"daemon":1},
 fn the_dropped_roles_are_named_sorted_and_once() {
     let body = br#"{"version":"1.0","max_updating":{"zed":1,"builder":3},
         "min_up":{"storage":1,"frontend":1,"builder":2,"zed":1}}"#;
-    let services = services().with(ServiceDef::new("other", &[("zed", RoleDef::plain())]));
+    let services = services().with(ServiceDef::new("other", &["zed"]));
     let (_, _, dropped) =
         Desired::parse_request_noting(body, &services, Some(LEGACY)).expect("accepted");
     assert_eq!(dropped, ["builder", "zed"]);

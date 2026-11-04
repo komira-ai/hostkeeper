@@ -3,8 +3,11 @@
 //!
 //! Everything is a flag; the coordinator reads no environment variable. It holds no CA key:
 //! its certificate and key are files the farm CA issued, and the CA certificate it checks
-//! updaters against is a file too. The services it manages are the ones `--services-file`
-//! defines; `--legacy-service` names the one whose heartbeat is the top level of a heartbeat.
+//! updaters against is a file too. The services it manages are the ones `--rollout-file`
+//! defines; `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
+//! the operator's tokens are those of `--tokens-file`, or the one token of
+//! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
+//! operator's; it takes the address of one interface.
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
 //! the whole start can be driven over in-memory connections.
 
@@ -33,6 +36,7 @@ use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, relo
 use crate::ops::{OpsError, OpsStore};
 use crate::service::{Clock, Coordinator};
 use crate::services::{Services, ServicesError};
+use crate::tokens::{OperatorTokens, TokensError};
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -40,24 +44,40 @@ pub enum StartError {
     /// The operator token file is refused.
     #[error("--operator-token-file: {0}")]
     OperatorToken(#[source] hostkeeper_wire::secret::SecretError),
+    /// The tokens file is refused.
+    #[error(transparent)]
+    Tokens(#[from] TokensError),
+    /// `--tokens-file` and `--operator-token-file` are both given.
+    #[error(
+        "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"
+    )]
+    TokenFlags,
+    /// Neither is given.
+    #[error("one of --tokens-file and --operator-token-file is required")]
+    NoTokenFlag,
+    /// `--private-listen` is a wildcard address.
+    #[error(
+        "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface"
+    )]
+    PrivateListen(SocketAddr),
     /// The allow-list of CI's OIDC token is refused.
     #[error(transparent)]
     Oidc(#[from] ConfigError),
-    /// The services file is refused.
-    #[error("--services-file: {0}")]
+    /// The rollout file is refused.
+    #[error("--rollout-file: {0}")]
     Services(#[from] ServicesError),
     /// The two certificate URI prefixes are refused.
     #[error("--role-uri-prefix and --host-role-uri-prefix: {0}")]
     Prefixes(#[from] PrefixError),
-    /// `--legacy-service` names a service the services file does not define.
-    #[error("--legacy-service names {0}, which --services-file does not define")]
+    /// `--legacy-service` names a service the rollout file does not define.
+    #[error("--legacy-service names {0}, which --rollout-file does not define")]
     LegacyService(String),
     /// An allow-list entry names no services and there is no legacy service for it to stand for.
     #[error("--oidc-config: entry {0} names no services and --legacy-service is not set")]
     OidcEntryUnnamed(usize),
-    /// An allow-list entry names a service the services file does not define.
+    /// An allow-list entry names a service the rollout file does not define.
     #[error(
-        "--oidc-config: entry {entry} names the service {service}, which is not defined by --services-file"
+        "--oidc-config: entry {entry} names the service {service}, which is not defined by --rollout-file"
     )]
     OidcEntryService {
         /// The entry, counting from 1.
@@ -104,7 +124,7 @@ pub struct Cli {
 /// The verbs of the binary.
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
-    /// Serve the heartbeat and control listeners until SIGTERM or SIGINT.
+    /// Serve the heartbeat and private listeners until SIGTERM or SIGINT.
     Serve(Serve),
 }
 
@@ -114,9 +134,14 @@ pub struct Serve {
     /// Where updaters dial (mutual TLS).
     #[arg(long)]
     pub heartbeat_listen: SocketAddr,
-    /// Where CI sets the desired state and an operator reads the status (TLS).
-    #[arg(long)]
-    pub control_listen: SocketAddr,
+    /// The private listener (TLS): where CI sets the desired state and reads the convergence
+    /// with its OIDC token, and where an operator reads the status and acts with a token. It
+    /// takes the address of one interface (loopback, a tunnel or a management network): a
+    /// wildcard address is refused at start.
+    // The name this flag had, `--control-listen`, is a hidden alias; giving both is refused. It
+    // is not in the doc comment above because that is the flag's help, which does not show it.
+    #[arg(long, alias = "control-listen")]
+    pub private_listen: SocketAddr,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
     /// `coordinator`.
     #[arg(long)]
@@ -134,23 +159,34 @@ pub struct Serve {
     /// The allow-list of CI's OIDC token: a TOML file with a `[remote_operator]` table.
     #[arg(long)]
     pub oidc_config: PathBuf,
-    /// A file holding the operator token, mode 0600, owned by the coordinator's user.
+    /// The operator's tokens: a TOML file with a `[[token]]` table for each, with its `name` (1
+    /// to 32 bytes of a-z, 0-9 and -) and the `sha256` of the token as lowercase hex, so the
+    /// file holds no secret; mode 0600, owned by the coordinator's user. It is read again
+    /// every `--tls-reload-secs`, so a token is revoked or replaced without a restart. Exactly
+    /// one of this and `--operator-token-file`.
     #[arg(long)]
-    pub operator_token_file: PathBuf,
+    pub tokens_file: Option<PathBuf>,
+    /// A file holding one operator token, mode 0600, owned by the coordinator's user: the one
+    /// token, named `operator`. Read once, at start. Exactly one of this and `--tokens-file`.
+    #[arg(long)]
+    pub operator_token_file: Option<PathBuf>,
     /// The ops file: what operators changed (exclusions, labels) and the audit ring, written
     /// by the coordinator and read back at start; created by the first change. Default: the
     /// state file's name with `.ops` added. Its directory must be writable by the
-    /// coordinator.
+    /// coordinator. The audit file `<ops-file>.audit` is beside it.
     #[arg(long)]
     pub ops_file: Option<PathBuf>,
-    /// The TOML file that defines the services (`docs/design/host-updates.md`). Required; an
-    /// empty file defines none. Which of them a CI token may set is said by the allow-list
-    /// entry that admits it (`--oidc-config`).
-    #[arg(long)]
-    pub services_file: PathBuf,
+    /// The rollout file: TOML with a `[[service]]` table for each service the coordinator
+    /// manages, the roles it runs on and how its rollout goes (`docs/design/host-updates.md`).
+    /// Required; an empty file defines none. Which of them a CI token may set is said by the
+    /// allow-list entry that admits it (`--oidc-config`).
+    // The name this flag had, `--services-file`, is a hidden alias; giving both is refused. It
+    // is not in the doc comment above because that is the flag's help, which does not show it.
+    #[arg(long, alias = "services-file")]
+    pub rollout_file: PathBuf,
     /// The service whose heartbeat is the top level of a heartbeat, which a desired-state body
     /// without `service` sets and an allow-list entry without `services` admits. It must be
-    /// defined by `--services-file`. Without it only the `services` entries of a heartbeat
+    /// defined by `--rollout-file`. Without it only the `services` entries of a heartbeat
     /// count.
     #[arg(long)]
     pub legacy_service: Option<String>,
@@ -160,7 +196,7 @@ pub struct Serve {
     /// The prefix of the certificate URI that names the role of the caller's host.
     #[arg(long, default_value = DEFAULT_HOST_ROLE_URI_PREFIX)]
     pub host_role_uri_prefix: String,
-    /// How often the TLS files are looked at again, in seconds.
+    /// How often the TLS files and the tokens file are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
 }
@@ -170,7 +206,7 @@ pub struct Serve {
 pub struct Bound {
     /// The heartbeat listener.
     pub heartbeat: SocketAddr,
-    /// The control listener.
+    /// The private listener.
     pub control: SocketAddr,
 }
 
@@ -180,13 +216,13 @@ pub struct Parts {
     pub coordinator: Arc<Coordinator>,
     /// The heartbeat listener's TLS (client certificates required).
     pub heartbeat_tls: TlsSource,
-    /// The control listener's TLS.
+    /// The private listener's TLS.
     pub control_tls: TlsSource,
     /// Where to bind the heartbeat listener.
     pub heartbeat_listen: SocketAddr,
-    /// Where to bind the control listener.
+    /// Where to bind the private listener.
     pub control_listen: SocketAddr,
-    /// How often to look at the TLS files.
+    /// How often to look at the TLS files and the tokens file.
     pub reload: Duration,
 }
 
@@ -195,14 +231,24 @@ pub struct Parts {
 ///
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
-/// file; the ops file must be one this build reads), the legacy service or an allow-list entry
-/// names a service `--services-file` does not define, an entry names no services with no
-/// legacy service set, or the two URI prefixes are refused.
+/// file; the ops file must be one this build reads), `--private-listen` is a wildcard address,
+/// both token flags or neither is given, the legacy service or an allow-list entry names a
+/// service `--rollout-file` does not define, an entry names no services with no legacy service
+/// set, or the two URI prefixes are refused.
 pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
-    let operator_token = hostkeeper_wire::secret::read_token(&flags.operator_token_file)
-        .map_err(StartError::OperatorToken)?;
+    if flags.private_listen.ip().to_canonical().is_unspecified() {
+        return Err(StartError::PrivateListen(flags.private_listen));
+    }
+    let tokens = match (&flags.tokens_file, &flags.operator_token_file) {
+        (Some(path), None) => OperatorTokens::from_file(path)?,
+        (None, Some(path)) => OperatorTokens::single(
+            &hostkeeper_wire::secret::read_token(path).map_err(StartError::OperatorToken)?,
+        ),
+        (Some(_), Some(_)) => return Err(StartError::TokenFlags),
+        (None, None) => return Err(StartError::NoTokenFlag),
+    };
     let oidc = AllowList::from_file(&flags.oidc_config)?;
-    let services = Services::from_file(&flags.services_file)?;
+    let services = Services::from_file(&flags.rollout_file)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
     let legacy = flags.legacy_service.as_deref();
     if let Some(name) = legacy.filter(|name| services.get(name).is_none()) {
@@ -247,7 +293,7 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
     let clock: Clock = Arc::new(move || origin.elapsed());
     Ok(Parts {
         coordinator: Arc::new(
-            Coordinator::new(desired, Arc::new(verifier), operator_token, clock)
+            Coordinator::new(desired, Arc::new(verifier), tokens, clock)
                 .with_services(services)
                 .with_legacy_service(legacy.map(str::to_owned))
                 .with_prefixes(prefixes)
@@ -260,7 +306,7 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
         )?,
         control_tls: TlsSource::files("control", files(None), interval)?,
         heartbeat_listen: flags.heartbeat_listen,
-        control_listen: flags.control_listen,
+        control_listen: flags.private_listen,
         reload: interval,
     })
 }
@@ -324,6 +370,7 @@ where
         tls: parts.control_tls.clone(),
         surface: Surface::Control,
     };
+    let tokens = parts.coordinator.tokens().clone();
     let coordinator = parts.coordinator;
     let serving = together(
         serve(
@@ -336,7 +383,11 @@ where
     );
     match together(
         serving,
-        reload_every(vec![parts.heartbeat_tls, parts.control_tls], parts.reload),
+        reload_every(
+            vec![parts.heartbeat_tls, parts.control_tls],
+            tokens,
+            parts.reload,
+        ),
     )
     .await {}
 }

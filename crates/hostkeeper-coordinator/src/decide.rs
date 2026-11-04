@@ -19,39 +19,34 @@
 //! 6. the service's canary gate, if it has one, is open to the host ([`crate::canary`]; a
 //!    host that is deferring is not chosen as a canary);
 //! 7. the service runs on the host's role, and no update is live anywhere: no host, of any
-//!    role, holds an update slot for any service, and the role's `max_updating` is not 0.
-//!    One update is live at a time across every service and role, whatever `max_updating`
-//!    says; a number above 1 is read and has no effect, and 0 still holds the role ([`live`]).
-//!    A host holds a slot while updating, while its promotion is pending, after a failed
-//!    update until it heartbeats healthy, from the order the coordinator gave it until the
-//!    host reports it or the order ages out, [`crate::fleet::ORDER_AGE`], and, at its
-//!    service's desired version, until it has beaten healthy that service's `bake_beats`
-//!    times, [`crate::bake`]. The asking host's own slot for the asked service is not
-//!    counted, so a host asking again under its own order is told the same again. A host the
-//!    service no longer counts (excluded, out of its selector, not announcing it) still holds
-//!    its slot until its beats or its order's age free it ([`Fleet::occupants_of`]);
-//! 8. the role waits for the roles its definition names (e.g. a frontend role waiting for
-//!    every live storage role host) and the service for the services in its `after`: each
-//!    live host of those runs that service's desired version and is done updating;
-//! 9. the hosts that would still be up without this one number at least the minimum: the
-//!    role's `min_up` (the desired state's `min_up` for that role), and at least one if the role
-//!    is never the last (`never_last`), whatever
-//!    the setting says. A host is up when it is live, healthy, not
-//!    updating, not waiting for its promotion and not under an outstanding order, so a host that has not heartbeated since
-//!    a restart counts as missing.
+//!    role, holds an update slot for any service. One update is live at a time across every
+//!    service and role ([`live`]). A host holds a slot while updating, while its promotion is
+//!    pending, after a failed update until it heartbeats healthy, from the order the
+//!    coordinator gave it until the host reports it or the order ages out,
+//!    [`crate::fleet::ORDER_AGE`], and, at its service's desired version, until it has beaten
+//!    healthy that service's `bake_beats` times, [`crate::bake`]. The asking host's own slot
+//!    for the asked service is not counted, so a host asking again under its own order is told
+//!    the same again. A host the service no longer counts (excluded, out of its selector, not
+//!    announcing it) still holds its slot until its beats or its order's age free it
+//!    ([`Fleet::occupants_of`]).
 //!
 //! A version marked bad ([`crate::reconcile`]) is ordered to nobody, whatever the rules above
-//! say, and is held at [`Hold::Bad`] after the quiet start.
+//! say, and is held at [`Gate::Bad`] after the quiet start.
 //! A host that reports the service `absent` (declared, never registered) is held back before
-//! all of these but the first, unless the definition says `install_when_absent` ([`Hold::Absent`]).
+//! all of these but the first, unless the definition says `install_when_absent` ([`Skip::Absent`]).
 //!
 //! The decision records nothing: the caller notes an `Update` it returns with
 //! [`Fleet::order`], under the same lock, so the next host's decision sees it. A host that
 //! asks again while its own order is outstanding is told the same again: its own order never
 //! counts against it, and the others' slots have not changed.
 //!
-//! The reply carries the desired version and nothing else. [`decide_why`] is the same
-//! decision that also says which rule held ([`Hold`]); [`decide_in`] drops the reason.
+//! The reply carries the desired version and nothing else. [`decide_why`] is the same decision
+//! that also says why it holds. A [`Gate`] is a rule that is closed at this moment and opens by
+//! itself or when something changes (the quiet start, the one live update, the canary, a bake, a
+//! version marked bad, a halt); a [`Skip`] is a question that does not apply (no definition, no
+//! desired state, not a member of the service, a host the service has not registered, a host at
+//! the desired version, one that failed it, one that declined it). [`Why`] is either, spelled in
+//! snake case for the status. [`decide_in`] drops the reason.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -63,7 +58,7 @@ use serde::Serialize;
 
 use crate::canary;
 use crate::desired::Desired;
-use crate::fleet::{Fleet, Host};
+use crate::fleet::Fleet;
 use crate::services::{ServiceDef, Services};
 
 /// What to tell the host `id` about `service` at `now`, given every service's `desired`
@@ -80,19 +75,40 @@ pub fn decide_in(
 ) -> Reply {
     match decide_why(services, desired, service, fleet, id, now) {
         Decision::Update { version } => Reply::Update { version },
-        Decision::Hold(_) => Reply::Nothing,
+        Decision::Gate(_) | Decision::Skip(_) => Reply::Nothing,
     }
 }
 
-/// Which rule held an order back: the first that failed, in the order the module lists them
-/// (the lookups before them come first: the definition, the desired state, the host). The
-/// status says it in snake case (`no_slot`).
+/// A rule that holds an order back at this moment. The status says it in snake case
+/// (`no_slot`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Hold {
+pub enum Gate {
     /// The service is halted: a host reported a failure no version can repair and an operator
     /// has not cleared it. Checked before every other rule ([`crate::halt::decide`]).
     Halted,
+    /// The desired version is marked bad ([`crate::reconcile`]).
+    Bad,
+    /// The host is updating this service.
+    Updating,
+    /// The host is updating another service or has an order outstanding for one.
+    BusyElsewhere,
+    /// A host, of any role, holds an update slot for some service (one live update at a time).
+    NoSlot,
+    /// The coordinator started less than [`crate::fleet::QUIET_START`] ago.
+    Quiet,
+    /// The service's canary gate is closed and the host is not one of the canaries.
+    CanaryWait,
+    /// No host holds an update slot, but a host, of any role, runs its service's desired
+    /// version and has not yet baked.
+    Baking,
+}
+
+/// A question that does not apply to this host and service: there is nothing to decide. The
+/// status says it in snake case (`up_to_date`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Skip {
     /// The service has no definition.
     NoDefinition,
     /// The service has no desired state.
@@ -100,37 +116,26 @@ pub enum Hold {
     /// The coordinator has not heard from the host for the service, or the service does not
     /// run on the host's role.
     NotAMember,
-    /// The coordinator started less than [`crate::fleet::QUIET_START`] ago.
-    Quiet,
     /// The service is declared on the host and has never registered, and the definition does
     /// not say `install_when_absent`.
     Absent,
-    /// The host is updating this service.
-    Updating,
-    /// The host is updating another service or has an order outstanding for one.
-    BusyElsewhere,
     /// The host runs the desired version.
     UpToDate,
     /// The host failed an update to the desired version.
     FailedHere,
     /// The host declined an update to the desired version and its wait is not over.
     Deferred,
-    /// A host, of any role, holds an update slot for some service (one live update at a time),
-    /// or the role's `max_updating` is 0.
-    NoSlot,
-    /// A role of the service that this one waits for has hosts behind or updating.
-    WaitingForRole,
-    /// A service that this one waits for has hosts behind or updating.
-    WaitingForService,
-    /// Fewer hosts of the role would stay up than the role requires.
-    MinUp,
-    /// No host holds an update slot, but a host, of any role, runs its service's desired
-    /// version and has not yet baked.
-    Baking,
-    /// The service's canary gate is closed and the host is not one of the canaries.
-    CanaryWait,
-    /// The desired version is marked bad ([`crate::reconcile`]).
-    Bad,
+}
+
+/// Why a host is told nothing, as the status says it in `hold`: a gate or a skip, each in its own
+/// snake case spelling (`"no_slot"`, `"up_to_date"`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum Why {
+    /// A gate that is closed.
+    Gate(Gate),
+    /// A question that does not apply.
+    Skip(Skip),
 }
 
 /// What [`decide_why`] found for one host and service.
@@ -141,8 +146,22 @@ pub enum Decision {
         /// The desired version.
         version: Version,
     },
-    /// Tell it nothing, for this reason.
-    Hold(Hold),
+    /// Tell it nothing: a gate is closed.
+    Gate(Gate),
+    /// Tell it nothing: the question does not apply.
+    Skip(Skip),
+}
+
+impl Decision {
+    /// Why the host is told nothing, or `None` when it is told to update.
+    #[must_use]
+    pub fn why(&self) -> Option<Why> {
+        match self {
+            Self::Update { .. } => None,
+            Self::Gate(gate) => Some(Why::Gate(*gate)),
+            Self::Skip(skip) => Some(Why::Skip(*skip)),
+        }
+    }
 }
 
 /// The decision for the host `id` about `service` at `now`, with the rule that held when it
@@ -173,17 +192,16 @@ pub fn decide_marked(
     now: Duration,
 ) -> Decision {
     let Some(def) = services.get(service) else {
-        return Decision::Hold(Hold::NoDefinition);
+        return Decision::Skip(Skip::NoDefinition);
     };
     let Some(want) = desired.get(service) else {
-        return Decision::Hold(Hold::NoDesired);
+        return Decision::Skip(Skip::NoDesired);
     };
-    match first_hold(services, def, want, desired, bad, fleet, id, now) {
-        Some(why) => Decision::Hold(why),
-        None => Decision::Update {
+    first_hold(services, def, want, desired, bad, fleet, id, now).unwrap_or_else(|| {
+        Decision::Update {
             version: want.version.clone(),
-        },
-    }
+        }
+    })
 }
 
 /// The first rule that fails for the host `id`, or `None` when every rule holds.
@@ -200,70 +218,49 @@ fn first_hold(
     fleet: &Fleet,
     id: &HostId,
     now: Duration,
-) -> Option<Hold> {
+) -> Option<Decision> {
     let service = def.name.as_str();
-    let member = fleet
+    let Some(host) = fleet
         .get_in(service, id)
-        .and_then(|h| def.roles.get(h.role_name()).map(|role| (h, role)));
-    let Some((host, role)) = member else {
-        return Some(Hold::NotAMember);
+        .filter(|h| def.roles.contains(h.role_name()))
+    else {
+        return Some(Decision::Skip(Skip::NotAMember));
     };
-    let others = || fleet.hosts_of(service).filter(|(other, _)| *other != id);
     let failed_here = host
         .beat
         .last_update
         .as_ref()
         .is_some_and(|r| r.outcome == Outcome::Failed && r.target == desired.version);
     let live = live(services, all, fleet, service, id, now);
-    let room = role.max_updating(host.role_name(), desired).min(1);
     let rules = [
-        (fleet.is_quiet(now), Hold::Quiet),
-        (bad.contains(&desired.version), Hold::Bad),
+        (fleet.is_quiet(now), Decision::Gate(Gate::Quiet)),
+        (bad.contains(&desired.version), Decision::Gate(Gate::Bad)),
         (
             host.beat.health == Health::Absent && !def.install_when_absent,
-            Hold::Absent,
+            Decision::Skip(Skip::Absent),
         ),
-        (host.beat.updating.is_some(), Hold::Updating),
-        (fleet.is_busy_besides(service, id, now), Hold::BusyElsewhere),
-        (host.beat.version == desired.version, Hold::UpToDate),
-        (failed_here, Hold::FailedHere),
+        (host.beat.updating.is_some(), Decision::Gate(Gate::Updating)),
+        (
+            fleet.is_busy_besides(service, id, now),
+            Decision::Gate(Gate::BusyElsewhere),
+        ),
+        (
+            host.beat.version == desired.version,
+            Decision::Skip(Skip::UpToDate),
+        ),
+        (failed_here, Decision::Skip(Skip::FailedHere)),
         (
             fleet
                 .deferred_until(service, id, &desired.version, &def.defer_backoff)
                 .is_some_and(|until| now < until),
-            Hold::Deferred,
+            Decision::Skip(Skip::Deferred),
         ),
         (
             canary::closed_to(def, desired, fleet, id, host, now),
-            Hold::CanaryWait,
+            Decision::Gate(Gate::CanaryWait),
         ),
-        (live.slots >= room, Hold::NoSlot),
-        (live.slots + live.baking >= room, Hold::Baking),
-        (
-            others().any(|(_, h)| {
-                role.after.iter().any(|r| r == h.role_name()) && is_pending(h, desired, now)
-            }),
-            Hold::WaitingForRole,
-        ),
-        (
-            !def.after.iter().all(|earlier| {
-                all.get(earlier).is_none_or(|want| {
-                    fleet
-                        .hosts_of(earlier)
-                        .all(|(_, h)| !is_pending(h, want, now))
-                })
-            }),
-            Hold::WaitingForService,
-        ),
-        (
-            others()
-                .filter(|(o, h)| {
-                    h.role_name() == host.role_name() && fleet.is_up(service, o, h, now)
-                })
-                .count()
-                < role.required_up(host.role_name(), desired),
-            Hold::MinUp,
-        ),
+        (live.slots > 0, Decision::Gate(Gate::NoSlot)),
+        (live.slots + live.baking > 0, Decision::Gate(Gate::Baking)),
     ];
     rules
         .into_iter()
@@ -314,10 +311,4 @@ fn live(
         slots: holding.len(),
         baking: baking.difference(&holding).count(),
     }
-}
-
-/// Whether `h` is live and not yet at `desired`, or still updating: what a later role or
-/// service must wait for.
-fn is_pending(h: &Host, desired: &Desired, now: Duration) -> bool {
-    h.is_live(now) && (h.beat.version != desired.version || h.beat.updating.is_some())
 }

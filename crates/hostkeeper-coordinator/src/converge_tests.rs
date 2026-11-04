@@ -1,11 +1,15 @@
+use std::time::Duration;
+
 use hostkeeper_wire::RoleName;
 use hostkeeper_wire::wire::{Heartbeat, Outcome};
 
 use crate::converge::{Convergence, RoleCounts, State, converge_service, role_counts};
 use crate::fleet::Fleet;
-use crate::services::{RoleDef, ServiceDef, Services};
+use crate::identity::Identity;
+use crate::services::{ServiceDef, Services};
 use crate::testutil::{
-    LEGACY, beat, converge, desired, fleet, last, role, secs, unhealthy, updating,
+    LEGACY, OPERATOR, Rig, beat, converge, desired, fleet, id, last, role, secs, unhealthy,
+    updating,
 };
 
 const NOW: u64 = 1_000;
@@ -163,14 +167,14 @@ fn a_silent_host_is_down_and_nothing_else() {
     );
     f.record_in(
         LEGACY,
-        crate::testutil::id("d3"),
+        id("d3"),
         role("daemon"),
         last(beat("1.0"), "2.0", Outcome::Failed),
         secs(NOW - 100),
     );
     f.record_in(
         LEGACY,
-        crate::testutil::id("d4"),
+        id("d4"),
         role("daemon"),
         beat("2.0"),
         secs(NOW - 100),
@@ -198,9 +202,10 @@ fn a_silent_host_is_down_and_nothing_else() {
     assert_eq!(silent_only.state, State::InProgress);
 }
 
-/// Catches: a coordinator that has just restarted reporting converged from what little it
-/// has heard: inside the quiet start, with no host, or with fewer hosts up than the
-/// minimums, the farm is in progress; with the minimums met it converges.
+/// Catches: a coordinator that has just restarted reporting converged from what little it has
+/// heard: inside the quiet start, or with no host, the farm is in progress; with one host at the
+/// version it converges, whatever minimum the desired state names (it is kept, and nothing reads
+/// it), and an unhealthy host at the version does not keep it from converging.
 #[test]
 fn a_restarted_coordinator_does_not_report_a_vacuous_convergence() {
     let hosts = [("st1", role("storage"), beat("2.0"))];
@@ -210,51 +215,56 @@ fn a_restarted_coordinator_does_not_report_a_vacuous_convergence() {
     assert!(quiet.quiet);
     assert_eq!(quiet.state, State::InProgress);
     assert_eq!(read(Some(("2.0", 0, 0)), &[]).state, State::InProgress);
-    let short = read(Some(("2.0", 2, 0)), &hosts);
-    assert_eq!(short.state, State::InProgress);
-    let no_frontend = read(Some(("2.0", 1, 1)), &hosts);
-    assert_eq!(no_frontend.state, State::InProgress);
-    assert_eq!(read(Some(("2.0", 1, 0)), &hosts).state, State::Converged);
-    // A storage host at the version but unhealthy is not up.
+    for (storage, frontend) in [(0, 0), (1, 0), (2, 0), (1, 1), (9, 9)] {
+        let one = read(Some(("2.0", storage, frontend)), &hosts);
+        assert_eq!(one.state, State::Converged, "{storage} {frontend}");
+    }
     let sick = read(
         Some(("2.0", 1, 0)),
         &[("st1", role("storage"), unhealthy(beat("2.0")))],
     );
-    assert_eq!(sick.state, State::InProgress);
+    assert_eq!(sick.state, State::Converged);
 }
 
-const TWO_DAEMONS: &str = "[[service]]\nname = \"agent\"\n[service.roles.daemon]\nmin_up = 2\n";
+const AGENT: &str = "[[service]]\nname = \"agent\"\nroles = [\"daemon\"]\n";
 
 /// A fleet whose hosts all heartbeated `service` at second 990: `kbf` hosts are not in it.
-fn fleet_of(service: &str, hosts: &[(&str, RoleName, Heartbeat)]) -> crate::fleet::Fleet {
+fn fleet_of(service: &str, hosts: &[(&str, RoleName, Heartbeat)]) -> Fleet {
     let mut f = fleet(secs(990), &[("kbf1", role("storage"), beat("9.0"))]);
     for (name, role, b) in hosts {
-        f.record_in(
-            service,
-            crate::testutil::id(name),
-            role.clone(),
-            b.clone(),
-            secs(990),
-        );
+        f.record_in(service, id(name), role.clone(), b.clone(), secs(990));
     }
     f
 }
 
 /// Behaviour: a service's convergence reads its own hosts and its own desired state, never
-/// kbf's: a kbf host at another version does not count, the role counts are the service's,
-/// the service's required hosts up come from its role definition, and a failed update to
-/// the service's desired version blocks it.
+/// kbf's: a kbf host at another version does not count, the role counts are the service's, one
+/// daemon at the version is the whole service (no minimum is read), a host behind keeps it in
+/// progress, and a failed update to the service's desired version blocks it.
+///
+/// Catches: the hosts of another service counted in, or a minimum of hosts up read again.
 #[test]
-fn a_service_converges_on_its_own_hosts_and_its_own_minimums() {
-    let services = Services::parse(TWO_DAEMONS).expect("services");
+fn a_service_converges_on_its_own_hosts() {
+    let services = Services::parse(AGENT).expect("services");
     let def = services.get("agent").expect("agent");
     let d = desired("3.0", 0, 0);
+    let behind = fleet_of(
+        "agent",
+        &[
+            ("d1", role("daemon"), beat("3.0")),
+            ("d2", role("daemon"), beat("2.0")),
+        ],
+    );
+    assert_eq!(
+        converge_service(def, Some(&d), &behind, secs(NOW)).state,
+        State::InProgress
+    );
     let one = fleet_of("agent", &[("d1", role("daemon"), beat("3.0"))]);
-    let short = converge_service(def, Some(&d), &one, secs(NOW));
-    assert_eq!(short.state, State::InProgress, "two daemons must be up");
-    assert_eq!(short.desired.as_ref().expect("desired").as_str(), "3.0");
-    assert_eq!(counted(&short, "daemon").at_desired, 1);
-    assert_eq!(short.roles.len(), 1, "the kbf storage host is not counted");
+    let alone = converge_service(def, Some(&d), &one, secs(NOW));
+    assert_eq!(alone.state, State::Converged, "no minimum is read");
+    assert_eq!(alone.desired.as_ref().expect("desired").as_str(), "3.0");
+    assert_eq!(counted(&alone, "daemon").at_desired, 1);
+    assert_eq!(alone.roles.len(), 1, "the kbf storage host is not counted");
     let two = fleet_of(
         "agent",
         &[
@@ -286,43 +296,123 @@ fn a_service_converges_on_its_own_hosts_and_its_own_minimums() {
     assert!(role_counts(def, None, &two, secs(NOW)).is_empty());
 }
 
-/// Catches: the `never_last` floor of a decision applied to the convergence of a definition
-/// other than kbf's: one rule reads every service, the role's `min_up` else the desired
-/// state's, so a `never_last` role whose minimum is 0 needs no host up to read `converged`
-/// (decisions still keep its last host up). An unhealthy host at the desired version is live
-/// and not up: with the minimum 0 the service converges, with a `min_up` of 1 it does not.
+/// Catches: a minimum of hosts up read again: the service has one live host at the version and
+/// that host is unhealthy; whatever the desired state names for `storage` and `frontend` it
+/// reads converged, and a second host behind still keeps it in progress.
 #[test]
-fn convergence_applies_the_minimum_without_the_never_last_floor() {
-    let guarded = RoleDef {
-        never_last: true,
-        ..RoleDef::plain()
-    };
-    let def = ServiceDef::new("pool", &[("builder", guarded.clone())]);
-    let mut f = Fleet::new(std::time::Duration::ZERO);
-    f.record_in(
+fn convergence_reads_no_minimum() {
+    let def = ServiceDef::new("pool", &["builder"]);
+    let mut f = Fleet::new(Duration::ZERO);
+    f.record_named_in(
         "pool",
-        crate::testutil::id("b1"),
-        role("builder"),
+        id("b1"),
+        "builder",
         unhealthy(beat("2.0")),
         secs(990),
     );
+    for (storage, frontend) in [(0, 0), (1, 0), (5, 5)] {
+        let d = desired("2.0", storage, frontend);
+        let state = converge_service(&def, Some(&d), &f, secs(NOW)).state;
+        assert_eq!(state, State::Converged, "{storage} {frontend}");
+    }
+    f.record_named_in("pool", id("b2"), "builder", beat("1.0"), secs(990));
     let d = desired("2.0", 0, 0);
     assert_eq!(
         converge_service(&def, Some(&d), &f, secs(NOW)).state,
-        State::Converged
-    );
-    let needs_one = ServiceDef::new(
-        "pool",
-        &[(
-            "builder",
-            RoleDef {
-                min_up: Some(1),
-                ..guarded
-            },
-        )],
-    );
-    assert_eq!(
-        converge_service(&needs_one, Some(&d), &f, secs(NOW)).state,
         State::InProgress
+    );
+}
+
+/// The names of `roles`, in the order they are listed.
+fn role_names(roles: &[RoleCounts]) -> Vec<&str> {
+    roles.iter().map(|r| r.role.as_str()).collect()
+}
+
+/// Catches: roles listed alphabetically (`daemon`, `frontend`, `mac-daemon`, `storage`)
+/// where the status and CI have always read frontend, storage, daemon, mac-daemon: hosts
+/// heard in the reverse order come out in that order.
+#[test]
+fn kbf_roles_in_convergence_keep_the_legacy_order() {
+    let f = fleet(
+        secs(990),
+        &[
+            ("m1", role("mac-daemon"), beat("2.0")),
+            ("d1", role("daemon"), beat("2.0")),
+            ("s1", role("storage"), beat("2.0")),
+            ("f1", role("frontend"), beat("2.0")),
+        ],
+    );
+    let c = converge(Some(&desired("2.0", 1, 1)), &f, secs(NOW));
+    assert_eq!(
+        role_names(&c.roles),
+        ["frontend", "storage", "daemon", "mac-daemon"]
+    );
+}
+
+/// Catches: roles the four legacy names do not cover listed before them or in map insertion
+/// order: a definition with `zeta`, `alpha`, `daemon` and `frontend` lists frontend, then
+/// daemon (the legacy order), then alpha, zeta (by name).
+#[test]
+fn roles_of_a_definition_come_legacy_first_then_by_name() {
+    let def = ServiceDef::new("pool", &["zeta", "alpha", "daemon", "frontend"]);
+    let mut f = Fleet::new(Duration::ZERO);
+    for role in ["zeta", "alpha", "daemon", "frontend"] {
+        f.record_named_in(
+            "pool",
+            id(&format!("{role}-1")),
+            role,
+            beat("2.0"),
+            secs(990),
+        );
+    }
+    let c = converge_service(&def, Some(&desired("2.0", 0, 0)), &f, secs(NOW));
+    assert_eq!(
+        role_names(&c.roles),
+        ["frontend", "daemon", "alpha", "zeta"]
+    );
+    assert_eq!(c.state, State::Converged);
+}
+
+/// Catches: a host of a role the definition does not name entering the counts (it would
+/// keep the service from converging, being behind): a stranger at the old version beside
+/// a builder at the new one leaves the service converged, with one role listed.
+#[test]
+fn convergence_counts_only_the_roles_of_the_definition() {
+    let def = ServiceDef::new("pool", &["builder"]);
+    let mut f = Fleet::new(Duration::ZERO);
+    f.record_named_in("pool", id("b1"), "builder", beat("2.0"), secs(990));
+    f.record_named_in("pool", id("x1"), "stranger", beat("1.0"), secs(990));
+    let c = converge_service(&def, Some(&desired("2.0", 0, 0)), &f, secs(NOW));
+    assert_eq!(role_names(&c.roles), ["builder"]);
+    assert_eq!(c.state, State::Converged);
+}
+
+/// Catches: the status listing a service's roles in another order than convergence does:
+/// hosts of all four roles heard in the reverse order are listed frontend, storage,
+/// daemon, mac-daemon under `kbf`.
+#[tokio::test]
+async fn status_lists_roles_in_the_legacy_order() {
+    let rig = Rig::new("converge-role-status");
+    rig.set(r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#)
+        .await;
+    rig.at(2_000);
+    for (name, role) in [
+        ("m1", role("mac-daemon")),
+        ("d1", role("daemon")),
+        ("s1", role("storage")),
+        ("f1", role("frontend")),
+    ] {
+        let who = Identity {
+            host_id: id(name),
+            role,
+        };
+        rig.coordinator
+            .heartbeat(who, beat("2.0"))
+            .expect("answered");
+    }
+    let status = rig.coordinator.status(Some(OPERATOR)).expect("status");
+    assert_eq!(
+        role_names(&status.per_service["kbf"].roles),
+        ["frontend", "storage", "daemon", "mac-daemon"]
     );
 }

@@ -5,7 +5,7 @@ use super::*;
 
 use crate::service::FEATURES;
 
-const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n";
+const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 /// The reply structs of the updaters before `features`, frozen with their strict reads.
 mod frozen {

@@ -1,6 +1,6 @@
 {
  "from": "kbf-coordinator/src/bake_canary_tests.rs::with_a_canary_of_one_nobody_else_is_ordered_until_it_has_baked (kbf's definition replaced as the test does; heartbeats that keep a host live have no expect_body)",
- "services_text": "[[service]]\nname = \"kbf\"\nbake_beats = 2\ncanary = { count = 1 }\n[service.roles.daemon]\nmax_updating = 3\nmin_up = 0\n",
+ "services_text": "[[service]]\nname = \"kbf\"\nbake_beats = 2\ncanary = { count = 1 }\nroles = [\"daemon\"]\n",
  "steps": [
   {
    "at_secs": 2000,

@@ -17,8 +17,8 @@ use crate::testutil::{desired, id};
 /// `extra` in its table.
 fn zoned(extra: &str) -> ServiceDef {
     let text = format!(
-        "[[service]]\nname = \"kbf\"\n{AUTO}\n{extra}\n[service.roles.daemon]\n\
-         max_updating = 8\nmin_up = 0\n[service.selector]\nlabels = {{ zone = \"a\" }}\n"
+        "[[service]]\nname = \"kbf\"\n{AUTO}\n{extra}\nroles = [\"daemon\"]\n\
+         [service.selector]\nlabels = {{ zone = \"a\" }}\n"
     );
     Services::parse(&text)
         .expect("services")

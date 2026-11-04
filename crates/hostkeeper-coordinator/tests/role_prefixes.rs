@@ -34,14 +34,14 @@ fn serve(extra: &[&str]) -> hostkeeper_coordinator::config::Serve {
     let mut args: Vec<OsString> = vec!["hostkeeper-coordinator".into(), "serve".into()];
     for (flag, value) in [
         ("--heartbeat-listen", "192.0.2.1:1"),
-        ("--control-listen", "192.0.2.1:2"),
+        ("--private-listen", "192.0.2.1:2"),
         ("--tls-cert", "tls.pem"),
         ("--tls-key", "tls.key"),
         ("--client-ca", "ca.pem"),
         ("--state-file", "desired.json"),
         ("--oidc-config", "oidc.toml"),
         ("--operator-token-file", "operator.token"),
-        ("--services-file", "services.toml"),
+        ("--rollout-file", "rollout.toml"),
     ] {
         args.push(flag.into());
         args.push(value.into());

@@ -223,7 +223,7 @@ fn a_clear_that_finds_the_halt_cleared_under_it_is_refused_and_counts_nothing() 
 
 /// Catches: the generations of every service the ops file ever counted being told. A service
 /// that is no longer defined keeps its generation in the file, and an agent refuses an answer
-/// with more generations than a services file holds (the whole answer, its order with it), so a
+/// with more generations than a rollout file holds (the whole answer, its order with it), so a
 /// farm whose services came and went would stop every agent that announced `halt-v1`. The
 /// answer names the generations of the defined services only, and reads; the file keeps the
 /// rest.
@@ -256,11 +256,9 @@ fn only_the_defined_services_generations_are_told_and_the_answer_reads() {
         )
         .expect("seeded");
     rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_services(
-        crate::services::Services::parse(
-            "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n",
-        )
-        .expect("services")
-        .with(kbf_def()),
+        crate::services::Services::parse("[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n")
+            .expect("services")
+            .with(kbf_def()),
     );
     let mut announce = beat("1.0");
     announce.agent_features = FEATURES.iter().map(|f| (*f).to_owned()).collect();

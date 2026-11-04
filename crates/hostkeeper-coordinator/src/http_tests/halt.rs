@@ -8,7 +8,7 @@ use crate::http::{CONVERGENCE_PATH, OPERATOR_PATH};
 use crate::ops::{OpsError, OpsState, OpsStore};
 use crate::testutil::Log;
 
-const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n";
+const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 /// The report of a hook that halted the update to 2.0.
 const HALT: &str =
@@ -100,7 +100,7 @@ async fn farm(name: &str) -> Rig {
     rig
 }
 
-/// The same, over a services file that adds `other` (a daemon service wanting 3.0) and over
+/// The same, over a rollout file that adds `other` (a daemon service wanting 3.0) and over
 /// ops writes that `fail` makes fail.
 async fn farm_of_two(name: &str, fail: &Arc<AtomicBool>) -> Rig {
     let mut rig = Rig::new(name);

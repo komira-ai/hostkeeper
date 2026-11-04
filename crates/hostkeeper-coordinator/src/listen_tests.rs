@@ -1,15 +1,21 @@
-//! The write deadline of a listener's connections.
+//! The write deadline of a listener's connections, and the tick that re-reads the tokens file.
 
+use std::fs;
 use std::future::poll_fn;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::task::noop_waker_ref;
+use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
-use super::WriteDeadline;
+use super::{WriteDeadline, reload_all};
+use crate::testutil::scratch;
+use crate::tokens::OperatorTokens;
 
 const PATIENCE: Duration = Duration::from_millis(200);
 
@@ -75,4 +81,38 @@ async fn flush_shutdown_and_read_reach_the_connection() {
     let mut rest = Vec::new();
     far.read_to_end(&mut rest).await.expect("read to the end");
     assert_eq!(rest, b"pong");
+}
+
+/// A tokens file naming `ci-ops` with the hash of `token`, mode 0600.
+fn tokens_file(path: &Path, token: &str) {
+    let hash: String = Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    fs::write(
+        path,
+        format!("[[token]]\nname = \"ci-ops\"\nsha256 = \"{hash}\"\n"),
+    )
+    .expect("written");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("mode");
+}
+
+/// Proves that one look of the tick reads the tokens file again: after `reload_all` (which
+/// `reload_every` calls each interval) a token replaced in the file is refused and the new one
+/// accepted, with no TLS source in play.
+///
+/// Catches: the tick that looks at the TLS files leaving the tokens file alone.
+#[tokio::test]
+async fn one_look_of_the_tick_reads_the_tokens_file_again() {
+    let dir = scratch("listen-tick-tokens");
+    let path = dir.path().join("tokens.toml");
+    let first = "first-token-0123456789abcdef0123456789";
+    let second = "second-token-0123456789abcdef0123456789";
+    tokens_file(&path, first);
+    let tokens = OperatorTokens::from_file(&path).expect("tokens");
+    assert!(tokens.name_of(first).is_some());
+    tokens_file(&path, second);
+    reload_all(&[], &tokens).await;
+    assert_eq!(tokens.name_of(first), None);
+    assert!(tokens.name_of(second).is_some());
 }

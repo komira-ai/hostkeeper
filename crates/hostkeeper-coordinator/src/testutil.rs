@@ -31,7 +31,7 @@ pub fn kbf_services() -> Services {
         .expect("the recorded kbf definition")
 }
 
-/// The recorded kbf entry of a services file.
+/// The recorded kbf entry of a rollout file.
 pub const KBF_ENTRY: &str = include_str!("../tests/fixtures/recorded/kbf.services.toml");
 
 /// The services of the recorded kbf entry followed by the entries of `text`.
@@ -39,7 +39,7 @@ pub fn with_kbf(text: &str) -> Services {
     Services::parse(&format!("{KBF_ENTRY}\n{text}")).expect("services")
 }
 
-/// The recorded tierstore entry of a services file.
+/// The recorded tierstore entry of a rollout file.
 pub const TIERSTORE_ENTRY: &str =
     include_str!("../tests/fixtures/recorded/tierstore.services.toml");
 

@@ -1,18 +1,17 @@
-//! Goldens of today's `decide`: for fixed fleets, desired states and times, the reply every
-//! host gets, written out as literals. `decide_tests.rs` has one test per rule; these pin the
-//! whole decision, so a later change that generalises the coordinator (`docs/design/host-updates.md`,
-//! section 8, step 1) cannot move what `kbf` is told without moving a literal here, in the
-//! same change, where a reviewer sees it.
+//! Goldens of the decision: for fixed fleets, desired states and times, the reply every host
+//! gets, written out as literals. `decide_tests.rs` has one test per rule; these pin the whole
+//! decision, so a change that moves what a host is told moves a literal here, in the same
+//! change, where a reviewer sees it.
 //!
 //! Each scenario is the coordinator's own loop: hosts are asked in the order listed, and an
 //! `update` is noted with `Fleet::order` before the next host is asked, as `service.rs` does
-//! under its lock. A scenario that asks without ordering says so. There is no canary in
-//! today's decision (no host goes first for being a canary), so there is nothing to pin for
-//! one; it arrives with the generalisation, which must leave these literals unchanged.
+//! under its lock. A scenario that asks without ordering says so. The canary gate has its own
+//! tests (`bake_canary_tests.rs`), so there is none here.
 //!
-//! One update is live at a time across every service and role (`decide.rs`, rule 7): the
-//! literals that a `max_updating` above 1 used to widen moved to one host at a time, on
-//! purpose, in the change that made the rule.
+//! One update is live at a time across every service and role (`decide.rs`, rule 7). The
+//! roles' order, a minimum of hosts up, a floor of one for the last host of a role and a
+//! `max_updating` of 0 are not rules any more: only the one live update, the quiet start and
+//! the other rules of `decide.rs` decide.
 
 use std::time::Duration;
 
@@ -72,8 +71,7 @@ const ALL: [&str; 11] = [
 ];
 
 /// The first pass of a roll with the default limits (1 storage, 2 daemons, 2 Macs, 1 frontend):
-/// the first host asked goes and every other host waits for it, whatever its role's limit, and
-/// no frontend starts while any other host is behind.
+/// the first host asked goes and every other host waits for its slot, whatever its role.
 #[test]
 fn the_first_pass_of_a_roll_with_the_default_limits() {
     let mut f = all_roles("1.0");
@@ -95,11 +93,12 @@ fn the_first_pass_of_a_roll_with_the_default_limits() {
     );
 }
 
-/// The limits the desired state sets no longer widen a roll: a storage limit of 2 still orders
-/// one host, and nothing else goes while it holds its slot. Zero still holds a role: with the
-/// storage and daemon roles at the version, no Mac is ordered.
+/// The limits the desired state sets no longer widen a roll or hold a role: a storage limit of 2
+/// still orders one host and nothing else goes while it holds its slot, and a Mac limit of 0
+/// holds nothing: with the other roles at the version the first Mac is ordered and the second
+/// waits for its slot.
 #[test]
-fn the_limits_of_the_desired_state_replace_the_defaults_per_role() {
+fn the_limits_of_the_desired_state_decide_nothing() {
     let mut f = all_roles("1.0");
     let mut d = desired("2.0", 1, 1);
     d.max_updating.set("storage", 2);
@@ -132,7 +131,7 @@ fn the_limits_of_the_desired_state_replace_the_defaults_per_role() {
     );
     assert_eq!(
         run(&mut macs, &d, &["m1", "m2"], NOW, true),
-        ["m1: nothing", "m2: nothing"]
+        ["m1: update 2.0", "m2: nothing"]
     );
 }
 
@@ -175,7 +174,7 @@ fn a_roll_in_progress() {
 /// Every other role at the version: the frontends go one at a time, and the second waits for
 /// the first's slot.
 #[test]
-fn frontends_go_last_and_one_at_a_time() {
+fn frontends_go_one_at_a_time() {
     let mut f = fleet(
         NOW,
         &[
@@ -199,18 +198,18 @@ fn frontends_go_last_and_one_at_a_time() {
     );
 }
 
-/// The last frontend that is up is never told to update, even with a minimum of zero; the
-/// storage minimum counts the others that are up.
+/// A frontend with no other frontend up, and a storage host with fewer others up than the
+/// minimum, are ordered: no minimum is read. The second host waits for the first's slot.
 #[test]
-fn the_minimums_hold_whatever_the_limits_say() {
-    // f2 has been silent for 900 s: f1 is the last frontend up.
+fn the_minimums_hold_nothing() {
+    // f2 has been silent for 900 s: f1 is the only frontend up.
     let mut f = fleet(NOW, &[("f1", role("frontend"), beat("1.0"))]);
     f.record_in(LEGACY, id("f2"), role("frontend"), beat("1.0"), secs(100));
     assert_eq!(
         run(&mut f, &desired("2.0", 0, 0), &["f1"], NOW, false),
-        ["f1: nothing"]
+        ["f1: update 2.0"]
     );
-    // Two storage hosts, a minimum of two others up: nobody goes. With one more, the first does.
+    // Two storage hosts, a minimum of two others up: the first goes all the same.
     let mut two = fleet(
         NOW,
         &[
@@ -220,7 +219,7 @@ fn the_minimums_hold_whatever_the_limits_say() {
     );
     assert_eq!(
         run(&mut two, &desired("2.0", 2, 1), &["s1", "s2"], NOW, true),
-        ["s1: nothing", "s2: nothing"]
+        ["s1: update 2.0", "s2: nothing"]
     );
     let mut three = fleet(
         NOW,
@@ -281,8 +280,7 @@ fn a_failed_host_is_not_ordered_again() {
             "d4: nothing"
         ]
     );
-    let mut one = desired("2.0", 1, 1);
-    one.max_updating.set("daemon", 1);
+    let one = desired("2.0", 1, 1);
     assert_eq!(
         run(&mut f, &one, &hosts, NOW, false),
         ["d1: nothing", "d2: nothing", "d3: nothing", "d4: nothing"],
@@ -301,40 +299,49 @@ fn a_failed_host_is_not_ordered_again() {
     );
 }
 
-/// Each of storage, daemons and Macs, alone behind, keeps both frontends waiting; the host
-/// that is behind goes. (Macs are the role the frontend wait names last.)
+/// A role behind keeps no other role waiting: with nothing ordered, every host that is behind,
+/// the frontends included, is told to update; once the first is ordered the others wait for its
+/// slot and not for its role.
 #[test]
-fn one_role_behind_keeps_the_frontends_waiting() {
+fn no_role_is_kept_waiting_by_another() {
     for (kind, host) in [
         (role("storage"), "s1"),
         (role("daemon"), "d1"),
         (role("mac-daemon"), "m1"),
     ] {
-        let mut f = fleet(
-            NOW,
-            &[
-                ("s1", role("storage"), beat("2.0")),
-                ("d1", role("daemon"), beat("2.0")),
-                ("m1", role("mac-daemon"), beat("2.0")),
-                ("f1", role("frontend"), beat("1.0")),
-                ("f2", role("frontend"), beat("1.0")),
-            ],
-        );
-        f.record_in(LEGACY, id(host), kind.clone(), beat("1.0"), NOW);
-        assert_eq!(
-            run(
-                &mut f,
-                &desired("2.0", 0, 1),
-                &[host, "f1", "f2"],
+        let behind = || {
+            let mut f = fleet(
                 NOW,
-                false
-            ),
+                &[
+                    ("s1", role("storage"), beat("2.0")),
+                    ("d1", role("daemon"), beat("2.0")),
+                    ("m1", role("mac-daemon"), beat("2.0")),
+                    ("f1", role("frontend"), beat("1.0")),
+                    ("f2", role("frontend"), beat("1.0")),
+                ],
+            );
+            f.record_in(LEGACY, id(host), kind.clone(), beat("1.0"), NOW);
+            f
+        };
+        let d = desired("2.0", 0, 1);
+        let hosts = [host, "f1", "f2"];
+        assert_eq!(
+            run(&mut behind(), &d, &hosts, NOW, false),
+            [
+                format!("{host}: update 2.0"),
+                "f1: update 2.0".to_owned(),
+                "f2: update 2.0".to_owned()
+            ],
+            "{kind}: nothing ordered"
+        );
+        assert_eq!(
+            run(&mut behind(), &d, &hosts, NOW, true),
             [
                 format!("{host}: update 2.0"),
                 "f1: nothing".to_owned(),
                 "f2: nothing".to_owned()
             ],
-            "{kind}"
+            "{kind}: the first is ordered"
         );
     }
 }
@@ -378,10 +385,9 @@ fn an_order_ages_out_after_120_seconds() {
     );
 }
 
-/// No order in the first 30 s after the coordinator starts; a host silent for 45 s is down and
-/// no longer counts toward the minimum, one silent for 44 s does.
+/// No order in the first 30 s after the coordinator starts.
 #[test]
-fn thirty_seconds_of_quiet_and_forty_five_of_silence() {
+fn thirty_seconds_of_quiet() {
     let mut f = Fleet::new(secs(970));
     f.record_in(LEGACY, id("d1"), role("daemon"), beat("1.0"), secs(999));
     let d = desired("2.0", 1, 1);
@@ -390,19 +396,10 @@ fn thirty_seconds_of_quiet_and_forty_five_of_silence() {
         run(&mut f, &d, &["d1"], secs(1_000), false),
         ["d1: update 2.0"]
     );
-    for (seen, want) in [(956, "update 2.0"), (955, "nothing")] {
-        let mut f = fleet(NOW, &[("s1", role("storage"), beat("1.0"))]);
-        f.record_in(LEGACY, id("s2"), role("storage"), beat("1.0"), secs(seen));
-        assert_eq!(
-            run(&mut f, &d, &["s1"], NOW, false),
-            [format!("s1: {want}")],
-            "s2 last seen at {seen}"
-        );
-    }
 }
 
-/// A rollback is an older desired version under the same rules: storage goes first, one host
-/// at a time, the frontends wait; with too few storage hosts for the minimum nobody goes.
+/// A rollback is an older desired version under the same rules: one host at a time, whatever
+/// the roles and the minimum.
 #[test]
 fn a_rollback_follows_the_same_rules() {
     let mut f = fleet(
@@ -440,6 +437,6 @@ fn a_rollback_follows_the_same_rules() {
     );
     assert_eq!(
         run(&mut thin, &desired("1.0", 2, 1), &["s1", "s2"], NOW, true),
-        ["s1: nothing", "s2: nothing"]
+        ["s1: update 1.0", "s2: nothing"]
     );
 }

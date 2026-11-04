@@ -2,7 +2,7 @@
 //!
 //! A host whose last update to a service `Failed` in the `halt` phase has found something a
 //! new release cannot fix (a tainted disk, a state no hook can read). The coordinator raises a
-//! halt for the service: every host and role of it is held ([`Hold::Halted`]), a new desired
+//! halt for the service: every host and role of it is held ([`Gate::Halted`]), a new desired
 //! version does not lift it, the convergence says `halted`, and nothing retries or rolls back.
 //! The coordinator has no pager: the halt is logged at error with the field `alert = "halt"`,
 //! which is what an operator alert watches.
@@ -25,7 +25,7 @@
 //! while the acknowledgement stands: the only place an order is produced is
 //! `Coordinator::reply_to` (`service.rs`, the call of `Fleet::order`), after [`decide`], and
 //! `decide_marked` holds a host whose beat's `last_update` is a failure of the desired version
-//! (`Hold::FailedHere`, `decide.rs`) and one that is updating (`Hold::Updating`). The
+//! (`Skip::FailedHere`, `decide.rs`) and one that is updating (`Gate::Updating`). The
 //! acknowledgement stands only while the host's beat carries the acknowledged report, a failed
 //! update of its target, and any other beat ends it in [`note`], before [`decide`] and
 //! durably, with no order for the service if the write fails. No operator verb lifts
@@ -51,7 +51,7 @@ use std::time::Duration;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::wire::{Heartbeat, Outcome, Phase, Token, UpdateResult};
 
-use crate::decide::{Decision, Hold, decide_marked};
+use crate::decide::{Decision, Gate, decide_marked};
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Node};
 use crate::identity::Identity;
@@ -271,7 +271,7 @@ pub(crate) fn standing(state: &OpsState, service: &str) -> Option<Halt> {
     state.services.get(service).and_then(|m| m.halt.clone())
 }
 
-/// [`Hold::Halted`] for a service that is halted, and [`decide_marked`] (which holds the
+/// [`Gate::Halted`] for a service that is halted, and [`decide_marked`] (which holds the
 /// versions marked bad) for one that is not.
 ///
 /// A halt is checked first, so that a halted service is told nothing: not an order, and not
@@ -296,7 +296,7 @@ pub(crate) fn decide(
         )
     });
     if halted {
-        return Decision::Hold(Hold::Halted);
+        return Decision::Gate(Gate::Halted);
     }
     decide_marked(services, desired, &bad, service, fleet, id, now)
 }

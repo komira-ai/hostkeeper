@@ -1,4 +1,4 @@
-//! No service is built in: the services a coordinator manages are the ones its services file
+//! No service is built in: the services a coordinator manages are the ones its rollout file
 //! defines, and nothing else. kbf and tierstore are names like any other.
 
 mod support;
@@ -19,7 +19,7 @@ fn beat_listing(names: &[&str]) -> String {
     )
 }
 
-/// Proves: with an empty services file (and so no legacy service) the coordinator manages
+/// Proves: with an empty rollout file (and so no legacy service) the coordinator manages
 /// nothing and knows neither kbf nor tierstore: the status lists no service, the convergence of
 /// any name is 404, a heartbeat that lists them is answered nothing and noted nowhere, a desired
 /// state or an operator action that names them is refused, and nothing is stored. With a file

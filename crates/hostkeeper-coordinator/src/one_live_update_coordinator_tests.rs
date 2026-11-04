@@ -9,20 +9,19 @@ use std::sync::Barrier;
 use hostkeeper_wire::wire::{Heartbeat, ServiceBeat, ServiceReply};
 use serde_json::{Value, json};
 
-use crate::decide::Hold;
+use crate::decide::{Gate, Why};
 use crate::membership_tests::{V2, labels, operate, who};
 use crate::services::Services;
 use crate::testutil::{OPERATOR, Rig, beat, kbf_def, version};
 
 /// `other`, on daemons in zone `a` (a selector), and `second`, on any daemon that announces it.
-const SELECTED: &str = "[[service]]\nname = \"other\"\n[service.roles.daemon]\nmin_up = 0\n\
+const SELECTED: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n\
     [service.selector]\nlabels = { zone = \"a\" }\n\
-    [[service]]\nname = \"second\"\n[service.roles.daemon]\nmin_up = 0\n";
+    [[service]]\nname = \"second\"\nroles = [\"daemon\"]\n";
 
 /// `other`, which bakes for two beats, and `second`, both on daemons that announce them.
-const PLAIN: &str = "[[service]]\nname = \"other\"\nbake_beats = 2\n\
-    [service.roles.daemon]\nmin_up = 0\n\
-    [[service]]\nname = \"second\"\n[service.roles.daemon]\nmin_up = 0\n";
+const PLAIN: &str = "[[service]]\nname = \"other\"\nbake_beats = 2\nroles = [\"daemon\"]\n\
+    [[service]]\nname = \"second\"\nroles = [\"daemon\"]\n";
 
 fn start(rig: &Rig, text: &str) -> crate::service::Coordinator {
     let list = format!(
@@ -83,7 +82,7 @@ fn order(service: &str) -> ServiceReply {
 }
 
 /// The hold of `host` under `service` in the status.
-fn hold(rig: &Rig, service: &str, host: &str) -> Option<Hold> {
+fn hold(rig: &Rig, service: &str, host: &str) -> Option<Why> {
     let status = rig.coordinator.status(Some(OPERATOR)).expect("status");
     status.per_service[service]
         .hosts
@@ -149,7 +148,11 @@ async fn a_host_that_leaves_a_service_mid_update_still_holds_the_slot() {
             ServiceReply::Nothing,
             "{case}"
         );
-        assert_eq!(hold(&rig, "second", "d2"), Some(Hold::NoSlot), "{case}");
+        assert_eq!(
+            hold(&rig, "second", "d2"),
+            Some(Why::Gate(Gate::NoSlot)),
+            "{case}"
+        );
         send(&rig, 2_030, "d1", &during);
         assert_eq!(
             send(&rig, 2_035, "d2", &[second_behind()]),

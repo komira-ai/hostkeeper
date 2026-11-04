@@ -13,7 +13,7 @@ use hostkeeper_wire::wire::{
 };
 
 use crate::converge::State;
-use crate::decide::{Decision, Hold, decide_marked, decide_why};
+use crate::decide::{Decision, Gate, decide_marked, decide_why};
 use crate::desired::{DesiredStore, StoreError};
 use crate::fleet::Fleet;
 use crate::identity::Identity;
@@ -34,12 +34,9 @@ pub(crate) fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
 }
 
-/// `kbf` replaced by a service of daemons that all may update at once, with the definition
-/// lines `extra` in its table.
+/// `kbf` replaced by a service of daemons, with the definition lines `extra` in its table.
 pub(crate) fn definition(extra: &str) -> String {
-    format!(
-        "[[service]]\nname = \"kbf\"\n{extra}\n[service.roles.daemon]\nmax_updating = 6\nmin_up = 0\n"
-    )
+    format!("[[service]]\nname = \"kbf\"\n{extra}\nroles = [\"daemon\"]\n")
 }
 
 pub(crate) fn def(extra: &str) -> ServiceDef {
@@ -382,7 +379,7 @@ fn a_bad_version_is_not_ordered_even_if_desired_names_it() {
         decide_marked(&services, &all, bad, LEGACY, &fleet, &id("d1"), secs(2_000))
     };
     assert_eq!(ask(&[]), go);
-    assert_eq!(ask(&[version("2.0")]), Decision::Hold(Hold::Bad));
+    assert_eq!(ask(&[version("2.0")]), Decision::Gate(Gate::Bad));
     assert_eq!(
         ask(&[version("1.5")]),
         go,

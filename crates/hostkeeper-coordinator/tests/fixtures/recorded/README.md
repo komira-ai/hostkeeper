@@ -3,16 +3,22 @@
 Data recorded from kbf's update coordinator at its tag `v0.0.64` (commit
 `8f90d0604794f3fee057e71647c7e1c1e034fa2e`). The tests in `crates/hostkeeper-coordinator/tests`
 read them as they are; none is generated at test time. A file is changed only to record kbf
-again, never to make a test pass.
+again, never to make a test pass. Two kinds of change are the exception, and say so where they
+are: the services files are written as rollout files of this coordinator (the data they record
+is kbf's service and tierstore's), and the sequences `24` to `30` are not recordings: each is a
+case where a rule this coordinator cut decided, with its own answer and kbf's beside it.
 
 ## Services and flags
 
-- `kbf.services.toml`: kbf's embedded `kbf.services.toml` as an entry of a services file, plus
-  `require_min_up = ["storage", "frontend"]` (the `min_up` keys kbf hard-coded for its own
-  service).
-- `tierstore.services.toml`: kbf's `tierstore.services.toml`, unchanged.
-- `services.toml`: the two in one file, kbf first. This is the `--services-file` of the
-  replays unless a sequence names another.
+- `kbf.services.toml`: kbf's service as an entry of a rollout file (`--rollout-file`): its name
+  and its four roles. What kbf's built-in definition also said (a frontend never the last one up
+  and waiting for the other roles, the `min_up` keys a desired state must name) is not a rollout
+  setting of this coordinator and is not in the file.
+- `tierstore.services.toml`: tierstore's service as an entry of a rollout file: its role,
+  selector, bake, canary and rollback. The per-role `max_updating` and `min_up` of kbf's file are
+  not in it.
+- `services.toml`: the two in one file, kbf first. This is the `--rollout-file` of the replays
+  unless a sequence names another.
 - `flags.json`: the flags kbf's farm ran with that this coordinator takes as parameters:
   `--legacy-service kbf` and the two certificate namespaces `urn:kbf:role:` and
   `urn:kbf:host-role:`.
@@ -66,11 +72,36 @@ fragment of the answer's bytes that value is, in kbf's serialiser order. A heart
 | `19-bake-holds-the-slot`, `20-canary-of-one` | `src/bake_canary_tests.rs` |
 | `21-deferral-frees-the-slot`, `22-deferral-backoff-grows` | `src/defer_tests.rs` |
 | `23-automatic-rollback-marks-the-version-bad` | `src/rollback_tests.rs` |
+| `24-cut-never-last-does-not-delay-an-order` .. `30-cut-require-min-up-does-not-refuse-a-body` | not a kbf test: the cases where a cut rule decided (below) |
 
 Two things differ from kbf's bytes on purpose, both additions to the answer: `{COMMIT}` stands
 for the commit this build was made from (kbf's tests appended their own the same way), and
 `"agent":{"name":"kbf-updater"},` in each host of a status, the agent this coordinator shows for
 a host that sent none, is taken out of the status before it is compared.
+
+## Where a cut rule decided
+
+Sequences `03` to `07` were transcribed from kbf goldens that asked each host without noting an
+order; the rules this coordinator cut (the order of roles, the minimum of hosts up, the
+`never_last` floor, a role's limit of zero) showed there. A recorded sequence goes through the
+coordinator, which notes each order, and the host asked after the first order is held by the one
+live update (`no_slot`) in kbf as well, so every answer of `03` to `07` is the same in kbf and
+here, and so is the reason.
+
+| sequence | the cut rule | kbf: answer and reason | here: answer and reason |
+|---|---|---|---|
+| `24-cut-never-last-does-not-delay-an-order` | the `never_last` floor of one | `nothing`, `min_up` (no other frontend up) | `update 2.0`, no reason (nothing holds it) |
+| `25-cut-min-up-does-not-delay-an-order` | the desired `min_up` of storage | `nothing`, `min_up` (0 of the 2 other storage hosts required up) | `update 2.0` |
+| `26-cut-role-order-does-not-delay-an-order` | a role's `after` (a frontend waits for storage) | `nothing`, `waiting_for_role` (storage host `s1` behind and live) | `update 2.0` |
+| `27-cut-a-role-limit-of-zero-does-not-hold-the-role` | a role's `max_updating` of 0 | `nothing`, `no_slot` (room 0 for the daemon role) | `update 2.0` |
+| `28-cut-convergence-does-not-need-min-up` | the convergence minimum | `in_progress` (0 of the 1 storage host required up) | `converged` |
+| `29-cut-service-order-does-not-delay-an-order` | a service's `after` | `nothing`, `waiting_for_service` (a host of `first`, which `second` came after, was behind and live) | `update` of `second` |
+| `30-cut-require-min-up-does-not-refuse-a-body` | `require_min_up` | 400 `bad_request` (`min_up lacks storage`) | 200 and the echo of the state, with `min_up` written `{"storage":0,"frontend":0}` |
+
+`kbf_status` and `kbf_body` of a step keep kbf's answer; the replay never compares them.
+`tests/replay.rs` lists the seven in `CHANGED` and `check_changed_list` fails when a sequence
+keeps kbf's answer and is not listed, or is listed and keeps none, or keeps an answer equal to
+this coordinator's.
 
 Not transcribed: `tests/container_unit.rs` (packaging of the container is not part of this
 repository) and the kbf tests that break a file system or a clock on purpose (the sequences are

@@ -27,7 +27,7 @@ today. So far this repository holds the generic half of the host updater and its
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and the agent exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity of an updater, the secret-file rule |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
-| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the desired version of each service, the heartbeat and control endpoints, the convergence of a fleet; run as `hostkeeper-coordinator serve` |
+| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services it manages and the roles they run on (a rollout file), the desired version of each service, the heartbeat endpoint and the private endpoint of CI and the operator (named operator tokens), the convergence of a fleet; run as `hostkeeper-coordinator serve` |
 | `hostkeeper-testkit` | helpers the tests share |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
 

@@ -9,7 +9,7 @@ use std::time::Duration;
 use hostkeeper_wire::wire::Reply;
 
 use crate::converge::{State, converge_service};
-use crate::decide::{Decision, Hold, decide_in, decide_why};
+use crate::decide::{Decision, Gate, Skip, decide_in, decide_why};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::identity::Identity;
@@ -20,16 +20,14 @@ pub(crate) fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
 }
 
-/// `kbf` replaced by a service of daemons (`max_updating` and `min_up` as given) with the
-/// definition lines `extra` (`bake_beats`, `canary`) in its table.
-pub(crate) fn definition(extra: &str, max_updating: u32, min_up: u32) -> String {
-    format!(
-        "[[service]]\nname = \"kbf\"\n{extra}\n[service.roles.daemon]\nmax_updating = {max_updating}\nmin_up = {min_up}\n"
-    )
+/// `kbf` replaced by a service of daemons with the definition lines `extra` (`bake_beats`,
+/// `canary`) in its table.
+pub(crate) fn definition(extra: &str) -> String {
+    format!("[[service]]\nname = \"kbf\"\n{extra}\nroles = [\"daemon\"]\n")
 }
 
-pub(crate) fn services(extra: &str, max_updating: u32, min_up: u32) -> Services {
-    Services::parse(&definition(extra, max_updating, min_up)).expect("services")
+pub(crate) fn services(extra: &str) -> Services {
+    Services::parse(&definition(extra)).expect("services")
 }
 
 pub(crate) fn all(want: &Desired) -> BTreeMap<String, Desired> {
@@ -47,7 +45,7 @@ pub(crate) fn why(s: &Services, f: &Fleet, host: &str, now: u64) -> Decision {
                 version: version.clone()
             }
         ),
-        Decision::Hold(_) => assert_eq!(reply, Reply::Nothing),
+        Decision::Gate(_) | Decision::Skip(_) => assert_eq!(reply, Reply::Nothing),
     }
     decision
 }
@@ -58,8 +56,12 @@ pub(crate) fn go() -> Decision {
     }
 }
 
-pub(crate) fn held(why: Hold) -> Decision {
-    Decision::Hold(why)
+pub(crate) fn gate(why: Gate) -> Decision {
+    Decision::Gate(why)
+}
+
+pub(crate) fn skip(why: Skip) -> Decision {
+    Decision::Skip(why)
 }
 
 pub(crate) fn beats(f: &mut Fleet, host: &str, b: &hostkeeper_wire::wire::Heartbeat, at: u64) {
@@ -71,12 +73,12 @@ pub(crate) fn beats(f: &mut Fleet, host: &str, b: &hostkeeper_wire::wire::Heartb
 #[test]
 fn bake_zero_changes_nothing() {
     assert_eq!(
-        services("bake_beats = 0", 1, 0),
-        services("", 1, 0),
+        services("bake_beats = 0"),
+        services(""),
         "zero is the default"
     );
     for extra in ["", "bake_beats = 0"] {
-        let s = services(extra, 1, 0);
+        let s = services(extra);
         let mut f = Fleet::new(Duration::ZERO);
         beats(&mut f, "a", &beat("2.0"), 100);
         beats(&mut f, "b", &beat("1.0"), 100);
@@ -88,13 +90,13 @@ fn bake_zero_changes_nothing() {
 /// first two healthy beats at the new version and frees it at the third.
 #[test]
 fn an_updated_host_holds_its_slot_until_it_has_beaten_healthy_bake_beats_times() {
-    let s = services("bake_beats = 3", 1, 0);
+    let s = services("bake_beats = 3");
     let mut f = Fleet::new(Duration::ZERO);
     beats(&mut f, "b", &beat("1.0"), 100);
     for (n, at) in [100, 115, 130].into_iter().enumerate() {
         beats(&mut f, "a", &beat("2.0"), at);
         beats(&mut f, "b", &beat("1.0"), at);
-        let expect = if n < 2 { held(Hold::Baking) } else { go() };
+        let expect = if n < 2 { gate(Gate::Baking) } else { go() };
         assert_eq!(why(&s, &f, "b", at), expect, "after beat {}", n + 1);
     }
 }
@@ -111,7 +113,7 @@ fn an_unhealthy_or_updating_beat_resets_the_bake() {
         pending,
     ];
     for broken in breaks {
-        let s = services("bake_beats = 3", 1, 0);
+        let s = services("bake_beats = 3");
         let mut f = Fleet::new(Duration::ZERO);
         let mut at = 100;
         for b in [beat("2.0"), beat("2.0"), broken, beat("2.0"), beat("2.0")] {
@@ -119,7 +121,7 @@ fn an_unhealthy_or_updating_beat_resets_the_bake() {
             at += 15;
         }
         beats(&mut f, "b", &beat("1.0"), at);
-        assert_eq!(why(&s, &f, "b", at), held(Hold::Baking), "two beats since");
+        assert_eq!(why(&s, &f, "b", at), gate(Gate::Baking), "two beats since");
         beats(&mut f, "a", &beat("2.0"), at);
         assert_eq!(why(&s, &f, "b", at), go(), "three beats since");
     }
@@ -129,11 +131,11 @@ fn an_unhealthy_or_updating_beat_resets_the_bake() {
 /// is not stalled by a host that cannot finish baking.
 #[test]
 fn a_baking_host_that_went_silent_frees_its_slot() {
-    let s = services("bake_beats = 3", 1, 0);
+    let s = services("bake_beats = 3");
     let mut f = Fleet::new(Duration::ZERO);
     beats(&mut f, "a", &beat("2.0"), 100);
     beats(&mut f, "b", &beat("1.0"), 100);
-    assert_eq!(why(&s, &f, "b", 100), held(Hold::Baking));
+    assert_eq!(why(&s, &f, "b", 100), gate(Gate::Baking));
     beats(&mut f, "b", &beat("1.0"), 145);
     assert_eq!(why(&s, &f, "b", 145), go());
 }
@@ -141,49 +143,36 @@ fn a_baking_host_that_went_silent_frees_its_slot() {
 /// A slot held by a host that is updating is a slot held, not a bake: the reason says so.
 #[test]
 fn a_slot_held_by_an_update_is_no_slot_not_baking() {
-    let s = services("bake_beats = 3", 1, 0);
+    let s = services("bake_beats = 3");
     let mut f = Fleet::new(Duration::ZERO);
     beats(&mut f, "a", &updating(beat("1.0"), "2.0"), 100);
     beats(&mut f, "b", &beat("1.0"), 100);
-    assert_eq!(why(&s, &f, "b", 100), held(Hold::NoSlot));
+    assert_eq!(why(&s, &f, "b", 100), gate(Gate::NoSlot));
 }
 
 /// A pending promotion holds the slot, and the host is not up: the next host waits while it
-/// is pending, with a limit of two as with one, and goes when it clears.
+/// is pending and goes when it clears.
 #[test]
 fn promotion_pending_holds_the_slot_and_is_not_up_until_it_clears() {
     let mut pending = beat("2.0");
     pending.promotion_pending = true;
 
-    let slot = services("", 1, 0);
+    let slot = services("");
     let mut f = Fleet::new(Duration::ZERO);
     beats(&mut f, "a", &pending, 100);
     beats(&mut f, "b", &beat("1.0"), 100);
-    assert_eq!(why(&slot, &f, "b", 100), held(Hold::NoSlot));
-    beats(&mut f, "a", &beat("2.0"), 115);
-    beats(&mut f, "b", &beat("1.0"), 115);
-    assert_eq!(why(&slot, &f, "b", 115), go());
-
-    let up = services("", 2, 1);
-    let mut f = Fleet::new(Duration::ZERO);
-    beats(&mut f, "a", &pending, 100);
-    beats(&mut f, "b", &beat("1.0"), 100);
-    assert_eq!(
-        why(&up, &f, "b", 100),
-        held(Hold::NoSlot),
-        "a holds the one slot"
-    );
+    assert_eq!(why(&slot, &f, "b", 100), gate(Gate::NoSlot));
     let a = f.get_in(LEGACY, &id("a")).expect("a");
     assert!(!f.is_up(LEGACY, &id("a"), a, secs(100)), "a is not up");
     beats(&mut f, "a", &beat("2.0"), 115);
     beats(&mut f, "b", &beat("1.0"), 115);
-    assert_eq!(why(&up, &f, "b", 115), go());
+    assert_eq!(why(&slot, &f, "b", 115), go());
 }
 
-/// A pending promotion keeps the service from converging even when no minimum notices.
+/// A pending promotion, or a bake not yet complete, keeps the service from converging.
 #[test]
 fn a_pending_or_baking_host_keeps_the_service_in_progress() {
-    let s = services("bake_beats = 2", 1, 0);
+    let s = services("bake_beats = 2");
     let def = s.get(LEGACY).expect("kbf");
     let want = desired("2.0", 0, 0);
     let mut f = Fleet::new(Duration::ZERO);
@@ -209,25 +198,25 @@ pub(crate) fn started(f: &mut Fleet, at: u64) {
 /// healthy beat comes the others go.
 #[test]
 fn with_a_canary_of_one_nobody_else_is_ordered_until_it_has_baked() {
-    let s = services("bake_beats = 2\ncanary = { count = 1 }", 3, 0);
+    let s = services("bake_beats = 2\ncanary = { count = 1 }");
     let mut f = Fleet::new(Duration::ZERO);
     started(&mut f, 100);
     assert_eq!(why(&s, &f, "a", 100), go());
-    assert_eq!(why(&s, &f, "b", 100), held(Hold::CanaryWait));
-    assert_eq!(why(&s, &f, "c", 100), held(Hold::CanaryWait));
+    assert_eq!(why(&s, &f, "b", 100), gate(Gate::CanaryWait));
+    assert_eq!(why(&s, &f, "c", 100), gate(Gate::CanaryWait));
     f.order(LEGACY, id("a"), version("2.0"), secs(100));
     assert_eq!(
         why(&s, &f, "a", 100),
         go(),
         "its own order does not hold it"
     );
-    assert_eq!(why(&s, &f, "b", 100), held(Hold::CanaryWait), "ordered");
+    assert_eq!(why(&s, &f, "b", 100), gate(Gate::CanaryWait), "ordered");
     beats(&mut f, "a", &updating(beat("1.0"), "2.0"), 115);
     started_others(&mut f, 115);
-    assert_eq!(why(&s, &f, "b", 115), held(Hold::CanaryWait), "updating");
+    assert_eq!(why(&s, &f, "b", 115), gate(Gate::CanaryWait), "updating");
     beats(&mut f, "a", &beat("2.0"), 130);
     started_others(&mut f, 130);
-    assert_eq!(why(&s, &f, "b", 130), held(Hold::CanaryWait), "one beat");
+    assert_eq!(why(&s, &f, "b", 130), gate(Gate::CanaryWait), "one beat");
     beats(&mut f, "a", &beat("2.0"), 145);
     started_others(&mut f, 145);
     assert_eq!(why(&s, &f, "b", 145), go(), "baked");
@@ -244,14 +233,14 @@ pub(crate) fn started_others(f: &mut Fleet, at: u64) {
 /// closed, whatever the bake count says.
 #[test]
 fn a_canary_with_a_pending_promotion_keeps_the_gate_closed() {
-    let s = services("canary = { count = 1 }", 3, 0);
+    let s = services("canary = { count = 1 }");
     let mut f = Fleet::new(Duration::ZERO);
     started(&mut f, 100);
     let mut pending = beat("2.0");
     pending.promotion_pending = true;
     beats(&mut f, "a", &pending, 115);
     started_others(&mut f, 115);
-    assert_eq!(why(&s, &f, "b", 115), held(Hold::CanaryWait));
+    assert_eq!(why(&s, &f, "b", 115), gate(Gate::CanaryWait));
     beats(&mut f, "a", &beat("2.0"), 130);
     started_others(&mut f, 130);
     assert_eq!(why(&s, &f, "b", 130), go());
@@ -260,15 +249,15 @@ fn a_canary_with_a_pending_promotion_keeps_the_gate_closed() {
 /// A canary of two lets two hosts go; the third waits until both have baked.
 #[test]
 fn a_canary_of_two_orders_two_hosts() {
-    let s = services("canary = { count = 2 }", 3, 0);
+    let s = services("canary = { count = 2 }");
     let mut f = Fleet::new(Duration::ZERO);
     started(&mut f, 100);
     assert_eq!(why(&s, &f, "a", 100), go());
     assert_eq!(why(&s, &f, "b", 100), go());
-    assert_eq!(why(&s, &f, "c", 100), held(Hold::CanaryWait));
+    assert_eq!(why(&s, &f, "c", 100), gate(Gate::CanaryWait));
     beats(&mut f, "a", &beat("2.0"), 115);
     started_others(&mut f, 115);
-    assert_eq!(why(&s, &f, "c", 115), held(Hold::CanaryWait), "one baked");
+    assert_eq!(why(&s, &f, "c", 115), gate(Gate::CanaryWait), "one baked");
     beats(&mut f, "b", &beat("2.0"), 115);
     assert_eq!(why(&s, &f, "c", 115), go(), "two baked");
 }
@@ -277,15 +266,15 @@ fn a_canary_of_two_orders_two_hosts() {
 /// as blocked.
 #[test]
 fn a_failed_canary_blocks_the_service_and_orders_nobody_else() {
-    let s = services("canary = { count = 1 }", 3, 0);
+    let s = services("canary = { count = 1 }");
     let def = s.get(LEGACY).expect("kbf");
     let mut f = Fleet::new(Duration::ZERO);
     started(&mut f, 100);
     let failed = last(beat("1.0"), "2.0", hostkeeper_wire::wire::Outcome::Failed);
     beats(&mut f, "a", &failed, 115);
     started_others(&mut f, 115);
-    assert_eq!(why(&s, &f, "b", 115), held(Hold::CanaryWait));
-    assert_eq!(why(&s, &f, "c", 115), held(Hold::CanaryWait));
+    assert_eq!(why(&s, &f, "b", 115), gate(Gate::CanaryWait));
+    assert_eq!(why(&s, &f, "c", 115), gate(Gate::CanaryWait));
     let want = desired("2.0", 0, 0);
     let state = converge_service(def, Some(&want), &f, secs(115)).state;
     assert_eq!(state, State::Blocked);
@@ -294,59 +283,39 @@ fn a_failed_canary_blocks_the_service_and_orders_nobody_else() {
 /// A canary that went silent before it was ever ordered is not a canary: the next host is.
 #[test]
 fn a_canary_that_is_down_and_never_started_is_replaced_by_the_next_host() {
-    let s = services("canary = { count = 1 }", 3, 0);
+    let s = services("canary = { count = 1 }");
     let mut f = Fleet::new(Duration::ZERO);
     started(&mut f, 100);
     beats(&mut f, "b", &beat("1.0"), 200);
     beats(&mut f, "c", &beat("1.0"), 200);
     assert_eq!(why(&s, &f, "b", 200), go());
-    assert_eq!(why(&s, &f, "c", 200), held(Hold::CanaryWait));
+    assert_eq!(why(&s, &f, "c", 200), gate(Gate::CanaryWait));
 }
 
 /// A canary that started and then went silent still counts as started: no one takes its
 /// place.
 #[test]
 fn one_that_started_and_went_down_still_counts() {
-    let s = services("canary = { count = 1 }", 3, 0);
+    let s = services("canary = { count = 1 }");
     let mut f = Fleet::new(Duration::ZERO);
     beats(&mut f, "a", &updating(beat("1.0"), "2.0"), 100);
     beats(&mut f, "b", &beat("1.0"), 200);
     beats(&mut f, "c", &beat("1.0"), 200);
-    assert_eq!(why(&s, &f, "b", 200), held(Hold::CanaryWait));
-    assert_eq!(why(&s, &f, "c", 200), held(Hold::CanaryWait));
+    assert_eq!(why(&s, &f, "b", 200), gate(Gate::CanaryWait));
+    assert_eq!(why(&s, &f, "c", 200), gate(Gate::CanaryWait));
 }
 
-/// A host of a role that waits for another role is chosen after the hosts of roles that
-/// wait for nobody: the smallest id alone would pick a frontend that cannot go until the
-/// storage hosts have, and nobody would.
+/// A canary is chosen by node id whatever the roles: the smallest id alone is ordered, in any
+/// role, and a host of another role waits for the canary to bake like every other.
 #[test]
-fn a_canary_is_chosen_among_roles_that_wait_for_nobody_first() {
-    let text = "[[service]]\nname = \"kbf\"\ncanary = { count = 1 }\n\
-        [service.roles.frontend]\nafter = [\"storage\"]\nmax_updating = 2\nmin_up = 0\n\
-        [service.roles.storage]\nmax_updating = 2\nmin_up = 0\n";
+fn a_canary_is_chosen_by_node_id_whatever_the_role() {
+    let text = "[[service]]\nname = \"kbf\"\ncanary = { count = 1 }\nroles = [\"frontend\", \"storage\"]\n";
     let s = Services::parse(text).expect("services");
     let mut f = Fleet::new(Duration::ZERO);
     f.record_in(LEGACY, id("a1"), role("frontend"), beat("1.0"), secs(100));
     f.record_in(LEGACY, id("s1"), role("storage"), beat("1.0"), secs(100));
-    assert_eq!(why(&s, &f, "s1", 100), go());
-    assert_eq!(why(&s, &f, "a1", 100), held(Hold::CanaryWait));
-}
-
-/// With a canary of two and two hosts of a role that waits for nobody, both go before any
-/// host of a role that waits for them.
-#[test]
-fn a_canary_of_two_takes_both_hosts_of_the_free_role_before_a_waiting_one() {
-    let text = "[[service]]\nname = \"kbf\"\ncanary = { count = 2 }\n\
-        [service.roles.frontend]\nafter = [\"storage\"]\nmax_updating = 2\nmin_up = 0\n\
-        [service.roles.storage]\nmax_updating = 2\nmin_up = 0\n";
-    let s = Services::parse(text).expect("services");
-    let mut f = Fleet::new(Duration::ZERO);
-    f.record_in(LEGACY, id("a1"), role("frontend"), beat("1.0"), secs(100));
-    f.record_in(LEGACY, id("s1"), role("storage"), beat("1.0"), secs(100));
-    f.record_in(LEGACY, id("s2"), role("storage"), beat("1.0"), secs(100));
-    assert_eq!(why(&s, &f, "s1", 100), go());
-    assert_eq!(why(&s, &f, "s2", 100), go());
-    assert_eq!(why(&s, &f, "a1", 100), held(Hold::CanaryWait));
+    assert_eq!(why(&s, &f, "a1", 100), go());
+    assert_eq!(why(&s, &f, "s1", 100), gate(Gate::CanaryWait));
 }
 
 /// A restart forgets the count: a host that had baked two of three beats starts again at
@@ -354,7 +323,7 @@ fn a_canary_of_two_takes_both_hosts_of_the_free_role_before_a_waiting_one() {
 #[tokio::test]
 async fn a_restart_mid_bake_starts_the_count_again() {
     let mut rig = Rig::new("bake-restart");
-    let s = || services("bake_beats = 3", 1, 0);
+    let s = || services("bake_beats = 3");
     rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_services(s());
     rig.set(r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#)
         .await;
@@ -404,12 +373,12 @@ async fn a_restart_mid_bake_starts_the_count_again() {
 /// cap, a canary of none, and the roles and labels form of the canary (a later change).
 #[test]
 fn the_definition_reads_bake_and_canary_and_refuses_the_rest() {
-    let s = services("bake_beats = 100\ncanary = { count = 2 }", 1, 0);
+    let s = services("bake_beats = 100\ncanary = { count = 2 }");
     let kbf = s.get(LEGACY).expect("kbf");
     assert_eq!(kbf.bake_beats, 100);
     assert_eq!(kbf.canary.map(|c| c.count), Some(2));
     let refused = |extra: &str| {
-        Services::parse(&definition(extra, 1, 0))
+        Services::parse(&definition(extra))
             .expect_err("refused")
             .to_string()
     };
