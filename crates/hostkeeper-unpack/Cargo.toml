@@ -1,0 +1,36 @@
+[package]
+name = "hostkeeper-unpack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Unpacks a verified .tar.zst package into a sealed version directory, in one streaming pass under hard bounds."
+
+# Steps 3 and 4 of docs/design/hostkeeper-design.md section 5.5: the archive reader (zstd and
+# tar), the rules every entry is checked against before it is written, the seal and the publish.
+# It depends on `hostkeeper-config` (the manifest loader, the bounds and the names),
+# `hostkeeper-hook` (the outcome and class of an error) and `hostkeeper-steps` (the package
+# layout, the tree digest and the seal), and on no other crate of this workspace
+# (crates/xtask/tests/layering keeps it so). No network, no service manager.
+[dependencies]
+hex.workspace = true
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+# The zstd decoder, pure Rust; no default features, so no checksum hasher and no dictionary
+# builder: the archive's SHA-256 is checked instead.
+ruzstd.workspace = true
+# Directory handles and `openat`, `mkdirat`, `renameat`, `unlinkat`, `fchown`, `fchmod`, `fsync`.
+rustix = { workspace = true, features = ["fs"] }
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The tests' own user and group, for the owner of what they unpack.
+rustix = { workspace = true, features = ["fs", "process"] }
+
+[lints]
+workspace = true

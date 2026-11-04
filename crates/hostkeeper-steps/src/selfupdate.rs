@@ -9,7 +9,9 @@
 //! *previous* binary's `self-update-fallback` verb, which calls [`Layout::flip_back`]: `current`
 //! points at the previous binary again and the unit is started.
 //!
-//! Layout of the updater's binary directory:
+//! Two kinds of [`Layout`] share the switch:
+//!
+//! The updater's binary directory ([`Layout::new`]):
 //!
 //! ```text
 //! <dir>/versions/<version>    one executable per staged version
@@ -18,8 +20,19 @@
 //! <dir>/previous -> versions/<version>   what it ran before the last switch
 //! ```
 //!
-//! Every move is a rename of a link made beside the old one, then a directory fsync, so a crash
-//! leaves either link whole.
+//! A package directory, `/var/lib/hostkeeper/packages/<service>` ([`Layout::package`]; the
+//! format is public, docs/package-format.md):
+//!
+//! ```text
+//! <dir>/<version>/        the unpacked tree of a version, root-owned, read-only
+//! <dir>/<version>.seal    its seal (crate::seal), written before the tree is renamed in
+//! <dir>/.stage-<random>/  a tree being unpacked (no version starts with `.`)
+//! <dir>/current  -> <version>   the version the host runs
+//! <dir>/previous -> <version>   the version it ran before the last switch
+//! ```
+//!
+//! Link targets are relative. Every move is a rename of a link made beside the old one, then a
+//! directory fsync, so a crash leaves either link whole.
 
 use std::fs::{self, File, OpenOptions, Permissions};
 use std::io;
@@ -28,13 +41,15 @@ use std::path::{Path, PathBuf};
 
 use hostkeeper_hook::Verdict;
 
-use crate::artifact::{ArtifactError, Staged};
+use crate::artifact::{ArtifactError, Staged, host_owner, trusted_owners, walk};
 use crate::runner::Finished;
+use crate::seal::Seal;
 
 /// The failed starts after which the fallback runs.
 pub const START_LIMIT_BURST: u32 = 3;
 
-/// The updater's binary directory.
+/// A directory of versions with a `current` and a `previous` link: the updater's own binaries
+/// ([`Layout::new`]) or the unpacked versions of one package ([`Layout::package`]).
 ///
 /// **The caller gives a directory that is root-owned and closed to group and others, in
 /// root-owned parents**: this type does not check it, and the fallback unit runs what `previous`
@@ -42,6 +57,16 @@ pub const START_LIMIT_BURST: u32 = 3;
 #[derive(Clone, Debug)]
 pub struct Layout {
     dir: PathBuf,
+    kind: Kind,
+}
+
+/// What a version of a layout is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// One executable, `versions/<version>`.
+    Binary,
+    /// A sealed tree, `<version>/` with `<version>.seal`.
+    Package,
 }
 
 /// What the caller does after [`follow_on`].
@@ -54,9 +79,20 @@ pub enum FollowOn {
 }
 
 impl Layout {
+    /// The updater's binary directory: each version one executable in `versions/`.
     pub fn new(dir: &Path) -> Layout {
         Layout {
             dir: dir.to_path_buf(),
+            kind: Kind::Binary,
+        }
+    }
+
+    /// A package directory, `packages/<service>`: each version a sealed tree `<version>/` with
+    /// its seal `<version>.seal` beside it.
+    pub fn package(dir: &Path) -> Layout {
+        Layout {
+            dir: dir.to_path_buf(),
+            kind: Kind::Package,
         }
     }
 
@@ -75,8 +111,24 @@ impl Layout {
         self.dir.join("previous")
     }
 
-    fn version_path(&self, version: &str) -> PathBuf {
-        self.dir.join("versions").join(version)
+    /// Where version `version` is: `versions/<version>` for the binary directory,
+    /// `<version>` for a package directory. `version` is not checked here.
+    pub fn version_path(&self, version: &str) -> PathBuf {
+        self.dir.join(self.link_target(version))
+    }
+
+    /// Where the seal of version `version` of a package directory is: `<version>.seal`.
+    /// `version` is not checked here.
+    pub fn seal_path(&self, version: &str) -> PathBuf {
+        self.dir.join(format!("{version}.seal"))
+    }
+
+    /// What `current` and `previous` hold when they name `version`: relative to the directory.
+    fn link_target(&self, version: &str) -> PathBuf {
+        match self.kind {
+            Kind::Binary => Path::new("versions").join(version),
+            Kind::Package => PathBuf::from(version),
+        }
     }
 
     /// The version `current` points at, `None` before the first switch.
@@ -90,6 +142,8 @@ impl Layout {
     }
 
     /// Puts `binary` beside the others as version `version`, mode 0755, durably. Changes no link.
+    /// For the binary directory only ([`io::ErrorKind::InvalidInput`] for a package directory,
+    /// whose versions are trees: [`Layout::stage_tree`]).
     ///
     /// The version `current` or `previous` points at is refused
     /// ([`io::ErrorKind::AlreadyExists`]) and left as it is: a crash between staging over it and
@@ -97,13 +151,8 @@ impl Layout {
     /// it switched to. The copy is made under a name no version can have (`.<version>.stage`),
     /// created afresh, so that staging one version never writes over the file of another.
     pub fn stage(&self, version: &str, binary: &Path) -> io::Result<()> {
-        check_version(version)?;
-        if self.in_place(version)? {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "the version `current` or `previous` points at is not staged over",
-            ));
-        }
+        self.expect_kind(Kind::Binary)?;
+        self.check_stageable(version)?;
         let versions = self.dir.join("versions");
         fs::create_dir_all(&versions)?;
         let tmp = versions.join(format!(".{version}.stage"));
@@ -125,10 +174,76 @@ impl Layout {
         File::open(&versions)?.sync_all()
     }
 
+    /// Moves the directory `tree` in as version `version` of a package directory, durably, and
+    /// changes no link. For a package directory only ([`io::ErrorKind::InvalidInput`] for the
+    /// binary directory). `tree` must be a real directory on the same file system, normally a
+    /// `.stage-*` directory beside the versions; the caller writes `<version>.seal` first, so a
+    /// version directory never exists without its seal.
+    ///
+    /// The refusals of [`Layout::stage`] hold: the version `current` or `previous` points at is
+    /// refused ([`io::ErrorKind::AlreadyExists`]) and left as it is, and only `<version>` is
+    /// written: a `<version>` directory already there, staged before and never switched to or
+    /// left by a crash, is removed before the rename, and no other version is touched.
+    pub fn stage_tree(&self, version: &str, tree: &Path) -> io::Result<()> {
+        self.expect_kind(Kind::Package)?;
+        self.check_stageable(version)?;
+        if !fs::symlink_metadata(tree)?.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a package version is staged from a directory",
+            ));
+        }
+        let at = self.version_path(version);
+        remove_tree(&at)?;
+        fs::rename(tree, &at)?;
+        File::open(&self.dir)?.sync_all()
+    }
+
+    /// The version is a plain name that `current` and `previous` do not point at.
+    fn check_stageable(&self, version: &str) -> io::Result<()> {
+        self.check_name(version)?;
+        if self.in_place(version)? {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the version `current` or `previous` points at is not staged over",
+            ));
+        }
+        Ok(())
+    }
+
+    /// A version is a plain name ([`check_version`]); in a package directory it is also none of
+    /// the directory's own names: not `current` or `previous`, and not ending in `.seal` or
+    /// `.tmp`, so that a version can never be a link, a seal or a temporary file.
+    fn check_name(&self, version: &str) -> io::Result<()> {
+        check_version(version)?;
+        let own = (version == "current")
+            | (version == "previous")
+            | version.ends_with(".seal")
+            | version.ends_with(".tmp");
+        if (self.kind == Kind::Package) & own {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a version may not be a name the package directory holds for itself",
+            ));
+        }
+        Ok(())
+    }
+
+    fn expect_kind(&self, kind: Kind) -> io::Result<()> {
+        if self.kind != kind {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a binary directory stages files and a package directory stages trees",
+            ));
+        }
+        Ok(())
+    }
+
     /// Points `current` at the staged `version` and `previous` at what `current` was. Running it
-    /// again changes nothing. The version must be an executable file ([`Layout::check_binary`]).
+    /// again changes nothing. The version must be an executable file (binary directory) or a
+    /// sealed tree that still has its seal's digest ([`Layout::check_tree`]).
     pub fn switch(&self, version: &str) -> io::Result<()> {
-        self.check_binary(version)?;
+        self.check(version)?;
         let before = self.current()?;
         if before.as_deref() == Some(version) {
             return Ok(());
@@ -141,13 +256,13 @@ impl Layout {
 
     /// Points `current` at `previous` again. `false` when there is no `previous` or `current`
     /// already points at it; an error, with `current` unchanged, when what `previous` names is
-    /// not an executable file ([`Layout::check_binary`]), whichever `current` points at: the
-    /// fallback reports a fallback it cannot run.
+    /// not an executable file or a sealed tree with its seal's digest, whichever `current`
+    /// points at: the fallback reports a fallback it cannot run.
     pub fn flip_back(&self) -> io::Result<bool> {
         let Some(previous) = self.previous()? else {
             return Ok(false);
         };
-        self.check_binary(&previous)?;
+        self.check(&previous)?;
         if self.current()?.as_deref() == Some(previous.as_str()) {
             return Ok(false);
         }
@@ -155,10 +270,18 @@ impl Layout {
         Ok(true)
     }
 
+    /// What a switch to `version` requires, by the kind of layout.
+    fn check(&self, version: &str) -> io::Result<()> {
+        match self.kind {
+            Kind::Binary => self.check_binary(version),
+            Kind::Package => self.check_tree(version),
+        }
+    }
+
     /// `versions/<version>` is a regular file with an execute bit, not a link (dangling or not)
     /// and not a directory: what staging makes. [`io::ErrorKind::NotFound`] when there is
     /// nothing, [`io::ErrorKind::InvalidData`] when it is something else.
-    pub fn check_binary(&self, version: &str) -> io::Result<()> {
+    fn check_binary(&self, version: &str) -> io::Result<()> {
         check_version(version)?;
         let meta = fs::symlink_metadata(self.version_path(version))?;
         if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
@@ -166,6 +289,64 @@ impl Layout {
                 io::ErrorKind::InvalidData,
                 format!("versions/{version} is not an executable file"),
             ));
+        }
+        Ok(())
+    }
+
+    /// Version `version` of a package directory is whole: `<version>` is a real directory (not
+    /// a link, dangling or not) owned by root or the running user and closed to group and
+    /// others, every entry in it is a regular file or a directory under the trust rules of
+    /// [`Staged::check_as`], its seal `<version>.seal` exists and parses, and the tree's digest
+    /// equals the seal's `tree_digest`. [`io::ErrorKind::NotFound`] when there is no
+    /// `<version>`, [`io::ErrorKind::InvalidData`] when it is anything else, and an I/O error as
+    /// it came (it says nothing about the tree: the caller tries again). For a package directory
+    /// only ([`io::ErrorKind::InvalidInput`] otherwise).
+    pub fn check_tree(&self, version: &str) -> io::Result<()> {
+        self.check_tree_as(version, &trusted_owners(), &host_owner)
+    }
+
+    /// [`Layout::check_tree`] with the trusted owners and the way an owner is read given, so
+    /// that a test can refuse a foreign owner without a second user.
+    pub fn check_tree_as(
+        &self,
+        version: &str,
+        trusted: &[u32],
+        owner: &dyn Fn(&fs::Metadata) -> (u32, u32),
+    ) -> io::Result<()> {
+        self.expect_kind(Kind::Package)?;
+        self.check_name(version)?;
+        let bad = |why: String| io::Error::new(io::ErrorKind::InvalidData, why);
+        let dir = self.version_path(version);
+        let meta = fs::symlink_metadata(&dir)?;
+        // One comparison: a real directory, a trusted owner, closed to group and others.
+        let sound = (
+            meta.is_dir(),
+            trusted.contains(&owner(&meta).0),
+            meta.permissions().mode() & 0o022 == 0,
+        );
+        if sound != (true, true, true) {
+            return Err(bad(format!(
+                "{version} is not a directory owned by root or the updater and closed to group and others"
+            )));
+        }
+        let seal = match fs::read(self.seal_path(version)) {
+            Ok(bytes) => Seal::parse(&bytes).map_err(|e| bad(format!("{version}.seal: {e}")))?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(bad(format!("{version} has no seal")));
+            }
+            Err(e) => return Err(e),
+        };
+        let tree = match walk(&dir, Some((trusted, owner))) {
+            Ok(tree) => tree,
+            Err(ArtifactError::Io(e)) => return Err(e),
+            Err(e) => return Err(bad(format!("{version}: {e}"))),
+        };
+        if tree.digest != seal.tree_digest() {
+            return Err(bad(format!(
+                "{version} changed after it was sealed: it was {}, it is {}",
+                seal.tree_digest(),
+                tree.digest
+            )));
         }
         Ok(())
     }
@@ -182,10 +363,27 @@ impl Layout {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
-        symlink(Path::new("versions").join(version), &tmp)?;
+        symlink(self.link_target(version), &tmp)?;
         fs::rename(&tmp, self.dir.join(name))?;
         File::open(&self.dir)?.sync_all()
     }
+}
+
+/// Removes `path` and everything below it, never following a link; nothing there is fine. A
+/// directory is opened to its owner first, so that a read-only tree (0555) can be emptied.
+fn remove_tree(path: &Path) -> io::Result<()> {
+    // What cannot be looked at is left to the rename that follows, which then reports it.
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if !meta.is_dir() {
+        return fs::remove_file(path);
+    }
+    fs::set_permissions(path, Permissions::from_mode(0o700))?;
+    for entry in fs::read_dir(path)? {
+        remove_tree(&entry?.path())?;
+    }
+    fs::remove_dir(path)
 }
 
 fn link_version(link: &Path) -> io::Result<Option<String>> {
