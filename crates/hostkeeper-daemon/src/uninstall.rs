@@ -387,13 +387,17 @@ fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
 
 /// The names in `dir`, sorted; none when it is gone.
 fn names(fs: &dyn Fs, dir: &Path) -> io::Result<Vec<String>> {
-    match fs.list(dir) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-        listed => Ok(listed?
-            .into_iter()
-            .map(|name| name.to_string_lossy().into_owned())
-            .collect()),
-    }
+    let listed = match fs.list(dir) {
+        Ok(listed) => listed,
+        Err(error) => match error.kind() {
+            io::ErrorKind::NotFound => Vec::new(),
+            _ => return Err(error),
+        },
+    };
+    Ok(listed
+        .into_iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect())
 }
 
 /// Removes what is at `path`, a directory with everything in it; nothing there is no error.
