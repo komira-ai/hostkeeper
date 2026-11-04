@@ -405,6 +405,54 @@ fn rows() -> Vec<Row> {
             Rule::Truncated,
         ),
         row(
+            "a pax header cut short",
+            zstd(
+                &[
+                    base().bytes(),
+                    Tar::header_block(&head(b"P", b'x', 0o644, 100)).to_vec(),
+                    vec![b'1'; 50],
+                ]
+                .concat(),
+            ),
+            Rule::Truncated,
+        ),
+        row(
+            "a GNU long name cut short",
+            zstd(
+                &[
+                    base().bytes(),
+                    Tar::header_block(&head(b"L", b'L', 0o644, 200)).to_vec(),
+                    vec![b'a'; 50],
+                ]
+                .concat(),
+            ),
+            Rule::Truncated,
+        ),
+        row(
+            "file data cut short",
+            zstd(
+                &[
+                    base().bytes(),
+                    Tar::header_block(&head(b"bin/x", b'0', 0o644, 1000)).to_vec(),
+                    vec![b'x'; 10],
+                ]
+                .concat(),
+            ),
+            Rule::Truncated,
+        ),
+        row(
+            "file padding cut short",
+            zstd(
+                &[
+                    base().bytes(),
+                    Tar::header_block(&head(b"bin/x", b'0', 0o644, 1)).to_vec(),
+                    vec![b'x'; 100],
+                ]
+                .concat(),
+            ),
+            Rule::Truncated,
+        ),
+        row(
             "a tar that ends before its end marker",
             zstd(&valid_tar().bytes()),
             Rule::Truncated,

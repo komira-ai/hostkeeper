@@ -234,8 +234,15 @@ fn stage_and_publish(
             at: pass.produced,
         });
     }
+    // Both digests are 64 lower-case hex digits (read_tree's and Sha256Hex's), so the seal is
+    // always made; the error is built eagerly so that no code path exists only for it.
+    let unsealable = UnpackError::Io {
+        what: "cannot seal",
+        source: io::Error::other("a digest that is not 64 lower-case hex digits"),
+    };
     let seal = Seal::new(&tree.digest, order.package_digest.as_str())
-        .map_err(|e| UnpackError::of_io("cannot seal", io::Error::other(e)))?;
+        .ok()
+        .ok_or(unsealable)?;
     let service = Path::new(order.service.as_str());
     publish(fs, service, stage, order.version.as_str(), &seal)?;
     Ok(Unpacked {

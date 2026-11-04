@@ -417,7 +417,7 @@ struct State {
     taken: Cell<usize>,
     /// Writes to a file whose path ends with this reach the disk with their first byte changed.
     corrupt: RefCell<Option<String>>,
-    /// A directory whose name ends with the first is given the second mode instead.
+    /// A file or directory whose name ends with the first is given the second mode instead.
     dir_mode: RefCell<Option<(String, u32)>>,
 }
 
@@ -576,6 +576,11 @@ impl StagedFile for FaultyFile {
 
     fn set_mode(&mut self, mode: u32) -> io::Result<()> {
         record(&self.state, Call::FileMode(self.path.clone(), mode))?;
+        let swap = self.state.dir_mode.borrow().clone();
+        let mode = match swap {
+            Some((suffix, other)) if self.path.to_string_lossy().ends_with(&suffix) => other,
+            _ => mode,
+        };
         self.inner.set_mode(mode)
     }
 

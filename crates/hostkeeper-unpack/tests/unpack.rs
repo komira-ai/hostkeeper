@@ -422,3 +422,49 @@ fn the_limits_are_the_daemon_configs_bounds() {
     assert_eq!(order.clone(), order);
     assert!(format!("{order:?}").contains("tierstore"));
 }
+
+/// Catches a staged tree that cannot be read back being sealed, or reported as a bad package: a
+/// file left unreadable on disk makes the read-back fail, which is `io_error`, tried again, and
+/// the staging directory is removed.
+#[test]
+fn a_staged_file_that_cannot_be_read_back_is_tried_again() {
+    let rig = Rig::new("u-readback-file");
+    let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
+    let fake = Faulty::new(rig.host()).dir_mode("bin/x", 0o000);
+    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    assert!(
+        matches!(&err, UnpackError::Io { what, .. } if *what == "cannot read back the staged tree"),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.outcome(),
+        (Outcome::Deferred, Class::Environment, "io_error")
+    );
+    assert!(rig.listing().is_empty(), "{:?}", rig.listing());
+}
+
+/// Catches an orphan that cannot be removed being passed over: when the removal of a leftover
+/// staging directory fails, the unpack stops with `io_error` before it stages anything.
+#[test]
+fn an_orphan_that_cannot_be_removed_stops_the_unpack() {
+    let rig = Rig::new("u-orphan-stuck");
+    fs::create_dir_all(rig.service().join(".stage-old")).unwrap();
+    let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
+    let fake = Faulty::new(rig.host()).fail(Box::new(|c| matches!(c, Call::RemoveTree(_))), 0, 5);
+    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    assert!(
+        matches!(&err, UnpackError::Io { what, .. } if *what == "cannot remove an orphan"),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.outcome(),
+        (Outcome::Deferred, Class::Environment, "io_error")
+    );
+    assert!(
+        !fake
+            .calls()
+            .iter()
+            .any(|c| matches!(c, Call::CreateStage(_)))
+    );
+    assert_eq!(rig.listing(), [".stage-old"]);
+}
