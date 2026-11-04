@@ -1,6 +1,9 @@
 //! The messages added since the committed baseline (`proto/compat/baseline.binpb`), with the
-//! generated types: each reads back as it was written, and a reader built from the baseline, the
-//! release before, keeps what it does not know and writes it back unchanged.
+//! generated types: each reads back as it was written, a reader built from the baseline, the
+//! release before, keeps what it does not know and writes it back unchanged, and what a writer of
+//! the release before sends reads with every new field at its default.
+
+use std::collections::BTreeSet;
 
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
@@ -43,6 +46,20 @@ fn claims() -> Claims {
         addresses: vec!["192.0.2.10".to_owned(), "198.51.100.7".to_owned()],
         mac_serial: "C02X".to_owned(),
         platform_uuid: "platform-uuid-2".to_owned(),
+    }
+}
+
+/// A pending request with every field set; `first_seen_unix` is past what 32 bits hold.
+fn pending() -> op::PendingEnrollment {
+    op::PendingEnrollment {
+        request_id: "ab".repeat(32),
+        key_sha256: "cd".repeat(32),
+        claims: Some(claims()),
+        image: "boot-1".to_owned(),
+        first_seen_unix: 5_000_000_000,
+        renewal_of: "db-1".to_owned(),
+        duplicate_claim: true,
+        mac_nonce_presented: true,
     }
 }
 
@@ -117,7 +134,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
         (
             "hostkeeper.operator.v1.ListAuditRequest",
             round_trip(&op::ListAuditRequest {
-                since_seq: 40,
+                since_seq: 5_000_000_001,
                 limit: 256,
                 actor: Some("operator".to_owned()),
                 action: Some("abort".to_owned()),
@@ -132,7 +149,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                     audit_entry("exclude_abandon"),
                     audit_entry("enroll_approve"),
                 ],
-                next_seq: 41,
+                next_seq: 5_000_000_002,
             }),
         ),
         (
@@ -145,18 +162,13 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
         (
             "hostkeeper.operator.v1.ListPendingResponse",
             round_trip(&op::ListPendingResponse {
-                requests: vec![op::PendingEnrollment {
-                    request_id: request_id.clone(),
-                    key_sha256: request_id.clone(),
-                    claims: Some(claims()),
-                    image: "boot-1".to_owned(),
-                    first_seen_unix: 1_800_000_000,
-                    renewal_of: "db-1".to_owned(),
-                    duplicate_claim: true,
-                    mac_nonce_presented: true,
-                }],
+                requests: vec![pending()],
                 next_page_token: "p3".to_owned(),
             }),
+        ),
+        (
+            "hostkeeper.operator.v1.PendingEnrollment",
+            round_trip(&pending()),
         ),
         (
             "hostkeeper.operator.v1.ApproveRequest",
@@ -188,7 +200,8 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
-/// Catches: a message added since the baseline that does not read back as written, and a new
+/// Catches: a message added since the baseline that does not read back as written or is missing
+/// from the inventory (which must equal the descriptor messages the baseline lacks), and a new
 /// field or message that a reader built from the baseline drops: a new field of a released
 /// message (`ExcludeRequest.abandon`, `ForceResponse.skipped`) is kept by the older reader of
 /// that message, which still reads what it knows; a whole new message is kept, byte for byte, by
@@ -215,13 +228,21 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
     let back = op::ExcludeRequest::decode(read.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(back, exclude);
 
+    // A held host is in `held` and, with reason `held`, in `skipped`.
     let force = op::ForceResponse {
         entries: vec![audit_entry("force")],
-        skipped: vec![op::SkippedHost {
-            node_id: "db-2".to_owned(),
-            reason: "held".to_owned(),
-        }],
-        ..op::ForceResponse::default()
+        held: vec!["db-2".to_owned()],
+        targeted: 2,
+        skipped: vec![
+            op::SkippedHost {
+                node_id: "db-2".to_owned(),
+                reason: "held".to_owned(),
+            },
+            op::SkippedHost {
+                node_id: "db-4".to_owned(),
+                reason: "daemon_too_old".to_owned(),
+            },
+        ],
     };
     let message = older
         .get_message_by_name("hostkeeper.operator.v1.ForceResponse")
@@ -238,12 +259,90 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .get_message_by_name("hostkeeper.operator.v1.ListHostsRequest")
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
+    // The inventory is every message the baseline does not have, each once.
+    let current = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
+    let added: BTreeSet<String> = current
+        .all_messages()
+        .map(|m| m.full_name().to_owned())
+        .filter(|name| older.get_message_by_name(name).is_none())
+        .collect();
     let messages = new_messages();
-    assert_eq!(messages.len(), 16);
+    let listed: BTreeSet<String> = messages.iter().map(|(n, _)| (*n).to_owned()).collect();
+    assert_eq!((listed.len(), messages.len()), (17, 17));
+    assert_eq!(listed, added);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
         let read = DynamicMessage::decode(blind.clone(), bytes.as_slice()).expect("decodes");
         assert_eq!(read.encode_to_vec(), bytes, "{name}");
     }
+}
+
+/// Catches: a new field of a released message that an older writer's message does not read as its
+/// default (`abandon` false, no `skipped`), or that costs the fields the older writer set.
+#[test]
+fn an_older_writers_exclude_and_force_read_with_no_abandon_and_no_skips() {
+    let older = baseline_pool();
+    let text = |s: &str| Value::String(s.to_owned());
+
+    let message = older
+        .get_message_by_name("hostkeeper.operator.v1.ExcludeRequest")
+        .expect("released");
+    let mut exclude = DynamicMessage::new(message);
+    exclude.set_field_by_name("service", text("db"));
+    exclude.set_field_by_name("node_id", text("db-1"));
+    exclude.set_field_by_name("reason", text("host is gone"));
+    let read = op::ExcludeRequest::decode(exclude.encode_to_vec().as_slice()).expect("decodes");
+    let want = op::ExcludeRequest {
+        service: "db".to_owned(),
+        node_id: "db-1".to_owned(),
+        reason: "host is gone".to_owned(),
+        abandon: false,
+    };
+    assert_eq!(read, want);
+
+    let entry = older
+        .get_message_by_name("hostkeeper.operator.v1.AuditEntry")
+        .expect("released");
+    let entry = DynamicMessage::decode(entry, audit_entry("force").encode_to_vec().as_slice())
+        .expect("decodes");
+    let message = older
+        .get_message_by_name("hostkeeper.operator.v1.ForceResponse")
+        .expect("released");
+    let mut force = DynamicMessage::new(message);
+    force.set_field_by_name("entries", Value::List(vec![Value::Message(entry)]));
+    force.set_field_by_name("held", Value::List(vec![text("db-3")]));
+    force.set_field_by_name("targeted", Value::U32(4));
+    let read = op::ForceResponse::decode(force.encode_to_vec().as_slice()).expect("decodes");
+    let want = op::ForceResponse {
+        entries: vec![audit_entry("force")],
+        held: vec!["db-3".to_owned()],
+        targeted: 4,
+        skipped: Vec::new(),
+    };
+    assert_eq!(read, want);
+}
+
+/// Catches: an audit filter that does not tell unset (no filter) from set to the empty string,
+/// or loses either on the way: each of the four reads back as written in all three states, and
+/// the three are three different messages on the wire.
+#[test]
+fn an_audit_filter_reads_back_unset_empty_or_set() {
+    let mut seen = BTreeSet::new();
+    for filter in [None, Some(String::new()), Some("db".to_owned())] {
+        let request = op::ListAuditRequest {
+            since_seq: 7,
+            limit: 0,
+            actor: filter.clone(),
+            action: filter.clone(),
+            service: filter.clone(),
+            node_id: filter.clone(),
+        };
+        let bytes = round_trip(&request);
+        let read = op::ListAuditRequest::decode(bytes.as_slice()).expect("decodes");
+        assert_eq!((read.actor, read.action), (filter.clone(), filter.clone()));
+        assert_eq!((read.service, read.node_id), (filter.clone(), filter));
+        seen.insert(bytes);
+    }
+    assert_eq!(seen.len(), 3);
 }

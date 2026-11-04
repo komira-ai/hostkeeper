@@ -5,8 +5,9 @@
 //! with the newest fields taken out, read with `prost-reflect`.
 //!
 //! Also the names on the wire, pinned: the feature strings, the order's verbs and their numbers,
-//! every refusal token, the RPCs of the coordinator's services, the fields of the enrollment,
-//! abort, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
+//! every refusal and state token with its number, the RPCs of the coordinator's services with
+//! their stream modes, the fields of the enrollment, abort, audit and force-report messages with
+//! their numbers and types, and the kbf JSON keys and the fields that carry them.
 
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
@@ -309,17 +310,16 @@ fn an_order_is_one_verb_with_typed_arguments() {
     assert_eq!((force.halt_generation, order.r#try), (3, 1));
 }
 
-/// The tokens of a refusal enum: each value's name without the enum's prefix, in lower case.
-fn tokens(pool: &DescriptorPool, name: &str, prefix: &str) -> Vec<String> {
+/// The values of a refusal or state enum but the zero, in the file's order: each value's number
+/// and its token, the name without the enum's prefix, in lower case.
+fn tokens(pool: &DescriptorPool, name: &str, prefix: &str) -> Vec<(i32, String)> {
     pool.get_enum_by_name(name)
         .expect("the enum")
         .values()
         .filter(|v| v.number() != 0)
         .map(|v| {
-            v.name()
-                .strip_prefix(prefix)
-                .expect("the prefix")
-                .to_ascii_lowercase()
+            let token = v.name().strip_prefix(prefix).expect("the prefix");
+            (v.number(), token.to_ascii_lowercase())
         })
         .collect()
 }
@@ -345,21 +345,49 @@ fn feature_names() -> Vec<String> {
     out
 }
 
-/// Each RPC of a service, as `Name(Request) Response`, in the file's order.
+/// Each RPC of a service, as `Name(Request) Response`, in the file's order; a streamed side is
+/// written `stream Request`.
 fn rpcs(pool: &DescriptorPool, service: &str) -> Vec<String> {
+    let stream = |on: bool| if on { "stream " } else { "" };
     pool.get_service_by_name(service)
         .expect("the service")
         .methods()
-        .map(|m| format!("{}({}) {}", m.name(), m.input().name(), m.output().name()))
+        .map(|m| {
+            let (input, output) = (m.input(), m.output());
+            let (client, server) = (
+                stream(m.is_client_streaming()),
+                stream(m.is_server_streaming()),
+            );
+            format!(
+                "{}({client}{}) {server}{}",
+                m.name(),
+                input.name(),
+                output.name()
+            )
+        })
         .collect()
 }
 
-/// Each field of a message, as its name and number, in the file's order.
-fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
+/// Each field of a message, as its name, number and type as the file writes it (`uint64`,
+/// `repeated string`, `optional string`, a message or enum by full name), in the file's order.
+fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, String)> {
     pool.get_message_by_name(message)
         .expect("the message")
         .fields()
-        .map(|f| (f.name().to_owned(), f.number()))
+        .map(|f| {
+            let label = if f.is_list() {
+                "repeated "
+            } else if f.field_descriptor_proto().proto3_optional() {
+                "optional "
+            } else {
+                ""
+            };
+            (
+                f.name().to_owned(),
+                f.number(),
+                format!("{label}{:?}", f.kind()),
+            )
+        })
         .collect()
 }
 
@@ -422,135 +450,229 @@ const RPCS: [(&str, &[&str]); 6] = [
     ),
 ];
 
-/// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
-/// number.
-const FIELDS: [(&str, &[(&str, u32)]); 19] = [
+/// The fields of the enrollment, abort, audit and force-report messages, pinned by name, number
+/// and type.
+const FIELDS: [(&str, &[(&str, u32, &str)]); 19] = [
     (
         "hostkeeper.agent.v1.EnrollRequest",
         &[
-            ("csr_der", 1),
-            ("claims", 2),
-            ("image", 3),
-            ("renewal_of", 4),
-            ("mac_nonce", 5),
+            ("csr_der", 1, "bytes"),
+            ("claims", 2, "hostkeeper.agent.v1.Claims"),
+            ("image", 3, "string"),
+            ("renewal_of", 4, "string"),
+            ("mac_nonce", 5, "bytes"),
         ],
     ),
     (
         "hostkeeper.agent.v1.Claims",
         &[
-            ("machine_id", 1),
-            ("dmi_serial", 2),
-            ("product_uuid", 3),
-            ("addresses", 4),
-            ("mac_serial", 5),
-            ("platform_uuid", 6),
+            ("machine_id", 1, "string"),
+            ("dmi_serial", 2, "string"),
+            ("product_uuid", 3, "string"),
+            ("addresses", 4, "repeated string"),
+            ("mac_serial", 5, "string"),
+            ("platform_uuid", 6, "string"),
         ],
     ),
     (
         "hostkeeper.agent.v1.EnrollResponse",
-        &[("request_id", 1), ("state", 2)],
+        &[
+            ("request_id", 1, "string"),
+            ("state", 2, "hostkeeper.agent.v1.EnrollState"),
+        ],
     ),
     (
         "hostkeeper.agent.v1.PollRequest",
-        &[("request_id", 1), ("nonce", 2), ("signature", 3)],
+        &[
+            ("request_id", 1, "string"),
+            ("nonce", 2, "bytes"),
+            ("signature", 3, "bytes"),
+        ],
     ),
     (
         "hostkeeper.agent.v1.PollResponse",
         &[
-            ("state", 1),
-            ("certificate_der", 2),
-            ("host_id", 3),
-            ("ca_bundle_pem", 4),
-            ("nonce", 5),
+            ("state", 1, "hostkeeper.agent.v1.PollState"),
+            ("certificate_der", 2, "bytes"),
+            ("host_id", 3, "string"),
+            ("ca_bundle_pem", 4, "string"),
+            ("nonce", 5, "bytes"),
         ],
     ),
-    ("hostkeeper.agent.v1.RenewRequest", &[("csr_der", 1)]),
+    (
+        "hostkeeper.agent.v1.RenewRequest",
+        &[("csr_der", 1, "bytes")],
+    ),
     (
         "hostkeeper.agent.v1.RenewResponse",
-        &[("certificate_der", 1), ("ca_bundle_pem", 2)],
+        &[
+            ("certificate_der", 1, "bytes"),
+            ("ca_bundle_pem", 2, "string"),
+        ],
     ),
     (
         "hostkeeper.operator.v1.ExcludeRequest",
         &[
-            ("service", 1),
-            ("node_id", 2),
-            ("reason", 3),
-            ("abandon", 4),
+            ("service", 1, "string"),
+            ("node_id", 2, "string"),
+            ("reason", 3, "string"),
+            ("abandon", 4, "bool"),
         ],
     ),
     (
         "hostkeeper.operator.v1.AbortRequest",
-        &[("node_id", 1), ("service", 2), ("reason", 3)],
+        &[
+            ("node_id", 1, "string"),
+            ("service", 2, "string"),
+            ("reason", 3, "string"),
+        ],
     ),
     (
         "hostkeeper.operator.v1.AbortResponse",
-        &[("queued", 1), ("entry", 2)],
+        &[
+            ("queued", 1, "bool"),
+            ("entry", 2, "hostkeeper.operator.v1.AuditEntry"),
+        ],
     ),
     (
         "hostkeeper.operator.v1.ListAuditRequest",
         &[
-            ("since_seq", 1),
-            ("limit", 2),
-            ("actor", 3),
-            ("action", 4),
-            ("service", 5),
-            ("node_id", 6),
+            ("since_seq", 1, "uint64"),
+            ("limit", 2, "uint32"),
+            ("actor", 3, "optional string"),
+            ("action", 4, "optional string"),
+            ("service", 5, "optional string"),
+            ("node_id", 6, "optional string"),
         ],
     ),
     (
         "hostkeeper.operator.v1.ListAuditResponse",
-        &[("entries", 1), ("next_seq", 2)],
+        &[
+            ("entries", 1, "repeated hostkeeper.operator.v1.AuditEntry"),
+            ("next_seq", 2, "uint64"),
+        ],
     ),
     (
         "hostkeeper.operator.v1.ListPendingRequest",
-        &[("limit", 1), ("page_token", 2)],
+        &[("limit", 1, "uint32"), ("page_token", 2, "string")],
     ),
     (
         "hostkeeper.operator.v1.ListPendingResponse",
-        &[("requests", 1), ("next_page_token", 2)],
+        &[
+            (
+                "requests",
+                1,
+                "repeated hostkeeper.operator.v1.PendingEnrollment",
+            ),
+            ("next_page_token", 2, "string"),
+        ],
     ),
     (
         "hostkeeper.operator.v1.PendingEnrollment",
         &[
-            ("request_id", 1),
-            ("key_sha256", 2),
-            ("claims", 3),
-            ("image", 4),
-            ("first_seen_unix", 5),
-            ("renewal_of", 6),
-            ("duplicate_claim", 7),
-            ("mac_nonce_presented", 8),
+            ("request_id", 1, "string"),
+            ("key_sha256", 2, "string"),
+            ("claims", 3, "hostkeeper.agent.v1.Claims"),
+            ("image", 4, "string"),
+            ("first_seen_unix", 5, "uint64"),
+            ("renewal_of", 6, "string"),
+            ("duplicate_claim", 7, "bool"),
+            ("mac_nonce_presented", 8, "bool"),
         ],
     ),
     (
         "hostkeeper.operator.v1.ApproveRequest",
         &[
-            ("request_id", 1),
-            ("key_sha256", 2),
-            ("host_id", 3),
-            ("role", 4),
-            ("services", 5),
-            ("replace", 6),
-            ("reason", 7),
+            ("request_id", 1, "string"),
+            ("key_sha256", 2, "string"),
+            ("host_id", 3, "string"),
+            ("role", 4, "string"),
+            ("services", 5, "repeated string"),
+            ("replace", 6, "bool"),
+            ("reason", 7, "string"),
         ],
     ),
     (
         "hostkeeper.operator.v1.ApproveResponse",
         &[
-            ("host_id", 1),
-            ("certificate_issued_at_poll", 2),
-            ("entry", 3),
+            ("host_id", 1, "string"),
+            ("certificate_issued_at_poll", 2, "bool"),
+            ("entry", 3, "hostkeeper.operator.v1.AuditEntry"),
         ],
     ),
     (
         "hostkeeper.operator.v1.ForceResponse",
-        &[("entries", 1), ("held", 2), ("targeted", 3), ("skipped", 4)],
+        &[
+            ("entries", 1, "repeated hostkeeper.operator.v1.AuditEntry"),
+            ("held", 2, "repeated string"),
+            ("targeted", 3, "uint32"),
+            ("skipped", 4, "repeated hostkeeper.operator.v1.SkippedHost"),
+        ],
     ),
     (
         "hostkeeper.operator.v1.SkippedHost",
-        &[("node_id", 1), ("reason", 2)],
+        &[("node_id", 1, "string"), ("reason", 2, "string")],
     ),
 ];
+
+/// Catches: pins that a change of a new field's type, of a new RPC's stream mode, or of a new enum
+/// value's number would leave green. Each is changed in a copy of the descriptors, and the pins
+/// read back the change, which `wire_names_are_pinned` then refuses.
+#[test]
+fn the_pins_read_a_changed_type_stream_mode_and_enum_number() {
+    use prost_types::field_descriptor_proto::Type;
+
+    let mut set = prost_types::FileDescriptorSet::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET)
+        .expect("the set decodes");
+    for file in &mut set.file {
+        for message in &mut file.message_type {
+            for field in &mut message.field {
+                if (message.name.as_deref(), field.name())
+                    == (Some("PendingEnrollment"), "first_seen_unix")
+                {
+                    field.set_type(Type::Uint32);
+                }
+            }
+        }
+        for method in file.service.iter_mut().flat_map(|s| &mut s.method) {
+            if method.name() == "Enroll" {
+                method.client_streaming = Some(true);
+            }
+        }
+        for value in file.enum_type.iter_mut().flat_map(|e| &mut e.value) {
+            if value.name() == "POLL_STATE_ISSUED" {
+                value.number = Some(20);
+            }
+        }
+    }
+    let changed = DescriptorPool::from_file_descriptor_set(set).expect("still a valid set");
+
+    let pending = "hostkeeper.operator.v1.PendingEnrollment";
+    let (_, pinned) = FIELDS.iter().find(|(m, _)| *m == pending).expect("pinned");
+    assert_eq!(pinned[4], ("first_seen_unix", 5, "uint64"));
+    assert_eq!(
+        fields_of(&changed, pending)[4],
+        ("first_seen_unix".to_owned(), 5, "uint32".to_owned())
+    );
+
+    assert_eq!(RPCS[0].1[1], "Enroll(EnrollRequest) EnrollResponse");
+    assert_eq!(
+        rpcs(&changed, "hostkeeper.agent.v1.Coordinator")[1],
+        "Enroll(stream EnrollRequest) EnrollResponse"
+    );
+
+    let issued =
+        |n: i32| [(1, "pending"), (n, "issued"), (3, "denied")].map(|(n, t)| (n, t.to_owned()));
+    let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
+    assert_eq!(
+        tokens(&pool, "hostkeeper.agent.v1.PollState", "POLL_STATE_"),
+        issued(2)
+    );
+    assert_eq!(
+        tokens(&changed, "hostkeeper.agent.v1.PollState", "POLL_STATE_"),
+        issued(20)
+    );
+}
 
 /// Catches: a name on the wire renamed or renumbered without this test changing with it: the
 /// features daemons announce, the order's verbs, every refusal token, the enrollment and poll
@@ -703,7 +825,10 @@ fn wire_names_are_pinned() {
             ],
         ),
     ];
+    // Every refusal and state enum numbers its values from 1 in the file's order, so a token's
+    // place in its list is its number.
     for (name, prefix, want) in cases {
+        let want: Vec<(i32, String)> = (1..).zip(want.iter().map(|t| (*t).to_owned())).collect();
         assert_eq!(tokens(&pool, name, prefix), want, "{name}");
     }
 
@@ -711,7 +836,10 @@ fn wire_names_are_pinned() {
         assert_eq!(rpcs(&pool, service), want, "{service}");
     }
     for (message, want) in FIELDS {
-        let want: Vec<(String, u32)> = want.iter().map(|(n, k)| ((*n).to_owned(), *k)).collect();
+        let want: Vec<(String, u32, String)> = want
+            .iter()
+            .map(|&(name, number, kind)| (name.to_owned(), number, kind.to_owned()))
+            .collect();
         assert_eq!(fields_of(&pool, message), want, "{message}");
     }
 

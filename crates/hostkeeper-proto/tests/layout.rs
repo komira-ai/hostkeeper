@@ -16,6 +16,9 @@ use protox::file::{
     ChainFileResolver, File, FileResolver, GoogleFileResolver, IncludeFileResolver,
 };
 
+#[path = "support/refusal_codes.rs"]
+mod refusal_codes;
+
 /// The include root of the protos.
 fn proto_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("proto")
@@ -679,26 +682,6 @@ message PollResponse {
     assert_eq!(secret_fields(&undeclared), Vec::<String>::new());
 }
 
-/// The gRPC status codes a refusal may name: every code but `OK`.
-const GRPC_CODES: [&str; 16] = [
-    "CANCELLED",
-    "UNKNOWN",
-    "INVALID_ARGUMENT",
-    "DEADLINE_EXCEEDED",
-    "NOT_FOUND",
-    "ALREADY_EXISTS",
-    "PERMISSION_DENIED",
-    "RESOURCE_EXHAUSTED",
-    "FAILED_PRECONDITION",
-    "ABORTED",
-    "OUT_OF_RANGE",
-    "UNIMPLEMENTED",
-    "INTERNAL",
-    "UNAVAILABLE",
-    "DATA_LOSS",
-    "UNAUTHENTICATED",
-];
-
 /// The gRPC code a refusal value's comment opens with (`NOT_FOUND: the host ...`), or why it
 /// opens with none.
 fn code_of(comment: &str) -> Result<String, String> {
@@ -706,7 +689,7 @@ fn code_of(comment: &str) -> Result<String, String> {
         .trim_start()
         .split_once(':')
         .ok_or_else(|| "no code".to_owned())?;
-    GRPC_CODES
+    refusal_codes::GRPC_CODES
         .contains(&code)
         .then(|| code.to_owned())
         .ok_or_else(|| format!("{code} is not a gRPC code"))
@@ -754,8 +737,9 @@ fn refusal_codes(file: &FileDescriptorProto) -> Vec<RefusalCode> {
 }
 
 /// Catches: a refusal value with no documented gRPC code, or one that names no gRPC code, which
-/// leaves a server free to pick any; a refusal enum whose zero is a real refusal; and a token that
-/// `Audit` or `Enrollment` shares with `Hosts` under another code.
+/// leaves a server free to pick any; a new refusal value moved to another valid code; a value
+/// added to `Audit` or `Enrollment` with no pinned code; a refusal enum whose zero is a real
+/// refusal; and a token that `Audit` or `Enrollment` shares with `Hosts` under another code.
 #[test]
 fn every_new_refusal_enum_has_the_zero_value_unspecified_and_a_code_comment_per_value() {
     let built = compiled();
@@ -792,6 +776,14 @@ fn every_new_refusal_enum_has_the_zero_value_unspecified_and_a_code_comment_per_
         codes.get(&("AuditRefusal".to_owned(), "store_failed".to_owned())),
         Some(&"INTERNAL".to_owned())
     );
+    let pins = refusal_codes::NEW_REFUSAL_CODES;
+    assert_eq!(
+        refusal_codes::off_pin(&codes, &pins),
+        Vec::<(String, String, Option<String>)>::new()
+    );
+    let whole = |r: &str| r == "AuditRefusal" || r == "EnrollmentRefusal";
+    let documented = codes.keys().filter(|(r, _)| whole(r)).count();
+    assert_eq!(documented, pins.iter().filter(|(r, _, _)| whole(r)).count());
 
     let fixture = fixture_set(
         "r.proto",
@@ -825,6 +817,38 @@ enum Mood {
                 err("NOPE is not a gRPC code")
             ),
             (s("ThingRefusal"), s("prose"), err("no code")),
+        ]
+    );
+
+    // A valid code, but not the pinned one, and a pinned value that is gone.
+    let moved = fixture_set(
+        "c.proto",
+        r#"syntax = "proto3";
+package c.v1;
+enum CoordinatorRefusal {
+  COORDINATOR_REFUSAL_UNSPECIFIED = 0;
+  // INTERNAL: a gRPC code, but not the one a bad signature is answered with.
+  COORDINATOR_REFUSAL_BAD_SIGNATURE = 1;
+}
+"#,
+    );
+    let moved: BTreeMap<(String, String), String> = refusal_codes(&moved.file[0])
+        .into_iter()
+        .map(|(refusal, token, code)| ((refusal, token), code.expect("a gRPC code")))
+        .collect();
+    let pins = [
+        ("CoordinatorRefusal", "bad_signature", "UNAUTHENTICATED"),
+        ("CoordinatorRefusal", "denied", "PERMISSION_DENIED"),
+    ];
+    assert_eq!(
+        refusal_codes::off_pin(&moved, &pins),
+        [
+            (
+                s("CoordinatorRefusal"),
+                s("bad_signature"),
+                Some(s("INTERNAL"))
+            ),
+            (s("CoordinatorRefusal"), s("denied"), None),
         ]
     );
 }

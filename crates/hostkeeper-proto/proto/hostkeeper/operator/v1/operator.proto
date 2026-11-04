@@ -626,8 +626,8 @@ message HostCounts {
 // It orders the `force` on each targeted host at its next heartbeat, passing the one live update,
 // the canary, the bake, a deferral, bad marks, a standing halt and a host's failure of the
 // version, so one call may reach every host in the same heartbeat round. It skips a pair an
-// operator holds and lists the host in `held`, unless `include_held` is set: then it orders the
-// held pairs it targets, for this call only, and removes no hold.
+// operator holds and lists the host in `held` and in `skipped`, unless `include_held` is set:
+// then it orders the held pairs it targets, for this call only, and removes no hold.
 //
 // The force stands until CI sets a newer desired version or an operator clears it; the automatic
 // rollback of the service is suspended meanwhile. A second force replaces the first.
@@ -662,18 +662,20 @@ message ForceResponse {
   // `clear_halt` as they apply.
   repeated AuditEntry entries = 1;
   // The targeted hosts skipped because an operator holds the pair; empty with `include_held`.
+  // Each is in `skipped` too, with reason `held`.
   repeated string held = 2;
   // How many hosts the force orders.
   uint32 targeted = 3;
-  // The targeted hosts the force does not order, other than `held`, each with why.
+  // Every targeted host the force does not order, each with why: the hosts of `held` among them.
   repeated SkippedHost skipped = 4;
 }
 
 // A targeted host a force does not order.
 message SkippedHost {
   string node_id = 1;
-  // Why, as a token: `daemon_too_old` (its daemon did not announce `forced-v1`), `held`,
-  // `unknown_target`. Open: a later coordinator adds reasons.
+  // Why, as a token: `daemon_too_old` (its daemon did not announce `forced-v1`), `held` (an
+  // operator holds the pair; the host is in `held` too), `unknown_target`. Open: a later
+  // coordinator adds reasons.
   string reason = 2;
 }
 
