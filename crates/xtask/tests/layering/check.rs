@@ -12,12 +12,18 @@ use std::path::Path;
 use std::process::Command;
 
 const HOOK: &str = "hostkeeper-hook";
+const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
 const RIGHTS: &str = "hostkeeper-rights";
 const TESTKIT: &str = "hostkeeper-testkit";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
-const LAYERS: [(&str, &[&str]); 3] = [(HOOK, &[]), (STEPS, &[HOOK]), (RIGHTS, &[HOOK])];
+const LAYERS: [(&str, &[&str]); 4] = [
+    (HOOK, &[]),
+    (CONFIG, &[]),
+    (STEPS, &[HOOK]),
+    (RIGHTS, &[CONFIG, HOOK]),
+];
 
 /// A package name to the names of the packages it depends on.
 pub type Edges = BTreeMap<String, BTreeSet<String>>;
@@ -263,7 +269,7 @@ fn chain_to(edges: &Edges, members: &[&str], target: &str) -> Vec<String> {
 }
 
 /// Every rule the workspace breaks, one line each: first the kbf names (all of `lock`), then
-/// the hook, steps and rights crates, then the testkit.
+/// the hook, config, steps and rights crates, then the testkit.
 fn violations(members: &Members, lock: &Edges) -> Vec<String> {
     let mut out = Vec::new();
     let member_names: Vec<&str> = members.keys().map(String::as_str).collect();

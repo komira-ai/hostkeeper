@@ -33,3 +33,16 @@ yaml.org
 
 # The SVG namespace URI every diagram under docs/design/diagrams declares; a namespace name, not a host the code reaches.
 =www.w3.org
+# Field paths of hostkeeper-proto's tests (the kbf JSON keys and proto fields they map onto, and
+# fixture field names) that end in a word the IANA list delegates (`name`, `target`, `health`,
+# `pin`). They are names, not hosts.
+=step.name
+=deferred.target
+=agent.name
+=services.name
+=platform.services.name
+=services.version.name
+=t.v1.health
+=f.v1.login.pin
+# A protobuf type path in hostkeeper-proto's operator.proto, not a host.
+=hostkeeper.agent.v1.health
