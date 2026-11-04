@@ -110,7 +110,7 @@ impl<'a> Launch<'a> {
     ) -> Launch<'a> {
         Launch::new(
             &declared.declaration,
-            declared.hook.uid,
+            declared.hook_uid,
             &declared.names,
             step,
             generation,

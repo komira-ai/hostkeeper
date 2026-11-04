@@ -2,10 +2,9 @@
 
 mod support;
 
-use std::fs;
 use std::os::unix::fs::symlink;
 
-use hostkeeper_rights::trust::{TrustError, check_dir, read_trusted};
+use hostkeeper_config::trust::{TrustError, check_dir, read_trusted};
 use support::{Scratch, my_uid};
 
 /// Catches a file the trusted account owns and nobody else can write not being read.
@@ -29,7 +28,12 @@ fn a_file_of_another_account_is_not() {
     let file = scratch.file("f", "x", 0o644);
     match read_trusted(&file, my_uid() + 1).unwrap_err() {
         TrustError::Owner { found, wanted } => {
-            assert_eq!((found, wanted), (my_uid(), my_uid() + 1))
+            assert_eq!((found, wanted), (my_uid(), my_uid() + 1));
+            let error = TrustError::Owner { found, wanted };
+            assert_eq!(
+                error.to_string(),
+                format!("owned by uid {found}, not the trusted uid {wanted}")
+            );
         }
         other => panic!("{other:?}"),
     }
@@ -67,7 +71,13 @@ fn a_link_a_directory_and_a_missing_file_are_not_read() {
         Err(TrustError::NotRegular)
     ));
     match read_trusted(&scratch.path().join("missing"), my_uid()).unwrap_err() {
-        TrustError::Io(e) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
+        TrustError::Io(e) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+            assert_eq!(
+                TrustError::Io(e).to_string(),
+                "No such file or directory (os error 2)"
+            );
+        }
         other => panic!("{other:?}"),
     }
     assert!(TrustError::NotRegular.to_string().contains("regular"));
@@ -78,12 +88,7 @@ fn a_link_a_directory_and_a_missing_file_are_not_read() {
 fn a_named_pipe_is_refused_and_not_waited_for() {
     let scratch = Scratch::new("trust-pipe");
     let pipe = scratch.path().join("pipe");
-    let status = std::process::Command::new("mkfifo")
-        .arg(&pipe)
-        .status()
-        .unwrap();
-    assert!(status.success());
-    fs::set_permissions(&pipe, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    support::fifo(&pipe);
     assert!(matches!(
         read_trusted(&pipe, my_uid()),
         Err(TrustError::NotRegular)

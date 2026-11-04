@@ -1,27 +1,18 @@
-//! Shared by the tests: a valid declaration, a scratch directory and fake accounts.
+//! Shared by the tests: a valid declaration, a scratch directory and a declaration made by hand.
 #![allow(dead_code, reason = "each test binary uses part of the shared support")]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_rights::{Declaration, EtcAccounts, Refusal};
+use hostkeeper_rights::{Declaration, Refusal};
 
 /// A declaration that keeps every rule, shaped like the example of the design (the numbers and
-/// the paths are the tierstore owner's).
+/// the paths are the tierstore owner's), with only the keys the launch still reads.
 pub const SAMPLE: &str = r#"
 name = "tierstore"
 binary = "tierstore"
-signer = { repository = "example-org/example", workflow = "artifacts.yml" }
-uid = "tierstore"
-registration_ttl_secs = 300
-health_ports = [9301, 9302]
-verify_deadline_secs = 1600
-promotion_ceiling_secs = 3600
-cleanup_retries = 3
 state_dir = "/var/lib/updater/hooks/tierstore"
-boot = "restore"
-min_version = "0.1.0"
 
 [hook]
 user = "tierstore-update"
@@ -29,7 +20,6 @@ group = "tierstore-update"
 capabilities = []
 read_paths = ["/usr/libexec/kbf", "/usr/sbin/nft", "/etc/tierstore", "/etc/updater.d/tierstore.toml"]
 write_paths = []
-units = ["tierstore@9301.service", "tierstore@9302.service"]
 address_families = ["AF_UNIX", "AF_INET", "AF_INET6", "AF_NETLINK"]
 environment = { }
 
@@ -46,9 +36,6 @@ cutover = 300
 verify = 1000
 rollback = 600
 cleanup = 1300
-
-[hook.params]
-promotion_bound_secs = 900
 "#;
 
 /// `SAMPLE` with `from` written as `to`. Panics if `from` is not in it, so a test cannot pass by
@@ -105,42 +92,8 @@ impl Scratch {
     }
 }
 
-pub fn my_uid() -> u32 {
-    rustix::process::geteuid().as_raw()
-}
-
-pub fn my_gid() -> u32 {
-    rustix::process::getegid().as_raw()
-}
-
-/// Accounts: root, the service and its hook account, and the others the tests name.
-pub fn accounts() -> EtcAccounts {
-    EtcAccounts::new(
-        "root:x:0:0:root:/root:/bin/sh\n\
-         tierstore:x:990:990::/nonexistent:/usr/sbin/nologin\n\
-         tierstore-update:x:991:991::/nonexistent:/usr/sbin/nologin\n\
-         other:x:992:992::/nonexistent:/usr/sbin/nologin\n\
-         other-update:x:993:993::/nonexistent:/usr/sbin/nologin\n\
-         toor:x:0:0:root by another name:/root:/bin/sh\n\
-         tsb:x:995:995::/nonexistent:/usr/sbin/nologin\n\
-         tsb-update:x:996:996::/nonexistent:/usr/sbin/nologin\n\
-         alias:x:990:990::/nonexistent:/usr/sbin/nologin\n",
-        "root:x:0:\n\
-         tierstore:x:990:\n\
-         tierstore-update:x:991:\n\
-         other:x:992:\n\
-         other-update:x:993:\n\
-         toor:x:0:\n\
-         tsb:x:995:\n\
-         tsb-update:x:996:\n\
-         alias:x:990:\n\
-         shared:x:994:tierstore,other\n",
-    )
-}
-
-/// A loaded declaration made by hand, for the tests that need one without a directory: its hook
-/// account has the uid `hook_uid` and the host declares these `names` (the service's own among
-/// them).
+/// A declaration made by hand: its hook account has the uid `hook_uid` and the host declares
+/// these `names` (the service's own among them).
 pub fn declared(
     declaration: Declaration,
     hook_uid: u32,

@@ -17,7 +17,7 @@ clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 hex = "0.4.3"
-# `O_NOFOLLOW` and `O_NONBLOCK` for the declaration and approval files (hostkeeper-rights).
+# `O_NOFOLLOW` and `O_NONBLOCK` for the daemon config and the manifest (hostkeeper-config).
 libc = "0.2.190"
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
@@ -28,7 +28,7 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
-# The `--params` file and the declaration are TOML.
+# The `--params` file, the daemon config and the manifest are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
 
 [workspace.lints.rust]

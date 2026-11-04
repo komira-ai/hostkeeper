@@ -1,8 +1,17 @@
-//! The reserved-path deny list: what no declaration may read, write or keep its record in.
+//! The reserved-path rules `run_step` repeats before every launch (`recheck_targets`, kept in
+//! `load.rs` until B3 rewrites launch.rs): the deny list on what an entry points to, and the rules
+//! of a hook that runs as root. These are the deny-list cases of the deleted `reserved.rs`, kept
+//! because `run_step` still applies the list, and the root cases of the deleted loader tests,
+//! driven through `Declared::recheck`.
 
-use hostkeeper_rights::reserved::{
-    HOOKS_ROOT, Kind, RESERVED, Violation, WRITE_FORBIDDEN, WRITE_ROOTS, check, is_within,
+mod support;
+
+use hostkeeper_rights::Refusal;
+use hostkeeper_rights::load::{
+    HOOKS_ROOT, Kind, RESERVED, Violation, WRITE_FORBIDDEN, WRITE_ROOTS, check,
+    check_service_write, is_within,
 };
+use support::{declared, with};
 
 const KINDS: [Kind; 3] = [Kind::Read, Kind::Write, Kind::State];
 
@@ -151,6 +160,12 @@ fn violations_read_as_sentences() {
     ] {
         assert!(violation.to_string().contains("/etc"));
     }
+    assert!(
+        Violation::NotTheServices
+            .to_string()
+            .contains("named for the service")
+    );
+    assert!(Violation::NotAllowed.to_string().contains("/var/lib"));
 }
 
 /// Catches a reserved directory dropped from the list: the list is pinned entry by entry, so
@@ -351,7 +366,6 @@ fn the_deny_list_still_catches_names_inside_the_write_roots() {
 /// the same, not the service's name further down.
 #[test]
 fn a_root_hook_writes_at_or_below_a_directory_named_for_its_service() {
-    use hostkeeper_rights::reserved::check_service_write;
     for path in [
         "/var/lib/svc",
         "/var/lib/svc/x/y",
@@ -414,4 +428,73 @@ fn the_directories_of_the_system_under_the_write_roots_are_reserved() {
             "{below}"
         );
     }
+}
+
+/// A declaration of `name` whose hook writes `write`, in place of the sample's empty list.
+fn writing(name: &str, write: &[&str]) -> hostkeeper_rights::Declaration {
+    let quoted: Vec<String> = write.iter().map(|path| format!("\"{path}\"")).collect();
+    let text = with(
+        "write_paths = []",
+        &format!("write_paths = [{}]", quoted.join(", ")),
+    )
+    .replace("name = \"tierstore\"", &format!("name = \"{name}\""));
+    hostkeeper_rights::Declaration::parse(&text).expect("a declaration")
+}
+
+/// Catches the root rule on write paths not being applied at the recheck: a hook that runs as
+/// root may write only below a directory named for its service, whether or not the path exists
+/// yet; a hook that is not root is not held to it.
+#[test]
+fn a_root_hook_writes_only_in_its_own_directory_at_the_recheck() {
+    let other = writing("tierstore", &["/var/lib/other/x"]);
+    assert_eq!(
+        declared(other.clone(), 0, &["tierstore"]).recheck(),
+        Err(Refusal::Reserved {
+            field: "hook.write_paths",
+            path: "/var/lib/other/x".to_owned(),
+            why: Violation::NotTheServices,
+        })
+    );
+    assert_eq!(declared(other, 65534, &["tierstore"]).recheck(), Ok(()));
+    let own = writing(
+        "tierstore",
+        &["/var/lib/tierstore/x", "/var/lib/tierstore-state"],
+    );
+    assert_eq!(declared(own, 0, &["tierstore"]).recheck(), Ok(()));
+}
+
+/// Catches the dash rule handing a root hook another service's directory: `tierstore` may not
+/// write `/var/lib/tierstore-b/x` when `tierstore-b` is a service of the host, and may when it is
+/// not; the refusal names the owner.
+#[test]
+fn a_root_hook_may_not_write_in_the_directory_of_another_declared_service() {
+    let d = writing("tierstore", &["/var/lib/tierstore-b/x"]);
+    assert_eq!(
+        declared(d.clone(), 0, &["tierstore", "tierstore-b"]).recheck(),
+        Err(Refusal::Conflict {
+            what: "a write path in the directory of another service",
+            with: "tierstore-b".to_owned(),
+        })
+    );
+    assert_eq!(declared(d.clone(), 0, &["tierstore"]).recheck(), Ok(()));
+    assert_eq!(
+        declared(d, 65534, &["tierstore", "tierstore-b"]).recheck(),
+        Ok(())
+    );
+    let error = Refusal::Conflict {
+        what: "x",
+        with: "y".to_owned(),
+    };
+    assert!(error.to_string().contains("conflicts with y"));
+}
+
+/// Catches what a loaded declaration reports: its hook uid, its names and its declaration.
+#[test]
+fn a_declared_reports_what_it_was_made_with() {
+    let d = writing("tierstore", &[]);
+    let loaded = declared(d.clone(), 991, &["tierstore", "other"]);
+    assert_eq!(loaded.hook_uid(), 991);
+    assert_eq!(loaded.declaration(), &d);
+    let names: Vec<&str> = loaded.names().iter().map(String::as_str).collect();
+    assert_eq!(names, ["other", "tierstore"]);
 }
