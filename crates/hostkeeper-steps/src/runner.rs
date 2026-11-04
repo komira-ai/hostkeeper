@@ -98,6 +98,9 @@ pub struct UpdateOrder {
     pub declared_params: Params,
     /// The declaration's `min_updater_protocol`.
     pub min_updater_protocol: Option<u32>,
+    /// The coordinator's try of the order (`Order.try`), kept in the record as `order_try`;
+    /// `None` for an update that came without one.
+    pub order_try: Option<u64>,
 }
 
 /// How an update ended.
@@ -342,6 +345,7 @@ impl StepRunner {
             state: State::Pending,
             hook: HookSel::New,
             progress: Progress::default(),
+            order_try: order.order_try,
         };
         self.store.save(&rec)?;
         Ok(rec)
