@@ -25,6 +25,8 @@ toml.workspace = true
 [dev-dependencies]
 # The manifest loader the package test loads the produced `manifest.toml` with.
 hostkeeper-config = { path = "../hostkeeper-config" }
+# The daemon's unpacker (design 5.5), which the package test unpacks the produced archive with.
+hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 saphyr-parser.workspace = true
 
 [lints]

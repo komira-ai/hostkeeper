@@ -6,7 +6,7 @@ use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 
-use hostkeeper_steps::{ArtifactError, Staged, tree_digest, tree_digest_with};
+use hostkeeper_steps::{ArtifactError, EntryKind, Staged, read_tree, tree_digest};
 use support::{Rig, Scratch};
 
 fn tree(name: &str) -> Scratch {
@@ -14,7 +14,6 @@ fn tree(name: &str) -> Scratch {
     fs::create_dir_all(s.path().join("bin")).unwrap();
     fs::write(s.path().join("bin/hook"), "#!hook\n").unwrap();
     fs::write(s.path().join("VERSION"), "2.0.0\n").unwrap();
-    symlink("bin/hook", s.path().join("link")).unwrap();
     s
 }
 
@@ -33,7 +32,7 @@ fn the_digest_of_a_tree_is_stable_hex() {
 }
 
 /// Catches a digest that misses a kind of change: content, mode, an added or removed file, a
-/// rename, a link retargeted, an empty directory added.
+/// rename, an empty directory added, a file made a directory.
 #[test]
 fn every_kind_of_change_moves_the_digest() {
     let s = tree("art-moves");
@@ -53,12 +52,12 @@ fn every_kind_of_change_moves_the_digest() {
     step(&|| fs::set_permissions(p.join("bin/hook"), fs::Permissions::from_mode(0o755)).unwrap());
     step(&|| fs::write(p.join("extra"), "").unwrap());
     step(&|| fs::rename(p.join("extra"), p.join("extra2")).unwrap());
-    step(&|| {
-        fs::remove_file(p.join("link")).unwrap();
-        symlink("VERSION", p.join("link")).unwrap();
-    });
     step(&|| fs::create_dir(p.join("empty")).unwrap());
     step(&|| fs::remove_file(p.join("extra2")).unwrap());
+    step(&|| {
+        fs::remove_dir(p.join("empty")).unwrap();
+        fs::write(p.join("empty"), "").unwrap();
+    });
 }
 
 /// Catches a framing that lets two different trees hash alike: a file `ab` holding `c` and a file
@@ -108,7 +107,7 @@ fn only_a_plain_relative_regular_file_is_a_hook() {
         );
         assert!(err.to_string().contains("relative path"));
     }
-    for missing in ["bin", "link", "nothing"] {
+    for missing in ["bin", "nothing"] {
         let err = staged.check(Path::new(missing)).unwrap_err();
         assert!(
             matches!(err, ArtifactError::HookMissing(_)),
@@ -118,8 +117,8 @@ fn only_a_plain_relative_regular_file_is_a_hook() {
     }
 }
 
-/// Catches a digest that quietly skips what it cannot hash: a FIFO in the tree is refused by
-/// name, and a tree that is not there is an I/O error.
+/// Catches a digest that quietly skips what it cannot hash: a FIFO and a link in the tree are
+/// refused by name, and a tree that is not there is an I/O error.
 #[test]
 fn what_cannot_be_hashed_is_refused() {
     let s = tree("art-fifo");
@@ -133,7 +132,15 @@ fn what_cannot_be_hashed_is_refused() {
     .unwrap();
     let err = tree_digest(s.path()).unwrap_err();
     assert!(matches!(&err, ArtifactError::Unsupported(p) if p == Path::new("pipe")));
-    assert!(err.to_string().contains("neither a file"));
+    assert!(
+        err.to_string()
+            .contains("neither a regular file nor a directory")
+    );
+    fs::remove_file(s.path().join("pipe")).unwrap();
+    symlink("VERSION", s.path().join("bin/link")).unwrap();
+    let err = tree_digest(s.path()).unwrap_err();
+    assert!(matches!(&err, ArtifactError::Unsupported(p) if p == Path::new("bin/link")));
+    assert!(Staged::seal(s.path()).is_err());
     let err = tree_digest(&s.path().join("absent")).unwrap_err();
     assert!(matches!(err, ArtifactError::Io(_)));
     assert!(err.to_string().contains("cannot read the staged release"));
@@ -198,41 +205,69 @@ fn me() -> u32 {
     rustix::process::geteuid().as_raw()
 }
 
-/// Catches a hook path that leaves the tree through a linked directory in the middle of it: with
-/// `bin` linked to a directory inside or outside the tree, `bin/hook` is not a hook, though the
-/// last component is a regular file.
+/// Catches a link inside a release being trusted: a tree with a link to a directory inside or
+/// outside it cannot be sealed, and a link added after sealing (beside the hook, or in the
+/// hook's place) makes the check refuse the tree as untrusted, naming the link.
 #[test]
-fn a_hook_behind_a_linked_directory_is_not_a_hook() {
+fn a_link_in_the_tree_is_refused_at_seal_and_at_check() {
     let s = Scratch::new("art-mid-link");
     let outside = Scratch::new("art-mid-link-out");
     fs::write(outside.path().join("hook"), "#!out\n").unwrap();
     fs::create_dir_all(s.path().join("real")).unwrap();
     fs::write(s.path().join("real/hook"), "#!in\n").unwrap();
-    symlink("real", s.path().join("inside")).unwrap();
-    symlink(outside.path(), s.path().join("outside")).unwrap();
     let staged = Staged::seal(s.path()).unwrap();
     staged.check(Path::new("real/hook")).unwrap();
-    for hook in ["inside/hook", "outside/hook"] {
-        let err = staged.check(Path::new(hook)).unwrap_err();
+    for (link, target) in [("inside", Path::new("real")), ("outside", outside.path())] {
+        symlink(target, s.path().join(link)).unwrap();
+        let err = Staged::seal(s.path()).unwrap_err();
         assert!(
-            matches!(err, ArtifactError::HookMissing(_)),
-            "{hook}: {err:?}"
+            matches!(&err, ArtifactError::Unsupported(p) if p == Path::new(link)),
+            "{err:?}"
         );
+        let err = staged
+            .check(Path::new(&format!("{link}/hook")))
+            .unwrap_err();
+        assert!(
+            matches!(&err, ArtifactError::Untrusted(p) if p == Path::new(link)),
+            "{err:?}"
+        );
+        fs::remove_file(s.path().join(link)).unwrap();
     }
+    fs::remove_file(s.path().join("real/hook")).unwrap();
+    symlink(outside.path().join("hook"), s.path().join("real/hook")).unwrap();
+    let err = staged.check(Path::new("real/hook")).unwrap_err();
+    assert!(
+        matches!(&err, ArtifactError::Untrusted(p) if p == Path::new("real/hook")),
+        "{err:?}"
+    );
 }
 
-/// Catches an owner that is not part of the digest: the same tree read with another user or
-/// group id has another digest, so a restore that chowns a file is a change.
+/// Catches an owner or a time in the digest (an unpacked package has neither from its archive,
+/// so a digest holding them could not be recomputed from the package): a file whose times
+/// change keeps the digest, and the entries read back carry kind, mode, size and contents.
 #[test]
-fn the_owner_of_every_entry_is_in_the_digest() {
+fn the_digest_holds_kind_name_mode_size_and_bytes_only() {
     let s = tree("art-owner-digest");
     let p = s.path();
-    let same = tree_digest_with(p, &host_owner).unwrap();
-    assert_eq!(same, tree_digest(p).unwrap());
-    let a = tree_digest_with(p, &|_| (1, 2)).unwrap();
-    let b = tree_digest_with(p, &|_| (1, 3)).unwrap();
-    let c = tree_digest_with(p, &|_| (2, 2)).unwrap();
-    assert!(a != b && a != c && b != c && a != same);
+    let before = read_tree(p).unwrap();
+    let file = fs::File::options()
+        .write(true)
+        .open(p.join("VERSION"))
+        .unwrap();
+    file.set_modified(std::time::UNIX_EPOCH).unwrap();
+    assert_eq!(read_tree(p).unwrap(), before);
+    let names: Vec<&[u8]> = before.entries.iter().map(|e| e.name.as_slice()).collect();
+    assert_eq!(names, [&b"VERSION"[..], b"bin", b"bin/hook"]);
+    let version = &before.entries[0];
+    assert_eq!(
+        (version.kind, version.size, version.mode & 0o7000),
+        (EntryKind::File, 6, 0)
+    );
+    assert!(version.content.is_some());
+    assert_eq!(
+        (before.entries[1].kind, before.entries[1].content),
+        (EntryKind::Dir, None)
+    );
 }
 
 /// Catches a foreign owner being trusted: with no trusted owner the tree is refused; an entry
@@ -249,12 +284,7 @@ fn only_the_trusted_owners_may_own_the_tree_and_what_is_in_it() {
         let (uid, gid) = host_owner(meta);
         (if meta.is_file() { 4242 } else { uid }, gid)
     };
-    let sealed = Staged::seal_with(s.path(), &files_of_another).unwrap();
-    assert_eq!(
-        sealed.digest(),
-        tree_digest_with(s.path(), &files_of_another).unwrap()
-    );
-    let err = sealed
+    let err = staged
         .check_as(hook, &[me(), 0], &files_of_another)
         .unwrap_err();
     assert!(

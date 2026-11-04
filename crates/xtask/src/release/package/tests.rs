@@ -577,3 +577,52 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
         Ok(())
     );
 }
+
+#[test]
+fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() {
+    // Catches: a package the daemon's unpacker (design 5.5 steps 3 and 4, hostkeeper-unpack)
+    // refuses: an entry outside the four top-level names, a link or other kind, a mode bit it
+    // does not allow, a digest that is not the archive's, or a manifest it cannot load.
+    let dir = scratch("package-daemon-unpack");
+    let (history, commit) = history();
+    // The package of the running daemon's own version, so `min_hostkeeper` admits it.
+    let running = hostkeeper_unpack::running_hostkeeper().to_string();
+    let mut req = request(&dir, UNIT.as_bytes(), &commit, Platform::LinuxX86_64, "out");
+    req.version = running.parse().expect("the workspace version");
+    package(&history, &req).expect("package");
+    let name = package_name(&req.version, Platform::LinuxX86_64);
+    let archive = req.out.join(&name);
+    let packages = dir.join("packages");
+    std::fs::create_dir(&packages).expect("the packages directory");
+    let meta = std::fs::metadata(&packages).expect("stat the packages directory");
+    let owner = hostkeeper_unpack::Owner {
+        uid: std::os::unix::fs::MetadataExt::uid(&meta),
+        gid: std::os::unix::fs::MetadataExt::gid(&meta),
+    };
+    let fs = hostkeeper_unpack::HostFs::open(&packages, owner).expect("open the packages");
+    let order = hostkeeper_unpack::UnpackOrder {
+        service: ServiceName::new("hostkeeper").expect("a service name"),
+        version: ConfigVersion::new(&running).expect("a version"),
+        package_digest: hostkeeper_config::daemon::Sha256Hex::parse(
+            &file_sha256(&archive).expect("hash the package"),
+        )
+        .expect("a digest"),
+    };
+    let limits = hostkeeper_unpack::Limits {
+        max_unpacked_bytes: 1 << 30,
+        max_entries: 1000,
+    };
+    let unpacked = hostkeeper_unpack::unpack(&archive, &order, &limits, &fs).expect("unpack");
+    assert!(unpacked.fresh);
+    assert_eq!(unpacked.manifest.run, ["hostkeeper.service"]);
+    assert_eq!(
+        std::fs::read(
+            packages
+                .join("hostkeeper")
+                .join(&running)
+                .join("bin/hostkeeper")
+        )
+        .expect("the unpacked binary"),
+        BINARY
+    );
+}
