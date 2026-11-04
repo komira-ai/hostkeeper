@@ -277,10 +277,10 @@ fn form_cases() -> Vec<(&'static str, String, usize)> {
 #[test]
 fn each_wall_clock_form_is_refused() {
     let cases = form_cases();
-    for (form, text, line) in &cases {
+    for &(form, ref text, line) in &cases {
         assert_eq!(
             lint(&[(DECIDE, text.as_str())], ""),
-            Err(vec![refusal(DECIDE, *line, form)]),
+            Err(vec![refusal(DECIDE, line, form)]),
             "in {text:?}"
         );
     }
