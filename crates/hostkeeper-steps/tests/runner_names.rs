@@ -6,9 +6,9 @@ mod support;
 
 use std::fs;
 
-use hostkeeper_hook::Verdict;
-use hostkeeper_steps::{Finished, RunError, Staged};
-use support::Rig;
+use hostkeeper_hook::{Step, Verdict};
+use hostkeeper_steps::{Finished, Loaded, RunError, Staged};
+use support::{FAIL, Rig};
 
 fn ok() -> Finished {
     Finished {
@@ -108,4 +108,42 @@ fn a_service_name_may_hold_dashes_underscores_and_dots() {
         };
         assert_eq!(ran, unit);
     }
+}
+
+/// Catches a length bound that holds only for a short generation: a 209-byte service whose
+/// update starts at the largest generation (its record's generation one below it) and whose
+/// `verify` fails runs `rollback`, the longest step name, in
+/// `updater-<service>-rollback-18446744073709551615`, whose unit with `.service` is exactly
+/// 255 bytes.
+#[test]
+fn the_longest_step_unit_of_the_longest_service_name_fits() {
+    let rig = Rig::new("run-longest-unit");
+    let service = "a".repeat(209);
+    let mut order = rig.order();
+    order.service = service.clone();
+    assert_eq!(rig.runner().run(&order).unwrap(), ok());
+    let Loaded::Current(mut record) = rig.store().load().unwrap() else {
+        unreachable!("a finished update leaves its record")
+    };
+    record.generation = u64::MAX - 1;
+    rig.store().save(&record).unwrap();
+    rig.fake.clear();
+    rig.fake.say(Step::Verify, &[FAIL]);
+    order.target_version = "3.0.0".to_owned();
+    rig.runner().run(&order).unwrap();
+    let rollback = rig
+        .fake
+        .runs()
+        .into_iter()
+        .find_map(|event| match event {
+            support::Event::Run {
+                step: Step::Rollback,
+                unit,
+                ..
+            } => Some(unit),
+            _ => None,
+        })
+        .expect("a failed verify runs rollback");
+    assert_eq!(rollback, format!("updater-{service}-rollback-{}", u64::MAX));
+    assert_eq!(format!("{rollback}.service").len(), 255);
 }

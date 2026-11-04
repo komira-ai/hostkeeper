@@ -220,19 +220,24 @@ impl Layout {
     }
 
     /// A version keeps [`is_version`] ([`io::ErrorKind::InvalidInput`] otherwise), and is short
-    /// enough that every name the layout derives from it, the longest being
-    /// `.<version>.seal.tmp`, fits in [`MAX_NAME`] bytes ([`io::ErrorKind::InvalidFilename`]
-    /// otherwise). In a package directory it is also none of
+    /// enough that every name the layout derives from it fits in [`MAX_NAME`] bytes
+    /// ([`io::ErrorKind::InvalidFilename`] otherwise): the longest is `.<version>.seal.tmp` in a
+    /// package directory and `.<version>.stage` in the binary directory. In a package directory
+    /// it is also none of
     /// the directory's own names: not `current` or `previous`, and not ending in `.seal` or
     /// `.tmp`, so that a version can never be a link, a seal or a temporary file.
     pub fn check_name(&self, version: &str) -> io::Result<()> {
         check_version(version)?;
-        if version.len() + LONGEST_AFFIX > MAX_NAME {
+        let (affix, longest) = match self.kind {
+            Kind::Package => (PACKAGE_AFFIX, "`.<version>.seal.tmp`"),
+            Kind::Binary => (BINARY_AFFIX, "`.<version>.stage`"),
+        };
+        if version.len() + affix > MAX_NAME {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidFilename,
                 format!(
                     "a version of {} bytes is too long for the names the layout puts beside it: \
-                     `.<version>.seal.tmp` would pass {MAX_NAME} bytes",
+                     {longest} would pass {MAX_NAME} bytes",
                     version.len()
                 ),
             ));
@@ -417,10 +422,13 @@ fn link_version(link: &Path) -> io::Result<Option<String>> {
     }
 }
 
-/// What the longest name the layout derives from a version adds to it: `.<version>.seal.tmp`,
-/// the seal `hostkeeper-unpack` writes beside a package version before renaming it into place
-/// (`<version>.seal` and the binary directory's `.<version>.stage` are shorter).
-const LONGEST_AFFIX: usize = ".".len() + ".seal.tmp".len();
+/// What the longest name a package directory derives from a version adds to it:
+/// `.<version>.seal.tmp`, the seal `hostkeeper-unpack` writes beside a package version before
+/// renaming it into place (`<version>.seal` is shorter).
+const PACKAGE_AFFIX: usize = ".".len() + ".seal.tmp".len();
+/// What the longest name the binary directory derives from a version adds to it:
+/// `.<version>.stage`, the copy [`Layout::stage`] renames into `versions/<version>`.
+const BINARY_AFFIX: usize = ".".len() + ".stage".len();
 
 /// A version names a file: it keeps [`is_version`].
 fn check_version(version: &str) -> io::Result<()> {

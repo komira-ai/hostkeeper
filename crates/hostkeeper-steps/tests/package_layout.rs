@@ -98,10 +98,11 @@ fn staging_a_tree_adds_a_version_and_moves_no_link() {
     assert!(source.exists());
 }
 
-/// Catches a version that keeps its rule but is too long for the names the layout puts beside it:
-/// `.<version>.seal.tmp` is at most 255 bytes, so a version of 245 bytes is staged and one of 246
-/// bytes, or 255, is `InvalidFilename` in a package directory and in the binary directory alike,
-/// before anything is touched.
+/// Catches a version that keeps its rule but is too long for the names the layout puts beside it,
+/// each layout counting the longest name it makes itself: in a package directory
+/// `.<version>.seal.tmp`, so 245 bytes are staged and 246 or 255 are `InvalidFilename`; in the
+/// binary directory `.<version>.stage`, so 248 bytes are staged and 249 are refused. A refused
+/// version touches nothing.
 #[test]
 fn a_version_too_long_for_its_derived_names_is_refused() {
     let s = Scratch::new("pl-long");
@@ -118,15 +119,6 @@ fn a_version_too_long_for_its_derived_names_is_refused() {
                 version.len()
             )
         );
-        assert_eq!(
-            layout.check_name(&version).unwrap_err().kind(),
-            io::ErrorKind::InvalidFilename
-        );
-        let binaries = Layout::new(&s.path().join("bin"));
-        assert_eq!(
-            binaries.check_name(&version).unwrap_err().kind(),
-            io::ErrorKind::InvalidFilename
-        );
     }
     assert!(source.exists());
     let longest = "1".repeat(245);
@@ -139,6 +131,26 @@ fn a_version_too_long_for_its_derived_names_is_refused() {
     write_seal(&layout, &longest, &tree);
     layout.stage_tree(&longest, &tree).unwrap();
     layout.check_tree(&longest).unwrap();
+
+    let binaries = Layout::new(&s.path().join("bin"));
+    let file = s.path().join("file");
+    fs::write(&file, "f").unwrap();
+    let over = "1".repeat(249);
+    let err = binaries.stage(&over, &file).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidFilename);
+    assert_eq!(
+        err.to_string(),
+        "a version of 249 bytes is too long for the names the layout puts beside it: \
+         `.<version>.stage` would pass 255 bytes"
+    );
+    assert!(!s.path().join("bin/versions").join(&over).exists());
+    let fits = "1".repeat(248);
+    assert_eq!(format!(".{fits}.stage").len(), 255);
+    binaries.stage(&fits, &file).unwrap();
+    assert_eq!(
+        fs::read(s.path().join("bin/versions").join(&fits)).unwrap(),
+        b"f"
+    );
 }
 
 /// Catches a switch that loses the way back: `previous` becomes what `current` was, a second

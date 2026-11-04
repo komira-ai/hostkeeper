@@ -501,6 +501,42 @@ fn state_of(rig: &Rig) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// Catches a version bound that refuses a version which fits, or a temporary seal of the longest
+/// version that cannot be written: a 245-byte version, whose `.<version>.seal.tmp` is exactly 255
+/// bytes, unpacks through the host port to a sealed version directory, its seal is readable
+/// and names the archive, no temporary seal stays, and a second unpack of the same order writes
+/// nothing and returns the version.
+#[test]
+fn the_longest_version_unpacks_and_is_found_again() {
+    let rig = Rig::new("u-longest");
+    let version = "1".repeat(245);
+    assert_eq!(format!(".{version}.seal.tmp").len(), 255);
+    let archive = manifest_tar(&MANIFEST.replace("1.5.0", &version));
+    let (path, _) = rig.archive("r.tar.zst", &archive);
+    let order = order(&version, &sha256_hex(&archive));
+    let unpacked = unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    assert!(unpacked.fresh);
+    assert_eq!(unpacked.dir, rig.service().join(&version));
+    assert_eq!(rig.listing(), [version.clone(), format!("{version}.seal")]);
+    let seal =
+        Seal::parse(&fs::read(rig.service().join(format!("{version}.seal"))).unwrap()).unwrap();
+    assert_eq!(seal, unpacked.seal);
+    assert_eq!(seal.package_digest(), sha256_hex(&archive));
+    Layout::package(&rig.service())
+        .check_tree(&version)
+        .unwrap();
+    let fake = Faulty::new(rig.host());
+    let again = unpack(&path, &order, &limits(), &fake).unwrap();
+    assert!(!again.fresh);
+    assert_eq!(again.seal, unpacked.seal);
+    assert!(
+        fake.calls().iter().all(|c| !c.writes()),
+        "{:?}",
+        fake.calls()
+    );
+    assert_eq!(rig.listing(), [version.clone(), format!("{version}.seal")]);
+}
+
 /// Catches an order whose version keeps its rule but is too long for the names the package
 /// directory derives from it (`.<version>.seal.tmp` past 255 bytes) reaching the disk: 246 and
 /// 255 bytes are `VersionTooLong`, `Failed`, release, `version_too_long`, before any call of the
