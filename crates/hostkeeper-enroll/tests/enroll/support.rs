@@ -13,9 +13,9 @@ use std::time::Duration;
 use hostkeeper_config::daemon::{DaemonConfig, Sha256Hex};
 use hostkeeper_enroll::{
     Claims, ClaimsSource, CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState, Enroller,
-    Entropy, EntropyError, Error, HostId, Issued, KeyFrom, PkiDir, Poll, PollAnswer, Ports, Reason,
-    RenewAnswer, RenewRequest, RequestId, Settings, Site, Store, StoreError, StoreLock, Stored,
-    TransportError, WallClock, poll_message,
+    Entropy, EntropyError, Error, FaultGate, HostId, Issued, KeyFrom, PkiDir, Poll, PollAnswer,
+    Ports, Reason, RenewAnswer, RenewRequest, RequestId, Settings, Site, Store, StoreError,
+    StoreLock, Stored, TransportError, WallClock,
 };
 use hostkeeper_steps::Clock;
 use hostkeeper_testkit::Scratch;
@@ -29,7 +29,7 @@ use x509_cert::der::asn1::{ObjectIdentifier, OctetString};
 use x509_cert::der::oid::AssociatedOid;
 use x509_cert::der::oid::db::rfc5280::ID_KP_CLIENT_AUTH;
 use x509_cert::der::pem::{LineEnding, encode_string};
-use x509_cert::der::{DateTime, Decode, Encode, EncodePem};
+use x509_cert::der::{DateTime, Decode, DecodePem, Encode, EncodePem};
 use x509_cert::ext::Extension;
 use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage};
 use x509_cert::name::Name;
@@ -101,6 +101,12 @@ pub fn extension<T: Encode + AssociatedOid>(value: &T) -> Extension {
         critical: false,
         extn_value: OctetString::new(value.to_der().expect("DER")).expect("an octet string"),
     }
+}
+
+/// `extension`, marked critical.
+pub fn critical(mut extension: Extension) -> Extension {
+    extension.critical = true;
+    extension
 }
 
 /// The extended key usage `usages`.
@@ -209,6 +215,27 @@ impl Ca {
         );
         cert.to_pem(LineEnding::LF).expect("PEM")
     }
+
+    /// [`Ca::leaf`], naming `issuer` (an RFC 4514 name) as its issuer although this CA signs it.
+    pub fn leaf_with_issuer(
+        &self,
+        spki: &SubjectPublicKeyInfoOwned,
+        subject: &str,
+        issuer: &str,
+        extensions: Vec<Extension>,
+        window: (u64, u64),
+    ) -> String {
+        let issuer = Name::from_str(issuer).expect("an issuer");
+        let cert = certificate(
+            &self.key,
+            subject,
+            &issuer,
+            extensions,
+            window,
+            spki.clone(),
+        );
+        cert.to_pem(LineEnding::LF).expect("PEM")
+    }
 }
 
 /// The SubjectPublicKeyInfo of `key`.
@@ -280,6 +307,36 @@ pub struct Wall {
     pub sites: Vec<&'static str>,
 }
 
+/// One call of the enrollment API, for a failure injected at it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Op {
+    Enroll,
+    UnsignedPoll,
+    SignedPoll,
+    Renew,
+}
+
+/// The bytes a poll signs, built here from the contract's literal bytes rather than with the
+/// crate's `poll_message`, so a change to one side is caught by the other.
+pub fn contract_poll_message(request_id: &RequestId, nonce: &[u8]) -> Vec<u8> {
+    let mut message = b"hostkeeper-enroll-poll-v1\x00".to_vec();
+    message.extend_from_slice(request_id.as_str().as_bytes());
+    message.push(0);
+    message.extend_from_slice(nonce);
+    message
+}
+
+/// The `not_after` of a PEM certificate, `0` when it does not parse.
+fn not_after(pem: &str) -> u64 {
+    Certificate::from_pem(pem.as_bytes()).map_or(0, |cert| {
+        cert.tbs_certificate()
+            .validity()
+            .not_after
+            .to_unix_duration()
+            .as_secs()
+    })
+}
+
 /// The in-memory coordinator.
 pub struct Coordinator {
     pub ca: Ca,
@@ -291,11 +348,13 @@ pub struct Coordinator {
     pub renews: Vec<RenewRequest>,
     pub rows: BTreeMap<RequestId, Row>,
     nonces: Vec<Vec<u8>>,
-    next_nonce: u8,
+    next_nonce: u64,
     /// The length of the nonces it gives.
     pub nonce_len: usize,
-    /// Every call fails with this transport error.
+    /// Every call fails with this transport error, before anything is done.
     pub down: Option<String>,
+    /// The next call of this operation does its work and then loses its reply.
+    pub lose_reply: Option<Op>,
     /// Called with each `Enroll` request before it is answered.
     pub on_enroll: Option<OnEnroll>,
     /// Answers `Enroll` with this request id instead of the request's.
@@ -318,11 +377,24 @@ impl Coordinator {
         }
     }
 
+    /// `answer`, unless the reply of `op` is to be lost.
+    fn reply<T>(&mut self, op: Op, answer: T) -> Result<T, TransportError> {
+        if self.lose_reply == Some(op) {
+            self.lose_reply = None;
+            return Err(TransportError(format!("the reply to {op:?} was lost")));
+        }
+        Ok(answer)
+    }
+
+    fn now(&self) -> u64 {
+        self.wall.lock().expect("wall").now
+    }
+
     fn issued(&mut self, spki_der: &[u8], host_id: &str) -> Issued {
         let args = Args {
             spki: SubjectPublicKeyInfoOwned::from_der(spki_der).expect("SPKI"),
             host_id: host_id.to_owned(),
-            now: self.wall.lock().expect("wall").now,
+            now: self.now(),
         };
         match self.issue.as_mut() {
             Some(issue) => issue(&self.ca, &args),
@@ -367,6 +439,7 @@ impl CoordinatorEnroll for Handle {
         if let Some(hook) = c.on_enroll.as_mut() {
             hook(request);
         }
+        let now = c.now();
         let spki_der = csr_spki(&request.csr_der);
         let id = RequestId::of_spki(&spki_der);
         let row = c.rows.entry(id.clone()).or_insert_with(|| Row {
@@ -375,7 +448,13 @@ impl CoordinatorEnroll for Handle {
             renewal_of: None,
             issued: None,
         });
-        if request.renewal_of.is_some() && matches!(row.state, RowState::Approved(_)) {
+        // A return (`renewal_of`) opens a new episode only when the certificate last issued for
+        // the key has expired; a repost within an episode keeps its approval.
+        let expired = row
+            .issued
+            .as_ref()
+            .is_some_and(|issued| not_after(&issued.cert_pem) < now);
+        if request.renewal_of.is_some() && expired {
             row.state = RowState::Pending;
             row.issued = None;
             row.renewal_of = request.renewal_of.clone();
@@ -383,12 +462,13 @@ impl CoordinatorEnroll for Handle {
         let state = match &row.state {
             RowState::Pending => EnrollState::Pending,
             RowState::Approved(_) => EnrollState::Approved,
-            RowState::Denied(reason) => EnrollState::Denied(Reason::new(reason)),
+            RowState::Denied(reason) => EnrollState::Denied(Reason::new(reason).expect("a token")),
         };
-        Ok(EnrollAnswer {
+        let answer = EnrollAnswer {
             request_id: c.answer_id.clone().unwrap_or(id),
             state,
-        })
+        };
+        c.reply(Op::Enroll, answer)
     }
 
     fn poll(&mut self, poll: &Poll) -> Result<PollAnswer, TransportError> {
@@ -401,9 +481,10 @@ impl CoordinatorEnroll for Handle {
                 return Ok(answer);
             }
             c.next_nonce += 1;
-            let nonce = vec![c.next_nonce; c.nonce_len];
+            let counter = c.next_nonce.to_be_bytes();
+            let nonce: Vec<u8> = (0..c.nonce_len).map(|i| counter[i % 8]).collect();
             c.nonces.push(nonce.clone());
-            return Ok(PollAnswer::Challenge(nonce));
+            return c.reply(Op::UnsignedPoll, PollAnswer::Challenge(nonce));
         }
         let Some(at) = c.nonces.iter().position(|n| *n == poll.nonce) else {
             return Err(TransportError(
@@ -418,14 +499,17 @@ impl CoordinatorEnroll for Handle {
             .ok_or_else(|| TransportError("no such request".into()))?;
         let key = VerifyingKey::from_public_key_der(&row.spki_der).expect("a P-256 key");
         let signature = DerSignature::from_bytes(&poll.signature).expect("a DER signature");
-        key.verify(&poll_message(&poll.request_id, &poll.nonce), &signature)
-            .map_err(|_| TransportError("the poll is not signed by the request key".into()))?;
+        key.verify(
+            &contract_poll_message(&poll.request_id, &poll.nonce),
+            &signature,
+        )
+        .map_err(|_| TransportError("the poll is not signed by the request key".into()))?;
         if let Some(answer) = c.signed_answer.clone() {
             return Ok(answer);
         }
-        match row.state {
-            RowState::Pending => Ok(PollAnswer::Pending),
-            RowState::Denied(reason) => Ok(PollAnswer::Denied(Reason::new(&reason))),
+        let answer = match row.state {
+            RowState::Pending => PollAnswer::Pending,
+            RowState::Denied(reason) => PollAnswer::Denied(Reason::new(&reason).expect("a token")),
             RowState::Approved(host_id) => {
                 let issued = match row.issued {
                     Some(issued) => issued,
@@ -434,9 +518,10 @@ impl CoordinatorEnroll for Handle {
                 if let Some(row) = c.rows.get_mut(&poll.request_id) {
                     row.issued = Some(issued.clone());
                 }
-                Ok(PollAnswer::Issued(issued))
+                PollAnswer::Issued(issued)
             }
-        }
+        };
+        c.reply(Op::SignedPoll, answer)
     }
 
     fn renew(&mut self, request: &RenewRequest) -> Result<RenewAnswer, TransportError> {
@@ -456,9 +541,8 @@ impl CoordinatorEnroll for Handle {
         if let Some(reason) = c.renew_refusal.clone() {
             return Ok(RenewAnswer::Refused(reason));
         }
-        Ok(RenewAnswer::Issued(
-            c.issued(&enrolled, request.host_id.as_str()),
-        ))
+        let issued = c.issued(&enrolled, request.host_id.as_str());
+        c.reply(Op::Renew, RenewAnswer::Issued(issued))
     }
 }
 
@@ -524,12 +608,12 @@ impl Entropy for ScriptedEntropy {
     }
 }
 
-/// Claims that never change.
-pub struct FixedClaims(pub Claims);
+/// Claims a test can change between steps, as a host's interfaces or DMI data can change.
+pub struct SharedClaims(Arc<Mutex<Claims>>);
 
-impl ClaimsSource for FixedClaims {
+impl ClaimsSource for SharedClaims {
     fn claims(&self) -> Claims {
-        self.0.clone()
+        self.0.lock().expect("claims").clone()
     }
 }
 
@@ -572,8 +656,8 @@ impl Store for KeyWriteFails {
         self.0.write_generation(cert_pem, ca_pem, key)
     }
 
-    fn prune(&self) -> Result<(), StoreError> {
-        self.0.prune()
+    fn prune(&self, used: u64) -> Result<(), StoreError> {
+        self.0.prune(used)
     }
 }
 
@@ -584,6 +668,8 @@ pub struct World {
     pub wall: Arc<Mutex<Wall>>,
     pub sleeps: Arc<Mutex<Vec<u64>>>,
     entropy: Arc<Mutex<u8>>,
+    pub claims: Arc<Mutex<Claims>>,
+    pub image: Mutex<String>,
     pub pin: Sha256Hex,
 }
 
@@ -608,6 +694,7 @@ impl World {
             next_nonce: 0,
             nonce_len: 32,
             down: None,
+            lose_reply: None,
             on_enroll: None,
             answer_id: None,
             unsigned_answer: None,
@@ -621,6 +708,8 @@ impl World {
             wall,
             sleeps: Arc::new(Mutex::new(Vec::new())),
             entropy: Arc::new(Mutex::new(0)),
+            claims: Arc::new(Mutex::new(claims())),
+            image: Mutex::new(IMAGE.to_owned()),
             pin,
         }
     }
@@ -649,8 +738,19 @@ impl World {
     pub fn settings(&self) -> Settings {
         Settings {
             ca_sha256: self.pin.clone(),
-            image: IMAGE.to_owned(),
+            image: self.image.lock().expect("image").clone(),
         }
+    }
+
+    /// The pki directory as the enroller's store, failing where `gate` says.
+    pub fn store_with_faults(&self, gate: FaultGate) -> Box<dyn Store> {
+        Box::new(PkiDir::new(&self.pki()).with_faults(gate))
+    }
+
+    /// An enroller over the pki directory that fails where `gate` says.
+    pub fn open_with_faults(&self, gate: FaultGate) -> Enroller {
+        let ports = self.ports_with(Some(self.store_with_faults(gate)), None);
+        Enroller::open(self.settings(), ports).expect("open the enroller")
     }
 
     /// The ports of an enroller over the pki directory, with `store` and `entropy` in place of
@@ -663,7 +763,7 @@ impl World {
         Ports {
             coordinator: Box::new(Handle(Arc::clone(&self.coordinator))),
             store: store.unwrap_or_else(|| Box::new(PkiDir::new(&self.pki()))),
-            claims: Box::new(FixedClaims(claims())),
+            claims: Box::new(SharedClaims(Arc::clone(&self.claims))),
             entropy: entropy.unwrap_or_else(|| Box::new(SharedEntropy(Arc::clone(&self.entropy)))),
             wall: Box::new(FakeWall(Arc::clone(&self.wall))),
             clock: Box::new(FakeClock(Arc::clone(&self.sleeps))),
@@ -724,4 +824,18 @@ pub fn names(dir: &Path) -> Vec<String> {
 /// The PKCS#8 DER of `key`.
 pub fn pkcs8(key: &SigningKey) -> Vec<u8> {
     key.to_pkcs8_der().expect("PKCS#8").as_bytes().to_vec()
+}
+
+/// Writes `bytes` to `path` with mode 0600, as the daemon writes a key.
+pub fn write_private(path: &Path, bytes: &[u8]) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .expect("create");
+    file.write_all(bytes).expect("write");
 }

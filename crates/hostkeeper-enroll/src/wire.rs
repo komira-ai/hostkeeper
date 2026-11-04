@@ -37,6 +37,14 @@ impl RequestId {
         RequestId(hex::encode(Sha256::digest(spki_der)))
     }
 
+    /// A request id as the coordinator sends it: exactly 64 lower-case hex digits, or `None`.
+    pub fn parse(text: &str) -> Option<RequestId> {
+        let hex = text
+            .bytes()
+            .all(|b| b.is_ascii_digit() | (b'a'..=b'f').contains(&b));
+        ((text.len() == 64) & hex).then(|| RequestId(text.to_owned()))
+    }
+
     /// The 64 hex digits.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -49,15 +57,23 @@ impl fmt::Display for RequestId {
     }
 }
 
+/// The longest host id.
+pub const MAX_HOST_ID: usize = 64;
+
 /// The id the coordinator gave a host when an operator approved it; its certificate's subject is
-/// `host:<id>`. Never empty.
+/// `host:<id>`. One to [`MAX_HOST_ID`] bytes of `A-Z a-z 0-9 . _ -`, the grammar of a service
+/// name with the dot added: it goes into certificate subjects and log lines, so it holds no
+/// space, separator or control character.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HostId(String);
 
 impl HostId {
-    /// `id`, or `None` when it is empty.
+    /// `id`, or `None` when it is not a host id.
     pub fn new(id: &str) -> Option<HostId> {
-        (!id.is_empty()).then(|| HostId(id.to_owned()))
+        let chars = id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() | (b == b'.') | (b == b'_') | (b == b'-'));
+        ((1..=MAX_HOST_ID).contains(&id.len()) & chars).then(|| HostId(id.to_owned()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -76,15 +92,23 @@ impl fmt::Display for HostId {
     }
 }
 
+/// The longest reason token.
+pub const MAX_REASON: usize = 64;
+
 /// Why the coordinator denied a request or refused a renewal: the token of the closed reason of
-/// the coordinator's API, as the transport names it. The daemon reports it and does not act on
-/// its value.
+/// the coordinator's API (`duplicate_claim`, `pending_full`, ...), as the transport names it:
+/// one to [`MAX_REASON`] bytes of `a-z 0-9 _`. The daemon reports it and does not act on its
+/// value, so a reason the API adds later is carried without a change here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reason(String);
 
 impl Reason {
-    pub fn new(token: &str) -> Reason {
-        Reason(token.to_owned())
+    /// `token`, or `None` when it is not a reason token.
+    pub fn new(token: &str) -> Option<Reason> {
+        let chars = token
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() | b.is_ascii_digit() | (b == b'_'));
+        ((1..=MAX_REASON).contains(&token.len()) & chars).then(|| Reason(token.to_owned()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -214,4 +238,58 @@ pub fn poll_message(request_id: &RequestId, nonce: &[u8]) -> Vec<u8> {
     message.push(0);
     message.extend_from_slice(nonce);
     message
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Catches a request id from the coordinator taken without its grammar: 64 lower-case hex
+    /// digits, nothing else.
+    #[test]
+    fn a_received_request_id_is_64_lower_case_hex_digits() {
+        let id = RequestId::of_spki(b"a key");
+        assert_eq!(RequestId::parse(id.as_str()), Some(id.clone()));
+        let upper = id.as_str().to_ascii_uppercase();
+        let short = &id.as_str()[1..];
+        let long = format!("{id}0");
+        let foreign = format!("{}g", &id.as_str()[1..]);
+        for text in ["", short, long.as_str(), upper.as_str(), foreign.as_str()] {
+            assert_eq!(RequestId::parse(text), None, "{text:?}");
+        }
+    }
+
+    /// Catches a host id outside its grammar: empty, too long, or holding a space, a separator
+    /// or a control character.
+    #[test]
+    fn a_host_id_has_its_grammar() {
+        let longest = "a".repeat(MAX_HOST_ID);
+        for id in ["web-1", "Web_1.a", longest.as_str()] {
+            assert_eq!(
+                HostId::new(id).map(|h| h.as_str().to_owned()),
+                Some(id.to_owned())
+            );
+        }
+        let long = "a".repeat(MAX_HOST_ID + 1);
+        for id in ["", "web 1", "web\n1", "web/1", "web:1", long.as_str()] {
+            assert_eq!(HostId::new(id), None, "{id:?}");
+        }
+    }
+
+    /// Catches a reason that is not a token (empty, upper case, a space, a control character,
+    /// too long) reaching a log line.
+    #[test]
+    fn a_reason_is_a_token() {
+        let longest = "a".repeat(MAX_REASON);
+        for token in ["duplicate_claim", "pending_full", "v2", longest.as_str()] {
+            assert_eq!(
+                Reason::new(token).map(|r| r.to_string()),
+                Some(token.to_owned())
+            );
+        }
+        let long = "a".repeat(MAX_REASON + 1);
+        for token in ["", "Denied", "a b", "denied\n", "denied-x", long.as_str()] {
+            assert_eq!(Reason::new(token), None, "{token:?}");
+        }
+    }
 }

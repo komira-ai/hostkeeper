@@ -19,8 +19,8 @@ hex.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 p256.workspace = true
-# `flock` for the store lock.
-rustix = { workspace = true, features = ["fs"] }
+# `flock` for the store lock; the effective uid that owns the pki directory.
+rustix = { workspace = true, features = ["fs", "process"] }
 sha2.workspace = true
 thiserror.workspace = true
 x509-cert.workspace = true

@@ -8,10 +8,14 @@ use hostkeeper_enroll::{
     Refusal, RequestId,
 };
 use x509_cert::Certificate;
+use x509_cert::der::asn1::ObjectIdentifier;
 use x509_cert::der::oid::db::rfc5280::{ID_KP_CLIENT_AUTH, ID_KP_SERVER_AUTH};
 use x509_cert::der::{DecodePem, Encode};
 
-use crate::support::{Args, Ca, HOST, T0, WEEK, World, eku, pem, proper};
+use x509_cert::ext::Extension;
+use x509_cert::ext::pkix::{BasicConstraints, KeyUsage, KeyUsages};
+
+use crate::support::{Args, Ca, HOST, T0, WEEK, World, critical, eku, extension, pem, proper};
 
 /// A world whose coordinator issues what `issue` makes.
 fn issuing(name: &str, issue: impl FnMut(&Ca, &Args) -> Issued + Send + 'static) -> World {
@@ -64,7 +68,7 @@ fn a_certificate_without_a_host_id_is_refused() {
     assert_eq!(refusal(&refused), Refusal::NoHostId);
     assert_eq!(
         refused.to_string(),
-        "the issued certificate was refused: the coordinator named no host id"
+        "the issued certificate was refused: the coordinator named no valid host id"
     );
 }
 
@@ -106,10 +110,18 @@ fn a_certificate_not_signed_by_the_pinned_ca_is_refused() {
     );
 
     let refused = first_refusal("other-ca", |ca: &Ca, args: &Args| {
+        // Another key signs a certificate that names the pinned CA as its issuer.
         let other = Ca::new(0x73);
         Issued {
+            cert_pem: other.leaf_with_issuer(
+                &args.spki,
+                "CN=host:web-1",
+                "CN=hostkeeper test CA 112",
+                vec![eku(&[ID_KP_CLIENT_AUTH])],
+                (args.now, args.now + WEEK),
+            ),
             ca_bundle_pem: format!("{}{}", other.pem, ca.pem),
-            ..proper(&other, args)
+            ..proper(ca, args)
         }
     });
     assert_eq!(refusal(&refused), Refusal::NotSignedByCa);
@@ -276,7 +288,7 @@ fn a_renewal_for_another_host_is_refused() {
 fn a_refused_renewal_leaves_the_current_generation() {
     let world = World::new("renew-refused");
     let mut enroller = world.enrolled();
-    world.coordinator().renew_refusal = Some(Reason::new("host_excluded"));
+    world.coordinator().renew_refusal = Reason::new("host_excluded");
     world.set_now(T0 + WEEK / 2);
     let refused = enroller.run_once().expect_err("refused");
     assert!(matches!(&refused, Error::RenewRefused(r) if r.as_str() == "host_excluded"));
@@ -386,4 +398,200 @@ fn a_poll_without_a_proper_nonce_is_refused() {
         "the coordinator broke the enrollment protocol: it answered a signed poll with another \
          nonce"
     );
+}
+
+/// A certificate for the request's key, valid a week from now, subject `host:web-1`, with
+/// `extensions`.
+fn with_extensions(ca: &Ca, args: &Args, extensions: Vec<Extension>) -> Issued {
+    leaf(
+        ca,
+        args,
+        "CN=host:web-1",
+        extensions,
+        (args.now, args.now + WEEK),
+    )
+}
+
+/// Catches a host id that is not one (empty, a space, a control character that would reach the
+/// log, a path separator, too long) being accepted from the coordinator.
+#[test]
+fn a_host_id_outside_its_grammar_is_refused() {
+    let long = "a".repeat(65);
+    for (n, id) in ["", "web 1", "web\n1", "web/1", long.as_str()]
+        .into_iter()
+        .enumerate()
+    {
+        let id = id.to_owned();
+        let refused = first_refusal(&format!("host-id-{n}"), move |ca: &Ca, args: &Args| {
+            Issued {
+                host_id: id.clone(),
+                ..proper(ca, args)
+            }
+        });
+        assert_eq!(refusal(&refused), Refusal::NoHostId, "{n}");
+    }
+}
+
+/// Catches a certificate whose issuer field names someone else being taken for the pinned CA's,
+/// although that CA's key signed it.
+#[test]
+fn a_certificate_naming_another_issuer_is_refused() {
+    let refused = first_refusal("issuer", |ca: &Ca, args: &Args| Issued {
+        cert_pem: ca.leaf_with_issuer(
+            &args.spki,
+            "CN=host:web-1",
+            "CN=someone else",
+            vec![eku(&[ID_KP_CLIENT_AUTH])],
+            (args.now, args.now + WEEK),
+        ),
+        ..proper(ca, args)
+    });
+    assert_eq!(refusal(&refused), Refusal::Issuer);
+    assert_eq!(
+        refused.to_string(),
+        "the issued certificate was refused: the certificate's issuer is not the pinned CA"
+    );
+}
+
+/// Catches an outer signature algorithm that differs from the signed one being ignored: only
+/// the outer field is changed to ECDSA with SHA-384, and the signature still verifies.
+#[test]
+fn a_certificate_whose_signature_algorithm_fields_differ_is_refused() {
+    let refused = first_refusal("algorithm", |ca: &Ca, args: &Args| {
+        let issued = proper(ca, args);
+        let cert = Certificate::from_pem(issued.cert_pem.as_bytes()).expect("PEM");
+        let mut der = cert.to_der().expect("DER");
+        // The DER of ecdsa-with-SHA256; its last occurrence is the outer field.
+        let sha256 = [0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+        let at = der
+            .windows(sha256.len())
+            .rposition(|window| window == sha256)
+            .expect("the outer algorithm");
+        der[at + 7] = 0x03;
+        Issued {
+            cert_pem: pem(&der),
+            ..issued
+        }
+    });
+    assert_eq!(refusal(&refused), Refusal::Algorithm);
+    assert_eq!(
+        refused.to_string(),
+        "the issued certificate was refused: the certificate's signature algorithm is not ECDSA \
+         with SHA-256 in both its fields"
+    );
+}
+
+/// Catches a CA certificate, a certificate whose key may not sign, or one with a critical
+/// extension this daemon does not check, being used as the host's client certificate.
+#[test]
+fn a_certificate_outside_the_client_profile_is_refused() {
+    let client = || eku(&[ID_KP_CLIENT_AUTH]);
+    let refused = first_refusal("is-ca", move |ca: &Ca, args: &Args| {
+        let constraints = BasicConstraints {
+            ca: true,
+            path_len_constraint: None,
+        };
+        with_extensions(ca, args, vec![extension(&constraints), client()])
+    });
+    assert_eq!(refusal(&refused), Refusal::Ca);
+    assert_eq!(
+        refused.to_string(),
+        "the issued certificate was refused: the certificate is a CA certificate"
+    );
+
+    let refused = first_refusal("key-usage", move |ca: &Ca, args: &Args| {
+        let usage = KeyUsage(KeyUsages::KeyCertSign.into());
+        with_extensions(ca, args, vec![critical(extension(&usage)), client()])
+    });
+    assert_eq!(refusal(&refused), Refusal::KeyUsage);
+    assert_eq!(
+        refused.to_string(),
+        "the issued certificate was refused: the certificate's key usage does not allow \
+         digital signatures"
+    );
+
+    let refused = first_refusal("critical", move |ca: &Ca, args: &Args| {
+        let unknown = Extension {
+            critical: true,
+            ..extension(&BasicConstraints {
+                ca: false,
+                path_len_constraint: None,
+            })
+        };
+        let unknown = Extension {
+            extn_id: ObjectIdentifier::new_unwrap("1.3.6.1.4.1.55555.1"),
+            ..unknown
+        };
+        with_extensions(ca, args, vec![unknown, client()])
+    });
+    assert_eq!(
+        refusal(&refused),
+        Refusal::CriticalExtension("1.3.6.1.4.1.55555.1".into())
+    );
+    assert_eq!(
+        refused.to_string(),
+        "the issued certificate was refused: the certificate marks the extension 1.3.6.1.4.1.55555.1 \
+         critical, which this daemon does not check"
+    );
+}
+
+/// Catches the profile checks refusing a proper client certificate that carries the extensions
+/// they read, marked critical.
+#[test]
+fn a_client_certificate_with_critical_known_extensions_is_accepted() {
+    let world = issuing("profile-accepted", |ca: &Ca, args: &Args| {
+        let constraints = BasicConstraints {
+            ca: false,
+            path_len_constraint: None,
+        };
+        let usage = KeyUsage(KeyUsages::DigitalSignature.into());
+        with_extensions(
+            ca,
+            args,
+            vec![
+                critical(extension(&constraints)),
+                critical(extension(&usage)),
+                critical(eku(&[ID_KP_CLIENT_AUTH])),
+            ],
+        )
+    });
+    let mut enroller = world.open();
+    assert_eq!(enroller.run_once().expect("post"), Outcome::Pending);
+    world.coordinator().approve(HOST);
+    let outcome = enroller.run_once().expect("enrolled");
+    assert!(matches!(outcome, Outcome::Enrolled(_)), "{outcome:?}");
+}
+
+/// Catches an extension that appears twice being read as absent, which would skip its check:
+/// two basic constraints, two key usages, two extended key usages are each refused.
+#[test]
+fn a_certificate_with_a_repeated_extension_is_refused() {
+    let constraints = BasicConstraints {
+        ca: false,
+        path_len_constraint: None,
+    };
+    let refused = first_refusal("two-constraints", move |ca: &Ca, args: &Args| {
+        let twice = vec![
+            extension(&constraints),
+            extension(&constraints),
+            eku(&[ID_KP_CLIENT_AUTH]),
+        ];
+        with_extensions(ca, args, twice)
+    });
+    assert_eq!(refusal(&refused), Refusal::Ca);
+    let refused = first_refusal("two-usages", |ca: &Ca, args: &Args| {
+        let usage = KeyUsage(KeyUsages::DigitalSignature.into());
+        let twice = vec![
+            extension(&usage),
+            extension(&usage),
+            eku(&[ID_KP_CLIENT_AUTH]),
+        ];
+        with_extensions(ca, args, twice)
+    });
+    assert_eq!(refusal(&refused), Refusal::KeyUsage);
+    let refused = first_refusal("two-ekus", |ca: &Ca, args: &Args| {
+        let twice = vec![eku(&[ID_KP_CLIENT_AUTH]), eku(&[ID_KP_CLIENT_AUTH])];
+        with_extensions(ca, args, twice)
+    });
+    assert_eq!(refusal(&refused), Refusal::NoClientAuth);
 }

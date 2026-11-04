@@ -83,3 +83,23 @@ fn the_loop_logs_each_change_once() {
     );
     assert_eq!(world.sleeps(), [RETRY_SECS; 8]);
 }
+
+/// Catches a wait for approval that cannot outlast a few hundred steps: 300 steps keep one line,
+/// one sleep each, one post, and a fresh nonce for every signed poll.
+#[test]
+fn a_long_wait_for_approval_keeps_its_pacing_and_fresh_nonces() {
+    let world = World::new("long-wait");
+    let mut enroller = world.open();
+    let lines = run(&mut enroller, 300, |_| {});
+    assert_eq!(lines, [NOT_ENROLLED]);
+    assert_eq!(world.sleeps(), [RETRY_SECS; 300]);
+    let c = world.coordinator();
+    assert_eq!(c.enrolls.len(), 1);
+    let nonces: std::collections::BTreeSet<&Vec<u8>> = c
+        .polls
+        .iter()
+        .filter(|poll| !poll.signature.is_empty())
+        .map(|poll| &poll.nonce)
+        .collect();
+    assert_eq!(nonces.len(), 300);
+}

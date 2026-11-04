@@ -1,31 +1,46 @@
-//! The checks an issued certificate passes before it is stored (design section 5.7, step 4).
+//! The checks a certificate passes before it is stored, or used from the pki directory (design
+//! section 5.7, step 4).
 //!
-//! In order: the host id is not empty (and, for a renewal, is the host's own); the certificate
-//! and the CA bundle are PEM; the bundle holds the CA whose SHA-256 is the pinned `ca_sha256`;
-//! the certificate is signed by that CA's key; its key is the key the host holds; its subject is
-//! exactly `host:<id>`; it allows client authentication; and it is valid now on the wall clock.
+//! [`check`], which reads no clock, in order:
+//! - the host id is a host id (and, for a renewal or a return, the host's own);
+//! - the certificate and the CA bundle are PEM;
+//! - the bundle holds the CA whose SHA-256 is the pinned `ca_sha256`;
+//! - the certificate is issued by that CA: its issuer is the CA's subject, both of its signature
+//!   algorithm fields are ECDSA with SHA-256 without parameters, and its signature verifies under
+//!   the CA's P-256 key;
+//! - its key is the key the host holds;
+//! - its subject is exactly `host:<id>`;
+//! - it is not a CA, each of the extensions read here decodes and appears once, every
+//!   extension it marks critical is one checked here (basic constraints,
+//!   key usage, extended key usage, subject alternative name), a key usage it carries allows
+//!   digital signatures, and its extended key usage allows client authentication.
+//!
+//! [`verify`] is [`check`] and the validity window on the wall clock.
 //!
 //! The CA of design section 4.4 issues host certificates itself, with a P-256 key, so a
-//! certificate is checked against the pinned CA directly, as ECDSA P-256 with SHA-256, whatever
-//! algorithm it names; there is no intermediate.
+//! certificate is checked against the pinned CA directly; there is no intermediate.
 
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{DerSignature, VerifyingKey};
 use p256::pkcs8::DecodePublicKey;
 use sha2::{Digest, Sha256};
 use x509_cert::Certificate;
-use x509_cert::der::oid::db::rfc5280::ID_KP_CLIENT_AUTH;
+use x509_cert::der::oid::db::rfc5280::{
+    ID_CE_BASIC_CONSTRAINTS, ID_CE_EXT_KEY_USAGE, ID_CE_KEY_USAGE, ID_CE_SUBJECT_ALT_NAME,
+    ID_KP_CLIENT_AUTH,
+};
+use x509_cert::der::oid::db::rfc5912::ECDSA_WITH_SHA_256;
 use x509_cert::der::{DecodePem, Encode};
-use x509_cert::ext::pkix::ExtendedKeyUsage;
+use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage};
 
 use crate::key::HostKey;
 use crate::validity::{self, WallClock};
 use crate::wire::{HostId, Issued};
 
-/// Why an issued certificate was refused. Nothing is stored for any of them.
+/// Why a certificate was refused. Nothing is stored for any of them.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
-    #[error("the coordinator named no host id")]
+    #[error("the coordinator named no valid host id")]
     NoHostId,
     #[error("the certificate is for host {issued}, not for this host, {held}")]
     OtherHost { held: HostId, issued: HostId },
@@ -35,19 +50,29 @@ pub enum Refusal {
     BundleNotPem,
     #[error("the CA bundle does not hold the CA whose SHA-256 is the pinned ca_sha256")]
     NoPinnedCa,
+    #[error("the certificate's issuer is not the pinned CA")]
+    Issuer,
+    #[error("the certificate's signature algorithm is not ECDSA with SHA-256 in both its fields")]
+    Algorithm,
     #[error("the certificate is not signed by the pinned CA")]
     NotSignedByCa,
     #[error("the certificate is for another key than the one this host holds")]
     OtherKey,
     #[error("the certificate's subject is not exactly {0}")]
     Subject(String),
+    #[error("the certificate is a CA certificate")]
+    Ca,
+    #[error("the certificate marks the extension {0} critical, which this daemon does not check")]
+    CriticalExtension(String),
+    #[error("the certificate's key usage does not allow digital signatures")]
+    KeyUsage,
     #[error("the certificate does not allow client authentication")]
     NoClientAuth,
     #[error("the certificate is not valid now: it is valid from {not_before} through {not_after}")]
     NotValidNow { not_before: u64, not_after: u64 },
 }
 
-/// An issued certificate that passed every check.
+/// A certificate that passed every check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Verified {
     pub host_id: HostId,
@@ -60,14 +85,31 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// Checks `issued` for the host holding `key`, under the CA pinned by `pin`; `held` is the
-/// host's own id when it renews or returns.
+/// [`check`], then the validity window on `wall`.
 pub(crate) fn verify(
     issued: &Issued,
     key: &HostKey,
     pin: &str,
     held: Option<&HostId>,
     wall: &dyn WallClock,
+) -> Result<Verified, Refusal> {
+    let verified = check(issued, key, pin, held)?;
+    if !validity::leaf_valid_now(wall, verified.not_before, verified.not_after) {
+        return Err(Refusal::NotValidNow {
+            not_before: verified.not_before,
+            not_after: verified.not_after,
+        });
+    }
+    Ok(verified)
+}
+
+/// Every check but the validity window; see the module documentation. `held` is the host's own
+/// id when it renews or returns.
+pub(crate) fn check(
+    issued: &Issued,
+    key: &HostKey,
+    pin: &str,
+    held: Option<&HostId>,
 ) -> Result<Verified, Refusal> {
     let host_id = HostId::new(&issued.host_id).ok_or(Refusal::NoHostId)?;
     if let Some(held) = held
@@ -85,10 +127,21 @@ pub(crate) fn verify(
         .iter()
         .find(|ca| der_sha256(ca).as_deref() == Some(pin))
         .ok_or(Refusal::NoPinnedCa)?;
+    let tbs = leaf.tbs_certificate();
+    if tbs.issuer() != ca.tbs_certificate().subject() {
+        return Err(Refusal::Issuer);
+    }
+    let algorithms = (
+        &leaf.signature_algorithm().oid,
+        &leaf.signature_algorithm().parameters,
+        leaf.signature_algorithm() == tbs.signature(),
+    );
+    if algorithms != (&ECDSA_WITH_SHA_256, &None, true) {
+        return Err(Refusal::Algorithm);
+    }
     if !signed_by(&leaf, ca) {
         return Err(Refusal::NotSignedByCa);
     }
-    let tbs = leaf.tbs_certificate();
     if tbs.subject_public_key_info().to_der().ok().as_deref() != Some(key.spki_der()) {
         return Err(Refusal::OtherKey);
     }
@@ -96,22 +149,51 @@ pub(crate) fn verify(
     if common_name(&leaf).as_deref() != Some(subject.as_str()) {
         return Err(Refusal::Subject(subject));
     }
-    let usage = tbs.get_extension::<ExtendedKeyUsage>().ok().flatten();
-    if !usage.is_some_and(|(_, usage)| usage.0.contains(&ID_KP_CLIENT_AUTH)) {
-        return Err(Refusal::NoClientAuth);
-    }
+    check_usage(&leaf)?;
     let (not_before, not_after) = window(&leaf);
-    if !validity::leaf_valid_now(wall, not_before, not_after) {
-        return Err(Refusal::NotValidNow {
-            not_before,
-            not_after,
-        });
-    }
     Ok(Verified {
         host_id,
         not_before,
         not_after,
     })
+}
+
+/// The certificate is an end entity for client authentication; see the module documentation.
+fn check_usage(leaf: &Certificate) -> Result<(), Refusal> {
+    let tbs = leaf.tbs_certificate();
+    // An extension that does not decode, or appears twice, refuses as its check would.
+    let constraints = tbs
+        .get_extension::<BasicConstraints>()
+        .map_err(|_| Refusal::Ca)?;
+    if constraints.is_some_and(|(_, constraints)| constraints.ca) {
+        return Err(Refusal::Ca);
+    }
+    let known = [
+        ID_CE_BASIC_CONSTRAINTS,
+        ID_CE_KEY_USAGE,
+        ID_CE_EXT_KEY_USAGE,
+        ID_CE_SUBJECT_ALT_NAME,
+    ];
+    let extensions = tbs.extensions().map_or(&[][..], Vec::as_slice);
+    if let Some(unknown) = extensions
+        .iter()
+        .find(|ext| ext.critical & !known.contains(&ext.extn_id))
+    {
+        return Err(Refusal::CriticalExtension(unknown.extn_id.to_string()));
+    }
+    let usage = tbs
+        .get_extension::<KeyUsage>()
+        .map_err(|_| Refusal::KeyUsage)?;
+    if usage.is_some_and(|(_, usage)| !usage.digital_signature()) {
+        return Err(Refusal::KeyUsage);
+    }
+    let usage = tbs
+        .get_extension::<ExtendedKeyUsage>()
+        .map_err(|_| Refusal::NoClientAuth)?;
+    if !usage.is_some_and(|(_, usage)| usage.0.contains(&ID_KP_CLIENT_AUTH)) {
+        return Err(Refusal::NoClientAuth);
+    }
+    Ok(())
 }
 
 /// The SHA-256 of the certificate's DER.

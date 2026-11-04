@@ -34,8 +34,13 @@ pub struct OsEntropy;
 
 impl Entropy for OsEntropy {
     fn fill(&mut self, buf: &mut [u8]) -> Result<(), EntropyError> {
-        getrandom::fill(buf).map_err(|e| EntropyError(e.to_string()))
+        os_result(getrandom::fill(buf))
     }
+}
+
+/// The result of the operating system's `getrandom`, as this crate reports it.
+fn os_result(result: Result<(), getrandom::Error>) -> Result<(), EntropyError> {
+    result.map_err(|e| EntropyError(e.to_string()))
 }
 
 /// Why the host key could not be made, read or used.
@@ -139,11 +144,22 @@ mod tests {
         );
     }
 
-    /// Catches the operating system's random bytes being left unfilled.
+    /// Catches a failure of the operating system's random bytes being dropped or reworded:
+    /// it is reported with its cause.
     #[test]
-    fn the_operating_system_fills_the_buffer() {
-        let mut buf = [0u8; 32];
-        OsEntropy.fill(&mut buf).expect("getrandom");
-        assert_ne!(buf, [0u8; 32]);
+    fn an_operating_system_failure_is_reported() {
+        assert_eq!(os_result(Ok(())), Ok(()));
+        let failed = getrandom::Error::UNSUPPORTED;
+        assert_eq!(
+            os_result(Err(failed)),
+            Err(EntropyError(failed.to_string()))
+        );
+    }
+
+    /// Catches the adapter not reaching the operating system. Its bytes are not asserted: any
+    /// value, all zeros included, is a valid draw.
+    #[test]
+    fn the_operating_system_answers() {
+        assert_eq!(OsEntropy.fill(&mut [0u8; 32]), Ok(()));
     }
 }

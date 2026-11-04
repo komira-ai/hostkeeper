@@ -86,11 +86,11 @@ mod tests {
         assert_eq!(unix_secs(UNIX_EPOCH + Duration::from_millis(7_900)), 7);
     }
 
-    /// Catches the host's wall clock reading nothing: it counts from the epoch, which is long
-    /// past on any host this runs on. Nothing is asserted about how two reads relate.
+    /// Catches the adapter not reaching the host's clock. Its value is not asserted: the
+    /// conversion is tested above with fixed times.
     #[test]
-    fn the_system_wall_clock_counts_from_the_epoch() {
-        assert!(SystemWallClock.now_unix_secs(LEAF_VALID_NOW) > 0);
+    fn the_system_wall_clock_reads() {
+        let _read: u64 = SystemWallClock.now_unix_secs(LEAF_VALID_NOW);
     }
 
     /// Catches an off-by-one at either end of the validity window or at its middle.

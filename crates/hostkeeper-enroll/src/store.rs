@@ -15,18 +15,32 @@
 //!
 //! Every file is written by temporary file, fsync, rename and directory fsync, the order of the
 //! step record in `hostkeeper-steps` (`record.rs`), here with the file's mode set when it is
-//! created so that a key is never readable by others, even for a moment.
+//! created so that a key is never readable by others, even for a moment. A pki directory made
+//! here is fsynced into its parent.
 //!
-//! Opening the store takes the lock, checks `SCHEMA` and then finishes or discards what a crash
-//! left: a generation without `COMPLETE` is removed, `current` is pointed at the newest complete
-//! generation (or removed when there is none), and a pending key whose enrollment finished (the
-//! newest generation holds the same key) is removed. Any other pending key belongs to a request
-//! still open and is kept: the enroller polls for it.
+//! The root, `pending/` and each generation must be directories (not links) owned by the daemon's
+//! user, and every key a regular file owned by it and closed to group and others; anything else
+//! is refused ([`StoreError::NotPrivate`]). The directories are closed to group and others when
+//! they are used.
+//!
+//! Opening the store first reads `SCHEMA`, so a newer layout is refused before anything in it is
+//! touched. It then takes the lock and finishes or discards what a crash left: a generation
+//! without `COMPLETE` is removed, `current` is pointed at the newest complete generation (or
+//! removed when there is none), and a pending key is removed only when it reads back equal to the
+//! newest generation's key (its enrollment finished). Any other pending key, and any key that
+//! cannot be read, is kept.
+//!
+//! A new generation is written in two parts. Its files and `COMPLETE` come first; a failure
+//! there removes the partial directory and leaves `current` and every key as they were. Then
+//! `current` is switched: from that rename on the generation is published. Removing the pending
+//! key after publication is cleanup: a failure there is not reported, and the next open finishes
+//! it.
 
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rustix::fs::{FlockOperation, flock};
 
@@ -58,12 +72,33 @@ pub enum StoreError {
     BadSchema(String),
     #[error("the pki directory's current link points to {0:?}, which is not a generation")]
     BadLink(PathBuf),
+    #[error(
+        "{0:?} is not the daemon's own: a directory or key must be owned by it, not a link, and closed to group and others"
+    )]
+    NotPrivate(PathBuf),
+    #[error("generation {0} of the pki directory has no COMPLETE marker")]
+    Incomplete(u64),
+    #[error("the pki directory has used every generation number")]
+    GenerationsExhausted,
 }
 
 /// The store lock. The pki directory is the holder's until it is dropped.
-#[derive(Debug)]
 pub struct StoreLock {
-    _file: File,
+    _guard: Box<dyn Send>,
+}
+
+impl StoreLock {
+    /// A lock held for as long as `guard` lives: the open lock file of [`PkiDir`], or whatever
+    /// another [`Store`] holds.
+    pub fn new(guard: Box<dyn Send>) -> StoreLock {
+        StoreLock { _guard: guard }
+    }
+}
+
+impl std::fmt::Debug for StoreLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StoreLock")
+    }
 }
 
 /// Where the key of a new generation comes from.
@@ -81,6 +116,7 @@ pub struct Stored {
     pub number: u64,
     pub dir: PathBuf,
     pub cert_pem: String,
+    pub ca_pem: String,
     pub key_der: Vec<u8>,
 }
 
@@ -108,32 +144,68 @@ impl Stored {
     }
 }
 
-/// The port to the pki directory.
+/// The port to the pki directory. Only the holder of the [`StoreLock`] that [`Store::open`]
+/// returned calls the other methods.
 pub trait Store: Send {
-    /// Takes the store lock (refused, not waited for, when another holder has it), checks the
-    /// schema and finishes or discards what a crash left.
+    /// Refuses a newer schema, takes the store lock (refused, not waited for, when another
+    /// holder has it) and finishes or discards what a crash left.
     fn open(&self) -> Result<StoreLock, StoreError>;
-    /// The pending key, when there is one.
+    /// The pending key, when there is one, made durable before it is returned: a key whose
+    /// earlier write failed after its rename is fsynced here, so it is never posted before it is
+    /// on disk.
     fn pending_key(&self) -> Result<Option<Vec<u8>>, StoreError>;
     /// Writes the pending key, durably, mode 0600. Nothing is posted before this returns.
     fn write_pending_key(&self, pkcs8_der: &[u8]) -> Result<(), StoreError>;
     /// The generation `current` points to.
     fn current(&self) -> Result<Option<Stored>, StoreError>;
-    /// Writes generation `n + 1`, marks it complete and points `current` at it.
+    /// Writes generation `n + 1`, marks it complete and points `current` at it. An error after
+    /// the switch of `current` started may leave the generation published: the caller reads
+    /// [`Store::current`] to know.
     fn write_generation(
         &self,
         cert_pem: &str,
         ca_pem: &str,
         key: KeyFrom,
     ) -> Result<Stored, StoreError>;
-    /// Removes the generations older than `current`, once `current` has been used.
-    fn prune(&self) -> Result<(), StoreError>;
+    /// Removes the generations older than generation `used`, when `used` is still current; a
+    /// confirmation for a generation that is no longer current removes nothing.
+    fn prune(&self, used: u64) -> Result<(), StoreError>;
 }
 
+/// A point in the writes of [`PkiDir`] where a [`FaultGate`] can make it fail, as a failed
+/// fsync or a crash would.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// The pending key was renamed into place; its directory is not fsynced.
+    PendingKeyRenamed,
+    /// A reused pending key is about to be fsynced.
+    PendingKeyReused,
+    /// The files and key of a new generation are written; `COMPLETE` is not.
+    GenerationFiles,
+    /// `current` was renamed to the new generation; the root directory is not fsynced.
+    CurrentRenamed,
+    /// `current` is durable; the pending key is not removed.
+    Published,
+}
+
+/// Answers `true` at the points where [`PkiDir`] is to fail.
+pub type FaultGate = Arc<dyn Fn(Fault) -> bool + Send + Sync>;
+
 /// The pki directory on disk.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct PkiDir {
     root: PathBuf,
+    owner: u32,
+    gate: Option<FaultGate>,
+}
+
+impl std::fmt::Debug for PkiDir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PkiDir")
+            .field("root", &self.root)
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The paths of the generation `current` points to, through the link: what the transport
@@ -146,15 +218,30 @@ pub struct CurrentPaths {
 }
 
 impl PkiDir {
+    /// The pki directory at `root`, owned by the effective user.
     pub fn new(root: &Path) -> PkiDir {
         PkiDir {
             root: root.to_path_buf(),
+            owner: rustix::process::geteuid().as_raw(),
+            gate: None,
         }
     }
 
     /// The host's pki directory, `/etc/updater/pki`.
     pub fn host() -> PkiDir {
         PkiDir::new(Path::new("/etc/updater/pki"))
+    }
+
+    /// The same directory, expected to be owned by `uid`.
+    pub fn with_owner(mut self, uid: u32) -> PkiDir {
+        self.owner = uid;
+        self
+    }
+
+    /// The same directory, failing wherever `gate` says: the seam of the fault tests.
+    pub fn with_faults(mut self, gate: FaultGate) -> PkiDir {
+        self.gate = Some(gate);
+        self
     }
 
     /// The certificate, CA bundle and key of the current generation, through `current`.
@@ -167,6 +254,13 @@ impl PkiDir {
         }
     }
 
+    fn cross(&self, fault: Fault) -> io::Result<()> {
+        match &self.gate {
+            Some(gate) if gate(fault) => Err(io::Error::other(format!("{fault:?} failed"))),
+            _ => Ok(()),
+        }
+    }
+
     fn generation_dir(&self, number: u64) -> PathBuf {
         self.root.join(generation_name(number))
     }
@@ -175,25 +269,52 @@ impl PkiDir {
         self.root.join(PENDING)
     }
 
-    /// Reads `SCHEMA`, and writes it in a directory that has none.
-    fn check_schema(&self) -> Result<(), StoreError> {
+    /// Refuses `path` unless it is a directory (or, with `dir` false, a regular file) owned by
+    /// the daemon's user; a key must also be closed to group and others.
+    fn check_own(&self, path: &Path, dir: bool) -> Result<(), StoreError> {
+        let meta = fs::symlink_metadata(path)?;
+        let kind = if dir { meta.is_dir() } else { meta.is_file() };
+        let closed = dir | (meta.mode() & 0o077 == 0);
+        if (kind, meta.uid() == self.owner, closed) != (true, true, true) {
+            return Err(StoreError::NotPrivate(path.to_path_buf()));
+        }
+        Ok(())
+    }
+
+    /// Checks that `dir` is the daemon's own directory and closes it to group and others.
+    fn own_dir(&self, dir: &Path) -> Result<(), StoreError> {
+        self.check_own(dir, true)?;
+        Ok(fs::set_permissions(dir, Permissions::from_mode(0o700))?)
+    }
+
+    /// Creates `dir` (mode 0700) when it is missing, fsyncing its parent, then [`Self::own_dir`].
+    fn make_dir(&self, dir: &Path) -> Result<(), StoreError> {
+        if !fs::exists(dir)? {
+            let parent = dir.parent().unwrap_or(Path::new("/"));
+            fs::create_dir_all(parent)?;
+            DirBuilder::new().mode(0o700).create(dir)?;
+            sync_dir(parent)?;
+        }
+        self.own_dir(dir)
+    }
+
+    /// The schema of the directory: `None` when it has no `SCHEMA` yet. Reads only.
+    fn read_schema(&self) -> Result<Option<u64>, StoreError> {
         let text = match fs::read_to_string(self.root.join(SCHEMA_FILE)) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let text = format!("{SCHEMA}\n");
-                return Ok(write_durable(
-                    &self.root,
-                    SCHEMA_FILE,
-                    text.as_bytes(),
-                    0o644,
-                )?);
-            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             read => read?,
         };
         match text.trim().parse::<u64>() {
-            Ok(SCHEMA) => Ok(()),
+            Ok(SCHEMA) => Ok(Some(SCHEMA)),
             Ok(found) if found > SCHEMA => Err(StoreError::NewerSchema { found }),
             _ => Err(StoreError::BadSchema(text)),
         }
+    }
+
+    /// Reads the key file `path`, which must be the daemon's own.
+    fn read_key(&self, path: &Path) -> Result<Vec<u8>, StoreError> {
+        self.check_own(path, false)?;
+        Ok(fs::read(path)?)
     }
 
     /// The numbers of the `gen-<n>` directories, ascending; other names are not generations.
@@ -230,6 +351,7 @@ impl PkiDir {
                 remove_file_if_present(&tmp)?;
                 symlink(&target, &tmp)?;
                 fs::rename(&tmp, &link)?;
+                self.cross(Fault::CurrentRenamed)?;
             }
             None => remove_file_if_present(&link)?,
         }
@@ -251,21 +373,70 @@ impl PkiDir {
         }
         sync_dir(&self.root)?;
         self.point_current(newest)?;
-        // A pending key is finished when the newest generation holds the same key; any other
-        // pending key belongs to a request still open and is kept.
+        // A pending key is finished when it reads back equal to the newest generation's key;
+        // any other pending key, or one that cannot be read, belongs to a request still open.
         let pending = self.pending_dir().join(KEY);
         if let Some(newest) = newest
-            && fs::read(self.generation_dir(newest).join(KEY)).ok() == fs::read(&pending).ok()
+            && let (Ok(held), Ok(waiting)) = (
+                fs::read(self.generation_dir(newest).join(KEY)),
+                fs::read(&pending),
+            )
+            && held == waiting
         {
-            remove_file_if_present(&pending)?;
+            fs::remove_file(&pending)?;
+            sync_dir(&self.pending_dir())?;
         }
         Ok(())
+    }
+
+    /// Temporary file created with `mode`, fsync, rename, `after_rename`, directory fsync.
+    fn write_durable(
+        &self,
+        dir: &Path,
+        name: &str,
+        bytes: &[u8],
+        mode: u32,
+        after_rename: Option<Fault>,
+    ) -> io::Result<()> {
+        let tmp = dir.join(tmp_name(name));
+        remove_file_if_present(&tmp)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&tmp, dir.join(name))?;
+        if let Some(fault) = after_rename {
+            self.cross(fault)?;
+        }
+        sync_dir(dir)
+    }
+
+    /// The files of generation directory `dir`, then `COMPLETE`.
+    fn fill_generation(
+        &self,
+        dir: &Path,
+        cert_pem: &str,
+        ca_pem: &str,
+        source: &Path,
+    ) -> Result<(), StoreError> {
+        self.write_durable(dir, CERT, cert_pem.as_bytes(), 0o644, None)?;
+        self.write_durable(dir, CA, ca_pem.as_bytes(), 0o644, None)?;
+        self.check_own(source, false)?;
+        fs::hard_link(source, dir.join(KEY))?;
+        sync_dir(dir)?;
+        self.cross(Fault::GenerationFiles)?;
+        self.write_durable(dir, COMPLETE, b"", 0o644, None)?;
+        Ok(sync_dir(&self.root)?)
     }
 }
 
 impl Store for PkiDir {
     fn open(&self) -> Result<StoreLock, StoreError> {
-        make_private_dir(&self.root)?;
+        let schema = self.read_schema()?;
+        self.make_dir(&self.root)?;
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -274,23 +445,32 @@ impl Store for PkiDir {
             .open(self.root.join(LOCK))?;
         flock(&file, FlockOperation::NonBlockingLockExclusive)
             .map_err(|errno| StoreError::Locked(errno.into()))?;
-        self.check_schema()?;
+        if schema.is_none() {
+            let text = format!("{SCHEMA}\n");
+            self.write_durable(&self.root, SCHEMA_FILE, text.as_bytes(), 0o644, None)?;
+        }
         self.recover()?;
-        Ok(StoreLock { _file: file })
+        Ok(StoreLock::new(Box::new(file)))
     }
 
     fn pending_key(&self) -> Result<Option<Vec<u8>>, StoreError> {
-        match fs::read(self.pending_dir().join(KEY)) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            read => Ok(Some(read?)),
+        let path = self.pending_dir().join(KEY);
+        if !fs::exists(&path)? {
+            return Ok(None);
         }
+        self.own_dir(&self.pending_dir())?;
+        let key = self.read_key(&path)?;
+        self.cross(Fault::PendingKeyReused)?;
+        File::open(&path)?.sync_all()?;
+        sync_dir(&self.pending_dir())?;
+        sync_dir(&self.root)?;
+        Ok(Some(key))
     }
 
     fn write_pending_key(&self, pkcs8_der: &[u8]) -> Result<(), StoreError> {
         let dir = self.pending_dir();
-        make_private_dir(&dir)?;
-        sync_dir(&self.root)?;
-        Ok(write_durable(&dir, KEY, pkcs8_der, 0o600)?)
+        self.make_dir(&dir)?;
+        Ok(self.write_durable(&dir, KEY, pkcs8_der, 0o600, Some(Fault::PendingKeyRenamed))?)
     }
 
     fn current(&self) -> Result<Option<Stored>, StoreError> {
@@ -298,10 +478,15 @@ impl Store for PkiDir {
             return Ok(None);
         };
         let dir = self.generation_dir(number);
+        self.check_own(&dir, true)?;
+        if !dir.join(COMPLETE).is_file() {
+            return Err(StoreError::Incomplete(number));
+        }
         Ok(Some(Stored {
             number,
             cert_pem: fs::read_to_string(dir.join(CERT))?,
-            key_der: fs::read(dir.join(KEY))?,
+            ca_pem: fs::read_to_string(dir.join(CA))?,
+            key_der: self.read_key(&dir.join(KEY))?,
             dir,
         }))
     }
@@ -312,43 +497,46 @@ impl Store for PkiDir {
         ca_pem: &str,
         key: KeyFrom,
     ) -> Result<Stored, StoreError> {
-        let number = self
-            .generations()?
-            .last()
-            .map_or(1, |newest| newest.saturating_add(1));
+        let number = match self.generations()?.last() {
+            None => 1,
+            Some(newest) => newest
+                .checked_add(1)
+                .ok_or(StoreError::GenerationsExhausted)?,
+        };
         let dir = self.generation_dir(number);
-        DirBuilder::new().mode(0o700).create(&dir)?;
-        write_durable(&dir, CERT, cert_pem.as_bytes(), 0o644)?;
-        write_durable(&dir, CA, ca_pem.as_bytes(), 0o644)?;
         let source = match key {
             KeyFrom::Pending => self.pending_dir().join(KEY),
             KeyFrom::Generation(from) => self.generation_dir(from).join(KEY),
         };
-        fs::hard_link(&source, dir.join(KEY))?;
-        sync_dir(&dir)?;
-        write_durable(&dir, COMPLETE, b"", 0o644)?;
-        sync_dir(&self.root)?;
+        DirBuilder::new().mode(0o700).create(&dir)?;
+        if let Err(error) = self.fill_generation(&dir, cert_pem, ca_pem, &source) {
+            // Not published: the partial generation goes, and a later attempt starts afresh.
+            let _ = fs::remove_dir_all(&dir);
+            return Err(error);
+        }
         self.point_current(Some(number))?;
-        // The generation is current from here on; should removing the pending key fail, the
-        // next open removes it (see `recover`).
         if key == KeyFrom::Pending {
-            fs::remove_file(&source)?;
-            sync_dir(&self.pending_dir())?;
+            // Published; removing the pending key is cleanup, which the next open finishes.
+            let _ = self
+                .cross(Fault::Published)
+                .and_then(|()| fs::remove_file(&source))
+                .and_then(|()| sync_dir(&self.pending_dir()));
         }
         Ok(Stored {
             number,
             cert_pem: cert_pem.to_owned(),
+            ca_pem: ca_pem.to_owned(),
             key_der: fs::read(dir.join(KEY))?,
             dir,
         })
     }
 
-    fn prune(&self) -> Result<(), StoreError> {
-        let Some(current) = self.current_number()? else {
+    fn prune(&self, used: u64) -> Result<(), StoreError> {
+        if self.current_number()? != Some(used) {
             return Ok(());
-        };
+        }
         for number in self.generations()? {
-            if number < current {
+            if number < used {
                 fs::remove_dir_all(self.generation_dir(number))?;
             }
         }
@@ -370,12 +558,6 @@ fn tmp_name(name: &str) -> String {
     format!("{name}.tmp")
 }
 
-/// Creates `dir` when it is missing and closes it to group and others.
-fn make_private_dir(dir: &Path) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
-    fs::set_permissions(dir, Permissions::from_mode(0o700))
-}
-
 fn remove_file_if_present(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
@@ -385,21 +567,6 @@ fn remove_file_if_present(path: &Path) -> io::Result<()> {
 
 fn sync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()
-}
-
-/// Temporary file created with `mode`, fsync, rename, directory fsync.
-fn write_durable(dir: &Path, name: &str, bytes: &[u8], mode: u32) -> io::Result<()> {
-    let tmp = dir.join(tmp_name(name));
-    remove_file_if_present(&tmp)?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(mode)
-        .open(&tmp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    fs::rename(&tmp, dir.join(name))?;
-    sync_dir(dir)
 }
 
 #[cfg(test)]
@@ -418,5 +585,11 @@ mod tests {
         ] {
             assert_eq!(generation_number(name), None, "{name}");
         }
+    }
+
+    /// Catches a lock that another store cannot make, or whose `Debug` shows what it holds.
+    #[test]
+    fn any_store_can_make_a_lock() {
+        assert_eq!(format!("{:?}", StoreLock::new(Box::new(()))), "StoreLock");
     }
 }

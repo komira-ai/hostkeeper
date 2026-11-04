@@ -162,21 +162,23 @@ fn the_current_link_is_read_strictly() {
     fs::remove_file(pki.join("current")).expect("unlink");
     fs::write(pki.join("current"), "gen-1").expect("a file");
     assert!(matches!(store.current(), Err(StoreError::Io(_))));
-    assert!(matches!(store.prune(), Err(StoreError::Io(_))));
+    assert!(matches!(store.prune(1), Err(StoreError::Io(_))));
 }
 
-/// Catches a pending key that cannot be read being taken as absent, which would make a second
-/// key and a second request.
+/// Catches a pending key that is not a key file being taken as absent, which would make a
+/// second key and a second request.
 #[test]
 fn a_pending_key_that_cannot_be_read_stops_the_step() {
     let world = World::new("pending-dir");
     let mut enroller = world.open();
-    fs::create_dir_all(world.pki().join("pending/key")).expect("a directory");
+    let key = world.pki().join("pending/key");
+    fs::create_dir_all(&key).expect("a directory");
     let refused = enroller.run_once().expect_err("unreadable");
     assert!(
-        matches!(refused, Error::Store(StoreError::Io(_))),
+        matches!(&refused, Error::Store(StoreError::NotPrivate(path)) if *path == key),
         "{refused:?}"
     );
+    assert!(key.is_dir(), "left as it was");
     assert!(world.coordinator().enrolls.is_empty());
 }
 
@@ -198,7 +200,7 @@ fn a_corrupt_generation_stops_the_step() {
     let world = World::new("corrupt-key");
     let mut enroller = world.enrolled();
     fs::remove_file(world.pki().join("gen-1/key")).expect("unlink");
-    fs::write(world.pki().join("gen-1/key"), "not a key").expect("key");
+    crate::support::write_private(&world.pki().join("gen-1/key"), b"not a key");
     assert!(matches!(enroller.run_once(), Err(Error::Corrupt(1))));
 
     // A certificate whose subject does not name a host.
@@ -229,18 +231,18 @@ fn a_corrupt_generation_stops_the_step() {
 fn confirming_the_current_generation_removes_the_older_ones() {
     let world = World::new("prune");
     let mut enroller = world.open();
-    enroller.confirm_current().expect("nothing to prune");
+    enroller.confirm_generation(1).expect("nothing to prune");
     drop(enroller);
 
     let mut enroller = world.enrolled();
-    enroller.confirm_current().expect("one generation");
+    enroller.confirm_generation(1).expect("one generation");
     world.set_now(T0 + WEEK / 2);
     assert!(matches!(enroller.run_once(), Ok(Outcome::Renewed(_))));
     assert_eq!(
         world.names(),
         [".lock", "SCHEMA", "current", "gen-1", "gen-2", "pending"]
     );
-    enroller.confirm_current().expect("prune");
+    enroller.confirm_generation(2).expect("prune");
     assert_eq!(
         world.names(),
         [".lock", "SCHEMA", "current", "gen-2", "pending"]
@@ -261,7 +263,10 @@ fn the_current_paths_follow_the_link() {
             key: root.join("current/key"),
         }
     );
-    assert_eq!(PkiDir::host(), PkiDir::new(Path::new("/etc/updater/pki")));
+    assert_eq!(
+        PkiDir::host().current_paths(),
+        PkiDir::new(Path::new("/etc/updater/pki")).current_paths()
+    );
 }
 
 /// Catches a generation written over an existing one, a key that is copied rather than linked
@@ -336,5 +341,188 @@ fn a_stored_generation_does_not_print_its_key() {
             "Stored {{ number: 1, dir: {:?}, key_der: \"<redacted>\", .. }}",
             world.pki().join("gen-1")
         )
+    );
+}
+
+/// Catches a pki directory, `pending/` or key that is not the daemon's own being used: a link,
+/// another owner, or a key open to others.
+#[test]
+fn a_tree_that_is_not_the_daemons_own_is_refused() {
+    // The root is a link to a directory.
+    let world = World::new("root-link");
+    let real = world.dir.path().join("real");
+    fs::create_dir(&real).expect("real");
+    symlink(&real, world.pki()).expect("link");
+    let refused = world.try_open().err().expect("a link");
+    assert!(
+        matches!(&refused, Error::Store(StoreError::NotPrivate(p)) if *p == world.pki()),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "{:?} is not the daemon's own: a directory or key must be owned by it, not a link, \
+             and closed to group and others",
+            world.pki()
+        )
+    );
+
+    // The root belongs to another user than the daemon's.
+    let world = World::new("other-owner");
+    fs::create_dir(world.pki()).expect("pki");
+    let mine = fs::metadata(world.pki()).expect("pki").uid();
+    let other = PkiDir::new(&world.pki()).with_owner(mine.wrapping_add(1));
+    let refused = other.open().expect_err("another owner");
+    assert!(matches!(refused, StoreError::NotPrivate(_)), "{refused:?}");
+    assert!(!world.pki().join(".lock").exists(), "nothing made in it");
+
+    // `pending/` is a link.
+    let world = World::new("pending-link");
+    let mut enroller = world.open();
+    let elsewhere = world.dir.path().join("elsewhere");
+    fs::create_dir(&elsewhere).expect("elsewhere");
+    symlink(&elsewhere, world.pki().join("pending")).expect("link");
+    let refused = enroller.run_once().expect_err("a link");
+    assert!(
+        matches!(refused, Error::Store(StoreError::NotPrivate(_))),
+        "{refused:?}"
+    );
+    assert!(
+        crate::support::names(&elsewhere).is_empty(),
+        "no key written through it"
+    );
+    assert!(world.coordinator().enrolls.is_empty());
+
+    // A generation's key is open to others.
+    let world = World::new("open-key");
+    let mut enroller = world.enrolled();
+    let key = world.pki().join("gen-1/key");
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).expect("chmod");
+    let refused = enroller.run_once().expect_err("an open key");
+    assert!(
+        matches!(&refused, Error::Store(StoreError::NotPrivate(p)) if *p == key),
+        "{refused:?}"
+    );
+}
+
+/// Catches recovery removing a pending key it could not read: when neither key reads back, the
+/// pending key is kept.
+#[test]
+fn a_pending_key_that_cannot_be_read_back_is_kept_by_recovery() {
+    let world = World::new("unreadable-keys");
+    drop(world.enrolled());
+    let pki = world.pki();
+    fs::remove_file(pki.join("gen-1/key")).expect("unlink");
+    fs::create_dir(pki.join("gen-1/key")).expect("a directory");
+    fs::create_dir(pki.join("pending/key")).expect("a directory");
+    drop(world.open());
+    assert!(pki.join("pending/key").is_dir(), "kept");
+}
+
+/// Catches a generation whose key is another valid key, whose CA bundle is not the pinned CA's
+/// or is missing, or whose `COMPLETE` marker is gone, being used as the host's identity.
+#[test]
+fn a_generation_that_does_not_hold_together_stops_the_step() {
+    let world = World::new("other-valid-key");
+    let mut enroller = world.enrolled();
+    let key = world.pki().join("gen-1/key");
+    fs::remove_file(&key).expect("unlink");
+    crate::support::write_private(&key, &pkcs8(&signing_key(0x5a)));
+    assert!(matches!(enroller.run_once(), Err(Error::Corrupt(1))));
+
+    let world = World::new("other-ca");
+    let mut enroller = world.enrolled();
+    let other = crate::support::Ca::new(0x5b);
+    fs::write(world.pki().join("gen-1/ca.pem"), &other.pem).expect("ca");
+    assert!(matches!(enroller.run_once(), Err(Error::Corrupt(1))));
+
+    let world = World::new("missing-ca");
+    let mut enroller = world.enrolled();
+    fs::remove_file(world.pki().join("gen-1/ca.pem")).expect("unlink");
+    assert!(matches!(
+        enroller.run_once(),
+        Err(Error::Store(StoreError::Io(_)))
+    ));
+
+    let world = World::new("not-complete");
+    let mut enroller = world.enrolled();
+    fs::remove_file(world.pki().join("gen-1/COMPLETE")).expect("unlink");
+    let refused = enroller.run_once().expect_err("incomplete");
+    assert!(
+        matches!(refused, Error::Store(StoreError::Incomplete(1))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "generation 1 of the pki directory has no COMPLETE marker"
+    );
+}
+
+/// Catches a late confirmation of an older generation removing generations: a heartbeat that
+/// started on generation 1 and ends after generation 2 became current removes nothing.
+#[test]
+fn a_stale_confirmation_removes_nothing() {
+    let world = World::new("stale-confirm");
+    let mut enroller = world.enrolled();
+    world.set_now(T0 + WEEK / 2);
+    assert!(matches!(enroller.run_once(), Ok(Outcome::Renewed(_))));
+    enroller.confirm_generation(1).expect("stale");
+    assert_eq!(
+        world.names(),
+        [".lock", "SCHEMA", "current", "gen-1", "gen-2", "pending"]
+    );
+    enroller.confirm_generation(2).expect("prune");
+    assert_eq!(
+        world.names(),
+        [".lock", "SCHEMA", "current", "gen-2", "pending"]
+    );
+}
+
+/// Catches the generation number wrapping or saturating onto an existing generation: past the
+/// last number a renewal is refused by name, and the current generation and its key stay.
+#[test]
+fn the_last_generation_number_is_refused_by_name() {
+    let world = World::new("exhausted");
+    drop(world.enrolled());
+    let pki = world.pki();
+    let last = format!("gen-{}", u64::MAX);
+    fs::rename(pki.join("gen-1"), pki.join(&last)).expect("rename");
+    let key = fs::read(pki.join(&last).join("key")).expect("key");
+    let mut enroller = world.open();
+    assert_eq!(world.current(), Some(PathBuf::from(&last)));
+    world.set_now(T0 + WEEK / 2);
+    let refused = enroller.run_once().expect_err("exhausted");
+    assert!(
+        matches!(refused, Error::Store(StoreError::GenerationsExhausted)),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "the pki directory has used every generation number"
+    );
+    assert_eq!(world.current(), Some(PathBuf::from(&last)));
+    assert_eq!(fs::read(pki.join(&last).join("key")).expect("key"), key);
+}
+
+/// Catches a pki directory whose parent does not exist yet failing to open.
+#[test]
+fn a_pki_directory_is_made_with_its_parents() {
+    let world = World::new("nested");
+    let root = world.dir.path().join("etc/updater/pki");
+    let store = PkiDir::new(&root);
+    drop(store.open().expect("open"));
+    assert_eq!(mode(&root), 0o700);
+    assert_eq!(
+        fs::read_to_string(root.join("SCHEMA")).expect("SCHEMA"),
+        "1\n"
+    );
+}
+
+/// Catches the store's `Debug` hiding where it is, or trying to print its fault gate.
+#[test]
+fn a_pki_directory_debug_shows_its_root_and_owner() {
+    assert_eq!(
+        format!("{:?}", PkiDir::new(Path::new("/srv/pki")).with_owner(7)),
+        "PkiDir { root: \"/srv/pki\", owner: 7, .. }"
     );
 }

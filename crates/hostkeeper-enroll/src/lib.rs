@@ -33,11 +33,13 @@ pub use enroller::{
     Enroller, Error, Identity, NOT_ENROLLED, Outcome, Ports, ProtocolError, RETRY_SECS, Settings,
 };
 pub use key::{Entropy, EntropyError, KEY_DRAWS, KeyError, OsEntropy};
-pub use store::{CurrentPaths, KeyFrom, PkiDir, SCHEMA, Store, StoreError, StoreLock, Stored};
+pub use store::{
+    CurrentPaths, Fault, FaultGate, KeyFrom, PkiDir, SCHEMA, Store, StoreError, StoreLock, Stored,
+};
 pub use validity::{Site, SystemWallClock, WallClock};
 pub use verify::Refusal;
 pub use wire::{
-    Claims, CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState, HostId, Issued, NONCE_MAX,
-    NONCE_MIN, POLL_CONTEXT, Poll, PollAnswer, Reason, RenewAnswer, RenewRequest, RequestId,
-    TransportError, poll_message,
+    Claims, CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState, HostId, Issued,
+    MAX_HOST_ID, MAX_REASON, NONCE_MAX, NONCE_MIN, POLL_CONTEXT, Poll, PollAnswer, Reason,
+    RenewAnswer, RenewRequest, RequestId, TransportError, poll_message,
 };

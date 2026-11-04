@@ -149,8 +149,13 @@ enum Polled {
 pub struct Enroller {
     settings: Settings,
     ports: Ports,
-    /// The request already posted by this process, with its `renewal_of`.
+    /// The request already posted by this process, with its `renewal_of`; cleared when a
+    /// certificate is installed or an issued one turned out expired, so the next request is
+    /// posted again.
     posted: Option<(RequestId, Option<HostId>)>,
+    /// The host an issued certificate named when it expired before it could be installed: the
+    /// pending key returns as `renewal_of` that host.
+    returning: Option<HostId>,
     _lock: StoreLock,
 }
 
@@ -163,6 +168,7 @@ impl Enroller {
             settings,
             ports,
             posted: None,
+            returning: None,
             _lock: lock,
         })
     }
@@ -199,11 +205,12 @@ impl Enroller {
         }
     }
 
-    /// Removes the generations older than `current`: to be called once `current` has been used
-    /// for one successful heartbeat or renewal, so a generation that does not work is never the
-    /// only one left.
-    pub fn confirm_current(&mut self) -> Result<(), Error> {
-        Ok(self.ports.store.prune()?)
+    /// Removes the generations older than generation `used`, when `used` is still current: to be
+    /// called with the generation a heartbeat or renewal succeeded with, so a generation that
+    /// has not worked is never the only one left, and a late confirmation of an older generation
+    /// removes nothing.
+    pub fn confirm_generation(&mut self, used: u64) -> Result<(), Error> {
+        Ok(self.ports.store.prune(used)?)
     }
 
     /// The current generation, read and parsed.
@@ -212,7 +219,9 @@ impl Enroller {
             return Ok(None);
         };
         let number = stored.number;
-        read_held(stored).map(Some).ok_or(Error::Corrupt(number))
+        read_held(stored, self.settings.ca_sha256.as_str())
+            .map(Some)
+            .ok_or(Error::Corrupt(number))
     }
 
     /// Checks the coordinator's CA against the pin; nothing is sent before this passes.
@@ -243,7 +252,11 @@ impl Enroller {
                 KeyFrom::Generation(held.number),
                 Some(held.host_id),
             ),
-            None => (self.pending_key()?, KeyFrom::Pending, None),
+            None => (
+                self.pending_key()?,
+                KeyFrom::Pending,
+                self.returning.clone(),
+            ),
         };
         let id = key.request_id();
         let wanted = (id.clone(), renewal_of.clone());
@@ -269,10 +282,29 @@ impl Enroller {
         }
         match self.poll(&key, &id)? {
             Polled::Pending => Ok(Outcome::Pending),
-            Polled::Issued(issued) => {
-                let identity = self.store(&issued, &key, from, renewal_of.as_ref())?;
-                Ok(Outcome::Enrolled(identity))
-            }
+            Polled::Issued(issued) => match self.store(&issued, &key, from, renewal_of.as_ref()) {
+                Ok(identity) => {
+                    self.posted = None;
+                    self.returning = None;
+                    Ok(Outcome::Enrolled(identity))
+                }
+                Err(error) => {
+                    self.note_expired(&error, &issued);
+                    Err(error)
+                }
+            },
+        }
+    }
+
+    /// After a refusal of an issued certificate as expired (approved, then not installed until
+    /// past its end): the next step posts again, as `renewal_of` the host it named, so that one
+    /// approval returns the key the host holds.
+    fn note_expired(&mut self, error: &Error, issued: &Issued) {
+        if let Error::Refused(Refusal::NotValidNow { not_after, .. }) = error
+            && validity::expired(&*self.ports.wall, *not_after)
+        {
+            self.posted = None;
+            self.returning = HostId::new(&issued.host_id);
         }
     }
 
@@ -329,10 +361,19 @@ impl Enroller {
     ) -> Result<Identity, Error> {
         let pin = self.settings.ca_sha256.as_str();
         let verified = verify::verify(issued, key, pin, held, &*self.ports.wall)?;
-        let stored =
+        let written =
             self.ports
                 .store
-                .write_generation(&issued.cert_pem, &issued.ca_bundle_pem, from)?;
+                .write_generation(&issued.cert_pem, &issued.ca_bundle_pem, from);
+        // An error once `current` started to switch may hide a published generation: it is this
+        // certificate's when `current` holds it.
+        let stored = match written {
+            Ok(stored) => stored,
+            Err(error) => match self.ports.store.current() {
+                Ok(Some(stored)) if stored.cert_pem == issued.cert_pem => stored,
+                _ => return Err(error.into()),
+            },
+        };
         Ok(Identity {
             host_id: verified.host_id,
             generation: stored.number,
@@ -345,19 +386,27 @@ impl Enroller {
     }
 }
 
-/// A stored generation as a certificate of this host and its key; `None` when it is not one.
-fn read_held(stored: Stored) -> Option<Held> {
+/// A stored generation as a certificate of this host and its key; `None` when it is not one:
+/// the certificate must pass every check of `verify.rs` but the validity window (an expired
+/// generation is still the host's, for `renewal_of`) against its own CA bundle and the pin, for
+/// the key stored beside it.
+fn read_held(stored: Stored, pin: &str) -> Option<Held> {
     let cert = Certificate::from_pem(stored.cert_pem.as_bytes()).ok()?;
     let host_id = verify::common_name(&cert)?
-        .strip_prefix("host:")
-        .and_then(HostId::new)?;
+        .strip_prefix("host:")?
+        .to_owned();
     let key = HostKey::from_pkcs8(&stored.key_der).ok()?;
-    let (not_before, not_after) = verify::window(&cert);
+    let issued = Issued {
+        host_id,
+        cert_pem: stored.cert_pem,
+        ca_bundle_pem: stored.ca_pem,
+    };
+    let verified = verify::check(&issued, &key, pin, None).ok()?;
     Some(Held {
         number: stored.number,
-        host_id,
-        not_before,
-        not_after,
+        host_id: verified.host_id,
+        not_before: verified.not_before,
+        not_after: verified.not_after,
         key,
     })
 }

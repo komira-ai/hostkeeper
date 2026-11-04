@@ -77,7 +77,7 @@ fn a_pending_key_that_is_not_a_key_is_kept_and_stops_the_step() {
     let world = World::new("bad-pending-key");
     let mut enroller = world.open();
     fs::create_dir_all(world.pki().join("pending")).expect("pending");
-    fs::write(world.pki().join("pending/key"), "not a key").expect("key");
+    crate::support::write_private(&world.pki().join("pending/key"), b"not a key");
     let refused = enroller.run_once().expect_err("not a key");
     assert!(
         matches!(&refused, Error::Key(KeyError::Unreadable(_))),

@@ -331,13 +331,20 @@ fn a_half_written_generation_is_removed_and_the_poll_finishes_under_the_lock() {
     assert_eq!(second.run_once().expect("idle"), Outcome::Idle);
 }
 
-/// Catches a reader that takes a pki directory of a newer layout for its own: it is refused
-/// with a message naming both schemas, and nothing in it is changed.
+/// Catches a reader that takes a pki directory of a newer layout for its own, or that changes
+/// it before refusing it: it is refused with a message naming both schemas, and its names and
+/// mode are exactly as they were.
 #[test]
 fn unknown_schema_in_the_pki_directory_is_refused() {
     let world = World::new("newer-schema");
-    fs::create_dir_all(world.pki().join("gen-3")).expect("gen-3");
-    fs::write(world.pki().join("SCHEMA"), "2\n").expect("SCHEMA");
+    let pki = world.pki();
+    fs::create_dir_all(pki.join("gen-3")).expect("gen-3");
+    fs::write(pki.join("SCHEMA"), "2\n").expect("SCHEMA");
+    fs::set_permissions(&pki, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let before = (
+        world.names(),
+        fs::metadata(&pki).expect("pki").permissions().mode(),
+    );
     let refused = world.try_open().err().expect("a newer schema");
     assert!(
         matches!(refused, Error::Store(StoreError::NewerSchema { found: 2 })),
@@ -350,7 +357,13 @@ fn unknown_schema_in_the_pki_directory_is_refused() {
              is left as it is"
         )
     );
-    assert_eq!(world.names(), [".lock", "SCHEMA", "gen-3"]);
+    // Not even the lock file is made, and the directory's mode is as it was.
+    let after = (
+        world.names(),
+        fs::metadata(&pki).expect("pki").permissions().mode(),
+    );
+    assert_eq!(after, before);
+    assert_eq!(before.0, ["SCHEMA", "gen-3"]);
     assert_eq!(
         fs::read_to_string(world.pki().join("SCHEMA")).expect("SCHEMA"),
         "2\n"
@@ -382,7 +395,7 @@ fn a_schema_1_directory_is_read_by_this_release() {
     fs::write(pki.join("SCHEMA"), "1\n").expect("SCHEMA");
     fs::write(gen1.join("cert.pem"), &issued.cert_pem).expect("cert");
     fs::write(gen1.join("ca.pem"), &issued.ca_bundle_pem).expect("ca");
-    fs::write(gen1.join("key"), pkcs8(&key)).expect("key");
+    crate::support::write_private(&gen1.join("key"), &pkcs8(&key));
     fs::write(gen1.join("COMPLETE"), "").expect("COMPLETE");
     symlink("gen-1", pki.join("current")).expect("current");
     // The coordinator knows the host by that key.
