@@ -18,12 +18,12 @@ use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{HookedVerb, PackageDigest};
 
-/// A service name: 1 to 64 bytes of `A-Za-z0-9_-`.
+/// A service name: [`hostkeeper_config::names::is_service_name`].
 pub fn service_name(text: &str) -> Result<ServiceName, Refusal> {
     ServiceName::new(text).map_err(|_| Refusal::InvalidOrder)
 }
 
-/// A version: 1 to 128 bytes of `A-Za-z0-9._+-`, not beginning with `.`.
+/// A version: [`hostkeeper_config::names::is_version`].
 pub fn version(text: &str) -> Result<Version, Refusal> {
     Version::new(text).map_err(|_| Refusal::InvalidOrder)
 }

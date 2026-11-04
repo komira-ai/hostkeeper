@@ -4,8 +4,8 @@
 //!   `kbf_*`;
 //! - `hostkeeper-hook` and `hostkeeper-config` depend on no other crate of this workspace (their
 //!   dev-dependencies hold only themselves and `hostkeeper-testkit`);
-//! - `hostkeeper-steps` depends on `hostkeeper-hook`, `hostkeeper-rights` on
-//!   `hostkeeper-config` and `hostkeeper-hook`, and `hostkeeper-unpack` on `hostkeeper-config`,
+//! - `hostkeeper-steps` and `hostkeeper-rights` depend on `hostkeeper-config` and
+//!   `hostkeeper-hook`, and `hostkeeper-unpack` on `hostkeeper-config`,
 //!   `hostkeeper-hook` and `hostkeeper-steps`, and on no other workspace crate
 //!   (dev-dependencies: themselves and `hostkeeper-testkit`);
 //! - `hostkeeper-enrollment` (the coordinator's CA and enrollment store) depends on no other
@@ -120,7 +120,7 @@ fn layering_refuses_hook_depending_on_steps() {
             "hostkeeper-hook depends (normal or build) on the workspace crates \
              {hostkeeper-steps}, but must depend on exactly {}\n\
              hostkeeper-steps depends (normal or build) on the workspace crates {}, \
-             but must depend on exactly {hostkeeper-hook}"
+             but must depend on exactly {hostkeeper-config, hostkeeper-hook}"
         )
     );
 }
@@ -135,7 +135,7 @@ fn the_workspace_keeps_its_layers() {
 }
 
 /// Catches: a check that refuses the shape the real workspace has (self dev-dependencies, the
-/// testkit as a dev-dependency, steps on the hook, rights on the hook and the config crate).
+/// testkit as a dev-dependency, steps and rights on the config crate and the hook).
 #[test]
 fn a_clean_fixture_passes() {
     let dir = fixture("clean", vec![]);
@@ -143,7 +143,8 @@ fn a_clean_fixture_passes() {
 }
 
 /// A crate `shim` under the fixture's `vendored/` (outside the members) that depends on the
-/// workspace crate `target`, and `hostkeeper-steps` depending on the hook and on `shim`.
+/// workspace crate `target`, and `hostkeeper-steps` depending on the config crate, the hook and
+/// `shim`.
 fn steps_through_shim(target: &str) -> Vec<(String, String)> {
     vec![
         (
@@ -160,7 +161,7 @@ fn steps_through_shim(target: &str) -> Vec<(String, String)> {
             "hostkeeper-steps",
             layered(
                 "hostkeeper-steps",
-                &format!("{HOOK_DEP}{}", vendored_dep("shim")),
+                &format!("{CONFIG_DEP}{HOOK_DEP}{}", vendored_dep("shim")),
                 "",
                 TESTKIT_DEP,
             ),
@@ -178,7 +179,8 @@ fn layering_refuses_a_layer_reached_through_an_excluded_crate() {
         check(&dir),
         refused(
             "hostkeeper-steps depends (normal or build) on the workspace crates \
-             {hostkeeper-hook, hostkeeper-rights}, but must depend on exactly {hostkeeper-hook}\n\
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-rights}, but must depend on exactly \
+             {hostkeeper-config, hostkeeper-hook}\n\
              hostkeeper-steps reaches the workspace crate hostkeeper-rights through \
              hostkeeper-steps -> shim -> hostkeeper-rights"
         )
@@ -268,7 +270,7 @@ fn a_dev_only_kbf_dependency_is_refused() {
         "hostkeeper-steps",
         layered(
             "hostkeeper-steps",
-            HOOK_DEP,
+            &format!("{CONFIG_DEP}{HOOK_DEP}"),
             "",
             &format!("{TESTKIT_DEP}{}", vendored_dep("kbf-types")),
         ),
@@ -355,14 +357,20 @@ fn the_testkit_as_a_build_dependency_is_refused() {
         "clean",
         vec![manifest_of(
             "hostkeeper-steps",
-            layered("hostkeeper-steps", HOOK_DEP, TESTKIT_DEP, ""),
+            layered(
+                "hostkeeper-steps",
+                &format!("{CONFIG_DEP}{HOOK_DEP}"),
+                TESTKIT_DEP,
+                "",
+            ),
         )],
     );
     assert_eq!(
         check(&dir),
         refused(
             "hostkeeper-steps depends (normal or build) on the workspace crates \
-             {hostkeeper-hook, hostkeeper-testkit}, but must depend on exactly {hostkeeper-hook}\n\
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-testkit}, but must depend on exactly \
+             {hostkeeper-config, hostkeeper-hook}\n\
              hostkeeper-steps has a normal or build dependency on hostkeeper-testkit, \
              which is a dev-dependency only"
         )
@@ -370,7 +378,7 @@ fn the_testkit_as_a_build_dependency_is_refused() {
 }
 
 /// Catches: the step runner gaining a normal dependency on another workspace crate (here the
-/// rights crate) beside the hook contract.
+/// rights crate) beside the config crate and the hook contract.
 #[test]
 fn steps_with_an_extra_workspace_dependency_is_refused() {
     let dir = fixture(
@@ -379,7 +387,7 @@ fn steps_with_an_extra_workspace_dependency_is_refused() {
             "hostkeeper-steps",
             layered(
                 "hostkeeper-steps",
-                &format!("{HOOK_DEP}{RIGHTS_DEP}"),
+                &format!("{CONFIG_DEP}{HOOK_DEP}{RIGHTS_DEP}"),
                 "",
                 TESTKIT_DEP,
             ),
@@ -389,7 +397,8 @@ fn steps_with_an_extra_workspace_dependency_is_refused() {
         check(&dir),
         refused(
             "hostkeeper-steps depends (normal or build) on the workspace crates \
-             {hostkeeper-hook, hostkeeper-rights}, but must depend on exactly {hostkeeper-hook}"
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-rights}, but must depend on exactly \
+             {hostkeeper-config, hostkeeper-hook}"
         )
     );
 }
@@ -494,7 +503,7 @@ fn steps_with_a_dev_dependency_on_config_is_refused() {
             "hostkeeper-steps",
             layered(
                 "hostkeeper-steps",
-                HOOK_DEP,
+                &format!("{CONFIG_DEP}{HOOK_DEP}"),
                 "",
                 &format!("{TESTKIT_DEP}{CONFIG_DEP}"),
             ),
@@ -518,7 +527,7 @@ fn steps_with_a_dev_dependency_on_rights_is_refused() {
             "hostkeeper-steps",
             layered(
                 "hostkeeper-steps",
-                HOOK_DEP,
+                &format!("{CONFIG_DEP}{HOOK_DEP}"),
                 "",
                 &format!("{TESTKIT_DEP}{RIGHTS_DEP}"),
             ),

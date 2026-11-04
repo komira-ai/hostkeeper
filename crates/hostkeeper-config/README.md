@@ -10,7 +10,7 @@ and the package fetch do.
 | `daemon` | `DaemonConfig::load(path, trusted_uid)` reads `/etc/hostkeeper/hostkeeper.toml`: a regular file, not a link, owned by `trusted_uid` (root on a host) and not writable by the group or others, checked on the open file. `DaemonConfig::parse(text)` reads the text alone. |
 | `manifest` | `Manifest::load(version_dir, expected, running)` reads `<version_dir>/manifest.toml` (a regular file, not a link, at most 64 KiB) and applies the load rules of design 4.7 for the order `expected`, against the running daemon's version. |
 | `trust` | `read_trusted` and `check_dir`: the owner and mode check of a file or directory the host trusts. |
-| `names` | The grammars: service names (`A-Za-z0-9_-`, 1 to 64 bytes) and versions (1 to 128 bytes of `A-Za-z0-9._+-`, no leading dot) of design 11.8, absolute and relative paths, and the unit names of a package. |
+| `names` | The grammars: service names and versions of design 11.8 (1 to 255 bytes of the POSIX portable filename characters `A-Za-z0-9._-`, with `+` added for a version, not beginning with `-` or `.`), absolute and relative paths, and the unit names of a package. |
 
 The crate depends on no crate of this workspace; `crates/xtask/tests/layering` keeps it so.
 

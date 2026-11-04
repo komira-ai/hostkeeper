@@ -61,9 +61,8 @@ impl fmt::Display for RequestId {
 pub const MAX_HOST_ID: usize = 64;
 
 /// The id the coordinator gave a host when an operator approved it; its certificate's subject is
-/// `host:<id>`. One to [`MAX_HOST_ID`] bytes of `A-Z a-z 0-9 . _ -`, the grammar of a service
-/// name with the dot added: it goes into certificate subjects and log lines, so it holds no
-/// space, separator or control character.
+/// `host:<id>`. One to [`MAX_HOST_ID`] bytes of `A-Z a-z 0-9 . _ -`: it goes into certificate
+/// subjects and log lines, so it holds no space, separator or control character.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HostId(String);
 

@@ -23,7 +23,7 @@ const ENROLLMENT: &str = "hostkeeper-enrollment";
 const LAYERS: [(&str, &[&str]); 6] = [
     (HOOK, &[]),
     (CONFIG, &[]),
-    (STEPS, &[HOOK]),
+    (STEPS, &[CONFIG, HOOK]),
     (RIGHTS, &[CONFIG, HOOK]),
     (UNPACK, &[CONFIG, HOOK, STEPS]),
     (ENROLLMENT, &[]),
