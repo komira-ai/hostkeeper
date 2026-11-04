@@ -23,6 +23,7 @@ today. So far this repository holds the generic half of the host updater, moved 
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the updater and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
 | [`hostkeeper-rights`](crates/hostkeeper-rights) | the declaration in `/etc/updater.d`, its loader, approvals, and the transient unit that runs one step with the declared rights |
 | [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update |
+| [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), and the test that keeps them compatible |
 | `hostkeeper-testkit` | helpers the tests share |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
 

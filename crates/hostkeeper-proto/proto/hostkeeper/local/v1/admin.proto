@@ -1,0 +1,210 @@
+// hostkeeper.local.v1 Admin: what root on the host may ask of the host's daemon, with the
+// coordinator down.
+//
+// Served by: the daemon (`hostkeeper.service`, run as root), on the unix socket
+// `/run/hostkeeper/admin.sock`, mode 0600, in a directory of mode 0700. It carries exactly three
+// calls, because they must work with the coordinator down: see what the daemon is doing
+// (`Status`), stop a step (`Abort`), and clear a corrupt step record (`ClearRecord`). None of them
+// can install, update or switch a version; only the coordinator's orders do that.
+//
+// Authentication: the peer's credentials on the socket (`SO_PEERCRED`; on macOS
+// `LOCAL_PEERCRED`), read on each connection before any request. Only uid 0 may connect: a
+// connection from any other uid is closed before a request is read.
+//
+// Refusals: a gRPC status whose message is exactly one token of `AdminRefusal`, written as the
+// value's name without the `ADMIN_REFUSAL_` prefix, in lower case (for example `not_installed`);
+// the status code is the one each value names. Nothing else is ever in the message. A refused
+// call changes nothing.
+//
+// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
+// A package digest is SHA-256 as 64 lower-case hex characters. A version is the release's version
+// string: 1 to 128 bytes, a digit first, then letters, digits and `.+~-`. A service name is 1 to 64
+// bytes of `[a-z0-9-]`. A token (a reason, a step name) is 1 to 64 bytes of `[a-z0-9_]`.
+//
+// Extending: add fields, messages and enum values; never renumber, rename, retype or remove one,
+// and never reuse a number (the compatibility test in this crate refuses each). A reader treats
+// an enum value it does not know as UNSPECIFIED; no enum here is closed. The menu of calls grows
+// only by a reviewed change to this file, and never by a call that installs, updates or switches
+// a version.
+syntax = "proto3";
+
+package hostkeeper.local.v1;
+
+import "hostkeeper/agent/v1/agent.proto";
+
+service Admin {
+  // What the daemon holds: each installed service's step records and state. Changes nothing.
+  rpc Status(StatusRequest) returns (StatusResponse);
+  // Stop the service's running step, and end its order in the halt phase, as the coordinator's
+  // `abort` verb does.
+  rpc Abort(AbortRequest) returns (AbortResponse);
+  // Clear the service's step record when it cannot be read (`RecordProblem`), so that orders run
+  // for the service again. A record that reads is refused (`record_reads`).
+  rpc ClearRecord(ClearRecordRequest) returns (ClearRecordResponse);
+}
+
+// Why the daemon refused an `Admin` call. The token is the value's name without the prefix, in
+// lower case.
+enum AdminRefusal {
+  ADMIN_REFUSAL_UNSPECIFIED = 0;
+  // INVALID_ARGUMENT: the service name breaks its rule.
+  ADMIN_REFUSAL_INVALID_REQUEST = 1;
+  // NOT_FOUND: the service is not installed on the host.
+  ADMIN_REFUSAL_NOT_INSTALLED = 2;
+  // FAILED_PRECONDITION: `Abort` of a service with no running step.
+  ADMIN_REFUSAL_NOTHING_RUNNING = 3;
+  // FAILED_PRECONDITION: `ClearRecord` of a record that reads; only a corrupt one is cleared.
+  ADMIN_REFUSAL_RECORD_READS = 4;
+  // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
+  ADMIN_REFUSAL_STORE_FAILED = 5;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  // Every service installed on the host, in name order.
+  repeated ServiceRecord services = 1;
+}
+
+message AbortRequest {
+  string service = 1;
+}
+
+message AbortResponse {
+  // The order, as the step record holds it once it ended.
+  StepRecord record = 1;
+}
+
+message ClearRecordRequest {
+  string service = 1;
+}
+
+message ClearRecordResponse {
+  // What the record was cleared for.
+  RecordProblem problem = 1;
+}
+
+// How an order ended.
+enum StepOutcome {
+  STEP_OUTCOME_UNSPECIFIED = 0;
+  // The service runs the version and confirmed it healthy.
+  STEP_OUTCOME_SUCCEEDED = 1;
+  // The order did not end with the version running confirmed healthy. Where the service is now
+  // is in its state: a hooked order is reverted to the version it ran before (or never left it); a
+  // force is not rolled back, and stays where it got to: on the version it ran before when it
+  // failed before the switch, on its target when it failed after.
+  STEP_OUTCOME_FAILED = 2;
+  // The hook declined the order for a reason about its moment, not about the release.
+  STEP_OUTCOME_DEFERRED = 3;
+}
+
+// One order of a service, as the daemon's step record holds it.
+message StepRecord {
+  // The coordinator's id for the order, and its try (`hostkeeper.agent.v1.Order`).
+  string order_id = 1;
+  uint64 order_try = 2;
+  string version = 3;
+  string package_digest = 4;
+  // The record was closed by a force: either the order was a `force`, or a hooked step of it was
+  // stopped by one (reason `forced_over`).
+  bool forced = 5;
+  // When the daemon took the step lock for it.
+  uint64 started_unix = 6;
+  // The hook step it is in, while it runs (`prepare`, `cutover`, `verify`).
+  string step = 7;
+  // The try of that step, from 1.
+  uint32 attempt = 8;
+  // It is past the hook's commit point.
+  bool committed = 9;
+  // How many seconds each step took, by step name.
+  map<string, uint64> step_secs = 10;
+  // How it ended; UNSPECIFIED while it runs.
+  StepOutcome outcome = 11;
+  // When it ended; 0 while it runs.
+  uint64 finished_unix = 12;
+  // Where a failure happened.
+  hostkeeper.agent.v1.FailurePhase phase = 13;
+  // Whom a failure is blamed on.
+  hostkeeper.agent.v1.FailureClass class = 14;
+  // The check or cause of a failure, or why the order was deferred, as a token.
+  string reason = 15;
+  // For a deferred order: how long the hook asks to wait before the order is given again.
+  uint64 retry_after_secs = 16;
+  // Serving, but not yet fully the service's own.
+  bool promotion_pending = 17;
+}
+
+// What the daemon holds about one service.
+message ServiceRecord {
+  string service = 1;
+  // The order running now; absent when none runs.
+  StepRecord current = 2;
+  // The last order that ended; absent before the first.
+  StepRecord last = 3;
+  // How the service runs now, as the service manager and its health check say.
+  ServiceState state = 4;
+  // Why `current` and `last` cannot be trusted as they are; UNSPECIFIED when the record reads.
+  RecordProblem record_problem = 5;
+}
+
+// Why a service's step record cannot be read as it is.
+enum RecordProblem {
+  RECORD_PROBLEM_UNSPECIFIED = 0;
+  // The record is unreadable or malformed. `current` and `last` are absent, and no order runs for
+  // the service until it reads again or `ClearRecord` clears it.
+  RECORD_PROBLEM_UNREADABLE = 1;
+  // The record was written by a newer daemon. It is shown as far as it is understood and never
+  // rewritten, and no order runs for the service.
+  RECORD_PROBLEM_NEWER_SCHEMA = 2;
+}
+
+// Whether a service runs, from the service manager (systemd, or launchd on a Mac).
+enum Liveness {
+  LIVENESS_UNSPECIFIED = 0;
+  // At least one of its units is active.
+  LIVENESS_LIVE = 1;
+  // No unit of it is loaded.
+  LIVENESS_ABSENT = 2;
+  // No unit of it is active: inactive or failed.
+  LIVENESS_STOPPED = 3;
+  // A unit is activating, deactivating or reloading, or a job is loaded and not yet running.
+  // Not live.
+  LIVENESS_TRANSITIONING = 4;
+  // The service manager could not be asked, answered with an error, or answered with a state the
+  // daemon does not know. Never read as ABSENT or STOPPED.
+  LIVENESS_UNOBSERVED = 5;
+  // The manifest names no unit to watch. Never healthy.
+  LIVENESS_UNMONITORED = 6;
+}
+
+// How a service runs now.
+message ServiceState {
+  Liveness liveness = 1;
+  // The version the daemon installed, when an active unit's main process runs that package's
+  // binary. Absent when it is not live, and when the only active units have no main process.
+  optional string version = 2;
+  // At least one active unit runs the installed version and every such unit answers its health
+  // check.
+  bool healthy = 3;
+  // Why it is not healthy; UNSPECIFIED when it is healthy or not live.
+  Unhealthy unhealthy = 4;
+  // The unit that decided it is not healthy, when one did.
+  string unit = 5;
+}
+
+// Why a live service is not healthy.
+enum Unhealthy {
+  UNHEALTHY_UNSPECIFIED = 0;
+  // No active unit runs the installed package's binary.
+  UNHEALTHY_VERSION_MISMATCH = 1;
+  // A unit on the installed version failed its health check, or did not answer in time.
+  UNHEALTHY_HEALTH = 2;
+  // The health check answered with a redirect, which is never followed.
+  UNHEALTHY_HEALTH_REDIRECT = 3;
+  // An active unit has no port the health check could be sent to.
+  UNHEALTHY_HEALTH_UNMAPPED = 4;
+  // The units changed during the last observation; the one before is reported until the next.
+  UNHEALTHY_OBSERVING = 5;
+  // An active unit has no main process, so its version is unknown.
+  UNHEALTHY_NO_MAIN_PROCESS = 6;
+}
