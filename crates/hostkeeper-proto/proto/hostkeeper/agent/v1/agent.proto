@@ -22,8 +22,8 @@
 // `forbidden`, `pending_full`, `bad_signature`); the status code is the one each value names.
 // Nothing else is ever in the message. A bad optional fact (a step, a deferral, a pin, a feature
 // list) is dropped and the rest of the heartbeat is read, so a host never loses its updates to a
-// field the coordinator could do without. A `Poll` before approval is not refused: it is
-// answered PENDING.
+// field the coordinator could do without. A signed `Poll` before approval is not refused: it
+// is answered PENDING; an unsigned one is answered as the Enrollment paragraph says.
 //
 // Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
 // A version is the release's version string: 1 to 128 bytes, a digit first, then letters,
@@ -34,6 +34,11 @@
 // with `-`. A CSR is DER, at most 4096 bytes; a certificate is DER, at most 8192 bytes; a CA
 // bundle is PEM. A request id is the SHA-256 of the DER SubjectPublicKeyInfo of the CSR's key, as
 // 64 lower-case hex characters.
+//
+// Orders: an order is one verb with typed arguments (`Order`): a service name, a version, a
+// package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds
+// everything else (the release channel, the hook, the units) in its own configuration and in the
+// manifest of the package whose digest verified.
 //
 // Enrollment: a host with no certificate generates a P-256 key, keeps it, and sends `Enroll`
 // with a CSR for it and its claims. Its request is pending until an operator approves it
