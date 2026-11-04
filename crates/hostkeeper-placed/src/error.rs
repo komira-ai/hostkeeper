@@ -59,6 +59,11 @@ pub enum ClaimError {
     Refused { path: String, prefix: &'static str },
     #[error("two entries of the package claim the path {}", .path.display())]
     Duplicate { path: PathBuf },
+    /// One claimed path lies below another: a directory placed at one would receive the other.
+    #[error("the package claims {} and {}, one below the other", .path.display(), .other.display())]
+    Overlap { path: PathBuf, other: PathBuf },
+    #[error("the [[files]] source {entry:?} {why}")]
+    BadSource { entry: String, why: String },
 }
 
 /// Why linking refused or failed.
@@ -97,6 +102,9 @@ pub enum PlacedError {
     },
     #[error(transparent)]
     Units(#[from] UnitControlError),
+    /// The caller passed two different switch intents for one service.
+    #[error("two different switch intents name the service {service}")]
+    ConflictingIntents { service: String },
 }
 
 impl PlacedError {
@@ -108,7 +116,8 @@ impl PlacedError {
             PlacedError::Corrupt { .. }
             | PlacedError::NewerSchema { .. }
             | PlacedError::Io { .. }
-            | PlacedError::Locked { .. } => (Class::Environment, "link_failed"),
+            | PlacedError::Locked { .. }
+            | PlacedError::ConflictingIntents { .. } => (Class::Environment, "link_failed"),
             PlacedError::Units(_) => (Class::Environment, "daemon_reload_failed"),
         }
     }

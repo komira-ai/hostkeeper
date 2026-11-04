@@ -176,6 +176,7 @@ fn relink_to_reloads_once_when_only_links_changed() {
     world.log.clear();
     assert!(!placer.relink_to(&newer).expect("the repeat"));
     assert!(world.unit_calls().is_empty());
+    assert!(!world.record().reload_pending);
 }
 
 /// Catches a second reload when links were made and a unit was removed: one `relink_to` that
@@ -196,6 +197,7 @@ fn relink_to_reloads_once_when_it_links_and_removes() {
         ]
     );
     assert!(world.read_link(EXTRA).is_some());
+    assert!(!world.record().reload_pending);
 }
 
 /// Catches errors of `relink_to` lost on the way: a tombstone refuses it, a failing service
@@ -212,6 +214,15 @@ fn relink_to_reports_each_refusal() {
     let refusal = placer.relink_to(&newer).expect_err("the reload fails");
     assert!(matches!(refusal, PlacedError::Units(_)));
     assert!(world.read_link(EXTRA).is_some());
+    assert!(world.record().reload_pending, "the failed reload is owed");
+
+    world.log.clear();
+    assert!(
+        world.placer().relink_to(&newer).expect("the retry"),
+        "a reload still owed is run and reported"
+    );
+    assert_eq!(world.unit_calls(), [UnitCall::DaemonReload]);
+    assert!(!world.record().reload_pending);
 
     let spec = Spec::new()
         .unit("tierstore.service", &unit_without_install(EXEC))
@@ -228,7 +239,11 @@ fn relink_to_reports_each_refusal() {
     record
         .uninstalling
         .insert("tierstore".to_owned(), Tombstone::default());
-    world.placer().store().save(&record).expect("save");
+    {
+        let placer = world.placer();
+        let lock = placer.lock().expect("take the lock");
+        placer.store().save(&record, &lock).expect("save");
+    }
     assert!(matches!(
         world.placer().relink_to(&newer),
         Err(PlacedError::Tombstoned { .. })
@@ -253,8 +268,8 @@ fn relink_to_fails_when_any_of_its_writes_fails() {
     assert!(world.placer().relink_to(&newer).expect("relink"));
     let total = world.fs.writes() - before;
     assert!(
-        total >= 12,
-        "begin, link, commit and removal write: {total}"
+        total >= 18,
+        "begin, link, commit, removal and the reload owed write: {total}"
     );
 
     for n in 1..=total {
@@ -270,4 +285,75 @@ fn relink_to_fails_when_any_of_its_writes_fails() {
         .placer_on(&failing)
         .relink_to(&newer)
         .expect("no write fails");
+}
+
+/// Catches a relink to a version whose unit pins a version directory: `relink_to` and
+/// `claims` refuse a unit whose `ExecStart=` names `<packages>/tierstore/1.5.0/...` with a
+/// `PackagePath` lint error (reason `manifest_mismatch`), log no write and leave `placed.json`
+/// and the links as they were.
+#[test]
+fn relink_to_refuses_a_unit_pinned_to_a_version_directory() {
+    let world = World::new("relink-pinned");
+    install(&world, "tierstore", "1.4.2", &Spec::tierstore());
+    let pinned = format!("{PACKAGES}/tierstore/1.5.0/bin/tierstore serve --port %i");
+    let spec = Spec::new()
+        .unit("tierstore@.service", &unit_text(&pinned))
+        .run("tierstore@9301.service");
+    let newer = world.package("tierstore", "1.5.0", &spec);
+    let bytes = world.placed_bytes();
+    let before = world.snapshot();
+    world.log.clear();
+
+    let refusal = world.placer().relink_to(&newer).expect_err("pinned");
+    match &refusal {
+        PlacedError::Lint(LintError::PackagePath {
+            file,
+            key,
+            path,
+            packages,
+            service,
+        }) => {
+            assert_eq!(file, "tierstore@.service");
+            assert_eq!(key, "ExecStart=");
+            assert_eq!(path, &format!("{PACKAGES}/tierstore/1.5.0/bin/tierstore"));
+            assert_eq!(packages, PACKAGES);
+            assert_eq!(service, "tierstore");
+        }
+        other => panic!("expected a package path refusal, got {other:?}"),
+    }
+    assert_eq!(refusal.reason(), "manifest_mismatch");
+    assert!(matches!(
+        world.placer().claims(&newer),
+        Err(PlacedError::Lint(LintError::PackagePath { .. }))
+    ));
+    assert!(world.writes().is_empty());
+    assert!(world.unit_calls().is_empty());
+    assert_eq!(world.placed_bytes(), bytes);
+    assert_eq!(world.snapshot(), before);
+}
+
+/// Catches `relink_to` reading a unit through a spelling of `current` that is not under it: an
+/// `ExecStart=` of `.../current/../1.5.0/bin/tierstore` is refused, and one of
+/// `.../current/./bin/tierstore` is accepted and relinks.
+#[test]
+fn relink_to_resolves_dots_in_a_unit_command_line() {
+    let world = World::new("relink-dots");
+    let sneaky = format!("{PACKAGES}/tierstore/current/../1.5.0/bin/tierstore");
+    let spec = Spec::new().unit("tierstore.service", &unit_without_install(&sneaky));
+    let bad = world.package("tierstore", "1.5.0", &spec);
+    assert!(matches!(
+        world.placer().relink_to(&bad),
+        Err(PlacedError::Lint(LintError::PackagePath { .. }))
+    ));
+    assert!(world.writes().is_empty());
+
+    let plain = format!("{PACKAGES}/tierstore/current/./bin/tierstore");
+    let spec = Spec::new().unit("tierstore.service", &unit_without_install(&plain));
+    let good = world.package("tierstore", "1.6.0", &spec);
+    assert!(world.placer().relink_to(&good).expect("relink"));
+    assert!(
+        world
+            .read_link("/etc/systemd/system/tierstore.service")
+            .is_some()
+    );
 }

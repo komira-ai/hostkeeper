@@ -27,6 +27,7 @@ const PLACED_JSON: &str = "/var/lib/hostkeeper/placed.json";
 const LOCK: &str = "/var/lib/hostkeeper/placed.lock";
 const CONF: &str = "/etc/tierstore/tierstore.conf";
 const A_CONF: &str = "/etc/x/a.conf";
+const STALE_TMP: &str = "/etc/x/.hk~a~tmp";
 
 /// One file of service `a` at `/etc/x/a.conf`.
 fn a_conf() -> Spec {
@@ -559,7 +560,13 @@ fn a_tombstoned_service_cannot_be_linked() {
     record
         .uninstalling
         .insert("tierstore".to_owned(), Tombstone::default());
-    placer.store().save(&record).expect("save the tombstone");
+    {
+        let lock = placer.lock().expect("take the lock");
+        placer
+            .store()
+            .save(&record, &lock)
+            .expect("save the tombstone");
+    }
     assert_eq!(placer.store().load().expect("load"), record);
     let bytes = world.placed_bytes();
     world.log.clear();
@@ -586,7 +593,13 @@ fn a_tombstone_of_another_service_does_not_block() {
     record
         .uninstalling
         .insert("other".to_owned(), Tombstone::default());
-    placer.store().save(&record).expect("save the tombstone");
+    {
+        let lock = placer.lock().expect("take the lock");
+        placer
+            .store()
+            .save(&record, &lock)
+            .expect("save the tombstone");
+    }
 
     placer.begin(&wanted).expect("begin");
     assert!(world.record().uninstalling.contains_key("other"));
@@ -725,10 +738,10 @@ fn switch_current_sets_previous_before_current_and_a_repeat_changes_nothing() {
         [
             FsWrite::Symlink {
                 target: "1.5.0".into(),
-                link: dir.join(".hk-current.tmp"),
+                link: dir.join(".hk~tierstore~tmp"),
             },
             FsWrite::Rename {
-                from: dir.join(".hk-current.tmp"),
+                from: dir.join(".hk~tierstore~tmp"),
                 to: dir.join("current"),
             },
             FsWrite::SyncDir(dir),
@@ -766,10 +779,10 @@ fn a_first_install_writes_only_current() {
         [
             FsWrite::Symlink {
                 target: "1.5.0".into(),
-                link: dir.join(".hk-current.tmp"),
+                link: dir.join(".hk~tierstore~tmp"),
             },
             FsWrite::Rename {
-                from: dir.join(".hk-current.tmp"),
+                from: dir.join(".hk~tierstore~tmp"),
                 to: dir.join("current"),
             },
             FsWrite::SyncDir(dir),
@@ -777,8 +790,9 @@ fn a_first_install_writes_only_current() {
     );
 }
 
-/// Catches a stale temporary link in the way: a `.hk-<name>.tmp` a crash left is replaced, and
-/// the link is made after the missing directory.
+/// Catches a stale temporary link in the way of a repoint: a `.hk~a~tmp` a crash left is
+/// replaced, and a link to elsewhere at the path is renamed over by the new one, in the order
+/// remove, link, rename, fsync.
 #[test]
 fn a_stale_temporary_link_is_replaced() {
     let world = World::new("stale-tmp");
@@ -786,17 +800,17 @@ fn a_stale_temporary_link_is_replaced() {
     let placer = world.placer();
     let linking = placer.begin(&wanted).expect("begin");
     make_parent(&world, A_CONF);
-    symlink("/stale", world.host("/etc/x/.hk-a.conf.tmp")).expect("leave a temporary link");
+    symlink("/old/target", world.host(A_CONF)).expect("make a wrong link");
+    symlink("/stale", world.host(STALE_TMP)).expect("leave a temporary link");
     world.log.clear();
 
     assert!(placer.link(&linking).expect("link"));
-    let tmp = PathBuf::from("/etc/x/.hk-a.conf.tmp");
+    let tmp = PathBuf::from(STALE_TMP);
     let dir = PathBuf::from("/etc/x");
     let target = PathBuf::from(format!("{PACKAGES}/a/current/files/a.conf"));
     assert_eq!(
         world.writes(),
         [
-            FsWrite::CreateDirs(dir.clone()),
             FsWrite::Remove(tmp.clone()),
             FsWrite::Symlink {
                 target: target.clone(),
@@ -810,41 +824,42 @@ fn a_stale_temporary_link_is_replaced() {
         ]
     );
     assert_eq!(world.read_link(A_CONF), Some(target));
-    assert!(world.read_link("/etc/x/.hk-a.conf.tmp").is_none());
+    assert!(world.read_link(STALE_TMP).is_none());
 }
 
 /// Catches a failed removal of a stale temporary reported as success, and a failed look at it:
-/// the removal failing is an `Io` error of `remove`, and a temporary name that cannot be
-/// inspected is an `Io` error of `inspect` naming it.
+/// the removal failing is an `Io` error of `remove` that leaves the wrong link, and a temporary
+/// name that cannot be inspected is an `Io` error of `inspect` naming it.
 #[test]
 fn a_stale_temporary_that_cannot_be_dealt_with_fails_the_link() {
     let world = World::new("stale-tmp-fail");
     let wanted = claims(&world, &world.package("a", "1.0.0", &a_conf()));
     let linking = world.placer().begin(&wanted).expect("begin");
     make_parent(&world, A_CONF);
-    symlink("/stale", world.host("/etc/x/.hk-a.conf.tmp")).expect("leave a temporary link");
+    symlink("/old/target", world.host(A_CONF)).expect("make a wrong link");
+    symlink("/stale", world.host(STALE_TMP)).expect("leave a temporary link");
 
-    let failing = world.failing_at(2);
+    let failing = world.failing_at(1);
     let result = world.placer_on(&failing).link(&linking);
     assert!(matches!(result, Err(PlacedError::Io { op: "remove", .. })));
-    assert!(world.read_link(A_CONF).is_none());
+    assert_eq!(world.read_link(A_CONF), Some(PathBuf::from("/old/target")));
 
     let flaky = Flaky::under(&world, false, true);
     match world.placer_on(&flaky).link(&linking) {
         Err(PlacedError::Io { op, path, .. }) => {
             assert_eq!(op, "inspect");
-            assert_eq!(path, Path::new("/etc/x/.hk-a.conf.tmp"));
+            assert_eq!(path, Path::new(STALE_TMP));
         }
         other => panic!("expected an inspect error, got {other:?}"),
     }
 }
 
-/// Catches a link that is half made after a crash and called done: each of the four writes of a
-/// fresh link failing is an `Io` error of its step, and no link is at the path until the
-/// directory is synced.
+/// Catches a link that is half made after a crash and called done: each of the three writes of
+/// a fresh link (the directories, the link at its own path, the fsync) failing is an `Io` error
+/// of its step, and the link is at the path from the moment it is made.
 #[test]
 fn every_write_of_a_fresh_link_can_fail() {
-    let steps = ["create", "link", "rename", "fsync"];
+    let steps = ["create", "link", "fsync"];
     for (at, op) in steps.iter().enumerate() {
         let n = at as u64 + 1;
         let world = World::new(&format!("link-fault-{n}"));
@@ -856,7 +871,7 @@ fn every_write_of_a_fresh_link_can_fail() {
             Err(PlacedError::Io { op: got, .. }) => assert_eq!(got, *op, "write {n}"),
             other => panic!("write {n} should fail, got {other:?}"),
         }
-        assert_eq!(world.read_link(A_CONF).is_some(), n == 4, "write {n}");
+        assert_eq!(world.read_link(A_CONF).is_some(), n == 3, "write {n}");
     }
 }
 

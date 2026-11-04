@@ -6,8 +6,8 @@
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, symlink};
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
+use std::path::{Component, Path, PathBuf};
 
 /// What is at a path, the path itself and not what a link at it points at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +42,7 @@ pub trait Fs {
     /// Makes a link at `link` whose target is `target`, written as it is.
     fn symlink(&self, target: &Path, link: &Path) -> io::Result<()>;
     fn remove_file(&self, path: &Path) -> io::Result<()>;
-    /// Makes `dir` and its missing parents, mode 0755.
+    /// Makes `dir` and its missing parents, each mode 0755 whatever the creation mask.
     fn create_dirs(&self, dir: &Path) -> io::Result<()>;
 }
 
@@ -74,8 +74,15 @@ fn kind_of(file_type: fs::FileType) -> FileKind {
 }
 
 impl Fs for RealFs {
+    /// `path` under the root, with only its plain components: `/`, `.` and `..` are dropped,
+    /// so no spelling of a path reaches above the root. Links on the way are the host's own and
+    /// are followed as the host follows them.
     fn host_path(&self, path: &Path) -> PathBuf {
-        self.root.join(path.strip_prefix("/").unwrap_or(path))
+        let plain: PathBuf = path
+            .components()
+            .filter(|part| matches!(part, Component::Normal(_)))
+            .collect();
+        self.root.join(plain)
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
@@ -134,10 +141,21 @@ impl Fs for RealFs {
         fs::remove_file(self.host_path(path))
     }
 
+    /// Each directory made gets mode 0755 whatever the creation mask; directories that were
+    /// there are left as they are.
     fn create_dirs(&self, dir: &Path) -> io::Result<()> {
+        let host = self.host_path(dir);
+        let missing: Vec<PathBuf> = host
+            .ancestors()
+            .take_while(|at| fs::symlink_metadata(at).is_err())
+            .map(Path::to_path_buf)
+            .collect();
         DirBuilder::new()
             .recursive(true)
             .mode(0o755)
-            .create(self.host_path(dir))
+            .create(&host)?;
+        missing
+            .iter()
+            .try_for_each(|made| fs::set_permissions(made, fs::Permissions::from_mode(0o755)))
     }
 }

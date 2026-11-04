@@ -36,10 +36,15 @@ pub(crate) fn check_path(
         path: path.to_path_buf(),
         owner,
     };
-    let listed = record.paths.get(path);
-    if let Some(entry) = listed.filter(|entry| entry.service != service) {
+    // Another service's path, or one above or below it: a directory linked at one would
+    // receive the other.
+    let foreign = record.paths.iter().find(|(other, entry)| {
+        (entry.service != service) & (other.starts_with(path) | path.starts_with(other))
+    });
+    if let Some((_, entry)) = foreign {
         return Err(conflict(Owner::Service(entry.service.clone())));
     }
+    let listed = record.paths.get(path);
     match (occupant(fs, path)?, listed.is_some()) {
         (None, _) | (Some(Owner::Link(_)), true) => Ok(()),
         (Some(owner), _) => Err(conflict(owner)),
@@ -47,9 +52,9 @@ pub(crate) fn check_path(
 }
 
 /// Refuses `claims` with [`PlacedError::PathConflict`] when one of its paths is listed in
-/// `record` for another service, or is occupied on disk by anything but a link `record` lists
-/// for the claimant: a regular file, a directory, another kind of file, or a link the record
-/// does not list. A path the claimant already owns is accepted, for a repeat or a new version.
+/// `record` for another service, or is above or below such a path, or is occupied on disk by
+/// anything but a link `record` lists for the claimant: a regular file, a directory, another
+/// kind of file, or a link the record does not list. A path the claimant already owns is accepted, for a repeat or a new version.
 /// Nothing is written.
 pub fn check(claims: &Claims, record: &PlacedRecord, fs: &dyn Fs) -> Result<(), PlacedError> {
     let service = claims.service().as_str();

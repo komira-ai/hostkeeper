@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::{Class, FileEntry, Manifest, REFUSED_PREFIXES};
 use hostkeeper_config::names::PathError;
-use hostkeeper_placed::claim::check_files_path;
+use hostkeeper_placed::claim::{check_files_path, check_source};
 use hostkeeper_placed::lint::{
-    COMMAND_PREFIXES, EXEC_KEYS, LintError, check_unit_text, is_unit_name, lint, wanted_by,
+    COMMAND_PREFIXES, EXEC_KEYS, LintError, MAX_UNIT_NAME, check_unit_text, is_unit_name, lint,
+    wanted_by,
 };
+use hostkeeper_placed::roots::PACKAGES_DIR;
 use hostkeeper_placed::{ClaimError, Claims, PathKind, Roots};
 use support::{Spec, TARGET, World, unit_text, unit_without_install};
 
@@ -46,9 +48,15 @@ fn overwrite_unit(world: &World, file: &str, bytes: &[u8]) {
     fs::write(path, bytes).expect("overwrite a unit");
 }
 
+/// The packages directory of a Linux host.
+fn packages() -> &'static Path {
+    Path::new(PACKAGES_DIR)
+}
+
 /// The result of `check_unit_text` for a `tierstore.service` whose `[Service]` holds `line`.
 fn service_line(line: &str) -> Result<(), LintError> {
     check_unit_text(
+        packages(),
         "tierstore",
         "tierstore.service",
         &format!("[Service]\n{line}\n"),
@@ -60,6 +68,7 @@ fn package_path(file: &str, key: &str, path: &str) -> LintError {
         file: file.to_owned(),
         key: key.to_owned(),
         path: path.to_owned(),
+        packages: PACKAGES_DIR.to_owned(),
         service: "tierstore".to_owned(),
     }
 }
@@ -328,14 +337,18 @@ fn execstart_must_use_the_current_path() {
 }
 
 /// Catches a path under the packages directory that goes around `current`: the directory
-/// itself, its trailing-slash spelling, a similar directory name, a bare `current`, a service
-/// whose name only starts with this one's, and `.` or `..` after `current` are judged exactly.
+/// itself and its trailing-slash spelling, a similar directory name, a bare `current`, a service
+/// whose name only starts with this one's, and `.` or `..` after `current` are judged on the
+/// resolved path: `current/./bin/x` stays in `current`, `current/..` leaves it.
 #[test]
 fn through_current_judges_every_shape_of_package_path() {
     let accepted = [
         "/var/lib/hostkeeper/packagesx/tierstore/1.5.0/bin/x",
         "/var/lib/hostkeeper/packages",
+        "/var/lib/hostkeeper/packages/",
         "/var/lib/hostkeeper/packages/tierstore/current/bin/x.y/z",
+        "/var/lib/hostkeeper/packages/tierstore/current/./bin/x",
+        "/var/lib/hostkeeper/packages/tierstore/current/bin/.",
         "/var/lib/hostkeeper/state",
         "/usr/bin/tierstore",
     ];
@@ -343,14 +356,11 @@ fn through_current_judges_every_shape_of_package_path() {
         assert_eq!(service_line(&format!("ExecStart={path}")), Ok(()), "{path}");
     }
     let refused = [
-        "/var/lib/hostkeeper/packages/",
         "/var/lib/hostkeeper/packages/tierstore",
         "/var/lib/hostkeeper/packages/tierstore/current",
         "/var/lib/hostkeeper/packages/tierstorex/current/bin/x",
         "/var/lib/hostkeeper/packages/tierstore/current/bin/../../1.5.0/bin/x",
-        "/var/lib/hostkeeper/packages/tierstore/current/./bin/x",
         "/var/lib/hostkeeper/packages/tierstore/current/..",
-        "/var/lib/hostkeeper/packages/tierstore/current/bin/.",
     ];
     for path in refused {
         assert_eq!(
@@ -390,7 +400,7 @@ fn every_exec_key_is_checked_and_other_keys_are_not() {
     }
     let in_install = format!("[Install]\nExecStart={BAD}\n");
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.service", &in_install),
+        check_unit_text(packages(), "tierstore", "tierstore.service", &in_install),
         Err(package_path("tierstore.service", "ExecStart=", BAD))
     );
 }
@@ -420,7 +430,7 @@ fn bad_paths_are_found_in_flags_quotes_and_continuations() {
     assert_eq!(service_line(&format!("ExecStart=\"{GOOD}\" serve")), Ok(()));
     let continued = format!("[Service]\nExecStart={GOOD} \\\n  serve \\\n  --config={flag_path}\n");
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.service", &continued),
+        check_unit_text(packages(), "tierstore", "tierstore.service", &continued),
         Err(package_path("tierstore.service", "ExecStart=", flag_path))
     );
 }
@@ -434,31 +444,36 @@ fn comments_blank_lines_and_trailing_continuations() {
         "[Service]\n# ExecStart={BAD}\n; ExecStart={BAD}\n\n   \n  #ExecStart={BAD}\nExecStart={GOOD}\n"
     );
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.service", &commented),
+        check_unit_text(packages(), "tierstore", "tierstore.service", &commented),
         Ok(())
     );
     let no_assignment = "[Service]\nExecStart\nsome words\n[Unit]\n";
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.service", no_assignment),
+        check_unit_text(packages(), "tierstore", "tierstore.service", no_assignment),
         Ok(())
     );
     let at_eof = format!("[Service]\nExecStart={BAD} \\");
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.service", &at_eof),
+        check_unit_text(packages(), "tierstore", "tierstore.service", &at_eof),
         Err(package_path("tierstore.service", "ExecStart=", BAD))
     );
     let empty_tail = "[Service]\nExecStart=/usr/bin/true\n\\";
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.service", empty_tail),
+        check_unit_text(packages(), "tierstore", "tierstore.service", empty_tail),
         Ok(())
     );
     let comment_inside = format!("[Service]\nExecStart=/usr/bin/true \\\n# a comment\n {BAD}\n");
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.service", &comment_inside),
+        check_unit_text(
+            packages(),
+            "tierstore",
+            "tierstore.service",
+            &comment_inside
+        ),
         Err(package_path("tierstore.service", "ExecStart=", BAD))
     );
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.service", ""),
+        check_unit_text(packages(), "tierstore", "tierstore.service", ""),
         Ok(())
     );
 }
@@ -475,15 +490,16 @@ fn plist(first: &str) -> String {
 #[test]
 fn a_plist_is_judged_by_its_first_program_argument() {
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.plist", &plist(GOOD)),
+        check_unit_text(packages(), "tierstore", "tierstore.plist", &plist(GOOD)),
         Ok(())
     );
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.plist", &plist(BAD)),
+        check_unit_text(packages(), "tierstore", "tierstore.plist", &plist(BAD)),
         Err(package_path("tierstore.plist", "ProgramArguments", BAD))
     );
     assert_eq!(
         check_unit_text(
+            packages(),
             "tierstore",
             "tierstore.plist",
             &plist(&format!("  {BAD}  "))
@@ -492,27 +508,27 @@ fn a_plist_is_judged_by_its_first_program_argument() {
     );
     let none = "<plist><dict><key>Label</key><string>x</string></dict></plist>";
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.plist", none),
+        check_unit_text(packages(), "tierstore", "tierstore.plist", none),
         Ok(())
     );
     let text_exec = format!("ExecStart={BAD}\n");
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.plist", &text_exec),
+        check_unit_text(packages(), "tierstore", "tierstore.plist", &text_exec),
         Ok(())
     );
     let no_array = format!("<key>ProgramArguments</key><string>{BAD}</string>");
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.plist", &no_array),
+        check_unit_text(packages(), "tierstore", "tierstore.plist", &no_array),
         Ok(())
     );
     let no_string = "<key>ProgramArguments</key><array></array>";
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.plist", no_string),
+        check_unit_text(packages(), "tierstore", "tierstore.plist", no_string),
         Ok(())
     );
     let unclosed = format!("<key>ProgramArguments</key><array><string>{BAD}");
     assert_eq!(
-        check_unit_text("tierstore", "tierstore.plist", &unclosed),
+        check_unit_text(packages(), "tierstore", "tierstore.plist", &unclosed),
         Ok(())
     );
 }
@@ -549,15 +565,53 @@ fn wanted_by_reads_the_install_section_as_systemd_does() {
     );
 }
 
-/// Catches a unit-name check that is too loose or too strict: letters, digits and `_ . @ : -`
-/// are a name; the empty string, a leading dot, a slash, a space and other characters are not.
+/// A unit name of exactly `len` bytes: `a`s and the `.service` suffix.
+fn unit_name_of_len(len: usize) -> String {
+    format!("{}.service", "a".repeat(len - ".service".len()))
+}
+
+/// Catches a unit-name check that is too loose or too strict: a stem of letters, digits and
+/// `_ . @ : -` with a unit type as suffix is a name; a name with no suffix or a suffix that is no
+/// unit type, an empty or dotted stem, an `@` with no prefix or no instance or a second `@`, other
+/// characters and one byte over `MAX_UNIT_NAME` are not.
 #[test]
-fn is_unit_name_accepts_only_unit_name_characters() {
-    for name in ["a", "a.service", "x@y:z_w-1.service", "A0", "a.b"] {
+fn is_unit_name_accepts_only_unit_names() {
+    let longest = unit_name_of_len(MAX_UNIT_NAME);
+    assert_eq!(longest.len(), 249);
+    for name in [
+        "a.service",
+        "a.b.service",
+        "x@9301.service",
+        "x:y-1_z.socket",
+        "x@y:z_w-1.service",
+        "A0.timer",
+        longest.as_str(),
+    ] {
         assert!(is_unit_name(name), "{name}");
     }
+    let too_long = unit_name_of_len(MAX_UNIT_NAME + 1);
+    assert_eq!(too_long.len(), 250);
     for name in [
-        "", ".hidden", "..", "../x", "a/b", "a b", "a;b", "a\u{e9}", "a$",
+        "",
+        "a",
+        "a.b",
+        "a.invalid",
+        "A0",
+        "a@b@c.service",
+        "@x.service",
+        "x@.service",
+        ".x.service",
+        ".service",
+        ".hidden",
+        "..",
+        "../x",
+        "a/b.service",
+        "a b.service",
+        "a;b.service",
+        "a\u{e9}.service",
+        "a$.service",
+        "a%i.service",
+        too_long.as_str(),
     ] {
         assert!(!is_unit_name(name), "{name:?}");
     }
@@ -702,4 +756,199 @@ fn lint_errors_are_release_manifest_mismatches() {
             "units/tierstore.service ExecStart= names {BAD:?}, which is under /var/lib/hostkeeper/packages/ but not /var/lib/hostkeeper/packages/tierstore/current/"
         )
     );
+}
+
+/// Catches a `[[files]] source` that leaves `files/`: an absolute source, one with `..`
+/// components, one below another directory of the package, an empty one and a bare `files/` are
+/// each `BadSource` naming the entry, from `Claims::of` on a manifest edited after loading and
+/// from `check_source`; a source below `files/` is accepted.
+#[test]
+fn a_files_source_must_be_relative_and_below_files() {
+    let (world, manifest) = tierstore("sources");
+    for source in ["/etc/passwd", "files/../../x", "bin/x", "", "files/"] {
+        let mut edited = manifest.clone();
+        edited.files = vec![FileEntry {
+            source: source.to_owned(),
+            path: "/etc/tierstore/tierstore.conf".to_owned(),
+        }];
+        let err = Claims::of(&world.roots, &edited).expect_err("a bad source");
+        assert!(
+            matches!(&err, ClaimError::BadSource { entry, .. } if entry == source),
+            "{source:?}: {err:?}"
+        );
+        assert!(
+            matches!(check_source(source), Err(ClaimError::BadSource { .. })),
+            "{source:?}"
+        );
+    }
+    assert_eq!(check_source("files/sub/a.conf"), Ok(()));
+    let mut deep = manifest.clone();
+    deep.files[0].source = "files/sub/a.conf".to_owned();
+    let claims = Claims::of(&world.roots, &deep).expect("a source below files/");
+    assert!(claims.iter().any(|claim| {
+        claim.link_target
+            == Path::new("/var/lib/hostkeeper/packages/tierstore/current/files/sub/a.conf")
+    }));
+}
+
+/// A manifest of the example with the `[[files]]` entries at `paths`, each from its own source.
+fn with_files_at(manifest: &Manifest, paths: &[&str]) -> Manifest {
+    let mut edited = manifest.clone();
+    edited.files = paths
+        .iter()
+        .enumerate()
+        .map(|(i, path)| FileEntry {
+            source: format!("files/f{i}.conf"),
+            path: (*path).to_owned(),
+        })
+        .collect();
+    edited
+}
+
+/// Catches two claims of one package where one path lies inside the other: `[[files]]` at
+/// `/etc/shared` and `/etc/shared/child.conf`, in either order, are `Overlap` naming both paths;
+/// a file below a unit's path is `Overlap` too; a sibling whose name only starts with the same
+/// text is no overlap.
+#[test]
+fn a_claim_below_another_claim_of_the_package_is_an_overlap() {
+    let (world, manifest) = tierstore("overlap");
+    let overlap = |path: &str, other: &str| ClaimError::Overlap {
+        path: PathBuf::from(path),
+        other: PathBuf::from(other),
+    };
+    assert_eq!(
+        Claims::of(
+            &world.roots,
+            &with_files_at(&manifest, &["/etc/shared", "/etc/shared/child.conf"])
+        )
+        .expect_err("a file below a file"),
+        overlap("/etc/shared/child.conf", "/etc/shared")
+    );
+    assert_eq!(
+        Claims::of(
+            &world.roots,
+            &with_files_at(&manifest, &["/etc/shared/child.conf", "/etc/shared"])
+        )
+        .expect_err("a file above a file"),
+        overlap("/etc/shared", "/etc/shared/child.conf")
+    );
+    let roots = Roots::new(
+        Path::new("/var/lib/hostkeeper"),
+        Path::new("/etc/units"),
+        Path::new("/var/lib/hostkeeper/packages"),
+    );
+    assert_eq!(
+        Claims::of(
+            &roots,
+            &with_files_at(&manifest, &["/etc/units/tierstore@.service/x"])
+        )
+        .expect_err("a file below a unit"),
+        overlap(
+            "/etc/units/tierstore@.service/x",
+            "/etc/units/tierstore@.service"
+        )
+    );
+    let apart = with_files_at(
+        &manifest,
+        &["/etc/shared", "/etc/shared2", "/etc/shared.d/a"],
+    );
+    let claims = Claims::of(&world.roots, &apart).expect("siblings do not overlap");
+    assert_eq!(claims.iter().count(), 4);
+}
+
+/// A manifest whose units are `files` (name and text) and whose `run` is `run`, written into
+/// a fresh world and loaded.
+fn world_with_units(name: &str, files: &[(&str, String)], run: &str) -> (World, Manifest) {
+    let mut spec = Spec::new().run(run);
+    for (file, text) in files {
+        spec = spec.unit(file, text);
+    }
+    let world = World::new(name);
+    let manifest = world.package("tierstore", "1.5.0", &spec);
+    (world, manifest)
+}
+
+/// A unit file whose command is good and whose `WantedBy=` is `wanted`.
+fn wanted_by_text(wanted: &str) -> String {
+    format!("[Service]\nExecStart={GOOD}\n[Install]\nWantedBy={wanted}\n")
+}
+
+/// Catches a run instance read from its template when its own unit file is linked: with only
+/// `tierstore@9301.service` among the unit files, that file's `WantedBy=` is the one judged
+/// (it passes, and with none it is `NoWantedBy` naming that file); with the template present as
+/// well, the instance file's `WantedBy=` wins in both directions.
+#[test]
+fn an_instance_with_its_own_unit_file_is_read_from_that_file() {
+    let instance = "tierstore@9301.service";
+    let (world, alone) = world_with_units("instalone", &[(instance, unit_text(GOOD))], instance);
+    assert_eq!(lint(&world.fs, &world.roots, &alone), Ok(()));
+    overwrite_unit(&world, instance, unit_without_install(GOOD).as_bytes());
+    assert_eq!(
+        lint(&world.fs, &world.roots, &alone),
+        Err(LintError::NoWantedBy {
+            unit: instance.to_owned(),
+            file: instance.to_owned()
+        })
+    );
+
+    let both = |name: &str, own: &str, template: &str| {
+        world_with_units(
+            name,
+            &[
+                (instance, wanted_by_text(own)),
+                ("tierstore@.service", wanted_by_text(template)),
+            ],
+            instance,
+        )
+    };
+    let (world, manifest) = both("instwins", TARGET, "broken.invalid");
+    assert_eq!(lint(&world.fs, &world.roots, &manifest), Ok(()));
+    let (world, manifest) = both("instloses", "broken.invalid", TARGET);
+    assert_eq!(
+        lint(&world.fs, &world.roots, &manifest),
+        Err(LintError::BadTarget {
+            file: instance.to_owned(),
+            target: "broken.invalid".to_owned()
+        })
+    );
+    let (world, manifest) = both("instnone", "", TARGET);
+    assert_eq!(
+        lint(&world.fs, &world.roots, &manifest),
+        Err(LintError::NoWantedBy {
+            unit: instance.to_owned(),
+            file: instance.to_owned()
+        })
+    );
+}
+
+/// Catches a `WantedBy=` the daemon could not enable: a name of no known unit type and a
+/// name with a specifier are `BadTarget`; a name of 249 bytes is accepted and one of 250 is
+/// refused.
+#[test]
+fn wanted_by_targets_are_unit_names_within_the_length_limit() {
+    let (world, manifest) = tierstore("targets");
+    let specifier = format!("tierstore-group@%i.{TARGET}");
+    let longest = unit_name_of_len(MAX_UNIT_NAME);
+    let too_long = unit_name_of_len(MAX_UNIT_NAME + 1);
+    for wanted in ["broken.invalid", specifier.as_str(), too_long.as_str()] {
+        overwrite_unit(
+            &world,
+            "tierstore@.service",
+            wanted_by_text(wanted).as_bytes(),
+        );
+        assert_eq!(
+            lint(&world.fs, &world.roots, &manifest),
+            Err(LintError::BadTarget {
+                file: "tierstore@.service".to_owned(),
+                target: wanted.to_owned()
+            }),
+            "{wanted}"
+        );
+    }
+    overwrite_unit(
+        &world,
+        "tierstore@.service",
+        wanted_by_text(&longest).as_bytes(),
+    );
+    assert_eq!(lint(&world.fs, &world.roots, &manifest), Ok(()));
 }

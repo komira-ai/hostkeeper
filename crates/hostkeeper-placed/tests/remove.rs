@@ -9,6 +9,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
+use hostkeeper_placed::store::TEMPORARY_FILE;
 use hostkeeper_placed::testing::{Event, FakeUnitControl, FaultFs, FsWrite, UnitCall};
 use hostkeeper_placed::{
     ClaimError, Claims, Entry, LintError, PathKind, PathState, PlacedError, Placer, Removal, Store,
@@ -63,6 +64,15 @@ fn unenabled_world(name: &str) -> (World, hostkeeper_config::manifest::Manifest)
     (world, manifest)
 }
 
+/// Writes `record` as `placed.json`, under the lock, which is released before this returns.
+fn save(world: &World, record: &hostkeeper_placed::PlacedRecord) {
+    let placer = world.placer();
+    let lock = placer.lock().expect("the lock");
+    Store::new(&world.fs, world.roots.state_dir())
+        .save(record, &lock)
+        .expect("save");
+}
+
 fn ghost_entry(kind: PathKind) -> Entry {
     Entry::new(
         "ghost",
@@ -75,8 +85,9 @@ fn ghost_entry(kind: PathKind) -> Entry {
 
 /// Catches a reload that runs before the removals or once per unit, and a stop that is missing,
 /// doubled for a unit and its `WantedBy=` link, or run after the link went: the exact order of
-/// the log is stop, wants link and its directory, unit file and its directory, the record, then
-/// one reload; the listed template, instance link and file are untouched.
+/// the log is stop, wants link and its directory, unit file and its directory, the record with
+/// the reload owed, one reload, then the record again with the reload cleared; the listed
+/// template, instance link and file are untouched.
 #[test]
 fn removing_a_version_unlists_stops_disables_unlinks_then_reloads_in_that_order() {
     let world = World::new("remove-order");
@@ -91,7 +102,7 @@ fn removing_a_version_unlists_stops_disables_unlinks_then_reloads_in_that_order(
         .expect("the removal");
 
     let state = PathBuf::from(STATE);
-    let tmp = state.join(".hk-placed.json.tmp");
+    let tmp = state.join(TEMPORARY_FILE);
     assert_eq!(
         world.log.events(),
         [
@@ -103,11 +114,18 @@ fn removing_a_version_unlists_stops_disables_unlinks_then_reloads_in_that_order(
             Event::Fs(FsWrite::Write(tmp.clone())),
             Event::Fs(FsWrite::SyncFile(tmp.clone())),
             Event::Fs(FsWrite::Rename {
+                from: tmp.clone(),
+                to: state.join("placed.json"),
+            }),
+            Event::Fs(FsWrite::SyncDir(state.clone())),
+            Event::Unit(UnitCall::DaemonReload),
+            Event::Fs(FsWrite::Write(tmp.clone())),
+            Event::Fs(FsWrite::SyncFile(tmp.clone())),
+            Event::Fs(FsWrite::Rename {
                 from: tmp,
                 to: state.join("placed.json"),
             }),
             Event::Fs(FsWrite::SyncDir(state)),
-            Event::Unit(UnitCall::DaemonReload),
         ]
     );
     assert_eq!(
@@ -131,6 +149,7 @@ fn removing_a_version_unlists_stops_disables_unlinks_then_reloads_in_that_order(
             .is_none()
     );
     assert!(world.read_link(wants("tierstore-cache.service")).is_none());
+    assert!(!world.record().reload_pending);
     let listed: BTreeSet<PathBuf> = world.record().paths.keys().cloned().collect();
     assert_eq!(
         listed,
@@ -343,8 +362,9 @@ fn a_failing_stop_leaves_everything_in_place() {
 }
 
 /// Catches a write failing at any point of a removal being swallowed or leaving a reload behind:
-/// the n-th write failing, for every n, is `PlacedError::Io` with no reload, and the record
-/// still lists every path until its own rename; one write more than needed succeeds.
+/// the n-th write failing, for every n, is `PlacedError::Io`; the reload runs only once the
+/// record without the paths is on disk, the record lists every path until its own rename, and
+/// it still owes the reload until the rename that clears it.
 #[test]
 fn a_failing_write_at_any_step_of_remove_all_is_an_io_error_without_a_reload() {
     let total = {
@@ -356,7 +376,7 @@ fn a_failing_write_at_any_step_of_remove_all_is_an_io_error_without_a_reload() {
             .expect("the removal");
         counting.writes()
     };
-    assert_eq!(total, 10);
+    assert_eq!(total, 14);
     for n in 1..=total {
         let world = tierstore_world(&format!("remove-fail-{n}"));
         let before = world.record();
@@ -368,9 +388,14 @@ fn a_failing_write_at_any_step_of_remove_all_is_an_io_error_without_a_reload() {
             .expect_err("the write fails");
 
         assert!(matches!(err, PlacedError::Io { .. }), "write {n}: {err}");
-        assert!(!world.unit_calls().contains(&UnitCall::DaemonReload));
+        let reloaded = world.unit_calls().contains(&UnitCall::DaemonReload);
+        assert_eq!(reloaded, n > 10, "write {n}");
         if n <= 9 {
             assert_eq!(world.record(), before, "write {n}");
+        } else {
+            let record = world.record();
+            assert!(record.paths.is_empty(), "write {n}");
+            assert_eq!(record.reload_pending, n <= 13, "write {n}");
         }
     }
 }
@@ -413,9 +438,7 @@ fn a_recorded_path_that_cannot_be_inspected_is_an_io_error() {
         PathBuf::from("/etc/blocker/child"),
         ghost_entry(PathKind::File),
     );
-    Store::new(&world.fs, world.roots.state_dir())
-        .save(&record)
-        .expect("save");
+    save(&world, &record);
     world.log.clear();
 
     let err = world
@@ -430,19 +453,17 @@ fn a_recorded_path_that_cannot_be_inspected_is_an_io_error() {
     assert!(world.log.events().is_empty());
 }
 
-/// Catches a removal that guesses a unit to stop for a path with no file name: such an absent
-/// path is removed from the record with no stop and no write of a link, and a reload is due
-/// because its kind is a unit.
+/// Catches a removal that guesses a unit to stop for, or deletes, a path with no file name: the
+/// root directory recorded as a unit is not a link, so it is left alone and reported, nothing is
+/// stopped or removed, no reload runs, and the record drops it.
 #[test]
-fn an_absent_path_without_a_file_name_is_dropped_with_no_stop() {
+fn a_recorded_path_with_no_file_name_is_left_alone_with_no_stop() {
     let world = World::new("remove-nameless");
     let mut record = world.record();
     record
         .paths
-        .insert(PathBuf::from("/ghostdir/.."), ghost_entry(PathKind::Unit));
-    Store::new(&world.fs, world.roots.state_dir())
-        .save(&record)
-        .expect("save");
+        .insert(PathBuf::from("/"), ghost_entry(PathKind::Unit));
+    save(&world, &record);
     world.log.clear();
 
     let removal = world
@@ -454,12 +475,12 @@ fn an_absent_path_without_a_file_name_is_dropped_with_no_stop() {
         removal,
         Removal {
             stopped: Vec::new(),
-            removed: vec![PathBuf::from("/ghostdir/..")],
-            left_alone: Vec::new(),
-            reloaded: true,
+            removed: Vec::new(),
+            left_alone: vec![PathBuf::from("/")],
+            reloaded: false,
         }
     );
-    assert_eq!(world.unit_calls(), [UnitCall::DaemonReload]);
+    assert!(world.unit_calls().is_empty());
     assert!(
         world
             .writes()
@@ -467,6 +488,38 @@ fn an_absent_path_without_a_file_name_is_dropped_with_no_stop() {
             .all(|write| !matches!(write, FsWrite::Remove(_)))
     );
     assert!(world.record().paths.is_empty());
+}
+
+/// Catches a `disable` that trips over a kept path with no file name: the root directory recorded
+/// as a unit is kept as it is, the `WantedBy=` link beside it goes, one reload runs, and the
+/// record keeps the root entry.
+#[test]
+fn disable_keeps_a_recorded_path_with_no_file_name() {
+    let world = World::new("disable-nameless-kept");
+    let link = wants("ghost.service");
+    let mut record = world.record();
+    record
+        .paths
+        .insert(PathBuf::from("/"), ghost_entry(PathKind::Unit));
+    record
+        .paths
+        .insert(link.clone(), ghost_entry(PathKind::WantsLink));
+    save(&world, &record);
+    world.log.clear();
+
+    let removal = world.placer().disable(&service("ghost")).expect("disable");
+
+    assert_eq!(
+        removal,
+        Removal {
+            stopped: Vec::new(),
+            removed: vec![link],
+            left_alone: Vec::new(),
+            reloaded: true,
+        }
+    );
+    let kept: Vec<PathBuf> = world.record().paths.keys().cloned().collect();
+    assert_eq!(kept, [PathBuf::from("/")]);
 }
 
 /// Catches a removal that proceeds on a record it cannot read: a corrupt `placed.json` is
@@ -573,6 +626,7 @@ fn disable_removes_the_wants_links_and_reloads_once_without_stopping() {
     let kinds: Vec<PathKind> = world.record().paths.values().map(|e| e.kind).collect();
     assert_eq!(kinds.len(), 2);
     assert!(!kinds.contains(&PathKind::WantsLink));
+    assert!(!world.record().reload_pending);
 
     world.log.clear();
     let again = world

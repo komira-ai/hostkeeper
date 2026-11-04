@@ -7,7 +7,7 @@ mod support;
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use hostkeeper_placed::fs::{FileKind, Fs, RealFs};
@@ -18,11 +18,13 @@ use hostkeeper_placed::{
     Claims, Entry, PackageDirs, PathKind, PathState, PlacedError, PlacedRecord, Roots, Store,
     Tombstone,
 };
+use rustix::fs::{Mode, RawMode};
+use rustix::process::umask;
 use serde_json::{Value, json};
 use support::{Spec, World};
 
 const PLACED: &str = "/var/lib/hostkeeper/placed.json";
-const TMP: &str = "/var/lib/hostkeeper/.hk-placed.json.tmp";
+const TMP: &str = "/var/lib/hostkeeper/.hk~placed.json~tmp";
 const STATE: &str = "/var/lib/hostkeeper";
 
 fn entry(service: &str, version: &str) -> Entry {
@@ -47,6 +49,18 @@ fn write_placed(world: &World, text: &str) {
     fs::write(world.host(PLACED), text).expect("write placed.json");
 }
 
+/// Saves `record` into the state directory `dir` through `fs`, holding the lock of the world's
+/// `placed.json` for the call, as `Store::save` asks.
+fn save_in(
+    world: &World,
+    fs: &dyn Fs,
+    dir: &Path,
+    record: &PlacedRecord,
+) -> Result<(), PlacedError> {
+    let lock = world.placer().lock().expect("the lock is free");
+    Store::new(fs, dir).save(record, &lock)
+}
+
 fn io_parts(error: PlacedError) -> (&'static str, PathBuf) {
     match error {
         PlacedError::Io { op, path, .. } => (op, path),
@@ -61,14 +75,12 @@ fn io_parts(error: PlacedError) -> (&'static str, PathBuf) {
 fn placed_json_write_is_temp_fsync_rename() {
     let world = World::new("store-order");
     let state = Path::new(STATE);
-    Store::new(&world.fs, state)
-        .save(&PlacedRecord::default())
-        .expect("first save");
+    save_in(&world, &world.fs, state, &PlacedRecord::default()).expect("first save");
     let old = world.placed_bytes().expect("placed.json exists");
     world.log.clear();
 
     let new = record_of(&[("/etc/x.conf", entry("x", "1.0.0"))]);
-    Store::new(&world.fs, state).save(&new).expect("save");
+    save_in(&world, &world.fs, state, &new).expect("save");
     assert_eq!(
         world.writes(),
         vec![
@@ -88,12 +100,10 @@ fn placed_json_write_is_temp_fsync_rename() {
     // A failure at any write before the rename leaves the old bytes.
     for n in 1..=3 {
         let world = World::new(&format!("store-crash-{n}"));
-        Store::new(&world.fs, state)
-            .save(&PlacedRecord::default())
-            .expect("first save");
+        save_in(&world, &world.fs, state, &PlacedRecord::default()).expect("first save");
         let old = world.placed_bytes().expect("placed.json exists");
         let failing = world.failing_at(n);
-        let result = Store::new(&failing, state).save(&new);
+        let result = save_in(&world, &failing, state, &new);
         assert!(result.is_err(), "write {n} fails");
         assert_eq!(world.placed_bytes(), Some(old), "failure at write {n}");
     }
@@ -115,13 +125,13 @@ fn a_failed_write_of_a_save_names_its_step_and_path() {
     for (n, op, path) in expected {
         let world = World::new(&format!("store-step-{n}"));
         let failing = world.failing_at(n);
-        let error = Store::new(&failing, state).save(&new).expect_err("fails");
+        let error = save_in(&world, &failing, state, &new).expect_err("fails");
         assert_eq!(io_parts(error), (op, PathBuf::from(path)), "write {n}");
     }
     // The record is on disk when only the directory fsync failed.
     let world = World::new("store-step-dir");
     let failing = world.failing_at(4);
-    Store::new(&failing, state).save(&new).expect_err("fails");
+    save_in(&world, &failing, state, &new).expect_err("fails");
     assert_eq!(world.record(), new);
 }
 
@@ -129,12 +139,16 @@ fn a_failed_write_of_a_save_names_its_step_and_path() {
 #[test]
 fn a_save_into_a_missing_directory_is_an_io_error() {
     let world = World::new("store-missing-dir");
-    let error = Store::new(&world.fs, Path::new("/nowhere"))
-        .save(&PlacedRecord::default())
-        .expect_err("no such directory");
+    let error = save_in(
+        &world,
+        &world.fs,
+        Path::new("/nowhere"),
+        &PlacedRecord::default(),
+    )
+    .expect_err("no such directory");
     assert_eq!(
         io_parts(error),
-        ("write", PathBuf::from("/nowhere/.hk-placed.json.tmp"))
+        ("write", PathBuf::from("/nowhere/.hk~placed.json~tmp"))
     );
 }
 
@@ -146,9 +160,7 @@ fn a_record_that_cannot_be_serialised_is_refused_before_any_write() {
     let bad = Path::new(OsStr::from_bytes(b"/etc/\xff.conf"));
     let mut record = PlacedRecord::default();
     record.paths.insert(bad.to_path_buf(), entry("x", "1.0.0"));
-    let error = Store::new(&world.fs, Path::new(STATE))
-        .save(&record)
-        .expect_err("refused");
+    let error = save_in(&world, &world.fs, Path::new(STATE), &record).expect_err("refused");
     match error {
         PlacedError::Corrupt { path, why } => {
             assert_eq!(path, PathBuf::from(PLACED));
@@ -183,7 +195,7 @@ fn placed_json_preserves_keys_it_does_not_know() {
     write_placed(&world, &original.to_string());
     let store = Store::new(&world.fs, Path::new(STATE));
     let record = store.load().expect("loads");
-    store.save(&record).expect("saves");
+    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
     let bytes = fs::read(world.host(PLACED)).expect("read");
     let again: Value = serde_json::from_slice(&bytes).expect("json");
     assert_eq!(again, original);
@@ -215,9 +227,7 @@ fn a_saved_record_has_the_schema_one_shape() {
             Path::new("/t/w"),
         ),
     );
-    Store::new(&world.fs, Path::new(STATE))
-        .save(&record)
-        .expect("saves");
+    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
     let bytes = world.placed_bytes().expect("written");
     assert_eq!(bytes.last(), Some(&b'\n'));
     let value: Value = serde_json::from_slice(&bytes).expect("json");
@@ -375,7 +385,7 @@ fn the_tombstone_round_trip() {
         .uninstalling
         .insert("x".to_owned(), Tombstone::default());
     let store = Store::new(&world.fs, Path::new(STATE));
-    store.save(&record).expect("saves");
+    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
     assert_eq!(store.load().expect("loads"), record);
     let value: Value =
         serde_json::from_slice(&world.placed_bytes().expect("written")).expect("json");
@@ -620,4 +630,276 @@ fn roots_and_package_dirs_name_the_design_paths() {
     assert_eq!(custom.placed_file(), PathBuf::from("/s/placed.json"));
     assert_eq!(custom.lock_file(), PathBuf::from("/s/placed.lock"));
     assert_ne!(custom, roots);
+}
+
+/// Puts the process creation mask back to what it was, when dropped, even on a failed assertion.
+struct UmaskGuard(Mode);
+
+impl UmaskGuard {
+    fn set(mask: RawMode) -> UmaskGuard {
+        UmaskGuard(umask(Mode::from_raw_mode(mask)))
+    }
+}
+
+impl Drop for UmaskGuard {
+    fn drop(&mut self) {
+        umask(self.0);
+    }
+}
+
+/// The permission bits of the host path `path` on disk.
+fn mode_of(world: &World, path: &str) -> u32 {
+    fs::metadata(world.host(path))
+        .expect("stat")
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+/// The text of a schema 1 record with one path entry built from the given parts.
+fn one_entry(path: &str, service: &str, version: &str, link_target: &str) -> String {
+    json!({
+        "schema": 1,
+        "paths": {
+            path: {
+                "service": service,
+                "version": version,
+                "kind": "file",
+                "state": "placed",
+                "link_target": link_target
+            }
+        }
+    })
+    .to_string()
+}
+
+/// Catches a load that trusts the known fields of a record that parsed: a wrong schema, a path or
+/// link target that is relative or has a dot component, a service or version outside its grammar
+/// or a tombstone for a non-service is `Corrupt` naming `placed.json`, and the file is not touched.
+#[test]
+fn a_record_that_breaks_the_rules_of_its_fields_is_corrupt_and_left_as_it_is() {
+    const TARGET: &str = "/var/lib/hostkeeper/packages/x/current/files/x.conf";
+    let cases = [
+        (
+            "{\"schema\": 0, \"paths\": {}}".to_owned(),
+            "its schema is 0",
+        ),
+        (
+            one_entry("etc/x.conf", "x", "1.0.0", TARGET),
+            "the path etc/x.conf",
+        ),
+        (
+            one_entry("/etc/./x.conf", "x", "1.0.0", TARGET),
+            "the path /etc/./x.conf",
+        ),
+        (
+            one_entry("/etc/../x.conf", "x", "1.0.0", TARGET),
+            "the path /etc/../x.conf",
+        ),
+        (
+            one_entry("/etc/x.conf", "x", "1.0.0", "current/files/x"),
+            "the link target current/files/x",
+        ),
+        (
+            one_entry("/etc/x.conf", "x", "1.0.0", "/a/../b"),
+            "the link target /a/../b",
+        ),
+        (
+            one_entry("/etc/x.conf", "/etc/x", "1.0.0", TARGET),
+            "\"/etc/x\" is not a service name",
+        ),
+        (
+            one_entry("/etc/x.conf", "a/b", "1.0.0", TARGET),
+            "\"a/b\" is not a service name",
+        ),
+        (
+            one_entry("/etc/x.conf", "", "1.0.0", TARGET),
+            "\"\" is not a service name",
+        ),
+        (
+            one_entry("/etc/x.conf", "x", "1/0", TARGET),
+            "\"1/0\" is not a version",
+        ),
+        (
+            one_entry("/etc/x.conf", "x", ".hidden", TARGET),
+            "\".hidden\" is not a version",
+        ),
+        (
+            json!({"schema": 1, "uninstalling": {"a/b": {}}}).to_string(),
+            "the tombstone \"a/b\" is not a service name",
+        ),
+    ];
+    for (n, (text, fragment)) in cases.into_iter().enumerate() {
+        let world = World::new(&format!("store-semantic-{n}"));
+        write_placed(&world, &text);
+        let result = Store::new(&world.fs, Path::new(STATE)).load();
+        match result {
+            Err(PlacedError::Corrupt { path, why }) => {
+                assert_eq!(path, PathBuf::from(PLACED), "{text}");
+                assert!(why.contains(fragment), "{text}: {why}");
+            }
+            other => panic!("{text}: expected Corrupt, got {other:?}"),
+        }
+        assert_eq!(world.placed_bytes(), Some(text.into_bytes()));
+        assert!(world.writes().is_empty());
+    }
+}
+
+/// Catches a validation that refuses a good record: a path and link target in the grammar, a
+/// service with `_` and `-`, a version with `+` and a tombstone for such a service all load.
+#[test]
+fn a_record_whose_fields_are_in_their_grammars_loads() {
+    let world = World::new("store-semantic-ok");
+    let text = json!({
+        "schema": 1,
+        "paths": {
+            "/etc/my_svc-2/x.conf": {
+                "service": "my_svc-2",
+                "version": "1.0.0-rc.1+build_5",
+                "kind": "file",
+                "state": "pending",
+                "link_target": "/var/lib/hostkeeper/packages/my_svc-2/current/files/x.conf"
+            }
+        },
+        "uninstalling": {"old-one": {}}
+    });
+    write_placed(&world, &text.to_string());
+    let record = Store::new(&world.fs, Path::new(STATE))
+        .load()
+        .expect("loads");
+    assert_eq!(record.paths.len(), 1);
+    assert!(record.uninstalling.contains_key("old-one"));
+}
+
+/// Catches a `reload_pending` that is lost on a save and load round trip, written when it is not
+/// set, or required when it is absent.
+#[test]
+fn reload_pending_round_trips_and_is_written_only_when_set() {
+    let world = World::new("store-reload-pending");
+    let store = Store::new(&world.fs, Path::new(STATE));
+    let mut record = record_of(&[("/etc/x.conf", entry("x", "1.0.0"))]);
+    assert!(!record.reload_pending, "the default owes nothing");
+
+    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
+    let value: Value =
+        serde_json::from_slice(&world.placed_bytes().expect("written")).expect("json");
+    assert!(
+        !value
+            .as_object()
+            .expect("an object")
+            .contains_key("reload_pending"),
+        "{value}"
+    );
+    assert!(!store.load().expect("loads").reload_pending);
+
+    record.reload_pending = true;
+    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
+    let value: Value =
+        serde_json::from_slice(&world.placed_bytes().expect("written")).expect("json");
+    assert_eq!(value["reload_pending"], json!(true));
+    let loaded = store.load().expect("loads");
+    assert!(loaded.reload_pending);
+    assert_eq!(loaded, record);
+
+    record.reload_pending = false;
+    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
+    let value: Value =
+        serde_json::from_slice(&world.placed_bytes().expect("written")).expect("json");
+    assert!(
+        !value
+            .as_object()
+            .expect("an object")
+            .contains_key("reload_pending")
+    );
+
+    write_placed(&world, "{\"schema\": 1, \"reload_pending\": false}");
+    assert!(!store.load().expect("loads").reload_pending);
+}
+
+/// Catches a `Store::save` that needs no lock: the lock `Placer::lock` returns is the token a
+/// save takes, and with it held a second lock is refused while the save still works.
+#[test]
+fn a_save_is_made_under_the_lock_of_placer_lock() {
+    let world = World::new("store-save-lock");
+    let placer = world.placer();
+    let lock = placer.lock().expect("the lock is free");
+    placer
+        .store()
+        .save(&record_of(&[("/etc/x.conf", entry("x", "1.0.0"))]), &lock)
+        .expect("saves under the lock");
+    assert!(matches!(placer.lock(), Err(PlacedError::Locked { .. })));
+    assert_eq!(world.record().paths.len(), 1);
+}
+
+/// Catches a `host_path` that lets `..` climb out of the root: a write to `/../outside/file` lands
+/// at `<root>/outside/file`, the directory beside the root is untouched, and `.` and `/` parts
+/// are dropped too.
+#[test]
+fn real_fs_host_path_keeps_every_spelling_under_the_root() {
+    let world = World::new("realfs-escape");
+    fs::create_dir(world.host("/jail")).expect("the root");
+    fs::create_dir(world.host("/outside")).expect("the sentinel directory");
+    fs::write(world.host("/outside/sentinel"), "keep").expect("sentinel");
+    let jail = world.host("/jail");
+    let real = RealFs::new(&jail);
+
+    assert_eq!(
+        real.host_path(Path::new("/../outside/file")),
+        jail.join("outside/file")
+    );
+    assert_eq!(real.host_path(Path::new("/../../..")), jail);
+    assert_eq!(real.host_path(Path::new("/a/../b/./c")), jail.join("a/b/c"));
+    assert_eq!(real.host_path(Path::new("..")), jail);
+
+    real.create_dirs(Path::new("/../outside"))
+        .expect("create_dirs");
+    real.write(Path::new("/../outside/file"), b"inside")
+        .expect("write");
+    assert_eq!(
+        fs::read(jail.join("outside/file")).expect("read"),
+        b"inside"
+    );
+    assert_eq!(
+        real.read(Path::new("/../outside/file")).expect("read"),
+        b"inside"
+    );
+    let beside: Vec<_> = fs::read_dir(world.host("/outside"))
+        .expect("list")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(beside, vec![std::ffi::OsString::from("sentinel")]);
+    assert_eq!(
+        fs::read(world.host("/outside/sentinel")).expect("read"),
+        b"keep"
+    );
+}
+
+/// Catches `create_dirs` giving a directory the creation mask took bits from, or changing a
+/// directory that was already there: under umask 077 each directory made is 0755 and one that
+/// existed with 0700 stays 0700.
+#[test]
+fn create_dirs_makes_0755_whatever_the_mask_and_leaves_existing_directories() {
+    let world = World::new("realfs-umask");
+    let real = RealFs::new(world.root());
+    fs::create_dir(world.host("/old")).expect("an existing directory");
+    fs::set_permissions(world.host("/old"), fs::Permissions::from_mode(0o700)).expect("chmod");
+
+    let _mask = UmaskGuard::set(0o077);
+    real.create_dirs(Path::new("/old/new/deeper"))
+        .expect("create_dirs");
+    real.create_dirs(Path::new("/fresh/a/b"))
+        .expect("create_dirs");
+    real.create_dirs(Path::new("/old/new/deeper"))
+        .expect("again");
+
+    assert_eq!(mode_of(&world, "/old"), 0o700);
+    for made in [
+        "/old/new",
+        "/old/new/deeper",
+        "/fresh",
+        "/fresh/a",
+        "/fresh/a/b",
+    ] {
+        assert_eq!(mode_of(&world, made), 0o755, "{made}");
+    }
 }

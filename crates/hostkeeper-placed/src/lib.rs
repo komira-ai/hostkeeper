@@ -39,7 +39,7 @@ pub use claim::{Claim, Claims};
 pub use error::{ClaimError, Owner, PlacedError};
 pub use fs::{FileKind, Fs, RealFs};
 pub use lint::LintError;
-pub use placer::{Linking, Placer};
+pub use placer::{Linking, PlacedLock, Placer};
 pub use reconcile::{BootView, Conflict, ReconcileReport, Side, SwitchIntent, Unresolved};
 pub use remove::Removal;
 pub use roots::{PackageDirs, Roots};

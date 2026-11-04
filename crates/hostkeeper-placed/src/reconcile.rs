@@ -16,7 +16,7 @@
 //! A service whose version cannot be read (no `current`, a manifest that does not load) is
 //! reported in [`ReconcileReport::unresolved`] and left as it is. Nothing here reads a clock.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -25,7 +25,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 
 use crate::check::{check, occupant};
 use crate::error::{Owner, PlacedError, io_at};
-use crate::placer::{Placer, is_temporary};
+use crate::placer::{PlacedLock, Placer, is_temporary};
 use crate::store::{PathState, PlacedRecord};
 
 /// Which side of a switch a crash is to be finished to.
@@ -86,6 +86,8 @@ pub struct ReconcileReport {
     pub left_alone: Vec<PathBuf>,
     /// The units stopped because their version no longer lists them.
     pub stopped: Vec<String>,
+    /// Each service whose `current` was removed: a first install undone.
+    pub current_removed: Vec<String>,
     /// The `path_conflict` cases: each such service was not touched.
     pub conflicts: Vec<Conflict>,
     pub unresolved: Vec<Unresolved>,
@@ -96,30 +98,51 @@ pub struct ReconcileReport {
 impl ReconcileReport {
     /// Whether a link or a switch changed, so that `daemon-reload` is due.
     pub fn changed(&self) -> bool {
-        !self.switched.is_empty() | !self.linked.is_empty() | !self.removed.is_empty()
+        !self.switched.is_empty()
+            | !self.current_removed.is_empty()
+            | !self.linked.is_empty()
+            | !self.removed.is_empty()
     }
 }
 
 impl Placer<'_> {
     /// Reconciles every placed path with the version `current` names, finishing or undoing the
-    /// switches of `view`'s intents first. Run at daemon start, before any unit.
+    /// switches of `view`'s intents first. Run at daemon start, before any unit. Two different
+    /// intents for one service are [`PlacedError::ConflictingIntents`], before anything is
+    /// written; an intent given twice counts once. `daemon-reload` runs once when anything
+    /// changed or a reload is owed in the record (a crash or a failed reload before), and the
+    /// reload owed is cleared after it.
     pub fn reconcile(&self, view: &BootView) -> Result<ReconcileReport, PlacedError> {
-        let _lock = self.lock()?;
+        let mut intents: BTreeMap<&str, &SwitchIntent> = BTreeMap::new();
+        for intent in &view.intents {
+            let service = intent.service.as_str();
+            if intents
+                .insert(service, intent)
+                .is_some_and(|before| before != intent)
+            {
+                return Err(PlacedError::ConflictingIntents {
+                    service: service.to_owned(),
+                });
+            }
+        }
+        let lock = self.lock()?;
         let mut record = self.store().load()?;
         let mut report = ReconcileReport::default();
         let services: BTreeSet<String> = record
             .paths
             .values()
             .map(|entry| entry.service.clone())
-            .chain(view.intents.iter().map(|intent| intent.service.to_string()))
+            .chain(intents.keys().map(|service| (*service).to_owned()))
             .filter(|service| !record.uninstalling.contains_key(service))
             .collect();
         self.remove_temporaries(&record, &services, &mut report)?;
         for service in &services {
-            self.reconcile_service(&mut record, service, view, &mut report)?;
+            let intent = intents.get(service.as_str()).copied();
+            self.reconcile_service(&mut record, service, intent, view, &mut report, &lock)?;
         }
-        if report.changed() {
+        if report.changed() | record.reload_pending {
             self.units.daemon_reload()?;
+            self.reloaded(&lock)?;
             report.reloaded = true;
         }
         Ok(report)
@@ -191,32 +214,35 @@ impl Placer<'_> {
         Ok(conflicts)
     }
 
-    /// The version `service` is to run after reconciliation, switching `current` to it when an
-    /// intent says so. `Ok(None)` for an intent undone to no version (a first install).
+    /// The version `service` is to run after reconciliation, without switching anything: the
+    /// intent's side, or the version `current` names. `Ok(Err(why))` when it cannot be known (no
+    /// `current`, a `current` or `previous` that is not a link to a version beside it), and
+    /// `Ok(Ok(None))` for an intent undone to no version (a first install).
     fn chosen_version(
         &self,
         service: &str,
         intent: Option<&SwitchIntent>,
-        report: &mut ReconcileReport,
     ) -> Result<Result<Option<String>, String>, PlacedError> {
-        let Some(intent) = intent else {
-            return Ok(self
-                .current(service)?
+        let links = self.current(service).and_then(|current| {
+            self.previous(service)?;
+            Ok(current)
+        });
+        let current = match links {
+            Ok(current) => current,
+            Err(PlacedError::PathConflict { path, owner }) => {
+                return Ok(Err(format!("{} is held by {owner}", path.display())));
+            }
+            Err(e) => return Err(e),
+        };
+        Ok(match intent {
+            None => current
                 .map(Some)
-                .ok_or_else(|| "it has no `current` link".to_owned()));
-        };
-        let side = match intent.side {
-            Side::Forward => Some(&intent.target),
-            Side::Back => intent.from.as_ref(),
-        };
-        if let Some(version) = side
-            && self.switch_current(&intent.service, version)?
-        {
-            report
-                .switched
-                .push((service.to_owned(), version.to_string()));
-        }
-        Ok(Ok(side.map(Version::to_string)))
+                .ok_or_else(|| "it has no `current` link".to_owned()),
+            Some(intent) => Ok(match intent.side {
+                Side::Forward => Some(intent.target.to_string()),
+                Side::Back => intent.from.as_ref().map(Version::to_string),
+            }),
+        })
     }
 
     /// The manifest of `version` of `service`, loaded from its version directory.
@@ -235,12 +261,27 @@ impl Placer<'_> {
             .map_err(|e| format!("the manifest of {version}: {e}"))
     }
 
+    /// Removes `current` of `service` when it names `target`: the undoing of a first install's
+    /// switch. A `current` naming anything else is left. `true` when it was removed.
+    fn unswitch(&self, service: &str, target: &Version) -> Result<bool, PlacedError> {
+        if self.current(service)?.as_deref() != Some(target.as_str()) {
+            return Ok(false);
+        }
+        let dir = self.roots.packages().service(service);
+        let link = dir.join("current");
+        self.fs.remove_file(&link).map_err(io_at("remove", &link))?;
+        self.fs.sync_dir(&dir).map_err(io_at("fsync", &dir))?;
+        Ok(true)
+    }
+
     fn reconcile_service(
         &self,
         record: &mut PlacedRecord,
         service: &str,
+        intent: Option<&SwitchIntent>,
         view: &BootView,
         report: &mut ReconcileReport,
+        lock: &PlacedLock,
     ) -> Result<(), PlacedError> {
         let conflicts = self.pending_conflicts(record, service)?;
         if !conflicts.is_empty() {
@@ -251,31 +292,41 @@ impl Placer<'_> {
             service: service.to_owned(),
             why,
         };
-        let intent = view
-            .intents
-            .iter()
-            .find(|intent| intent.service.as_str() == service);
-        let version = match self.chosen_version(service, intent, report)? {
+        let version = match self.chosen_version(service, intent)? {
             Ok(version) => version,
             Err(why) => {
                 report.unresolved.push(unresolved(why));
                 return Ok(());
             }
         };
-        let mut keep = BTreeSet::new();
-        if let Some(version) = version {
-            let desired = match self
-                .manifest_of(service, &version, &view.running)
-                .and_then(|manifest| self.desired(&manifest).map_err(|e| e.to_string()))
+        let Some(version) = version else {
+            // A first install undone: every path of the service goes, then `current`.
+            let (removal, _) = self.prune_in(record, service, &BTreeSet::new(), true, lock)?;
+            report.stopped.extend(removal.stopped);
+            report.removed.extend(removal.removed);
+            report.left_alone.extend(removal.left_alone);
+            if let Some(intent) = intent
+                && self.unswitch(service, &intent.target)?
             {
-                Ok(desired) => desired,
-                Err(why) => {
-                    report.unresolved.push(unresolved(why));
-                    return Ok(());
-                }
-            };
-            if let Err(PlacedError::PathConflict { path, owner }) = check(&desired, record, self.fs)
-            {
+                report.current_removed.push(service.to_owned());
+            }
+            return Ok(());
+        };
+        // Everything is judged before anything changes: the manifest, its claims and lint, and
+        // every destination against the record and the disk.
+        let desired = match self
+            .manifest_of(service, &version, &view.running)
+            .and_then(|manifest| self.desired(&manifest).map_err(|e| e.to_string()))
+        {
+            Ok(desired) => desired,
+            Err(why) => {
+                report.unresolved.push(unresolved(why));
+                return Ok(());
+            }
+        };
+        match check(&desired, record, self.fs) {
+            Ok(()) => {}
+            Err(PlacedError::PathConflict { path, owner }) => {
                 report.conflicts.push(Conflict {
                     service: service.to_owned(),
                     path,
@@ -283,16 +334,21 @@ impl Placer<'_> {
                 });
                 return Ok(());
             }
-            self.begin_in(record, &desired)?;
-            for claim in desired.iter() {
-                if self.ensure_link(&claim.path, &claim.link_target)? {
-                    report.linked.push(claim.path.clone());
-                }
-            }
-            self.commit_in(record, &desired)?;
-            keep = desired.paths();
+            Err(e) => return Err(e),
         }
-        let (removal, _) = self.prune_in(record, service, &keep, true)?;
+        if let Some(intent) = intent
+            && self.switch_current(&intent.service, desired.version())?
+        {
+            report.switched.push((service.to_owned(), version.clone()));
+        }
+        self.begin_in(record, &desired, lock)?;
+        for claim in desired.iter() {
+            if self.ensure_link(&claim.path, &claim.link_target, service)? {
+                report.linked.push(claim.path.clone());
+            }
+        }
+        self.commit_in(record, &desired, lock)?;
+        let (removal, _) = self.prune_in(record, service, &desired.paths(), true, lock)?;
         report.stopped.extend(removal.stopped);
         report.removed.extend(removal.removed);
         report.left_alone.extend(removal.left_alone);

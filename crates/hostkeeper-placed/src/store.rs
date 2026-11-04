@@ -19,25 +19,31 @@
 //!
 //! Schema 1, changed additively only: a key this daemon does not know, at the top level, in an
 //! entry or in a tombstone, is kept as it is when the record is written again. A record with a
-//! newer schema, or one that does not parse, is an error naming the file, and the file is left
-//! as it is. Every write is a temporary file in the same directory, an `fsync` of the file, a
+//! newer schema, one that does not parse, or one whose known fields break their rules (schema 1,
+//! every path and link target absolute in the path grammar, services and versions in their
+//! grammars), is an error naming the file, and the file is left as it is. `reload_pending`,
+//! written only when set, says a `daemon-reload` is owed. A write needs the lock of the file
+//! ([`crate::PlacedLock`]). Every write is a temporary file in the same directory, an `fsync` of the file, a
 //! rename and an `fsync` of the directory.
 
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use hostkeeper_config::names::{check_path, is_service_name, is_version};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::error::{PlacedError, io_at};
 use crate::fs::Fs;
+use crate::placer::PlacedLock;
 use crate::roots::PLACED_FILE;
 
 /// The schema this daemon reads and writes.
 pub const SCHEMA: u64 = 1;
-/// The temporary name `placed.json` is written under, beside it.
-pub const TEMPORARY_FILE: &str = ".hk-placed.json.tmp";
+/// The temporary name `placed.json` is written under, beside it. `~` is outside the path
+/// grammar, so no placed path can have this name.
+pub const TEMPORARY_FILE: &str = ".hk~placed.json~tmp";
 
 /// What a placed path is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -128,6 +134,11 @@ pub struct PlacedRecord {
     /// The tombstones, by service.
     #[serde(default)]
     pub uninstalling: BTreeMap<String, Tombstone>,
+    /// A `daemon-reload` is owed: set in the same write that records a change to placed links,
+    /// cleared only after a reload succeeded, so a crash or a failed reload leaves it due.
+    /// Written only when set.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reload_pending: bool,
     /// The keys of a newer writer, kept on rewrite.
     #[serde(flatten)]
     extra: Map<String, Value>,
@@ -139,6 +150,7 @@ impl Default for PlacedRecord {
             schema: SCHEMA,
             paths: BTreeMap::new(),
             uninstalling: BTreeMap::new(),
+            reload_pending: false,
             extra: Map::new(),
         }
     }
@@ -154,6 +166,45 @@ impl PlacedRecord {
             .iter()
             .filter(move |(_, entry)| entry.service == service)
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// `Err(why())` unless `ok`.
+fn require(ok: bool, why: impl FnOnce() -> String) -> Result<(), String> {
+    ok.then_some(()).ok_or_else(why)
+}
+
+/// Checks that `path` is an absolute path in the path grammar (no `.` or `..` component).
+fn require_path(what: &str, path: &Path) -> Result<(), String> {
+    let text = path.to_str().unwrap_or_default();
+    check_path(text).map_err(|why| format!("{what} {} {why}", path.display()))
+}
+
+/// The rules on the known fields of a record that parsed: schema 1, every path and link
+/// target absolute and in the path grammar, every service a service name, every version a
+/// version. A record that breaks one is never used to name a path.
+fn validate(record: &PlacedRecord) -> Result<(), String> {
+    require(record.schema == SCHEMA, || {
+        format!("its schema is {}, not {SCHEMA}", record.schema)
+    })?;
+    for (path, entry) in &record.paths {
+        require_path("the path", path)?;
+        require_path("the link target", &entry.link_target)?;
+        require(is_service_name(&entry.service), || {
+            format!("{:?} is not a service name", entry.service)
+        })?;
+        require(is_version(&entry.version), || {
+            format!("{:?} is not a version", entry.version)
+        })?;
+    }
+    record.uninstalling.keys().try_for_each(|service| {
+        require(is_service_name(service), || {
+            format!("the tombstone {service:?} is not a service name")
+        })
+    })
 }
 
 /// The error of a record that is not valid JSON of the schema at `path`.
@@ -198,11 +249,15 @@ impl<'a> Store<'a> {
         if let Some(schema) = schema.filter(|schema| *schema > SCHEMA) {
             return Err(PlacedError::NewerSchema { path, schema });
         }
-        serde_json::from_value(value).map_err(corrupt(&path))
+        let record: PlacedRecord = serde_json::from_value(value).map_err(corrupt(&path))?;
+        validate(&record).map_err(|why| PlacedError::Corrupt { path, why })?;
+        Ok(record)
     }
 
     /// Writes the record: the temporary file, its `fsync`, the rename, the directory's `fsync`.
-    pub fn save(&self, record: &PlacedRecord) -> Result<(), PlacedError> {
+    /// The caller holds the lock of `placed.json` ([`crate::Placer::lock`]), which the signature
+    /// asks for, so that two writers never interleave a read and a write.
+    pub fn save(&self, record: &PlacedRecord, _lock: &PlacedLock) -> Result<(), PlacedError> {
         let path = self.path();
         let tmp = self.dir.join(TEMPORARY_FILE);
         let mut bytes = serde_json::to_vec_pretty(record).map_err(corrupt(&path))?;

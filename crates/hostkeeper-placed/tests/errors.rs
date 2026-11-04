@@ -16,8 +16,8 @@ use hostkeeper_placed::testing::{
     Event, FakeLauncher, FakeUnitControl, FaultFs, FsWrite, Log, UnitCall,
 };
 use hostkeeper_placed::{
-    ClaimError, FileKind, Fs, LintError, Owner, PackageDirs, PlacedError, Placer, Roots, Systemctl,
-    UnitControl, UnitControlError,
+    ClaimError, FileKind, Fs, LintError, Owner, PackageDirs, PlacedError, PlacedLock, Placer,
+    Roots, Systemctl, UnitControl, UnitControlError,
 };
 use support::World;
 
@@ -217,6 +217,7 @@ fn every_lint_error_is_a_manifest_mismatch() {
                 file: "a.service".to_owned(),
                 key: "ExecStart".to_owned(),
                 path: "/var/lib/hostkeeper/packages/a/1.0.0/bin/a".to_owned(),
+                packages: "/var/lib/hostkeeper/packages".to_owned(),
                 service: "a".to_owned(),
             },
             "units/a.service ExecStart names \"/var/lib/hostkeeper/packages/a/1.0.0/bin/a\", which is under /var/lib/hostkeeper/packages/ but not /var/lib/hostkeeper/packages/a/current/",
@@ -603,4 +604,213 @@ fn package_dirs_name_the_service_links_and_versions() {
         dirs.version("tierstore", "1.2.0"),
         PathBuf::from("/p/tierstore/1.2.0")
     );
+}
+
+/// Catches a `PackagePath` text that names a fixed packages directory instead of the field: with
+/// another packages directory the text carries it twice, and the refusal is a release one.
+#[test]
+fn a_package_path_refusal_names_the_packages_directory_it_was_given() {
+    let error = LintError::PackagePath {
+        file: "a.service".to_owned(),
+        key: "ExecStart".to_owned(),
+        path: "/srv/pk/a/1.0.0/bin/a".to_owned(),
+        packages: "/srv/pk".to_owned(),
+        service: "a".to_owned(),
+    };
+    assert_eq!(
+        error.to_string(),
+        "units/a.service ExecStart names \"/srv/pk/a/1.0.0/bin/a\", which is under /srv/pk/ but not /srv/pk/a/current/"
+    );
+    assert_eq!(error.class(), Class::Release);
+    assert_eq!(error.reason(), "manifest_mismatch");
+}
+
+/// Catches a wrong class, reason or text for the refusals that came with the overlap rule, the
+/// source rule and the conflicting switch intents.
+#[test]
+fn overlap_bad_source_and_conflicting_intents_have_class_reason_and_text() {
+    let overlap = ClaimError::Overlap {
+        path: PathBuf::from("/etc/x"),
+        other: PathBuf::from("/etc/x/y.conf"),
+    };
+    assert_eq!(
+        overlap.to_string(),
+        "the package claims /etc/x and /etc/x/y.conf, one below the other"
+    );
+    let bad_source = ClaimError::BadSource {
+        entry: "../x".to_owned(),
+        why: "is not below files/".to_owned(),
+    };
+    assert_eq!(
+        bad_source.to_string(),
+        "the [[files]] source \"../x\" is not below files/"
+    );
+    for claim in [overlap, bad_source] {
+        let text = claim.to_string();
+        let error = PlacedError::Claim(claim);
+        assert_eq!(error.class(), Class::Release, "{text}");
+        assert_eq!(error.reason(), "manifest_mismatch", "{text}");
+        assert_eq!(error.to_string(), text);
+    }
+
+    let conflicting = PlacedError::ConflictingIntents {
+        service: "tierstore".to_owned(),
+    };
+    assert_eq!(
+        conflicting.to_string(),
+        "two different switch intents name the service tierstore"
+    );
+    assert_eq!(conflicting.class(), Class::Environment);
+    assert_eq!(conflicting.reason(), "link_failed");
+}
+
+/// What one read of a [`FaultFs`] does on the scratch tree of [`read_world`].
+type ReadOp = fn(&FaultFs) -> io::Result<()>;
+
+fn read_file(fs_: &FaultFs) -> io::Result<()> {
+    fs_.read(Path::new("/var/lib/hostkeeper/f")).map(drop)
+}
+
+fn kind_of_file(fs_: &FaultFs) -> io::Result<()> {
+    fs_.kind(Path::new("/var/lib/hostkeeper/f")).map(drop)
+}
+
+fn read_the_link(fs_: &FaultFs) -> io::Result<()> {
+    fs_.read_link(Path::new("/var/lib/hostkeeper/l")).map(drop)
+}
+
+fn list_the_directory(fs_: &FaultFs) -> io::Result<()> {
+    fs_.list(Path::new("/var/lib/hostkeeper")).map(drop)
+}
+
+/// The four reads, each on something that exists in [`read_world`].
+const READ_OPS: [(&str, ReadOp); 4] = [
+    ("read", read_file as ReadOp),
+    ("kind", kind_of_file as ReadOp),
+    ("read_link", read_the_link as ReadOp),
+    ("list", list_the_directory as ReadOp),
+];
+
+/// A world with a file `f` and a link `l` in the state directory.
+fn read_world(name: &str) -> World {
+    let world = World::new(name);
+    fs::write(world.host("/var/lib/hostkeeper/f"), "x").expect("file");
+    std::os::unix::fs::symlink("f", world.host("/var/lib/hostkeeper/l")).expect("link");
+    world
+}
+
+/// Catches a one-shot read fault that sticks or misses: for each of read, kind, read_link and
+/// list the second read fails with its number, the first and third pass, and `reads()` counts
+/// the three.
+#[test]
+fn failing_read_once_fails_only_that_read() {
+    for (name, op) in READ_OPS {
+        let world = read_world(&format!("errors-read-once-{name}"));
+        let fs_ = FaultFs::new(world.root(), world.log.clone()).failing_read(2, false);
+        assert_eq!(fs_.reads(), 0, "{name}");
+        op(&fs_).unwrap_or_else(|e| panic!("{name} 1: {e}"));
+        let error = op(&fs_).expect_err(name);
+        assert_eq!(error.to_string(), "injected failure of read 2", "{name}");
+        op(&fs_).unwrap_or_else(|e| panic!("{name} 3: {e}"));
+        assert_eq!(fs_.reads(), 3, "{name}");
+        assert_eq!(fs_.writes(), 0, "{name}");
+        assert!(world.log.events().is_empty(), "{name}");
+    }
+}
+
+/// Catches a persistent read fault that heals: for each read the second and every later read fail
+/// with their number, the first passes, and failed reads are counted.
+#[test]
+fn failing_read_persistent_fails_that_read_and_every_later_one() {
+    for (name, op) in READ_OPS {
+        let world = read_world(&format!("errors-read-persistent-{name}"));
+        let fs_ = FaultFs::new(world.root(), world.log.clone()).failing_read(2, true);
+        op(&fs_).unwrap_or_else(|e| panic!("{name} 1: {e}"));
+        for n in 2..=4 {
+            let error = op(&fs_).expect_err(name);
+            assert_eq!(
+                error.to_string(),
+                format!("injected failure of read {n}"),
+                "{name}"
+            );
+        }
+        assert_eq!(fs_.reads(), 4, "{name}");
+    }
+}
+
+/// Catches a read counter kept per method: one count runs over read, kind, read_link and list, so
+/// the third read in a mixed sequence is the failing one whichever method it is, and a filesystem
+/// with no fault set counts its reads and never fails.
+#[test]
+fn the_read_counter_runs_over_all_four_reads() {
+    let world = read_world("errors-read-mixed");
+    let fs_ = FaultFs::new(world.root(), world.log.clone()).failing_read(3, false);
+    READ_OPS[0].1(&fs_).expect("read 1");
+    READ_OPS[1].1(&fs_).expect("read 2");
+    let error = READ_OPS[2].1(&fs_).expect_err("read 3 is a read_link");
+    assert_eq!(error.to_string(), "injected failure of read 3");
+    READ_OPS[3].1(&fs_).expect("read 4");
+    assert_eq!(fs_.reads(), 4);
+
+    let plain = FaultFs::new(world.root(), world.log.clone());
+    for (_, op) in READ_OPS {
+        op(&plain).expect("no fault");
+    }
+    assert_eq!(plain.reads(), 4);
+    assert_eq!(world.fs.reads(), 0, "another filesystem has its own count");
+}
+
+/// Catches a failing read that is not an error of the placer's own read: a first read that fails
+/// persistently turns `Placer::current` into an Io error, and a once-failing one lets the next
+/// call succeed.
+#[test]
+fn an_injected_read_failure_reaches_the_caller_as_an_io_error() {
+    let world = World::new("errors-read-placer");
+    let failing = FaultFs::new(world.root(), world.log.clone()).failing_read(1, false);
+    let placer = world.placer_on(&failing);
+    match placer.current("tierstore") {
+        Err(PlacedError::Io { path, .. }) => assert_eq!(
+            path,
+            PathBuf::from("/var/lib/hostkeeper/packages/tierstore/current")
+        ),
+        other => panic!("expected an Io error, got {other:?}"),
+    }
+    assert_eq!(
+        placer.current("tierstore").expect("the next read passes"),
+        None
+    );
+}
+
+/// Catches a `Placer::lock` that returns no token or lets two holders in: the first lock is a
+/// `PlacedLock`, a second while it is held is `Locked` naming the lock file, and once the first
+/// is dropped the lock can be taken again.
+#[test]
+fn placer_lock_returns_the_token_and_a_second_lock_is_refused() {
+    let world = World::new("errors-lock");
+    let placer = world.placer();
+    let lock: PlacedLock = placer.lock().expect("the lock is free");
+    assert!(world.host("/var/lib/hostkeeper/placed.lock").is_file());
+    match placer.lock() {
+        Err(error @ PlacedError::Locked { .. }) => {
+            match &error {
+                PlacedError::Locked { path, .. } => {
+                    assert_eq!(path, Path::new("/var/lib/hostkeeper/placed.lock"));
+                }
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(error.class(), Class::Environment);
+            assert_eq!(error.reason(), "link_failed");
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("another daemon holds /var/lib/hostkeeper/placed.lock, or its lock cannot be taken: "),
+                "{error}"
+            );
+            assert!(error.source().is_some());
+        }
+        other => panic!("expected Locked, got {other:?}"),
+    }
+    drop(lock);
+    let again = placer.lock().expect("free again");
+    drop(again);
 }

@@ -22,8 +22,8 @@ thiserror.workspace = true
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # `mknodat`, to make the named pipe the tests use as a file that is neither a file, a directory
-# nor a link.
-rustix = { workspace = true, features = ["fs"] }
+# nor a link; `umask`, for the test of the mode of the directories `create_dirs` makes.
+rustix = { workspace = true, features = ["fs", "process"] }
 
 [lints]
 workspace = true

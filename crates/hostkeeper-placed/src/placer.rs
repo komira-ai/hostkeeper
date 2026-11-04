@@ -1,12 +1,13 @@
 //! The write-ahead protocol of design section 4.7, "Placed paths", one function per step so that
 //! a caller (a hooked update, a force) sequences them around the switch of `current`:
 //!
-//! 1. [`Placer::begin`] writes `placed.json` with the target's paths `pending`, each with the
-//!    owning service and version, after the [`check`] of the claims;
-//! 2. [`Placer::link`] makes each link under a temporary name in its directory and renames it
-//!    into place;
+//! 1. [`Placer::begin`] checks the command lines of the units it is given ([`crate::lint`]) and
+//!    the claims ([`check`]), then writes `placed.json` with the target's paths `pending`, each
+//!    with the owning service and version, and a `daemon-reload` owed;
+//! 2. [`Placer::link`] makes each missing link in one step that fails if anything is there, and
+//!    repoints a recorded link under a temporary name renamed over it;
 //! 3. [`Placer::switch_current`] sets `previous` first, `current` second;
-//! 4. [`Placer::reload`] runs `daemon-reload`;
+//! 4. [`Placer::reload`] runs `daemon-reload` and then clears the reload owed;
 //! 5. [`Placer::commit`] marks the paths `placed`.
 //!
 //! Every placed link points into `<packages>/<service>/current/`, never into a version directory,
@@ -15,7 +16,10 @@
 //!
 //! `placed.json` is read and written, and `daemon-reload` run, under a short lock of its own
 //! (`<state dir>/placed.lock`, design section 8.7), taken by each call for its duration; the
-//! caller holds the service lock around the whole sequence.
+//! caller holds the service lock around the whole sequence. Temporary names are
+//! `.hk~<owner>~tmp`, `<owner>` being the service (or `placed.json`): `~` is outside the path
+//! grammar, so no placed path has such a name, and the name stays short whatever the length of
+//! the link's own name.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -23,24 +27,25 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use hostkeeper_config::manifest::Manifest;
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::names::{ServiceName, Version, is_version};
 
 use crate::check::{check, occupant};
 use crate::claim::Claims;
 use crate::error::{Owner, PlacedError, io_at};
 use crate::fs::Fs;
+use crate::lint::{check_unit_text, read_unit};
 use crate::roots::Roots;
-use crate::store::{Entry, PathState, PlacedRecord, Store};
+use crate::store::{Entry, PathKind, PathState, PlacedRecord, Store};
 use crate::unit_control::UnitControl;
 
 /// The prefix of every temporary name this crate writes.
-pub const TEMPORARY_PREFIX: &str = ".hk-";
+pub const TEMPORARY_PREFIX: &str = ".hk~";
 /// The suffix of every temporary name this crate writes.
-pub const TEMPORARY_SUFFIX: &str = ".tmp";
+pub const TEMPORARY_SUFFIX: &str = "~tmp";
 
-/// The temporary name a link or file named `name` is made under, in its own directory.
-pub fn temporary_name(name: &str) -> String {
-    format!("{TEMPORARY_PREFIX}{name}{TEMPORARY_SUFFIX}")
+/// The temporary name the links of `owner` are made under, in the directory of each.
+pub fn temporary_name(owner: &str) -> String {
+    format!("{TEMPORARY_PREFIX}{owner}{TEMPORARY_SUFFIX}")
 }
 
 /// Whether `name` is a temporary name this crate writes.
@@ -48,16 +53,23 @@ pub fn is_temporary(name: &str) -> bool {
     name.starts_with(TEMPORARY_PREFIX) & name.ends_with(TEMPORARY_SUFFIX)
 }
 
-/// Points the link `<dir>/<name>` at `target`: a link made under the temporary name, renamed
-/// over the old one, and an `fsync` of `dir`. A temporary link a crash left is replaced. A crash
-/// leaves either link whole.
+/// The lock of `placed.json`, held until it is dropped. [`Store::save`] asks for one.
+#[derive(Debug)]
+pub struct PlacedLock {
+    _file: File,
+}
+
+/// Points the link `<dir>/<name>` at `target`: a link made under the temporary name of `owner`,
+/// renamed over the old one, and an `fsync` of `dir`. A temporary link a crash left is replaced.
+/// A crash leaves either link whole.
 pub(crate) fn set_link(
     fs: &dyn Fs,
     dir: &Path,
     name: &str,
     target: &Path,
+    owner: &str,
 ) -> Result<(), PlacedError> {
-    let tmp = dir.join(temporary_name(name));
+    let tmp = dir.join(temporary_name(owner));
     if fs.kind(&tmp).map_err(io_at("inspect", &tmp))?.is_some() {
         fs.remove_file(&tmp).map_err(io_at("remove", &tmp))?;
     }
@@ -67,9 +79,8 @@ pub(crate) fn set_link(
     fs.sync_dir(dir).map_err(io_at("fsync", dir))
 }
 
-/// The last component of `path`: the version a `current` or `previous` link's target names,
-/// or the name of a placed link.
-fn file_name_of(path: &Path) -> String {
+/// The last component of `path`: the name of a placed link.
+pub(crate) fn file_name_of(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
@@ -111,8 +122,10 @@ impl<'a> Placer<'a> {
         Store::new(self.fs, self.roots.state_dir())
     }
 
-    /// Takes the lock of `placed.json`, held until the file is dropped.
-    pub(crate) fn lock(&self) -> Result<File, PlacedError> {
+    /// Takes the lock of `placed.json` (`<state dir>/placed.lock`, opened without following a
+    /// link), or [`PlacedError::Locked`] when another holder has it. A caller that changes the
+    /// record itself (the tombstone of uninstall) holds it from its read to its write.
+    pub fn lock(&self) -> Result<PlacedLock, PlacedError> {
         let path = self.roots.lock_file();
         let file = OpenOptions::new()
             .read(true)
@@ -127,19 +140,25 @@ impl<'a> Placer<'a> {
             path,
             source: io::Error::from(e),
         })?;
-        Ok(file)
+        Ok(PlacedLock { _file: file })
     }
 
-    /// The version the link `link` names, `None` when there is no link. Anything else at `link`
-    /// is a [`PlacedError::PathConflict`].
+    /// The version the link `link` names, `None` when there is no link. The link must name a
+    /// version directory beside it: its target one component that is a version. Any other
+    /// target (another service's directory, an absolute path), or anything but a link, is a
+    /// [`PlacedError::PathConflict`].
     fn read_version(&self, link: &Path) -> Result<Option<String>, PlacedError> {
+        let conflict = |owner: Owner| PlacedError::PathConflict {
+            path: link.to_path_buf(),
+            owner,
+        };
         match occupant(self.fs, link)? {
             None => Ok(None),
-            Some(Owner::Link(target)) => Ok(Some(file_name_of(&target))),
-            Some(owner) => Err(PlacedError::PathConflict {
-                path: link.to_path_buf(),
-                owner,
-            }),
+            Some(Owner::Link(target)) => match target.to_str().filter(|text| is_version(text)) {
+                Some(version) => Ok(Some(version.to_owned())),
+                None => Err(conflict(Owner::Link(target))),
+            },
+            Some(owner) => Err(conflict(owner)),
         }
     }
 
@@ -158,14 +177,40 @@ impl<'a> Placer<'a> {
         check(claims, &self.store().load()?, self.fs)
     }
 
-    /// Step 1: under the lock, refuses a tombstoned service ([`PlacedError::Tombstoned`]) and
-    /// the claims [`check`] refuses, then records every path of `claims` `pending` for its
-    /// service and version. A path already recorded with the same link is left as it is, and a
-    /// record that would not change is not written.
+    /// The claims of `manifest` ([`Claims::of`]), with the command lines of its unit files
+    /// checked: what a caller links with [`Placer::begin`].
+    pub fn claims(&self, manifest: &Manifest) -> Result<Claims, PlacedError> {
+        let claims = Claims::of(&self.roots, manifest)?;
+        self.lint_units(&claims)?;
+        Ok(claims)
+    }
+
+    /// Checks the command lines of every unit `claims` places, read from its version directory
+    /// ([`crate::lint::check_unit_text`]).
+    fn lint_units(&self, claims: &Claims) -> Result<(), PlacedError> {
+        let service = claims.service().as_str();
+        let packages = self.roots.packages();
+        let units = packages
+            .version(service, claims.version().as_str())
+            .join("units");
+        for claim in claims.iter().filter(|claim| claim.kind == PathKind::Unit) {
+            let file = file_name_of(&claim.path);
+            let text = read_unit(self.fs, &units, &file)?;
+            check_unit_text(packages.dir(), service, &file, &text)?;
+        }
+        Ok(())
+    }
+
+    /// Step 1: under the lock, refuses a tombstoned service ([`PlacedError::Tombstoned`]), a unit
+    /// whose command line names a package file other than through `current`
+    /// ([`crate::LintError`]) and the claims [`check`] refuses, then records every path of
+    /// `claims` `pending` for its service and version, with a `daemon-reload` owed. A path
+    /// already recorded with the same link is left as it is, and a record that would not change
+    /// is not written.
     pub fn begin(&self, claims: &Claims) -> Result<Linking, PlacedError> {
-        let _lock = self.lock()?;
+        let lock = self.lock()?;
         let mut record = self.store().load()?;
-        self.begin_in(&mut record, claims)?;
+        self.begin_in(&mut record, claims, &lock)?;
         Ok(Linking {
             claims: claims.clone(),
         })
@@ -176,6 +221,7 @@ impl<'a> Placer<'a> {
         &self,
         record: &mut PlacedRecord,
         claims: &Claims,
+        lock: &PlacedLock,
     ) -> Result<bool, PlacedError> {
         let service = claims.service().as_str();
         if record.uninstalling.contains_key(service) {
@@ -183,6 +229,7 @@ impl<'a> Placer<'a> {
                 service: service.to_owned(),
             });
         }
+        self.lint_units(claims)?;
         check(claims, record, self.fs)?;
         let version = claims.version().as_str();
         let mut changed = false;
@@ -207,38 +254,57 @@ impl<'a> Placer<'a> {
             }
         }
         if changed {
-            self.store().save(record)?;
+            record.reload_pending = true;
+            self.store().save(record, lock)?;
         }
         Ok(changed)
     }
 
     /// Points the link at `path` at `target`, making its missing directories (mode 0755); a
-    /// link already right is left. Anything but a link at `path` is a
-    /// [`PlacedError::PathConflict`] and is not touched. `true` when the link was written.
-    pub(crate) fn ensure_link(&self, path: &Path, target: &Path) -> Result<bool, PlacedError> {
-        match occupant(self.fs, path)? {
-            Some(Owner::Link(now)) if now.as_path() == target => return Ok(false),
-            None | Some(Owner::Link(_)) => {}
-            Some(owner) => {
-                return Err(PlacedError::PathConflict {
-                    path: path.to_path_buf(),
-                    owner,
-                });
-            }
-        }
+    /// link already right is left. A missing link is made at `path` itself, in one step that
+    /// fails if anything got there first, which is then a [`PlacedError::PathConflict`] and is
+    /// not touched. A link to elsewhere, which the caller's check found recorded for this
+    /// service, is repointed by a rename over it from `owner`'s temporary name. Anything but a
+    /// link at `path` is a conflict and is not touched. `true` when the link was written.
+    pub(crate) fn ensure_link(
+        &self,
+        path: &Path,
+        target: &Path,
+        owner: &str,
+    ) -> Result<bool, PlacedError> {
+        let conflict = |owner: Owner| PlacedError::PathConflict {
+            path: path.to_path_buf(),
+            owner,
+        };
         let dir = path.parent().unwrap_or(Path::new("/"));
-        let name = file_name_of(path);
-        self.fs.create_dirs(dir).map_err(io_at("create", dir))?;
-        set_link(self.fs, dir, &name, target)?;
-        Ok(true)
+        match occupant(self.fs, path)? {
+            Some(Owner::Link(now)) if now.as_path() == target => Ok(false),
+            None => {
+                self.fs.create_dirs(dir).map_err(io_at("create", dir))?;
+                match self.fs.symlink(target, path) {
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                        Err(conflict(occupant(self.fs, path)?.unwrap_or(Owner::Other)))
+                    }
+                    other => other.map_err(io_at("link", path)),
+                }?;
+                self.fs.sync_dir(dir).map_err(io_at("fsync", dir))?;
+                Ok(true)
+            }
+            Some(Owner::Link(_)) => {
+                set_link(self.fs, dir, &file_name_of(path), target, owner)?;
+                Ok(true)
+            }
+            Some(other) => Err(conflict(other)),
+        }
     }
 
     /// Step 2: makes every link of `linking`, each pointing into `current`. Idempotent: a link
     /// already right is left. `true` when a link was written.
     pub fn link(&self, linking: &Linking) -> Result<bool, PlacedError> {
+        let owner = linking.claims.service().as_str();
         let mut changed = false;
         for claim in linking.claims.iter() {
-            changed |= self.ensure_link(&claim.path, &claim.link_target)?;
+            changed |= self.ensure_link(&claim.path, &claim.link_target, owner)?;
         }
         Ok(changed)
     }
@@ -258,24 +324,36 @@ impl<'a> Placer<'a> {
         if let Some(from) = &current
             && self.previous(name)?.as_ref() != Some(from)
         {
-            set_link(self.fs, &dir, "previous", Path::new(from))?;
+            set_link(self.fs, &dir, "previous", Path::new(from), name)?;
         }
-        set_link(self.fs, &dir, "current", Path::new(to.as_str()))?;
+        set_link(self.fs, &dir, "current", Path::new(to.as_str()), name)?;
         Ok(true)
     }
 
-    /// Step 4: `daemon-reload`, under the lock.
+    /// Step 4: `daemon-reload`, under the lock; once it succeeded, the reload owed in the record
+    /// is cleared. A failed reload leaves it owed, for the next reload or the next start.
     pub fn reload(&self) -> Result<(), PlacedError> {
-        let _lock = self.lock()?;
-        Ok(self.units.daemon_reload()?)
+        let lock = self.lock()?;
+        self.units.daemon_reload()?;
+        self.reloaded(&lock)
+    }
+
+    /// Clears the reload owed in the record on disk, if it is set.
+    pub(crate) fn reloaded(&self, lock: &PlacedLock) -> Result<(), PlacedError> {
+        let mut record = self.store().load()?;
+        if record.reload_pending {
+            record.reload_pending = false;
+            self.store().save(&record, lock)?;
+        }
+        Ok(())
     }
 
     /// Step 5: marks the paths of `linking` `placed`, under the lock. `true` when the record was
     /// written.
     pub fn commit(&self, linking: Linking) -> Result<bool, PlacedError> {
-        let _lock = self.lock()?;
+        let lock = self.lock()?;
         let mut record = self.store().load()?;
-        self.commit_in(&mut record, &linking.claims)
+        self.commit_in(&mut record, &linking.claims, &lock)
     }
 
     /// [`Placer::commit`] on a record in hand, under the lock.
@@ -283,6 +361,7 @@ impl<'a> Placer<'a> {
         &self,
         record: &mut PlacedRecord,
         claims: &Claims,
+        lock: &PlacedLock,
     ) -> Result<bool, PlacedError> {
         let service = claims.service().as_str();
         let version = claims.version().as_str();
@@ -299,15 +378,15 @@ impl<'a> Placer<'a> {
             }
         }
         if changed {
-            self.store().save(record)?;
+            self.store().save(record, lock)?;
         }
         Ok(changed)
     }
 
-    /// Every path the version of `manifest` places: its units and files ([`Claims::of`]) and
-    /// the `WantedBy=` links of its `run` units.
+    /// Every path the version of `manifest` places: its units and files ([`Placer::claims`],
+    /// command lines checked) and the `WantedBy=` links of its `run` units.
     pub fn desired(&self, manifest: &Manifest) -> Result<Claims, PlacedError> {
-        let mut claims = Claims::of(&self.roots, manifest)?;
+        let mut claims = self.claims(manifest)?;
         claims.extend(self.wants_claims(manifest)?)?;
         Ok(claims)
     }
@@ -316,8 +395,8 @@ impl<'a> Placer<'a> {
     /// to (before cutover, and back before rollback): [`Placer::begin`], [`Placer::link`] and
     /// [`Placer::commit`] for every path that version places, its `run` units' `WantedBy=` links
     /// included, then the removal of the service's paths that version does not list
-    /// ([`Placer::unlink_unlisted`]), then one `daemon-reload` when anything changed. `true`
-    /// when anything changed.
+    /// ([`Placer::unlink_unlisted`]), then one `daemon-reload` when one is owed. `true` when
+    /// anything changed.
     pub fn relink_to(&self, manifest: &Manifest) -> Result<bool, PlacedError> {
         let desired = self.desired(manifest)?;
         let linking = self.begin(&desired)?;
@@ -325,10 +404,13 @@ impl<'a> Placer<'a> {
         self.commit(linking)?;
         let keep = desired.paths();
         let removal = self.prune(manifest.name.as_str(), true, |_| keep)?;
-        let changed = linked | removal.reloaded;
-        if linked & !removal.reloaded {
+        let owed = {
+            let _lock = self.lock()?;
+            self.store().load()?.reload_pending
+        };
+        if owed {
             self.reload()?;
         }
-        Ok(changed)
+        Ok(linked | removal.reloaded | owed)
     }
 }

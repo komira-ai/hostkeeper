@@ -1,5 +1,5 @@
-//! Start-up reconciliation of placed paths (`Placer::reconcile`): a crash between any two writes
-//! of an update is finished or undone, a hand-made switch of `current` is followed, an occupied
+//! Start-up reconciliation of placed paths (`Placer::reconcile`; the crash sweeps are in
+//! `reconcile_crash.rs`): a hand-made switch of `current` is followed, an occupied
 //! pending path is reported and left alone, the temporary names are removed, `daemon-reload`
 //! runs once and only for a change, and a service whose version cannot be read is reported and
 //! left as it is.
@@ -12,9 +12,8 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::{Expected, Manifest};
-use hostkeeper_config::names::NameError;
 use hostkeeper_placed::placer::is_temporary;
-use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log, UnitCall};
+use hostkeeper_placed::testing::{FakeUnitControl, UnitCall};
 use hostkeeper_placed::{
     BootView, Conflict, Entry, Owner, PathKind, PathState, PlacedError, Placer, ReconcileReport,
     Side, Store, SwitchIntent, Tombstone, Unresolved,
@@ -90,8 +89,9 @@ fn put(world: &World, path: &str, owner: &str, state: PathState) {
 }
 
 fn save(world: &World, record: &hostkeeper_placed::PlacedRecord) {
+    let lock = world.placer().lock().expect("take the lock");
     Store::new(&world.fs, world.roots.state_dir())
-        .save(record)
+        .save(record, &lock)
         .expect("save placed.json");
 }
 
@@ -131,6 +131,7 @@ fn settled(world: &World, chosen: &str) {
             .all(|entry| entry.state == PathState::Placed),
         "a pending entry remains: {record:?}"
     );
+    assert!(!record.reload_pending, "a reload is still owed");
     for link in world.placed_links() {
         assert!(record.paths.contains_key(&link), "{link:?} is not listed");
     }
@@ -140,17 +141,6 @@ fn settled(world: &World, chosen: &str) {
     }
 }
 
-/// The steps of a hooked update to `manifest`, up to the first error.
-fn update(placer: &Placer<'_>, manifest: &Manifest) -> Result<(), PlacedError> {
-    let claims = placer.desired(manifest)?;
-    let linking = placer.begin(&claims)?;
-    placer.link(&linking)?;
-    placer.switch_current(&manifest.name, &manifest.version)?;
-    placer.reload()?;
-    placer.commit(linking)?;
-    Ok(())
-}
-
 /// 1.4.2 and 1.5.0 installed, then `current` pointed back at 1.4.2 by hand.
 fn hand_switched(name: &str) -> World {
     let world = World::new(name);
@@ -158,44 +148,6 @@ fn hand_switched(name: &str) -> World {
     install(&world, "tierstore", "1.5.0", &new_spec());
     world.set_link("tierstore", "current", "1.4.2");
     world
-}
-
-/// Catches a write that is not ahead of its link, a link that is not whole, or a start-up
-/// reconciliation that leaves a pending entry, an unlisted link or a temporary name, or does not
-/// settle to the one version the side names, whichever write of the update the crash fell after.
-#[test]
-fn a_crash_between_two_links_is_finished_or_undone_at_start() {
-    for side in [Side::Forward, Side::Back] {
-        let chosen = match side {
-            Side::Forward => "1.5.0",
-            Side::Back => "1.4.2",
-        };
-        let mut completed = false;
-        for n in 1..200_u64 {
-            let world = World::new(&format!("crash-{side:?}-{n}"));
-            install(&world, "tierstore", "1.4.2", &old_spec());
-            let target = world.package("tierstore", "1.5.0", &new_spec());
-            let faulty = FaultFs::failing_at(world.root(), n, Log::new());
-            let crashed = update(&world.placer_on(&faulty), &target);
-            if crashed.is_ok() {
-                assert!(faulty.writes() < n, "the update completed past write {n}");
-                completed = true;
-                break;
-            }
-            let boot = view(vec![intent(Some("1.4.2"), "1.5.0", side)]);
-            let placer = world.placer();
-            placer
-                .reconcile(&boot)
-                .unwrap_or_else(|e| panic!("{side:?} after write {n}: {e}"));
-            settled(&world, chosen);
-            world.log.clear();
-            let again = placer.reconcile(&boot).expect("a second reconcile");
-            assert!(!again.changed(), "{side:?} after write {n}: {again:?}");
-            assert!(!again.reloaded);
-            assert!(world.writes().is_empty(), "{:?}", world.writes());
-        }
-        assert!(completed, "the update never completed for {side:?}");
-    }
 }
 
 /// Catches a reconciliation that follows the record or the old version instead of `current`: with
@@ -368,23 +320,28 @@ fn reconcile_reports_a_desired_path_held_by_something_unlisted() {
 }
 
 /// Catches a stale temporary link or file surviving a start, or a name that merely resembles one
-/// being deleted: the `.hk-*.tmp` names in the state, unit, files and package directories go and
-/// are listed; `keep.tmp` and `.hk-keep` stay.
+/// being deleted: the `.hk~<owner>~tmp` names in the state, unit, files and package directories go
+/// and are listed; `keep.tmp`, `.hk~keep`, `x~tmp` and the old `.hk-*.tmp` spelling stay.
 #[test]
 fn reconcile_removes_stale_temporary_link_names() {
     let world = World::new("temporaries");
     install(&world, "tierstore", "1.4.2", &old_spec());
     let stale = [
-        "/etc/systemd/system/.hk-x.tmp",
-        "/etc/tierstore/.hk-y.tmp",
-        "/var/lib/hostkeeper/packages/tierstore/.hk-current.tmp",
-        "/var/lib/hostkeeper/.hk-placed.json.tmp",
+        "/etc/systemd/system/.hk~x~tmp",
+        "/etc/tierstore/.hk~y~tmp",
+        "/var/lib/hostkeeper/packages/tierstore/.hk~tierstore~tmp",
+        "/var/lib/hostkeeper/.hk~placed.json~tmp",
     ];
     symlink("/nowhere", world.host(stale[0])).expect("make a link");
     fs::write(world.host(stale[1]), "half").expect("write a file");
     symlink("1.5.0", world.host(stale[2])).expect("make a link");
     fs::write(world.host(stale[3]), "{").expect("write a file");
-    let keep = ["/etc/tierstore/keep.tmp", "/etc/tierstore/.hk-keep"];
+    let keep = [
+        "/etc/tierstore/keep.tmp",
+        "/etc/tierstore/.hk~keep",
+        "/etc/tierstore/x~tmp",
+        "/etc/tierstore/.hk-old.tmp",
+    ];
     for name in keep {
         fs::write(world.host(name), "mine").expect("write a file");
     }
@@ -438,13 +395,13 @@ fn reconcile_fails_when_a_directory_cannot_be_listed() {
 #[test]
 fn reconcile_fails_when_a_temporary_name_cannot_be_removed() {
     let world = World::new("remove-error");
-    fs::write(world.host("/etc/systemd/system/.hk-x.tmp"), "half").expect("write a file");
+    fs::write(world.host("/etc/systemd/system/.hk~x~tmp"), "half").expect("write a file");
     let faulty = world.failing_at(1);
     match world.placer_on(&faulty).reconcile(&view(vec![])) {
         Err(PlacedError::Io {
             op: "remove", path, ..
         }) => {
-            assert_eq!(path, Path::new("/etc/systemd/system/.hk-x.tmp"));
+            assert_eq!(path, Path::new("/etc/systemd/system/.hk~x~tmp"));
         }
         other => panic!("expected a removal failure, got {other:?}"),
     }
@@ -487,28 +444,6 @@ fn reconcile_fails_when_the_service_manager_fails() {
     let err = placer.reconcile(&view(vec![])).expect_err("stop fails");
     assert!(matches!(err, PlacedError::Units(_)));
     assert!(world.snapshot().contains_key(Path::new(C)));
-}
-
-/// Catches a reconciliation that is not restartable: whichever write fails, the start fails with
-/// the I/O error, and a second start over a healthy filesystem settles the host.
-#[test]
-fn reconcile_stops_at_the_first_failed_write_and_a_rerun_finishes() {
-    let mut completed = false;
-    for n in 1..200_u64 {
-        let world = hand_switched(&format!("sweep-{n}"));
-        let faulty = world.failing_at(n);
-        match world.placer_on(&faulty).reconcile(&view(vec![])) {
-            Ok(_) => {
-                completed = true;
-                settled(&world, "1.4.2");
-                break;
-            }
-            Err(err) => assert!(matches!(err, PlacedError::Io { .. }), "write {n}: {err}"),
-        }
-        world.placer().reconcile(&view(vec![])).expect("rerun");
-        settled(&world, "1.4.2");
-    }
-    assert!(completed, "the reconciliation never completed");
 }
 
 /// Catches a forward intent that does not finish the switch of a first install: with no record
@@ -571,8 +506,9 @@ fn an_intent_already_carried_out_changes_nothing() {
     assert!(world.writes().is_empty() && world.unit_calls().is_empty());
 }
 
-/// Catches a first install that is undone leaving its pending links or entries: the pending links
-/// and entries go, the run instance is stopped, and no `current` is switched.
+/// Catches a first install that is undone leaving its pending links, entries or `current`: the
+/// links and entries go, the run instance is stopped, `current` is removed and reported, the
+/// reload that follows is cleared, and a second start writes nothing.
 #[test]
 fn a_back_intent_with_no_version_removes_the_pending_links_and_entries() {
     let world = World::new("back-none");
@@ -586,15 +522,20 @@ fn a_back_intent_with_no_version_removes_the_pending_links_and_entries() {
         .expect("switch");
     assert!(!world.placed_links().is_empty());
     world.log.clear();
-    let report = placer
-        .reconcile(&view(vec![intent(None, "1.5.0", Side::Back)]))
-        .expect("reconcile");
+    let boot = view(vec![intent(None, "1.5.0", Side::Back)]);
+    let report = placer.reconcile(&boot).expect("reconcile");
     let removed: BTreeSet<PathBuf> = report.removed.iter().cloned().collect();
     assert_eq!(removed, claims.paths());
     assert_eq!(report.stopped, [RUN_UNIT]);
     assert!(report.switched.is_empty() && report.reloaded);
-    assert!(world.record().paths.is_empty());
+    assert_eq!(report.current_removed, ["tierstore"]);
+    assert_eq!(world.read_link(format!("{PKG}/current")), None);
+    assert!(world.record().paths.is_empty() && !world.record().reload_pending);
     assert!(world.placed_links().is_empty());
+    world.log.clear();
+    let again = placer.reconcile(&boot).expect("a second reconcile");
+    assert_eq!(again, ReconcileReport::default());
+    assert!(world.writes().is_empty() && world.unit_calls().is_empty());
 }
 
 /// Catches a path a hand or another program replaced being deleted: a recorded path that the
@@ -608,9 +549,13 @@ fn reconcile_leaves_a_foreign_file_at_a_dropped_path_and_forgets_it() {
     world.set_link("tierstore", "current", "1.5.0");
     fs::remove_file(world.host(B)).expect("remove a link");
     fs::write(world.host(B), "mine").expect("write a file");
+    world.log.clear();
     let report = world.placer().reconcile(&view(vec![])).expect("reconcile");
     assert_eq!(report.left_alone, [PathBuf::from(B)]);
-    assert!(report.removed.is_empty() && !report.changed() && !report.reloaded);
+    assert!(report.removed.is_empty() && !report.changed());
+    // The record moved to 1.5.0, so the reload begin owed runs, once, and is cleared.
+    assert!(report.reloaded && !world.record().reload_pending);
+    assert_eq!(world.unit_calls(), [UnitCall::DaemonReload]);
     assert_eq!(fs::read(world.host(B)).expect("read"), b"mine");
     assert_eq!(
         world
@@ -696,30 +641,29 @@ fn a_current_whose_manifest_does_not_load_is_reported_unresolved() {
     assert!(world.writes().is_empty());
 }
 
-/// Catches a service or version name that is not one reaching the loader: each is reported with
-/// the name error.
+/// Catches a `current` that is not a version name being followed, and a record naming a service
+/// that is not one being used: the first is reported with the link named, the second fails the
+/// start as a corrupt record.
 #[test]
 fn a_service_or_version_that_is_not_a_name_is_reported_unresolved() {
     let world = World::new("bad-names");
     install(&world, "tierstore", "1.4.2", &old_spec());
     world.set_link("tierstore", "current", "bad version");
-    put(&world, "/etc/badname/x.conf", "bad name", PathState::Placed);
-    fs::create_dir_all(world.host("/var/lib/hostkeeper/packages/bad name")).expect("create");
-    world.set_link("bad name", "current", "1.0.0");
     let report = world.placer().reconcile(&view(vec![])).expect("reconcile");
+    let held = Owner::Link(PathBuf::from("bad version"));
     assert_eq!(
         report.unresolved,
-        [
-            Unresolved {
-                service: "bad name".to_owned(),
-                why: NameError::Service("bad name".to_owned()).to_string(),
-            },
-            Unresolved {
-                service: "tierstore".to_owned(),
-                why: NameError::Version("bad version".to_owned()).to_string(),
-            },
-        ]
+        [Unresolved {
+            service: "tierstore".to_owned(),
+            why: format!("{PKG}/current is held by {held}"),
+        }]
     );
+
+    put(&world, "/etc/badname/x.conf", "bad name", PathState::Placed);
+    match world.placer().reconcile(&view(vec![])) {
+        Err(PlacedError::Corrupt { .. }) => {}
+        other => panic!("expected a corrupt record, got {other:?}"),
+    }
 }
 
 /// Catches a version whose paths cannot be derived (a run unit with no `WantedBy=`) being linked

@@ -77,12 +77,16 @@ impl Log {
 
 /// [`RealFs`] under `root`, recording each write that happened in its [`Log`]. Built with
 /// [`FaultFs::failing_at`], the n-th write (counted from 1) and every later one fail with an
-/// error and change nothing, as if the process had died before it. Reads always pass.
+/// error and change nothing, as if the process had died before it. With
+/// [`FaultFs::failing_read`], a read fails once or from then on.
 pub struct FaultFs {
     inner: RealFs,
     log: Log,
     fail_at: Option<u64>,
     writes: Mutex<u64>,
+    /// The read that fails, and whether every later read fails too.
+    read_fault: Option<(u64, bool)>,
+    reads: Mutex<u64>,
 }
 
 impl FaultFs {
@@ -93,7 +97,39 @@ impl FaultFs {
             log,
             fail_at: None,
             writes: Mutex::new(0),
+            read_fault: None,
+            reads: Mutex::new(0),
         }
+    }
+
+    /// The same filesystem, whose `n`-th read (`read`, `kind`, `read_link` or `list`, counted
+    /// from 1) fails; with `persistent`, every later read fails too, else only that one.
+    pub fn failing_read(self, n: u64, persistent: bool) -> FaultFs {
+        FaultFs {
+            read_fault: Some((n, persistent)),
+            ..self
+        }
+    }
+
+    /// How many reads were attempted, failed ones included.
+    pub fn reads(&self) -> u64 {
+        *self.reads.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Counts a read, and runs it unless it is a failing one.
+    fn read_op<T>(&self, run: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let n = {
+            let mut reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
+            *reads += 1;
+            *reads
+        };
+        let fails = self
+            .read_fault
+            .is_some_and(|(at, persistent)| (n == at) | (persistent & (n > at)));
+        if fails {
+            return Err(io::Error::other(format!("injected failure of read {n}")));
+        }
+        run()
     }
 
     /// A filesystem under `root` whose `n`-th write and every later one fail.
@@ -131,19 +167,19 @@ impl Fs for FaultFs {
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        self.inner.read(path)
+        self.read_op(|| self.inner.read(path))
     }
 
     fn kind(&self, path: &Path) -> io::Result<Option<FileKind>> {
-        self.inner.kind(path)
+        self.read_op(|| self.inner.kind(path))
     }
 
     fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
-        self.inner.read_link(path)
+        self.read_op(|| self.inner.read_link(path))
     }
 
     fn list(&self, dir: &Path) -> io::Result<Vec<OsString>> {
-        self.inner.list(dir)
+        self.read_op(|| self.inner.list(dir))
     }
 
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
