@@ -50,8 +50,9 @@ fn the_last_line_is_found_across_ring_wraps() {
         ring.push(&chunk);
         all.extend_from_slice(&chunk);
     }
-    all.extend_from_slice(b"{\"reason\":\"done\"}\n");
-    ring.push(b"{\"reason\":\"done\"}\n");
+    // The last chunk ends inside a line; end it, then write the report.
+    all.extend_from_slice(b"\n{\"reason\":\"done\"}\n");
+    ring.push(b"\n{\"reason\":\"done\"}\n");
     assert_eq!(ring.bytes(), &all[all.len() - RING_BYTES..]);
     assert!(ring.cut());
     assert_eq!(ring.last_line().as_deref(), Some("{\"reason\":\"done\"}"));
