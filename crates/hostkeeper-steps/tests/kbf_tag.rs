@@ -51,6 +51,7 @@ fn expected(name: &str) -> Record {
         state: State::Pending,
         hook: HookSel::New,
         progress: Progress::default(),
+        order_try: None,
     };
     match name {
         "pending" => Record {
@@ -296,6 +297,7 @@ fn kbf_ci_record() -> Record {
             watching: None,
             reason: Some("remote_down".to_owned()),
         },
+        order_try: None,
     }
 }
 
