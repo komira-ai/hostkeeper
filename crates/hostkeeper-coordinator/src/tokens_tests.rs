@@ -314,6 +314,35 @@ fn a_tokens_file_that_cannot_be_read_again_leaves_the_tokens_in_use() {
     assert_eq!(name_of(&tokens, BOB), Some("bob".to_owned()));
 }
 
+/// Proves: two tokens with the same `sha256` are refused naming both, when the file is read at
+/// start and when it is read again; a refused reload keeps the tokens in use, so each secret
+/// still answers to the one name it had.
+///
+/// Catches: one secret answering to two names, so that the audit's `by` hangs on the order of
+/// the file and removing one name leaves its secret working under the other.
+#[test]
+fn two_tokens_with_one_sha256_are_refused_at_start_and_on_reload() {
+    let shared = format!(
+        "{}{}",
+        entry("alice", &digest(ALICE.as_bytes())),
+        entry("bob", &digest(ALICE.as_bytes()))
+    );
+    let why = refused("tokens-shared-start", shared.as_bytes());
+    assert_eq!(
+        why.to_string(),
+        "--tokens-file: tokens alice and bob have the same sha256"
+    );
+    assert!(matches!(why, TokensError::SharedDigest { .. }));
+
+    let dir = scratch("tokens-shared-reload");
+    let path = write(&dir, &[("alice", ALICE), ("bob", BOB)]);
+    let tokens = OperatorTokens::from_file(&path).expect("tokens");
+    put(&dir, shared.as_bytes(), 0o600);
+    assert_eq!(tokens.reload(), Reload::Rejected);
+    assert_eq!(name_of(&tokens, ALICE), Some("alice".to_owned()));
+    assert_eq!(name_of(&tokens, BOB), Some("bob".to_owned()));
+}
+
 /// Proves: one token from `--operator-token-file` is named `operator` and is never read again.
 ///
 /// Catches: the legacy flag giving a token another name than the one the audit has always

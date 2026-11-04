@@ -174,6 +174,44 @@ fn a_torn_last_line_is_skipped_and_the_next_line_starts_on_its_own() {
     );
 }
 
+/// Proves: an append that failed part-way while the store runs (a part of a line written, no
+/// newline) does not swallow the next line. The store has not reopened the file, so it cannot
+/// have learned of the cut from a read at open; the next line still starts after a newline of
+/// its own and is read back whole.
+///
+/// Catches: the store remembering only what it found at open, so that a line cut short by a
+/// failed write while it runs has the next line joined to it, and both are lost to the reader.
+#[test]
+fn an_append_cut_short_while_the_store_runs_does_not_swallow_the_next_line() {
+    let dir = scratch("audit-cut-short");
+    let (file, audit) = files(&dir);
+    let store = open(&file);
+    make(&store, "alice", "include");
+    let first = r#"{"seq":1,"at_unix":1800000000,"by":"alice","action":"include","detail":{}}"#;
+    // What a write that failed part-way leaves: the start of the line, no newline.
+    let cut = r#"{"seq":2,"at_unix":1800000000,"by":"bo"#;
+    {
+        use std::io::Write as _;
+        let mut appending = fs::OpenOptions::new()
+            .append(true)
+            .open(&audit)
+            .expect("the audit file");
+        appending
+            .write_all(cut.as_bytes())
+            .expect("a part of a line");
+    }
+
+    let entry = make(&store, "bob", "include");
+    assert_eq!(entry.seq, 2);
+    let second = r#"{"seq":2,"at_unix":1800000000,"by":"bob","action":"include","detail":{}}"#;
+    assert_eq!(
+        fs::read_to_string(&audit).expect("read"),
+        format!("{first}\n{cut}\n{second}\n")
+    );
+    assert_eq!(numbers(&audit), [1, 2]);
+    assert_eq!(audit_file::read(&audit).expect("read").skipped, 1);
+}
+
 /// Proves: a change is numbered one past the larger of the ring's last and the audit file's
 /// last, so moving the ops file aside does not repeat a number, nor does losing the audit file.
 ///

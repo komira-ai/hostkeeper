@@ -6,10 +6,12 @@
 //! ```toml
 //! [[token]]
 //! name = "ci-ops"     # 1 to 32 bytes of a-z, 0-9 and -; no two tokens share a name
-//! sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+//! sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"  # nor a hash
 //! ```
 //!
 //! `sha256` is the SHA-256 of the token as 64 lowercase hex digits, so the file holds no secret.
+//! No two tokens may have the same `sha256`: one secret is one name, so the audit names the same
+//! operator whatever the order of the file, and removing a name revokes its secret.
 //! Whoever can write the file can add a token, so it is read under the rule of a secret file: a
 //! regular file owned by the coordinator's user with mode `0600` or `0400`. `coordinator` and
 //! `ci` are not names a token may have: the audit uses them for the coordinator's own changes
@@ -119,6 +121,14 @@ pub enum TokensError {
     /// Two tokens have the same name.
     #[error("--tokens-file: the name {0} is used twice")]
     Repeated(String),
+    /// Two tokens have the same `sha256`: one secret would answer to two names.
+    #[error("--tokens-file: tokens {first} and {second} have the same sha256")]
+    SharedDigest {
+        /// The token that has it first in the file.
+        first: String,
+        /// The later token with the same hash.
+        second: String,
+    },
     /// The file names no token.
     #[error("--tokens-file: it names no token")]
     Empty,
@@ -168,6 +178,12 @@ fn parse(text: &str) -> Result<Vec<Token>, TokensError> {
         }
         if tokens.iter().any(|token| token.name == name) {
             return Err(TokensError::Repeated(name.0));
+        }
+        if let Some(earlier) = tokens.iter().find(|token| token.sha256 == raw.sha256) {
+            return Err(TokensError::SharedDigest {
+                first: earlier.name.0.clone(),
+                second: name.0,
+            });
         }
         tokens.push(Token {
             name,
@@ -235,8 +251,8 @@ impl OperatorTokens {
     ///
     /// # Errors
     /// [`TokensError`]: the file cannot be read, breaks the rule of a secret file, is over
-    /// 64 KiB, is not UTF-8 or TOML of the shape, names no token, repeats a name, or has a
-    /// name or a digest the rules above refuse.
+    /// 64 KiB, is not UTF-8 or TOML of the shape, names no token, repeats a name or a
+    /// `sha256`, or has a name or a digest the rules above refuse.
     pub fn from_file(path: &Path) -> Result<Self, TokensError> {
         read(path).map(|tokens| Self::of(tokens, Some(path.to_owned())))
     }

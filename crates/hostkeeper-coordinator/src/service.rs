@@ -265,6 +265,10 @@ pub struct Coordinator {
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
     features: Vec<String>,
+    /// Told when CI's set of a desired state is about to take the fleet's lock: a test's
+    /// progress event, so a race is made to happen rather than waited for.
+    #[cfg(test)]
+    set_at_lock: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 impl std::fmt::Debug for Coordinator {
@@ -298,6 +302,8 @@ impl Coordinator {
             services_dropped: AtomicU64::new(0),
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
+            #[cfg(test)]
+            set_at_lock: Mutex::new(None),
         }
     }
 
@@ -365,6 +371,27 @@ impl Coordinator {
             self.fleet.try_lock(),
             Err(std::sync::TryLockError::WouldBlock)
         )
+    }
+
+    /// Tells `reached` each time CI's set of a desired state is about to take the fleet's lock.
+    #[cfg(test)]
+    pub(crate) fn tell_at_set_lock(&self, reached: std::sync::mpsc::Sender<()>) {
+        *self
+            .set_at_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(reached);
+    }
+
+    /// Says that CI's set is at the fleet's lock, to the test that asked.
+    #[cfg(test)]
+    fn reached_set_lock(&self) {
+        if let Some(reached) = &*self
+            .set_at_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            let _ = reached.send(());
+        }
     }
 
     /// The ops store.
@@ -615,6 +642,8 @@ impl Coordinator {
         // plans a rollback and writes it under that lock, so it cannot write a rollback from
         // the state it read over the version CI stores meanwhile.
         {
+            #[cfg(test)]
+            self.reached_set_lock();
             let fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
             clear_bad(&self.ops, &fleet, &service, &desired.version)?;
             self.desired.set(&service, desired.clone())?;

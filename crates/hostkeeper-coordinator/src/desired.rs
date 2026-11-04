@@ -53,7 +53,8 @@ pub fn is_role_name(name: &str) -> bool {
     name.parse::<RoleName>().is_ok()
 }
 
-/// A number per role name: the limit on hosts updating at once, or the minimum that stays up.
+/// A number per role name: the limit on hosts updating at once, or the minimum that stays up, as
+/// the desired-state file carries them. They are kept and printed; no decision reads them.
 ///
 /// A role the map does not name has the default of the question asked ([`Self::max_updating_of`],
 /// [`Self::min_up_of`]). The defaults are for a role a service definition names: whether a role

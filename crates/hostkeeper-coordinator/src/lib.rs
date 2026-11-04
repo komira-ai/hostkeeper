@@ -1,5 +1,6 @@
-//! `hostkeeper-coordinator`: tells each host's updater which version to run, within per-role
-//! limits (`docs/design/host-updates.md`).
+//! `hostkeeper-coordinator`: tells each host's updater which version to run, one live update at a
+//! time across every service and role (`docs/design/host-updates.md`). The per-role limits and
+//! minimums a desired state carries are kept, written and printed, and no decision reads them.
 //!
 //! - [`identity`]: who is calling, from the client certificate's subjectAltNames alone;
 //! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically;

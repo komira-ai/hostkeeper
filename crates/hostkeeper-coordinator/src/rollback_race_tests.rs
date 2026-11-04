@@ -1,8 +1,9 @@
 //! A rollback and CI's set of the desired state do not overwrite each other.
 //!
 //! The race is made to happen, not waited for: the ops store's writer pauses the heartbeat that
-//! plans a rollback at its bad mark, with the plan made from the state it read, and CI sets
-//! another version before the heartbeat goes on. Every step waits on a message; nothing sleeps.
+//! plans a rollback at its bad mark, with the plan made from the state it read; CI's set of
+//! another version runs until it says it is at the fleet's lock, and only then does the heartbeat
+//! go on. Every step waits on a message; nothing sleeps.
 
 use std::sync::Mutex;
 use std::sync::mpsc;
@@ -17,11 +18,13 @@ struct Gate {
     go: Mutex<mpsc::Receiver<()>>,
 }
 
-/// Catches: a rollback written over a version CI stored while the rollback was being made. CI's
-/// set takes the fleet's lock the heartbeat plans and writes its rollback under, so the
-/// rollback, planned from 2.0, is written first and CI's 3.0 is written after it. Without
-/// that, CI's 3.0 could land between the bad mark and the rollback's write, and the rollback
-/// would put 1.0 over it, in memory and on disk.
+/// Proves: CI's set reaches the fleet's lock while the rollback is paused at its mark holding
+/// that lock, so the set waits for it; the rollback, planned from 2.0, is written first and
+/// CI's 3.0 after it, in memory and on disk.
+///
+/// Catches: a rollback written over a version CI stored while the rollback was being made. A
+/// set that took no lock would run on past the progress event and store 3.0 while the rollback
+/// is paused, and the rollback would then put 1.0 over it.
 #[tokio::test]
 async fn a_rollback_paused_at_its_mark_does_not_overwrite_the_version_ci_sets_meanwhile() {
     let (paused_tx, paused_rx) = mpsc::channel();
@@ -66,6 +69,8 @@ async fn a_rollback_paused_at_its_mark_does_not_overwrite_the_version_ci_sets_me
                 .expect("a heartbeat")
         });
         paused_rx.recv().expect("the rollback paused at its mark");
+        let (at_lock_tx, at_lock_rx) = mpsc::channel();
+        coordinator.tell_at_set_lock(at_lock_tx);
         let ci = scope.spawn(|| {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -73,6 +78,11 @@ async fn a_rollback_paused_at_its_mark_does_not_overwrite_the_version_ci_sets_me
                 .expect("a runtime")
                 .block_on(coordinator.set_desired(Some(&token), THREE.as_bytes()))
         });
+        at_lock_rx.recv().expect("CI's set is at the fleet's lock");
+        assert!(
+            coordinator.fleet_held(),
+            "the paused rollback holds the lock CI's set needs"
+        );
         go_tx.send(()).expect("let the rollback go");
         beat.join().expect("the heartbeat");
         ci.join().expect("the set").expect("CI's set");

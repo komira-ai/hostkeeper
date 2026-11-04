@@ -6,15 +6,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The update coordinator: tells each host's updater which version to run, within per-role limits."
+description = "The update coordinator: tells each host's updater which version to run, one live update at a time across the fleet."
 
 # The update coordinator (docs/design/host-updates.md): a deployable of its own that tells each
-# host's updater which version to run, within per-role limits. Updaters dial it over mutual
-# TLS; CI sets the desired state of a service with a GitHub Actions OIDC token
-# (hostkeeper-oidc); an operator reads the status with the operator token. The decision is a
-# pure function (`decide`) over the heartbeats the coordinator has seen. On disk it keeps three
-# files: the desired state of each service, the operations file (operator actions, version
-# marks, the audit ring) and the halts file beside it (halt reports, clear generations).
+# host's updater which version to run, one live update at a time across every service and role
+# (the limits and minimums a desired state carries are kept and printed; no decision reads
+# them). Updaters dial it over mutual TLS; CI sets the desired state of a service with a GitHub
+# Actions OIDC token (hostkeeper-oidc); an operator reads the status with a named token. The
+# decision is a pure function (`decide`) over the heartbeats the coordinator has seen. On disk it
+# keeps three files: the desired state of each service, the operations file (operator actions,
+# version marks, the audit ring, with every change also a line of the audit file beside it) and
+# the halts file beside it (halt reports, clear generations).
 # The services it manages are data: the rollout file named by `--rollout-file`. An operator is
 # one of the named tokens of `--tokens-file`.
 [[bin]]
