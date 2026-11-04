@@ -88,9 +88,9 @@ pub const FORMS: &[Form] = &[
 ];
 
 /// The names whose rename is refused. A name that other crates use too has a root: its rename
-/// is refused only when its source, followed through the file's imports, starts with that crate
-/// or with something of this crate (`crate`, `self`, `super`, a module the file declares), which
-/// may re-export it. The others are refused from any source.
+/// is refused when one of the sources it may stand for (every one the file's imports and globs
+/// allow) starts with that crate or with something of this crate (`crate`, `self`, `super`, a
+/// module the file declares), which may re-export it. The others are refused from any source.
 pub const RENAMED: &[(&str, Option<&str>)] = &[
     ("SystemTime", None),
     ("UNIX_EPOCH", None),
@@ -174,15 +174,17 @@ fn matches(form: &Form, chain: &Chain, code: &Code) -> bool {
     chain.paths.iter().any(|p| ends_with(p, form.tail)) && code.followed_by(chain, form.then)
 }
 
-/// Whether `rename` renames a wall-clock name (see [`RENAMED`]).
+/// Whether `rename` renames a wall-clock name (see [`RENAMED`]): whether one of the sources it
+/// may stand for ([`Code::sources`]) does, so an ambiguous source is refused.
 fn hides_a_read(rename: &Rename, code: &Code) -> bool {
-    let source = code.resolve(&rename.path);
-    let (Some(first), Some(last)) = (source.first(), source.last()) else {
-        return false;
-    };
-    RENAMED
-        .iter()
-        .any(|(name, root)| last == name && root.is_none_or(|r| first == r || code.is_local(first)))
+    code.sources(&rename.path).iter().any(|source| {
+        let (Some(first), Some(last)) = (source.first(), source.last()) else {
+            return false;
+        };
+        RENAMED.iter().any(|(name, root)| {
+            last == name && root.is_none_or(|r| first == r || code.is_local(first))
+        })
+    })
 }
 
 /// Every wall-clock read and wall-clock rename in the source `text` of the file at `path`, by

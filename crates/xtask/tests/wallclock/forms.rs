@@ -207,8 +207,9 @@ fn each_wall_clock_form_is_refused() {
 /// Catches: a wall-clock name renamed by `use .. as ..` or `type .. = ..;` hiding the reads made
 /// through the new name (in the same scope, in another module, through a chain of renames or a
 /// re-export, under a raw or Unicode alias, in either order of the scopes; a source reached
-/// through an import, a crate alias, `crate::` or a module of the file), and a rename of a name
-/// that is not a wall clock, or of another crate's `Timestamp` or `time` (or `as _`), refused.
+/// through an import, a glob, a crate alias, `crate::` or a module of the file, also when another
+/// scope binds the same name elsewhere, in either order), and a rename of a name that is not a
+/// wall clock, or of another crate's `Timestamp` or `time` (or `as _`), refused.
 #[test]
 fn a_renamed_wall_clock_name_is_refused() {
     let st = st();
@@ -326,6 +327,25 @@ fn a_renamed_wall_clock_name_is_refused() {
             "use crate::time as t2;".to_owned(),
             1,
             "crate::time as t2".to_owned(),
+        ),
+        (
+            "use jiff::*;\ntype T = Timestamp;\nfn f() { T::now(); }".to_owned(),
+            2,
+            "type T = Timestamp".to_owned(),
+        ),
+        (
+            "use jiff::Timestamp;\ntype T = Timestamp;\nfn f() { T::now(); }\n\
+             mod other { use prost_types::Timestamp; }"
+                .to_owned(),
+            2,
+            "type T = Timestamp".to_owned(),
+        ),
+        (
+            "mod other { use prost_types::Timestamp; }\nuse jiff::Timestamp;\n\
+             type T = Timestamp;\nfn f() { T::now(); }"
+                .to_owned(),
+            3,
+            "type T = Timestamp".to_owned(),
         ),
     ];
     for (text, line, spelling) in &cases {
