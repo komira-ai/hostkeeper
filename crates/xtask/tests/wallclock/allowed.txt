@@ -1,0 +1,10 @@
+# The paths whose code may read the wall clock, from the repository root: a file, or a
+# directory ending in `/`. Nothing the updater decides reads the wall clock; decisions read
+# hostkeeper_steps::Clock (monotonic seconds and the boot id), so a host with a wrong clock keeps
+# its release. The wall clock is read only to check a validity window, for one of three purposes:
+#   TLS and certificate validity;
+#   the OIDC verifier;
+#   the enrollment nonce check.
+# Each entry has a `#` line directly above it saying which of these it serves and why. The test
+# no_decision_reads_the_wall_clock in crates/xtask/tests/wallclock reads this file; it refuses
+# an entry that matches no file or whose files read no wall clock.
