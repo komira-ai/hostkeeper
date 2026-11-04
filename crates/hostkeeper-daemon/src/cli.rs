@@ -2,10 +2,14 @@
 //! comes in as flags only, never from the environment (AGENTS.md S2); every default is a
 //! constant here.
 //!
+//! The one value read from the environment is the address of systemd's notify socket, a
+//! platform-set marker, and only `--notify-systemd` makes the daemon use it.
+//!
 //! Exit status: [`EXIT_FAILED`] when the daemon could not start or serve, `2` for a usage error
 //! (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not load, [`EXIT_LOCKED`]
 //! when another daemon holds the state directory.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -16,6 +20,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, SystemClock};
 
 use crate::executor::Ports;
+use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::packages::{PackageError, Packages, VersionDir};
 use crate::start::{self, Settings, StartError};
 use crate::verb::PackageDigest;
@@ -30,6 +35,8 @@ pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 pub const DEFAULT_PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
 /// The default of `--admin-socket`.
 pub const DEFAULT_ADMIN_SOCKET: &str = "/run/hostkeeper/admin.sock";
+/// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
+pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
 /// How often each service's dead-man looks at its running step on a host, in seconds.
 pub const DEADMAN_POLL_SECS: u64 = 1;
 
@@ -62,6 +69,10 @@ pub struct DaemonFlags {
     /// The root-only admin socket, made mode 0600 in a directory of mode 0700.
     #[arg(long, default_value = DEFAULT_ADMIN_SOCKET)]
     pub admin_socket: PathBuf,
+    /// Tell systemd the daemon is ready (`READY=1` on the notify socket systemd sets for a unit
+    /// of `Type=notify`) once its boot work is over.
+    #[arg(long)]
+    pub notify_systemd: bool,
 }
 
 impl DaemonFlags {
@@ -79,15 +90,44 @@ impl DaemonFlags {
 
 /// The entry point of the `hostkeeper` binary.
 pub fn main() -> ExitCode {
-    run(Cli::parse())
+    run_with(Cli::parse(), notify_socket())
 }
 
-/// Runs a parsed command line to its exit status.
+/// The address of the notify socket systemd set for the process, if any: a platform-set marker,
+/// not configuration (AGENTS.md S2). It is used only with `--notify-systemd`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "NOTIFY_SOCKET is the platform-set marker of a Type=notify unit, which AGENTS.md S2 allows; the flag --notify-systemd decides whether it is used"
+)]
+fn notify_socket() -> Option<OsString> {
+    std::env::var_os(NOTIFY_SOCKET)
+}
+
+/// Runs a parsed command line to its exit status, with no notify socket.
 pub fn run(cli: Cli) -> ExitCode {
+    run_with(cli, None)
+}
+
+/// Runs a parsed command line to its exit status; `notify_socket` is the address of the notify
+/// socket systemd set for the process, used with `--notify-systemd` only.
+pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
     let Command::Daemon(flags) = cli.command;
-    daemon(&flags.settings())
-        .err()
-        .map_or(ExitCode::SUCCESS, report)
+    let started = notifier(&flags, notify_socket)
+        .and_then(|notifier| daemon(&flags.settings(), notifier.as_ref()));
+    started.err().map_or(ExitCode::SUCCESS, report)
+}
+
+/// The readiness notifier the flags ask for: systemd's with `--notify-systemd`, refused when no
+/// notify socket was set; none without it.
+pub fn notifier(
+    flags: &DaemonFlags,
+    notify_socket: Option<OsString>,
+) -> Result<Box<dyn ReadyNotifier>, StartError> {
+    match (flags.notify_systemd, notify_socket) {
+        (false, _) => Ok(Box::new(NoNotifier)),
+        (true, Some(socket)) => Ok(Box::new(SystemdNotifier::new(socket))),
+        (true, None) => Err(StartError::NoNotifySocket),
+    }
 }
 
 fn report(error: StartError) -> ExitCode {
@@ -96,20 +136,22 @@ fn report(error: StartError) -> ExitCode {
 }
 
 /// Starts the daemon and serves it, returning only on an error.
-fn daemon(settings: &Settings) -> Result<(), StartError> {
+fn daemon(settings: &Settings, notifier: &dyn ReadyNotifier) -> Result<(), StartError> {
     let own_version = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION"))?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build();
     let runtime = runtime.map_err(StartError::Runtime)?;
-    runtime.block_on(start_and_serve(settings, own_version))
+    runtime.block_on(start_and_serve(settings, own_version, notifier))
 }
 
 async fn start_and_serve(
     settings: &Settings,
     own_version: HostkeeperVersion,
+    notifier: &dyn ReadyNotifier,
 ) -> Result<(), StartError> {
-    start::serve(start::startup(settings, host_ports(), own_version)?).await
+    let started = start::startup_notifying(settings, host_ports(), own_version, notifier)?;
+    start::serve(started).await
 }
 
 /// The ports of this build. The host's step launcher and package store are not part of it yet,

@@ -246,6 +246,20 @@ impl StepRunner {
     /// starts the next generation: the verdict of a finished update is read with
     /// [`StepRunner::last_result`].
     pub fn run(&self, order: &UpdateOrder) -> Result<Finished, RunError> {
+        self.run_with(order, false)
+    }
+
+    /// As [`StepRunner::run`], but the post-success watcher is not run here: once the update has
+    /// reached it (or at once, when the record is already in it) this returns
+    /// `Succeeded { promotion_pending: true }` and leaves the record in the watcher, for a later
+    /// [`StepRunner::run`] of the same order to watch. The daemon's start pass runs each
+    /// unfinished update with it, so that a watcher, which may run for as long as the promotion
+    /// ceiling, does not hold up the start (design section 6.5).
+    pub fn run_until_watching(&self, order: &UpdateOrder) -> Result<Finished, RunError> {
+        self.run_with(order, true)
+    }
+
+    fn run_with(&self, order: &UpdateOrder, handoff: bool) -> Result<Finished, RunError> {
         let staged = path_str(order.staged.dir())?;
         let previous = order
             .previous
@@ -297,7 +311,7 @@ impl StepRunner {
                 }
                 let unfinished = !matches!(rec.state, State::Finished { .. });
                 if unfinished && same_update(&rec, order) {
-                    return self.advance(order, *rec);
+                    return self.advance(order, *rec, handoff);
                 }
                 if unfinished && rec.progress.watching.is_none() {
                     return Err(RunError::Busy {
@@ -313,7 +327,7 @@ impl StepRunner {
             }
         };
         let rec = self.begin(order, generation, staged, previous)?;
-        self.advance(order, rec)
+        self.advance(order, rec, handoff)
     }
 
     /// Writes the params file and the first record of an update.
@@ -362,8 +376,23 @@ impl StepRunner {
         Ok(rec)
     }
 
-    fn advance(&self, order: &UpdateOrder, mut rec: Record) -> Result<Finished, RunError> {
+    fn advance(
+        &self,
+        order: &UpdateOrder,
+        mut rec: Record,
+        handoff: bool,
+    ) -> Result<Finished, RunError> {
         loop {
+            let finished = matches!(rec.state, State::Finished { .. });
+            // The watcher is left to a later run ([`StepRunner::run_until_watching`]).
+            if handoff & rec.progress.watching.is_some() & !finished {
+                return Ok(Finished {
+                    verdict: Verdict::Succeeded {
+                        promotion_pending: true,
+                    },
+                    reason: None,
+                });
+            }
             match rec.state.clone() {
                 State::Finished { verdict, reason } => {
                     self.store.remove_params()?;
@@ -373,7 +402,7 @@ impl StepRunner {
                     // The updater died with the step's unit possibly alive: stop it by name and
                     // wait for it to end before the step is started again (3.5).
                     self.launcher.stop(&rec.unit(rec.step))?;
-                    rec.attempt += 1;
+                    rec.attempt = rec.attempt.saturating_add(1);
                     rec.state = State::Pending;
                     self.store.save(&rec)?;
                 }
@@ -545,7 +574,7 @@ impl StepRunner {
                 if step != Step::Verify {
                     rec.progress.retry += 1;
                 }
-                rec.attempt += 1;
+                rec.attempt = rec.attempt.saturating_add(1);
                 rec.state = State::Pending;
             }
             Next::Rollback { then } => {
@@ -610,7 +639,7 @@ impl StepRunner {
             Outcome::Success if !over => {
                 self.clock
                     .sleep_secs(wait_secs(report.retry_after_secs, WATCH_POLL_SECS));
-                rec.attempt += 1;
+                rec.attempt = rec.attempt.saturating_add(1);
                 rec.state = State::Pending;
                 return;
             }

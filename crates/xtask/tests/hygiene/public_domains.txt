@@ -57,3 +57,8 @@ yaml.org
 =hostkeeper.agent.v1.health
 =hostkeeper.agent.v1.claims
 =hostkeeper.operator.v1.services
+# systemd targets in packaging/linux/hostkeeper.service and its test (`target` is a top-level
+# domain), not hosts.
+=default.target
+=multi-user.target
+=network-online.target

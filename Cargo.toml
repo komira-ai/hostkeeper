@@ -15,6 +15,10 @@ publish = false
 [workspace.dependencies]
 # The attestation bundle's DSSE payload and certificate are base64 (hostkeeper-package).
 base64 = "0.23.1"
+# A JavaScript engine in pure Rust, in which the tests of hostkeeper-ui-tests run the web app's
+# data layer and pages (`ui/`) against a fake gateway; dev-dependency only. Pinned exactly: its
+# embedding API changes between minor versions.
+boa_engine = "=0.22.0"
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
@@ -34,7 +38,8 @@ prost-types = "0.14.4"
 # The connection the tests of hostkeeper-daemon open to its admin server over an in-process pipe
 # (`TokioIo`); dev-dependency only.
 hyper-util = { version = "0.1.21", default-features = false }
-# Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests.
+# Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests;
+# hostkeeper-ui-tests adds `serde` to read a message's canonical JSON against its descriptor.
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's build script and tests.
 protox = "0.10.0"

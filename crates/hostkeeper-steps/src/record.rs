@@ -148,10 +148,15 @@ pub enum RecordError {
 /// A gate that answers `true` at the points where the updater is to die.
 pub type CrashGate = Arc<dyn Fn(CrashPoint) -> bool + Send + Sync>;
 
+/// A test's way to make the n-th write of the record (counted from `1`) fail with an I/O error
+/// before it touches the disk, as a full disk would: `Some` for a write that fails.
+pub type WriteFault = Arc<dyn Fn(u64) -> Option<io::Error> + Send + Sync>;
+
 /// The record and the params file of one service's updates, in its state directory.
 pub struct RecordStore {
     dir: PathBuf,
     gate: Option<CrashGate>,
+    fault: Option<WriteFault>,
     writes: AtomicU64,
 }
 
@@ -161,6 +166,7 @@ impl RecordStore {
         RecordStore {
             dir: dir.to_path_buf(),
             gate: None,
+            fault: None,
             writes: AtomicU64::new(0),
         }
     }
@@ -168,6 +174,13 @@ impl RecordStore {
     /// The same store, stopped wherever `gate` says: the seam of the crash-and-resume tests.
     pub fn with_crash_gate(mut self, gate: CrashGate) -> RecordStore {
         self.gate = Some(gate);
+        self
+    }
+
+    /// The same store, its writes of the record failed wherever `fault` says: the seam of the
+    /// tests of a record that cannot be written. It can only make a write fail.
+    pub fn with_write_fault(mut self, fault: WriteFault) -> RecordStore {
+        self.fault = Some(fault);
         self
     }
 
@@ -198,6 +211,9 @@ impl RecordStore {
     pub fn save(&self, record: &Record) -> Result<(), RecordError> {
         let n = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
         self.cross(CrashPoint::BeforeWrite(n))?;
+        if let Some(error) = self.fault.as_ref().and_then(|fault| fault(n)) {
+            return Err(RecordError::Io(error));
+        }
         let bytes =
             serde_json::to_vec_pretty(record).map_err(|e| RecordError::Corrupt(e.to_string()))?;
         write_atomic(&self.dir, RECORD_FILE, &bytes)?;
