@@ -18,9 +18,16 @@ bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+# The operating system's random bytes, from which hostkeeper-enroll makes the host's key. Already in
+# the tree through the P-256 crates below.
+getrandom = "0.4.3"
 hex = "0.4.3"
 # `O_NOFOLLOW` and `O_NONBLOCK` for the daemon config and the manifest (hostkeeper-config).
 libc = "0.2.190"
+# The host's P-256 key, its ECDSA signatures (RFC 6979: the same key and message give the same
+# signature, so a reposted enrollment request is byte for byte the same) and its PKCS#8 encoding
+# (hostkeeper-enroll). Pure Rust: no OpenSSL, no C.
+p256 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
 # The protobuf runtime of the code hostkeeper-proto generates, and the descriptor types its tests read.
 prost = "0.14.4"
 prost-types = "0.14.4"
@@ -33,6 +40,9 @@ protox = "0.10.0"
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
 # TLS for `hostkeeper ctl`'s gateway client, with the ring provider tonic's `tls-ring` also uses.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+# The zstd decoder of hostkeeper-unpack: pure Rust (MIT); `hash` (twox-hash, MIT) to check a
+# frame's content checksum; no dictionary builder.
+ruzstd = { version = "0.9.1", default-features = false, features = ["hash", "std"] }
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
 rustix = "1.1.5"
 # The YAML parser the workflow lint (crates/xtask/tests/workflows) reads each workflow with.
@@ -53,6 +63,9 @@ toml = { version = "1.1.8", default-features = false, features = ["display", "pa
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
+# The certificate request hostkeeper-enroll sends and the certificates it checks; `builder` makes the
+# PKCS#10 request (and the test CA's certificates).
+x509-cert = { version = "0.3.0", features = ["builder", "pem"] }
 
 [workspace.lints.rust]
 # `coverage` is set by cargo-llvm-cov.
