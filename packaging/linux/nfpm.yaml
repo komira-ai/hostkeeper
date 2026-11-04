@@ -3,7 +3,9 @@
 #
 #   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/linux/nfpm.yaml --packager deb --target <directory>
 #
-# and the same with `--packager rpm`. nfpm expands ${VERSION} and ${ARCH} and names the files
+# and the same with `--packager rpm`. VERSION is the release's MAJOR.MINOR.PATCH in digits, with
+# no `v` and no prerelease or build suffix. ARCH is amd64 for the platform linux-x86_64 and
+# arm64 for linux-arm64. nfpm expands ${VERSION} and ${ARCH} and names the files
 # hostkeeper_<version>_<arch>.deb (amd64, arm64) and hostkeeper-<version>-1.<arch>.rpm (x86_64,
 # aarch64). The packages carry the daemon, its unit, its tmpfiles rules and the template of its
 # config, and nothing else: no key, no certificate, no token and no hostkeeper.toml, which

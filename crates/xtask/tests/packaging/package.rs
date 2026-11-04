@@ -34,22 +34,57 @@ const SCRIPT_COMMANDS: [&[&str]; 7] = [
 ];
 
 fn check_nfpm_keys(text: &str) -> Result<(), String> {
-    let unknown = Config::parse(text)?.unknown_keys()?;
+    let config = Config::parse(text)?;
+    let unknown = config.unknown_keys()?;
     if !unknown.is_empty() {
         return Err(format!(
             "nfpm.yaml holds keys it does not need: {unknown:?}"
+        ));
+    }
+    let bad = config.bad_values();
+    if !bad.is_empty() {
+        return Err(format!(
+            "nfpm.yaml holds values nfpm does not take: {bad:?}"
         ));
     }
     Ok(())
 }
 
 /// Catches a signing or repository section (release work, outside this file), a key for one
-/// packager only, a dependency or a version suffix: any key nfpm.yaml does not need.
+/// packager only, a dependency or a version suffix: any key nfpm.yaml does not need; and a
+/// value nfpm decodes as text written as a mapping, a list or null, or a platform other than
+/// Linux.
 #[test]
 fn nfpm_config_holds_only_the_keys_it_needs() {
     let text = read(NFPM);
     assert_eq!(check_nfpm_keys(&text), Ok(()));
+    let maintainer =
+        "maintainer: \"The hostkeeper project <https://github.com/komira-ai/hostkeeper>\"";
     let cases = [
+        (
+            altered(&text, maintainer, "maintainer: {}"),
+            "[\"maintainer is not text\"]",
+        ),
+        (
+            altered(&text, maintainer, "maintainer: [a, b]"),
+            "[\"maintainer is not text\"]",
+        ),
+        (
+            altered(&text, maintainer, "maintainer:"),
+            "[\"maintainer is not text\"]",
+        ),
+        (
+            altered(&text, "vendor: komira-ai", "vendor: {name: komira-ai}"),
+            "[\"vendor is not text\"]",
+        ),
+        (
+            altered(&text, "version: \"${VERSION}\"", "version: [1]"),
+            "[\"version is not text\"]",
+        ),
+        (
+            altered(&text, "platform: linux", "platform: darwin"),
+            "[\"platform is \\\"darwin\\\", not linux\"]",
+        ),
         (
             format!("{text}deb:\n  signature:\n    key_file: release.gpg\n"),
             "[\"deb\"]",
@@ -293,19 +328,43 @@ fn rpm_and_deb_share_one_file_list() {
     refuses(check_one_list, &cases);
 }
 
-const ARCHES: [(&str, &str); 4] = [
-    ("deb", "amd64"),
-    ("deb", "arm64"),
-    ("rpm", "amd64"),
-    ("rpm", "arm64"),
-];
+/// The platforms of hostkeeper's packages: the closed list of the release index (one package
+/// per OS and CPU family). Held here until hostkeeper-config's shared `Platform` replaces it.
+#[derive(Clone, Copy, Debug)]
+enum Platform {
+    LinuxX86_64,
+    LinuxArm64,
+    MacosArm64,
+}
 
+impl Platform {
+    const ALL: [Platform; 3] = [
+        Platform::LinuxX86_64,
+        Platform::LinuxArm64,
+        Platform::MacosArm64,
+    ];
+
+    /// The `ARCH` nfpm builds the platform's deb and rpm with; none for macOS, whose package
+    /// is a pkg, not built here.
+    fn nfpm_arch(self) -> Option<&'static str> {
+        match self {
+            Platform::LinuxX86_64 => Some("amd64"),
+            Platform::LinuxArm64 => Some("arm64"),
+            Platform::MacosArm64 => None,
+        }
+    }
+}
+
+/// The file names of the deb and then the rpm of every Linux platform, for version 1.2.3.
 fn file_names(text: &str) -> Result<Vec<String>, String> {
     let config = Config::parse(text)?;
-    ARCHES
-        .iter()
-        .map(|(packager, arch)| config.file_name(packager, "1.2.3", arch))
-        .collect()
+    let mut out = Vec::new();
+    for packager in ["deb", "rpm"] {
+        for arch in Platform::ALL.iter().filter_map(|p| p.nfpm_arch()) {
+            out.push(config.file_name(packager, "1.2.3", arch)?);
+        }
+    }
+    Ok(out)
 }
 
 /// Catches a package name, version or architecture that does not come out as
@@ -348,6 +407,46 @@ fn package_file_names_follow_the_pattern() {
     ] {
         let refused = names(&altered(&text, from, to)).expect_err(to);
         assert!(refused.contains(words), "{refused:?} lacks {words:?}");
+    }
+    // Only the inputs nfpm.yaml documents: a version nfpm would rewrite, or an architecture
+    // that is not one of the Linux platforms', is refused, not given a name nfpm would not use.
+    let config = Config::parse(&text).expect("nfpm.yaml parses");
+    for (version, arch, refusal) in [
+        (
+            "v1.2.3",
+            "amd64",
+            "VERSION \"v1.2.3\" is not MAJOR.MINOR.PATCH in digits",
+        ),
+        (
+            "1.2.3-rc.1",
+            "amd64",
+            "VERSION \"1.2.3-rc.1\" is not MAJOR.MINOR.PATCH in digits",
+        ),
+        (
+            "1.2.3+build.5",
+            "amd64",
+            "VERSION \"1.2.3+build.5\" is not MAJOR.MINOR.PATCH in digits",
+        ),
+        (
+            "1.2",
+            "amd64",
+            "VERSION \"1.2\" is not MAJOR.MINOR.PATCH in digits",
+        ),
+        (
+            "",
+            "amd64",
+            "VERSION \"\" is not MAJOR.MINOR.PATCH in digits",
+        ),
+        ("1.2.3", "", "ARCH \"\" is not amd64 or arm64"),
+        ("1.2.3", "x86_64", "ARCH \"x86_64\" is not amd64 or arm64"),
+    ] {
+        for packager in ["deb", "rpm"] {
+            assert_eq!(
+                config.file_name(packager, version, arch),
+                Err(refusal.to_owned()),
+                "{packager} {version:?} {arch:?}"
+            );
+        }
     }
 }
 
@@ -572,4 +671,217 @@ fn scripts_are_posix_sh_and_touch_only_the_unit_and_tmpfiles() {
         ),
     ];
     refuses(check_commands, &cases);
+}
+
+const TMPFILES_CREATE: [&str; 3] = ["systemd-tmpfiles", "--create", "hostkeeper.conf"];
+const DAEMON_RELOAD: [&str; 2] = ["systemctl", "daemon-reload"];
+
+/// One run of a package script: what the package manager passes, the program that fails (if
+/// any), and the programs it must run and the status it must end with.
+struct Scenario {
+    name: &'static str,
+    args: &'static [&'static str],
+    failing: Option<&'static [&'static str]>,
+    ran: &'static [&'static [&'static str]],
+    status: i32,
+}
+
+/// The post-install script's runs: a first install enables the unit, an upgrade does not; a
+/// systemd that is not running (a chroot) does not stop the enable; a failed tmpfiles run or
+/// a failed enable fails the install.
+const POSTINSTALL_RUNS: [Scenario; 7] = [
+    Scenario {
+        name: "deb first install",
+        args: &["configure"],
+        failing: None,
+        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD, &ENABLE],
+        status: 0,
+    },
+    Scenario {
+        name: "rpm first install",
+        args: &["1"],
+        failing: None,
+        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD, &ENABLE],
+        status: 0,
+    },
+    Scenario {
+        name: "deb upgrade",
+        args: &["configure", "1.2.2"],
+        failing: None,
+        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD],
+        status: 0,
+    },
+    Scenario {
+        name: "rpm upgrade",
+        args: &["2"],
+        failing: None,
+        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD],
+        status: 0,
+    },
+    Scenario {
+        name: "first install without a running systemd",
+        args: &["configure"],
+        failing: Some(&DAEMON_RELOAD),
+        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD, &ENABLE],
+        status: 0,
+    },
+    Scenario {
+        name: "tmpfiles fails",
+        args: &["1"],
+        failing: Some(&TMPFILES_CREATE),
+        ran: &[&TMPFILES_CREATE],
+        status: 1,
+    },
+    Scenario {
+        name: "enable fails",
+        args: &["1"],
+        failing: Some(&ENABLE),
+        ran: &[&TMPFILES_CREATE, &DAEMON_RELOAD, &ENABLE],
+        status: 1,
+    },
+];
+
+/// The pre-remove script's runs: a removal disables the unit, an upgrade does nothing, and a
+/// failed disable does not stop the removal.
+const PREREMOVE_RUNS: [Scenario; 5] = [
+    Scenario {
+        name: "deb removal",
+        args: &["remove"],
+        failing: None,
+        ran: &[&DISABLE],
+        status: 0,
+    },
+    Scenario {
+        name: "rpm removal",
+        args: &["0"],
+        failing: None,
+        ran: &[&DISABLE],
+        status: 0,
+    },
+    Scenario {
+        name: "deb upgrade",
+        args: &["upgrade", "1.2.4"],
+        failing: None,
+        ran: &[],
+        status: 0,
+    },
+    Scenario {
+        name: "rpm upgrade",
+        args: &["1"],
+        failing: None,
+        ran: &[],
+        status: 0,
+    },
+    Scenario {
+        name: "disable fails",
+        args: &["remove"],
+        failing: Some(&DISABLE),
+        ran: &[&DISABLE],
+        status: 0,
+    },
+];
+
+/// Runs `text` through every scenario of `runs`, with each program a fake that fails only
+/// for the scenario's failing command.
+fn check_runs(text: &str, runs: &[Scenario]) -> Result<(), String> {
+    let commands = script::parse(text)?;
+    for scenario in runs {
+        let done = script::run(&commands, scenario.args, |words| {
+            i32::from(scenario.failing.is_some_and(|failing| words == failing))
+        });
+        let wanted = script::Run {
+            ran: scenario
+                .ran
+                .iter()
+                .map(|words| words.iter().map(|w| (*w).to_owned()).collect())
+                .collect(),
+            status: scenario.status,
+        };
+        if done != wanted {
+            return Err(format!(
+                "{}: the script ran {:?} and ended {}, not {:?} and {}",
+                scenario.name, done.ran, done.status, wanted.ran, wanted.status
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Catches a package script that skips a step (the directories, the reload, the enable or the
+/// disable), runs one on the wrong install or removal, hides a failure that must fail the
+/// install (no `set -e`), or fails an install on a host where systemd is not running (a
+/// boot-image chroot), by running each script as sh runs it, with the package manager's
+/// arguments and a fake for every program.
+#[test]
+fn package_scripts_run_their_steps_in_order_and_fail_as_the_package_manager_expects() {
+    let post = read(POSTINSTALL);
+    let pre = read(PREREMOVE);
+    assert_eq!(check_runs(&post, &POSTINSTALL_RUNS), Ok(()));
+    assert_eq!(check_runs(&pre, &PREREMOVE_RUNS), Ok(()));
+    let post_cases = [
+        (
+            altered(&post, "systemd-tmpfiles --create hostkeeper.conf\n", ""),
+            "deb first install: the script ran",
+        ),
+        (
+            altered(&post, "systemctl daemon-reload || true\n", ""),
+            "deb first install: the script ran",
+        ),
+        (
+            altered(&post, "set -e\n", ""),
+            "tmpfiles fails: the script ran",
+        ),
+        (
+            altered(
+                &post,
+                "systemctl daemon-reload || true",
+                "systemctl daemon-reload",
+            ),
+            "first install without a running systemd: the script ran",
+        ),
+        (
+            altered(
+                &post,
+                "systemd-tmpfiles --create hostkeeper.conf",
+                "systemd-tmpfiles --create hostkeeper.conf || true",
+            ),
+            "tmpfiles fails: the script ran",
+        ),
+        (
+            altered(
+                &post,
+                "systemctl enable hostkeeper.service ;;",
+                "systemctl enable hostkeeper.service || true ;;",
+            ),
+            "enable fails: the script ran",
+        ),
+        (
+            altered(&post, "configure: | 1:)", "configure: | 1: | 2:)"),
+            "rpm upgrade: the script ran",
+        ),
+        (
+            altered(&post, "exit 0", "exit 1"),
+            "deb first install: the script ran",
+        ),
+    ];
+    refuses(|t: &str| check_runs(t, &POSTINSTALL_RUNS), &post_cases);
+    let pre_cases = [
+        (
+            altered(&pre, "remove | 0)", "remove)"),
+            "rpm removal: the script ran",
+        ),
+        (
+            altered(&pre, "remove | 0)", "remove | 0 | upgrade | 1)"),
+            "deb upgrade: the script ran",
+        ),
+        (
+            altered(
+                &pre,
+                "systemctl disable hostkeeper.service || true",
+                "systemctl disable hostkeeper.service",
+            ),
+            "disable fails: the script ran",
+        ),
+    ];
+    refuses(|t: &str| check_runs(t, &PREREMOVE_RUNS), &pre_cases);
 }

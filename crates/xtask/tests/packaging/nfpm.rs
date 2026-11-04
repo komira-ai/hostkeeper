@@ -23,6 +23,20 @@ pub const TOP_KEYS: [&str; 13] = [
     "contents",
     "scripts",
 ];
+/// The top-level keys whose value nfpm decodes as a string.
+pub const TEXT_KEYS: [&str; 11] = [
+    "name",
+    "arch",
+    "platform",
+    "version",
+    "section",
+    "priority",
+    "maintainer",
+    "description",
+    "vendor",
+    "homepage",
+    "license",
+];
 pub const SCRIPT_KEYS: [&str; 2] = ["postinstall", "preremove"];
 pub const CONTENT_KEYS: [&str; 3] = ["src", "dst", "file_info"];
 pub const FILE_INFO_KEYS: [&str; 3] = ["mode", "owner", "group"];
@@ -154,6 +168,23 @@ impl Config {
         Ok(out)
     }
 
+    /// The values nfpm would not take, or that are not this package's: a key of [`TEXT_KEYS`]
+    /// whose value is a mapping, a list or null, and a platform other than `linux`.
+    pub fn bad_values(&self) -> Vec<String> {
+        let top = self.top();
+        let mut out: Vec<String> = TEXT_KEYS
+            .iter()
+            .filter(|key| top.get(**key).is_some_and(|node| node.as_str().is_none()))
+            .map(|key| format!("{key} is not text"))
+            .collect();
+        if let Some(platform) = top.get("platform").copied().and_then(Node::as_str)
+            && platform != "linux"
+        {
+            out.push(format!("platform is {platform:?}, not linux"));
+        }
+        out
+    }
+
     /// `key` of the `overrides.<packager>` table, if any: nfpm adds an override's `contents`
     /// and `scripts` to the package of that packager only.
     fn overridden(&self, packager: &str, key: &str) -> Result<Option<&Node>, String> {
@@ -214,7 +245,25 @@ impl Config {
     /// `ARCH=arch` (Go's architecture names, `amd64` and `arm64`): `ConventionalFileName` of
     /// nfpm's `deb/deb.go` and `rpm/rpm.go`, with no release, prerelease or version metadata
     /// (which [`TOP_KEYS`] does not allow, so the rpm's release is nfpm's default, 1).
+    ///
+    /// The inputs are the ones nfpm.yaml documents: `version` is `MAJOR.MINOR.PATCH` in digits
+    /// (nfpm would drop a `v` prefix and move a prerelease or build suffix into the version in
+    /// a form of its own, so those are refused rather than modelled), and `arch` is `amd64` or
+    /// `arm64`.
     pub fn file_name(&self, packager: &str, version: &str, arch: &str) -> Result<String, String> {
+        let parts: Vec<&str> = version.split('.').collect();
+        let plain = parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
+        if !plain {
+            return Err(format!(
+                "VERSION {version:?} is not MAJOR.MINOR.PATCH in digits"
+            ));
+        }
+        if !["amd64", "arm64"].contains(&arch) {
+            return Err(format!("ARCH {arch:?} is not amd64 or arm64"));
+        }
         let package = self.expanded("name", version, arch)?;
         let package_version = self.expanded("version", version, arch)?;
         let package_arch = self.expanded("arch", version, arch)?;

@@ -9,7 +9,7 @@ use hostkeeper_config::daemon::{Bounds, ConfigError, DaemonConfig, TrustedSigner
 
 use crate::template;
 use crate::testdir::TestDir;
-use crate::{TEMPLATE, altered, read};
+use crate::{TEMPLATE, altered, read, refuses};
 
 /// Each placeholder of the template, the dotted key it stands for, and a valid value as TOML.
 const PLACEHOLDERS: [(&str, &str, &str); 7] = [
@@ -46,24 +46,14 @@ const PLACEHOLDERS: [(&str, &str, &str); 7] = [
     ),
 ];
 
-fn values(left: Option<&str>) -> BTreeMap<&'static str, String> {
-    PLACEHOLDERS
-        .iter()
-        .map(|(name, _, value)| {
-            let value = if Some(*name) == left {
-                format!("\"@@{name}@@ left unfilled\"")
-            } else {
-                (*value).to_owned()
-            };
-            (*name, value)
-        })
-        .collect()
-}
-
+/// `text` with every placeholder filled but `left`, which keeps its value exactly as written.
 fn filled(text: &str, left: Option<&str>) -> String {
-    let values = values(left);
-    let borrowed: BTreeMap<&str, &str> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    template::fill(text, &borrowed).expect("every placeholder has a value")
+    let values: BTreeMap<&str, &str> = PLACEHOLDERS
+        .iter()
+        .filter(|(name, ..)| Some(*name) != left)
+        .map(|(name, _, value)| (*name, *value))
+        .collect();
+    template::fill(text, &values, left).expect("every placeholder has a value")
 }
 
 /// Loads `text` with the daemon config's loader, from a file of mode 0600 that the account
@@ -78,24 +68,113 @@ fn load(text: &str) -> Result<DaemonConfig, ConfigError> {
     DaemonConfig::load(&path, owner)
 }
 
-fn refused_key(result: Result<DaemonConfig, ConfigError>) -> String {
-    match result {
-        Err(ConfigError::Invalid { key, .. }) => key,
-        other => panic!("not refused for a value: {other:?}"),
+/// The template as written is refused for one of its placeholders, and so is the template
+/// with any one placeholder left exactly as written and every other filled, each for its own
+/// key.
+fn check_placeholders_refused(text: &str) -> Result<(), String> {
+    match load(text) {
+        Err(ConfigError::Invalid { key, .. }) if PLACEHOLDERS.iter().any(|(_, k, _)| *k == key) => {
+        }
+        other => return Err(format!("the template as written gives {other:?}")),
     }
+    for (name, key, _) in PLACEHOLDERS {
+        match load(&filled(text, Some(name))) {
+            Err(ConfigError::Invalid { key: refused, .. }) if refused == key => {}
+            other => {
+                return Err(format!(
+                    "with only @@{name}@@ left the loader gives {other:?}, not a refusal of {key}"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Catches a placeholder that the loader would take as a value, so that a host whose config
 /// was not filled in would start with it: the template as committed is refused, and so is the
-/// template with any one placeholder left and every other filled, each naming its own key.
+/// template with any one placeholder left as shipped and every other filled, each naming its
+/// own key. A bare `"@@NAME@@"` is a word the loader accepts for the signer's organisation,
+/// workflow and refs, which is why each placeholder carries a hint with white space.
 #[test]
 fn config_template_with_placeholders_is_refused_by_the_loader() {
     let text = read(TEMPLATE);
-    let key = refused_key(load(&text));
-    assert!(PLACEHOLDERS.iter().any(|(_, k, _)| *k == key), "{key}");
-    for (name, key, _) in PLACEHOLDERS {
-        assert_eq!(refused_key(load(&filled(&text, Some(name)))), key, "{name}");
+    assert_eq!(check_placeholders_refused(&text), Ok(()));
+    let bare = |name: &str, hint: &str| {
+        altered(
+            &text,
+            &format!("\"@@{name}@@ ({hint})\""),
+            &format!("\"@@{name}@@\""),
+        )
+    };
+    let cases = [
+        (
+            bare("SIGNER_ORGANISATION", "a GitHub organisation"),
+            "with only @@SIGNER_ORGANISATION@@ left the loader gives Ok(",
+        ),
+        (
+            bare("SIGNER_WORKFLOW", "a workflow path"),
+            "with only @@SIGNER_WORKFLOW@@ left the loader gives Ok(",
+        ),
+        (
+            bare("SIGNER_REFS", "one or more ref globs"),
+            "with only @@SIGNER_REFS@@ left the loader gives Ok(",
+        ),
+    ];
+    refuses(check_placeholders_refused, &cases);
+}
+
+/// The bounds the template writes out: every one, so a host's config states each bound even
+/// though the loader would default a missing one to the same number.
+const BOUNDS: [&str; 6] = [
+    "attestation_timeout_secs",
+    "fetch_timeout_secs",
+    "force_start_secs",
+    "max_entries",
+    "max_package_bytes",
+    "max_unpacked_bytes",
+];
+
+/// The keys written in the `[bounds]` table of `text`.
+fn bound_keys(text: &str) -> BTreeSet<String> {
+    text.lines()
+        .map(str::trim)
+        .skip_while(|line| *line != "[bounds]")
+        .skip(1)
+        .take_while(|line| !line.starts_with('['))
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, _)| key.trim().to_owned())
+        .collect()
+}
+
+fn check_bounds_written(text: &str) -> Result<(), String> {
+    let found = bound_keys(text);
+    let wanted: BTreeSet<String> = BOUNDS.iter().map(|k| (*k).to_owned()).collect();
+    if found != wanted {
+        return Err(format!(
+            "[bounds] writes {found:?}, not every bound {wanted:?}"
+        ));
     }
+    Ok(())
+}
+
+/// Catches a bound dropped from the template: the loader would supply its default, so the
+/// loaded value alone cannot show that the template still writes it.
+#[test]
+fn config_template_writes_every_bound() {
+    let text = read(TEMPLATE);
+    assert_eq!(check_bounds_written(&text), Ok(()));
+    let cases: Vec<(String, &str)> = BOUNDS
+        .iter()
+        .map(|key| {
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(key))
+                .unwrap_or_else(|| panic!("{key} is in the template"));
+            (altered(&text, &format!("{line}\n"), ""), "[bounds] writes")
+        })
+        .collect();
+    refuses(check_bounds_written, &cases);
 }
 
 /// Catches a template the loader refuses once it is filled in (a key it does not know, a
@@ -152,7 +231,7 @@ fn config_template_loads_once_placeholders_are_filled() {
     let token = altered(&text, "@@CA_SHA256@@", "@@CA_DIGEST@@");
     assert_ne!(template::tokens(&token), names);
     assert_eq!(
-        template::fill(&token, &BTreeMap::new()),
+        template::fill(&token, &BTreeMap::new(), None),
         Err("no value for @@COORDINATOR@@".to_owned())
     );
 }
@@ -165,36 +244,59 @@ fn config_template_has_no_secret_shaped_value() {
     assert_eq!(template::secret_shapes(&text), Vec::<String>::new());
     let pem = concat!("-----BEGIN ", "PRIVATE KEY-----");
     let github = format!("ghp_{}", "a1B2".repeat(9));
-    let cases = [
-        (format!("{text}# {pem}\n"), "a PEM block"),
+    let run = |n: usize, alphabet: &str| format!("line 1: a run of {n} {alphabet} characters");
+    let cases: [(String, Vec<String>); 9] = [
+        (format!("# {pem}"), vec!["line 1: a PEM block".to_owned()]),
         (
-            format!("{text}token = \"{github}\"\n"),
-            "a token starting \"ghp_\"",
+            format!("token = \"{github}\""),
+            vec![
+                run(36, "base64"),
+                run(40, "base64url"),
+                "line 1: a token starting \"ghp_\"".to_owned(),
+            ],
         ),
         (
-            format!("{text}# Authorization: Bearer abc\n"),
-            "a bearer token",
+            "# Authorization: Bearer abc".to_owned(),
+            vec!["line 1: a bearer token".to_owned()],
         ),
         (
-            format!("{text}key = \"{}\"\n", "0123456789abcdef".repeat(4)),
-            "a run of 64 key characters",
+            format!("key = \"{}\"", "0123456789abcdef".repeat(4)),
+            vec![run(64, "base64"), run(64, "base64url")],
+        ),
+        // Base64 of letters only, with no digit in it.
+        (
+            format!("key = \"{}\"", "YWJj".repeat(12)),
+            vec![run(48, "base64"), run(48, "base64url")],
+        ),
+        // Padded: `=` ends the base64url run one character short of the base64 one.
+        (
+            format!("key = \"{}YQ==\"", "YWJj".repeat(8)),
+            vec![run(36, "base64"), run(34, "base64url")],
+        ),
+        // The length is the boundary: 31 characters pass, 32 do not.
+        (format!("key = \"{}\"", "a".repeat(31)), vec![]),
+        (
+            format!("key = \"{}\"", "a".repeat(32)),
+            vec![run(32, "base64"), run(32, "base64url")],
         ),
         (
-            format!("{text}key = \"{}\"\n", "Zm9vYmFyYmF6cXV4".repeat(3)),
-            "a run of 48 key characters",
-        ),
-        (
-            format!("{text}jwt = \"eyJhbGciOiJIUzI1NiJ9\"\n"),
-            "a token starting \"eyJ\"",
+            "jwt = \"eyJhbGciOiJIUzI1NiJ9\"".to_owned(),
+            vec!["line 1: a token starting \"eyJ\"".to_owned()],
         ),
     ];
-    for (altered_text, words) in cases {
-        let found = template::secret_shapes(&altered_text);
-        assert!(
-            found.iter().any(|f| f.contains(words)),
-            "{found:?} lacks {words:?}"
-        );
+    for (line, wanted) in cases {
+        assert_eq!(template::secret_shapes(&line), wanted, "{line}");
     }
+    // Appended to the template, a pasted key is found on its own line.
+    let pasted = format!("{text}key = \"{}\"\n", "YWJj".repeat(12));
+    let last = text.lines().count() + 1;
+    assert_eq!(
+        template::secret_shapes(&pasted),
+        vec![
+            format!("line {last}: a run of 48 base64 characters"),
+            format!("line {last}: a run of 48 base64url characters"),
+        ]
+    );
 }
 
 /// Catches a template that would need the loader to learn, or to forget, a key: the filled

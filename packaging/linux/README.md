@@ -7,7 +7,7 @@ image, network boot, signing and publishing the packages are not here.
 
 | file | what |
 |---|---|
-| `hostkeeper.service` | the unit: the daemon as root, `Type=notify`, with its paths as flags |
+| `hostkeeper.service` | the unit: the daemon as root, `Type=notify`, with its paths as flags; it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other |
 | `hostkeeper.tmpfiles.conf` | the daemon's directories and their modes, as `/usr/lib/tmpfiles.d/hostkeeper.conf` |
 | `hostkeeper.toml.template` | the daemon config with a `@@NAME@@` placeholder in each value that belongs to a site |
 | `nfpm.yaml` | the deb and the rpm, for nfpm |
@@ -22,8 +22,9 @@ the unit, and that the overlay equals these sources.
 
 ## The packages
 
-`nfpm.yaml` says how to build them. `hostkeeper_<version>_<arch>.deb` (`amd64`, `arm64`) and
-`hostkeeper-<version>-1.<arch>.rpm` (`x86_64`, `aarch64`) install:
+`nfpm.yaml` says how to build them: one deb and one rpm for each Linux platform of hostkeeper's
+packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-arm64` (`arm64`,
+`aarch64`). `hostkeeper_<version>_<arch>.deb` and `hostkeeper-<version>-1.<arch>.rpm` install:
 
 | path | mode |
 |---|---|

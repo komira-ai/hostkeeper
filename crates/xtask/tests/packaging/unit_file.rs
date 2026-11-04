@@ -389,6 +389,16 @@ fn unit_restart_limits_match_the_self_update_fallback_assumption() {
     refuses(check_limits, &cases);
 }
 
+/// Keys that would start a kbf unit with this one, or tie this unit's life to it.
+const PULLING_KEYS: [&str; 6] = [
+    "Wants",
+    "Requires",
+    "Requisite",
+    "BindsTo",
+    "PartOf",
+    "Upholds",
+];
+
 fn check_conflicts(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
     let conflicts = unit.list("Unit", "Conflicts");
@@ -397,23 +407,14 @@ fn check_conflicts(text: &str) -> Result<(), String> {
             "Conflicts= is {conflicts:?}, not kbf's units {KBF_UNITS:?}"
         ));
     }
-    for key in [
-        "Before",
-        "After",
-        "Wants",
-        "Requires",
-        "Requisite",
-        "BindsTo",
-        "PartOf",
-        "Upholds",
-    ] {
+    for key in PULLING_KEYS {
         if let Some(name) = unit
             .list("Unit", key)
             .into_iter()
             .find(|name| KBF_UNITS.contains(&name.as_str()))
         {
             return Err(format!(
-                "{key}= names {name}, which this unit only conflicts with"
+                "{key}= names {name}, which pulls in a unit this one conflicts with"
             ));
         }
     }
@@ -421,48 +422,104 @@ fn check_conflicts(text: &str) -> Result<(), String> {
 }
 
 /// Catches a unit that could run beside kbf's update agent or its root half (design section
-/// 12.3): a kbf unit missing from `Conflicts=` or misspelled there, or named in an ordering or
-/// dependency key instead.
+/// 12.3): a kbf unit missing from `Conflicts=` or misspelled there, or named in a key that
+/// would start it with this unit.
 #[test]
 fn the_unit_conflicts_with_kbfs_updater_units() {
     let text = read(UNIT);
     assert_eq!(check_conflicts(&text), Ok(()));
     let all = KBF_UNITS.join(" ");
+    let conflicts = format!("Conflicts={all}");
     let cases = [
         (
             altered(
                 &text,
-                &all,
-                "kbf-updater-agent.service kbf-host-local.service",
+                &conflicts,
+                "Conflicts=kbf-updater-agent.service kbf-host-local.service",
             ),
             "Conflicts= is",
         ),
         (
             altered(
                 &text,
-                "kbf-updater-agent.service",
-                "kbf-update-agent.service",
+                "Conflicts=kbf-updater-agent.service",
+                "Conflicts=kbf-update-agent.service",
             ),
             "Conflicts= is",
         ),
+        (altered(&text, &conflicts, "Conflicts="), "Conflicts= is"),
         (
-            altered(&text, &format!("Conflicts={all}"), "Conflicts="),
-            "Conflicts= is",
-        ),
-        (
-            altered(&text, &format!("Conflicts={all}"), &format!("Before={all}")),
+            altered(&text, &conflicts, &format!("Before={all}")),
             "Conflicts= is",
         ),
         (
             altered(
                 &text,
-                "After=network-online.target",
-                "After=network-online.target kbf-host-local.service",
+                "Wants=network-online.target",
+                "Wants=network-online.target kbf-host-local.service",
             ),
-            "After= names kbf-host-local.service",
+            "Wants= names kbf-host-local.service",
+        ),
+        (
+            altered(
+                &text,
+                "Wants=network-online.target\n",
+                "Wants=network-online.target\nBindsTo=kbf-updater-agent.service\n",
+            ),
+            "BindsTo= names kbf-updater-agent.service",
         ),
     ];
     refuses(check_conflicts, &cases);
+}
+
+fn check_handoff(text: &str) -> Result<(), String> {
+    let unit = Unit::parse(text)?;
+    let ordered: Vec<String> = unit
+        .list("Unit", "After")
+        .into_iter()
+        .chain(unit.list("Unit", "Before"))
+        .collect();
+    for name in unit.list("Unit", "Conflicts") {
+        if !ordered.contains(&name) {
+            return Err(format!(
+                "{name} is in Conflicts= but in neither After= nor Before=, so systemd may start one while the other is still stopping"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Catches a handoff between hostkeeper and kbf's units that could overlap. systemd orders the
+/// stop job of one unit before the start job of another only when an ordering (`After=` or
+/// `Before=`, either one, either direction) links them; `Conflicts=` alone queues both jobs at
+/// once. So every unit this one conflicts with must also be ordered against it.
+#[test]
+fn the_handoff_with_kbfs_units_stops_one_before_starting_the_other() {
+    let text = read(UNIT);
+    assert_eq!(check_handoff(&text), Ok(()));
+    let after = format!("After={}\n", KBF_UNITS.join(" "));
+    // Ordered by Before= instead of After=: the stop still comes first.
+    let before = altered(&text, &after, &after.replace("After=", "Before="));
+    assert_eq!(check_handoff(&before), Ok(()));
+    let cases = [
+        (
+            altered(&text, &after, ""),
+            "kbf-updater-agent.service is in Conflicts= but in neither",
+        ),
+        (
+            altered(
+                &text,
+                &after,
+                "After=kbf-updater-agent.service kbf-host-local.service\n",
+            ),
+            "kbf-host-local-frontend.service is in Conflicts= but in neither",
+        ),
+        (
+            altered(&text, &after, "After=\n"),
+            "kbf-updater-agent.service is in Conflicts= but in neither",
+        ),
+    ];
+    refuses(check_handoff, &cases);
 }
 
 fn check_unit_keys(text: &str) -> Result<(), String> {

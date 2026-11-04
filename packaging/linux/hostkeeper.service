@@ -14,6 +14,11 @@ Wants=network-online.target
 # packaging/host-agent/linux/): the two families never run on one host together (design
 # section 12.3). Starting this unit stops them; starting one of them stops this unit.
 Conflicts=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.service
+# Ordered after them too. When one of two units with an ordering between them stops while the
+# other starts, systemd finishes the stop before it begins the start, whichever of After= and
+# Before= orders them (systemd.unit(5), Before=, After=). So in a handoff, in either direction,
+# the stopping updater has exited before the starting one runs.
+After=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.service
 # Three failed starts within 300 seconds leave the unit failed: the bound the self-update
 # fallback of design section 6.6 is written against.
 StartLimitIntervalSec=300
