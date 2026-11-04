@@ -1,6 +1,8 @@
 //! The URLs the two files hold, checked without a URL library: a scheme, a host, an optional
 //! port and an optional path, each in a small grammar. Nothing here resolves or fetches.
 
+use std::net::Ipv6Addr;
+
 /// The placeholder the manifest's health URL may put in the port's place.
 pub(crate) const PORT_PLACEHOLDER: &str = "{port}";
 
@@ -12,8 +14,8 @@ pub(crate) struct Parts<'a> {
     pub port: Option<&'a str>,
 }
 
-/// A host: a DNS name or an IPv4 literal (letters, digits, `.` and `-`), or an IPv6 literal in
-/// brackets.
+/// A host: a DNS name or an IPv4 literal (letters, digits, `.` and `-`), or an IPv6 address in
+/// brackets that parses as one.
 fn is_host(host: &str) -> bool {
     let named = !host.is_empty()
         & host
@@ -22,12 +24,7 @@ fn is_host(host: &str) -> bool {
     let bracketed = host
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
-        .is_some_and(|inner| {
-            !inner.is_empty()
-                & inner
-                    .bytes()
-                    .all(|b| b.is_ascii_hexdigit() | b":.".contains(&b))
-        });
+        .is_some_and(|inner| inner.parse::<Ipv6Addr>().is_ok());
     named | bracketed
 }
 
@@ -38,11 +35,20 @@ fn is_port(port: &str, placeholder: bool) -> bool {
     number | (placeholder & (port == PORT_PLACEHOLDER))
 }
 
-/// The characters of a path: unreserved characters and `/`; no query, fragment, white space or
-/// escape.
+/// The characters of a path (RFC 3986 `path-abempty`): `/`, the unreserved characters, the
+/// sub-delimiters, `:` and `@`, and `%` only as the start of an escape of two hex digits. No
+/// query, fragment, white space, `{` or `}`.
 fn is_path(path: &str) -> bool {
-    path.bytes()
-        .all(|b| b.is_ascii_alphanumeric() | b"/._~-".contains(&b))
+    let bytes = path.as_bytes();
+    let escapes = path.match_indices('%').all(|(at, _)| {
+        bytes
+            .get(at + 1..at + 3)
+            .is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+    });
+    let chars = path
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() | b"/-._~!$&'()*+,;=:@%".contains(&b));
+    escapes & chars
 }
 
 /// Takes `text` apart as `<scheme>://<host>[:<port>][/<path>]`, or says why it is not one. No
@@ -62,7 +68,9 @@ pub(crate) fn parts(text: &str, placeholder: bool) -> Result<Parts<'_>, &'static
         return Err("has a port that is not 1 to 65535");
     }
     if !is_path(path) {
-        return Err("has a path outside letters, digits and `/._~-`, or a query or fragment");
+        return Err(
+            "has a path outside the characters of a URL path or a `%` without two hex digits, or a query or fragment",
+        );
     }
     Ok(Parts { scheme, host, port })
 }

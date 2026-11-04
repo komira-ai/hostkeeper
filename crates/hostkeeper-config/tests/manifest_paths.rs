@@ -3,13 +3,14 @@
 
 mod support;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::symlink;
 
 use hostkeeper_config::manifest::ManifestRefusal;
 use hostkeeper_config::names::UnitError;
-use support::fifo;
 use support::package::{EXAMPLE, Package, invalid_key, with};
+use support::{Scratch, fifo};
 
 /// Catches a `[[files]]` source that is not in the package.
 #[test]
@@ -57,7 +58,9 @@ fn files_source_missing_is_refused() {
 #[test]
 fn files_source_symlink_out_of_tree_is_refused() {
     let package = Package::new("source-link");
-    let outside = package.scratch.file("outside/secret", "x", 0o444);
+    let elsewhere = Scratch::new("source-link-outside");
+    let outside = elsewhere.file("secret", "x", 0o444);
+    assert!(!outside.starts_with(package.dir()));
     let file = package.dir().join("files/tierstore.conf");
     fs::remove_file(&file).unwrap();
     symlink(&outside, &file).unwrap();
@@ -65,16 +68,41 @@ fn files_source_symlink_out_of_tree_is_refused() {
     assert!(refusal.to_string().contains("link"), "{refusal}");
     assert!(matches!(refusal, ManifestRefusal::FileSource { .. }));
     fs::remove_file(&file).unwrap();
-    symlink(
-        package.dir().join("outside"),
-        package.dir().join("files/linked"),
-    )
-    .unwrap();
+    // A link inside the tree is refused too: no link is followed on the way.
+    package.scratch.file("bin/conf", "x", 0o444);
+    symlink(package.dir().join("bin/conf"), &file).unwrap();
+    assert!(matches!(
+        package.load(),
+        Err(ManifestRefusal::FileSource { .. })
+    ));
+    fs::remove_file(&file).unwrap();
+    symlink(elsewhere.path(), package.dir().join("files/linked")).unwrap();
     let through = with("\"files/tierstore.conf\"", "\"files/linked/secret\"");
     assert!(matches!(
         package.refusal(&through),
         ManifestRefusal::FileSource { .. }
     ));
+}
+
+/// Catches a `files/` that is itself a link being followed, and an ordinary nested source being
+/// refused: the first component is checked like the others, and a regular file two levels down
+/// loads.
+#[test]
+fn a_linked_files_root_is_refused_and_a_nested_source_loads() {
+    let package = Package::new("source-root");
+    package.scratch.file("files/conf.d/a.conf", "x", 0o444);
+    let nested = with("\"files/tierstore.conf\"", "\"files/conf.d/a.conf\"");
+    let manifest = package.load_text(&nested).expect("a nested source loads");
+    assert_eq!(manifest.files[0].source, "files/conf.d/a.conf");
+    let elsewhere = Scratch::new("source-root-outside");
+    elsewhere.file("tierstore.conf", "x", 0o444);
+    fs::remove_dir_all(package.dir().join("files")).unwrap();
+    symlink(elsewhere.path(), package.dir().join("files")).unwrap();
+    let refusal = package.load_text(EXAMPLE).expect_err("refused");
+    assert!(
+        matches!(&refusal, ManifestRefusal::FileSource { why, .. } if why.contains("link")),
+        "{refusal}"
+    );
 }
 
 /// The path guards, matched on whole components: each refused prefix, a relative path and `..`
@@ -365,10 +393,135 @@ fn non_scalar_param_is_refused() {
     }
     let scalars = with(
         "promotion_bound_secs = 900",
-        "s = \"x\"\ni = -1\nf = 1.5\nb = false",
+        &format!(
+            "s = \"x\"\nempty = \"\"\nwide = \"\u{e9}\u{4e2d}\"\ni = -1\nmin = {}\nmax = {}\nf = 1.5\n\
+             nan = nan\ninf = inf\nneg = -inf\nb = false\n\"a.b\" = 2",
+            i64::MIN,
+            i64::MAX
+        ),
     );
-    assert_eq!(package.load_text(&scalars).unwrap().params.len(), 4);
+    let params = package.load_text(&scalars).unwrap().params;
+    let keys: Vec<&str> = params.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        [
+            "a.b", "b", "empty", "f", "i", "inf", "max", "min", "nan", "neg", "s", "wide"
+        ]
+    );
+    let text = |key: &str| params[key].as_str().map(str::to_owned);
+    assert_eq!(text("s").as_deref(), Some("x"));
+    assert_eq!(text("empty").as_deref(), Some(""));
+    assert_eq!(text("wide").as_deref(), Some("\u{e9}\u{4e2d}"));
+    assert_eq!(params["i"].as_integer(), Some(-1));
+    assert_eq!(params["min"].as_integer(), Some(i64::MIN));
+    assert_eq!(params["max"].as_integer(), Some(i64::MAX));
+    assert_eq!(params["a.b"].as_integer(), Some(2));
+    assert_eq!(params["f"].as_float(), Some(1.5));
+    assert!(params["nan"].as_float().is_some_and(f64::is_nan));
+    assert_eq!(params["inf"].as_float(), Some(f64::INFINITY));
+    assert_eq!(params["neg"].as_float(), Some(f64::NEG_INFINITY));
+    assert_eq!(params["b"].as_bool(), Some(false));
     let not_table = with("[params]\npromotion_bound_secs = 900\n", "")
         .replace("schema         = 1\n", "schema = 1\nparams = 1\n");
     assert_eq!(invalid_key(package.refusal(&not_table)), "params");
+}
+
+/// Catches an entry of `units/` with a unit's name that is no unit file: a directory, a link
+/// and a pipe are refused naming the entry, whatever a run entry says.
+#[test]
+fn a_unit_entry_that_is_not_a_regular_file_is_refused() {
+    let package = Package::new("unit-kind");
+    let line = "run = [\"tierstore@9301.service\", \"tierstore@9302.service\"]";
+    let run = with(line, "run = [\"tierstore-cache.service\"]").replace(
+        "http://127.0.0.1:{port}/healthz",
+        "http://127.0.0.1:9000/healthz",
+    );
+    package.scratch.dir("units/tierstore-cache.service", 0o555);
+    assert_eq!(
+        package.refusal(&run),
+        ManifestRefusal::UnitNotAFile {
+            file: "tierstore-cache.service".to_owned()
+        }
+    );
+    fs::remove_dir(package.dir().join("units/tierstore-cache.service")).unwrap();
+    let elsewhere = Scratch::new("unit-kind-outside");
+    let target = elsewhere.file("unit", "[Service]\n", 0o444);
+    symlink(&target, package.dir().join("units/tierstore-cache.service")).unwrap();
+    let refusal = package.refusal(&run);
+    assert!(
+        refusal.to_string().contains("not a regular file"),
+        "{refusal}"
+    );
+    assert!(matches!(refusal, ManifestRefusal::UnitNotAFile { .. }));
+    fs::remove_file(package.dir().join("units/tierstore-cache.service")).unwrap();
+    fifo(&package.dir().join("units/tierstore-cache.service"));
+    assert!(matches!(
+        package.refusal(&run),
+        ManifestRefusal::UnitNotAFile { .. }
+    ));
+}
+
+/// Catches a run entry refused although its unit is in the package: an instance supplied as its
+/// own file with no template, a socket and a timer each load, and the unit files are exactly the
+/// files of `units/`.
+#[test]
+fn a_run_entry_may_be_an_instance_file_a_socket_or_a_timer() {
+    let package = Package::new("run-kinds");
+    fs::remove_file(package.dir().join("units/tierstore@.service")).unwrap();
+    package
+        .scratch
+        .file("units/tierstore@9301.service", "", 0o444);
+    package
+        .scratch
+        .file("units/tierstore@9302.service", "", 0o444);
+    let manifest = package.load().expect("instance files load");
+    assert_eq!(
+        manifest.unit_files,
+        BTreeSet::from([
+            "tierstore@9301.service".to_owned(),
+            "tierstore@9302.service".to_owned()
+        ])
+    );
+    assert_eq!(
+        manifest.run,
+        ["tierstore@9301.service", "tierstore@9302.service"]
+    );
+    package.scratch.file("units/tierstore.socket", "", 0o444);
+    package.scratch.file("units/tierstore-gc.timer", "", 0o444);
+    let text = with(
+        "run = [\"tierstore@9301.service\", \"tierstore@9302.service\"]",
+        "run = [\"tierstore.socket\", \"tierstore-gc.timer\"]",
+    )
+    .replace(
+        "http://127.0.0.1:{port}/healthz",
+        "http://127.0.0.1:9000/healthz",
+    );
+    let manifest = package.load_text(&text).expect("a socket and a timer load");
+    assert_eq!(manifest.run, ["tierstore.socket", "tierstore-gc.timer"]);
+    assert_eq!(manifest.unit_files.len(), 4);
+}
+
+/// Catches the loopback rule being a spelling: `::1` written out in full is the loopback
+/// address and loads; an IPv4-mapped loopback and the unspecified address are not `::1`.
+#[test]
+fn the_ipv6_loopback_is_recognised_in_any_spelling() {
+    let package = Package::new("loopback-v6");
+    for url in [
+        "http://[0:0:0:0:0:0:0:1]:{port}/healthz",
+        "http://[0::1]:{port}/",
+    ] {
+        let text = with("http://127.0.0.1:{port}/healthz", url);
+        let manifest = package
+            .load_text(&text)
+            .unwrap_or_else(|e| panic!("{url}: {e}"));
+        assert_eq!(manifest.health_url.as_deref(), Some(url));
+    }
+    for url in [
+        "http://[::ffff:127.0.0.1]:{port}/",
+        "http://[::]:{port}/",
+        "http://0.0.0.0:{port}/",
+    ] {
+        let text = with("http://127.0.0.1:{port}/healthz", url);
+        assert_eq!(invalid_key(package.refusal(&text)), "health.url", "{url}");
+    }
 }

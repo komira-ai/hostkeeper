@@ -11,7 +11,9 @@ use hostkeeper_rights::load::{
     HOOKS_ROOT, Kind, RESERVED, Violation, WRITE_FORBIDDEN, WRITE_ROOTS, check,
     check_service_write, is_within,
 };
-use support::{declared, with};
+use std::os::unix::fs::symlink;
+
+use support::{Scratch, declared, with};
 
 const KINDS: [Kind; 3] = [Kind::Read, Kind::Write, Kind::State];
 
@@ -430,68 +432,48 @@ fn the_directories_of_the_system_under_the_write_roots_are_reserved() {
     }
 }
 
-/// A declaration of `name` whose hook writes `write`, in place of the sample's empty list.
-fn writing(name: &str, write: &[&str]) -> hostkeeper_rights::Declaration {
-    let quoted: Vec<String> = write.iter().map(|path| format!("\"{path}\"")).collect();
+/// Catches a record directory re-pointed after the declaration was made: a link that leads to a
+/// directory of the test is accepted, the same link pointed at `/etc` is refused naming
+/// `state_dir`, and pointed back it is accepted again.
+#[test]
+fn a_state_directory_link_retargeted_and_restored_is_judged_each_time() {
+    let scratch = Scratch::new("recheck-state");
+    let real = scratch.dir("real", 0o755);
+    let link = scratch.path().join("state");
+    symlink(&real, &link).unwrap();
     let text = with(
-        "write_paths = []",
-        &format!("write_paths = [{}]", quoted.join(", ")),
+        "state_dir = \"/var/lib/updater/hooks/tierstore\"",
+        &format!("state_dir = \"{}\"", link.display()),
     )
-    .replace("name = \"tierstore\"", &format!("name = \"{name}\""));
-    hostkeeper_rights::Declaration::parse(&text).expect("a declaration")
-}
-
-/// Catches the root rule on write paths not being applied at the recheck: a hook that runs as
-/// root may write only below a directory named for its service, whether or not the path exists
-/// yet; a hook that is not root is not held to it.
-#[test]
-fn a_root_hook_writes_only_in_its_own_directory_at_the_recheck() {
-    let other = writing("tierstore", &["/var/lib/other/x"]);
+    .replace(
+        "read_paths = [\"/usr/libexec/kbf\", \"/usr/sbin/nft\", \"/etc/tierstore\", \"/etc/updater.d/tierstore.toml\"]",
+        "read_paths = []",
+    );
+    let loaded = declared(
+        hostkeeper_rights::Declaration::parse(&text).unwrap(),
+        65534,
+        &["tierstore"],
+    );
+    assert_eq!(loaded.recheck(), Ok(()));
+    std::fs::remove_file(&link).unwrap();
+    symlink("/etc", &link).unwrap();
     assert_eq!(
-        declared(other.clone(), 0, &["tierstore"]).recheck(),
+        loaded.recheck(),
         Err(Refusal::Reserved {
-            field: "hook.write_paths",
-            path: "/var/lib/other/x".to_owned(),
-            why: Violation::NotTheServices,
+            field: "state_dir",
+            path: format!("{} (which is /etc)", link.display()),
+            why: Violation::Names("/etc"),
         })
     );
-    assert_eq!(declared(other, 65534, &["tierstore"]).recheck(), Ok(()));
-    let own = writing(
-        "tierstore",
-        &["/var/lib/tierstore/x", "/var/lib/tierstore-state"],
-    );
-    assert_eq!(declared(own, 0, &["tierstore"]).recheck(), Ok(()));
-}
-
-/// Catches the dash rule handing a root hook another service's directory: `tierstore` may not
-/// write `/var/lib/tierstore-b/x` when `tierstore-b` is a service of the host, and may when it is
-/// not; the refusal names the owner.
-#[test]
-fn a_root_hook_may_not_write_in_the_directory_of_another_declared_service() {
-    let d = writing("tierstore", &["/var/lib/tierstore-b/x"]);
-    assert_eq!(
-        declared(d.clone(), 0, &["tierstore", "tierstore-b"]).recheck(),
-        Err(Refusal::Conflict {
-            what: "a write path in the directory of another service",
-            with: "tierstore-b".to_owned(),
-        })
-    );
-    assert_eq!(declared(d.clone(), 0, &["tierstore"]).recheck(), Ok(()));
-    assert_eq!(
-        declared(d, 65534, &["tierstore", "tierstore-b"]).recheck(),
-        Ok(())
-    );
-    let error = Refusal::Conflict {
-        what: "x",
-        with: "y".to_owned(),
-    };
-    assert!(error.to_string().contains("conflicts with y"));
+    std::fs::remove_file(&link).unwrap();
+    symlink(&real, &link).unwrap();
+    assert_eq!(loaded.recheck(), Ok(()));
 }
 
 /// Catches what a loaded declaration reports: its hook uid, its names and its declaration.
 #[test]
 fn a_declared_reports_what_it_was_made_with() {
-    let d = writing("tierstore", &[]);
+    let d = support::sample();
     let loaded = declared(d.clone(), 991, &["tierstore", "other"]);
     assert_eq!(loaded.hook_uid(), 991);
     assert_eq!(loaded.declaration(), &d);

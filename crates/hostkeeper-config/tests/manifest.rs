@@ -100,7 +100,11 @@ cleanup = 1
     assert_eq!(manifest.health_url, None);
     assert!(manifest.files.is_empty() && manifest.params.is_empty());
     for (from, key) in [
+        ("prepare = 5\n", "hook.timeout_secs.prepare"),
         ("cutover = 1\n", "hook.timeout_secs.cutover"),
+        ("verify = 1\n", "hook.timeout_secs.verify"),
+        ("rollback = 1\n", "hook.timeout_secs.rollback"),
+        ("cleanup = 1\n", "hook.timeout_secs.cleanup"),
         ("verify_deadline_secs = 2\n", "hook.verify_deadline_secs"),
         ("command = [\"bin/tierstore\"]\n", "hook.command"),
         ("min_hostkeeper = \"0.1.0\"\n", "min_hostkeeper"),
@@ -409,19 +413,28 @@ fn the_hook_command_and_the_boot_step_are_checked() {
             "hook.cleanup_retries",
         ),
         (
-            "[hook.timeout_secs]\n",
-            "timeout_secs = 5\n[other]\n",
-            "hook.timeout_secs",
+            "cleanup_retries        = 3",
+            "cleanup_retries = -1",
+            "hook.cleanup_retries",
         ),
     ] {
-        let refusal = package.refusal(&with(from, to));
-        match refusal {
-            ManifestRefusal::Invalid { key: found, .. } => assert_eq!(found, key, "{to}"),
-            // `[other]` is a table no manifest knows.
-            ManifestRefusal::UnknownKey { key: found, .. } => assert_eq!(found, "other"),
-            other => panic!("{to}: {other:?}"),
-        }
+        assert_eq!(invalid_key(package.refusal(&with(from, to))), key, "{to}");
     }
+    for (to, value) in [("cleanup_retries = 0", 0), ("cleanup_retries = 7", 7)] {
+        let text = with("cleanup_retries        = 3", to);
+        assert_eq!(
+            package.load_text(&text).unwrap().hook.cleanup_retries,
+            value
+        );
+    }
+    let one = with(
+        "promotion_ceiling_secs = 3600",
+        "promotion_ceiling_secs = 1",
+    );
+    assert_eq!(
+        package.load_text(&one).unwrap().hook.promotion_ceiling_secs,
+        Some(secs(1))
+    );
     let most = with("cleanup_retries        = 3", "cleanup_retries = 4294967295");
     assert_eq!(
         package.load_text(&most).unwrap().hook.cleanup_retries,
@@ -513,15 +526,44 @@ fn malformed_min_hostkeeper_is_a_release_refusal_not_too_old() {
 fn too_old_is_not_reported_when_another_rule_also_fails() {
     let package = Package::new("order");
     let too_old = with("min_hostkeeper = \"0.4.0\"", "min_hostkeeper = \"9.0.0\"");
-    for (from, to) in [
-        ("cutover = 300", "cutover = 0"),
-        ("promotion_bound_secs = 900", "updater.x = 1"),
-        ("\"/etc/tierstore/tierstore.conf\"", "\"/usr/x\""),
-        ("version        = \"1.5.0\"", "version = \"1.4.0\""),
-        ("schema         = 1\n", "schema = 1\nuser = \"root\"\n"),
+    for (from, to, expected) in [
+        (
+            "cutover = 300",
+            "cutover = 0",
+            ManifestRefusal::ZeroBound { step: "cutover" },
+        ),
+        (
+            "promotion_bound_secs = 900",
+            "updater.x = 1",
+            ManifestRefusal::ReservedParam {
+                key: "updater".to_owned(),
+            },
+        ),
+        (
+            "\"/etc/tierstore/tierstore.conf\"",
+            "\"/usr/x\"",
+            ManifestRefusal::ReservedPath {
+                path: "/usr/x".to_owned(),
+                prefix: "/usr",
+            },
+        ),
+        (
+            "version        = \"1.5.0\"",
+            "version = \"1.4.0\"",
+            ManifestRefusal::VersionMismatch {
+                expected: "1.5.0".to_owned(),
+                found: "1.4.0".to_owned(),
+            },
+        ),
+        (
+            "schema         = 1\n",
+            "schema = 1\nuser = \"root\"\n",
+            unknown("", "user"),
+        ),
     ] {
         let refusal = package.refusal(&with_in(&too_old, from, to));
-        assert_eq!(refusal.class(), Class::Release, "{to}: {refusal:?}");
+        assert_eq!(refusal, expected, "{to}");
+        assert_eq!(refusal.class(), Class::Release, "{to}");
     }
     assert!(matches!(
         package.refusal(&too_old),
@@ -645,6 +687,7 @@ fn index(refusal: &ManifestRefusal) -> usize {
         ManifestRefusal::ReservedParam { .. } => 17,
         ManifestRefusal::NonScalarParam { .. } => 18,
         ManifestRefusal::DaemonTooOld { .. } => 19,
+        ManifestRefusal::UnitNotAFile { .. } => 20,
     }
 }
 
@@ -705,6 +748,7 @@ fn every_refusal() -> Vec<ManifestRefusal> {
             needs: RUNNING,
             running: RUNNING,
         },
+        ManifestRefusal::UnitNotAFile { file: s("x") },
     ]
 }
 
@@ -750,4 +794,101 @@ fn a_loaded_manifest_clones_compares_and_prints() {
     ] {
         assert!(!shown.is_empty());
     }
+}
+
+/// Catches a table given a value of another type being reported as anything but that table:
+/// `hook`, `hook.timeout_secs`, `units` and `health`, each a number with nothing else wrong, are
+/// `Invalid` naming the table.
+#[test]
+fn a_table_given_another_type_is_refused_naming_it() {
+    let package = Package::new("table-types");
+    let timeouts =
+        &EXAMPLE[EXAMPLE.find("[hook.timeout_secs]").unwrap()..EXAMPLE.find("[units]").unwrap()];
+    let cases = [
+        (with(timeouts, "timeout_secs = 5\n\n"), "hook.timeout_secs"),
+        (
+            with_in(
+                &with(timeouts, ""),
+                &EXAMPLE
+                    [EXAMPLE.find("[hook]").unwrap()..EXAMPLE.find("[hook.timeout_secs]").unwrap()],
+                "",
+            )
+            .replace("schema         = 1\n", "schema = 1\nhook = 1\n"),
+            "hook",
+        ),
+        (
+            with(
+                "[units]\nrun = [\"tierstore@9301.service\", \"tierstore@9302.service\"]\n",
+                "",
+            )
+            .replace("schema         = 1\n", "schema = 1\nunits = 1\n"),
+            "units",
+        ),
+        (
+            with("[health]\nurl = \"http://127.0.0.1:{port}/healthz\"\n", "")
+                .replace("schema         = 1\n", "schema = 1\nhealth = 1\n"),
+            "health",
+        ),
+    ];
+    for (text, key) in cases {
+        let refusal = package.refusal(&text);
+        assert!(
+            refusal.to_string().contains("not a table"),
+            "{key}: {refusal}"
+        );
+        assert_eq!(invalid_key(refusal), key);
+    }
+}
+
+/// Catches a required key of a `[units]` or `[[files]]` table that may be left out: with the
+/// table kept, a missing `run`, `source` or `path` is `Invalid` naming it.
+#[test]
+fn a_missing_key_of_units_or_files_names_it() {
+    let package = Package::new("table-keys");
+    for (from, key) in [
+        (
+            "run = [\"tierstore@9301.service\", \"tierstore@9302.service\"]\n",
+            "units|run",
+        ),
+        ("source = \"files/tierstore.conf\"\n", "files[0].source"),
+        (
+            "path   = \"/etc/tierstore/tierstore.conf\"\n",
+            "files[0].path",
+        ),
+    ] {
+        let refusal = package.refusal(&with(from, ""));
+        assert!(refusal.to_string().contains("is missing"), "{refusal}");
+        // `units|run` stands for the dotted key, which written whole reads as a host name.
+        assert_eq!(invalid_key(refusal), key.replace('|', "."), "{from:?}");
+    }
+}
+
+/// Catches an unknown key reported after the order or a value is judged: with an unknown key, a
+/// name mismatch and a bad bound are not what is reported.
+#[test]
+fn an_unknown_key_is_reported_before_the_order_and_the_values() {
+    let package = Package::new("unknown-first");
+    let extra = with("schema         = 1\n", "schema = 1\nextra = 1\n");
+    for (from, to) in [
+        ("name           = \"tierstore\"", "name = \"other\""),
+        ("cutover = 300", "cutover = 0"),
+        ("\"/etc/tierstore/tierstore.conf\"", "\"relative\""),
+    ] {
+        let text = with_in(&extra, from, to);
+        assert_eq!(package.refusal(&text), unknown("", "extra"), "{to}");
+    }
+}
+
+/// The accepted side of the deadline: more than the verify and rollback bounds together loads.
+#[test]
+fn a_deadline_above_verify_plus_rollback_is_accepted() {
+    let package = Package::new("deadline-above");
+    let text = with(
+        "verify_deadline_secs   = 1600",
+        "verify_deadline_secs = 1601",
+    );
+    assert_eq!(
+        package.load_text(&text).unwrap().hook.verify_deadline_secs,
+        1601
+    );
 }

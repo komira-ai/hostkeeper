@@ -437,6 +437,94 @@ fn bad_ca_digest_and_non_https_urls_are_refused() {
     }
 }
 
+/// Catches an IPv6 literal judged by its characters only, and a path grammar narrower or wider
+/// than a URL path: a bracketed host must parse as an IPv6 address; a path may hold escapes,
+/// sub-delimiters, `:` and `@`, and a `%` must start two hex digits.
+#[test]
+fn bracketed_hosts_and_url_paths_are_checked_as_url_parts() {
+    for url in [
+        "https://[1]",
+        "https://[::1::]",
+        "https://[g::1]",
+        "https://[1:2:3:4:5:6:7:8:9]",
+        "https://[:::]",
+        "https://[192.0.2.1]",
+        "https://releases.example/a%2",
+        "https://releases.example/a%zz",
+        "https://releases.example/a%",
+        "https://releases.example/{x}",
+        "https://releases.example/a\\b",
+    ] {
+        let text = with("https://releases.example", url);
+        assert_eq!(invalid_key(refusal(&text)), "release_channel", "{url}");
+    }
+    for url in [
+        "https://[0:0:0:0:0:0:0:1]:8443",
+        "https://[2001:db8:0:0:0:0:0:1]",
+        "https://[::ffff:192.0.2.1]",
+        "https://releases.example/a%20b/c+d",
+        "https://releases.example/x;v=1,2",
+        "https://releases.example/~u/@x/a:b/!$&'()*=",
+        "https://releases.example/%7E",
+    ] {
+        let text = with("https://releases.example", url);
+        let config = DaemonConfig::parse(&text).unwrap_or_else(|e| panic!("{url}: {e}"));
+        assert_eq!(config.release_channel.as_str(), url);
+    }
+}
+
+/// The boundaries of the signer strings: 256 printable ASCII bytes are accepted for the
+/// organisation, the workflow and each ref glob, 257 are refused, and so are a non-ASCII and a
+/// control character, each naming its key.
+#[test]
+fn signer_strings_are_1_to_256_printable_ascii_bytes() {
+    let at = |key: &str, value: &str| {
+        let text = match key {
+            "organisation" => with("\"komira-ai\"", &format!("\"{value}\"")),
+            "workflow" => with("\".github/workflows/release.yml\"", &format!("\"{value}\"")),
+            _ => with(
+                "[\"refs/tags/*\"]",
+                &format!("[\"refs/tags/*\", \"{value}\"]"),
+            ),
+        };
+        DaemonConfig::parse(&text)
+    };
+    for key in ["organisation", "workflow", "refs"] {
+        let longest = "a".repeat(256);
+        let config = at(key, &longest).unwrap_or_else(|e| panic!("{key}: {e}"));
+        let found = match key {
+            "organisation" => config.trusted_signers.organisation,
+            "workflow" => config.trusted_signers.workflow,
+            _ => config.trusted_signers.refs[1].clone(),
+        };
+        assert_eq!(found, longest, "{key}");
+        for bad in ["a".repeat(257), "\u{e9}".to_owned(), "a\\u0007b".to_owned()] {
+            let error = at(key, &bad).expect_err("refused");
+            assert_eq!(
+                invalid_key(error),
+                format!("trusted_signers.{key}"),
+                "{key} {bad:?}"
+            );
+        }
+    }
+}
+
+/// Catches an unknown key reported after a value is judged: an unknown key and an invalid
+/// value together are the unknown key.
+#[test]
+fn an_unknown_key_is_reported_before_an_invalid_value() {
+    let text = format!(
+        "extra = 1\n{}",
+        with("https://releases.example", "http://releases.example")
+    );
+    assert_eq!(unknown_of(refusal(&text)), unknown("", "extra"));
+    let text = with(
+        "max_entries            = 20000",
+        "max_entries = 0\nmax_files = 1",
+    );
+    assert_eq!(unknown_of(refusal(&text)), unknown("bounds", "max_files"));
+}
+
 /// Catches a parse error that does not say where: the line of the error is given.
 #[test]
 fn a_syntax_error_names_its_line() {

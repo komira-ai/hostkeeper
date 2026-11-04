@@ -45,6 +45,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU64;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -224,6 +225,8 @@ pub enum ManifestRefusal {
     DuplicatePath { path: String },
     #[error("the unit file units/{file} {why}")]
     UnitFile { file: String, why: UnitError },
+    #[error("units/{file} is not a regular file (a link, a directory or another kind)")]
+    UnitNotAFile { file: String },
     #[error("the [units] run entry {unit:?} {why}")]
     RunUnit { unit: String, why: String },
     #[error(
@@ -264,6 +267,7 @@ impl ManifestRefusal {
             | ManifestRefusal::ReservedPath { .. }
             | ManifestRefusal::DuplicatePath { .. }
             | ManifestRefusal::UnitFile { .. }
+            | ManifestRefusal::UnitNotAFile { .. }
             | ManifestRefusal::RunUnit { .. }
             | ManifestRefusal::PortWithoutInstance { .. }
             | ManifestRefusal::ReservedParam { .. }
@@ -471,13 +475,13 @@ fn hook(top: &Fields<'_>) -> Result<Hook, ManifestRefusal> {
     })
 }
 
-/// The names of the files in `units/`, each checked to be `service`'s; none when there is no
-/// `units/`.
+/// The names of the files in `units/`, each a regular file (not a link, a directory or a pipe)
+/// whose name is `service`'s; none when there is no `units/`.
 fn unit_files(version_dir: &Path, service: &str) -> Result<BTreeSet<String>, ManifestRefusal> {
     let dir = version_dir.join("units");
     let listed = std::fs::read_dir(&dir).and_then(|entries| {
         entries
-            .map(|entry| entry.map(|entry| entry.file_name()))
+            .map(|entry| entry.and_then(|entry| Ok((entry.file_name(), entry.file_type()?))))
             .collect::<io::Result<Vec<_>>>()
     });
     let names = match listed {
@@ -490,12 +494,16 @@ fn unit_files(version_dir: &Path, service: &str) -> Result<BTreeSet<String>, Man
         }
     };
     let mut files = BTreeSet::new();
-    for name in names {
+    for (name, kind) in names {
         let file = name.to_string_lossy().into_owned();
         UnitName::of(service, &file, true).map_err(|why| ManifestRefusal::UnitFile {
             file: file.clone(),
             why,
         })?;
+        // The kind of the entry itself: a link is not followed.
+        if !kind.is_file() {
+            return Err(ManifestRefusal::UnitNotAFile { file });
+        }
         files.insert(file);
     }
     Ok(files)
@@ -531,9 +539,15 @@ fn run_units(
     Ok(run.into_iter().map(str::to_owned).collect())
 }
 
-/// Whether `host` is a loopback literal: `127.0.0.1` or `[::1]`.
+/// Whether `host` is a loopback literal: the address `127.0.0.1`, or `::1` in brackets in any
+/// spelling (`[::1]`, `[0:0:0:0:0:0:0:1]`).
 fn is_loopback(host: &str) -> bool {
-    (host == "127.0.0.1") | (host == "[::1]")
+    let v4 = host.parse::<Ipv4Addr>() == Ok(Ipv4Addr::LOCALHOST);
+    let v6 = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(|inner| inner.parse::<Ipv6Addr>() == Ok(Ipv6Addr::LOCALHOST));
+    v4 | v6
 }
 
 /// `[health] url`: `http://` to a loopback literal (design section 5.8). A `{port}` in the port's

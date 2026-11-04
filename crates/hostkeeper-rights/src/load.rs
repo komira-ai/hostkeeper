@@ -207,7 +207,42 @@ impl Declared {
 /// the rules on its own write paths and on the directories above its paths. Each entry is
 /// judged as written first (the root rules), then on what it points to when it exists (the deny
 /// list, then the root rules again).
-fn check_targets(declaration: &Declaration, root_hook: bool) -> Result<(), Refusal> {
+/// What the rules read of the host's file system: where a path leads once its links are
+/// followed, and the owner and mode of a directory. A launch reads the real file system
+/// ([`Host::real`]); the unit tests at the end of this file give a fixed one, so the rules of a
+/// root hook are judged without depending on the directories of the machine that runs them.
+struct Host<'a> {
+    canonical: &'a dyn Fn(&str) -> Option<String>,
+    owner_mode: &'a dyn Fn(&Path) -> Option<(u32, u32)>,
+}
+
+fn real_canonical(path: &str) -> Option<String> {
+    std::fs::canonicalize(path)
+        .ok()
+        .map(|target| target.to_string_lossy().into_owned())
+}
+
+fn real_owner_mode(path: &Path) -> Option<(u32, u32)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path)
+        .ok()
+        .map(|meta| (meta.uid(), meta.mode()))
+}
+
+impl Host<'static> {
+    fn real() -> Host<'static> {
+        Host {
+            canonical: &real_canonical,
+            owner_mode: &real_owner_mode,
+        }
+    }
+}
+
+fn check_targets(
+    declaration: &Declaration,
+    root_hook: bool,
+    host: &Host<'_>,
+) -> Result<(), Refusal> {
     let hook = &declaration.hook;
     let entries = [(Kind::State, "state_dir", &declaration.state_dir)]
         .into_iter()
@@ -237,7 +272,7 @@ fn check_targets(declaration: &Declaration, root_hook: bool) -> Result<(), Refus
         };
         let swappable = |path: &str| {
             guarded
-                .then(|| swappable_above(path))
+                .then(|| swappable_above(path, host))
                 .flatten()
                 .map(|ancestor| Refusal::Ancestor {
                     field,
@@ -245,9 +280,7 @@ fn check_targets(declaration: &Declaration, root_hook: bool) -> Result<(), Refus
                     ancestor,
                 })
         };
-        let target = std::fs::canonicalize(entry)
-            .ok()
-            .map(|target| target.to_string_lossy().into_owned());
+        let target = (host.canonical)(entry);
         let reserved = target.as_deref().and_then(|target| {
             check(kind, target).err().map(|why| Refusal::Reserved {
                 field,
@@ -270,11 +303,10 @@ fn check_targets(declaration: &Declaration, root_hook: bool) -> Result<(), Refus
 /// The nearest directory above `path` that an account other than root owns or can write (the
 /// group or others): the one that could replace `path` with a link. Directories that do not
 /// exist yet are skipped.
-fn swappable_above(path: &str) -> Option<String> {
-    use std::os::unix::fs::MetadataExt;
+fn swappable_above(path: &str, host: &Host<'_>) -> Option<String> {
     Path::new(path).ancestors().skip(1).find_map(|above| {
-        let meta = std::fs::metadata(above).ok()?;
-        ((meta.uid() != 0) | (meta.mode() & 0o022 != 0)).then(|| above.display().to_string())
+        let (uid, mode) = (host.owner_mode)(above)?;
+        ((uid != 0) | (mode & 0o022 != 0)).then(|| above.display().to_string())
     })
 }
 
@@ -285,8 +317,18 @@ pub(crate) fn recheck_targets(
     hook_uid: u32,
     names: &BTreeSet<String>,
 ) -> Result<(), Refusal> {
-    check_targets(declaration, hook_uid == 0)?;
-    trespass_among(declaration, hook_uid == 0, names)
+    recheck_on(&Host::real(), declaration, hook_uid, names)
+}
+
+/// [`recheck_targets`] on the file system `host` shows.
+fn recheck_on(
+    host: &Host<'_>,
+    declaration: &Declaration,
+    hook_uid: u32,
+    names: &BTreeSet<String>,
+) -> Result<(), Refusal> {
+    check_targets(declaration, hook_uid == 0, host)?;
+    trespass_among(declaration, hook_uid == 0, names, host)
         .map_or(Ok(()), |(what, with)| Err(Refusal::Conflict { what, with }))
 }
 
@@ -301,13 +343,11 @@ fn trespass_among(
     declaration: &Declaration,
     root_hook: bool,
     names: &BTreeSet<String>,
+    host: &Host<'_>,
 ) -> Option<(&'static str, String)> {
     let paths = root_hook.then_some(&declaration.hook.write_paths)?;
     paths.iter().find_map(|path| {
-        let target = std::fs::canonicalize(path)
-            .ok()
-            .map(|target| target.to_string_lossy().into_owned());
-        [Some(path.clone()), target]
+        [Some(path.clone()), (host.canonical)(path)]
             .into_iter()
             .flatten()
             .find_map(|candidate| {
@@ -320,4 +360,167 @@ fn trespass_among(
                 (owner != declaration.name).then(|| (TRESPASS, owner.to_owned()))
             })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! The rules of a root hook on a fixed file system: what the test names exists, root-owned and
+    //! closed unless it says otherwise, and nothing else exists or is a link. B3 rewrites
+    //! launch.rs and deletes this.
+
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::Path;
+
+    use super::{Host, Violation, recheck_on};
+    use crate::declaration::{Declaration, Refusal};
+
+    /// A declaration of `tierstore` whose hook writes `write` and reads nothing.
+    fn writing(write: &[&str]) -> Declaration {
+        let quoted: Vec<String> = write.iter().map(|path| format!("\"{path}\"")).collect();
+        Declaration::parse(&format!(
+            "name = \"tierstore\"\nbinary = \"tierstore\"\nstate_dir = \"/var/lib/updater/hooks/tierstore\"\n\
+             [hook]\nuser = \"root\"\ngroup = \"root\"\nwrite_paths = [{}]\n\
+             [hook.timeout_secs]\nprepare = 1\ncutover = 1\nverify = 1\nrollback = 1\ncleanup = 1\n",
+            quoted.join(", ")
+        ))
+        .expect("a declaration")
+    }
+
+    /// The recheck of `declaration` for a hook of uid `uid` among `names`, on a file system where
+    /// `/`, `/var` and `/var/lib` are root's and closed, `dirs` adds directories with their owner
+    /// and mode, and `links` maps a path to where it leads.
+    fn recheck(
+        declaration: &Declaration,
+        uid: u32,
+        names: &[&str],
+        dirs: &[(&str, u32, u32)],
+        links: &[(&str, &str)],
+    ) -> Result<(), Refusal> {
+        let mut known: BTreeMap<String, (u32, u32)> = ["/", "/var", "/var/lib"]
+            .into_iter()
+            .map(|dir| (dir.to_owned(), (0, 0o40755)))
+            .collect();
+        known.extend(
+            dirs.iter()
+                .map(|(dir, owner, mode)| ((*dir).to_owned(), (*owner, *mode))),
+        );
+        let links: BTreeMap<String, String> = links
+            .iter()
+            .map(|(from, to)| ((*from).to_owned(), (*to).to_owned()))
+            .collect();
+        let canonical = |path: &str| links.get(path).cloned();
+        let owner_mode = |path: &Path| known.get(path.to_str()?).copied();
+        let host = Host {
+            canonical: &canonical,
+            owner_mode: &owner_mode,
+        };
+        let names: BTreeSet<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        recheck_on(&host, declaration, uid, &names)
+    }
+
+    /// Catches the root rule on write paths not being applied at the recheck: a hook that runs
+    /// as root may write only below a directory named for its service, whether or not the path
+    /// exists; a hook that is not root is not held to it.
+    #[test]
+    fn a_root_hook_writes_only_in_its_own_directory() {
+        let other = writing(&["/var/lib/other/x"]);
+        assert_eq!(
+            recheck(&other, 0, &["tierstore"], &[], &[]),
+            Err(Refusal::Reserved {
+                field: "hook.write_paths",
+                path: "/var/lib/other/x".to_owned(),
+                why: Violation::NotTheServices,
+            })
+        );
+        assert_eq!(recheck(&other, 65534, &["tierstore"], &[], &[]), Ok(()));
+        let own = writing(&["/var/lib/tierstore/x", "/var/lib/tierstore-state"]);
+        assert_eq!(recheck(&own, 0, &["tierstore"], &[], &[]), Ok(()));
+    }
+
+    /// Catches a root hook's path below a directory another account controls: the service's own
+    /// directory owned by its service account, or one the group can write, is refused; root's
+    /// and closed is accepted.
+    #[test]
+    fn a_root_hook_path_below_a_directory_root_does_not_control_is_refused() {
+        let own = writing(&["/var/lib/tierstore/x"]);
+        for (owner, mode) in [(990, 0o40755), (0, 0o40775), (0, 0o40757)] {
+            assert_eq!(
+                recheck(
+                    &own,
+                    0,
+                    &["tierstore"],
+                    &[("/var/lib/tierstore", owner, mode)],
+                    &[]
+                ),
+                Err(Refusal::Ancestor {
+                    field: "hook.write_paths",
+                    path: "/var/lib/tierstore/x".to_owned(),
+                    ancestor: "/var/lib/tierstore".to_owned(),
+                }),
+                "{owner} {mode:o}"
+            );
+        }
+        let closed = recheck(
+            &own,
+            0,
+            &["tierstore"],
+            &[("/var/lib/tierstore", 0, 0o40755)],
+            &[],
+        );
+        assert_eq!(closed, Ok(()));
+    }
+
+    /// Catches a link that leads a root hook's write path out of its own directory: the path as
+    /// written is the service's, what it leads to is not.
+    #[test]
+    fn a_root_hook_write_path_that_leads_elsewhere_is_refused_where_it_leads() {
+        let linked = writing(&["/var/lib/tierstore/link"]);
+        assert_eq!(
+            recheck(
+                &linked,
+                0,
+                &["tierstore"],
+                &[],
+                &[("/var/lib/tierstore/link", "/var/lib/other/y")]
+            ),
+            Err(Refusal::Reserved {
+                field: "hook.write_paths",
+                path: "/var/lib/other/y".to_owned(),
+                why: Violation::NotTheServices,
+            })
+        );
+        assert_eq!(
+            recheck(
+                &linked,
+                0,
+                &["tierstore"],
+                &[],
+                &[("/var/lib/tierstore/link", "/etc")]
+            ),
+            Err(Refusal::Reserved {
+                field: "hook.write_paths",
+                path: "/var/lib/tierstore/link (which is /etc)".to_owned(),
+                why: Violation::Names("/etc"),
+            })
+        );
+    }
+
+    /// Catches the dash rule handing a root hook another declared service's directory, as
+    /// written or through a link: `tierstore` may not write `/var/lib/tierstore-b/x` when
+    /// `tierstore-b` is a service of the host, and may when it is not.
+    #[test]
+    fn a_root_hook_may_not_write_in_the_directory_of_another_declared_service() {
+        let conflict = Err(Refusal::Conflict {
+            what: "a write path in the directory of another service",
+            with: "tierstore-b".to_owned(),
+        });
+        let both = ["tierstore", "tierstore-b"];
+        let direct = writing(&["/var/lib/tierstore-b/x"]);
+        assert_eq!(recheck(&direct, 0, &both, &[], &[]), conflict);
+        assert_eq!(recheck(&direct, 0, &["tierstore"], &[], &[]), Ok(()));
+        assert_eq!(recheck(&direct, 65534, &both, &[], &[]), Ok(()));
+        let linked = writing(&["/var/lib/tierstore-x"]);
+        let links = [("/var/lib/tierstore-x", "/var/lib/tierstore-b/y")];
+        assert_eq!(recheck(&linked, 0, &both, &[], &links), conflict);
+    }
 }
