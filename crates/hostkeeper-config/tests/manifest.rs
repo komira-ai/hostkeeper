@@ -81,7 +81,7 @@ fn the_optional_tables_and_keys_may_be_left_out() {
     let text = r#"schema = 1
 name = "tierstore"
 version = "1.5.0"
-platform = "linux-arm64"
+platform = "linux-x86_64"
 min_hostkeeper = "0.1.0"
 [hook]
 command = ["bin/tierstore"]
@@ -114,7 +114,7 @@ cleanup = 1
         ("schema = 1\n", "schema"),
         ("name = \"tierstore\"\n", "name"),
         ("version = \"1.5.0\"\n", "version"),
-        ("platform = \"linux-arm64\"\n", "platform"),
+        ("platform = \"linux-x86_64\"\n", "platform"),
     ] {
         let refusal = package.refusal(&with_in(text, from, ""));
         assert!(refusal.to_string().contains("is missing"), "{refusal}");
@@ -692,6 +692,7 @@ fn index(refusal: &ManifestRefusal) -> usize {
         ManifestRefusal::NonScalarParam { .. } => 18,
         ManifestRefusal::DaemonTooOld { .. } => 19,
         ManifestRefusal::UnitNotAFile { .. } => 20,
+        ManifestRefusal::PlatformMismatch { .. } => 21,
     }
 }
 
@@ -753,6 +754,10 @@ fn every_refusal() -> Vec<ManifestRefusal> {
             running: RUNNING,
         },
         ManifestRefusal::UnitNotAFile { file: s("x") },
+        ManifestRefusal::PlatformMismatch {
+            expected: Platform::LinuxArm64,
+            found: Platform::MacosArm64,
+        },
     ]
 }
 

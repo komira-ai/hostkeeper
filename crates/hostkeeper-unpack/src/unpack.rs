@@ -11,6 +11,7 @@ use hostkeeper_config::manifest::{
     Expected, HostkeeperVersion, MANIFEST_FILE, MAX_MANIFEST_BYTES, Manifest,
 };
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::platform::Platform;
 use hostkeeper_steps::{
     ArtifactError, EntryKind, Layout, Seal, SealError, TreeEntry, read_seal, read_tree,
 };
@@ -22,12 +23,14 @@ use crate::fs::{PackageFs, ServiceLock};
 use crate::publish::publish;
 use crate::seal;
 
-/// What to unpack: the service and version the order names, and the SHA-256 the archive was
+/// What to unpack: the service and version the order names, the platform the package was
+/// fetched for (the daemon's own, `Platform::current()`), and the SHA-256 the archive was
 /// verified to have.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnpackOrder {
     pub service: ServiceName,
     pub version: Version,
+    pub platform: Platform,
     pub package_digest: Sha256Hex,
 }
 
@@ -232,6 +235,7 @@ fn expected(order: &UnpackOrder) -> Expected {
     Expected {
         name: order.service.clone(),
         version: order.version.clone(),
+        platform: order.platform,
     }
 }
 

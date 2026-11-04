@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::platform::Platform;
 use hostkeeper_unpack::{HostFs, Limits, Owner, PackageFs, ServiceLock, StagedFile, UnpackOrder};
 use sha2::{Digest, Sha256};
 
@@ -340,6 +341,7 @@ pub fn order(version: &str, digest: &str) -> UnpackOrder {
     UnpackOrder {
         service: ServiceName::new(SERVICE).unwrap(),
         version: Version::new(version).unwrap(),
+        platform: Platform::LinuxX86_64,
         package_digest: Sha256Hex::parse(digest).unwrap(),
     }
 }

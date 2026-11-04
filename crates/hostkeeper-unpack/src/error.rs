@@ -9,8 +9,9 @@ use hostkeeper_hook::{Class, Outcome};
 
 /// The archive breaks a bound or a shape rule (design section 5.5).
 pub const REASON_BAD_ARCHIVE: &str = "bad_archive";
-/// The archive's SHA-256 is not the one the order names.
-pub const REASON_DIGEST_MISMATCH: &str = "digest_mismatch";
+/// The archive's SHA-256 is not the one the order names (the one its release index entry gives,
+/// design section 5.5).
+pub const REASON_DIGEST_MISMATCH: &str = "package_digest_mismatch";
 /// The manifest is refused (the loader's own token, `manifest_mismatch` for every refusal of
 /// the package).
 pub const REASON_MANIFEST_MISMATCH: &str = "manifest_mismatch";

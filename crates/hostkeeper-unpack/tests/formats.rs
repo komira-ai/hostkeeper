@@ -98,7 +98,7 @@ fn row(error: &UnpackError) -> (Outcome, Class, &'static str) {
     let deferred = |reason| (Outcome::Deferred, Class::Environment, reason);
     match error {
         UnpackError::BadArchive { .. } => failed("bad_archive"),
-        UnpackError::DigestMismatch { .. } => failed("digest_mismatch"),
+        UnpackError::DigestMismatch { .. } => failed("package_digest_mismatch"),
         UnpackError::Manifest(ManifestRefusal::DaemonTooOld { .. }) => deferred("daemon_too_old"),
         UnpackError::Manifest(_) => failed("manifest_mismatch"),
         UnpackError::NoSpace(_) => deferred("no_space"),

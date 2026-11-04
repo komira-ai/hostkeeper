@@ -1,8 +1,10 @@
 # Package format
 
-A hostkeeper package is one archive per version of a service, `<service>-<version>.tar.zst`.
-CI computes its SHA-256 and puts it in the desired state with the version; the daemon fetches the
-archive, checks that digest and an attestation for it, and only then reads it. This page is what
+A hostkeeper package is one archive per version of a service and platform,
+`<service>-<version>-<platform>.tar.zst`, where the platform is `linux-x86_64`, `linux-arm64` or
+`macos-arm64`. CI lists each archive's size and SHA-256 in the version's release index
+(`index.json`, design section 5.5); the daemon fetches the archive of its own platform, checks its
+size and digest against the index entry and its own attestation, and only then reads it. This page is what
 the daemon then requires of the archive and what it leaves on the host. Every part of it is a
 format that another release of hostkeeper reads, so it changes only as the last section says.
 
@@ -77,7 +79,7 @@ a handle on the packages directory that never follows a link, so no entry can wr
 - **Modes.** A file whose tar mode has any execute bit gets 0555, every other file 0444, every
   directory 0555 (set after its contents are written).
 
-Then `manifest.toml` is read by the manifest loader (`name` and `version` must be the order's;
+Then `manifest.toml` is read by the manifest loader (`name`, `version` and `platform` must be the ones the daemon asked for;
 the load rules are those of the design's section 4.7), the tree is made durable and read back,
 and it must be what was written.
 

@@ -102,9 +102,10 @@ fn modes_are_normalised_and_owner_and_mtime_ignored() {
 }
 
 /// Catches an archive file that is not the one the order names being sealed: one byte of
-/// padding more than the bytes the order's digest is of is `digest_mismatch`, and nothing stays.
+/// padding more than the bytes the order's digest is of is `package_digest_mismatch`, and
+/// nothing stays.
 #[test]
-fn an_archive_with_another_digest_is_digest_mismatch() {
+fn an_archive_with_another_digest_is_package_digest_mismatch() {
     let rig = Rig::new("u-digest");
     let archive = zstd(&valid_tar().end().bytes());
     let (path, _) = rig.archive("a.tar.zst", &archive);
@@ -117,7 +118,7 @@ fn an_archive_with_another_digest_is_digest_mismatch() {
     );
     assert_eq!(
         err.outcome(),
-        (Outcome::Failure, Class::Release, "digest_mismatch")
+        (Outcome::Failure, Class::Release, "package_digest_mismatch")
     );
     assert!(rig.listing().is_empty(), "{:?}", rig.listing());
 }
@@ -142,14 +143,15 @@ fn refused_manifest(name: &str, manifest: &str) -> UnpackError {
     err
 }
 
-/// Catches a package for another service or version being staged as this one: a manifest that
-/// names another version, or another service, is `Failed`, release, `manifest_mismatch`, with
+/// Catches a package for another service, version or platform being staged as this one: a
+/// manifest that names another version, another service or another platform is `Failed`, release, `manifest_mismatch`, with
 /// the staging directory removed and no version.
 #[test]
-fn a_manifest_for_another_name_or_version_is_manifest_mismatch() {
+fn a_manifest_for_another_name_version_or_platform_is_manifest_mismatch() {
     let cases = [
         ("version = \"1.5.0\"", "version = \"1.5.1\""),
         ("name = \"tierstore\"", "name = \"other\""),
+        ("platform = \"linux-x86_64\"", "platform = \"linux-arm64\""),
     ];
     for (from, to) in cases {
         let err = refused_manifest("u-mismatch", &MANIFEST.replace(from, to));
@@ -157,7 +159,9 @@ fn a_manifest_for_another_name_or_version_is_manifest_mismatch() {
             matches!(
                 &err,
                 UnpackError::Manifest(
-                    ManifestRefusal::VersionMismatch { .. } | ManifestRefusal::NameMismatch { .. }
+                    ManifestRefusal::VersionMismatch { .. }
+                        | ManifestRefusal::NameMismatch { .. }
+                        | ManifestRefusal::PlatformMismatch { .. }
                 )
             ),
             "{to}: {err:?}"

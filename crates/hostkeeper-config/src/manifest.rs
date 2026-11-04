@@ -36,8 +36,8 @@
 //! ```
 //!
 //! [`Manifest::load`] applies the load rules of section 4.7 in this order: the file, the syntax
-//! and the schema, every key against the tables that may hold it, `name` and `version` against
-//! the order, every other rule, and `min_hostkeeper` last, so a malformed manifest is never
+//! and the schema, every key against the tables that may hold it, `name`, `version` and
+//! `platform` against the order, every other rule, and `min_hostkeeper` last, so a malformed manifest is never
 //! reported as one the daemon is too old for. There is no `user`, `capabilities`, write-path,
 //! signer, release-URL or `min_version` key: each is an unknown key. Which paths another package
 //! owns, linking and the contents of unit files are not judged here.
@@ -169,11 +169,13 @@ impl fmt::Display for HostkeeperVersion {
     }
 }
 
-/// The order a manifest is read for: the service and the version the daemon was told to install.
+/// The order a manifest is read for: the service and the version the daemon was told to install,
+/// and the platform it fetched the package for (its own, [`Platform::current`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Expected {
     pub name: ServiceName,
     pub version: Version,
+    pub platform: Platform,
 }
 
 /// The kind of a refusal, as a step record reports it: the package is bad (`Release`), or the
@@ -206,6 +208,8 @@ pub enum ManifestRefusal {
     NameMismatch { expected: String, found: String },
     #[error("the manifest is for the version {found:?}, not {expected:?}")]
     VersionMismatch { expected: String, found: String },
+    #[error("the manifest is for the platform {found}, not {expected}")]
+    PlatformMismatch { expected: Platform, found: Platform },
     #[error("hook.timeout_secs.{step} is 0; only prepare may be unbounded")]
     ZeroBound { step: &'static str },
     #[error(
@@ -263,6 +267,7 @@ impl ManifestRefusal {
             | ManifestRefusal::Invalid { .. }
             | ManifestRefusal::NameMismatch { .. }
             | ManifestRefusal::VersionMismatch { .. }
+            | ManifestRefusal::PlatformMismatch { .. }
             | ManifestRefusal::ZeroBound { .. }
             | ManifestRefusal::DeadlineTooShort { .. }
             | ManifestRefusal::FileSource { .. }
@@ -729,6 +734,12 @@ impl Manifest {
             .string("platform")?
             .parse::<Platform>()
             .map_err(|why| top.invalid("platform", why.to_string()))?;
+        if platform != expected.platform {
+            return Err(ManifestRefusal::PlatformMismatch {
+                expected: expected.platform,
+                found: platform,
+            });
+        }
         let service = expected.name.as_str();
         let hook = hook(&top)?;
         let unit_files = unit_files(version_dir, service)?;
@@ -748,7 +759,7 @@ impl Manifest {
         Ok(Manifest {
             name: expected.name.clone(),
             version: expected.version.clone(),
-            platform,
+            platform: expected.platform,
             min_hostkeeper,
             hook,
             unit_files,

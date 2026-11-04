@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="Package fetch, verify and unpack: order with version and digest only, fetch by the daemon, download, size and digest check and attestation, bounds and shape checks while unpacking in one pass, manifest read, seal and rename into the version directory, with what is root-written at each step.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="Package fetch, verify and unpack: order with service and version only, release index lookup for the daemon's platform, download, size and digest check against the index entry and attestation, bounds and shape checks while unpacking in one pass, manifest read, seal and rename into the version directory, with what is root-written at each step.">
 <title>Package fetch, verify and unpack</title>
-<desc>The daemon turns an order that names only a service, a version and a digest into a sealed, read-only version directory in four steps, and a failure in the checks leaves nothing behind. Linking units and files happens later, at cutover. The seal is checked again before every later step, so a changed tree halts the service instead of running.</desc>
+<desc>The daemon turns an order that names only a service and a version into a sealed, read-only version directory in four steps, and a failure in the checks leaves nothing behind. Linking units and files happens later, at cutover. The seal is checked again before every later step, so a changed tree halts the service instead of running.</desc>
 <defs><marker id="release-fetch-verify-stage-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="release-fetch-verify-stage-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -24,13 +24,13 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="20" y="28" class="b" font-size="16" text-anchor="start">Fetch, verify and unpack: four steps (1 to 4) from an order to a sealed package version</text>
 <rect x="30" y="80" width="220" height="100" rx="5" class="box-b"/>
 <text x="140" y="104" class="b" text-anchor="middle">Order</text>
-<text x="140" y="122" class="t-m" text-anchor="middle">service, version, digest</text>
+<text x="140" y="122" class="t-m" text-anchor="middle">service, version</text>
 <text x="140" y="138" class="t-m" text-anchor="middle">no URL, no path</text>
 
 <rect x="320" y="80" width="220" height="100" rx="5" class="box"/>
-<text x="430" y="104" class="b" text-anchor="middle">Resolve location</text>
-<text x="430" y="122" class="t-m" text-anchor="middle">release channel from the</text>
-<text x="430" y="138" class="t-m" text-anchor="middle">daemon config</text>
+<text x="430" y="104" class="b" text-anchor="middle">Index lookup</text>
+<text x="430" y="122" class="t-m" text-anchor="middle">S/V/index.json, entry for</text>
+<text x="430" y="138" class="t-m" text-anchor="middle">the daemon's own platform</text>
 <rect x="306" y="70" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="320" y="84" class="b" font-size="11" text-anchor="middle">1a</text>
 <rect x="610" y="80" width="220" height="100" rx="5" class="box dash"/>
@@ -41,8 +41,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="610" y="84" class="b" font-size="11" text-anchor="middle">1b</text>
 <rect x="900" y="80" width="220" height="100" rx="5" class="box-o"/>
 <text x="1010" y="104" class="b" text-anchor="middle">Size cap and SHA-256</text>
-<text x="1010" y="122" class="t-m" text-anchor="middle">SHA-256 equals the order</text>
-<text x="1010" y="138" class="t-m" text-anchor="middle">and the byte count</text>
+<text x="1010" y="122" class="t-m" text-anchor="middle">SHA-256 equals the index</text>
+<text x="1010" y="138" class="t-m" text-anchor="middle">entry, and the byte count</text>
 <rect x="886" y="70" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="900" y="84" class="b" font-size="11" text-anchor="middle">2a</text>
 <rect x="900" y="250" width="220" height="100" rx="5" class="box-o"/>
@@ -66,8 +66,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="320" y="254" class="b" font-size="11" text-anchor="middle">3b</text>
 <rect x="30" y="250" width="220" height="100" rx="5" class="box-o"/>
 <text x="140" y="274" class="b" text-anchor="middle">Manifest and seal</text>
-<text x="140" y="292" class="t-m" text-anchor="middle">read manifest.toml, name and</text>
-<text x="140" y="308" class="t-m" text-anchor="middle">version match; path claims;</text>
+<text x="140" y="292" class="t-m" text-anchor="middle">manifest.toml: name, version,</text>
+<text x="140" y="308" class="t-m" text-anchor="middle">platform match; path claims;</text>
 <text x="140" y="324" class="t-m" text-anchor="middle">0555, rename, write .seal</text>
 <rect x="16" y="240" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="30" y="254" class="b" font-size="11" text-anchor="middle">4</text>

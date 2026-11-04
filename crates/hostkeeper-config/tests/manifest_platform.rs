@@ -3,20 +3,24 @@
 
 mod support;
 
-use hostkeeper_config::manifest::{Class, ManifestRefusal};
+use hostkeeper_config::manifest::{Class, Manifest, ManifestRefusal};
 use hostkeeper_config::platform::Platform;
-use support::package::{Package, with};
+use support::package::{EXAMPLE, Package, RUNNING, expected, with};
 
 /// The manifest names the platform the package was built for: each of the three spellings loads
-/// as its platform. A manifest without `platform`, or with any other spelling or a value that is
+/// for an order of that platform. A manifest without `platform`, or with any other spelling or a value that is
 /// not text, is refused naming the key, class release.
 #[test]
 fn platform_is_required_and_one_of_the_three() {
     let package = Package::new("platform");
     let line = "platform       = \"linux-x86_64\"\n";
     for platform in Platform::ALL {
-        let text = with(line, &format!("platform = \"{platform}\"\n"));
-        let manifest = package.load_text(&text).expect("each platform loads");
+        package.manifest(&with(line, &format!("platform = \"{platform}\"\n")));
+        let order = support::package::Expected {
+            platform,
+            ..expected("tierstore", "1.5.0")
+        };
+        let manifest = Manifest::load(&package.dir(), &order, &RUNNING).expect("loads");
         assert_eq!(manifest.platform, platform);
     }
     let missing = package.refusal(&with(line, ""));
@@ -55,4 +59,43 @@ fn platform_is_required_and_one_of_the_three() {
         );
         assert_eq!(refusal.reason(), "manifest_mismatch", "{value}");
     }
+}
+
+/// A package built for another platform than the order's is refused naming both, class release,
+/// `manifest_mismatch`, as a package of another service or version is: for each pair of distinct
+/// platforms, from the manifest's side and from the order's.
+#[test]
+fn a_manifest_for_another_platform_is_manifest_mismatch() {
+    let package = Package::new("platform-mismatch");
+    let line = "platform       = \"linux-x86_64\"\n";
+    for built in Platform::ALL {
+        package.manifest(&with(line, &format!("platform = \"{built}\"\n")));
+        for ordered in Platform::ALL.into_iter().filter(|p| *p != built) {
+            let order = support::package::Expected {
+                platform: ordered,
+                ..expected("tierstore", "1.5.0")
+            };
+            let refusal = Manifest::load(&package.dir(), &order, &RUNNING).unwrap_err();
+            assert_eq!(
+                refusal,
+                ManifestRefusal::PlatformMismatch {
+                    expected: ordered,
+                    found: built,
+                }
+            );
+            assert_eq!(refusal.class(), Class::Release);
+            assert_eq!(refusal.reason(), "manifest_mismatch");
+        }
+    }
+    package.manifest(EXAMPLE);
+    let order = support::package::Expected {
+        platform: Platform::MacosArm64,
+        ..expected("tierstore", "1.5.0")
+    };
+    assert_eq!(
+        Manifest::load(&package.dir(), &order, &RUNNING)
+            .unwrap_err()
+            .to_string(),
+        "the manifest is for the platform linux-x86_64, not macos-arm64"
+    );
 }
