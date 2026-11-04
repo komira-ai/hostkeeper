@@ -92,7 +92,7 @@ fn fixtures() -> Vec<Fixture> {
         fixture(
             "embedded-at-workflow.sigstore.json",
             BundleSpec {
-                workflow: ".github/workflows/artifacts.yml@other.yml",
+                workflow: ".github/workflows/artifacts.yml@other.example",
                 ..good()
             },
             "gh: --cert-identity-regex",

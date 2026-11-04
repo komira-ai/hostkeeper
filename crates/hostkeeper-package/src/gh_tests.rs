@@ -483,7 +483,7 @@ fn an_untrusted_gh_or_trusted_root_is_unavailable_and_nothing_runs() {
 
 /// The signer pattern, compiled by the `regex` crate, matches the whole signer URI of the
 /// configured workflow in any repository of the organisation, and nothing else.
-/// Catches a pattern that is only a prefix (a workflow named `artifacts.yml@other.yml` passing as
+/// Catches a pattern that is only a prefix (a workflow named `artifacts.yml@other.example` passing as
 /// `artifacts.yml`), an unanchored end, another organisation, a repository path of another
 /// depth, and a suffix after the ref.
 #[test]
@@ -504,7 +504,7 @@ fn the_signer_pattern_matches_the_complete_signer_uri_and_only_that() {
         assert!(pattern.is_match(&good), "{good}");
     }
     for bad in [
-        "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@other.yml@refs/heads/main",
+        "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@other.example@refs/heads/main",
         "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@refs/heads/main@x",
         "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@",
         "https://github.com/example-org/tool-a/.github/workflows/artifacts.yml@heads/main",

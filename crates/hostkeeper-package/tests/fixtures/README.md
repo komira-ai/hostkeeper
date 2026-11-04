@@ -49,7 +49,7 @@ column is the reason the test expects, exactly.
 | `good.sigstore.json` | a good attestation of `good.tar.zst` | accepted |
 | `other-bytes.sigstore.json` | an attestation of other bytes (subject: the SHA-256 of `other bytes than the archive\n`): the channel serves a bundle that is not this archive's; refused before `gh` runs | the digest check before gh |
 | `other-workflow.sigstore.json` | signed by `.github/workflows/release.yml`, a workflow other than the configured one | gh: --cert-identity-regex |
-| `embedded-at-workflow.sigstore.json` | signed by `.github/workflows/artifacts.yml@other.yml`, a different workflow whose file name starts with the configured one and an `@`: the signer URI is then `.../artifacts.yml@other.yml@refs/heads/main`, which the complete-URI pattern refuses | gh: --cert-identity-regex |
+| `embedded-at-workflow.sigstore.json` | signed by `.github/workflows/artifacts.yml@other.example`, a different workflow whose file name starts with the configured one and an `@`: the signer URI is then `.../artifacts.yml@other.example@refs/heads/main`, which the complete-URI pattern refuses | gh: --cert-identity-regex |
 | `other-organisation.sigstore.json` | from the repository `other-org/tool-a`, outside the configured organisation | gh: --owner |
 | `self-hosted.sigstore.json` | built on a `self-hosted` runner | gh: --deny-self-hosted-runners |
 | `disallowed-ref.sigstore.json` | made on the tag `refs/tags/v1.2.3`, which no configured ref matches; refused before `gh` runs | the ref refs/tags/v1.2.3 matches none of the trusted signer's refs |

@@ -12,7 +12,7 @@
 //!   `^https://github\.com/<organisation>/[^/]+/<workflow>@refs/[^@]+$`, with both config values
 //!   escaped. The whole URI must match: after the workflow path comes `@` and a `refs/...` ref
 //!   with no further `@`, so a workflow whose file name merely starts with the configured one
-//!   and an `@` (`artifacts.yml@other.yml`) is a different workflow and is refused;
+//!   and an `@` (`artifacts.yml@other.example`) is a different workflow and is refused;
 //! - `--deny-self-hosted-runners` is passed only when the config's `hosted_runner` is true;
 //! - the config's refs are globs. The ref in the bundle's certificate is matched against them
 //!   here, and a ref no glob matches is rejected without running `gh`; otherwise `gh` is run once,
