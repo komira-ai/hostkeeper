@@ -2,14 +2,15 @@
 //!
 //! The race is made to happen, not waited for: the ops store's writer pauses the heartbeat that
 //! plans a rollback at its bad mark, with the plan made from the state it read; CI's set of
-//! another version runs until it says it is at the fleet's lock, and only then does the heartbeat
-//! go on. Every step waits on a message; nothing sleeps.
+//! another version runs until it finds the fleet's lock held and says it waits for it, and only
+//! then does the heartbeat go on. Every step waits on a message; nothing sleeps.
 
 use std::sync::Mutex;
 use std::sync::mpsc;
 
 use crate::ops::{OpsError, OpsState, OpsStore};
 use crate::rollback_tests::{AUTO, ONE, THREE, TWO, failure, good, release, rig_over, round, who};
+use crate::service::SetProgress;
 use crate::testutil::{LEGACY, ci_token, version};
 
 /// What pauses the writer: it says it is paused, and waits to be let go.
@@ -18,13 +19,15 @@ struct Gate {
     go: Mutex<mpsc::Receiver<()>>,
 }
 
-/// Proves: CI's set reaches the fleet's lock while the rollback is paused at its mark holding
-/// that lock, so the set waits for it; the rollback, planned from 2.0, is written first and
-/// CI's 3.0 after it, in memory and on disk.
+/// Proves: CI's set, started while the rollback is paused at its mark holding the fleet's lock,
+/// finds that lock held and waits for it: the first thing the test hears of the set is that it
+/// waits, not that it returned. The rollback, planned from 2.0, is written first and CI's 3.0
+/// after it, in memory and on disk.
 ///
 /// Catches: a rollback written over a version CI stored while the rollback was being made. A
-/// set that took no lock would run on past the progress event and store 3.0 while the rollback
-/// is paused, and the rollback would then put 1.0 over it.
+/// set that took no lock, or took it after storing, never waits: it returns while the rollback
+/// is still paused, so the first message is `Returned` and the test fails there, whatever the
+/// threads' scheduling.
 #[tokio::test]
 async fn a_rollback_paused_at_its_mark_does_not_overwrite_the_version_ci_sets_meanwhile() {
     let (paused_tx, paused_rx) = mpsc::channel();
@@ -69,19 +72,21 @@ async fn a_rollback_paused_at_its_mark_does_not_overwrite_the_version_ci_sets_me
                 .expect("a heartbeat")
         });
         paused_rx.recv().expect("the rollback paused at its mark");
-        let (at_lock_tx, at_lock_rx) = mpsc::channel();
-        coordinator.tell_at_set_lock(at_lock_tx);
-        let ci = scope.spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+        let (progress_tx, progress_rx) = mpsc::channel();
+        coordinator.tell_when_set_waits(progress_tx.clone());
+        let ci = scope.spawn(move || {
+            let set = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("a runtime")
-                .block_on(coordinator.set_desired(Some(&token), THREE.as_bytes()))
+                .block_on(coordinator.set_desired(Some(&token), THREE.as_bytes()));
+            let _ = progress_tx.send(SetProgress::Returned);
+            set
         });
-        at_lock_rx.recv().expect("CI's set is at the fleet's lock");
-        assert!(
-            coordinator.fleet_held(),
-            "the paused rollback holds the lock CI's set needs"
+        assert_eq!(
+            progress_rx.recv().expect("word of CI's set"),
+            SetProgress::Waits,
+            "CI's set waits for the lock the paused rollback holds"
         );
         go_tx.send(()).expect("let the rollback go");
         beat.join().expect("the heartbeat");

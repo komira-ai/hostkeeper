@@ -16,7 +16,7 @@ use crate::testutil::{Log, scratch};
 const AT: u64 = 1_800_000_000;
 
 /// The clock of the audit file: always `AT`.
-fn fixed() -> hostkeeper_oidc::Clock {
+fn fixed() -> audit_file::UnixClock {
     Arc::new(|| AT)
 }
 
@@ -328,4 +328,19 @@ fn an_audit_line_is_read_back_whole() {
     let read: AuditLine = serde_json::from_str(newer).expect("read");
     assert_eq!(read.seq, 1);
     assert_eq!(read.by, "a");
+}
+
+/// Proves: a store opened without a clock of its own stamps a line with the wall clock, in
+/// seconds since the epoch: the line is read back with its number and a time after the epoch.
+/// Catches: a store whose audit lines are stamped by nothing, or by a clock that is not set.
+#[test]
+fn a_store_stamps_its_audit_lines_with_the_wall_clock() {
+    let dir = scratch("audit-wall-clock");
+    let (file, audit) = files(&dir);
+    let store = OpsStore::open(&file).expect("opened");
+    make(&store, "alice", "exclude");
+    let read = audit_file::read(&audit).expect("read");
+    assert_eq!(read.lines.len(), 1);
+    assert_eq!(read.lines[0].seq, 1);
+    assert!(read.lines[0].at_unix > 0, "{:?}", read.lines[0]);
 }

@@ -25,12 +25,27 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
 use std::os::unix::fs::{FileExt as _, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::desired::{StoreError, dir_of};
 use crate::ops::{AuditEntry, OpsError};
+
+/// Seconds since the epoch, for the `at_unix` of the audit file's lines.
+pub(crate) type UnixClock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+/// The wall clock, for the `at_unix` of a line: when a change was made, for the people who read
+/// the file. No decision reads it; the coordinator decides by its own monotonic clock.
+#[must_use]
+pub(crate) fn wall_clock() -> UnixClock {
+    Arc::new(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs())
+    })
+}
 
 /// The audit file of the ops file at `ops`: its name with `.audit` added.
 #[must_use]

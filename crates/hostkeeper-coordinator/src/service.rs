@@ -265,10 +265,20 @@ pub struct Coordinator {
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
     features: Vec<String>,
-    /// Told when CI's set of a desired state is about to take the fleet's lock: a test's
-    /// progress event, so a race is made to happen rather than waited for.
+    /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
+    /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
-    set_at_lock: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    set_waits: Mutex<Option<std::sync::mpsc::Sender<SetProgress>>>,
+}
+
+/// What a test hears of CI's set of a desired state while it races another change.
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SetProgress {
+    /// The set found the fleet's lock held, and waits for it.
+    Waits,
+    /// The set returned.
+    Returned,
 }
 
 impl std::fmt::Debug for Coordinator {
@@ -303,7 +313,7 @@ impl Coordinator {
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
             #[cfg(test)]
-            set_at_lock: Mutex::new(None),
+            set_waits: Mutex::new(None),
         }
     }
 
@@ -373,25 +383,30 @@ impl Coordinator {
         )
     }
 
-    /// Tells `reached` each time CI's set of a desired state is about to take the fleet's lock.
+    /// Tells `waits` [`SetProgress::Waits`] each time CI's set of a desired state finds the
+    /// fleet's lock held and waits for it.
     #[cfg(test)]
-    pub(crate) fn tell_at_set_lock(&self, reached: std::sync::mpsc::Sender<()>) {
+    pub(crate) fn tell_when_set_waits(&self, waits: std::sync::mpsc::Sender<SetProgress>) {
         *self
-            .set_at_lock
+            .set_waits
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(reached);
+            .unwrap_or_else(PoisonError::into_inner) = Some(waits);
     }
 
-    /// Says that CI's set is at the fleet's lock, to the test that asked.
-    #[cfg(test)]
-    fn reached_set_lock(&self) {
-        if let Some(reached) = &*self
-            .set_at_lock
+    /// The fleet's lock, for CI's set of a desired state. Under test, a set that finds the
+    /// lock held first says so to the test that asked ([`Self::tell_when_set_waits`]); then it
+    /// waits for the lock, as every build does.
+    fn lock_fleet_for_set(&self) -> std::sync::MutexGuard<'_, Fleet> {
+        #[cfg(test)]
+        self.set_waits
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-        {
-            let _ = reached.send(());
-        }
+            .iter()
+            .filter(|_| self.fleet_held())
+            .for_each(|waits| {
+                let _ = waits.send(SetProgress::Waits);
+            });
+        self.fleet.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The ops store.
@@ -642,9 +657,7 @@ impl Coordinator {
         // plans a rollback and writes it under that lock, so it cannot write a rollback from
         // the state it read over the version CI stores meanwhile.
         {
-            #[cfg(test)]
-            self.reached_set_lock();
-            let fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+            let fleet = self.lock_fleet_for_set();
             clear_bad(&self.ops, &fleet, &service, &desired.version)?;
             self.desired.set(&service, desired.clone())?;
         }

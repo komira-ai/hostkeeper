@@ -42,13 +42,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use hostkeeper_oidc::{Clock as UnixClock, system_clock};
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::UpdateResult;
 use serde::{Deserialize, Serialize};
 
-use crate::audit_file::{self, AuditLine, AuditLog};
+use crate::audit_file::{self, AuditLine, AuditLog, UnixClock, wall_clock};
 use crate::desired::StoreError;
 use crate::ops_file;
 use crate::service::Unauthorized;
@@ -400,7 +399,7 @@ impl OpsStore {
             writing: Mutex::new(()),
             write,
             audit: None,
-            unix: system_clock(),
+            unix: wall_clock(),
             #[cfg(test)]
             interleave: Mutex::new(None),
         }
