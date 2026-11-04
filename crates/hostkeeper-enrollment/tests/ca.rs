@@ -23,7 +23,6 @@ use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::ServerCertVerifier;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::server::WebPkiClientVerifier;
-use rustls::server::danger::ClientCertVerifier;
 use sha2::{Digest, Sha256};
 use support::{FixedClock, HostKey, NOW, TestCa, csr_of, files, host_id, scratch, subject};
 use x509_parser::certificate::X509Certificate;

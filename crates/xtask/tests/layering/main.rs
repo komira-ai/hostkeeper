@@ -532,7 +532,8 @@ fn a_missing_layer_crate_is_refused() {
     let root = (
         "Cargo.toml".to_string(),
         "[workspace]\nresolver = \"3\"\nexclude = [\"vendored\"]\nmembers = [\n    \
-         \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
+         \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-enrollment\",\n    \
+         \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
          \"crates/hostkeeper-testkit\",\n]\n"
             .to_string(),
     );
