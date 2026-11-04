@@ -9,6 +9,7 @@
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
 //!   ([`contract::stamp_string`]) and the check that a built binary prints exactly it.
 //! - `package` ([`package`]): the deterministic hostkeeper package, `.tar.zst`, and its SHA-256.
+//! - `index` ([`index`]): the release index, `index.json`: which package serves each platform.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `plan` ([`plan`]): whether a commit (or, on the scheduled path, each missed commit) is
 //!   released, and under which version.
@@ -29,6 +30,7 @@ pub(crate) mod contract;
 mod fakes;
 mod git;
 mod github;
+mod index;
 mod locate;
 #[cfg(test)]
 mod no_network;
@@ -140,6 +142,15 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Write `index.json`, the release index of the hostkeeper packages of a version in a
+    /// directory: one entry per platform whose package is there.
+    Index {
+        #[arg(long)]
+        version: Version,
+        /// The directory holding the packages; the index is written there.
+        #[arg(long)]
+        dir: PathBuf,
+    },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
     /// Whether a commit is released, and as which version.
@@ -201,6 +212,7 @@ pub(crate) fn run<A: Adapters>(
         Verb::SetVersion { version, root } => set_version::set_version(&root, &version),
         Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
+        Verb::Index { version, dir } => index::write_index(&dir, &version),
         verb => run_with(verb, &connect().ports()),
     }
 }
@@ -273,9 +285,10 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => publish::publish(ports, &dir, &repo, &version, &commit),
-        Verb::SetVersion { .. } | Verb::Stamp { .. } | Verb::CompareImages { .. } => {
-            run(verb, || Lent(*ports))
-        }
+        Verb::SetVersion { .. }
+        | Verb::Stamp { .. }
+        | Verb::CompareImages { .. }
+        | Verb::Index { .. } => run(verb, || Lent(*ports)),
     }
 }
 

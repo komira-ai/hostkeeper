@@ -627,3 +627,16 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
         BINARY
     );
 }
+
+#[test]
+fn a_macos_package_is_refused_until_the_macos_daemon_defines_its_units() {
+    // Catches: a macos-arm64 package that carries a systemd unit, which a Mac cannot run.
+    let dir = scratch("package-macos");
+    let (history, commit) = history();
+    let r = request(&dir, UNIT.as_bytes(), &commit, Platform::MacosArm64, "out");
+    assert_eq!(
+        package(&history, &r),
+        Err(Error::Failed(MACOS_LATER.to_owned()))
+    );
+    assert!(!r.out.exists());
+}

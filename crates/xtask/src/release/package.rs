@@ -22,6 +22,10 @@ use super::Error;
 use super::contract::{Commit, DIGEST_SUFFIX, Platform, Version, package_name};
 use super::ports::GitHistory;
 
+/// Why there is no macos-arm64 package yet: its units are launchd plists, which the macOS
+/// daemon (design build item B18) defines.
+const MACOS_LATER: &str = "the macos-arm64 package waits for the macOS daemon: its units are launchd plists, not the systemd unit this verb packages";
+
 /// What `release package` builds a package from.
 pub(crate) struct Request {
     pub(crate) platform: Platform,
@@ -111,6 +115,9 @@ pub(crate) fn compress(tar: &[u8]) -> Vec<u8> {
 
 /// Builds the package of `request` and its digest file; the lines to print.
 pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<String>, Error> {
+    if request.platform == Platform::MacosArm64 {
+        return Err(Error::Failed(MACOS_LATER.to_owned()));
+    }
     let binary = read(&request.binary)?;
     let unit = read(&request.unit)?;
     check_unit(&request.unit, &unit)?;

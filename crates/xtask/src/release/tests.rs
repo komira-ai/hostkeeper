@@ -166,6 +166,26 @@ fn verbs_that_read_no_port_run_with_the_ports_lent_back() {
     std::fs::write(d.join("b"), b"same").expect("write");
     let compare = verb(&["compare-images", text(&d.join("a")), text(&d.join("b"))]);
     assert!(run_with(compare, &ports).is_ok());
+
+    let index = verb(&["index", "--version", "0.1.9", "--dir", text(&d)]);
+    assert!(matches!(run_with(index, &ports), Err(Error::Failed(_))));
+}
+
+#[test]
+fn index_writes_the_release_index_without_asking_for_adapters() {
+    // Catches: `--version` or `--dir` not reaching the index verb, or the verb building the real
+    // adapters though it reads no port.
+    let d = scratch("release-index-verb");
+    std::fs::write(d.join("hostkeeper-0.1.9-linux-arm64.tar.zst"), b"arm").expect("write");
+    let (out, connected) = connects(verb(&["index", "--version", "0.1.9", "--dir", text(&d)]));
+    assert_eq!(
+        out,
+        Ok(vec![format!(
+            "{}: the packages of hostkeeper 0.1.9 for linux-arm64",
+            d.join("index.json").display()
+        )])
+    );
+    assert!(!connected);
 }
 
 #[test]

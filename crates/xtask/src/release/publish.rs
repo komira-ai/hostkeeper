@@ -137,7 +137,7 @@ pub(crate) fn notes(version: &Version, commit: &Commit) -> String {
 
 /// The name and SHA-256 of every asset of `version` in `dir`, in name order.
 fn local_assets(dir: &Path, version: &Version) -> Result<BTreeMap<String, String>, Error> {
-    asset_names(version, &Platform::ALL)
+    asset_names(version, &Platform::RELEASED)
         .into_iter()
         .map(|name| {
             let digest = file_sha256(&dir.join(&name))?;

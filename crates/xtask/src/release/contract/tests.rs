@@ -38,15 +38,15 @@ fn asset_names_are_the_documented_contract() {
     // Catches: a name added, removed or renamed in `asset_names` without the baseline file
     // changing with it, or a platform added or dropped.
     let v = version("7.8.9");
-    assert_eq!(asset_names(&v, &Platform::ALL), baseline_for(&v));
-    assert_eq!(asset_names(&v, &Platform::ALL).len(), 31);
+    assert_eq!(asset_names(&v, &Platform::RELEASED), baseline_for(&v));
+    assert_eq!(asset_names(&v, &Platform::RELEASED).len(), 32);
 }
 
 #[test]
 fn asset_name_list_only_grows() {
     // Catches: a released name that the current list no longer holds; adding a name is allowed.
     let v = version("0.1.4");
-    let current = asset_names(&v, &Platform::ALL);
+    let current = asset_names(&v, &Platform::RELEASED);
     assert_eq!(
         missing_from(&baseline_for(&v), &current),
         Vec::<String>::new()
@@ -196,7 +196,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let attested = attested_names(&v);
     let summed = summed_names(&v);
     assert_eq!(attested.len(), 12);
-    assert_eq!(summed.len(), 18);
+    assert_eq!(summed.len(), 19);
+    assert!(summed.contains(&INDEX.to_owned()) & !attested.contains(&INDEX.to_owned()));
     assert!(attested.iter().all(|a| summed.contains(a)));
     assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
     assert!(attested.contains(&package_name(&v, Platform::LinuxArm64)));
@@ -207,6 +208,47 @@ fn the_attested_and_summed_names_partition_the_assets() {
     assert_eq!(bundle_of("a.deb"), "a.deb.sigstore.json");
     assert_eq!(
         Platform::ALL.map(Platform::name),
-        ["linux-x86_64", "linux-arm64"]
+        ["linux-arm64", "linux-x86_64", "macos-arm64"]
+    );
+}
+
+#[test]
+fn there_are_exactly_three_platforms_and_a_release_ships_the_linux_ones() {
+    // Catches: a fourth platform, a name read loosely, or macOS shipped before its daemon.
+    for platform in Platform::ALL {
+        assert_eq!(Platform::of_name(platform.name()), Some(platform));
+    }
+    for bad in [
+        "linux-amd64",
+        "Linux-x86_64",
+        "macos-x86_64",
+        "windows-x86_64",
+        "",
+    ] {
+        assert_eq!(Platform::of_name(bad), None, "{bad}");
+    }
+    assert_eq!(
+        Platform::RELEASED,
+        [Platform::LinuxX86_64, Platform::LinuxArm64]
+    );
+}
+
+#[test]
+fn a_macos_platform_has_a_binary_a_package_and_an_sbom_but_no_linux_assets() {
+    // Catches: a deb, an rpm, a coordinator or an image named for macOS, or its package without
+    // a bundle or digest file.
+    let v = version("0.2.1");
+    assert_eq!(
+        asset_names(&v, &[Platform::MacosArm64]),
+        [
+            "SHA256SUMS",
+            "hostkeeper-0.2.1-macos-arm64.cdx.json",
+            "hostkeeper-0.2.1-macos-arm64.tar.gz",
+            "hostkeeper-0.2.1-macos-arm64.tar.gz.sigstore.json",
+            "hostkeeper-0.2.1-macos-arm64.tar.zst",
+            "hostkeeper-0.2.1-macos-arm64.tar.zst.sha256",
+            "hostkeeper-0.2.1-macos-arm64.tar.zst.sigstore.json",
+            "index.json",
+        ]
     );
 }

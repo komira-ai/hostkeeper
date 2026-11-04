@@ -7,7 +7,10 @@
 //!    digest is that of the file;
 //! 3. the `.sha256` file of each package holds exactly `<sha256 of the package>  <name>` and a
 //!    line break;
-//! 4. each attested asset verifies twice, online and from its bundle, and every attestation
+//! 4. `index.json` is the release index of the packages in the directory: it reads as the index
+//!    of hostkeeper at the version, lists every package with its size and SHA-256, and is
+//!    written canonically;
+//! 5. each attested asset verifies twice, online and from its bundle, and every attestation
 //!    returned names this repository's signer workflow and ref, the pinned commit, and the
 //!    SHA-256 of the file.
 
@@ -15,9 +18,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, Platform, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Version, asset_names,
-    attested_names, bundle_of, summed_names,
+    Commit, DIGEST_SUFFIX, INDEX, PROGRAM, Platform, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Version,
+    asset_names, attested_names, bundle_of, package_name, summed_names,
 };
+use super::index::ReleaseIndex;
 use super::ports::{Attestation, PortError, Verifier};
 use super::{Error, file_sha256};
 
@@ -29,12 +33,13 @@ pub(crate) fn check(
     version: &Version,
     commit: &Commit,
 ) -> Result<Vec<String>, Error> {
-    let expected = asset_names(version, &Platform::ALL);
+    let expected = asset_names(version, &Platform::RELEASED);
     let present = regular_files(dir)?;
     let mut problems = Vec::new();
     check_names(version, &expected, &present, &mut problems);
     check_sums(dir, version, &present, &mut problems)?;
     check_digest_files(dir, &expected, &present, &mut problems)?;
+    check_index(dir, version, &present, &mut problems)?;
     let attested = attested_names(version);
     for name in attested.iter().filter(|n| present.contains(*n)) {
         check_attestations(verifier, dir, name, commit, &mut problems)?;
@@ -134,6 +139,36 @@ fn check_sums(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// Step 4: `index.json` is the canonical release index of the packages in `dir`. It is skipped
+/// when the index or a package is absent (step 1 reported that).
+fn check_index(
+    dir: &Path,
+    version: &Version,
+    present: &BTreeSet<String>,
+    problems: &mut Vec<String>,
+) -> Result<(), Error> {
+    let packages = Platform::RELEASED.map(|p| package_name(version, p));
+    if !present.contains(INDEX) | !packages.iter().all(|p| present.contains(p)) {
+        return Ok(());
+    }
+    let path = dir.join(INDEX);
+    let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
+    let text = String::from_utf8_lossy(&bytes);
+    let expected = ReleaseIndex::of_dir(dir, PROGRAM, version, &Platform::RELEASED)?;
+    match ReleaseIndex::parse(&text, PROGRAM, version) {
+        Err(e) => problems.push(format!("{INDEX}: {e}")),
+        Ok(read) if read != expected => problems.push(format!(
+            "{INDEX} does not list exactly the packages of the directory with their sizes and \
+             SHA-256 digests"
+        )),
+        Ok(_) if text != expected.to_json() => {
+            problems.push(format!("{INDEX} is not written canonically"));
+        }
+        Ok(_) => {}
     }
     Ok(())
 }

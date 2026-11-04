@@ -33,3 +33,4 @@ hostkeeper_<version>_amd64.deb
 hostkeeper_<version>_amd64.deb.sigstore.json
 hostkeeper_<version>_arm64.deb
 hostkeeper_<version>_arm64.deb.sigstore.json
+index.json

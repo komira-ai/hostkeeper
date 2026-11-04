@@ -56,7 +56,7 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 31 assets of v0.1.5 match SHA256SUMS, and 24 attestations of \
+            "release check: the 32 assets of v0.1.5 match SHA256SUMS, and 24 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
@@ -310,5 +310,88 @@ fn a_verifier_error_is_listed_for_every_file() {
     assert_eq!(
         lines[1],
         format!("{first} (offline): verify: no attestation")
+    );
+}
+
+/// Writes `text` as `index.json` in `dir` and rewrites `SHA256SUMS` to match, so only the index
+/// check can object.
+fn replace_index(dir: &Path, text: &str) {
+    std::fs::write(dir.join(INDEX), text).expect("write the index");
+    let mut sums = String::new();
+    for name in summed_names(&version()) {
+        let digest = file_sha256(&dir.join(&name)).expect("hash");
+        sums.push_str(&format!("{digest}  {name}\n"));
+    }
+    std::fs::write(dir.join(SUMS), sums).expect("write the sums");
+}
+
+/// The index `write_assets` wrote.
+fn good_index(dir: &Path) -> ReleaseIndex {
+    ReleaseIndex::of_dir(dir, PROGRAM, &version(), &Platform::RELEASED).expect("index")
+}
+
+#[test]
+fn an_index_that_is_not_the_release_index_is_listed_with_why() {
+    // Catches: an index of another version, one that is not JSON, or one with a field the
+    // daemon's reader refuses, passing the check.
+    let (dir, commit) = assets("check-index-invalid");
+    let verifier = FakeVerifier::good(&commit);
+    let other = good_index(&dir)
+        .to_json()
+        .replace("\"version\":\"0.1.5\"", "\"version\":\"0.1.4\"");
+    replace_index(&dir, &other);
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![
+            "index.json: index_invalid: the index is of hostkeeper 0.1.4, not hostkeeper 0.1.5"
+                .to_owned()
+        ]
+    );
+}
+
+#[test]
+fn an_index_with_another_size_or_digest_is_listed() {
+    // Catches: an index whose entry is not the package beside it (another size or SHA-256), which
+    // would make every host refuse the package with package_digest_mismatch.
+    let (dir, commit) = assets("check-index-other-digest");
+    let verifier = FakeVerifier::good(&commit);
+    let mut index = good_index(&dir);
+    index.packages[0].bytes += 1;
+    replace_index(&dir, &index.to_json());
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![
+            "index.json does not list exactly the packages of the directory with their sizes and \
+             SHA-256 digests"
+                .to_owned()
+        ]
+    );
+}
+
+#[test]
+fn an_index_that_is_not_written_canonically_is_listed() {
+    // Catches: an index whose bytes differ from the canonical form, so two builds of one release
+    // would publish different index files.
+    let (dir, commit) = assets("check-index-spaced");
+    let verifier = FakeVerifier::good(&commit);
+    let spaced = good_index(&dir)
+        .to_json()
+        .replace(",\"schema\"", ", \"schema\"");
+    replace_index(&dir, &spaced);
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec!["index.json is not written canonically".to_owned()]
+    );
+}
+
+#[test]
+fn a_missing_index_is_listed_once_and_not_read() {
+    // Catches: a check that reads an index that is not there, or that does not report it.
+    let (dir, commit) = assets("check-index-missing");
+    let verifier = FakeVerifier::good(&commit);
+    std::fs::remove_file(dir.join(INDEX)).expect("remove");
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec!["missing index.json".to_owned()]
     );
 }

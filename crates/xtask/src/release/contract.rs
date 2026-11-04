@@ -10,7 +10,10 @@
 //! - the asset names of a release ([`asset_names`], the one function that lists them; the
 //!   committed baseline `crates/xtask/tests/release/asset_names.baseline` holds them).
 //!
-//! The platforms are linux-x86_64 and linux-arm64 ([`Platform::ALL`]).
+//! There are exactly three platforms, linux-x86_64, linux-arm64 and macos-arm64
+//! ([`Platform::ALL`]): one package per OS and CPU family, listed in the release index
+//! (`index.json`, see `index`). A release ships the platforms of [`Platform::RELEASED`], the two
+//! Linux ones until the macOS daemon exists.
 
 use std::fmt;
 use std::str::FromStr;
@@ -52,6 +55,9 @@ pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
+
+/// The release index: which package file serves each platform (see `index`).
+pub(crate) const INDEX: &str = "index.json";
 
 /// What a provenance bundle's file name adds to its asset's.
 pub(crate) const BUNDLE_SUFFIX: &str = ".sigstore.json";
@@ -236,40 +242,52 @@ pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
     format!("{PROGRAM} {version}+{}", commit.short())
 }
 
-/// A platform a release ships for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+/// A platform: an OS and CPU family. The set is closed; the daemon knows its own from the target
+/// it was compiled for. The instruction-set levels inside a family are the build's business, held
+/// inside one package.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, clap::ValueEnum)]
 pub(crate) enum Platform {
     #[value(name = "linux-x86_64")]
     LinuxX86_64,
     #[value(name = "linux-arm64")]
     LinuxArm64,
+    #[value(name = "macos-arm64")]
+    MacosArm64,
 }
 
 impl Platform {
-    /// Every platform a release ships for, in the order the assets list them.
-    pub(crate) const ALL: [Platform; 2] = [Platform::LinuxX86_64, Platform::LinuxArm64];
+    /// Every platform, in the order of their names.
+    pub(crate) const ALL: [Platform; 3] = [
+        Platform::LinuxArm64,
+        Platform::LinuxX86_64,
+        Platform::MacosArm64,
+    ];
 
-    /// The platform's name in asset names.
+    /// The platforms a release ships today: the Linux ones. The macOS artifacts wait for the
+    /// macOS daemon (design build item B18), which adds macos-arm64 here.
+    pub(crate) const RELEASED: [Platform; 2] = [Platform::LinuxX86_64, Platform::LinuxArm64];
+
+    /// The platform's name, in asset names, the release index and a manifest.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Platform::LinuxX86_64 => "linux-x86_64",
             Platform::LinuxArm64 => "linux-arm64",
+            Platform::MacosArm64 => "macos-arm64",
         }
     }
 
-    /// The architecture as a deb names it.
-    fn deb_arch(self) -> &'static str {
-        match self {
-            Platform::LinuxX86_64 => "amd64",
-            Platform::LinuxArm64 => "arm64",
-        }
+    /// The platform a name names, none for any other text.
+    pub(crate) fn of_name(name: &str) -> Option<Platform> {
+        Platform::ALL.into_iter().find(|p| p.name() == name)
     }
 
-    /// The architecture as an rpm names it.
-    fn rpm_arch(self) -> &'static str {
+    /// The architecture as a deb and as an rpm name it, for a Linux platform; none for macOS,
+    /// which has neither.
+    fn linux_arches(self) -> Option<(&'static str, &'static str)> {
         match self {
-            Platform::LinuxX86_64 => "x86_64",
-            Platform::LinuxArm64 => "aarch64",
+            Platform::LinuxX86_64 => Some(("amd64", "x86_64")),
+            Platform::LinuxArm64 => Some(("arm64", "aarch64")),
+            Platform::MacosArm64 => None,
         }
     }
 }
@@ -291,35 +309,40 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 
 /// Every asset of the release of `version` for `platforms`, sorted. This is the one list of
 /// asset names; [`SUMS`] lists every one of them that is neither itself nor a bundle, and every
-/// asset with a bundle (`<asset>.sigstore.json`) is attested. Per platform `<p>`, with the
-/// deb and rpm architecture `<deb>` and `<rpm>`:
+/// asset with a bundle (`<asset>.sigstore.json`) is attested. Per platform `<p>`:
 ///
-/// - `hostkeeper-<v>-<p>.tar.gz` and `hostkeeper-coordinator-<v>-<p>.tar.gz`, the binaries;
-/// - `hostkeeper_<v>_<deb>.deb` and `hostkeeper-<v>-1.<rpm>.rpm`, the Linux packages;
+/// - `hostkeeper-<v>-<p>.tar.gz`, the binary;
 /// - `hostkeeper-<v>-<p>.tar.zst`, the hostkeeper package, and its `.sha256`;
-/// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
-/// - `hostkeeper-<v>-<p>.cdx.json` and `hostkeeper-coordinator-<v>-<p>.cdx.json`, the SBOMs;
-/// - the bundle of each of the six attested files above;
+/// - `hostkeeper-<v>-<p>.cdx.json`, the SBOM;
 ///
-/// and once, `SHA256SUMS`.
+/// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:
+///
+/// - `hostkeeper-coordinator-<v>-<p>.tar.gz`, the coordinator's binary;
+/// - `hostkeeper_<v>_<deb>.deb` and `hostkeeper-<v>-1.<rpm>.rpm`, the Linux packages;
+/// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
+/// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
+///
+/// the bundle of each binary tarball, Linux package, hostkeeper package and image; and once,
+/// [`INDEX`] (the release index of the hostkeeper packages) and `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
-    let mut names = vec![SUMS.to_owned()];
+    let mut names = vec![SUMS.to_owned(), INDEX.to_owned()];
     for &platform in platforms {
         let p = platform.name();
         let package = package_name(version, platform);
-        let attested = [
-            format!("{PROGRAM}-{version}-{p}.tar.gz"),
-            format!("{COORDINATOR}-{version}-{p}.tar.gz"),
-            format!("{PROGRAM}_{version}_{}.deb", platform.deb_arch()),
-            format!("{PROGRAM}-{version}-1.{}.rpm", platform.rpm_arch()),
-            package.clone(),
-            format!("{COORDINATOR}-{version}-{p}.image.tar"),
-        ];
-        names.extend(attested.iter().map(|a| bundle_of(a)));
-        names.extend(attested);
+        let mut attested = vec![format!("{PROGRAM}-{version}-{p}.tar.gz"), package.clone()];
         names.push(format!("{package}{DIGEST_SUFFIX}"));
         names.push(format!("{PROGRAM}-{version}-{p}.cdx.json"));
-        names.push(format!("{COORDINATOR}-{version}-{p}.cdx.json"));
+        if let Some((deb, rpm)) = platform.linux_arches() {
+            attested.extend([
+                format!("{COORDINATOR}-{version}-{p}.tar.gz"),
+                format!("{PROGRAM}_{version}_{deb}.deb"),
+                format!("{PROGRAM}-{version}-1.{rpm}.rpm"),
+                format!("{COORDINATOR}-{version}-{p}.image.tar"),
+            ]);
+            names.push(format!("{COORDINATOR}-{version}-{p}.cdx.json"));
+        }
+        names.extend(attested.iter().map(|a| bundle_of(a)));
+        names.extend(attested);
     }
     names.sort();
     names
@@ -327,7 +350,7 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
 
 /// The assets of `version` that [`SUMS`] lists: all but itself and the bundles.
 pub(crate) fn summed_names(version: &Version) -> Vec<String> {
-    asset_names(version, &Platform::ALL)
+    asset_names(version, &Platform::RELEASED)
         .into_iter()
         .filter(|n| (n != SUMS) & !is_bundle(n))
         .collect()
@@ -335,7 +358,7 @@ pub(crate) fn summed_names(version: &Version) -> Vec<String> {
 
 /// The assets of `version` that are attested: those with a bundle.
 pub(crate) fn attested_names(version: &Version) -> Vec<String> {
-    asset_names(version, &Platform::ALL)
+    asset_names(version, &Platform::RELEASED)
         .iter()
         .filter_map(|n| n.strip_suffix(BUNDLE_SUFFIX))
         .map(str::to_owned)
