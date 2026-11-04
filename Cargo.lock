@@ -1881,6 +1881,7 @@ dependencies = [
  "clap",
  "flate2",
  "hex",
+ "hostkeeper-config",
  "saphyr-parser",
  "serde_json",
  "sha2",
