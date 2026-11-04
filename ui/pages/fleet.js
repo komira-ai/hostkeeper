@@ -63,7 +63,8 @@ function marks(view) {
     out.push("holds the update slot");
   }
   const gate = enumLabel(view.gateReason, "GATE_REASON_");
-  if (gate !== "-" && gate !== "none" && gate !== "up_to_date") {
+  const said = (gate === "held" && out.includes("held")) || (gate === "-" || gate === "none" || gate === "up_to_date");
+  if (!said) {
     out.push(gate);
   }
   return out;

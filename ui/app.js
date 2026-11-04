@@ -33,9 +33,11 @@ export function startApp({ doc, root, fetch, confirm }) {
   const api = createApi({
     fetch,
     getToken: session.getToken,
-    clearToken: (error) => {
-      refusal = describeError(error);
-      session.signOut();
+    clearToken: (error, refused) => {
+      if (session.getToken() === refused) {
+        refusal = describeError(error);
+        session.forget(refused);
+      }
     },
   });
   let current = { view: "fleet", params: {} };
@@ -89,9 +91,11 @@ export function startApp({ doc, root, fetch, confirm }) {
   }
 
   // What a page may do. `refresh` and `report` act while the operator stays on the page the
-  // context was made for; `show` only while this rendering of it is the latest.
+  // context was made for, under the sign-in it was made under; `show` only while this rendering
+  // of it is the latest.
   function context(mine, at) {
-    const here = () => current === at && session.isSignedIn();
+    const signedIn = session.revision();
+    const here = () => current === at && session.isSignedIn() && session.revision() === signedIn;
     return {
       api,
       params: at.params,
@@ -120,16 +124,17 @@ export function startApp({ doc, root, fetch, confirm }) {
   async function show() {
     generation += 1;
     const mine = generation;
-    const [, title, page] = PAGES.find(([name]) => name === current.view);
+    const at = current;
+    const [, title, page] = PAGES.find(([name]) => name === at.view);
     shown = null;
     draw();
     let tree;
     try {
-      tree = await page.render(context(mine, current));
+      tree = await page.render(context(mine, at));
     } catch (error) {
       tree = errorView(title, error);
     }
-    if (mine === generation && session.isSignedIn()) {
+    if (mine === generation && session.isSignedIn() && current === at) {
       shown = tree;
       draw();
     }

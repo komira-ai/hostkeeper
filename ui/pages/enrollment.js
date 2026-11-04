@@ -2,9 +2,17 @@
 // Calls: Enrollment.List; on a button, Enrollment.Approve, which sends back the key hash the
 // list gave for the request. Claims authorise nothing: they help an operator recognise a machine.
 
-import { h, action, checkbox, errorView, field, fmtUnix, table, trimmed, words } from "../view.js";
+import {
+  h, action, checkbox, errorView, field, fmtUnix, reasonProblem, table, trimmed, words,
+} from "../view.js";
 
 const PAGE_SIZE = 50;
+// The grammars of operator.proto: a host id is a node id (1 to 63 of `[a-z0-9-]`, not starting
+// or ending with `-`), a role 1 to 32 of `[a-z0-9-]` with a letter first, a service name 1 to 64
+// of `[a-z0-9-]`.
+const HOST_ID = /^(?=.{1,63}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+const ROLE = /^[a-z][a-z0-9-]{0,31}$/;
+const SERVICE = /^[a-z0-9-]{1,64}$/;
 
 function claimTable(c) {
   const facts = [
@@ -21,22 +29,44 @@ function claimTable(c) {
 }
 
 // The ApproveRequest for `request` (a PendingEnrollment) from what the operator typed, or a
-// sentence saying what is missing. The key hash is the one the list gave, sent back unchanged;
-// `replace` is true only when its box is ticked.
+// sentence saying what is missing or wrong, each input checked on its own against its grammar.
+// The key hash is the one the list gave, sent back unchanged; `replace` is true only when its box
+// is ticked.
 export function approval(request, form) {
   const hostId = trimmed(form.hostId);
   const role = trimmed(form.role);
-  if (hostId === "" || role === "") {
-    return "Name the host id and the role.";
+  const services = words(form.serviceList);
+  const reason = trimmed(form.reason);
+  if (hostId === "") {
+    return "Name the host id.";
+  }
+  if (!HOST_ID.test(hostId)) {
+    return "A host id is 1 to 63 of a-z, 0-9 and -, not starting or ending with -.";
+  }
+  if (role === "") {
+    return "Name the role.";
+  }
+  if (!ROLE.test(role)) {
+    return "A role is 1 to 32 of a-z, 0-9 and -, a letter first.";
+  }
+  const badService = services.find((s) => !SERVICE.test(s));
+  if (badService !== undefined) {
+    return `${badService} is not a service name: 1 to 64 of a-z, 0-9 and -.`;
+  }
+  if (reason === "") {
+    return "Give a reason for the approval.";
+  }
+  if (reasonProblem(reason) !== null) {
+    return reasonProblem(reason);
   }
   return {
     requestId: request.requestId,
     keySha256: request.keySha256,
     hostId,
     role,
-    services: words(form.serviceList),
+    services,
     replace: form.replace === true,
-    reason: trimmed(form.reason),
+    reason,
   };
 }
 

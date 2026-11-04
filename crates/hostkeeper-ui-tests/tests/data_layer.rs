@@ -58,7 +58,7 @@ fn call_sends_post_path_bearer_token_and_json_body() {
     );
     assert_eq!(sent.header("content-type"), Some("application/json"));
     assert_eq!(sent.body(), json!({}));
-    assert_eq!(sent.init["credentials"], "omit");
+    assert_fetch_protections(sent);
 
     ui.reply(
         "hostkeeper.operator.v1.Hosts/Get",
@@ -71,6 +71,115 @@ fn call_sends_post_path_bearer_token_and_json_body() {
     let requests = ui.requests();
     assert_eq!(requests[1].url, "/hostkeeper.operator.v1.Hosts/Get");
     assert_eq!(requests[1].body(), json!({"nodeId": "web-1"}));
+    assert_fetch_protections(&requests[1]);
+}
+
+/// The options every request carries: no cookie or other credential, no cache, no redirect
+/// followed, no referrer.
+fn assert_fetch_protections(sent: &support::Request) {
+    for (option, value) in [
+        ("method", "POST"),
+        ("credentials", "omit"),
+        ("cache", "no-store"),
+        ("redirect", "error"),
+        ("referrerPolicy", "no-referrer"),
+    ] {
+        assert_eq!(sent.init[option], value, "{option}");
+    }
+    let headers: Vec<String> = sent.init["headers"]
+        .as_object()
+        .expect("headers")
+        .keys()
+        .map(|k| k.to_ascii_lowercase())
+        .collect();
+    assert_eq!(headers, ["authorization", "content-type"]);
+}
+
+#[test]
+fn a_redirect_is_an_error_that_carries_nothing_of_the_request() {
+    // Catches: a redirect answer taken as a reply, or an error that names the request's headers.
+    let mut ui = Ui::start();
+    ui.reply_raw(LIST, 302, "Location: /elsewhere");
+    let out = ui.run(&call_driver(LIST, "{}"));
+    assert_eq!(
+        out["error"],
+        json!({"name": "ApiError", "message": "UNKNOWN", "code": "UNKNOWN", "reason": "",
+               "httpStatus": 302, "signInRequired": false, "text": "ApiError: UNKNOWN"})
+    );
+    assert_eq!(out["signedIn"], true);
+}
+
+#[test]
+fn a_refusal_that_holds_the_token_loses_its_reason() {
+    // Catches: a reason or a code kept although it holds the token, or is part of it, so that
+    // the token reaches the error and the page.
+    let token = "tok_demo_42";
+    for reason in [
+        "failed_tok_demo_42",
+        "tok_demo_42_again",
+        "tok_demo_42",
+        "demo",
+        "tok",
+    ] {
+        let mut ui = Ui::start();
+        ui.refuse(LIST, 412, "FAILED_PRECONDITION", reason);
+        let out = ui.run(&format!(
+            r#"
+import {{ api }} from "../test/kit.js";
+import {{ describeError }} from "./view.js";
+export async function main() {{
+  try {{ await api("{token}").call("{LIST}", {{}}); return "replied"; }}
+  catch (e) {{ return {{ message: e.message, reason: e.reason, shown: describeError(e), text: String(e) }}; }}
+}}"#
+        ));
+        assert_eq!(
+            out,
+            json!({"message": "FAILED_PRECONDITION", "reason": "",
+                   "shown": "FAILED_PRECONDITION", "text": "ApiError: FAILED_PRECONDITION"}),
+            "{reason}"
+        );
+    }
+    let mut ui = Ui::start();
+    ui.refuse(LIST, 400, "TOK_DEMO_42", "x_tok_demo_42");
+    let out = ui.run(&format!(
+        r#"
+import {{ api }} from "../test/kit.js";
+export async function main() {{
+  try {{ await api("TOK_DEMO_42").call("{LIST}", {{}}); return "replied"; }}
+  catch (e) {{ return [e.code, e.reason, e.message]; }}
+}}"#
+    ));
+    assert_eq!(
+        out,
+        json!(["UNKNOWN", "x_tok_demo_42", "UNKNOWN: x_tok_demo_42"])
+    );
+}
+
+#[test]
+fn a_refusal_whose_body_cannot_be_read_still_says_what_its_status_says() {
+    // Catches: a 401 or 403 whose body fails to read taken as a network failure, which would
+    // keep the refused token.
+    let cases: [(u16, &str, bool); 4] = [
+        (401, "UNAUTHENTICATED", false),
+        (403, "PERMISSION_DENIED", false),
+        (500, "UNKNOWN", true),
+        (200, "NETWORK", true),
+    ];
+    for (status, code, kept) in cases {
+        let mut ui = Ui::start();
+        ui.unreadable(LIST, status);
+        let out = ui.run(&call_driver(LIST, "{}"));
+        assert_eq!(
+            json!([
+                out["error"]["code"],
+                out["error"]["reason"],
+                out["error"]["httpStatus"],
+                out["signedIn"]
+            ]),
+            json!([code, "", status, kept]),
+            "{status}"
+        );
+    }
 }
 
 #[test]
@@ -134,7 +243,7 @@ fn a_gateway_error_becomes_an_api_error_with_code_and_reason() {
 fn a_reply_that_breaks_the_gateway_shape_is_an_error_without_its_text() {
     // Catches: a body that is not a refusal read as one, text from it copied into the error, and
     // a success body that is not a JSON object returned as a reply.
-    let cases: [(u16, &str, Value); 7] = [
+    let cases: [(u16, &str, Value); 10] = [
         (500, "Internal Server Error", json!(["UNKNOWN", ""])),
         (
             503,
@@ -150,6 +259,9 @@ fn a_reply_that_breaks_the_gateway_shape_is_an_error_without_its_text() {
         (200, "not json", json!(["BAD_REPLY", ""])),
         (200, "[1, 2]", json!(["BAD_REPLY", ""])),
         (200, "null", json!(["BAD_REPLY", ""])),
+        (200, "5", json!(["BAD_REPLY", ""])),
+        (200, "true", json!(["BAD_REPLY", ""])),
+        (200, "\"hosts\"", json!(["BAD_REPLY", ""])),
     ];
     for (status, body, expected) in cases {
         let mut ui = Ui::start();
@@ -179,10 +291,11 @@ fn a_reply_that_breaks_the_gateway_shape_is_an_error_without_its_text() {
 fn an_unauthenticated_reply_clears_the_token() {
     // Catches: a token that survives a 401 or 403, or an UNAUTHENTICATED or PERMISSION_DENIED
     // code, so that the next call still sends it.
-    let refusals: [(u16, &str, &str); 4] = [
+    let refusals: [(u16, &str, &str); 5] = [
         (401, "UNAUTHENTICATED", "unauthorized"),
         (403, "PERMISSION_DENIED", "forbidden"),
         (400, "UNAUTHENTICATED", "unauthorized"),
+        (400, "PERMISSION_DENIED", "forbidden"),
         (401, "", ""),
     ];
     for (status, code, reason) in refusals {

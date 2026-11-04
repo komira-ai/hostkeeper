@@ -43,8 +43,9 @@ export class ApiError extends Error {
   }
 }
 
-// The refusal a gateway error reply says. A code or a reason that breaks its grammar, or that
-// is part of the token, is not kept: the error never carries text it should not.
+// The refusal a gateway error reply says. A code or a reason that breaks its grammar, that is
+// part of the token or that holds the token, is not kept: the error never carries text it should
+// not. `text` is null when the body could not be read: the status still says what it says.
 function refusal(status, text, token) {
   let parsed = null;
   try {
@@ -53,7 +54,8 @@ function refusal(status, text, token) {
     parsed = null;
   }
   const body = parsed !== null && typeof parsed === "object" ? parsed : {};
-  const kept = (value, grammar) => typeof value === "string" && grammar.test(value) && !token.includes(value);
+  const kept = (value, grammar) => typeof value === "string" && grammar.test(value)
+    && !token.includes(value) && !value.includes(token);
   let code = kept(body.code, CODE) ? body.code : "UNKNOWN";
   if (status === 401) {
     code = "UNAUTHENTICATED";
@@ -65,7 +67,9 @@ function refusal(status, text, token) {
 }
 
 // `fetch` (a URL and an init object) is the browser's, or a test's fake. `getToken()` returns
-// the token or null; `clearToken(error)` forgets it, given the refusal that said to.
+// the token or null. `clearToken(error, token)` is told that `token`, the one the refused call
+// sent, was refused: it forgets the token only if it is still the one held, so a late refusal of
+// a token the operator has since replaced signs nothing out.
 export function createApi({ fetch, getToken, clearToken }) {
   async function call(method, body) {
     if (typeof method !== "string" || !METHOD.test(method)) {
@@ -93,18 +97,21 @@ export function createApi({ fetch, getToken, clearToken }) {
       throw new ApiError("NETWORK", "", 0);
     }
     const status = response.status;
-    let text;
+    let text = null;
     try {
       text = await response.text();
     } catch (_) {
-      throw new ApiError("NETWORK", "", status);
+      text = null;
     }
     if (status < 200 || status > 299) {
       const error = refusal(status, text, token);
       if (error.signInRequired) {
-        clearToken(error);
+        clearToken(error, token);
       }
       throw error;
+    }
+    if (text === null) {
+      throw new ApiError("NETWORK", "", status);
     }
     if (text === "") {
       return {};

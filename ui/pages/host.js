@@ -3,21 +3,39 @@
 // Hosts.SetLabels, Services.Hold and Services.Unhold.
 
 import {
-  h, action, checkbox, enumLabel, errorView, field, fmtUnix, list, scopeLabel, table, trimmed,
+  h, action, checkbox, enumLabel, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, table,
+  trimmed,
 } from "../view.js";
 
-// `key=value` pairs separated by commas or spaces, as SetLabels takes them; null when one is
-// not a pair. An empty text is the empty set, which removes every label.
+// A label key or value, as SetLabels takes it: 1 to 32 bytes of `[a-z0-9-]`.
+const LABEL = /^[a-z0-9-]{1,32}$/;
+// The most labels a host may have.
+const MAX_LABELS = 8;
+
+// `key=value` pairs separated by commas or spaces, as SetLabels takes them: `{labels}`, or
+// `{problem}`, a sentence saying why not. Each key and value must follow the label grammar (so
+// no key reaches the object's prototype), no key may be given twice, and there may be at most 8.
+// An empty text is the empty set, which removes every label.
 export function parseLabels(text) {
-  const labels = {};
+  const labels = Object.create(null);
+  let count = 0;
   for (const pair of trimmed(text).split(/[\s,]+/).filter((p) => p !== "")) {
     const at = pair.indexOf("=");
-    if (at <= 0 || at === pair.length - 1) {
-      return null;
+    const key = pair.slice(0, at);
+    const value = pair.slice(at + 1);
+    if (at < 0 || !LABEL.test(key) || !LABEL.test(value)) {
+      return { problem: `Labels are key=value pairs, each key and value 1 to 32 of a-z, 0-9 and -: not ${pair}.` };
     }
-    labels[pair.slice(0, at)] = pair.slice(at + 1);
+    if (key in labels) {
+      return { problem: `The label ${key} is given twice.` };
+    }
+    labels[key] = value;
+    count += 1;
   }
-  return labels;
+  if (count > MAX_LABELS) {
+    return { problem: `A host has at most ${MAX_LABELS} labels, not ${count}.` };
+  }
+  return { labels };
 }
 
 function lastUpdate(result) {
@@ -57,7 +75,7 @@ function serviceSection(ctx, nodeId, view) {
     if (trimmed(form.reason) === "") {
       return "Give a reason first.";
     }
-    return run();
+    return reasonProblem(trimmed(form.reason)) || run();
   };
   const reason = () => trimmed(form.reason);
   return h("section", { class: "service" },
@@ -95,9 +113,11 @@ function serviceSection(ctx, nodeId, view) {
           return `Included ${nodeId} in ${service}.`;
         }),
         action(ctx, "Abort the running update", "abort", needReason(async () => {
-          await ctx.api.call("hostkeeper.operator.v1.Hosts/Abort", { nodeId, service, reason: reason() });
+          const reply = await ctx.api.call("hostkeeper.operator.v1.Hosts/Abort", { nodeId, service, reason: reason() });
           ctx.refresh();
-          return `Abort of ${service} queued for ${nodeId}'s next heartbeat.`;
+          return reply.queued === true
+            ? `Abort of ${service} queued for ${nodeId}'s next heartbeat.`
+            : `Nothing to abort: ${nodeId} runs nothing of ${service}, so no abort was queued.`;
         })),
         action(ctx, "Hold here", "hold", needReason(async () => {
           await ctx.api.call("hostkeeper.operator.v1.Services/Hold",
@@ -157,9 +177,15 @@ export async function render(ctx) {
       h("legend", {}, "Labels"),
       field("Labels (key=value, separated by commas)", "labels", labelsForm, "labels"),
       action(ctx, "Set labels", "set-labels", async () => {
-        const labels = parseLabels(labelsForm.labels);
-        if (labels === null) {
-          return "Labels are key=value pairs.";
+        const parsed = parseLabels(labelsForm.labels);
+        if (parsed.problem) {
+          return parsed.problem;
+        }
+        const { labels } = parsed;
+        const had = Object.keys(host.labels || {}).length;
+        if (Object.keys(labels).length === 0 && had > 0
+          && !ctx.confirm(`Remove every label of ${nodeId}?`)) {
+          return "Labels not changed.";
         }
         await ctx.api.call("hostkeeper.operator.v1.Hosts/SetLabels", { nodeId, labels });
         ctx.refresh();

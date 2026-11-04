@@ -5,7 +5,8 @@
 // count a force's hosts. It never sets the desired version: CI does.
 
 import {
-  h, action, checkbox, enumLabel, errorView, field, list, select, table, trimmed, words,
+  h, action, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select, table,
+  trimmed, words,
 } from "../view.js";
 
 function runsService(view) {
@@ -86,6 +87,10 @@ export function forceRequest(form) {
   if (service === "" || version === "" || reason === "") {
     return "Name the service, the version and a reason.";
   }
+  const problem = reasonProblem(reason);
+  if (problem !== null) {
+    return problem;
+  }
   const request = { service, version, reason, includeHeld: form.includeHeld === true };
   if (form.targetKind === "role") {
     if (trimmed(form.role) === "") {
@@ -113,18 +118,74 @@ function forceReply(reply) {
     + ".";
 }
 
+// The force form moves through phases: `idle`; `counting`, while Hosts.List counts the hosts;
+// `confirm`, while the dialog waits for the typed number; and `sending`, from the click on Force
+// until its answer. Each count is an attempt with its own number: a count that finishes after it
+// was cancelled or started again changes nothing. Cancel is offered while counting and
+// confirming, never once the force is sent: a sent force cannot be called back.
 function forceSection(ctx, services, state, redraw) {
   const form = state.force;
-  const confirmation = () => {
+  const reset = () => {
+    state.attempt += 1;
+    state.phase = "idle";
+    state.prepared = null;
+    state.typed = "";
+  };
+  const cancel = action(ctx, "Cancel", "force-cancel", async () => {
+    reset();
+    redraw();
+    return "Force cancelled: nothing was sent.";
+  });
+  const send = async () => {
     const prepared = state.prepared;
-    if (prepared === null) {
+    if (state.phase !== "confirm" || !typedCountMatches(prepared, state.typed)) {
+      return prepared !== null && prepared.ok
+        ? `Not sent: type ${prepared.count}, the number of hosts, to confirm.`
+        : "Not sent: the hosts have not been counted.";
+    }
+    state.phase = "sending";
+    redraw();
+    let reply;
+    try {
+      reply = await sendForce(ctx.api, prepared, state.typed);
+    } catch (error) {
+      if (error.code === "NETWORK" || error.code === "BAD_REPLY") {
+        reset();
+        redraw();
+        return `The force may have been sent (${describeError(error)}). Look at this page and the audit`
+          + " log before forcing again; a new force needs a new count.";
+      }
+      state.phase = "confirm";
+      state.typed = "";
+      redraw();
+      return `Not forced: ${describeError(error)}. Type ${prepared.count} again to retry.`;
+    }
+    reset();
+    redraw();
+    ctx.refresh();
+    return forceReply(reply);
+  };
+  const confirmation = () => {
+    if (state.phase === "counting") {
+      return h("div", { class: "confirm", role: "status" }, h("p", {}, "Counting the hosts..."), cancel);
+    }
+    if (state.phase === "sending") {
+      const r = state.prepared.request;
+      return h("div", { class: "confirm", role: "status" },
+        h("p", {}, `Sending the force of ${r.service} to ${r.version} on ${state.prepared.count} hosts.`
+          + " It cannot be cancelled."),
+        h("button", { type: "button", name: "force-send", disabled: true }, "Force"));
+    }
+    if (state.phase !== "confirm") {
       return null;
     }
+    const prepared = state.prepared;
     if (!prepared.ok) {
       return h("div", { class: "confirm", role: "alert" },
-        h("p", {}, `The hosts could not be counted (${prepared.error.code || "error"}`
-          + `${prepared.error.reason ? ` ${prepared.error.reason}` : ""}), so the force cannot be confirmed.`),
-        h("button", { type: "button", name: "force-send", disabled: true }, "Force"));
+        h("p", {}, `The hosts could not be counted (${describeError(prepared.error)}), so the force cannot be`
+          + " confirmed."),
+        h("button", { type: "button", name: "force-send", disabled: true }, "Force"),
+        cancel);
     }
     const r = prepared.request;
     return h("div", { class: "confirm", role: "alert" },
@@ -132,22 +193,8 @@ function forceSection(ctx, services, state, redraw) {
         `Force ${r.service} to ${r.version} on ${prepared.count} hosts (${targetLabel(r)}`
         + `${r.includeHeld ? ", held hosts included" : ""}). Running work on them is cut: the units stop without a drain.`),
       field(`Type ${prepared.count} to confirm`, "force-count", state, "typed", { inputmode: "numeric" }),
-      action(ctx, "Force", "force-send", async () => {
-        const reply = await sendForce(ctx.api, state.prepared, state.typed);
-        if (reply === null) {
-          return `Not sent: type ${prepared.count}, the number of hosts, to confirm.`;
-        }
-        state.prepared = null;
-        state.typed = "";
-        ctx.refresh();
-        return forceReply(reply);
-      }),
-      action(ctx, "Cancel", "force-cancel", async () => {
-        state.prepared = null;
-        state.typed = "";
-        redraw();
-        return "Force cancelled.";
-      }));
+      action(ctx, "Force", "force-send", send),
+      cancel);
   };
   return h("section", { class: "force" },
     h("h3", {}, "Force a version"),
@@ -162,12 +209,23 @@ function forceSection(ctx, services, state, redraw) {
     field("Hosts (for listed hosts, separated by commas)", "force-hosts", form, "hosts"),
     checkbox("Include held hosts, for this force only (no hold is removed)", "force-include-held", form, "includeHeld"),
     action(ctx, "Count the hosts", "force-prepare", async () => {
+      if (state.phase === "sending") {
+        return "A force is being sent: wait for its answer.";
+      }
       const request = forceRequest(form);
       if (typeof request === "string") {
         return request;
       }
-      state.typed = "";
-      state.prepared = await prepareForce(ctx.api, request);
+      reset();
+      const attempt = state.attempt;
+      state.phase = "counting";
+      redraw();
+      const prepared = await prepareForce(ctx.api, request);
+      if (state.attempt !== attempt) {
+        return undefined;
+      }
+      state.prepared = prepared;
+      state.phase = "confirm";
       redraw();
       return undefined;
     }),
@@ -193,7 +251,7 @@ function serviceSection(ctx, svc) {
     if (trimmed(form.reason) === "") {
       return "Give a reason first.";
     }
-    return run(trimmed(form.reason));
+    return reasonProblem(trimmed(form.reason)) || run(trimmed(form.reason));
   };
   const canary = byGate(svc, "GATE_REASON_CANARY_WAIT");
   const baking = byGate(svc, "GATE_REASON_BAKING");
@@ -269,6 +327,8 @@ export async function render(ctx) {
   const services = list(status, "services");
   const state = {
     force: { service: "", version: "", reason: "", targetKind: "fleet", role: "", hosts: "", includeHeld: false },
+    phase: "idle",
+    attempt: 0,
     prepared: null,
     typed: "",
   };

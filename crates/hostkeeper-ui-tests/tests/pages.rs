@@ -186,32 +186,39 @@ fn host_with_api() -> Value {
 fn host_page_buttons_each_send_one_call() {
     // Catches: a button that sends another method, more than one call, a body without the host,
     // the service or the reason, an action needing a reason sent without one, an abandon not
-    // confirmed, and labels that are not pairs.
+    // confirmed, a reason over 256 bytes or with a control character, an abort reported as
+    // queued when the coordinator queued none, and labels that are not pairs.
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/Get"), host_with_api());
     for method in [
         "Hosts/Exclude",
         "Hosts/Exclude",
         "Hosts/Include",
-        "Hosts/Abort",
         "Services/Hold",
         "Services/Unhold",
         "Hosts/SetLabels",
     ] {
         ui.reply(&m(method), json!({}));
     }
+    ui.reply(&m("Hosts/Abort"), json!({"queued": true}));
+    ui.reply(&m("Hosts/Abort"), json!({}));
     let out = ui.run(&page_driver(
         "host",
         r#"{ nodeId: "web-2" }"#,
         "[false, true]",
         r#"
 for (const name of ["exclude", "abort", "hold", "unhold"]) { await click(tree, name); }
+type(tree, "reason", "bad\treason");
+await click(tree, "exclude");
+type(tree, "reason", "\u00e9".repeat(129));
+await click(tree, "hold");
 type(tree, "reason", "  disk swap  ");
 await click(tree, "exclude");
 tick(tree, "abandon", true);
 await click(tree, "exclude");
 await click(tree, "exclude");
 await click(tree, "include");
+await click(tree, "abort");
 await click(tree, "abort");
 await click(tree, "hold");
 await click(tree, "unhold");
@@ -248,6 +255,10 @@ return {
                 json!({"nodeId": "web-2", "service": "api", "reason": reason})
             ),
             (
+                m("Hosts/Abort"),
+                json!({"nodeId": "web-2", "service": "api", "reason": reason})
+            ),
+            (
                 m("Services/Hold"),
                 json!({"scope": {"host": "web-2"}, "service": "api", "reason": reason})
             ),
@@ -276,22 +287,105 @@ return {
             "Give a reason first.",
             "Give a reason first.",
             "Give a reason first.",
+            "A reason has no control character (a tab or a line break, for example).",
+            "A reason is at most 256 bytes; this one is 258.",
             "Excluded web-2 from api.",
             "Not excluded.",
             "Excluded web-2 from api.",
             "Included web-2 in api.",
             "Abort of api queued for web-2's next heartbeat.",
+            "Nothing to abort: web-2 runs nothing of api, so no abort was queued.",
             "Held api on web-2.",
             "Released the hold of api on web-2.",
-            "Labels are key=value pairs.",
+            "Labels are key=value pairs, each key and value 1 to 32 of a-z, 0-9 and -: not rack.",
             "Labels of web-2 set.",
         ])
     );
-    assert_eq!(seen["refreshes"], 7);
+    assert_eq!(seen["refreshes"], 8);
     // The tree a status line mounts again shows what the state holds.
     assert_eq!(
         out["out"],
         json!({"abandon": true, "reason": "  disk swap  ", "labels": "rack=r2, zone=z1"})
+    );
+}
+
+#[test]
+fn set_labels_checks_every_pair_and_asks_before_removing_all() {
+    // Catches: a key that reaches the object's prototype (`__proto__`) and is dropped, so that
+    // the request silently removes the labels; a key given twice; keys and values off their
+    // grammar or over 32 bytes; more than 8 labels; and an empty set sent without the operator's
+    // yes. The limits themselves (8 labels of 32-byte keys and values) are sent.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Hosts/Get"),
+        json!({"host": {"nodeId": "web-3", "role": "web", "labels": {"rack": "r1"}}}),
+    );
+    ui.reply(&m("Hosts/SetLabels"), json!({}));
+    ui.reply(&m("Hosts/SetLabels"), json!({}));
+    let long = "a".repeat(32);
+    let out = ui.run(&page_driver(
+        "host",
+        r#"{ nodeId: "web-3" }"#,
+        "[false, true]",
+        r#"
+const shown = named(tree, "labels")[0].attrs.value;
+const tries = [
+  "__proto__=x", "rack=r1 rack=r2", "Rack=r1", "a".repeat(33) + "=v", "=v", "k=", "rack",
+  Array.from({ length: 9 }, (_, i) => `a${i}=v`).join(", "), "", "",
+  Array.from({ length: 8 }, (_, i) => `${"a".repeat(31)}${i}=${"b".repeat(32)}`).join(" "),
+];
+for (const labels of tries) {
+  type(tree, "labels", labels);
+  await click(tree, "set-labels");
+}
+return shown;
+"#,
+    ));
+    assert_eq!(out["out"], "rack=r1");
+    let pairs = |pair: &str| {
+        format!(
+            "Labels are key=value pairs, each key and value 1 to 32 of a-z, 0-9 and -: not {pair}."
+        )
+    };
+    assert_eq!(
+        out["seen"]["reports"],
+        json!([
+            pairs("__proto__=x"),
+            "The label rack is given twice.",
+            pairs("Rack=r1"),
+            pairs(&format!("{long}a=v")),
+            pairs("=v"),
+            pairs("k="),
+            pairs("rack"),
+            "A host has at most 8 labels, not 9.",
+            "Labels not changed.",
+            "Labels of web-3 set.",
+            "Labels of web-3 set.",
+        ])
+    );
+    assert_eq!(
+        out["seen"]["questions"],
+        json!([
+            "Remove every label of web-3?",
+            "Remove every label of web-3?"
+        ])
+    );
+    let eight: serde_json::Map<String, Value> = (0..8)
+        .map(|i| (format!("{}{i}", "a".repeat(31)), json!("b".repeat(32))))
+        .collect();
+    assert_eq!(
+        bodies(&ui),
+        [
+            (m("Hosts/Get"), json!({"nodeId": "web-3"})),
+            (
+                m("Hosts/SetLabels"),
+                json!({"nodeId": "web-3", "labels": {}})
+            ),
+            (
+                m("Hosts/SetLabels"),
+                json!({"nodeId": "web-3", "labels": eight})
+            ),
+        ]
     );
 }
 
@@ -532,9 +626,11 @@ fn pending_reply() -> Value {
     json!({"requests": [
         {"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32), "image": "debian-hk",
          "firstSeenUnix": "1800000000",
-         "claims": {"machineId": "m-0001", "dmiSerial": "SN-42", "addresses": ["192.0.2.10"]}},
+         "claims": {"machineId": "m-0001", "dmiSerial": "SN-42", "productUuid": "4c4c4544-0042",
+                    "addresses": ["192.0.2.10", "192.0.2.11"]}},
         {"requestId": "2e".repeat(32), "keySha256": "cd".repeat(32), "renewalOf": "web-3",
-         "duplicateClaim": true, "macNoncePresented": true, "claims": {"macSerial": "C02-X"}},
+         "duplicateClaim": true, "macNoncePresented": true,
+         "claims": {"macSerial": "C02-X", "platformUuid": "a1b2c3d4-0042"}},
      ],
      "nextPageToken": "page-2"})
 }
@@ -542,9 +638,20 @@ fn pending_reply() -> Value {
 #[test]
 fn enrollment_approve_sends_the_listed_key_hash_and_replace_is_false_by_default() {
     // Catches: a key hash recomputed or taken from elsewhere, replace on by default, a replace
-    // sent without the operator's yes, and an approval without a host id or role.
+    // sent without the operator's yes, an approval sent with any one input missing or off its
+    // grammar (host id, role, a service, the reason, each alone), and a refusal taken as success
+    // or losing what the operator typed.
     let mut ui = Ui::start();
     ui.reply(&m("Enrollment/List"), pending_reply());
+    for (status, code, reason) in [
+        (412, "FAILED_PRECONDITION", "key_mismatch"),
+        (412, "FAILED_PRECONDITION", "not_pending"),
+        (409, "ALREADY_EXISTS", "host_id_taken"),
+        (412, "FAILED_PRECONDITION", "duplicate_claim"),
+        (412, "FAILED_PRECONDITION", "denied"),
+    ] {
+        ui.refuse(&m("Enrollment/Approve"), status, code, reason);
+    }
     ui.reply(
         &m("Enrollment/Approve"),
         json!({"hostId": "web-7", "certificateIssuedAtPoll": true}),
@@ -558,35 +665,48 @@ fn enrollment_approve_sends_the_listed_key_hash_and_replace_is_false_by_default(
         "{}",
         "[false, true]",
         r#"
-await click(tree, "approve", 0);
-type(tree, "host-id", "web-7", 0);
-type(tree, "role", "web", 0);
-type(tree, "services", "api, metrics", 0);
-await click(tree, "approve", 0);
+const fill = (hostId, role, services, reason) => {
+  type(tree, "host-id", hostId, 0);
+  type(tree, "role", role, 0);
+  type(tree, "services", services, 0);
+  type(tree, "reason", reason, 0);
+};
+const attempts = [
+  ["", "web", "api", "new rack"],
+  ["web-7", "", "api", "new rack"],
+  ["-web-7", "web", "api", "new rack"],
+  ["web-7", "7web", "api", "new rack"],
+  ["web-7", "web", "api, API", "new rack"],
+  ["web-7", "web", "api", "   "],
+  ["web-7", "web", "api", "new\nrack"],
+  ["web-7", "web", "api", "x".repeat(257)],
+];
+for (const [hostId, role, services, reason] of attempts) {
+  fill(hostId, role, services, reason);
+  await click(tree, "approve", 0);
+}
+fill(" web-7 ", " web ", "api, metrics", " new rack ");
+for (let i = 0; i < 6; i++) {
+  await click(tree, "approve", 0);
+}
+const kept = ["host-id", "role", "services", "reason"].map((n) => named(tree, n)[0].attrs.value);
 type(tree, "role", "web", 1);
+type(tree, "reason", "re-imaged", 1);
 tick(tree, "replace", true, 1);
 await click(tree, "approve", 1);
-type(tree, "reason", "re-imaged", 1);
 await click(tree, "approve", 1);
 await click(tree, "next-page");
+return kept;
 "#,
     ));
-    assert_eq!(
-        bodies(&ui),
-        [
-            (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
-            (
-                m("Enrollment/Approve"),
-                json!({"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32),
-                "hostId": "web-7", "role": "web", "services": ["api", "metrics"], "replace": false, "reason": ""})
-            ),
-            (
-                m("Enrollment/Approve"),
-                json!({"requestId": "2e".repeat(32), "keySha256": "cd".repeat(32),
-                "hostId": "web-3", "role": "web", "services": [], "replace": true, "reason": "re-imaged"})
-            ),
-        ]
-    );
+    let first = json!({"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32), "hostId": "web-7",
+        "role": "web", "services": ["api", "metrics"], "replace": false, "reason": "new rack"});
+    let second = json!({"requestId": "2e".repeat(32), "keySha256": "cd".repeat(32), "hostId": "web-3",
+        "role": "web", "services": [], "replace": true, "reason": "re-imaged"});
+    let mut expected = vec![(m("Enrollment/List"), json!({"limit": 50, "pageToken": ""}))];
+    expected.extend((0..6).map(|_| (m("Enrollment/Approve"), first.clone())));
+    expected.push((m("Enrollment/Approve"), second));
+    assert_eq!(bodies(&ui), expected);
     let seen = &out["seen"];
     let question = format!(
         "Approve request {} as web-3 and revoke the certificate of any host that holds web-3?",
@@ -596,11 +716,29 @@ await click(tree, "next-page");
     assert_eq!(
         seen["reports"],
         json!([
-            "Name the host id and the role.",
+            "Name the host id.",
+            "Name the role.",
+            "A host id is 1 to 63 of a-z, 0-9 and -, not starting or ending with -.",
+            "A role is 1 to 32 of a-z, 0-9 and -, a letter first.",
+            "API is not a service name: 1 to 64 of a-z, 0-9 and -.",
+            "Give a reason for the approval.",
+            "A reason has no control character (a tab or a line break, for example).",
+            "A reason is at most 256 bytes; this one is 257.",
+            "FAILED_PRECONDITION key_mismatch",
+            "FAILED_PRECONDITION not_pending",
+            "ALREADY_EXISTS host_id_taken",
+            "FAILED_PRECONDITION duplicate_claim",
+            "FAILED_PRECONDITION denied",
             "Approved web-7: the host gets its certificate at its next poll.",
             "Not approved.",
             "Approved web-3: the host gets its certificate at its next poll.",
         ])
+    );
+    assert_eq!(seen["refreshes"], 2, "a refused approval refreshes nothing");
+    assert_eq!(
+        out["out"],
+        json!([" web-7 ", " web ", "api, metrics", " new rack "]),
+        "a refusal keeps what the operator typed"
     );
     assert_eq!(
         seen["navigations"],

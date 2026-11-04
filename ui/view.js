@@ -116,13 +116,19 @@ export function enumLabel(value, prefix) {
   return name.toLowerCase();
 }
 
-// Unix seconds (canonical JSON writes 64-bit numbers as strings) as UTC time.
+// Unix seconds (canonical JSON writes 64-bit numbers as strings) as UTC time. Absent, 0 or not a
+// number reads as "-"; a time a JavaScript date cannot hold (beyond the year 275760) is shown as
+// the number it is, marked out of range, rather than failing the page.
 export function fmtUnix(value) {
   const seconds = Number(value);
   if (value === undefined || value === "" || !Number.isFinite(seconds) || seconds <= 0) {
     return "-";
   }
-  return new Date(seconds * 1000).toISOString().replace("T", " ").replace(".000Z", " UTC");
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return `${value} (out of range)`;
+  }
+  return date.toISOString().replace("T", " ").replace(".000Z", " UTC");
 }
 
 // A hold's scope in words.
@@ -213,6 +219,28 @@ export function action(ctx, label, name, run, extra) {
       },
     },
   }, extra || {}), label);
+}
+
+// The UTF-8 length of a text, in bytes.
+function utf8Bytes(text) {
+  let bytes = 0;
+  for (const ch of text) {
+    const point = ch.codePointAt(0);
+    bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
+// Why a typed reason, trimmed and not empty, breaks the API's rule for a reason (at most 256
+// bytes, no control character); null when it keeps it.
+export function reasonProblem(reason) {
+  if (/[\u0000-\u001f\u007f]/.test(reason)) {
+    return "A reason has no control character (a tab or a line break, for example).";
+  }
+  if (utf8Bytes(reason) > 256) {
+    return `A reason is at most 256 bytes; this one is ${utf8Bytes(reason)}.`;
+  }
+  return null;
 }
 
 // A trimmed text, or "" for anything that is not a string.

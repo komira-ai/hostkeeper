@@ -3,9 +3,13 @@
 // Nothing here renders, logs or copies it.
 
 let token = null;
+// One more at every sign-in and every sign-out, so what was started under one sign-in can tell
+// that it no longer belongs to the current one.
+let generation = 0;
 const listeners = [];
 
 function changed() {
+  generation += 1;
   for (const listener of listeners) {
     listener();
   }
@@ -22,13 +26,26 @@ export function signIn(pasted) {
   return true;
 }
 
-// Forgets the token: the "Sign out" control, and a reply that says the token is not accepted.
+// Forgets the token: the "Sign out" control.
 export function signOut() {
   const had = token !== null;
   token = null;
   if (had) {
     changed();
   }
+}
+
+// Forgets the token if it is still `refused`, which a reply refused; a token the operator has
+// pasted since is kept.
+export function forget(refused) {
+  if (token !== null && token === refused) {
+    signOut();
+  }
+}
+
+// The current sign-in's number.
+export function revision() {
+  return generation;
 }
 
 export function getToken() {

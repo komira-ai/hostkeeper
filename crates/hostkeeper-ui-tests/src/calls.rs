@@ -11,6 +11,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use prost_types::FileDescriptorSet;
+
+use crate::lexis::{joined, line_of, skip_blank};
 use serde::Deserialize;
 
 /// Where a module names a method: the module's path under `ui/`, the 1-based line and the name.
@@ -46,39 +48,34 @@ pub enum ScanError {
 /// The prefix of every method name the app may call, as it opens a string literal.
 const NAME_OPENING: &str = "\"hostkeeper.";
 
-fn is_ident(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '$'
-}
-
-fn line_of(text: &str, at: usize) -> usize {
-    text[..at].matches('\n').count() + 1
-}
-
-/// The double-quoted literal that opens `rest`, if it does: its contents, with no escape and no
-/// line break in them.
-fn literal(rest: &str) -> Option<&str> {
-    let body = rest.strip_prefix('"')?;
+/// The double-quoted literal that is the whole first argument at the start of `args`, if it is:
+/// its contents, with no escape and no line break in them, followed by nothing but blanks before
+/// the `,` or `)` that ends the argument (so `"a".replace(...)` or `"a" + b` is not one).
+fn literal(args: &str) -> Option<&str> {
+    let body = args.strip_prefix('"')?;
     let end = body.find('"')?;
     let contents = &body[..end];
-    (!contents.contains(['\\', '\n'])).then_some(contents)
+    let after = skip_blank(&body[end + 1..]);
+    let ends = after.starts_with(',') || after.starts_with(')');
+    (ends && !contents.contains(['\\', '\n'])).then_some(contents)
 }
 
 /// Every method a module calls, in the order written. `path` is the module's path under `ui/`,
 /// for the sites and the errors. A call is the word `call` (not part of a longer name) followed
-/// by `(`; its first argument must be a string literal, and every literal opening with
-/// `"hostkeeper.` must be such an argument.
+/// by `(`, blanks (white space, comments) allowed between; its first argument must be a string
+/// literal and nothing else, and every literal opening with `"hostkeeper.` must be such an
+/// argument.
 pub fn call_sites(path: &str, text: &str) -> Result<Vec<CallSite>, ScanError> {
     let mut sites = Vec::new();
     let mut names_at = BTreeSet::new();
     for (at, _) in text.match_indices("call") {
-        let before = text[..at].chars().next_back();
-        if before.is_some_and(is_ident) {
+        if joined(text, at) {
             continue;
         }
-        let Some(args) = text[at + 4..].trim_start().strip_prefix('(') else {
+        let Some(args) = skip_blank(&text[at + 4..]).strip_prefix('(') else {
             continue;
         };
-        let args = args.trim_start();
+        let args = skip_blank(args);
         let name_at = text.len() - args.len();
         let line = line_of(text, name_at);
         let Some(method) = literal(args) else {

@@ -16,6 +16,8 @@
 
 use std::fmt;
 
+use crate::lexis::{joined, line_of, skip_blank};
+
 /// One offence: the file, the 1-based line and what was found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
@@ -38,23 +40,24 @@ fn finding(path: &str, line: usize, what: impl Into<String>) -> Finding {
     }
 }
 
-fn is_ident(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '$'
-}
-
-/// Every place in `text` where a needle of `list` is, one finding each.
+/// Every place in `text` where a needle of `list` is, one finding each, in line order (and in
+/// the list's order within a line). A needle that ends in `(` is a call: its name followed by
+/// any white space and comments, then `(` (`eval /* x */ (text)` is `eval(`).
 fn needles(path: &str, text: &str, list: &[&str]) -> Vec<Finding> {
     let mut out = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        for needle in list {
-            let word = needle.starts_with(|c: char| c.is_ascii_alphabetic());
-            for (at, _) in line.match_indices(needle) {
-                if !(word && line[..at].chars().next_back().is_some_and(is_ident)) {
-                    out.push(finding(path, n + 1, format!("`{needle}`")));
-                }
+    for needle in list {
+        let (stem, call) = needle
+            .strip_suffix('(')
+            .map_or((*needle, false), |stem| (stem, true));
+        let word = stem.starts_with(|c: char| c.is_ascii_alphabetic());
+        for (at, _) in text.match_indices(stem) {
+            let called = !call || skip_blank(&text[at + stem.len()..]).starts_with('(');
+            if called && !(word && joined(text, at)) {
+                out.push(finding(path, line_of(text, at), format!("`{needle}`")));
             }
         }
     }
+    out.sort_by_key(|f| f.line);
     out
 }
 
@@ -120,8 +123,24 @@ fn sets_handler(rest: &str) -> bool {
     name > 0 && after.starts_with('=') && !after.starts_with("==")
 }
 
-fn line_of(text: &str, at: usize) -> usize {
-    text[..at].matches('\n').count() + 1
+/// Where lower-case HTML sets the attribute `name`: the name after white space, then `=` after
+/// any white space (`\n  STYLE =` once lowered).
+fn attributes(lower: &str, name: &str) -> Vec<usize> {
+    lower
+        .match_indices(name)
+        .map(|(at, _)| at)
+        .filter(|&at| {
+            lower[..at]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace)
+                && lower[at + name.len()..].trim_start().starts_with('=')
+        })
+        .collect()
+}
+
+fn has_attribute(tag: &str, name: &str) -> bool {
+    !attributes(tag, name).is_empty()
 }
 
 fn html_inline(path: &str, text: &str) -> Vec<Finding> {
@@ -130,7 +149,7 @@ fn html_inline(path: &str, text: &str) -> Vec<Finding> {
     for (at, _) in lower.match_indices("<script") {
         let end = lower[at..].find('>').map_or(lower.len(), |e| at + e);
         let tag = &lower[at..end];
-        if !tag.contains(" src=") {
+        if !has_attribute(tag, "src") {
             out.push(finding(path, line_of(text, at), "a script without `src`"));
         } else if !lower[end..].starts_with("></script>") {
             out.push(finding(path, line_of(text, at), "a script with a body"));
@@ -148,10 +167,8 @@ fn html_inline(path: &str, text: &str) -> Vec<Finding> {
             out.push(finding(path, line_of(text, at), "an inline event handler"));
         }
     }
-    for (at, _) in lower.match_indices(" style") {
-        if lower[at + 6..].trim_start().starts_with('=') {
-            out.push(finding(path, line_of(text, at), "an inline style"));
-        }
+    for at in attributes(&lower, "style") {
+        out.push(finding(path, line_of(text, at), "an inline style"));
     }
     out
 }

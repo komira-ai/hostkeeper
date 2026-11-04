@@ -2,7 +2,9 @@
 // for a host, a role or the whole fleet. Calls: Services.List; on a button, Services.Hold or
 // Services.Unhold. Both need a reason: a hold with an empty one is never sent.
 
-import { h, action, errorView, field, fmtUnix, list, scopeLabel, select, table, trimmed } from "../view.js";
+import {
+  h, action, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, select, table, trimmed,
+} from "../view.js";
 
 // The HoldScope the form names, or a sentence saying what is missing.
 export function holdScope(form) {
@@ -38,6 +40,9 @@ export async function render(ctx) {
       if (reason === "") {
         return "Give a reason for the release first.";
       }
+      if (reasonProblem(reason) !== null) {
+        return reasonProblem(reason);
+      }
       await ctx.api.call("hostkeeper.operator.v1.Services/Unhold",
         { scope: hold.scope, service: hold.service, reason });
       ctx.refresh();
@@ -65,6 +70,9 @@ export async function render(ctx) {
         }
         if (reason === "") {
           return "A hold needs a reason.";
+        }
+        if (reasonProblem(reason) !== null) {
+          return reasonProblem(reason);
         }
         const scope = holdScope(form);
         if (typeof scope === "string") {

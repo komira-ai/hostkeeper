@@ -99,6 +99,23 @@ fn call_sites_reads_each_literal_with_its_line_and_page() {
 }
 
 #[test]
+fn blanks_between_the_call_its_parenthesis_and_its_name_are_read_through() {
+    // Catches: a call hidden from the list by a comment or a line break before its `(` or its
+    // name, or after its name.
+    let text = "call /* why */ ( // the method\n  \"hostkeeper.a.v1.Hosts/List\" /* x */ , {});\n\
+                api.call(\"hostkeeper.a.v1.Hosts/Get\"\n);";
+    let methods: Vec<String> = call_sites("pages/x.js", text)
+        .expect("both calls are literals")
+        .into_iter()
+        .map(|s| s.method)
+        .collect();
+    assert_eq!(
+        methods,
+        ["hostkeeper.a.v1.Hosts/List", "hostkeeper.a.v1.Hosts/Get"]
+    );
+}
+
+#[test]
 fn a_call_site_outside_the_pages_has_no_page() {
     let site = |path: &str| CallSite {
         path: path.to_owned(),
@@ -120,6 +137,18 @@ fn a_computed_or_escaped_method_name_is_refused_with_its_line() {
         ("api.call(\"hostkeeper.a.v1.Hosts/List", 1),
         ("api.call(\"hostkeeper.a.v1.\nHosts/List\")", 1),
         ("call  (  prefix + \"Hosts/List\")", 1),
+        // A literal that is only the start of the argument names another method.
+        (
+            "api.call(\"hostkeeper.a.v1.Hosts/List\".replace(\"List\", \"Teleport\"), {})",
+            1,
+        ),
+        ("api.call(\"hostkeeper.a.v1.Hosts/List\" + suffix, {})", 1),
+        ("api.call(\"hostkeeper.a.v1.Hosts/List\" ? a : b)", 1),
+        ("api.call(\"hostkeeper.a.v1.Hosts/List\"[0])", 1),
+        (
+            "api.call(\"hostkeeper.a.v1.Hosts/List\" /* c */ .trim())",
+            1,
+        ),
     ] {
         assert_eq!(
             call_sites("pages/x.js", text),

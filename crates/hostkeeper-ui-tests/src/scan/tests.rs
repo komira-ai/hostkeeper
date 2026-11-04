@@ -40,7 +40,8 @@ fn a_word_needle_inside_a_longer_name_is_not_found() {
     assert!(
         network_and_code(
             "x.js",
-            "retrieval(x); makeFunction(y); reimport(z); $eval(w); do_eval(v);"
+            "retrieval(x); makeFunction(y); reimport(z); $eval(w); do_eval(v); evaluate(t); \
+             eval; eval /* never closed (x)"
         )
         .is_empty()
     );
@@ -82,6 +83,27 @@ fn network_and_code_finds_urls_of_other_origins_and_code_from_text() {
 }
 
 #[test]
+fn a_forbidden_call_is_found_with_blanks_before_its_parenthesis() {
+    // Catches: `eval (text)`, `new Function /* x */ (text)` and the like slipping past a scan
+    // that only knows the compact spelling.
+    let text = "eval (text);\nnew Function /* x */ (text);\nawait import\n(name);\n\
+                el.style.background = url // u\n(a);";
+    assert_eq!(
+        whats(&network_and_code("x.js", text)),
+        [
+            (1, "`eval(`"),
+            (2, "`Function(`"),
+            (3, "`import(`"),
+            (5, "`url(`"),
+        ]
+    );
+    assert_eq!(
+        whats(&fetches("x.js", "fetch\n(u);\nwindow.fetch /* c */ (u);")),
+        [(1, "`fetch(`"), (3, "`fetch(`")]
+    );
+}
+
+#[test]
 fn a_comment_or_a_relative_path_is_not_a_url() {
     let text = "// a comment\nimport { h } from \"./view.js\";\nimport * as fleet from \"./pages/fleet.js\";";
     assert!(network_and_code("app.js", text).is_empty());
@@ -107,9 +129,23 @@ fn inline_code_in_html_finds_what_the_policy_refuses() {
 }
 
 #[test]
+fn inline_code_in_html_is_found_in_any_case_and_across_white_space() {
+    let html = "<BUTTON\n  ONCLICK = \"go()\">x</BUTTON>\n<p\tSTYLE\n= \"color: red\">x</p>\n<Script\n>run()</Script>";
+    assert_eq!(
+        whats(&inline_code("index.html", html)),
+        [
+            (5, "a script without `src`"),
+            (2, "an inline event handler"),
+            (3, "an inline style"),
+        ]
+    );
+}
+
+#[test]
 fn clean_html_has_no_inline_code() {
     let html = "<html lang=\"en\">\n<script type=\"module\" src=\"main.js\"></script>\n\
-                <p class=\"one\">Done once only; content== on = onfoo == bar; a style guide</p>\n<div id=\"app\"></div>";
+                <p class=\"one\">Done once only; content== on = onfoo == bar; a style guide</p>\n<div id=\"app\"></div>\n\
+                <script\n  type=\"module\"\n  SRC = \"a.js\"></script>";
     assert!(inline_code("index.html", html).is_empty());
 }
 

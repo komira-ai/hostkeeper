@@ -13,7 +13,11 @@ export function api(token) {
   if (token !== null) {
     session.signIn(token);
   }
-  return createApi({ fetch: gatewayFetch, getToken: session.getToken, clearToken: session.signOut });
+  return createApi({
+    fetch: gatewayFetch,
+    getToken: session.getToken,
+    clearToken: (_, refused) => session.forget(refused),
+  });
 }
 
 // A page context over `client` that records what the page does. `answers` are the operator's
@@ -71,6 +75,24 @@ export function text(tree) {
     return tree.text;
   }
   return tree.children.map(text).join(" ");
+}
+
+// Every table row of a view tree, as the texts of its cells, in order, each with its white space
+// run together and trimmed.
+export function rows(tree) {
+  return nodes(tree)
+    .filter((node) => node.tag === "tr")
+    .map((row) => row.children.map((cell) => text(cell).replace(/\s+/g, " ").trim()));
+}
+
+// The value cell of the first two-cell row whose heading cell is `label`; it throws when there
+// is none.
+export function cell(tree, label) {
+  const row = rows(tree).find((cells) => cells.length === 2 && cells[0] === label);
+  if (row === undefined) {
+    throw new Error(`no row ${label}`);
+  }
+  return row[1];
 }
 
 // Every text node of a view tree.

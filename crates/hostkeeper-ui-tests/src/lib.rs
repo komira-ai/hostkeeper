@@ -16,6 +16,7 @@
 //! against a fake gateway.
 
 mod calls;
+mod lexis;
 pub mod scan;
 mod sources;
 
