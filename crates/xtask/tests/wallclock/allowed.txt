@@ -12,3 +12,6 @@
 # window of every certificate it signs starts (hostkeeper-enrollment, the only file of the crate
 # that reads the wall clock).
 crates/hostkeeper-enrollment/src/validity.rs
+# Certificate validity: the enroller reads the wall clock only to decide whether its host
+# certificate is due for renewal at half life, has expired, and whether one just issued is valid now.
+crates/hostkeeper-enroll/src/validity.rs
