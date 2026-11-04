@@ -350,8 +350,9 @@ fn the_archive_holds_the_binary_the_manifest_and_the_unit_bytes() {
 fn compress_round_trips_through_the_zstd_decoder() {
     // Catches: a compression the decoder of the daemon cannot read back to the same tar.
     let tar = archive(&[Entry::dir("bin/")], 7).expect("archive");
+    let compressed = compress(&tar);
     let mut decoder =
-        ruzstd::decoding::StreamingDecoder::new(compress(&tar).as_slice()).expect("a zstd frame");
+        ruzstd::decoding::StreamingDecoder::new(compressed.as_slice()).expect("a zstd frame");
     let mut back = Vec::new();
     decoder.read_to_end(&mut back).expect("decompress");
     assert_eq!(back, tar);
