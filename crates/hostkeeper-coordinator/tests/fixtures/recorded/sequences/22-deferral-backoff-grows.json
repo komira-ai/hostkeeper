@@ -33,7 +33,8 @@
    "host": "d1",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"deferred\":{\"target\":\"2.0\",\"reason\":\"drain_bound\",\"retry_after_secs\":0}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2010,
@@ -59,7 +60,8 @@
    "host": "d1",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"deferred\":{\"target\":\"2.0\",\"reason\":\"drain_bound\",\"retry_after_secs\":0}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2041,

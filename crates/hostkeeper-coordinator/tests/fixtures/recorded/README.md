@@ -55,10 +55,20 @@ differs from it. The coordinator starts at second 1000 (kbf's test rig did) and 
 `at_secs`. `tests/replay.rs` replays them through `http::handle`; `tests/support/replay.rs` says
 what every key means.
 
-Where kbf's test asserted a literal, `expect_body` is the literal. Where it asserted a value in a
-Rust type (a field of a parsed answer, the marks of a service), `expect_contains` holds the
-fragment of the answer's bytes that value is, in kbf's serialiser order. A heartbeat with no
-`expect_body` only keeps a host in the fleet: kbf's test made no assertion about its answer.
+Every step but a `status` (and a `restart`, which has no answer) records the full answer in
+`expect_body`; the replay refuses a step that has none, naming it. A `status` step records the
+full answer or, where kbf's test asserted a value in a Rust type (a field of a parsed answer, the
+marks of a service), `expect_contains` holds the fragment of the answer's bytes that value is, in
+kbf's serialiser order; it must have one or the other. `expect_contains` and
+`expect_not_contains` may also sit beside an `expect_body` of any step. Sequence
+`13-kbf-status-and-convergence-bytes` holds kbf's status and convergence bytes in full.
+
+Where kbf's test asserted a literal, `expect_body` is the literal. For the steps kbf's tests did
+not assert in full (a heartbeat made only to keep a host in the fleet, a convergence or an
+operator answer asserted by its fields, a refused body), `expect_body` was derived from kbf
+v0.0.64's source: the rules that decide the answer and the serialiser of the answer, read at the
+tag, and found to be the same in this coordinator's source. These bodies were not recorded from a
+running kbf.
 
 | file | kbf source |
 |---|---|

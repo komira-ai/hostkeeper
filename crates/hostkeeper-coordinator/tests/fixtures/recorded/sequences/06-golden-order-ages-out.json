@@ -50,7 +50,8 @@
    "host": "s2",
    "role": "storage",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2010,
@@ -67,7 +68,8 @@
    "host": "s1",
    "role": "storage",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
   },
   {
    "at_secs": 2119,

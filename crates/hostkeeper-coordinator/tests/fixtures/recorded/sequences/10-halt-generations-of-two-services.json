@@ -27,13 +27,15 @@
    "host": "s1",
    "role": "storage",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.1\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 1100,
    "call": "operator",
    "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
    "expect_status": 200,
+   "expect_body": "{\"seq\":2,\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\"}",
    "expect_contains": [
     "\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\""
    ]
@@ -53,13 +55,15 @@
    "host": "s1",
    "role": "storage",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.2\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 1100,
    "call": "operator",
    "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
    "expect_status": 200,
+   "expect_body": "{\"seq\":5,\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\"}",
    "expect_contains": [
     "\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\""
    ]
@@ -79,13 +83,15 @@
    "host": "d3",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"services\":[{\"name\":\"other\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"3.0\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}]}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 1100,
    "call": "operator",
    "body": "{\"action\":\"clear_halt\",\"service\":\"other\",\"reason\":\"disk replaced\"}",
    "expect_status": 200,
+   "expect_body": "{\"seq\":7,\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"other\",\"node_id\":\"d3\",\"reason\":\"disk replaced\"}",
    "expect_contains": [
     "\"action\":\"clear_halt\",\"service\":\"other\""
    ]

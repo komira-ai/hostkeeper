@@ -46,6 +46,7 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"0.0.19+g123456abcdef-1\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null,\"services\":[{\"name\":\"kbf\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null}]}",
    "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}",
    "expect_not_contains": [
     "service"
    ]

@@ -15,7 +15,8 @@
    "host": "d1",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2000,
@@ -23,7 +24,8 @@
    "host": "d2",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2000,
@@ -31,7 +33,8 @@
    "host": "d3",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2000,
@@ -39,7 +42,8 @@
    "host": "d4",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2000,
@@ -47,7 +51,8 @@
    "host": "d5",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2000,
@@ -55,7 +60,8 @@
    "host": "d6",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2000,
@@ -78,7 +84,8 @@
    "host": "d1",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"after_commit\",\"class\":\"release\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2015,
@@ -86,7 +93,8 @@
    "host": "d2",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
   },
   {
    "at_secs": 2015,
@@ -94,7 +102,8 @@
    "host": "d3",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2015,
@@ -102,7 +111,8 @@
    "host": "d4",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2015,
@@ -110,7 +120,8 @@
    "host": "d5",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2015,
@@ -118,7 +129,8 @@
    "host": "d6",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2015,
@@ -137,7 +149,8 @@
    "host": "d1",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"after_commit\",\"class\":\"release\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2030,
@@ -145,7 +158,8 @@
    "host": "d2",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"gate_release\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2030,
@@ -153,7 +167,8 @@
    "host": "d3",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2030,
@@ -161,7 +176,8 @@
    "host": "d4",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2030,
@@ -169,7 +185,8 @@
    "host": "d5",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2030,
@@ -177,7 +194,8 @@
    "host": "d6",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2030,
@@ -195,7 +213,8 @@
    "host": "d1",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"after_commit\",\"class\":\"release\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2045,
@@ -203,7 +222,8 @@
    "host": "d2",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"gate_release\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2045,
@@ -211,7 +231,8 @@
    "host": "d3",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2045,
@@ -219,7 +240,8 @@
    "host": "d4",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2045,
@@ -227,7 +249,8 @@
    "host": "d5",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2045,
@@ -235,7 +258,8 @@
    "host": "d6",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2045,

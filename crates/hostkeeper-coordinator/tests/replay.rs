@@ -96,14 +96,17 @@ async fn the_replay_reports_the_step_that_differs() {
             "recorded",
         ),
         (
-            r#""expect_status":200,"expect_contains":["update"]"#,
+            r#""expect_status":200,"expect_body":"{\"reply\":\"nothing\"}","expect_contains":["update"]"#,
             "lacks",
         ),
         (
-            r#""expect_status":200,"expect_not_contains":["nothing"]"#,
+            r#""expect_status":200,"expect_body":"{\"reply\":\"nothing\"}","expect_not_contains":["nothing"]"#,
             "has",
         ),
-        (r#""expect_status":404"#, "status 200, recorded 404"),
+        (
+            r#""expect_status":404,"expect_body":"{\"reply\":\"nothing\"}""#,
+            "status 200, recorded 404",
+        ),
     ];
     for (n, (expect, word)) in cases.into_iter().enumerate() {
         let wrong = heartbeat_sequence("heartbeat", expect);
@@ -146,6 +149,39 @@ async fn the_replay_reports_every_step_that_differs() {
         why.contains(r#"{"reply":"nothing"}"#),
         "the actual body is in full: {why}"
     );
+}
+
+/// Proves: a step that records no full answer is refused, naming the sequence and the step. A
+/// heartbeat with a status but no `expect_body` is refused (`no expect_body`); a status with
+/// neither `expect_body` nor `expect_contains` is refused; a status with a fragment is accepted.
+/// Catches: a recorded step that keeps only its status or a fragment, so that a changed answer
+/// passes unseen.
+#[tokio::test]
+async fn a_step_without_its_full_answer_is_refused() {
+    let bare = heartbeat_sequence("heartbeat", r#""expect_status":200"#);
+    let why = replay(&bare, "replay-bare")
+        .await
+        .expect_err("a heartbeat without expect_body");
+    assert!(
+        why.contains("replay-bare: step 0 (heartbeat at 2000): no expect_body"),
+        "{why}"
+    );
+    let steps = r#"{"at_secs":1,"call":"status","expect_status":200}"#;
+    let (_, status) = named("status", steps);
+    let why = replay(&status, "replay-status")
+        .await
+        .expect_err("a status with no body and no fragment");
+    assert!(
+        why.contains(
+            "replay-status: step 0 (status at 1): a status step has neither expect_body nor expect_contains"
+        ),
+        "{why}"
+    );
+    let steps = r#"{"at_secs":1,"call":"status","expect_status":200,"expect_contains":["{\""]}"#;
+    let (_, status) = named("status", steps);
+    replay(&status, "replay-status-fragment")
+        .await
+        .expect("a status with a fragment");
 }
 
 /// A sequence of `steps` named `stem`.

@@ -22,6 +22,7 @@
    "at_secs": 2000,
    "call": "status",
    "expect_status": 401,
+   "expect_body": "{\"error\":\"unauthorized\"}",
    "auth": "ci"
   },
   {

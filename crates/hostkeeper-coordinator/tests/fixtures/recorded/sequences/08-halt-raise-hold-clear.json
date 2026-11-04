@@ -23,7 +23,8 @@
    "host": "s1",
    "role": "storage",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 1100,
@@ -56,6 +57,7 @@
    "at_secs": 1100,
    "call": "convergence",
    "expect_status": 200,
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}",
    "expect_contains": [
     "\"state\":\"halted\"",
     "\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"}"
@@ -89,6 +91,7 @@
    "at_secs": 1100,
    "call": "convergence",
    "expect_status": 200,
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}",
    "expect_contains": [
     "\"state\":\"halted\""
    ]
@@ -98,6 +101,7 @@
    "call": "operator",
    "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
    "expect_status": 200,
+   "expect_body": "{\"seq\":2,\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\"}",
    "expect_contains": [
     "\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\""
    ]
@@ -106,6 +110,7 @@
    "at_secs": 1100,
    "call": "convergence",
    "expect_status": 200,
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"blocked\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"commit\":\"{COMMIT}\"}",
    "expect_not_contains": [
     "\"state\":\"halted\"",
     "\"halt\":"

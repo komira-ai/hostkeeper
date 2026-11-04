@@ -42,7 +42,8 @@
    "host": "a",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2015,
@@ -59,7 +60,8 @@
    "host": "a",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2030,

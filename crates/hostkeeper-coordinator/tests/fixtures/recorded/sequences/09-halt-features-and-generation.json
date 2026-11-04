@@ -23,13 +23,15 @@
    "host": "s1",
    "role": "storage",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}",
-   "expect_status": 200
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 1100,
    "call": "operator",
    "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
    "expect_status": 200,
+   "expect_body": "{\"seq\":2,\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\"}",
    "expect_contains": [
     "\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\""
    ]

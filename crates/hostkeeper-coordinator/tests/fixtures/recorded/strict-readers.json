@@ -1,9 +1,10 @@
 {
- "from": "kbf v0.0.64 (8f90d0604794f3fee057e71647c7e1c1e034fa2e), kbf-coordinator/src/desired.rs and ops.rs: every struct the coordinator reads from its state files with deny_unknown_fields. `allowed` are the keys the struct has, `required` the ones without a serde default (an Option field without `default` is not required either), `nested` the type of a key's value: `T` a struct, `[T]` an array of them, `{T}` a map from names to them.",
+ "from": "kbf v0.0.64 (8f90d0604794f3fee057e71647c7e1c1e034fa2e): every struct the coordinator reads from its state files, in kbf-coordinator/src/desired.rs (the desired state), ops.rs (the ops file) and ops_file.rs (the halts file beside it), and the report inside them, kbf-updater/src/wire.rs and wire_report.rs. `files` names the struct each state file is read with. For a struct, `source` is where it is at the tag, `allowed` are the keys it has, `required` the ones without a serde default (an Option field without `default` is not required either) and `schema` the schema it reads. `lenient` is true for a struct kbf reads without deny_unknown_fields, which skips a key it does not know: the halts file, the records in it and the report; every other struct refuses one. A record of the halts file that kbf cannot read is passed over with its report lost, and the rest of the file is read; the mirror counts such a record as refused, since a file this coordinator writes should lose nothing. `nested` is the shape of the value of a key that is a struct: `T` a struct, `[T]` an array of them, `{T}` a map from names to them. `types` is the type of the value of every other allowed key, one of: `string`; `u32` and `u64` (a JSON integer, not negative, that fits); `version` (a string that kbf-updater's Version::parse takes: a digit first, then letters, digits and . + ~ -, at most 128 bytes); `token` (1 to 64 bytes of a-z, 0-9 and _, kbf-updater's Token); `enum:a|b|c` (a string that is one of the serde spellings); `limits` (a map from a role name to a count of at most 10000, as Desired::checked takes max_updating and min_up; a role name is a lowercase letter, then lowercase letters, digits and single hyphens, at most 32 bytes, none last); `min_up` (limits that name storage and frontend, which Desired::checked requires of the state of kbf; this coordinator names them in every state it writes); `map<string,V>` and `[V]` (a map and an array of values of the type V, any type above). `nullable` lists the keys whose value may be null: the fields kbf reads as an Option (or leniently), where null is none. A null in any other allowed key is refused, a required one included, as serde refuses it for a map, a list or a count that has a default and is no Option; so is a null report of a halt in the halts file, which kbf passes over. The phase, class and reason of a report are read as none by kbf when it does not know the value; the mirror holds them to the spellings, since a value outside them is one kbf drops.",
  "files": {
   "desired-single": "Desired",
   "desired-map": "MapFile",
-  "ops": "OpsState"
+  "ops": "OpsState",
+  "halts": "ReadHalts"
  },
  "structs": {
   "Desired": {
@@ -17,7 +18,13 @@
     "version",
     "min_up"
    ],
-   "nested": {}
+   "nullable": [],
+   "nested": {},
+   "types": {
+    "version": "version",
+    "max_updating": "limits",
+    "min_up": "min_up"
+   }
   },
   "MapFile": {
    "source": "kbf-coordinator/src/desired.rs:335",
@@ -27,9 +34,11 @@
    "required": [
     "services"
    ],
+   "nullable": [],
    "nested": {
     "services": "{Desired}"
-   }
+   },
+   "types": {}
   },
   "OpsState": {
    "source": "kbf-coordinator/src/ops.rs:234",
@@ -44,11 +53,15 @@
    "required": [
     "schema"
    ],
+   "nullable": [],
    "nested": {
     "hosts": "{HostOps}",
     "excluded": "[Exclusion]",
     "services": "{ServiceOps}",
     "audit": "[AuditEntry]"
+   },
+   "types": {
+    "schema": "u32"
    }
   },
   "HostOps": {
@@ -57,7 +70,11 @@
     "labels"
    ],
    "required": [],
-   "nested": {}
+   "nullable": [],
+   "nested": {},
+   "types": {
+    "labels": "map<string,string>"
+   }
   },
   "Exclusion": {
    "source": "kbf-coordinator/src/ops.rs:88",
@@ -71,7 +88,13 @@
     "node_id",
     "reason"
    ],
-   "nested": {}
+   "nullable": [],
+   "nested": {},
+   "types": {
+    "service": "string",
+    "node_id": "string",
+    "reason": "string"
+   }
   },
   "Halt": {
    "source": "kbf-coordinator/src/ops.rs:100",
@@ -86,7 +109,17 @@
     "check",
     "target"
    ],
-   "nested": {}
+   "nullable": [
+    "report"
+   ],
+   "nested": {
+    "report": "UpdateResult"
+   },
+   "types": {
+    "node_id": "string",
+    "check": "string",
+    "target": "version"
+   }
   },
   "HaltAck": {
    "source": "kbf-coordinator/src/ops.rs:117",
@@ -99,7 +132,16 @@
     "node_id",
     "target"
    ],
-   "nested": {}
+   "nullable": [
+    "report"
+   ],
+   "nested": {
+    "report": "UpdateResult"
+   },
+   "types": {
+    "node_id": "string",
+    "target": "version"
+   }
   },
   "FailureAck": {
    "source": "kbf-coordinator/src/ops.rs:155",
@@ -111,7 +153,13 @@
     "node_id",
     "report"
    ],
-   "nested": {}
+   "nullable": [],
+   "nested": {
+    "report": "UpdateResult"
+   },
+   "types": {
+    "node_id": "string"
+   }
   },
   "ServiceOps": {
    "source": "kbf-coordinator/src/ops.rs:165",
@@ -125,11 +173,20 @@
     "failure_acked"
    ],
    "required": [],
+   "nullable": [
+    "halt",
+    "last_good"
+   ],
    "nested": {
     "halt": "Halt",
     "halt_acked": "[HaltAck]",
     "halt_seen": "[HaltAck]",
     "failure_acked": "[FailureAck]"
+   },
+   "types": {
+    "halt_generation": "u64",
+    "last_good": "version",
+    "bad": "[version]"
    }
   },
   "AuditEntry": {
@@ -147,7 +204,131 @@
     "by",
     "action"
    ],
-   "nested": {}
+   "nullable": [
+    "service",
+    "node_id",
+    "reason"
+   ],
+   "nested": {},
+   "types": {
+    "seq": "u64",
+    "by": "string",
+    "action": "string",
+    "service": "string",
+    "node_id": "string",
+    "reason": "string"
+   }
+  },
+  "UpdateResult": {
+   "source": "kbf-updater/src/wire.rs:61",
+   "lenient": true,
+   "allowed": [
+    "target",
+    "outcome",
+    "phase",
+    "class",
+    "reason"
+   ],
+   "required": [
+    "target",
+    "outcome"
+   ],
+   "nullable": [
+    "phase",
+    "class",
+    "reason"
+   ],
+   "nested": {},
+   "types": {
+    "target": "version",
+    "outcome": "enum:succeeded|failed",
+    "phase": "enum:before_commit|gate_release|gate_environment|after_commit|halt",
+    "class": "enum:release|environment",
+    "reason": "token"
+   }
+  },
+  "ReadHalts": {
+   "source": "kbf-coordinator/src/ops_file.rs:173",
+   "lenient": true,
+   "allowed": [
+    "services",
+    "ops"
+   ],
+   "required": [],
+   "nullable": [
+    "ops"
+   ],
+   "nested": {
+    "services": "{ReadService}"
+   },
+   "types": {
+    "ops": "string"
+   }
+  },
+  "ReadService": {
+   "source": "kbf-coordinator/src/ops_file.rs:160",
+   "lenient": true,
+   "allowed": [
+    "halt",
+    "halt_acked",
+    "halt_seen",
+    "halt_generation"
+   ],
+   "required": [],
+   "nullable": [
+    "halt"
+   ],
+   "nested": {
+    "halt": "Standing",
+    "halt_acked": "[Kept]",
+    "halt_seen": "[Kept]"
+   },
+   "types": {
+    "halt_generation": "u64"
+   }
+  },
+  "Standing": {
+   "source": "kbf-coordinator/src/ops_file.rs:123",
+   "lenient": true,
+   "allowed": [
+    "node_id",
+    "target",
+    "report"
+   ],
+   "required": [
+    "node_id",
+    "target"
+   ],
+   "nullable": [],
+   "nested": {
+    "report": "UpdateResult"
+   },
+   "types": {
+    "node_id": "string",
+    "target": "version"
+   }
+  },
+  "Kept": {
+   "source": "kbf-coordinator/src/ops_file.rs:95",
+   "lenient": true,
+   "allowed": [
+    "node_id",
+    "target",
+    "report"
+   ],
+   "required": [
+    "node_id",
+    "target",
+    "report"
+   ],
+   "nullable": [],
+   "nested": {
+    "report": "UpdateResult"
+   },
+   "types": {
+    "node_id": "string",
+    "target": "version"
+   }
   }
  }
 }

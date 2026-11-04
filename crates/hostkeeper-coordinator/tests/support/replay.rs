@@ -5,9 +5,11 @@
 //! own, `services_fixture` (a recorded rollout file to start from), `services_text` (text added
 //! after it, or the whole file when there is no fixture) and `oidc_services` (the services the
 //! allow-list entry of CI's token names). A step is one call at one time of the fake clock; its
-//! expectations are the status, the body bytes (`expect_body`) or fragments of them
-//! (`expect_contains`, `expect_not_contains`), as the kbf test that is its source asserted them.
-//! An expectation a step does not have is one kbf did not make.
+//! expectations are the status and the body bytes (`expect_body`), which every step but a
+//! `restart` and a `status` must have; a `status` has `expect_body` or at least one fragment of
+//! the body (`expect_contains`), and any step may also have fragments that must (`expect_contains`)
+//! or must not (`expect_not_contains`) be in the body. A step without its full answer is refused
+//! by name before anything else of it is compared.
 //!
 //! Two things are not compared as kbf's build wrote them. `{COMMIT}` in an expected body stands
 //! for the commit this build was made from (kbf's tests appended their own the same way). And
@@ -85,6 +87,7 @@ pub struct Step {
     pub auth: Option<String>,
     #[serde(default)]
     pub expect_status: Option<u16>,
+    /// The full body of the answer; required of every step but a `status` and a `restart`.
     #[serde(default)]
     pub expect_body: Option<String>,
     #[serde(default)]
@@ -182,6 +185,15 @@ pub async fn replay(sequence: &Sequence, name: &str) -> Result<(), String> {
         let Some(want_status) = step.expect_status else {
             return Err(format!("{at}: no expect_status"));
         };
+        if step.call == "status" {
+            if step.expect_body.is_none() && step.expect_contains.is_empty() {
+                return Err(format!(
+                    "{at}: a status step has neither expect_body nor expect_contains"
+                ));
+            }
+        } else if step.expect_body.is_none() {
+            return Err(format!("{at}: no expect_body"));
+        }
         if code != want_status {
             differences.push(format!(
                 "{at}: status {code}, recorded {want_status}: {got}"

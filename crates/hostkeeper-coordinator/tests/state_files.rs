@@ -3,96 +3,26 @@
 //! schema newer than its own.
 //!
 //! The fixtures are kbf v0.0.64's bytes (`fixtures/recorded`). `strict-readers.json` lists, for
-//! every struct kbf reads from these files with `deny_unknown_fields`, the keys it allows, the
-//! keys it requires and the schema it reads; the checks below mirror those readers, so a file
-//! this coordinator writes that kbf would refuse fails here.
+//! every struct kbf reads from these files (the desired-state file, the ops file and the halts
+//! file beside it, and the report in them), the keys it allows, the keys it requires, the keys
+//! that take null, the schema it reads, whether it skips a key it does not know (`lenient`: the
+//! halts file, its records and the report; every other struct refuses one) and the type of
+//! every value. The mirror of those readers (`support::readers`; its own checks are in
+//! `state_readers.rs`) is held over the files this coordinator writes, so a file that kbf would
+//! refuse, or would read with a record of the halts file passed over, fails here.
 
 mod support;
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
 use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::ops::{OpsError, OpsStore};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
+use support::readers::Readers;
 use support::rig::{Rig, Spec};
-use support::{Flags, recorded, recorded_bytes, scratch};
-
-/// What one of kbf's strict readers takes.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Reader {
-    source: String,
-    #[serde(default)]
-    schema: Option<u64>,
-    allowed: Vec<String>,
-    required: Vec<String>,
-    nested: BTreeMap<String, String>,
-}
-
-/// `strict-readers.json`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Readers {
-    from: String,
-    files: BTreeMap<String, String>,
-    structs: BTreeMap<String, Reader>,
-}
-
-impl Readers {
-    fn recorded() -> Self {
-        serde_json::from_str(&recorded("strict-readers.json")).expect("strict-readers.json")
-    }
-
-    /// Whether kbf's reader `name` takes `value`: no key it does not know, every key it
-    /// requires, the schema it reads, and the same of everything nested in it.
-    fn check(&self, name: &str, value: &Value, at: &str) -> Result<(), String> {
-        let reader = self
-            .structs
-            .get(name)
-            .ok_or_else(|| format!("{at}: no reader named {name}"))?;
-        let object = value
-            .as_object()
-            .ok_or_else(|| format!("{at}: {name} is not an object"))?;
-        if let Some(key) = object.keys().find(|k| !reader.allowed.contains(k)) {
-            return Err(format!(
-                "{at}: {key} is a key {name} refuses ({})",
-                reader.source
-            ));
-        }
-        if let Some(key) = reader.required.iter().find(|k| !object.contains_key(*k)) {
-            return Err(format!("{at}: {name} requires {key} ({})", reader.source));
-        }
-        if let Some(schema) = reader.schema
-            && object.get("schema").and_then(Value::as_u64) != Some(schema)
-        {
-            return Err(format!("{at}: {name} reads schema {schema} only"));
-        }
-        for (key, shape) in &reader.nested {
-            let Some(inner) = object.get(key).filter(|v| !v.is_null()) else {
-                continue;
-            };
-            let at = format!("{at}.{key}");
-            if let Some(item) = shape.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                let items = inner.as_array().ok_or(format!("{at}: not an array"))?;
-                for (n, one) in items.iter().enumerate() {
-                    self.check(item, one, &format!("{at}[{n}]"))?;
-                }
-            } else if let Some(item) = shape.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-                let map = inner.as_object().ok_or(format!("{at}: not an object"))?;
-                for (name, one) in map {
-                    self.check(item, one, &format!("{at}.{name}"))?;
-                }
-            } else {
-                self.check(shape, inner, &at)?;
-            }
-        }
-        Ok(())
-    }
-}
+use support::{BEAT, Flags, recorded, recorded_bytes, scratch};
 
 fn parse(path: &Path) -> Value {
     let text = std::fs::read_to_string(path).expect("a file");
@@ -104,27 +34,31 @@ fn parse(path: &Path) -> Value {
     serde_json::from_str(&text).expect("JSON")
 }
 
-/// The desired-state file the rig's coordinator has written, checked against kbf's readers: the
-/// single state, or the map.
-fn check_desired(rig: &Rig, readers: &Readers, reader: &str) {
+/// The desired-state file the rig's coordinator has written, checked against kbf's reader of
+/// `file`: `desired-single` for the single state, `desired-map` for the map.
+fn check_desired(rig: &Rig, readers: &Readers, file: &str) {
     let path = rig.dir.path().join("desired.json");
     readers
-        .check(reader, &parse(&path), "desired.json")
+        .check(readers.reader_of(file), &parse(&path), "desired.json")
         .unwrap_or_else(|why| panic!("{why}"));
 }
 
 /// The ops file and the halts file the rig's coordinator has written, checked against kbf's
-/// readers; the halts file names the digest of the ops file it goes with.
+/// readers, down into the records of both; the halts file names the digest of the ops file it
+/// goes with.
 fn check_ops(rig: &Rig, readers: &Readers) {
     let ops = rig.dir.path().join("desired.json.ops");
     let value = parse(&ops);
     readers
-        .check("OpsState", &value, "ops")
+        .check(readers.reader_of("ops"), &value, "ops")
         .unwrap_or_else(|why| panic!("{why}"));
     assert_eq!(value["schema"], 1);
     let halts = rig.dir.path().join("desired.json.ops.halts");
     if halts.exists() {
         let halts = parse(&halts);
+        readers
+            .check(readers.reader_of("halts"), &halts, "halts")
+            .unwrap_or_else(|why| panic!("{why}"));
         let mut keys: Vec<&str> = halts
             .as_object()
             .expect("an object")
@@ -153,6 +87,29 @@ const HALT_BEAT: &str = concat!(
     r#"{"platform":"linux-x86_64","version":"1.0","health":"healthy","#,
     r#""last_update":{"target":"2.0","outcome":"failed","phase":"halt","reason":"disk_tainted"}}"#
 );
+
+/// A second host's report of a halt, with a class and a reason of its own.
+const SECOND_HALT_BEAT: &str = concat!(
+    r#"{"platform":"linux-x86_64","version":"1.0","health":"healthy","#,
+    r#""last_update":{"target":"2.0","outcome":"failed","phase":"halt","class":"environment","#,
+    r#""reason":"state_unreadable"}}"#
+);
+
+/// The six daemons of the scenarios of a rollback.
+const DAEMONS: [&str; 6] = ["d1", "d2", "d3", "d4", "d5", "d6"];
+
+/// The rollout file of those scenarios: kbf's service as one of daemons that the coordinator rolls
+/// back by itself, as the test of kbf's rollback has it.
+const AUTOMATIC: &str =
+    "[[service]]\nname = \"kbf\"\nrollback = \"automatic\"\nroles = [\"daemon\"]\n";
+
+/// The desired states of those scenarios.
+const ONE: &str = r#"{"version":"1.0","min_up":{"storage":0,"frontend":0}}"#;
+const TWO: &str = r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#;
+
+/// A service that runs on hosts of a role, `gpu`, which the desired-state file format does not
+/// name (it carries limits for four roles).
+const RENDER: &str = "[[service]]\nname = \"render\"\nroles = [\"gpu\"]\n";
 
 /// kbf's desired-state files (the single state and the map) are read with the recorded flags and
 /// written back to the same bytes.
@@ -262,7 +219,7 @@ async fn what_this_coordinator_writes_is_within_kbfs_readers(readers: &Readers) 
     assert!(!rig.dir.path().join("desired.json").exists());
     let (code, body) = rig.desired(support::STATE).await;
     assert_eq!(code, 200, "{body}");
-    check_desired(&rig, readers, "Desired");
+    check_desired(&rig, readers, "desired-single");
     assert_eq!(
         bytes(&rig, "desired.json"),
         recorded_bytes("desired-single.json")
@@ -275,7 +232,7 @@ async fn what_this_coordinator_writes_is_within_kbfs_readers(readers: &Readers) 
     let tier = r#"{"service":"tierstore","version":"7.1","min_up":{"storage":4}}"#;
     let (code, body) = rig.desired(tier).await;
     assert_eq!(code, 200, "{body}");
-    check_desired(&rig, readers, "MapFile");
+    check_desired(&rig, readers, "desired-map");
     assert_eq!(
         bytes(&rig, "desired.json"),
         recorded_bytes("desired-map.json")
@@ -316,6 +273,211 @@ async fn what_this_coordinator_writes_is_within_kbfs_readers(readers: &Readers) 
     assert_eq!(ops["audit"].as_array().map(Vec::len), Some(6));
 }
 
+/// Who made each change of the ops file's ring and what it was, oldest first.
+fn audited(ops: &Value) -> Vec<(&str, &str)> {
+    ops["audit"]
+        .as_array()
+        .expect("the ring")
+        .iter()
+        .map(|entry| {
+            (
+                entry["by"].as_str().expect("who"),
+                entry["action"].as_str().expect("what"),
+            )
+        })
+        .collect()
+}
+
+/// The heartbeat of a daemon on 1.0 whose last update, to 2.0, failed as `report` says.
+fn failed_beat(report: &Value) -> String {
+    json!({
+        "platform": "linux-x86_64",
+        "version": "1.0",
+        "health": "healthy",
+        "last_update": report
+    })
+    .to_string()
+}
+
+/// One heartbeat of each of the six daemons at `at`: those named in `failed` report the failure
+/// they are paired with, the others are healthy on 1.0.
+async fn round(rig: &Rig, at: u64, failed: &[(&str, &Value)]) {
+    rig.at(at);
+    for host in DAEMONS {
+        let body = match failed.iter().find(|(name, _)| *name == host) {
+            Some((_, report)) => failed_beat(report),
+            None => BEAT.to_owned(),
+        };
+        let (code, answer) = rig.heartbeat(host, "daemon", &body).await;
+        assert_eq!(code, 200, "{host}: {answer}");
+    }
+}
+
+/// A rig whose service the coordinator has rolled back, as the test of kbf's rollback has it:
+/// 1.0 is wanted and converges on six daemons, so it is recorded as the last good version; CI
+/// sets 2.0; one daemon fails it after the commit and a second at the release gate, which is
+/// enough hosts to mark 2.0 bad and set 1.0 again.
+async fn rolled_back(name: &str) -> Rig {
+    let rig = Rig::new(name, Spec::recorded().with_services(AUTOMATIC));
+    let (code, body) = rig.desired(ONE).await;
+    assert_eq!(code, 200, "{body}");
+    round(&rig, 2_000, &[]).await;
+    let (code, body) = rig.desired(TWO).await;
+    assert_eq!(code, 200, "{body}");
+    let after_commit =
+        json!({"target": "2.0", "outcome": "failed", "phase": "after_commit", "class": "release"});
+    let at_the_gate = json!({"target": "2.0", "outcome": "failed", "phase": "gate_release"});
+    round(&rig, 2_015, &[("d1", &after_commit)]).await;
+    round(&rig, 2_030, &[("d1", &after_commit), ("d2", &at_the_gate)]).await;
+    rig
+}
+
+/// An automatic rollback writes the last good version and the bad one into the ops file, and
+/// sets the desired state back: the files are within kbf's readers.
+async fn an_automatic_rollback_writes_its_marks_within_kbfs_readers(readers: &Readers) {
+    let rig = rolled_back("state-rollback").await;
+    check_ops(&rig, readers);
+    check_desired(&rig, readers, "desired-single");
+    let ops = parse(&rig.dir.path().join("desired.json.ops"));
+    let marks = &ops["services"]["kbf"];
+    assert_eq!(marks["last_good"], "1.0");
+    assert_eq!(marks["bad"], json!(["2.0"]));
+    assert_eq!(
+        audited(&ops),
+        [("coordinator", "last_good"), ("coordinator", "mark_bad")]
+    );
+    assert_eq!(
+        parse(&rig.dir.path().join("desired.json"))["version"],
+        "1.0",
+        "the desired state is the last good version again"
+    );
+}
+
+/// CI setting by hand the version the coordinator marked bad lifts the mark and acknowledges
+/// the failure reports standing for it, one for each host, with the whole report: the ops file
+/// with its `failure_acked` is within kbf's readers.
+async fn an_override_of_a_bad_version_writes_failure_acks_within_kbfs_readers(readers: &Readers) {
+    let rig = rolled_back("state-failure-ack").await;
+    rig.at(2_040);
+    let (code, body) = rig.desired(TWO).await;
+    assert_eq!(code, 200, "{body}");
+    check_ops(&rig, readers);
+    check_desired(&rig, readers, "desired-single");
+    let ops = parse(&rig.dir.path().join("desired.json.ops"));
+    let marks = &ops["services"]["kbf"];
+    assert_eq!(marks["bad"], json!([]), "the override lifts the mark");
+    let acks = marks["failure_acked"].as_array().expect("the acks");
+    assert_eq!(acks.len(), 2, "one for each host that failed 2.0");
+    let report = |host: &str| {
+        acks.iter()
+            .find(|ack| ack["node_id"] == host)
+            .map(|ack| ack["report"].clone())
+    };
+    assert_eq!(
+        report("d1"),
+        Some(
+            json!({"target": "2.0", "outcome": "failed", "phase": "after_commit", "class": "release"})
+        )
+    );
+    assert_eq!(
+        report("d2"),
+        Some(json!({"target": "2.0", "outcome": "failed", "phase": "gate_release"}))
+    );
+    assert_eq!(audited(&ops).last(), Some(&("ci", "unmark_bad")));
+    assert_eq!(
+        parse(&rig.dir.path().join("desired.json"))["version"],
+        "2.0",
+        "CI's version is the desired state"
+    );
+}
+
+/// Limits for a role the file format does not name (it carries `max_updating` for four roles
+/// and `min_up` for two) are kept for the service that has the role, after the format's own keys,
+/// and dropped, and named in the answer, for a service that has not: the state file is within
+/// kbf's readers after each, and the custom role is in it only under the service that has it.
+async fn limits_for_a_custom_role_are_written_within_kbfs_readers(readers: &Readers) {
+    let services = format!("{}\n{RENDER}", recorded("kbf.services.toml"));
+    let spec = Spec::recorded()
+        .with_services(&services)
+        .with_oidc_services(&["kbf", "render"]);
+    let rig = Rig::new("state-custom-role", spec);
+
+    let render =
+        r#"{"service":"render","version":"3.0","max_updating":{"gpu":3},"min_up":{"gpu":2}}"#;
+    let (code, body) = rig.desired(render).await;
+    assert_eq!(code, 200, "{body}");
+    assert!(!body.contains("dropped_roles"), "{body}");
+    check_desired(&rig, readers, "desired-map");
+    let file = parse(&rig.dir.path().join("desired.json"));
+    assert_eq!(
+        file["services"]["render"]["max_updating"],
+        json!({"frontend": 1, "storage": 1, "daemon": 2, "mac-daemon": 2, "gpu": 3})
+    );
+    assert_eq!(
+        file["services"]["render"]["min_up"],
+        json!({"storage": 0, "frontend": 0, "gpu": 2})
+    );
+
+    let kbf = r#"{"version":"2.0","max_updating":{"daemon":1,"gpu":4},"min_up":{"storage":1,"frontend":1,"gpu":1}}"#;
+    let (code, body) = rig.desired(kbf).await;
+    assert_eq!(code, 200, "{body}");
+    assert!(body.ends_with(r#","dropped_roles":["gpu"]}"#), "{body}");
+    check_desired(&rig, readers, "desired-map");
+    let file = parse(&rig.dir.path().join("desired.json"));
+    assert_eq!(
+        file["services"]["kbf"]["max_updating"],
+        json!({"frontend": 1, "storage": 1, "daemon": 1, "mac-daemon": 2})
+    );
+    assert_eq!(
+        file["services"]["kbf"]["min_up"],
+        json!({"storage": 1, "frontend": 1})
+    );
+    assert_eq!(file["services"]["render"]["max_updating"]["gpu"], 3);
+    assert_eq!(file["services"]["render"]["min_up"]["gpu"], 2);
+}
+
+/// A second host reports a halt while one stands, and an operator clears it: the halts file keeps
+/// the report of the standing halt and, apart from it, the report seen while it stood; after the
+/// clear, the two acknowledged and the generation. Both files are within kbf's readers each time.
+async fn a_second_halt_report_and_the_clear_are_written_within_kbfs_readers(readers: &Readers) {
+    let rig = Rig::recorded("state-halt-seen");
+    rig.at(1_100);
+    let (code, body) = rig.desired(support::STATE).await;
+    assert_eq!(code, 200, "{body}");
+    for (host, beat) in [("s1", HALT_BEAT), ("s3", SECOND_HALT_BEAT)] {
+        let (code, answer) = rig.heartbeat(host, "storage", beat).await;
+        assert_eq!(code, 200, "{host}: {answer}");
+        check_ops(&rig, readers);
+    }
+    let ops = parse(&rig.dir.path().join("desired.json.ops"));
+    assert!(
+        ops["services"]["kbf"].get("halt_seen").is_none(),
+        "the report seen while the halt stands is in the halts file only"
+    );
+    let halts = parse(&rig.dir.path().join("desired.json.ops.halts"));
+    let kbf = &halts["services"]["kbf"];
+    assert_eq!(kbf["halt"]["node_id"], "s1");
+    assert_eq!(kbf["halt_seen"].as_array().map(Vec::len), Some(1));
+    assert_eq!(kbf["halt_seen"][0]["node_id"], "s3");
+    assert_eq!(kbf["halt_seen"][0]["report"]["reason"], "state_unreadable");
+
+    let clear = r#"{"action":"clear_halt","service":"kbf","reason":"disks replaced"}"#;
+    let (code, answer) = rig.operator(clear).await;
+    assert_eq!(code, 200, "{answer}");
+    check_ops(&rig, readers);
+    let halts = parse(&rig.dir.path().join("desired.json.ops.halts"));
+    let kbf = &halts["services"]["kbf"];
+    let acked: Vec<&str> = kbf["halt_acked"]
+        .as_array()
+        .expect("the acknowledgements")
+        .iter()
+        .map(|ack| ack["node_id"].as_str().expect("a host"))
+        .collect();
+    assert_eq!(acked, ["s1", "s3"], "the clear acknowledges both reports");
+    assert_eq!(kbf["halt_generation"], 1);
+    assert!(kbf.get("halt").is_none() && kbf.get("halt_seen").is_none());
+}
+
 /// An ops file of a newer schema is refused at open and never rewritten: its bytes are the same
 /// afterwards and nothing else is made beside it.
 fn a_newer_ops_file_is_refused_and_left_alone() {
@@ -341,33 +503,69 @@ fn a_newer_ops_file_is_refused_and_left_alone() {
 /// Proves: the state files are compatible both ways. A desired-state file (single and map) and
 /// an ops file with its halts file, as kbf's coordinator wrote them, are read by this one with
 /// the recorded flags, and a desired-state file written back is the same bytes. What this one
-/// writes (the desired state in both forms; the ops file after an exclusion, a label, a halt, a
-/// clear, an include and a removal of labels; the halts file) parses as JSON and, checked by a
-/// mirror of kbf's `deny_unknown_fields` readers (`strict-readers.json`), has only keys they
-/// allow, every key they require and schema 1; for the changes kbf's fixtures record it is kbf's
-/// bytes. An ops file of schema 2 is refused at open, and its bytes are unchanged afterwards.
+/// writes parses as JSON and, checked by a mirror of kbf's readers (`strict-readers.json`: the
+/// keys each allows, requires, skips and takes null for, the schema and the type of every value,
+/// down into the records of the halts file and the report in them), is a file kbf reads whole:
+/// the desired state in both forms, and with limits for a role the format does not name (kept
+/// for the service that has the role, dropped for one that has not); the ops file and the halts
+/// file after an exclusion, a label, a halt, a second host's halt report, a clear, an include
+/// and a removal of labels, after an automatic rollback (the last good version and the bad
+/// one) and after CI sets the bad version by hand (the failure acks). For the changes kbf's
+/// fixtures record it is kbf's bytes. An ops file of schema 2 is refused at open, and its bytes
+/// are unchanged afterwards.
+/// Catches: a change of what this coordinator writes to a state file, in a step of any of those
+/// scenarios, that kbf's coordinator would refuse or read with a record of the halts file lost.
 #[tokio::test]
 async fn state_files_written_by_kbf_are_read_and_the_reverse_holds_by_schema_rules() {
     let readers = Readers::recorded();
     assert!(readers.from.contains("v0.0.64"), "{}", readers.from);
     assert_eq!(
         readers.files.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["desired-map", "desired-single", "ops"]
+        ["desired-map", "desired-single", "halts", "ops"]
     );
     kbf_desired_files_are_read_and_rewritten_to_the_same_bytes();
     kbf_ops_files_are_read_and_rewritten_within_kbfs_readers(&readers).await;
     what_this_coordinator_writes_is_within_kbfs_readers(&readers).await;
+    an_automatic_rollback_writes_its_marks_within_kbfs_readers(&readers).await;
+    an_override_of_a_bad_version_writes_failure_acks_within_kbfs_readers(&readers).await;
+    limits_for_a_custom_role_are_written_within_kbfs_readers(&readers).await;
+    a_second_halt_report_and_the_clear_are_written_within_kbfs_readers(&readers).await;
     a_newer_ops_file_is_refused_and_left_alone();
+}
+
+/// Catches: a `check_ops` that reads the root keys and the digest of the halts file and not the
+/// records in it. kbf's halts file with an outcome kbf does not know in the report of its
+/// standing halt, its root keys and its digest as they were, is refused, naming where.
+#[test]
+#[should_panic(expected = "halts.services.kbf.halt.report.outcome")]
+fn the_check_of_the_halts_file_reads_the_records_in_it() {
+    let rig = Rig::recorded("state-bad-halts");
+    let mut halts: Value =
+        serde_json::from_slice(&recorded_bytes("ops.json.halts")).expect("kbf's halts file");
+    halts["services"]["kbf"]["halt"]["report"]["outcome"] = json!("exploded");
+    let mut text = serde_json::to_string_pretty(&halts).expect("JSON");
+    text.push('\n');
+    for (file, contents) in [
+        ("desired.json.ops", recorded_bytes("ops.json")),
+        ("desired.json.ops.halts", text.into_bytes()),
+    ] {
+        std::fs::write(rig.dir.path().join(file), contents).expect("written");
+    }
+    check_ops(&rig, &Readers::recorded());
 }
 
 /// Catches: a mirror that takes anything. A key kbf's reader does not have, a key it requires
 /// that is missing, a schema it does not read, and the same inside an array or a map are each
-/// refused, naming where; kbf's own ops file is taken.
+/// refused, naming where; kbf's own ops file and halts file are taken.
 #[test]
 fn the_mirror_of_kbfs_readers_refuses_what_they_refuse() {
     let readers = Readers::recorded();
     let kbf: Value = serde_json::from_str(&recorded("ops.json")).expect("kbf's ops file");
     readers.check("OpsState", &kbf, "ops").expect("kbf's file");
+    let halts: Value = serde_json::from_str(&recorded("ops.json.halts")).expect("kbf's halts");
+    readers
+        .check("ReadHalts", &halts, "halts")
+        .expect("kbf's halts file");
     let mut cases: Vec<(Value, &str)> = Vec::new();
     for (patch, word) in [
         (json!({"future": true}), "future"),

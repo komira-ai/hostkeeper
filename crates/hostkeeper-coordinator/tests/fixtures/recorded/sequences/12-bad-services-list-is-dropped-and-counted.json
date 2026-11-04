@@ -57,7 +57,8 @@
    "host": "d1",
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"health\":\"healthy\",\"services\":[]}",
-   "expect_status": 400
+   "expect_status": 400,
+   "expect_body": "{\"error\":\"bad_request\"}"
   },
   {
    "at_secs": 2000,
