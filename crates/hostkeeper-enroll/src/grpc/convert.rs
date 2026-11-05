@@ -79,7 +79,8 @@ pub(super) fn enroll_request(request: &EnrollRequest) -> pb::EnrollRequest {
             dmi_serial: claims.product_serial.clone().unwrap_or_default(),
             product_uuid: claims.product_uuid.clone().unwrap_or_default(),
             addresses: claims.network_addresses.clone(),
-            ..pb::Claims::default()
+            mac_serial: claims.mac_serial.clone().unwrap_or_default(),
+            platform_uuid: claims.platform_uuid.clone().unwrap_or_default(),
         }),
         image: request.image.clone(),
         renewal_of: request

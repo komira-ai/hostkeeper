@@ -13,33 +13,40 @@ It is planned as:
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
-**hostkeeper is pre-release.** There is no release yet, and the one program, `hostkeeper daemon`,
-serves its admin socket's `Status` and runs no order yet (see [Running the daemon](#running-the-daemon)).
-The parts listed above are being moved here from [kbf](https://github.com/komira-ai/kbf), where
-they are developed today. So far this repository holds the generic half of the host updater,
-moved from kbf ([MIGRATION.md](MIGRATION.md)), the first part of the daemon, and the build, lint
-and coverage tooling:
+**hostkeeper is pre-release.** There is no release yet. Two programs are built from source: the
+one host program, `hostkeeper daemon`, which serves its admin socket's `Status` and runs no order
+yet (see [Running the daemon](#running-the-daemon)), and the update coordinator,
+`hostkeeper-coordinator serve`. The parts listed above are being moved here from
+[kbf](https://github.com/komira-ai/kbf), where they are developed today. So far this repository
+holds the generic half of the host updater and its coordinator, moved from kbf
+([MIGRATION.md](MIGRATION.md)), the first part of the daemon, and the build, lint and coverage
+tooling:
 
 | crate | what it holds |
 |---|---|
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the updater and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of the host's daemon config (`/etc/hostkeeper/hostkeeper.toml`) and of the `manifest.toml` a package carries, the owner and mode check of a trusted file, and the name and path grammars |
 | [`hostkeeper-rights`](crates/hostkeeper-rights) | the transient unit that runs one step of a hook, and the part of the old declaration it is still built from |
-| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the layout of versions with `current` and `previous`, the tree digest and the seal of a package version |
+| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the layout of versions with `current` and `previous` and its prune to those two, the tree digest and the seal of a package version |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (the P-256 request profile, host and server certificates, the owner-only key file, the CA bundle) and its durable enrollment store (requests, approval, one certificate per request, duplicate claims, deny rows), as a library |
 | [`hostkeeper-unpack`](crates/hostkeeper-unpack) | the unpack of a verified `.tar.zst` package into a sealed version directory, in one streaming pass under the archive bounds ([package format](docs/package-format.md)) |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon, the one root process of a host: start-up and its lock, the executor of orders with the service and step locks, the daemon's own checks, the try rules and the held halts, and the root-only admin socket |
 | [`hostkeeper`](crates/hostkeeper) | the binary, `hostkeeper daemon` and `hostkeeper ctl`, which only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), the command table of `hostkeeper ctl` generated from them, and the test that keeps them compatible |
 | [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, called over gRPC or the coordinator's HTTP/JSON gateway |
+| [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and the agent exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity of an updater, the secret-file rule |
+| [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
+| [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
+| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services it manages and the roles they run on (a rollout file), the desired version of each service, the heartbeat endpoint and the private endpoint of CI and the operator (named operator tokens), the convergence of a fleet; run as `hostkeeper-coordinator serve` |
 | `hostkeeper-testkit` | helpers the tests share |
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui): every call it makes is a method of the protobuf descriptors, its sources keep no token and load nothing from another origin, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; not shipped |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
 no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
-the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. No
-coordinator serves it yet.
+the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. The
+coordinator serves it under `/ui/` of its private listener when started with `--ui-dir`
+([docs/ui-serving.md](docs/ui-serving.md)).
 
 The design is [docs/design/host-updates.md](docs/design/host-updates.md).
 
@@ -111,7 +118,7 @@ own.
 | 15. Wait until each is active | each must be seen active once within `force_start_secs`, polled every second | nothing more | again from step 9 |
 | 16. Record the verdict | phase `verdicted` with `Succeeded`, or `Failed` with its reason | the verdict | nothing: a resend is answered from it |
 | 17. Report | the verdict, with the order's id and try, is what the daemon's status gives the heartbeat until the next order | the verdict | nothing |
-| 18. Prune | when `current` moved, the versions but `current` and `previous` are deleted (this build deletes nothing yet); a failed prune is an alert and leaves the verdict | the versions | nothing |
+| 18. Prune | when `current` moved, the versions but `current` and `previous` are deleted (see below); a failed prune is an alert and leaves the verdict | a version renamed to `.stage-prune-*`, or a seal with no tree, both removed later | nothing; the next confirmed switch prunes again |
 
 The reasons a force reports: before anything changed, `Failed` before the commit with the
 reason of what refused it (`digest_mismatch`, `package_not_found`, `no_space`, `package_failed`,
@@ -122,6 +129,24 @@ to 12, before the commit up to the switch and after it from then on), `daemon_re
 stays where it is: nothing is rolled back and the daemon does not try again. The repair is a
 second force, for instance to the version `previous` names, which is on the host and needs no
 fetch.
+
+## Two versions on a host
+
+A host keeps two versions of each service: the one `current` names and the one `previous`
+names, so a rollback to `previous` is a local switch with no fetch, and anything older is
+fetched again. No setting changes this. After a confirmed switch (an update that ends
+`Succeeded`, `promotion_pending` or not, or a force that moved `current`, whatever its verdict)
+the daemon deletes every other version directory of the service, with its seal, under the
+service's lock and no other. It keeps the target of the switch, and anything a record says is
+still in use: the release an unfinished update replaces, the target of a switch under way, and
+a version `placed.json` still lists as `pending`. A version staged by an update that did not
+switch stays until the next confirmed switch, so a retry needs no fetch. Nothing is pruned
+after a failed, deferred, halted or `forced_over` update, at start, or to make room: the disk
+need is two trees per service plus the one being staged. When `current` or `previous` is
+missing or names no version, nothing is deleted. A version is renamed to `.stage-prune-*`, then
+its seal is removed, then the tree, so a crash never leaves a half-deleted version; the next
+prune, or the unpack's own clean-up, finishes the job. A removal that fails is an alert and
+never changes the verdict; the next confirmed switch tries again.
 
 hostkeeper is licensed under [Apache-2.0](LICENSE). How to contribute is in
 [CONTRIBUTING.md](CONTRIBUTING.md), and how to report a vulnerability is in

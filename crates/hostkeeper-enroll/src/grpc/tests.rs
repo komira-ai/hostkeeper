@@ -23,7 +23,7 @@ use tonic::{Request, Status};
 
 use super::server::{Call, Double, Loopback, NONCE, Pki, Seen, pki};
 use super::{GrpcEnroll, convert, describe, trust_only_last};
-use crate::claims::ClaimsSource;
+use crate::claims::{ClaimsError, ClaimsSource};
 use crate::enroller::{Enroller, Outcome, Ports, Settings};
 use crate::key::{HostKey, OsEntropy};
 use crate::store::{CurrentPaths, PkiDir, Store};
@@ -138,6 +138,8 @@ fn full_request() -> EnrollRequest {
                 "02:00:00:00:00:01".to_owned(),
                 "02:00:00:00:00:02".to_owned(),
             ],
+            mac_serial: Some("mac-serial-1".to_owned()),
+            platform_uuid: Some("platform-uuid-1".to_owned()),
         },
         image: "image-1".to_owned(),
         renewal_of: Some(host()),
@@ -196,11 +198,11 @@ fn seen(double: &Double) -> Vec<Seen> {
 struct FixedClaims;
 
 impl ClaimsSource for FixedClaims {
-    fn claims(&self) -> Claims {
-        Claims {
+    fn claims(&self) -> Result<Claims, ClaimsError> {
+        Ok(Claims {
             machine_id: Some("machine-1".to_owned()),
             ..Claims::default()
-        }
+        })
     }
 }
 
@@ -422,8 +424,8 @@ fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
                         "02:00:00:00:00:01".to_owned(),
                         "02:00:00:00:00:02".to_owned()
                     ],
-                    mac_serial: String::new(),
-                    platform_uuid: String::new(),
+                    mac_serial: "mac-serial-1".to_owned(),
+                    platform_uuid: "platform-uuid-1".to_owned(),
                 }),
                 image: "image-1".to_owned(),
                 renewal_of: "web-1".to_owned(),

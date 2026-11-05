@@ -71,3 +71,23 @@ fn ctl_is_forwarded_and_main_has_no_logic() {
         .expect("main.rs");
     assert!(!main.contains("ctl"), "{main}");
 }
+
+/// Catches a binary whose `--version` is not the release stamp: it prints `hostkeeper `, the
+/// crate version, and `+` with the first 12 digits of the build's commit when it has one, then
+/// exits 0.
+#[test]
+fn version_prints_the_release_stamp() {
+    let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+        .arg("--version")
+        .output()
+        .expect("run hostkeeper");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let expected = format!(
+        "hostkeeper {}\n",
+        hostkeeper_daemon::stamp::version_text(
+            env!("CARGO_PKG_VERSION"),
+            option_env!("RELEASE_COMMIT")
+        )
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), expected);
+}

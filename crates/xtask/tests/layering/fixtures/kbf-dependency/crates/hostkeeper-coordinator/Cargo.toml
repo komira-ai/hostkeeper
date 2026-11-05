@@ -1,0 +1,12 @@
+[package]
+name = "hostkeeper-coordinator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+hostkeeper-oidc = { path = "../hostkeeper-oidc" }
+hostkeeper-tls = { path = "../hostkeeper-tls" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

@@ -59,7 +59,8 @@ use crate::refusal::Refusal;
 use crate::verb::{Forced, HookedVerb, PackageDigest};
 use crate::verbs::update::{last_record, while_held};
 
-pub use switch::{ALERT_FORCE_FAILED, ALERT_PRUNE};
+pub use crate::prune::ALERT_PRUNE;
+pub use switch::ALERT_FORCE_FAILED;
 
 /// The service a force is refused for: hostkeeper updates itself by its own path.
 pub const SELF_SERVICE: &str = "hostkeeper";

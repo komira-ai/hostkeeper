@@ -8,6 +8,7 @@ mod features;
 mod halts;
 mod kbf;
 mod orders;
+mod pki;
 mod ports;
 mod resend;
 mod size;

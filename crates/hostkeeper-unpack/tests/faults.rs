@@ -8,7 +8,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_steps::{Layout, Seal};
-use hostkeeper_unpack::{PackageFs, UnpackError, remove_orphans, unpack};
+use hostkeeper_unpack::{PackageFs, Platform, UnpackError, remove_orphans, unpack};
 use support::{
     Call, Faulty, MANIFEST, Matcher, Rig, SERVICE, Tar, VERSION, limits, order, sha256_hex,
     valid_tar, zstd,
@@ -42,6 +42,7 @@ fn install(rig: &Rig, version: &str) {
         &order(version, &sha256_hex(&archive)),
         &limits(),
         &rig.host(),
+        Platform::Linux,
     )
     .unwrap();
 }
@@ -115,7 +116,7 @@ fn enospc_during_staging_defers_with_no_space_and_leaves_no_partial_tree() {
         let archive = package(VERSION);
         let (path, order) = rig.archive("new.tar.zst", &archive);
         let fake = Faulty::new(rig.host()).fail(matcher, nth, errno);
-        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
         assert!(matches!(err, UnpackError::NoSpace(_)), "{what}: {err:?}");
         assert_eq!(
             err.outcome(),
@@ -144,7 +145,7 @@ fn a_crash_during_unpack_leaves_no_version_directory() {
     let clean = Rig::new("f-crash-count");
     let (path, order) = clean.archive("a.tar.zst", &archive);
     let counted = Faulty::new(clean.host());
-    unpack(&path, &order, &limits(), &counted).unwrap();
+    unpack(&path, &order, &limits(), &counted, Platform::Linux).unwrap();
     let calls = counted.calls().len();
     assert!(calls > 20, "{calls}");
     let mut published = 0;
@@ -152,7 +153,7 @@ fn a_crash_during_unpack_leaves_no_version_directory() {
         let rig = Rig::new("f-crash");
         let (path, order) = rig.archive("a.tar.zst", &archive);
         let fake = Faulty::new(rig.host()).crash_at(crash);
-        let result = unpack(&path, &order, &limits(), &fake);
+        let result = unpack(&path, &order, &limits(), &fake, Platform::Linux);
         assert!(result.is_err(), "a crash at call {crash} was not seen");
         let layout = Layout::package(&rig.service());
         let dir = layout.version_path(VERSION);
@@ -169,7 +170,7 @@ fn a_crash_during_unpack_leaves_no_version_directory() {
             );
         }
         remove_orphans(&order.service, &rig.host()).unwrap();
-        let unpacked = unpack(&path, &order, &limits(), &rig.host()).unwrap();
+        let unpacked = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
         assert_eq!(unpacked.seal.package_digest(), sha256_hex(&archive));
         assert_eq!(
             rig.listing(),
@@ -236,7 +237,7 @@ fn an_unpack_removes_the_orphans_of_its_service_first() {
     fs::write(service.join("1.5.0.seal"), "{\"schema\":1}").unwrap();
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
     let fake = Faulty::new(rig.host());
-    unpack(&path, &order, &limits(), &fake).unwrap();
+    unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap();
     assert_eq!(
         rig.listing(),
         [VERSION.to_owned(), format!("{VERSION}.seal")]
@@ -325,7 +326,7 @@ fn a_failure_at_each_step_of_the_publish_leaves_the_host_as_it_was() {
         let before = state(&rig);
         let (path, order) = rig.archive("new.tar.zst", &package(VERSION));
         let fake = Faulty::new(rig.host()).partial().fail(matcher, nth, errno);
-        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
         assert_eq!(err.outcome().2, reason, "{what}: {err:?}");
         assert_eq!(state(&rig), before, "{what}");
         layout.check_tree("1.4.1").unwrap();
@@ -346,7 +347,7 @@ fn a_cleanup_that_fails_leaves_only_orphans() {
         Box::new(|c| matches!(c, Call::FileSync(_) | Call::RemoveTree(_))),
         ENOSPC,
     );
-    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
     assert!(matches!(err, UnpackError::NoSpace(_)), "{err:?}");
     assert!(
         rig.listing().iter().any(|n| n.starts_with(".stage-")),
@@ -378,7 +379,7 @@ fn a_version_published_before_a_failed_fsync_stays_and_is_used_without_the_archi
         }),
         ENOSPC,
     );
-    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
     assert!(matches!(err, UnpackError::NoSpace(_)), "{err:?}");
     assert!(published.get());
     assert_eq!(
@@ -387,7 +388,7 @@ fn a_version_published_before_a_failed_fsync_stays_and_is_used_without_the_archi
     );
     Layout::package(&rig.service()).check_tree(VERSION).unwrap();
     fs::remove_file(&path).unwrap();
-    let again = unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    let again = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
     assert!(!again.fresh);
 }
 
@@ -411,7 +412,7 @@ fn an_unpack_holds_its_service_against_other_unpacks_and_orphan_removal() {
         Box::new(|c| matches!(c, Call::Rename(_, to) if to.ends_with("1.5.0"))),
         move |_| {
             let other = hostkeeper_unpack::HostFs::open(&packages, support::me()).unwrap();
-            let unpacked = unpack(&second, &second_order, &limits(), &other);
+            let unpacked = unpack(&second, &second_order, &limits(), &other, Platform::Linux);
             let removed = remove_orphans(&second_order.service, &other);
             let names: Vec<String> = fs::read_dir(packages.join(SERVICE))
                 .unwrap()
@@ -425,7 +426,7 @@ fn an_unpack_holds_its_service_against_other_unpacks_and_orphan_removal() {
             ));
         },
     );
-    unpack(&path, &order, &limits(), &fake).unwrap();
+    unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap();
     assert_eq!(*seen.borrow(), [(Err("io_error"), Err("io_error"), true)]);
     assert_eq!(
         rig.listing(),
@@ -438,7 +439,14 @@ fn an_unpack_holds_its_service_against_other_unpacks_and_orphan_removal() {
     let other = package("1.6.0");
     let (other_path, _) = rig.archive("other.tar.zst", &other);
     let other_order = support::order("1.6.0", &sha256_hex(&other));
-    let err = unpack(&other_path, &other_order, &limits(), &rig.host()).unwrap_err();
+    let err = unpack(
+        &other_path,
+        &other_order,
+        &limits(),
+        &rig.host(),
+        Platform::Linux,
+    )
+    .unwrap_err();
     assert!(
         matches!(&err, UnpackError::Io { what, .. } if what.contains("unpack lock")),
         "{err:?}"
@@ -454,7 +462,7 @@ fn a_service_directory_that_cannot_be_made_or_looked_at_stops_the_work() {
     let rig = Rig::new("f-service-dir");
     let (path, order) = rig.archive("a.tar.zst", &package(VERSION));
     fs::set_permissions(&rig.packages, fs::Permissions::from_mode(0o555)).unwrap();
-    let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap_err();
     assert!(
         matches!(&err, UnpackError::Io { what, .. } if *what == "cannot create the service directory"),
         "{err:?}"
@@ -486,7 +494,7 @@ fn a_service_directory_left_half_made_is_finished_by_the_next_unpack() {
     fs::create_dir(rig.service()).unwrap();
     fs::set_permissions(rig.service(), fs::Permissions::from_mode(0o700)).unwrap();
     let (path, order) = rig.archive("a.tar.zst", &package(VERSION));
-    unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
     let mode = |p: &std::path::Path| fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
     assert_eq!(mode(&rig.service()), 0o755);
     rig.host()
@@ -504,7 +512,7 @@ fn a_service_directory_left_half_made_is_finished_by_the_next_unpack() {
     fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o700)).unwrap();
     symlink(&elsewhere, rig.service()).unwrap();
     let (path, order) = rig.archive("a.tar.zst", &package(VERSION));
-    let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap_err();
     assert!(
         matches!(&err, UnpackError::Io { what, .. } if *what == "cannot create the service directory"),
         "{err:?}"

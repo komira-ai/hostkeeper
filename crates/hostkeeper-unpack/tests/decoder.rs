@@ -4,7 +4,7 @@
 mod support;
 
 use hostkeeper_hook::{Class, Outcome};
-use hostkeeper_unpack::{MAX_WINDOW_BYTES, Rule, UnpackError, unpack};
+use hostkeeper_unpack::{MAX_WINDOW_BYTES, Platform, Rule, UnpackError, unpack};
 use ruzstd::encoding::{CompressionLevel, compress_to_vec};
 use support::{Rig, VERSION, WINDOW_1M, block_header, limits, valid_tar};
 
@@ -45,7 +45,7 @@ fn single_segment(size: u64) -> Vec<u8> {
 fn run(name: &str, archive: &[u8]) -> (Rig, Result<hostkeeper_unpack::Unpacked, UnpackError>) {
     let rig = Rig::new(name);
     let (path, order) = rig.archive("a.tar.zst", archive);
-    let result = unpack(&path, &order, &limits(), &rig.host());
+    let result = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux);
     (rig, result)
 }
 

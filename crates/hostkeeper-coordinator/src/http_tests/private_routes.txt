@@ -1,0 +1,9 @@
+# The routes the private listener answers, one `METHOD path` a line; `/ui/*` is `/ui/` and every
+# path below it, answered only when `--ui-dir` is given. A route added or removed changes this
+# list in the same change (`the_private_route_set_is_unchanged` in `ui.rs` beside it).
+GET /ui/*
+GET /v1/convergence
+GET /v1/status
+HEAD /ui/*
+POST /v1/desired
+POST /v1/operator
