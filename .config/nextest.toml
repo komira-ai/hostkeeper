@@ -1,6 +1,6 @@
 # cargo-nextest's configuration (CI: .github/workflows/ci.yml runs `cargo llvm-cov nextest`).
-# It holds a hang guard and nothing else: no test asserts how long it takes, and no test has a
-# timeout of its own. A test that waits for something that never comes is stopped by nextest's
+# It holds a hang guard and one output setting: no test asserts how long it takes, and no test
+# has a timeout of its own. A test that waits for something that never comes is stopped by nextest's
 # slow-timeout with terminate-after (the test is killed and fails once period x terminate-after
 # has passed), instead of hanging the run.
 
@@ -9,3 +9,11 @@
 [[profile.default.overrides]]
 filter = 'all()'
 slow-timeout = { period = "120s", terminate-after = 4 }
+
+# The report's open cells: `the_open_cells_are_measurements` (crates/xtask/tests/report) prints
+# the measurement cells of docs/report/hostkeeper.md still waiting for a measurement. They are
+# allowed, so the test passes; its output is shown on success too, at the end of the run, so the
+# list is in every CI log.
+[[profile.default.overrides]]
+filter = 'package(xtask) & binary(report) & test(the_open_cells_are_measurements)'
+success-output = "final"
