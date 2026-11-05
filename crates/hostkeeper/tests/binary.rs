@@ -50,3 +50,17 @@ fn a_missing_config_exits_with_the_config_status() {
     assert!(stderr.contains(&config.display().to_string()), "{stderr}");
     assert!(!scratch.path().join("state").exists());
 }
+
+/// Catches the protocol verb of the real binary printing anything but its protocol, or failing:
+/// `hostkeeper self-update-protocol` exits 0 and prints exactly `1` and a newline, which is what
+/// the daemon of the release before reads before it stages this binary.
+#[test]
+fn self_update_protocol_verb_prints_only_the_constant() {
+    let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+        .arg("self-update-protocol")
+        .output()
+        .expect("run hostkeeper");
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
+    assert!(out.stderr.is_empty(), "{out:?}");
+}
