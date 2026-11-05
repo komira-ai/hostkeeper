@@ -11,6 +11,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::http::{Peer, Surface, handle};
+use hostkeeper_coordinator::identity::identity_of;
 use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
@@ -19,7 +20,9 @@ use hostkeeper_link::{
     BeatOutcome, CertState, CoordinatorLink, DEFAULT_HEARTBEAT_SECS, Feature, Heartbeater,
     LoopConfig, Order, OrderId, Platform, Ports, Reply, Target, Verb,
 };
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_testkit::Scratch;
+use hostkeeper_wire::wire;
 use http_body_util::{BodyExt, Full};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -121,8 +124,9 @@ fn serve_coordinator(
 /// not read: the coordinator answers the link's heartbeat with an update of `web` to 2.0 and
 /// its terms (`order-v1`: order id, try, the registered digest), the features both sides know
 /// and the halt generation of `web`; the link gives the loop the features, the generation and
-/// the update order with that id, try and digest; the loop raises the held generation and runs
-/// the order; its verdict goes back under the order's id and try; and the coordinator's status
+/// the update order with that id, try and digest, which is also the coordinator's typed order
+/// for the same heartbeat (the other API); the loop raises the held generation and runs the
+/// order; its verdict goes back under the order's id and try; and the coordinator's status
 /// shows the host under the agent and version the heartbeat named.
 #[test]
 fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
@@ -205,9 +209,28 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             digest: digest(),
         }),
     };
+    // The other API carries the same order: the typed order the coordinator gives for the same
+    // heartbeat of the same host is the loop's order, field for field.
+    let who = identity_of(&request.peer, coordinator.prefixes()).expect("an updater");
+    let again: wire::Heartbeat = serde_json::from_slice(&request.body).expect("a heartbeat");
+    let (_, typed) = coordinator
+        .heartbeat_with_orders(who, again)
+        .expect("an answer");
+    assert_eq!(
+        typed.expect("a typed order").to_proto(),
+        agent::Order {
+            order_id: ordered.id.as_str().to_owned(),
+            r#try: ordered.order_try,
+            verb: Some(agent::order::Verb::Update(agent::Update {
+                service: "web".to_owned(),
+                version: "2.0".to_owned(),
+                package_digest: digest().as_str().to_owned(),
+            })),
+        }
+    );
     assert_eq!(rig.world.dispatch.pending(), 1);
     assert!(rig.world.dispatch.run_next());
-    assert_eq!(rig.world.orders.orders(), [ordered.clone()]);
+    assert_eq!(rig.world.orders.orders(), std::slice::from_ref(&ordered));
 
     // Its verdict goes back under the order's id and try.
     let server = serve_coordinator(&transport, &farm, &coordinator);
