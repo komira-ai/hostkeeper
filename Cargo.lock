@@ -1117,6 +1117,7 @@ name = "hostkeeper"
 version = "0.1.0"
 dependencies = [
  "hostkeeper-daemon",
+ "hostkeeper-proto",
  "hostkeeper-testkit",
 ]
 
@@ -1206,8 +1207,10 @@ dependencies = [
  "hex",
  "hostkeeper-ci",
  "hostkeeper-config",
+ "hostkeeper-ctl",
  "hostkeeper-daemon",
  "hostkeeper-hook",
+ "hostkeeper-link",
  "hostkeeper-observe",
  "hostkeeper-package",
  "hostkeeper-placed",
@@ -1236,12 +1239,18 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "hostkeeper-config",
+ "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "p256",
+ "rcgen",
  "rustix",
+ "rustls",
  "sha2",
  "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
  "x509-cert",
 ]
 
