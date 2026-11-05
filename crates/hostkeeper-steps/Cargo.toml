@@ -8,11 +8,11 @@ repository.workspace = true
 publish.workspace = true
 description = "The step runner of the host updater: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the transient systemd unit that runs one step."
 
-# The step runner of the generic host updater (docs/design/host-updates.md, sections 3.2 to 3.5):
+# The step runner of the generic host updater (docs/design/hostkeeper-design.md, sections 6.2 to 6.6):
 # the persisted step record and its resume, the dead-man that enforces the bounds on a thread of
 # its own, the exit codes read as outcomes through `hostkeeper-hook`, the check of the staged
 # artifact before any run, and the updater's own update with its fallback. It runs a step through
-# a `StepLauncher` it is given and knows no service and no declaration; `systemd.rs` is the
+# a `StepLauncher` it is given and knows no service and no manifest; `systemd.rs` is the
 # launcher of the host (one transient unit per step, `RuntimeMaxSec=` and nothing else).
 # Synchronous, threads and blocking files. It depends on `hostkeeper-hook` and, for the one rule
 # of service names and versions, `hostkeeper-config` (crates/xtask/tests/layering keeps it so).

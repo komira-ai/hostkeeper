@@ -1,5 +1,5 @@
-//! The step runner of the generic host updater: the root part's engine for one update of one
-//! service (docs/design/host-updates.md, 3.2 to 3.5).
+//! The step runner of the generic host updater: the daemon's engine for one update of one
+//! service (docs/design/hostkeeper-design.md, 6.2).
 //!
 //! - [`StepRunner`] runs the five steps of the hook contract through a [`StepLauncher`], writes
 //!   the [`record::Record`] before and after each step, resumes from it after a crash, and reads

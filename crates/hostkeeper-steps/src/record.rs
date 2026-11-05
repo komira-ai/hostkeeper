@@ -1,4 +1,4 @@
-//! The step record: the updater's memory of one update (docs/design/host-updates.md, 3.5).
+//! The step record: the updater's memory of one update (docs/design/hostkeeper-design.md, 6.2).
 //!
 //! Before each step the record is written and fsynced (temporary file, fsync, rename, directory
 //! fsync) with the step in state `running`; when the step ends it is written again as `done`
@@ -58,7 +58,8 @@ pub enum State {
         /// The second it must end by; for an `unbounded` step the second it started, and read by
         /// nothing.
         deadline_secs: u64,
-        /// The step has no bound (a `prepare` declared with 0): the dead-man was not armed.
+        /// The step has no bound (a `prepare` whose manifest timeout is 0): the dead-man was not
+        /// armed.
         /// Written only when true, so a bounded step writes the bytes it always did, and a
         /// record without it (every record from before it existed) reads as bounded.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]

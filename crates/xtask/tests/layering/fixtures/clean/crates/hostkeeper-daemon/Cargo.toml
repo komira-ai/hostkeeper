@@ -1,0 +1,21 @@
+[package]
+name = "hostkeeper-daemon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-ci = { path = "../hostkeeper-ci" }
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-ctl = { path = "../hostkeeper-ctl" }
+hostkeeper-enroll = { path = "../hostkeeper-enroll" }
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-link = { path = "../hostkeeper-link" }
+hostkeeper-observe = { path = "../hostkeeper-observe" }
+hostkeeper-package = { path = "../hostkeeper-package" }
+hostkeeper-placed = { path = "../hostkeeper-placed" }
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

@@ -104,6 +104,27 @@ fn tmpfiles_creates_the_designs_directories_with_their_modes() {
     refuses(check_directories, &cases);
 }
 
+/// The kbf tag the host updater was imported from (MIGRATION.md).
+const KBF_TAG: &str = "v0.0.64";
+/// The kbf commit of that tag.
+const KBF_COMMIT: &str = "8f90d0604794f3fee057e71647c7e1c1e034fa2e";
+
+/// Catches a rename of the hooks root, the directory under which each hook keeps its record:
+/// the tmpfiles rules make exactly the directory kbf's `update-rights` named at the tag, as a
+/// plain directory closed to everyone but root. The path is written out here as kbf spells it,
+/// never read back from `DIRECTORIES`.
+#[test]
+fn constants_match_kbf_at_the_tag() {
+    let at = format!("kbf {KBF_TAG} ({KBF_COMMIT})");
+    let lines = tmpfiles::parse(&read(TMPFILES)).expect("the tmpfiles rules parse");
+    let hooks: Vec<(&str, &str)> = lines
+        .iter()
+        .filter(|line| line.path == "/var/lib/updater/hooks")
+        .map(|line| (line.kind.as_str(), line.mode.as_str()))
+        .collect();
+    assert_eq!(hooks, [("d", "0700")], "{at}");
+}
+
 fn check_scope(text: &str) -> Result<(), String> {
     for line in tmpfiles::parse(text)? {
         let n = line.line;
