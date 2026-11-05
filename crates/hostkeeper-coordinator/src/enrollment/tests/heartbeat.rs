@@ -17,7 +17,7 @@ use super::support::{
     HostKey, PATIENCE, Rig, coordinator_over, enrolled, host_id, identity, watched,
 };
 use crate::enrollment::{Admission, RpcError, os_random};
-use crate::fleet::{Fleet, ORDER_AGE};
+use crate::fleet::{Fleet, ORDER_AGE, QUIET_START};
 use crate::http::{Peer, Surface, handle};
 use crate::identity::{Identity, IdentityError};
 use crate::service::Coordinator;
@@ -343,7 +343,7 @@ fn a_deny_row_that_cannot_be_made_final_still_frees_the_slot() {
 /// it.
 #[test]
 fn a_host_is_released_only_when_no_update_or_order_of_it_is_in_flight() {
-    let mut fleet = Fleet::new(secs(0));
+    let mut fleet = Fleet::new(secs(0), QUIET_START);
     let (s1, s2) = (id("s1"), id("s2"));
     fleet.record_in("kbf", s2.clone(), role("storage"), beat("1.0"), secs(10));
     fleet.order("kbf", s2.clone(), version("2.0"), secs(10));
