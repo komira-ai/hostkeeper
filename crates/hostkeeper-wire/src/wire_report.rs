@@ -445,8 +445,8 @@ impl PartialEq<crate::wire::Reply> for Answer {
     }
 }
 
-/// An answer as it is read: [`ServiceReply`]'s fields, the order terms, `features`, `halts`
-/// and `acks`, and no other.
+/// An answer as it is read: [`ServiceReply`]'s fields, the order terms, `features`, `halts` and
+/// `acks`, and no other.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawAnswer {

@@ -11,10 +11,13 @@
 //! - `hostkeeper-wire`, `hostkeeper-oidc` and `hostkeeper-tls` depend on no workspace crate;
 //!   `hostkeeper-coordinator` depends on exactly those three, `hostkeeper-enrollment` (its CA
 //!   and enrollment store) and `hostkeeper-proto` (the messages of `Enroll`, `Poll` and
-//!   `Renew`) (dev-dependencies: itself, `hostkeeper-testkit` and `hostkeeper-oidc`, whose
-//!   `testkit` feature its tests use);
+//!   `Renew`) (dev-dependencies: itself, `hostkeeper-testkit`, `hostkeeper-oidc`, whose
+//!   `testkit` feature its tests use, and `hostkeeper-ctl`, which its tests run against it);
 //! - `hostkeeper-enrollment` (the coordinator's CA and enrollment store) depends on no other
 //!   crate of this workspace (dev-dependencies: itself and `hostkeeper-testkit`);
+//! - `hostkeeper-steps` and `hostkeeper-observe` reach `hostkeeper-launchd` through no normal or
+//!   build dependency, direct or through any chain (a fixture without `hostkeeper-observe` has
+//!   nothing to check for it);
 //! - `hostkeeper-testkit` depends on no workspace crate, and no crate has it but as a
 //!   dev-dependency;
 //! - no non-test source file under `crates/*/src` brings back a closed set of roles (the enum
@@ -872,5 +875,50 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              but must depend on exactly {COORDINATOR_DEPS}\n\
              hostkeeper-enrollment is not a workspace member"
         ))
+    );
+}
+
+/// Catches: the step runner or the observer (which every platform builds) gaining a normal or
+/// build dependency on the launchd crate, directly or through a crate outside the workspace, so
+/// that the macOS code would be linked into the shared layers; and a fixture without the observer
+/// being refused for lack of it.
+#[test]
+fn hostkeeper_steps_and_observe_do_not_depend_on_launchd() {
+    let launchd_dep = "hostkeeper-launchd = { path = \"../hostkeeper-launchd\" }\n";
+    let mut with_launchd = bare_crate("crates", "hostkeeper-launchd");
+    with_launchd.extend(bare_crate("crates", "hostkeeper-observe"));
+    let mut direct = with_launchd.clone();
+    direct.push(manifest_of(
+        "hostkeeper-observe",
+        layered("hostkeeper-observe", launchd_dep, "", ""),
+    ));
+    let dir = fixture("clean", direct);
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-observe must not depend (normal or build) on hostkeeper-launchd, \
+             but reaches it through hostkeeper-observe -> hostkeeper-launchd"
+        )
+    );
+    let mut through = with_launchd.clone();
+    through.extend(steps_through_shim("hostkeeper-launchd"));
+    through.push(manifest_of(
+        "hostkeeper-observe",
+        layered("hostkeeper-observe", &vendored_dep("shim"), "", ""),
+    ));
+    let dir = fixture("clean", through);
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-steps depends (normal or build) on the workspace crates \
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-launchd}, but must depend on exactly \
+             {hostkeeper-config, hostkeeper-hook}\n\
+             hostkeeper-steps reaches the workspace crate hostkeeper-launchd through \
+             hostkeeper-steps -> shim -> hostkeeper-launchd\n\
+             hostkeeper-steps must not depend (normal or build) on hostkeeper-launchd, \
+             but reaches it through hostkeeper-steps -> shim -> hostkeeper-launchd\n\
+             hostkeeper-observe must not depend (normal or build) on hostkeeper-launchd, \
+             but reaches it through hostkeeper-observe -> shim -> hostkeeper-launchd"
+        )
     );
 }

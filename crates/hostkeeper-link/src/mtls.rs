@@ -1,7 +1,7 @@
 //! [`JsonMtlsLink`]: the loop's [`CoordinatorLink`] over the frozen JSON heartbeat route of
-//! `hostkeeper-wire` (`POST /v1/heartbeat`) and rustls mutual TLS, because the coordinator serves
-//! nothing else until the gRPC link lands (docs/design/hostkeeper-design.md, 12.2, the deviation
-//! note). It speaks the bytes kbf's agent speaks (kbf `crates/kbf-updater/src/agent/coordinator.rs`
+//! `hostkeeper-wire` (`POST /v1/heartbeat`) and rustls mutual TLS, the route every coordinator
+//! serves (docs/design/hostkeeper-design.md, 12.2, the deviation note); [`crate::GrpcMtlsLink`]
+//! is the gRPC one, on the same trust. It speaks the bytes kbf's agent speaks (kbf `crates/kbf-updater/src/agent/coordinator.rs`
 //! at `v0.0.64`): one POST per connection, HTTP/1.1, `Connection: close`.
 //!
 //! - **Who it talks to.** The coordinator's address is the daemon config's `coordinator`. Its
@@ -18,11 +18,11 @@
 //!   wire's [`MAX_HEARTBEAT_BYTES`], which the coordinator reads no more of.
 //! - **What it takes back.** A 200 whose body is exactly an `Answer` of the wire: read strictly
 //!   (a key other than `reply`, `service`, `version`, `order_id`, `order_try`,
-//!   `package_digest`, `features`, `halts` and `acks` is [`ReplyFault::UnknownKey`]) and bounded (a body over [`REPLY_MAX`] or a head over
+//!   `package_digest`, `features` and `halts` is
+//!   [`ReplyFault::UnknownKey`]) and bounded (a body over [`REPLY_MAX`] or a head over
 //!   [`HEAD_MAX`] is [`ReplyFault::OverBound`]). An answer of another status whose body is the
 //!   coordinator's `{"error": <code>}` is [`LinkError::Refused`] by that code. An update with
-//!   its order terms (`order-v1`) is the loop's update order, and its `acks` are the loop's
-//!   acknowledgements; an update the loop cannot be given (no
+//!   its order terms (`order-v1`) is the loop's update order; one the loop cannot be given (no
 //!   service, no terms, or words the daemon cannot read) is logged once with why, and again
 //!   when it changes.
 //!
@@ -98,12 +98,12 @@ pub enum EndpointError {
 /// Where the coordinator is: the host and port to dial, and the name its certificate must be
 /// for.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Endpoint {
+pub(crate) struct Endpoint {
     /// `host:port` as the URL spells it, for the `Host` header.
-    authority: String,
-    host: String,
-    port: u16,
-    name: ServerName<'static>,
+    pub(crate) authority: String,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) name: ServerName<'static>,
 }
 
 impl Endpoint {
@@ -112,7 +112,7 @@ impl Endpoint {
     ///
     /// # Errors
     /// [`EndpointError`]: a path, or a host that is no DNS name or address.
-    fn of(url: &HttpsUrl) -> Result<Endpoint, EndpointError> {
+    pub(crate) fn of(url: &HttpsUrl) -> Result<Endpoint, EndpointError> {
         let text = url.as_str();
         let rest = text.strip_prefix("https://").unwrap_or(text);
         let (authority, path) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
@@ -175,37 +175,7 @@ impl JsonMtlsLink {
 
     /// The TLS configuration of one heartbeat: the pinned CA as the only root, and `identity`.
     fn client_config(&self, identity: &ClientIdentity) -> Result<Arc<ClientConfig>, LinkError> {
-        let bundle =
-            fs::read(&self.ca_bundle).map_err(|_| LinkError::Untrusted(TrustFault::NoPinnedCa))?;
-        let pinned: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&bundle)
-            .filter_map(Result::ok)
-            .filter(|ca| sha256_hex(ca.as_ref()) == self.pin.as_str())
-            .collect();
-        let mut roots = RootCertStore::empty();
-        roots.add_parsable_certificates(pinned);
-        if roots.is_empty() {
-            return Err(LinkError::Untrusted(TrustFault::NoPinnedCa));
-        }
-        let not_identity = |_| LinkError::Untrusted(TrustFault::ClientIdentity);
-        let chain: Vec<CertificateDer<'static>> =
-            CertificateDer::pem_slice_iter(identity.certificate())
-                .collect::<Result<_, _>>()
-                .map_err(not_identity)?;
-        if chain.is_empty() {
-            return Err(LinkError::Untrusted(TrustFault::ClientIdentity));
-        }
-        let key = PrivateKeyDer::from_pem_slice(identity.key()).map_err(not_identity)?;
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let mut config = ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .and_then(|builder| {
-                builder
-                    .with_root_certificates(roots)
-                    .with_client_auth_cert(chain, key)
-            })
-            .map_err(|_| LinkError::Untrusted(TrustFault::ClientIdentity))?;
-        config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        Ok(Arc::new(config))
+        client_config(&self.ca_bundle, &self.pin, identity, b"http/1.1")
     }
 
     /// Posts `body` over a new connection and returns every byte of the answer, up to the
@@ -288,6 +258,51 @@ impl CoordinatorLink for JsonMtlsLink {
     }
 }
 
+/// The TLS configuration of one heartbeat of either link: the certificates of the CA bundle
+/// `ca_bundle` whose SHA-256 is `pin` as the only roots, `identity` as the client's, and `alpn`
+/// as the one protocol offered.
+///
+/// # Errors
+/// [`LinkError::Untrusted`]: the bundle cannot be read or holds no certificate with that
+/// SHA-256, or `identity` is no TLS client identity.
+pub(crate) fn client_config(
+    ca_bundle: &Path,
+    pin: &Sha256Hex,
+    identity: &ClientIdentity,
+    alpn: &[u8],
+) -> Result<Arc<ClientConfig>, LinkError> {
+    let bundle = fs::read(ca_bundle).map_err(|_| LinkError::Untrusted(TrustFault::NoPinnedCa))?;
+    let pinned: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&bundle)
+        .filter_map(Result::ok)
+        .filter(|ca| sha256_hex(ca.as_ref()) == pin.as_str())
+        .collect();
+    let mut roots = RootCertStore::empty();
+    roots.add_parsable_certificates(pinned);
+    if roots.is_empty() {
+        return Err(LinkError::Untrusted(TrustFault::NoPinnedCa));
+    }
+    let not_identity = |_| LinkError::Untrusted(TrustFault::ClientIdentity);
+    let chain: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_slice_iter(identity.certificate())
+            .collect::<Result<_, _>>()
+            .map_err(not_identity)?;
+    if chain.is_empty() {
+        return Err(LinkError::Untrusted(TrustFault::ClientIdentity));
+    }
+    let key = PrivateKeyDer::from_pem_slice(identity.key()).map_err(not_identity)?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut config = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .and_then(|builder| {
+            builder
+                .with_root_certificates(roots)
+                .with_client_auth_cert(chain, key)
+        })
+        .map_err(|_| LinkError::Untrusted(TrustFault::ClientIdentity))?;
+    config.alpn_protocols = vec![alpn.to_vec()];
+    Ok(Arc::new(config))
+}
+
 /// `bytes`' SHA-256 as lower-case hex.
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -298,7 +313,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// A failure of the TLS stream: the server's certificate refused is the server not being the
 /// coordinator; anything else is the connection failing.
-fn failed(error: &io::Error) -> LinkError {
+pub(crate) fn failed(error: &io::Error) -> LinkError {
     let refused = error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<rustls::Error>())

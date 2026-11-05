@@ -25,17 +25,26 @@
 //! JSON heartbeat route of `hostkeeper-wire` over rustls mutual TLS, with the conversions between
 //! the loop's types and the wire's in one private module (`wire_map`). It reaches the
 //! coordinator through a [`Transport`]; [`TcpTransport`] ([`dial`]) is the production one and
-//! the only code of the crate that opens a socket.
+//! the only code of the crate that opens a socket, with [`TcpDial`], its async counterpart.
+//!
+//! [`GrpcMtlsLink`] ([`grpc`]) is the same call over gRPC (`Coordinator.Heartbeat` of
+//! `hostkeeper.agent.v1`) and HTTP/2 on the same mutual TLS, reaching the coordinator through a
+//! [`GrpcDial`], with its conversions in the private module `proto_map`. [`NegotiatedLink`]
+//! ([`negotiated`]) holds one of each and speaks gRPC only while the coordinator's last reply
+//! advertised [`Feature::GrpcV1`].
 
 pub mod beat;
 pub mod deferral;
 pub mod dial;
+pub mod grpc;
 pub mod heartbeater;
 pub mod mtls;
 pub mod names;
+pub mod negotiated;
 pub mod order;
 pub mod pki;
 pub mod ports;
+mod proto_map;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod wire_map;
@@ -45,12 +54,14 @@ pub use beat::{
     Observed, OptionalFact, Oversize, Platform, ServiceFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
-pub use dial::{CALL_SECS, TcpTransport};
+pub use dial::{CALL_SECS, TcpDial, TcpTransport};
+pub use grpc::{AsyncConn, GrpcDial, GrpcLinkError, GrpcMtlsLink};
 pub use heartbeater::{
     ACKED_KEPT, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
 };
 pub use mtls::{Conn, EndpointError, HEAD_MAX, JsonMtlsLink, REPLY_MAX, Transport};
 pub use names::{OrderId, PackageDigest, Reason, WordError};
+pub use negotiated::NegotiatedLink;
 pub use order::{
     Acknowledged, DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
 };

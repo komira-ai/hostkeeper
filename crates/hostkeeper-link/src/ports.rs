@@ -66,7 +66,7 @@ pub enum Unsendable {
     /// any heartbeat this long: only a caller of the link that does not fit its heartbeat
     /// meets it.
     #[error(
-        "the JSON heartbeat is {len} bytes, more than {}",
+        "the encoded heartbeat is {len} bytes, more than {}",
         hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES
     )]
     Bytes { len: usize },

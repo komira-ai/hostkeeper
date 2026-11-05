@@ -13,8 +13,10 @@ description = "The daemon's heartbeat loop: the facts of the installed services 
 # step records, the service observer, the executor, the held halts, the unix clock, the log and
 # the sleeper. It implements the certificate source itself, over the files of the pki directory
 # (`PkiCertSource`), and the coordinator link, over the JSON heartbeat route and mutual TLS
-# (`JsonMtlsLink`), which reaches the coordinator through a transport port; `TcpTransport`, in
-# `src/dial.rs`, is the one module that opens a socket. The loop reads no wall clock; the daemon
+# (`JsonMtlsLink`), which reaches the coordinator through a transport port, and over gRPC
+# (`GrpcMtlsLink`), which reaches it through an async dial port; `NegotiatedLink` picks between
+# the two by the features the coordinator advertised. `TcpTransport` and `TcpDial`, in
+# `src/dial.rs`, are the one module that opens a socket. The loop reads no wall clock; the daemon
 # passes the real ports in. The fakes of every port are in `hostkeeper_link::testing`, behind the
 # feature `testing`.
 [dependencies]
@@ -39,6 +41,8 @@ hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The deferral file under a handle on its directory: `openat` without following a link or
 # waiting on a special file, `renameat`, `unlinkat`, `fsync`, and the owner check (`geteuid`).
 rustix = { workspace = true, features = ["fs", "process"] }
+# The messages of the heartbeat `GrpcMtlsLink` sends: their encoded length is bounded.
+prost.workspace = true
 # The mutual TLS of `JsonMtlsLink`, with the ring provider; the coordinator's certificate is
 # checked against the pinned CA by its SHA-256.
 rustls.workspace = true
@@ -46,6 +50,16 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+# The runtime `GrpcMtlsLink` blocks on for each heartbeat; `net` is for `TcpDial` only.
+tokio = { workspace = true, features = ["net", "rt", "time"] }
+# The TLS handshake of `GrpcMtlsLink`, over the stream its dial port gave.
+tokio-rustls.workspace = true
+# The gRPC client over a connection `GrpcMtlsLink` has already made secure: client side only, no
+# TLS of its own.
+tonic = { workspace = true, features = ["channel"] }
+# The connector that hands tonic the established stream, and the stream as hyper reads it.
+hyper-util = { workspace = true, features = ["tokio"] }
+tower = { workspace = true, features = ["util"] }
 
 [features]
 # The fakes of every port (`hostkeeper_link::testing`), for this crate's tests and for the
@@ -68,11 +82,14 @@ hostkeeper-link = { path = ".", features = ["testing"] }
 # writes.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The server TLS of the gRPC link's tests: the coordinator's own listener configuration.
+hostkeeper-tls = { path = "../hostkeeper-tls" }
 # The test PKI of the certificate source's and the link's tests, made at run time so that no key
 # is committed.
 rcgen.workspace = true
-# The runtime the real coordinator's handler runs on in that test: one thread, no network.
-tokio = { workspace = true, features = ["rt", "time"] }
+# The runtime the real coordinator's handler runs on in those tests, and the in-memory streams
+# the gRPC link is dialed over: no network.
+tokio = { workspace = true, features = ["io-util", "rt", "rt-multi-thread", "time"] }
 # Reads this crate's manifest in the test that the loop dials nothing but its link.
 toml.workspace = true
 

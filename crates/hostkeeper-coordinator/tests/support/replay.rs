@@ -141,7 +141,16 @@ fn bearer(step: &Step, default: &str) -> Option<String> {
 /// Replays `sequence` on a fresh coordinator whose files are in a scratch directory called
 /// `name`: `Err` says every step whose answer is not the recorded one, with the answer in full.
 pub async fn replay(sequence: &Sequence, name: &str) -> Result<(), String> {
-    let mut rig = Rig::new(name, sequence.spec());
+    replay_on(Rig::new(name, sequence.spec()), sequence, name).await
+}
+
+/// Replays `sequence` through `grpc::route`, the entry point of the listeners, instead of
+/// `http::handle`: the recorded bytes are the same.
+pub async fn replay_routed(sequence: &Sequence, name: &str) -> Result<(), String> {
+    replay_on(Rig::new(name, sequence.spec()).routed(), sequence, name).await
+}
+
+async fn replay_on(mut rig: Rig, sequence: &Sequence, name: &str) -> Result<(), String> {
     let mut differences: Vec<String> = Vec::new();
     for (n, step) in sequence.steps.iter().enumerate() {
         rig.at(step.at_secs);

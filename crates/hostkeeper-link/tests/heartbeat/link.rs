@@ -7,9 +7,9 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_link::{
-    ANNOUNCED, Acknowledged, ClientIdentity, CoordinatorLink, EndpointError, Feature, HEAD_MAX,
-    Heartbeat, JsonMtlsLink, LinkError, Order, OrderId, OrderRef, Platform, REPLY_MAX, Reason,
-    Reply, ReplyFault, Target, TrustFault, Verb,
+    ANNOUNCED, Acknowledged, ClientIdentity, CoordinatorLink, EndpointError, HEAD_MAX, Heartbeat,
+    JsonMtlsLink, LinkError, Order, OrderId, OrderRef, Platform, REPLY_MAX, Reason, Reply,
+    ReplyFault, Target, TrustFault, Verb,
 };
 
 use crate::tls::{
@@ -190,8 +190,7 @@ fn padded(len: usize) -> String {
 }
 
 /// Catches a reply read loosely or without a bound: a key the wire does not have, at the top
-/// level, is refused as an unknown key, and one inside an acknowledgement makes the answer
-/// malformed, while an empty list of acknowledgements is read; a body over [`REPLY_MAX`] (by its length or by what was
+/// level, is refused as an unknown key; a body over [`REPLY_MAX`] (by its length or by what was
 /// sent), a head over [`HEAD_MAX`], or more bytes than both is over the bound, and a body of
 /// exactly [`REPLY_MAX`] is read; an answer that is not one HTTP response with one length and a
 /// body of that length, or not one wire answer, is malformed; the coordinator's refusal is
@@ -220,17 +219,9 @@ fn the_mtls_link_refuses_a_reply_with_an_unknown_key_or_over_the_bound() {
             unknown.clone(),
         ),
         (
-            "an empty list of acknowledgements",
-            http(200, r#"{"reply":"nothing","acks":[]}"#),
-            nothing.clone(),
-        ),
-        (
-            "an acknowledgement with a key the wire does not have",
-            http(
-                200,
-                r#"{"reply":"nothing","acks":[{"service":"web","order_id":"o-1","order_try":1,"extra":1}]}"#,
-            ),
-            malformed.clone(),
+            "a key of no answer beside a known one",
+            http(200, r#"{"reply":"nothing","acks":[],"acked":[]}"#),
+            unknown,
         ),
         (
             "an order id without its try and digest",
@@ -440,7 +431,7 @@ fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
         http(
             200,
             &format!(
-                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","verdict-acks-v1","order-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
+                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
             ),
         )
     };
@@ -544,23 +535,16 @@ fn an_update_with_its_terms_is_the_loops_update_order() {
     }
 }
 
-/// Catches a JSON answer's acknowledgements lost on the way to the loop, which leaves a daemon
-/// that a `verdict-acks-v1` coordinator answers resending its oldest verdict for ever: each ack
-/// is the loop's acknowledgement of that service's order id and try, in the answer's order; an
-/// ack whose service or order id the daemon's grammars refuse (the wire's are wider) names no
-/// verdict the daemon sent and is dropped, the others kept; an answer with no acks has none.
+/// Catches an acknowledgement dropped from the reply, or one the daemon cannot read kept: the
+/// `acks` of an answer are the loop's acknowledgements in the answer's order, and one whose
+/// service name or order id the daemon's grammars refuse (the wire's are wider) is left out.
 #[test]
-fn the_answers_acks_are_the_loops_acknowledgements() {
+fn the_acks_of_an_answer_are_the_loops_when_the_daemon_reads_them() {
     let bench = Bench::new("link-acks");
-    let (reply, read) = bench.answered(
-        http(
-            200,
-            r#"{"reply":"nothing","features":["verdict-acks-v1"],"acks":[{"service":"web","order_id":"update-1","order_try":2},{"service":"web","order_id":".hidden","order_try":1},{"service":"-web","order_id":"update-1","order_try":1},{"service":"db","order_id":"force-1","order_try":1}]}"#,
-        ),
-        Close::Notify,
-    );
+    let body = r#"{"reply":"nothing","acks":[{"service":"web","order_id":"update-1","order_try":2},{"service":"-web","order_id":"update-1","order_try":1},{"service":"api","order_id":".hidden","order_try":1},{"service":"api","order_id":"force-3","order_try":1}]}"#;
+    let (reply, read) = bench.answered(http(200, body), Close::Notify);
     assert!(read);
-    let ack = |name: &str, id: &str, order_try: u64| Acknowledged {
+    let acknowledged = |name: &str, id: &str, order_try: u64| Acknowledged {
         service: service(name),
         order: OrderRef {
             id: OrderId::new(id).expect("an order id"),
@@ -570,21 +554,10 @@ fn the_answers_acks_are_the_loops_acknowledgements() {
     assert_eq!(
         reply,
         Ok(Reply {
-            features: vec![Feature::VerdictAcksV1],
-            acknowledged: vec![ack("web", "update-1", 2), ack("db", "force-1", 1)],
-            ..Reply::default()
-        })
-    );
-
-    let (reply, read) = bench.answered(
-        http(200, r#"{"reply":"nothing","features":["verdict-acks-v1"]}"#),
-        Close::Notify,
-    );
-    assert!(read);
-    assert_eq!(
-        reply,
-        Ok(Reply {
-            features: vec![Feature::VerdictAcksV1],
+            acknowledged: vec![
+                acknowledged("web", "update-1", 2),
+                acknowledged("api", "force-3", 1)
+            ],
             ..Reply::default()
         })
     );

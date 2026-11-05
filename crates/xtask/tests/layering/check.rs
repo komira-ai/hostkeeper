@@ -22,7 +22,10 @@ const TLS: &str = "hostkeeper-tls";
 const COORDINATOR: &str = "hostkeeper-coordinator";
 const UNPACK: &str = "hostkeeper-unpack";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
+const OBSERVE: &str = "hostkeeper-observe";
+const LAUNCHD: &str = "hostkeeper-launchd";
 const PROTO: &str = "hostkeeper-proto";
+const CTL: &str = "hostkeeper-ctl";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
 const LAYERS: [(&str, &[&str]); 10] = [
@@ -38,10 +41,17 @@ const LAYERS: [(&str, &[&str]); 10] = [
     (ENROLLMENT, &[]),
 ];
 
-/// Dev-dependencies on another layer crate that are allowed besides the crate itself and the
+/// Dev-dependencies on another workspace crate that are allowed besides the crate itself and the
 /// testkit: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature (a fake
-/// issuer), which a dev-dependency can do and a normal dependency must not.
-const DEV_ALLOWED: [(&str, &str); 1] = [(COORDINATOR, OIDC)];
+/// issuer), which a dev-dependency can do and a normal dependency must not; and they run
+/// `hostkeeper-ctl` against an in-process coordinator (`hostkeeper-ctl` depends on neither the
+/// coordinator nor any crate that does).
+const DEV_ALLOWED: [(&str, &str); 2] = [(COORDINATOR, OIDC), (COORDINATOR, CTL)];
+
+/// Pairs (crate, crate it must not reach): the first never depends on the second through its
+/// normal or build dependencies, directly or through any chain. A pair whose first crate is not a
+/// workspace member has nothing to check.
+const NOT_ABOVE: [(&str, &str); 2] = [(STEPS, LAUNCHD), (OBSERVE, LAUNCHD)];
 
 /// A package name to the names of the packages it depends on.
 pub type Edges = BTreeMap<String, BTreeSet<String>>;
@@ -287,7 +297,7 @@ fn chain_to(edges: &Edges, members: &[&str], target: &str) -> Vec<String> {
 }
 
 /// Every rule the workspace breaks, one line each: first the kbf names (all of `lock`), then
-/// the layer crates in the order of `LAYERS`, then the testkit.
+/// the layer crates in the order of `LAYERS`, then the pairs of `NOT_ABOVE`, then the testkit.
 fn violations(members: &Members, lock: &Edges) -> Vec<String> {
     let mut out = Vec::new();
     let member_names: Vec<&str> = members.keys().map(String::as_str).collect();
@@ -329,6 +339,17 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
                      which is neither itself nor {TESTKIT}"
                 ));
             }
+        }
+    }
+    for (from, to) in NOT_ABOVE {
+        if !members.contains_key(from) {
+            continue;
+        }
+        if let Some(chain) = reached(members, lock, from).get(to) {
+            out.push(format!(
+                "{from} must not depend (normal or build) on {to}, but reaches it through {}",
+                chain.join(" -> ")
+            ));
         }
     }
     if !members.contains_key(TESTKIT) {

@@ -19,7 +19,6 @@ use crate::decide::Decision;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
-use crate::force::end_by_ci;
 use crate::halt;
 use crate::holds::{alert_on_bad_version, marks_of, on_bad_version};
 use crate::identity::Identity;
@@ -167,16 +166,18 @@ pub struct Set {
 /// heartbeat's `deferred` report ends the order, holds no slot and backs the host off
 /// ([`crate::defer`]). `halt-v1`: the clear generations of [`crate::halt`]. `heartbeat-v2`:
 /// selector membership, hosts that are `missing`, `absent` or `unmanaged`
-/// ([`crate::membership`]). `verdict-acks-v1`: the acks of the verdicts stored
-/// ([`crate::verdict_file`]). `order-v1`: an update answer carries the order terms of
+/// ([`crate::membership`]). `order-v1`: an update answer carries the order terms of
 /// [`crate::order_terms`], and the heartbeat's top level is the agent itself, never the legacy
-/// service.
+/// service. `verdict-acks-v1`: the acks of the verdicts stored ([`crate::verdict_file`]).
+/// `grpc-v1`: the coordinator serves `hostkeeper.agent.v1.Coordinator` on the heartbeat
+/// listener ([`crate::grpc`]), so an agent that announced it may send its next heartbeat there.
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
     crate::membership::HEARTBEAT_V2,
-    verdict_file::FEATURE,
     ORDER_FEATURE,
+    verdict_file::FEATURE,
+    crate::grpc::GRPC_FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
@@ -186,10 +187,10 @@ pub const FEATURES: &[&str] = &[
 /// coordinator does not advertise it ([`FEATURES`]). A field not listed is sent to every agent.
 pub const GATED_FIELDS: &[(&str, &str)] = &[
     ("halts", halt::FEATURE),
-    ("acks", verdict_file::FEATURE),
     ("order_id", ORDER_FEATURE),
     ("order_try", ORDER_FEATURE),
     ("package_digest", ORDER_FEATURE),
+    ("acks", verdict_file::FEATURE),
 ];
 
 /// Whether the answer field `field` goes to an agent whose announced features this coordinator
@@ -779,62 +780,7 @@ impl Coordinator {
         body: &[u8],
     ) -> Result<Set, SetError> {
         let verified = self.ci(bearer).await?;
-        let (service, desired, dropped_roles) =
-            Desired::parse_request_noting(body, &self.services, self.legacy.as_deref())?;
-        // An allow-list entry that names no services stands for the legacy service.
-        let admitted = match &verified.services {
-            Some(names) => names.contains(&service),
-            None => self.legacy.as_deref() == Some(service.as_str()),
-        };
-        if !admitted {
-            tracing::warn!(
-                workflow = %verified.job_workflow_ref,
-                %service,
-                "refused a desired state: the allow-list entry does not name the service"
-            );
-            return Err(SetError::Forbidden);
-        }
-        // The fleet's lock is held to the end of the set: a heartbeat plans a rollback and
-        // writes it under that lock, so it cannot write a rollback from the state it read over
-        // the version CI stores meanwhile, and the refusals below are decided on the marks and
-        // the registry the set is made over. The desired state goes first and the lift of an
-        // updater's halt after it: a lift that fails leaves the service halted (the safe side),
-        // and the reverse would order the halted target again.
-        {
-            let _fleet = self.lock_fleet_for_set();
-            let def = self
-                .services
-                .get(&service)
-                .ok_or(SetError::Invalid(DesiredError::UnknownService))?;
-            self.refuse(def, &desired)?;
-            let marks = self.ops.marks(&service);
-            self.desired
-                .record(&service, desired.clone(), |v| kept(&marks, v))?;
-            // CI's set of another version ends a force that stands ([`crate::force`]), before
-            // the lift: a lift that fails then leaves no force ordering the old version.
-            end_by_ci(
-                &self.ops,
-                &service,
-                &desired.version,
-                &verified.job_workflow_ref,
-            )?;
-            halt::lift_by_ci(
-                &self.ops,
-                &service,
-                &desired.version,
-                &verified.job_workflow_ref,
-            )?;
-        }
-        tracing::info!(
-            workflow = %verified.job_workflow_ref,
-            sha = ?verified.sha,
-            %service,
-            "desired state set by CI"
-        );
-        Ok(Set {
-            desired,
-            dropped_roles,
-        })
+        self.set_desired_verified(&verified, body)
     }
 
     /// Why CI may not set `desired` for `service`, if it may not: the refusals of
@@ -1005,15 +951,7 @@ impl Coordinator {
         service: &str,
     ) -> Result<Convergence, ConvergenceError> {
         self.ci(bearer).await?;
-        let def = self
-            .services
-            .get(service)
-            .ok_or(ConvergenceError::UnknownService)?;
-        let now = (self.clock)();
-        let fleet = self.lock_fleet();
-        let desired = self.desired.get(service);
-        let ops = self.ops.state();
-        Ok(convergence_of(def, desired.as_ref(), &fleet, &ops, now))
+        self.convergence_verified(service)
     }
 }
 
@@ -1026,3 +964,7 @@ pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
 /// The calls of the heartbeat path that ask enrollment.
 #[path = "service_enrollment.rs"]
 mod enrollment_calls;
+
+/// The calls that act for a CI token already checked.
+#[path = "service_ci.rs"]
+mod ci_calls;

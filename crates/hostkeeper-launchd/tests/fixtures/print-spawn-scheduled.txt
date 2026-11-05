@@ -1,0 +1,9 @@
+# A hand-written sample of the `launchctl print` format, to be replaced by output captured on a
+# device.
+system/dev.hostkeeper.hostkeeper = {
+	active count = 0
+	state = spawn scheduled
+
+	program = /usr/local/bin/hostkeeper
+	last exit code = 1
+}
