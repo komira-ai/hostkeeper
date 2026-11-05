@@ -6,7 +6,7 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_hook::{Class, Outcome};
-use hostkeeper_unpack::{BUFFER, Limits, MAX_WINDOW_BYTES, Rule, UnpackError, unpack};
+use hostkeeper_unpack::{BUFFER, Limits, MAX_WINDOW_BYTES, Platform, Rule, UnpackError, unpack};
 use support::{
     Call, Faulty, Head, MANIFEST, Rig, Tar, VERSION, WINDOW_1M, block_header, frame_header, limits,
     rle_blocks, valid_tar, zstd, zstd_with,
@@ -699,7 +699,7 @@ fn archive_bounds_and_shape_rules_refuse_each_violation() {
         let rig = Rig::new("b-row");
         let (path, order) = rig.archive("a.tar.zst", &row.archive);
         let fake = Faulty::new(rig.host());
-        let err = unpack(&path, &order, &row.limits, &fake).unwrap_err();
+        let err = unpack(&path, &order, &row.limits, &fake, Platform::Linux).unwrap_err();
         let UnpackError::BadArchive { rule, entry, .. } = &err else {
             panic!("{}: {err:?}", row.name)
         };
@@ -750,7 +750,7 @@ fn archive_bounds_and_shape_rules_refuse_each_violation() {
     for (name, archive, limits) in passing() {
         let rig = Rig::new("b-pass");
         let (path, order) = rig.archive("a.tar.zst", &archive);
-        let unpacked = unpack(&path, &order, &limits, &rig.host());
+        let unpacked = unpack(&path, &order, &limits, &rig.host(), Platform::Linux);
         assert!(unpacked.is_ok(), "{name}: {unpacked:?}");
         assert!(rig.service().join(VERSION).is_dir(), "{name}");
     }
@@ -773,7 +773,7 @@ fn a_zip_bomb_is_stopped_within_one_buffer_of_the_bound() {
         max_entries: 100,
     };
     let fake = Faulty::new(rig.host());
-    let err = unpack(&path, &order, &limits, &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits, &fake, Platform::Linux).unwrap_err();
     let UnpackError::BadArchive {
         rule: Rule::TooLarge,
         at,
@@ -840,7 +840,7 @@ fn no_byte_is_written_for_an_entry_that_breaks_a_rule() {
         let rig = Rig::new("b-nobyte");
         let (path, order) = rig.archive("a.tar.zst", &archive);
         let fake = Faulty::new(rig.host());
-        unpack(&path, &order, &limits, &fake).unwrap_err();
+        unpack(&path, &order, &limits, &fake, Platform::Linux).unwrap_err();
         let calls = fake.calls();
         let creates = |p: &Path| {
             calls
@@ -886,7 +886,7 @@ fn nothing_is_written_outside_the_staging_directory() {
         let rig = Rig::new("b-outside");
         let (path, order) = rig.archive("a.tar.zst", &archive);
         let fake = Faulty::new(rig.host());
-        unpack(&path, &order, &limits(), &fake).unwrap_err();
+        unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
         for call in fake.calls().iter().filter(|c| c.writes()) {
             for p in call.paths() {
                 // The staging directory, or the seal names the cleanup removes after it.
@@ -930,7 +930,7 @@ fn the_decoder_has_a_window_cap() {
         let mut archive = frame_header(descriptor);
         archive.extend_from_slice(&[0xffu8; 64]);
         let (path, order) = rig.archive("a.tar.zst", &archive);
-        let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap_err();
         let UnpackError::BadArchive { rule, at, .. } = &err else {
             panic!("{err:?}")
         };
