@@ -92,6 +92,18 @@ impl AuditLine {
         }
     }
 
+    /// The entry the line records, without its time.
+    pub(crate) fn into_entry(self) -> AuditEntry {
+        AuditEntry {
+            seq: self.seq,
+            by: self.by,
+            action: self.action,
+            service: self.detail.service,
+            node_id: self.detail.node_id,
+            reason: self.detail.reason,
+        }
+    }
+
     /// The line as the file holds it, with its newline, and a newline before it when the file's
     /// last line is `torn`. (A line of strings and numbers always serialises, so the empty text
     /// is never written.)
@@ -199,6 +211,11 @@ impl AuditLog {
 
     fn lock(&self) -> MutexGuard<'_, u64> {
         self.last_seq.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The file.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 
     /// The number of the last line the file holds: 0 when it holds none.

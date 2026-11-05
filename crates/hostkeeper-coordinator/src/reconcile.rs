@@ -116,8 +116,9 @@ pub(crate) fn is_release_failure_beat(beat: &Heartbeat, version: &Version) -> bo
 ///
 /// Nothing for a `manual` service (a farm that never asks for a rollback keeps its files as
 /// they were), nothing in the quiet start (the coordinator has not heard the hosts that would
-/// outvote a few failures) and nothing while the service is halted. Otherwise, the first that
-/// applies:
+/// outvote a few failures), nothing while the service is halted and nothing while a force of it
+/// stands. A pair an operator holds is not counted, as a failure or as a live host. Otherwise,
+/// the first that applies:
 ///
 /// 1. the desired version has converged and baked and nothing holds a slot: record it as
 ///    the last good version (unless it is, or is marked bad);
@@ -159,7 +160,13 @@ fn decide(
     state: &OpsState,
     now: Duration,
 ) -> Vec<Change> {
-    if def.rollback != Rollback::Automatic || fleet.is_quiet(now) || marks.halt.is_some() {
+    // A force that stands suspends the automatic rollback of its service: the operator chose
+    // the version, and only CI's next version or another force ends it ([`crate::force`]).
+    if def.rollback != Rollback::Automatic
+        || fleet.is_quiet(now)
+        || marks.halt.is_some()
+        || marks.force.is_some()
+    {
         return Vec::new();
     }
     let wanted = &want.version;
@@ -169,7 +176,9 @@ fn decide(
             .hosts_of(service)
             .filter(|(_, h)| def.roles.contains(h.role_name()))
             .filter(|(_, h)| h.is_live(now))
-            // The hosts the service counts: not an excluded one, nor one its selector leaves out.
+            // The hosts the service counts: not an excluded one, nor one its selector leaves out,
+            // nor a pair an operator holds, which is never counted towards a rollback.
+            .filter(|(id, _)| !fleet.is_held(service, id))
             .filter(|(id, _)| {
                 fleet
                     .node(id)
@@ -247,6 +256,7 @@ fn canary_open(def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Duration) -
     let baked = fleet
         .hosts_of(&def.name)
         .filter(|(_, h)| def.roles.contains(h.role_name()))
+        .filter(|(id, _)| !fleet.is_held(&def.name, id))
         .filter(|(id, h)| {
             h.beat.version == want.version
                 && fleet.is_up(&def.name, id, h, now)

@@ -13,8 +13,12 @@
 //! [`Fleet::record_in`] under that service's name. A restart forgets the
 //! outstanding orders: the start-up quiet period lets the hosts report first, and a host
 //! that began updating says so.
+//!
+//! The operator's holds and the hosts a standing force orders are kept here as a copy of the ops
+//! store's ([`Marks`]), refreshed under the fleet's lock, so the decisions read them with the
+//! beats; the `abort` orders an operator queued are kept in memory only, like the other orders.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use hostkeeper_wire::version::Version;
@@ -23,6 +27,7 @@ use hostkeeper_wire::{HostId, RoleName};
 
 use crate::bake::Bake;
 use crate::defer::{DeferBackoff, Defers};
+use crate::holds::{HoldMark, holding};
 use crate::verdicts::Verdicts;
 
 /// A host with no heartbeat for this long is down.
@@ -120,6 +125,17 @@ impl Node {
     }
 }
 
+/// What the fleet keeps of the operator's marks for its decisions: a copy of the holds and of
+/// the hosts each standing force orders, as the ops store holds them
+/// ([`crate::holds::marks_of`]), refreshed under the fleet's lock ([`Fleet::set_marks`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Marks {
+    /// The holds that stand.
+    pub holds: Vec<HoldMark>,
+    /// Per service, the hosts its standing force orders ([`crate::force`]).
+    pub forced: BTreeMap<String, BTreeSet<HostId>>,
+}
+
 /// Every host the coordinator has heard from since it started.
 #[derive(Clone, Debug)]
 pub struct Fleet {
@@ -138,6 +154,14 @@ pub struct Fleet {
     defers: Defers,
     /// The release failures heard, each counted once ([`crate::verdicts`]).
     verdicts: Verdicts,
+    /// The operator's marks the decisions read ([`Marks`]).
+    marks: Marks,
+    /// The `abort` orders an operator queued, per host and service, each with its order id: sent
+    /// once, at the host's next heartbeat ([`crate::orders`]).
+    aborts: BTreeMap<(HostId, String), String>,
+    /// The held hosts on a bad version already alerted, per service, host and version
+    /// ([`crate::holds::alert_on_bad_version`]).
+    alerted: BTreeSet<(String, HostId, String)>,
 }
 
 impl Fleet {
@@ -155,6 +179,9 @@ impl Fleet {
             bake: BTreeMap::new(),
             defers: Defers::default(),
             verdicts: Verdicts::default(),
+            marks: Marks::default(),
+            aborts: BTreeMap::new(),
+            alerted: BTreeSet::new(),
         }
     }
 
@@ -436,5 +463,86 @@ impl Fleet {
     pub fn occupants_of(&self, service: &str) -> impl Iterator<Item = (&HostId, &Host)> {
         self.hosts_of(service)
             .chain(self.outside.get(service).into_iter().flatten())
+    }
+
+    /// Replaces the operator's marks the fleet decides by with `marks`.
+    pub fn set_marks(&mut self, marks: Marks) {
+        self.marks = marks;
+    }
+
+    /// What the fleet keeps of the host `id` for `service`, counted or not.
+    fn occupant(&self, service: &str, id: &HostId) -> Option<&Host> {
+        self.occupants_of(service)
+            .find(|(occupant, _)| *occupant == id)
+            .map(|(_, host)| host)
+    }
+
+    /// Whether an operator holds `service` on the host `id`: a hold of the host, of the role it
+    /// has now (its certificate's at its last heartbeat; for a host the fleet knows only by its
+    /// beats of `service`, the role of those), or of the whole fleet.
+    #[must_use]
+    pub fn is_held(&self, service: &str, id: &HostId) -> bool {
+        let role = match self.nodes.get(id) {
+            Some(node) => node.role.as_str(),
+            None => self.occupant(service, id).map_or("", Host::role_name),
+        };
+        holding(&self.marks.holds, service, id.as_str(), role)
+            .next()
+            .is_some()
+    }
+
+    /// Whether the standing force of `service` orders the host `id`.
+    #[must_use]
+    pub fn is_forced(&self, service: &str, id: &HostId) -> bool {
+        self.marks
+            .forced
+            .get(service)
+            .is_some_and(|hosts| hosts.contains(id))
+    }
+
+    /// Whether the agent of the host `id` announced `feature` in its last heartbeat.
+    #[must_use]
+    pub fn announced(&self, id: &HostId, feature: &str) -> bool {
+        self.nodes
+            .get(id)
+            .is_some_and(|node| node.features.iter().any(|f| f == feature))
+    }
+
+    /// Queues an `abort` of `service` for the host `id` as the order `order_id`, unless one is
+    /// queued for them already: the first stands, so asking twice sends one abort.
+    pub fn queue_abort(&mut self, id: HostId, service: String, order_id: String) {
+        self.aborts.entry((id, service)).or_insert(order_id);
+    }
+
+    /// Takes an `abort` queued for the host `id`, the first by service name: the service and its
+    /// order id. Taken, it is not sent again.
+    pub fn take_abort(&mut self, id: &HostId) -> Option<(String, String)> {
+        let key = self.aborts.keys().find(|(host, _)| host == id).cloned()?;
+        self.aborts
+            .remove_entry(&key)
+            .map(|((_, service), order_id)| (service, order_id))
+    }
+
+    /// Forgets the host `id` for `service` altogether, its order with it, so the slot it held is
+    /// free now: an operator abandoned it (`Hosts.Exclude` with `abandon`). Answers whether it
+    /// held the slot at `now`. A beat it sends later is noted as any other.
+    pub fn abandon_in(&mut self, service: &str, id: &HostId, now: Duration) -> bool {
+        let held = self
+            .occupant(service, id)
+            .is_some_and(|host| self.holds_slot(service, id, host, now));
+        self.hosts.entry(service.to_owned()).or_default().remove(id);
+        self.outside
+            .entry(service.to_owned())
+            .or_default()
+            .remove(id);
+        self.orders.remove(&(id.clone(), service.to_owned()));
+        held
+    }
+
+    /// Notes the alert of the held host `id` running `version` of `service`, marked bad, and
+    /// answers whether it is the first for them.
+    pub fn first_alert(&mut self, service: &str, id: &HostId, version: &Version) -> bool {
+        self.alerted
+            .insert((service.to_owned(), id.clone(), version.as_str().to_owned()))
     }
 }

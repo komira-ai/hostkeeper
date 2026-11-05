@@ -209,6 +209,7 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
     let gate = |gate: Gate| -> &'static str {
         match gate {
             Gate::Halted => "halted",
+            Gate::Held => "held",
             Gate::Bad => "bad",
             Gate::BelowMinVersion => "below_min_version",
             Gate::Updating => "updating",
@@ -232,6 +233,7 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
     };
     for g in [
         Gate::Halted,
+        Gate::Held,
         Gate::Bad,
         Gate::BelowMinVersion,
         Gate::Updating,

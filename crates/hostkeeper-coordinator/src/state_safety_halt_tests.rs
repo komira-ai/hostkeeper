@@ -358,7 +358,8 @@ fn recorded_ops(
 
 /// Catches: a halt read from a file that predates `origin` taken for the updater's (CI would
 /// lift it), or the ops file of the release before refused: it reads, its halt is a hook's with
-/// its report, and an origin this release does not know is a hook's too, the record kept.
+/// its report, an operator's halt is the operator's, and an origin this release does not know is
+/// a hook's too, the record kept.
 #[test]
 fn an_old_halt_file_reads_as_a_hook_halt() {
     let (_dir, path) = recorded_ops("halt-old", |_| {});
@@ -369,7 +370,8 @@ fn an_old_halt_file_reads_as_a_hook_halt() {
 
     for (origin, read) in [
         ("updater", HaltOrigin::Updater),
-        ("operator", HaltOrigin::Hook),
+        ("operator", HaltOrigin::Operator),
+        ("someone_else", HaltOrigin::Hook),
     ] {
         let (_dir, path) = recorded_ops(&format!("halt-origin-{origin}"), |halts| {
             halts["services"][LEGACY]["halt"]["origin"] = json!(origin);
