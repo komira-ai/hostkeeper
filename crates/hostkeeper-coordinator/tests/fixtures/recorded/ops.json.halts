@@ -1,0 +1,17 @@
+{
+  "services": {
+    "kbf": {
+      "halt": {
+        "node_id": "s1",
+        "target": "2.0",
+        "report": {
+          "target": "2.0",
+          "outcome": "failed",
+          "phase": "halt",
+          "reason": "disk_tainted"
+        }
+      }
+    }
+  },
+  "ops": "b53b723f57e20124d54787869e86432b43edc7b6ab4115911493ec51e1d31f7e"
+}

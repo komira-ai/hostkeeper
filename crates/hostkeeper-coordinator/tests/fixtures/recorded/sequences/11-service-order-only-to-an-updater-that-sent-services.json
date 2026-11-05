@@ -1,0 +1,55 @@
+{
+ "from": "kbf-coordinator/src/http_tests/services.rs::a_service_order_goes_only_to_an_updater_that_sent_services (the third host's reply is asserted in kbf not to contain `service`)",
+ "services_fixture": "kbf.services.toml",
+ "services_text": "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n",
+ "oidc_services": [
+  "kbf",
+  "other"
+ ],
+ "steps": [
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"version\":\"0.0.19+g123456abcdef-1\",\"min_up\":{\"storage\":1,\"frontend\":1}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"0.0.19+g123456abcdef-1\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"service\":\"other\",\"version\":\"3.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"3.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"0.0.19+g123456abcdef-1\",\"health\":\"healthy\",\"last_update\":{\"target\":\"0.0.19+g123456abcdef-1\",\"outcome\":\"succeeded\"},\"updating\":null}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"0.0.19+g123456abcdef-1\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null,\"services\":[{\"name\":\"other\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null}]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"service\":\"other\",\"version\":\"3.0\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d3",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"0.0.19+g123456abcdef-1\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null,\"services\":[{\"name\":\"kbf\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":null,\"updating\":null}]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}",
+   "expect_not_contains": [
+    "service"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,67 @@
+{
+ "from": "kbf-coordinator/src/http_tests/halt.rs::halts_go_only_to_an_agent_that_announced_halt_v1 (the expected bytes are the test's literals)",
+ "steps": [
+  {
+   "at_secs": 1100,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"halt-v1\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[\"halt-v1\"]}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "s1",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "operator",
+   "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
+   "expect_status": 200,
+   "expect_body": "{\"seq\":2,\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\"}",
+   "expect_contains": [
+    "\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\""
+   ]
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"halt-v1\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[\"halt-v1\"],\"halts\":{\"kbf\":1}}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"unknown-v9\"]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[]}"
+  }
+ ]
+}

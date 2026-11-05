@@ -16,18 +16,31 @@ const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
 const RIGHTS: &str = "hostkeeper-rights";
 const TESTKIT: &str = "hostkeeper-testkit";
+const WIRE: &str = "hostkeeper-wire";
+const OIDC: &str = "hostkeeper-oidc";
+const TLS: &str = "hostkeeper-tls";
+const COORDINATOR: &str = "hostkeeper-coordinator";
 const UNPACK: &str = "hostkeeper-unpack";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
-const LAYERS: [(&str, &[&str]); 6] = [
+const LAYERS: [(&str, &[&str]); 10] = [
     (HOOK, &[]),
     (CONFIG, &[]),
     (STEPS, &[CONFIG, HOOK]),
     (RIGHTS, &[CONFIG, HOOK]),
+    (WIRE, &[]),
+    (OIDC, &[]),
+    (TLS, &[]),
+    (COORDINATOR, &[WIRE, OIDC, TLS]),
     (UNPACK, &[CONFIG, HOOK, STEPS]),
     (ENROLLMENT, &[]),
 ];
+
+/// Dev-dependencies on another layer crate that are allowed besides the crate itself and the
+/// testkit: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature (a fake
+/// issuer), which a dev-dependency can do and a normal dependency must not.
+const DEV_ALLOWED: [(&str, &str); 1] = [(COORDINATOR, OIDC)];
 
 /// A package name to the names of the packages it depends on.
 pub type Edges = BTreeMap<String, BTreeSet<String>>;
@@ -309,7 +322,7 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
             }
         }
         for dev in workspace_deps(members, name, |kind| kind == Kind::Dev) {
-            if dev != name && dev != TESTKIT {
+            if dev != name && dev != TESTKIT && !DEV_ALLOWED.contains(&(name, dev)) {
                 out.push(format!(
                     "{name} has a dev-dependency on the workspace crate {dev}, \
                      which is neither itself nor {TESTKIT}"
@@ -404,4 +417,319 @@ pub fn metadata_of(root: &Path) -> serde_json::Value {
         &root.join("Cargo.toml"),
     );
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("cargo metadata printed no JSON: {e}"))
+}
+
+/// Whether the role-enum scan leaves the file out: it holds test code.
+fn is_test_file(name: &str) -> bool {
+    name == "tests.rs" || name == "testutil.rs" || name.ends_with("_tests.rs")
+}
+
+/// Whether `c` can be part of an identifier.
+fn is_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// `text` with every comment (line, and block comments, nested), string literal (plain, byte
+/// and raw) and character literal replaced by spaces. Newlines are kept, so a line number of
+/// the result is the line number of `text`. A lifetime such as `'static` is code and stays.
+fn mask_non_code(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let blank = |out: &mut String, c: char| out.push(if c == '\n' { '\n' } else { ' ' });
+    let at = |i: usize| chars.get(i).copied().unwrap_or('\0');
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let after_ident = i > 0 && is_ident(chars[i - 1]);
+        let raw_from = match (c, at(i + 1)) {
+            ('r', _) if !after_ident => Some(i + 1),
+            ('b', 'r') if !after_ident => Some(i + 2),
+            _ => None,
+        };
+        let hashes = raw_from.map_or(0, |from| (from..).take_while(|j| at(*j) == '#').count());
+        let raw_quote = raw_from.map(|from| from + hashes).filter(|q| at(*q) == '"');
+        // The index one past the end of the span to blank, if `i` starts one.
+        let end = if c == '/' && at(i + 1) == '/' {
+            Some(
+                (i..chars.len())
+                    .find(|j| chars[*j] == '\n')
+                    .unwrap_or(chars.len()),
+            )
+        } else if c == '/' && at(i + 1) == '*' {
+            let mut depth = 0;
+            let mut j = i;
+            while j < chars.len() {
+                if at(j) == '/' && at(j + 1) == '*' {
+                    depth += 1;
+                    j += 2;
+                } else if at(j) == '*' && at(j + 1) == '/' {
+                    depth -= 1;
+                    j += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    j += 1;
+                }
+            }
+            Some(j)
+        } else if let Some(quote) = raw_quote {
+            let closing: String = std::iter::once('"')
+                .chain(std::iter::repeat_n('#', hashes))
+                .collect();
+            let body: String = chars[quote + 1..].iter().collect();
+            Some(body.find(&closing).map_or(chars.len(), |at| {
+                quote + 1 + body[..at].chars().count() + closing.len()
+            }))
+        } else if c == '"' {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j] != '"' {
+                j += if chars[j] == '\\' { 2 } else { 1 };
+            }
+            Some((j + 1).min(chars.len()))
+        } else if c == '\'' && at(i + 1) == '\\' {
+            let close = (i + 3..chars.len()).find(|j| chars[*j] == '\'');
+            Some(close.map_or(chars.len(), |j| j + 1))
+        } else if c == '\'' && at(i + 2) == '\'' {
+            Some(i + 3)
+        } else {
+            None
+        };
+        match end {
+            Some(end) => {
+                for blanked in &chars[i..end.min(chars.len())] {
+                    blank(&mut out, *blanked);
+                }
+                i = end;
+            }
+            None => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The words of `code` (runs of identifier characters) with the byte offset each starts at.
+fn words_of(code: &str) -> Vec<(usize, &str)> {
+    let mut words = Vec::new();
+    let mut start = None;
+    for (at, c) in code
+        .char_indices()
+        .chain(std::iter::once((code.len(), ' ')))
+    {
+        match (start, is_ident(c)) {
+            (None, true) => start = Some(at),
+            (Some(from), false) => {
+                words.push((from, &code[from..at]));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    words
+}
+
+/// The type of a `const` or `static` item: `rest`, which follows the `:`, up to the `=` (or
+/// `;`, `,` or closing bracket) that ends it. The `;` of an array type is inside brackets.
+fn declared_type(rest: &str) -> &str {
+    let mut depth = 0_i32;
+    let mut previous = ' ';
+    for (at, c) in rest.char_indices() {
+        let ends = match c {
+            '(' | '[' | '<' => {
+                depth += 1;
+                false
+            }
+            ')' | ']' => {
+                depth -= 1;
+                depth < 0
+            }
+            '>' if previous != '-' => {
+                depth -= 1;
+                depth < 0
+            }
+            '=' | '{' => true,
+            ';' | ',' => depth <= 0,
+            _ => false,
+        };
+        if ends {
+            return &rest[..at];
+        }
+        previous = c;
+    }
+    rest
+}
+
+/// Whether the type that begins `returned` (after a `->`) is an array of `RoleName`, possibly
+/// behind `&`, a lifetime or `mut`, and the name possibly qualified by a path.
+fn returns_role_array(returned: &str) -> bool {
+    let mut rest = returned;
+    loop {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix('&') {
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix('\'') {
+            rest = after.trim_start_matches(is_ident);
+        } else if let Some(after) = rest.strip_prefix("mut ") {
+            rest = after;
+        } else {
+            break;
+        }
+    }
+    rest.strip_prefix('[').is_some_and(|inside| {
+        let path: String = inside
+            .chars()
+            .take_while(|c| is_ident(*c) || *c == ':' || c.is_whitespace())
+            .collect();
+        path.trim().rsplit("::").next().map(str::trim) == Some("RoleName")
+    })
+}
+
+/// What the code of one file says that brings the closed set of roles back: `(line, what)`, a
+/// line once, in line order. `code` is the file with comments and literals masked
+/// ([`mask_non_code`]), so a declaration is matched across the lines it spans and is reported at
+/// the line it starts on. The things looked for: the identifier `HostRole`, an `enum` whose
+/// name ends in `Role`, a `const` or `static` of a type naming `RoleName` (not `const fn`, not a
+/// `'static` lifetime), and a function returning an array of `RoleName`, the name possibly
+/// qualified by a path.
+fn closed_roles_in(code: &str) -> Vec<(usize, String)> {
+    let line_of = |offset: usize| code[..offset].matches('\n').count() + 1;
+    let words = words_of(code);
+    let mut found: Vec<(usize, u8, String)> = Vec::new();
+    for (index, (offset, word)) in words.iter().enumerate() {
+        let next = words.get(index + 1).map(|(_, next)| *next);
+        match *word {
+            "HostRole" => found.push((line_of(*offset), 0, "the identifier HostRole".to_string())),
+            "enum" => {
+                if let Some(name) = next.filter(|name| name.ends_with("Role")) {
+                    found.push((
+                        line_of(*offset),
+                        1,
+                        format!("the enum {name}, a closed set of roles"),
+                    ));
+                }
+            }
+            "const" | "static" if !code[..*offset].ends_with('\'') => {
+                let name_at = if next == Some("mut") {
+                    index + 2
+                } else {
+                    index + 1
+                };
+                if let Some((name_offset, name)) = words.get(name_at)
+                    && !matches!(*name, "fn" | "unsafe" | "async" | "extern")
+                {
+                    let after = &code[name_offset + name.len()..];
+                    if let Some(rest) = after.trim_start().strip_prefix(':')
+                        && !rest.starts_with(':')
+                        && words_of(declared_type(rest))
+                            .iter()
+                            .any(|(_, word)| *word == "RoleName")
+                    {
+                        found.push((
+                            line_of(*offset),
+                            2,
+                            "a const or static of type RoleName".to_string(),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for (arrow, _) in code.match_indices("->") {
+        if returns_role_array(&code[arrow + 2..]) {
+            // The declaration starts at the nearest `fn` before the arrow.
+            let start = words
+                .iter()
+                .rev()
+                .find(|(offset, word)| *offset < arrow && *word == "fn")
+                .map_or(arrow, |(offset, _)| *offset);
+            found.push((
+                line_of(start),
+                3,
+                "a function returning an array of RoleName".to_string(),
+            ));
+        }
+    }
+    found.sort();
+    found.dedup_by_key(|(line, _, _)| *line);
+    found
+        .into_iter()
+        .map(|(line, _, what)| (line, what))
+        .collect()
+}
+
+/// The sorted paths directly under `dir`; an unreadable `dir` panics.
+fn sorted_entries(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+        .map(|entry| entry.expect("read a directory entry").path())
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Scans the `.rs` files under `dir`, skipping test files and directories named `tests`.
+fn scan_role_dir(root: &Path, dir: &Path, scanned: &mut usize, found: &mut Vec<String>) {
+    for path in sorted_entries(dir) {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if path.is_dir() {
+            if name != "tests" {
+                scan_role_dir(root, &path, scanned, found);
+            }
+        } else if name.ends_with(".rs") && !is_test_file(&name) {
+            *scanned += 1;
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let masked = mask_non_code(&text);
+            // The lines of `#[cfg(test)]` items are blanked before the scan.
+            let mut skipping = false;
+            let mut code = String::with_capacity(masked.len());
+            for (raw, line) in text.lines().zip(masked.lines()) {
+                if skipping {
+                    // A `#[cfg(test)]` item at column 0 ends at the first column-0 line that is
+                    // `}` or ends in `;`.
+                    let top_level = !raw.starts_with(char::is_whitespace);
+                    let ends = raw == "}" || (top_level && raw.ends_with(';'));
+                    skipping = !ends;
+                } else if raw == "#[cfg(test)]" {
+                    skipping = true;
+                } else {
+                    code.push_str(line);
+                }
+                code.push('\n');
+            }
+            for (line, what) in closed_roles_in(&code) {
+                found.push(format!("{relative}:{line}: {what}"));
+            }
+        }
+    }
+}
+
+/// Scans every non-test `.rs` file under `root/crates/*/src` for the closed set of roles coming
+/// back (see `closed_roles_in`). Returns the number of files scanned and one line per finding,
+/// `<file>:<line>: <what>`, in path order. Test files (`tests.rs`, `testutil.rs`, `*_tests.rs`),
+/// directories named `tests` and `#[cfg(test)]` items at column 0 are left out; comments, string
+/// and character literals are not code, and a declaration may span lines.
+pub fn closed_role_enums(root: &Path) -> (usize, Vec<String>) {
+    let mut scanned = 0;
+    let mut found = Vec::new();
+    for krate in sorted_entries(&root.join("crates")) {
+        let src = krate.join("src");
+        if src.is_dir() {
+            scan_role_dir(root, &src, &mut scanned, &mut found);
+        }
+    }
+    (scanned, found)
 }
