@@ -684,9 +684,7 @@ mod tests {
             service: "web".to_owned(),
         })));
         let mut none = order(pb::order::Verb::Abort(pb::Abort::default()));
-        if let Some(order) = none.order.as_mut() {
-            order.verb = None;
-        }
+        none.order.as_mut().expect("an order").verb = None;
         for mapped in [abort, reply(none)] {
             assert_eq!(mapped.reply.order, None);
             let dropped = mapped.dropped.expect("dropped");
@@ -717,9 +715,7 @@ mod tests {
             package_digest: digest(),
             halt_generation: 1,
         }));
-        if let Some(order) = forced.order.as_mut() {
-            order.order_id = ".hidden".to_owned();
-        }
+        forced.order.as_mut().expect("an order").order_id = ".hidden".to_owned();
         let mapped = reply(forced);
         assert_eq!(mapped.reply.order, None);
         let dropped = mapped.dropped.expect("dropped");
