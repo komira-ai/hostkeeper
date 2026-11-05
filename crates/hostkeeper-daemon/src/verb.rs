@@ -37,7 +37,7 @@ impl fmt::Display for PackageDigest {
     }
 }
 
-/// The verbs that switch a service to a package under the service's lock: the two that run its
+/// The verbs that switch a service to a package under the service's lock: those that run its
 /// hook to a verdict through the step runner, and `force`, which runs no hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookedVerb {
@@ -47,6 +47,8 @@ pub enum HookedVerb {
     ForceRollback,
     /// The hookless switch of design section 5.6, to any version, lower ones included.
     Force,
+    /// The update path with no previous release, for a service with none installed.
+    Install,
 }
 
 impl HookedVerb {
@@ -56,6 +58,7 @@ impl HookedVerb {
             HookedVerb::Update => "update",
             HookedVerb::ForceRollback => "force_rollback",
             HookedVerb::Force => "force",
+            HookedVerb::Install => "install",
         }
     }
 }
@@ -67,6 +70,14 @@ pub struct Hooked {
     pub version: Version,
     pub digest: PackageDigest,
     /// The coordinator's try of the order, from 1.
+    pub order_try: NonZeroU64,
+}
+
+/// The arguments of an `uninstall`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unhooked {
+    pub service: ServiceName,
+    /// The coordinator's try of the order, from 1: reported with the uninstall's verdict.
     pub order_try: NonZeroU64,
 }
 
@@ -88,7 +99,7 @@ pub enum Verb {
     Update(Hooked),
     ForceRollback(Hooked),
     Install(Hooked),
-    Uninstall(ServiceName),
+    Uninstall(Unhooked),
     Force(Forced),
     Abort(ServiceName),
     ClearHalt {
@@ -181,7 +192,10 @@ impl TryFrom<&Order> for Verb {
                 halt_generation: a.halt_generation,
                 order_id: Some(order.order_id.clone()).filter(|id| !id.is_empty()),
             }),
-            order::Verb::Uninstall(a) => Verb::Uninstall(service("uninstall", &a.service)?),
+            order::Verb::Uninstall(a) => Verb::Uninstall(Unhooked {
+                service: service("uninstall", &a.service)?,
+                order_try,
+            }),
             order::Verb::Abort(a) => Verb::Abort(service("abort", &a.service)?),
             order::Verb::ClearHalt(a) => Verb::ClearHalt {
                 service: service("clear_halt", &a.service)?,

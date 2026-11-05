@@ -1,0 +1,120 @@
+{
+ "from": "kbf-coordinator/src/http_tests/halt.rs::a_halt_report_stops_every_order_of_the_service_on_every_role, ::convergence_says_halted_and_names_the_host_and_check and ::only_the_operator_token_clears_a_halt (one coordinator; the halt and the audit entry are asserted by their fields in kbf, so they are expect_contains here, in the order kbf's serialiser writes the fields)",
+ "steps": [
+  {
+   "at_secs": 1100,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "s1",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"last_update\":{\"target\":\"2.0\",\"outcome\":\"failed\",\"phase\":\"halt\",\"reason\":\"disk_tainted\"}}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "s2",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "heartbeat",
+   "host": "f1",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "convergence",
+   "expect_status": 200,
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}",
+   "expect_contains": [
+    "\"state\":\"halted\"",
+    "\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"}"
+   ]
+  },
+  {
+   "at_secs": 1100,
+   "call": "operator",
+   "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
+   "expect_status": 401,
+   "auth": "none",
+   "expect_body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "operator",
+   "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
+   "expect_status": 401,
+   "auth": "ci",
+   "expect_body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "operator",
+   "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
+   "expect_status": 401,
+   "auth": "nope",
+   "expect_body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+   "at_secs": 1100,
+   "call": "convergence",
+   "expect_status": 200,
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}",
+   "expect_contains": [
+    "\"state\":\"halted\""
+   ]
+  },
+  {
+   "at_secs": 1100,
+   "call": "operator",
+   "body": "{\"action\":\"clear_halt\",\"service\":\"kbf\",\"reason\":\"disk replaced\"}",
+   "expect_status": 200,
+   "expect_body": "{\"seq\":2,\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\"}",
+   "expect_contains": [
+    "\"by\":\"operator\",\"action\":\"clear_halt\",\"service\":\"kbf\",\"node_id\":\"s1\",\"reason\":\"disk replaced\""
+   ]
+  },
+  {
+   "at_secs": 1100,
+   "call": "convergence",
+   "expect_status": 200,
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"blocked\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"commit\":\"{COMMIT}\"}",
+   "expect_not_contains": [
+    "\"state\":\"halted\"",
+    "\"halt\":"
+   ]
+  }
+ ]
+}

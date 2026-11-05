@@ -189,6 +189,8 @@ pub enum AdditiveFault {
     Lost,
     /// As `Lost`, and from then on no unit of the service can be stopped.
     LostUnstoppable,
+    /// The step ran past its bound and was killed: it ends with no exit code.
+    Killed,
 }
 
 type AdditiveEffect = Box<dyn Fn(&AdditiveCall<'_>) + Send + Sync>;
@@ -200,6 +202,7 @@ pub struct ScriptedLauncher {
     exits: Mutex<BTreeMap<Key, VecDeque<i32>>>,
     lines: Mutex<BTreeMap<Key, VecDeque<String>>>,
     additive_exits: Mutex<BTreeMap<String, VecDeque<i32>>>,
+    additive_lines: Mutex<BTreeMap<String, VecDeque<String>>>,
     additive_faults: Mutex<BTreeMap<String, AdditiveFault>>,
     during_additive: Mutex<Option<AdditiveEffect>>,
     additive: Mutex<Vec<AdditiveRan>>,
@@ -236,6 +239,14 @@ impl ScriptedLauncher {
     /// The exit codes of the next runs of an additive step for `service`.
     pub fn additive_exits(&self, service: &str, codes: &[i32]) {
         lock(&self.additive_exits).insert(service.to_owned(), codes.iter().copied().collect());
+    }
+
+    /// The exit codes and last lines of the next runs of an additive step for `service`.
+    pub fn additive_replies(&self, service: &str, replies: &[(i32, &str)]) {
+        let codes = replies.iter().map(|(code, _)| *code).collect();
+        let lines = replies.iter().map(|(_, line)| (*line).to_owned()).collect();
+        lock(&self.additive_exits).insert(service.to_owned(), codes);
+        lock(&self.additive_lines).insert(service.to_owned(), lines);
     }
 
     /// The next run of an additive step of `service` goes wrong as `fault` says.
@@ -375,11 +386,18 @@ impl StepLauncher for ScriptedLauncher {
             .get_mut(call.service)
             .and_then(VecDeque::pop_front)
             .unwrap_or(0);
+        let last_line = lock(&self.additive_lines)
+            .get_mut(call.service)
+            .and_then(VecDeque::pop_front);
         let fault = lock(&self.additive_faults).remove(call.service);
         let lost = || LaunchError::Launcher(format!("{} was lost", call.unit));
         match fault {
             None => Ok(StepExit {
                 code: Some(code),
+                last_line,
+            }),
+            Some(AdditiveFault::Killed) => Ok(StepExit {
+                code: None,
                 last_line: None,
             }),
             Some(AdditiveFault::NoStart) => Err(LaunchError::NoStart("no such file".to_owned())),

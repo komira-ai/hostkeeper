@@ -1,0 +1,40 @@
+[package]
+name = "hostkeeper-enrollment"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The coordinator's certificate authority (P-256 profile, issuance, key file, bundle) and its durable enrollment store."
+
+# docs/design/hostkeeper-design.md sections 4.4, 5.7, 6.1 and 8.8: everything about enrollment
+# that is a certificate or a file. No RPC is served here and no wire message is used; the
+# coordinator converts its messages to this crate's plain types. It depends on no crate of this
+# workspace (crates/xtask/tests/layering keeps it so).
+[dependencies]
+hex.workspace = true
+# `O_NOFOLLOW`: the CA key file is opened without following a link.
+libc.workspace = true
+# The runtime of the store's own messages, which build.rs generates from proto/.
+prost.workspace = true
+rcgen = { workspace = true, features = ["x509-parser"] }
+ring.workspace = true
+# flock(2) on the store's lock file, and the effective uid the key file must belong to.
+rustix = { workspace = true, features = ["fs", "process"] }
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+x509-parser.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+rustls.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

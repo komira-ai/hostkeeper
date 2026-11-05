@@ -3,7 +3,8 @@
 //! - [`FaultFs`]: the real filesystem under a root, recording every write in a [`Log`] and
 //!   failing the n-th write and every one after it, as a crash there would leave the disk;
 //! - [`FakeUnitControl`]: a [`UnitControl`] that records each call in the same [`Log`], so that
-//!   a test reads the order of writes and calls in one list, and keeps which units are active;
+//!   a test reads the order of writes and calls in one list, and keeps which units are active
+//!   (a test puts the calls of its own fakes among them with [`Event::Mark`]);
 //! - [`FakeLauncher`]: a [`CommandLauncher`] that records each argument vector.
 //!
 //! None of them runs a program, opens a socket or reads a clock.
@@ -26,6 +27,7 @@ pub enum FsWrite {
     Rename { from: PathBuf, to: PathBuf },
     Symlink { target: PathBuf, link: PathBuf },
     Remove(PathBuf),
+    RemoveDir(PathBuf),
     CreateDirs(PathBuf),
 }
 
@@ -43,6 +45,9 @@ pub enum UnitCall {
 pub enum Event {
     Fs(FsWrite),
     Unit(UnitCall),
+    /// What a test wrote to the log itself: the call of another fake, put in its place among
+    /// these.
+    Mark(String),
 }
 
 /// The events of the fakes that share it, in the order they happened.
@@ -225,6 +230,12 @@ impl Fs for FaultFs {
         })
     }
 
+    fn remove_dir(&self, dir: &Path) -> io::Result<()> {
+        self.write_op(FsWrite::RemoveDir(dir.to_path_buf()), || {
+            self.inner.remove_dir(dir)
+        })
+    }
+
     fn create_dirs(&self, dir: &Path) -> io::Result<()> {
         self.write_op(FsWrite::CreateDirs(dir.to_path_buf()), || {
             self.inner.create_dirs(dir)
@@ -242,13 +253,14 @@ struct Units {
     late: BTreeMap<String, u64>,
     fail_reload: bool,
     fail_start: BTreeSet<String>,
+    fail_stop: BTreeSet<String>,
 }
 
 /// A [`UnitControl`] that records each call in its [`Log`] and keeps which units are active: a
 /// start makes a unit active, a stop makes it inactive. Built with [`FakeUnitControl::failing`],
 /// every call is recorded and then fails; [`FakeUnitControl::fail_reload`],
-/// [`FakeUnitControl::fail_start`] and [`FakeUnitControl::active_after`] fail or delay one kind
-/// of call.
+/// [`FakeUnitControl::fail_start`], [`FakeUnitControl::fail_stop`] and
+/// [`FakeUnitControl::active_after`] fail or delay one kind of call.
 pub struct FakeUnitControl {
     log: Log,
     failing: bool,
@@ -283,6 +295,12 @@ impl FakeUnitControl {
     /// A start of `unit` fails from now on, and leaves it inactive.
     pub fn fail_start(&self, unit: &str) {
         self.units().fail_start.insert(unit.to_owned());
+    }
+
+    /// A stop of `unit` fails from now on, and leaves it as it was: a unit still active after its
+    /// stop bound.
+    pub fn fail_stop(&self, unit: &str) {
+        self.units().fail_stop.insert(unit.to_owned());
     }
 
     /// Once `unit` is started, [`UnitControl::is_active`] answers `false` for it `asks` times
@@ -324,7 +342,8 @@ impl UnitControl for FakeUnitControl {
     }
 
     fn stop_unit(&self, unit: &str) -> Result<(), UnitControlError> {
-        self.call(UnitCall::Stop(unit.to_owned()), false)?;
+        let fault = self.units().fail_stop.contains(unit);
+        self.call(UnitCall::Stop(unit.to_owned()), fault)?;
         self.units().active.remove(unit);
         Ok(())
     }

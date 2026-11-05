@@ -48,6 +48,8 @@ impl Timeouts {
             Step::Verify => self.verify,
             Step::Rollback => self.rollback,
             Step::Cleanup => self.cleanup,
+            // A declaration has no `uninstall` step: no bound, which the launcher refuses.
+            Step::Uninstall => 0,
         }
     }
 }
@@ -74,6 +76,8 @@ impl StepCapabilities {
             Step::Verify => self.verify.as_ref(),
             Step::Rollback => self.rollback.as_ref(),
             Step::Cleanup => self.cleanup.as_ref(),
+            // A declaration has no `uninstall` step, so no entry for it.
+            Step::Uninstall => None,
         }
     }
 }

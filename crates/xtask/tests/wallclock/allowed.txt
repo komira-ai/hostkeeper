@@ -4,10 +4,23 @@
 # its release. The wall clock is read only to check a validity window, for one of three purposes:
 #   TLS and certificate validity;
 #   the OIDC verifier;
-#   the enrollment nonce check.
+#   the enrollment nonce check;
+# and, apart from them, to stamp a record with the time it was made, which nothing reads back to
+# decide: the coordinator's audit file.
 # Each entry has a `#` line directly above it saying which of these it serves and why. The test
 # no_decision_reads_the_wall_clock in crates/xtask/tests/wallclock reads this file; it refuses
 # an entry that matches no file or whose files read no wall clock.
+# The OIDC verifier: system_clock is the time a CI token's exp, nbf and iat are checked against,
+# and the age of the cached signing keys.
+crates/hostkeeper-oidc/src/lib.rs
+# The coordinator's audit file: wall_clock stamps each line's at_unix, when a change was made,
+# for the people who read the file; no decision reads it (the coordinator decides by its own
+# monotonic clock).
+crates/hostkeeper-coordinator/src/audit_file.rs
+# TLS and certificate validity: SystemClock, the coordinator CA's clock, from which the validity
+# window of every certificate it signs starts (hostkeeper-enrollment, the only file of the crate
+# that reads the wall clock).
+crates/hostkeeper-enrollment/src/validity.rs
 # Certificate validity: the enroller reads the wall clock only to decide whether its host
 # certificate is due for renewal at half life, has expired, and whether one just issued is valid now.
 crates/hostkeeper-enroll/src/validity.rs

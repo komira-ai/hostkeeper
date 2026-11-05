@@ -8,6 +8,7 @@
 //! it was taken through.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
@@ -22,12 +23,41 @@ pub struct Package {
     pub digest: PackageDigest,
 }
 
+/// What a service's lock is held for: an order of a package, or the service's uninstall.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Holder {
+    Package(Package),
+    Uninstall,
+}
+
+impl fmt::Display for Holder {
+    /// `an order to update it to 2.0.0`, `an order to uninstall it`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Holder::Package(package) => write!(
+                f,
+                "an order to {} it to {}",
+                package.verb.name(),
+                package.version
+            ),
+            Holder::Uninstall => f.write_str("an order to uninstall it"),
+        }
+    }
+}
+
 /// Who holds a service's lock.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Held {
-    pub package: Package,
+    pub holder: Holder,
     /// The order's step could not be stopped: the lock stays held until `abort` clears it.
     pub stuck: bool,
+}
+
+impl Held {
+    /// Whether the lock is held for a `force`.
+    pub fn is_force(&self) -> bool {
+        matches!(&self.holder, Holder::Package(package) if package.verb == HookedVerb::Force)
+    }
 }
 
 /// One lock per service, made when a service's first order comes. A clone shares the locks: a
@@ -44,12 +74,21 @@ impl ServiceLocks {
 
     /// Takes the lock of `service` for `package`; never waits. `Err` says who holds it.
     pub fn take(&self, service: &ServiceName, package: Package) -> Result<ServiceGuard<'_>, Held> {
+        self.take_for(service, Holder::Package(package))
+    }
+
+    /// Takes the lock of `service` for `holder`; never waits. `Err` says who holds it.
+    pub fn take_for(
+        &self,
+        service: &ServiceName,
+        holder: Holder,
+    ) -> Result<ServiceGuard<'_>, Held> {
         let mut map = self.map();
         if let Some(held) = map.get(service.as_str()) {
             return Err(held.clone());
         }
         let held = Held {
-            package,
+            holder,
             stuck: false,
         };
         map.insert(service.to_string(), held);
@@ -74,7 +113,7 @@ impl ServiceLocks {
             return Err(held.clone());
         }
         let held = Held {
-            package,
+            holder: Holder::Package(package),
             stuck: false,
         };
         map.insert(service.to_string(), held);

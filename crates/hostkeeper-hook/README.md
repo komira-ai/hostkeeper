@@ -21,6 +21,7 @@ feature `conformance`, which a service turns on in its dev-dependencies.
 | `verify` | | observe that the new version serves; may be run again and again |
 | `rollback` | | undo `prepare` and `cutover` as far as they can be undone |
 | `cleanup` | | remove what only the update needed; run only after `verify` succeeded |
+| `uninstall` | | not a step of an update: run once, from the installed release, when the service is removed from the host; bounded by the manifest's `[hook.timeout_secs] uninstall`, and never run for a manifest without that bound |
 
 Every step may be followed by `--params <file>`: a TOML table of scalars, the declaration's
 `[hook.params]`, opaque to the updater. It also carries the reserved key

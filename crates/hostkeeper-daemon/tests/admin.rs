@@ -126,7 +126,10 @@ async fn status_reports_running_version_last_result_and_held_halt() {
     assert_eq!((done.held_halt, done.step_running()), (Some(0), false));
     assert!(busy.step_running() & busy.locked);
     assert_eq!(busy.last_result(), None);
-    assert_eq!(busy.running_version, None);
+    assert_eq!(
+        busy.running_version.as_ref().map(|v| v.as_str()),
+        Some(support::BASE)
+    );
     assert_eq!(halted.last_result().map(|f| f.verdict), Some(Verdict::Halt));
     assert_eq!(halted.held_halt, Some(3));
     assert!(matches!(broken.record, RecordState::Unreadable(_)));

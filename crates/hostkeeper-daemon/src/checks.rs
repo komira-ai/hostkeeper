@@ -18,6 +18,7 @@ use hostkeeper_hook::Verdict;
 use hostkeeper_steps::Finished;
 use hostkeeper_steps::record::{Record, State};
 
+use crate::installed::Lifecycle;
 use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{HookedVerb, PackageDigest};
@@ -160,6 +161,42 @@ pub fn not_below_running(
     }
 }
 
+/// Which hooked orders a service takes, by where it is in its life (design section 6.1): none
+/// while its uninstall is unfinished (`tombstoned`: `uninstalling`); `install` only when no
+/// release is installed (`already_installed`), `update` and `force_rollback` only when one is
+/// (`not_installed`). An order the step record holds unfinished for the same package
+/// (`resuming`) is resumed whatever `current` says: an install may have switched `current`
+/// before the daemon stopped.
+pub fn installed_rule(
+    verb: HookedVerb,
+    installed: bool,
+    resuming: bool,
+    tombstoned: bool,
+) -> Result<(), Refusal> {
+    let wants_installed = verb != HookedVerb::Install;
+    let wrong = match verb {
+        HookedVerb::Install => Refusal::AlreadyInstalled,
+        HookedVerb::Update | HookedVerb::ForceRollback | HookedVerb::Force => Refusal::NotInstalled,
+    };
+    match (tombstoned, resuming | (installed == wants_installed)) {
+        (true, _) => Err(Refusal::Uninstalling),
+        (false, true) => Ok(()),
+        (false, false) => Err(wrong),
+    }
+}
+
+/// Whether a `force` may run for a service where it is in its life (design section 6.1): a
+/// force is refused, and nothing changes, for a service whose first install is under way
+/// (`installing`) and one whose uninstall is unfinished (`uninstalling`). A service with no
+/// release installed is forced as the `force` verb does it: its first switch places it.
+pub fn force_allowed(lifecycle: Lifecycle) -> Result<(), Refusal> {
+    match lifecycle {
+        Lifecycle::Running | Lifecycle::Absent => Ok(()),
+        Lifecycle::Installing => Err(Refusal::Installing),
+        Lifecycle::Removing => Err(Refusal::Uninstalling),
+    }
+}
+
 /// The token of a package error.
 pub fn package_refusal(error: &PackageError) -> Refusal {
     match error {
@@ -203,7 +240,7 @@ pub fn finished_of(rec: &Record) -> Option<Finished> {
 
 /// Whether `rec` is the step record of an order for the package `key` names, of the same kind:
 /// the record of a force answers only a `force`, and a hooked record only a hooked order.
-fn same_package(rec: &Record, key: &OrderKey) -> bool {
+pub fn same_package(rec: &Record, key: &OrderKey) -> bool {
     let same_kind = rec.force.is_some() == (key.verb == HookedVerb::Force);
     (rec.target_version == key.version.as_str())
         & (rec.tarball_digest == key.digest.as_str())

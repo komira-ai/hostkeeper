@@ -24,7 +24,9 @@ use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
 use hostkeeper_hook::Verdict;
 use hostkeeper_placed::Roots;
 use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log as PlacedLog};
-use hostkeeper_proto::hostkeeper::agent::v1::{Force, ForceRollback, Order, Update, order};
+use hostkeeper_proto::hostkeeper::agent::v1::{
+    Force, ForceRollback, Install, Order, Uninstall, Update, order,
+};
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::{CrashPoint, Finished, RecordStore};
@@ -104,6 +106,34 @@ pub fn update(service: &str, version: &str, package_digest: &str, order_try: u64
     }
 }
 
+/// An `install` order.
+pub fn install(service: &str, version: &str, package_digest: &str, order_try: u64) -> Order {
+    Order {
+        order_id: format!("install-{service}-{version}"),
+        r#try: order_try,
+        verb: Some(order::Verb::Install(Install {
+            service: service.to_owned(),
+            version: version.to_owned(),
+            package_digest: package_digest.to_owned(),
+        })),
+    }
+}
+
+/// An `uninstall` order.
+pub fn uninstall(service: &str, order_try: u64) -> Order {
+    Order {
+        order_id: format!("uninstall-{service}"),
+        r#try: order_try,
+        verb: Some(order::Verb::Uninstall(Uninstall {
+            service: service.to_owned(),
+        })),
+    }
+}
+
+/// The release a service that a test updates is installed at, when the test installed none:
+/// an update needs a release installed.
+pub const BASE: &str = "0.0.0";
+
 /// A `force_rollback` order.
 pub fn force_rollback(service: &str, version: &str, package_digest: &str, order_try: u64) -> Order {
     Order {
@@ -158,6 +188,11 @@ pub fn roots() -> Roots {
 }
 
 /// A scratch directory with the daemon's directories, its config and fakes for its ports.
+///
+/// Placement reads and writes the real paths under the scratch directory (a `FaultFs` rooted at
+/// `/`, given only paths below the scratch directory), units in `<scratch>/units`, and
+/// `placed.json` in the scratch directory, above the packages directory. Its writes and the
+/// calls of its unit control go to `placed_log`.
 pub struct Rig {
     pub scratch: Scratch,
     pub state: PathBuf,
@@ -214,6 +249,25 @@ impl Rig {
             prune: Arc::new(NoPrune),
             force_lock_point: Arc::new(NoLockPoint),
         }
+    }
+
+    /// A daemon on the rig's directories whose placement goes through `fs` and `units`, with no
+    /// dead-men.
+    pub fn daemon_with(&self, fs: Arc<FaultFs>, units: Arc<FakeUnitControl>) -> Daemon {
+        let ports = Ports {
+            units,
+            placement: Placement { roots: roots(), fs },
+            ..self.ports()
+        };
+        Daemon::new(config(), self.dirs(), ports, OWN)
+    }
+
+    /// Where the host path `path` is on disk: the scratch directory is the rig's host's root.
+    pub fn host(&self, path: impl AsRef<Path>) -> PathBuf {
+        let path = path.as_ref();
+        self.scratch
+            .path()
+            .join(path.strip_prefix("/").unwrap_or(path))
     }
 
     /// A version of `service` with units, sealed with the package digest [`d`]: each of `units`
@@ -273,15 +327,28 @@ impl Rig {
         }
     }
 
-    /// The package of `service` at `version`, with a manifest every rule accepts.
+    /// The package of `service` at `version`, with a manifest every rule accepts. A service
+    /// with no `current` is installed at [`BASE`] (its package there, `current` naming it), so
+    /// that an update of it runs; [`Rig::stage`] adds a package and installs nothing.
     pub fn add(&self, service: &str, version: &str) -> PathBuf {
+        let dir = self.stage(service, version);
+        if fs::symlink_metadata(self.packages.join(service).join("current")).is_err() {
+            self.stage(service, BASE);
+            self.store.link(service, "current", BASE);
+        }
+        dir
+    }
+
+    /// The package of `service` at `version`, with a manifest every rule accepts, and nothing
+    /// else.
+    pub fn stage(&self, service: &str, version: &str) -> PathBuf {
         self.store
             .add(service, version, &manifest(service, version))
     }
 
     /// `service` runs `version`: its package is there and `current` names it.
     pub fn running(&self, service: &str, version: &str) -> PathBuf {
-        let dir = self.add(service, version);
+        let dir = self.stage(service, version);
         self.store.link(service, "current", version);
         dir
     }
@@ -323,6 +390,88 @@ impl Rig {
             State::Finished { verdict, reason } => Some(Finished { verdict, reason }),
             _ => None,
         }
+    }
+}
+
+impl Rig {
+    /// Where the `[[files]]` entry of a package of `service` that [`Rig::placed`] makes is
+    /// placed, as the host names it.
+    pub fn conf_path(&self, service: &str) -> PathBuf {
+        PathBuf::from(format!("/opt/{service}/{service}.conf"))
+    }
+
+    /// The text of the unit `<service>.service`: its `ExecStart=` through `current`, wanted by
+    /// [`TARGET`].
+    pub fn unit_text(&self, service: &str) -> String {
+        format!(
+            "[Unit]\nDescription=a test unit\n\n[Service]\nExecStart={}/{service}/current/bin/hook serve\n\n[Install]\nWantedBy={TARGET}\n",
+            roots().packages().dir().display()
+        )
+    }
+
+    /// The package of `service` at `version` that places something: `units/<service>.service`,
+    /// its one `run` unit, and `files/<service>.conf` at [`Rig::conf_path`]; with
+    /// `uninstall = <bound>` in `[hook.timeout_secs]` when `uninstall` is given. Sealed with the
+    /// package digest [`d`]. Nothing is installed.
+    pub fn placed(&self, service: &str, version: &str, uninstall: Option<u64>) -> PathBuf {
+        let mut text = manifest(service, version);
+        if let Some(bound) = uninstall {
+            text.push_str(&format!("uninstall = {bound}\n"));
+        }
+        text.push_str(&format!(
+            "\n[units]\nrun = [\"{service}.service\"]\n\n[[files]]\nsource = \"files/{service}.conf\"\npath = \"{}\"\n",
+            self.conf_path(service).display()
+        ));
+        let dir = self.store.add(service, version, &text);
+        for sub in ["units", "files"] {
+            fs::create_dir_all(dir.join(sub)).expect("a directory of the package");
+            fs::set_permissions(dir.join(sub), fs::Permissions::from_mode(0o755))
+                .expect("its mode");
+        }
+        let unit = dir.join("units").join(format!("{service}.service"));
+        fs::write(&unit, self.unit_text(service)).expect("the unit");
+        let conf = dir.join("files").join(format!("{service}.conf"));
+        fs::write(&conf, format!("{service} {version}\n")).expect("the file");
+        for file in [&unit, &conf] {
+            fs::set_permissions(file, fs::Permissions::from_mode(0o644)).expect("its mode");
+        }
+        self.store.seal(service, version, &d());
+        dir
+    }
+
+    /// The paths a package of `service` from [`Rig::placed`] places, as the host names them: its
+    /// unit, its `WantedBy=` link and its file.
+    pub fn placed_paths(&self, service: &str) -> [PathBuf; 3] {
+        let unit = format!("{service}.service");
+        let units = roots().unit_dir().to_path_buf();
+        [
+            units.join(&unit),
+            units.join(format!("{TARGET}.wants")).join(&unit),
+            self.conf_path(service),
+        ]
+    }
+
+    /// Whether anything is at the host path `path`, a link included.
+    pub fn there(&self, path: impl AsRef<Path>) -> bool {
+        fs::symlink_metadata(self.host(path)).is_ok()
+    }
+
+    /// `placed.json` as it is on disk.
+    pub fn placed_record(&self) -> hostkeeper_placed::PlacedRecord {
+        hostkeeper_placed::Store::new(&*self.placed_fs, roots().state_dir())
+            .load()
+            .expect("placed.json loads")
+    }
+
+    /// Writes `record` as `placed.json`, under its lock.
+    pub fn save_placed(&self, record: &hostkeeper_placed::PlacedRecord) {
+        let daemon = self.daemon();
+        let placer = daemon.ctx().placer();
+        let lock = placer.lock().expect("the lock of placed.json");
+        placer
+            .store()
+            .save(record, &lock)
+            .expect("placed.json saves");
     }
 }
 

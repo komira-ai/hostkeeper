@@ -4,17 +4,14 @@
 mod support;
 
 use std::fs;
-use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::packages::PackageError;
 use hostkeeper_daemon::testing::{FakeClock, manifest};
-use hostkeeper_daemon::verb::{
-    DIGEST_RULE, Hooked, NO_TRY, NO_VERB, PackageDigest, SERVICE_RULE, VERSION_RULE,
-};
+use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE};
 use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply, Verb};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -64,22 +61,14 @@ fn no_record(rig: &Rig, service: &str) -> bool {
 
 /// Catches a verb that is not built doing something anyway (or panicking): each answers
 /// `not_implemented`, takes no lock, asks for no package and writes nothing, whether it comes as
-/// an order or as a verb (`clear_record` comes only from the admin socket). `force` is built
-/// (tests/force.rs).
+/// an order or as a verb (`clear_record` comes only from the admin socket). `force`, `install`
+/// and `uninstall` are built (tests/force.rs, tests/install.rs, tests/uninstall.rs).
 #[test]
 fn unimplemented_verbs_are_refused_not_implemented_and_touch_nothing() {
     let rig = Rig::new("unimpl");
     let daemon = rig.daemon();
     let web = name("web");
-    let hooked = Hooked {
-        service: web.clone(),
-        version: Version::new("2.0.0").expect("a version"),
-        digest: PackageDigest::new(&d()).expect("a digest"),
-        order_try: NonZeroU64::MIN,
-    };
     let verbs = [
-        ("install", Verb::Install(hooked.clone())),
-        ("uninstall", Verb::Uninstall(web.clone())),
         ("abort", Verb::Abort(web.clone())),
         (
             "clear_halt",
@@ -101,16 +90,8 @@ fn unimplemented_verbs_are_refused_not_implemented_and_touch_nothing() {
             "{verb_name}"
         );
     }
-    let (service, version, package_digest) = ("web".to_owned(), "2.0.0".to_owned(), d());
+    let service = "web".to_owned();
     let orders = [
-        order::Verb::Install(Install {
-            service: service.clone(),
-            version,
-            package_digest,
-        }),
-        order::Verb::Uninstall(Uninstall {
-            service: service.clone(),
-        }),
         order::Verb::Abort(Abort {
             service: service.clone(),
         }),
@@ -270,6 +251,7 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
 #[test]
 fn manifest_name_or_version_that_differs_from_the_order_is_refused() {
     let rig = Rig::new("mismatch");
+    rig.running("web", support::BASE);
     let daemon = rig.daemon();
     rig.store.add("web", "2.0.0", &manifest("api", "2.0.0"));
     rig.store.add("web", "2.1.0", &manifest("web", "2.2.0"));
@@ -297,6 +279,7 @@ fn manifest_name_or_version_that_differs_from_the_order_is_refused() {
 #[test]
 fn min_hostkeeper_above_the_running_daemon_is_refused() {
     let rig = Rig::new("too-old");
+    rig.running("web", support::BASE);
     let daemon = rig.daemon();
     let text = manifest("web", "2.0.0")
         .replace("min_hostkeeper = \"0.1.0\"", "min_hostkeeper = \"0.2.0\"");
@@ -766,6 +749,7 @@ fn lock_order_is_service_then_step() {
 #[test]
 fn package_errors_map_to_closed_reasons() {
     let rig = Rig::new("pkg-errors");
+    rig.running("web", "1.0.0");
     let daemon = rig.daemon();
     let rows = [
         (
@@ -875,6 +859,7 @@ fn a_state_directory_that_cannot_be_written_refuses_the_order() {
 #[test]
 fn a_package_the_store_cannot_seal_is_package_failed() {
     let rig = Rig::new("no-seal");
+    rig.running("web", "1.0.0");
     let reply = rig.daemon().order(&update("web", "9.9.9", &d(), 1));
     assert_eq!(reply.refusal(), Some(Refusal::PackageFailed), "{reply:?}");
     assert_eq!(rig.store.asked(), [("web".to_owned(), "9.9.9".to_owned())]);

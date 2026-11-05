@@ -14,7 +14,7 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Verdict;
-use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
+use hostkeeper_placed::{Fs, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::{
@@ -25,8 +25,8 @@ use hostkeeper_steps::{
 use crate::boot::{ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
 use crate::checks;
 use crate::halt::HaltStore;
-use crate::installed::{self, CURRENT};
-use crate::locks::{Package, ServiceGuard, ServiceLocks, StepLock};
+use crate::installed::{self, CURRENT, Lifecycle};
+use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
@@ -104,6 +104,9 @@ pub struct Ctx {
     /// The post-success watchers, one per service at most.
     pub watchers: Watchers,
     runners: Mutex<BTreeMap<String, Arc<StepRunner>>>,
+    /// How the last uninstall of each service ended, while the daemon runs: what `Status` reports
+    /// for a service being removed.
+    uninstalls: Mutex<BTreeMap<String, LastUninstall>>,
     /// The record lock of each service's state directory, shared by every store made for it.
     record_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
     stores: Option<StoreSeam>,
@@ -117,6 +120,74 @@ impl Ctx {
     /// The state directory of `service`.
     pub fn service_dir(&self, service: &ServiceName) -> PathBuf {
         self.dirs.state.join(service.as_str())
+    }
+
+    /// Where `service` is in its life (design section 6.1); `Err` when `placed.json` cannot be
+    /// read, which says nothing of its tombstone.
+    pub fn lifecycle(&self, service: &ServiceName) -> Result<Lifecycle, PlacedError> {
+        let tombstoned = crate::uninstall::tombstoned(self, service)?;
+        let record = RecordState::of(self.store(service).load());
+        Ok(self.lifecycle_of(
+            service,
+            tombstoned,
+            self.locks.holder(service).as_ref(),
+            &record,
+        ))
+    }
+
+    fn lifecycle_of(
+        &self,
+        service: &ServiceName,
+        tombstoned: bool,
+        holder: Option<&Held>,
+        record: &RecordState,
+    ) -> Lifecycle {
+        let installed = installed::linked_version(&self.dirs.packages, service, CURRENT).is_some();
+        let busy = holder.is_some() | matches!(record, RecordState::Unfinished(_));
+        Lifecycle::of(tombstoned, installed, busy)
+    }
+
+    /// Keeps how the uninstall of `service`, the order's try `order_try` (0 for one the start
+    /// resumed), ended, for `Status`; a reply without a verdict changes nothing, and an uninstall
+    /// that succeeded is forgotten with the service.
+    pub fn record_uninstall(&self, service: &ServiceName, reply: &Reply, order_try: u64) {
+        let mut uninstalls = self
+            .uninstalls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match reply {
+            Reply::Finished {
+                verdict: Verdict::Succeeded { .. },
+                ..
+            } => {
+                uninstalls.remove(service.as_str());
+            }
+            Reply::Finished {
+                verdict, reason, ..
+            } => {
+                let finished = Finished {
+                    verdict: verdict.clone(),
+                    reason: reason.clone(),
+                };
+                uninstalls.insert(
+                    service.to_string(),
+                    LastUninstall {
+                        finished,
+                        order_try,
+                    },
+                );
+            }
+            Reply::Running | Reply::Refused { .. } | Reply::Interrupted { .. } => {}
+        }
+    }
+
+    /// How the last uninstall of `service` ended, while the daemon runs.
+    pub fn last_uninstall(&self, service: &ServiceName) -> Option<LastUninstall> {
+        let uninstalls = self
+            .uninstalls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        uninstalls.get(service.as_str()).cloned()
     }
 
     /// The step record store of `service`, with the record lock every store of the service
@@ -152,16 +223,24 @@ impl Ctx {
 
     /// The step runner of `service`, made with its dead-man on first use. A watcher of the
     /// service is stopped first, and waited for: whoever asks for the runner is about to run an
-    /// order, and a new order replaces the watcher (design section 6.4).
+    /// order, and a new order replaces the watcher (design section 6.4). Its switch places a
+    /// first install ([`crate::place::first_install`]).
     pub fn runner(&self, service: &ServiceName) -> Arc<StepRunner> {
         drop(self.watchers.stop(service));
         let mut runners = self.runners.lock().unwrap_or_else(PoisonError::into_inner);
         let made = runners.entry(service.to_string()).or_insert_with(|| {
+            let switch = crate::place::first_install(
+                self.placement.roots.clone(),
+                Arc::clone(&self.placement.fs),
+                Arc::clone(&self.units),
+                self.own_version,
+            );
             let runner = StepRunner::new(
                 Arc::clone(&self.launcher),
                 Arc::clone(&self.clock),
                 self.store(service),
-            );
+            )
+            .with_switch(switch);
             self.watch(runner.watch());
             Arc::new(runner)
         });
@@ -269,6 +348,14 @@ impl Reply {
     }
 }
 
+/// How the last uninstall of a service ended, and the try of its order (0 for one the daemon's
+/// start resumed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LastUninstall {
+    pub finished: Finished,
+    pub order_try: u64,
+}
+
 /// What a service's step record says, as [`Daemon::status`] reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordState {
@@ -322,6 +409,10 @@ pub struct ServiceStatus {
     /// The lock is held by a step that could not be stopped: it stays held until `abort`.
     pub stuck: bool,
     pub record: RecordState,
+    /// Where it is in its life.
+    pub lifecycle: Lifecycle,
+    /// How its last uninstall ended, while the daemon runs; `None` when none ran or it succeeded.
+    pub uninstall: Option<LastUninstall>,
 }
 
 impl ServiceStatus {
@@ -362,7 +453,7 @@ impl ServiceStatus {
 pub struct DaemonStatus {
     /// This daemon's version.
     pub version: HostkeeperVersion,
-    /// Every service with a package directory or a state directory, by name.
+    /// Every service with a package directory, a state directory or a tombstone, by name.
     pub services: Vec<ServiceStatus>,
 }
 
@@ -405,6 +496,7 @@ impl Daemon {
                 halts,
                 watchers: Watchers::default(),
                 runners: Mutex::default(),
+                uninstalls: Mutex::default(),
                 record_locks: Mutex::default(),
                 stores: None,
                 alerts: Arc::new(|line: &str| eprintln!("{line}")),
@@ -447,7 +539,10 @@ impl Daemon {
     /// update's resend included, is `busy` until `abort` clears it.
     pub fn execute(&self, verb: Verb) -> Reply {
         let hooked = match &verb {
-            Verb::Update(order) | Verb::ForceRollback(order) => Some(order.service.clone()),
+            Verb::Update(order) | Verb::ForceRollback(order) | Verb::Install(order) => {
+                Some(order.service.clone())
+            }
+            Verb::Uninstall(order) => Some(order.service.clone()),
             _ => None,
         };
         let stuck = hooked
@@ -457,9 +552,8 @@ impl Daemon {
             return Reply::refused(
                 Refusal::Busy,
                 format!(
-                    "a step of {service} that could not be stopped holds it, for an order to {} it to {}",
-                    held.package.verb.name(),
-                    held.package.version
+                    "a step of {service} that could not be stopped holds it, for {}",
+                    held.holder
                 ),
             );
         }
@@ -480,7 +574,7 @@ impl Daemon {
             Verb::Update(order) => verbs::update::run(ctx, order),
             Verb::ForceRollback(order) => verbs::force_rollback::run(ctx, order),
             Verb::Install(order) => verbs::install::run(ctx, order),
-            Verb::Uninstall(service) => verbs::uninstall::run(ctx, service),
+            Verb::Uninstall(order) => verbs::uninstall::run(ctx, order),
             Verb::Force(order) => verbs::force::run(ctx, order),
             Verb::Abort(service) => verbs::abort::run(ctx, service),
             Verb::ClearHalt {
@@ -491,7 +585,9 @@ impl Daemon {
         }
     }
 
-    /// What the daemon holds about every service with a package directory or a state directory.
+    /// What the daemon holds about every service with a package directory, a state directory or
+    /// a tombstone. A `placed.json` that cannot be read shows no tombstone (every order of a
+    /// service is refused while it cannot be read).
     pub fn status(&self) -> Result<DaemonStatus, StatusError> {
         let ctx = &self.ctx;
         let listed = |dir: &PathBuf| {
@@ -502,10 +598,23 @@ impl Daemon {
         };
         let mut names = listed(&ctx.dirs.packages)?;
         names.extend(listed(&ctx.dirs.state)?);
+        let tombstones = ctx
+            .placer()
+            .store()
+            .load()
+            .map(|record| record.uninstalling)
+            .unwrap_or_default();
+        names.extend(
+            tombstones
+                .keys()
+                .filter_map(|name| ServiceName::new(name).ok().map(|s| (name.clone(), s))),
+        );
         let services = names
             .into_values()
             .map(|service| {
                 let holder = ctx.locks.holder(&service);
+                let record = RecordState::of(ctx.store(&service).load());
+                let tombstoned = tombstones.contains_key(service.as_str());
                 ServiceStatus {
                     running_version: installed::linked_version(
                         &ctx.dirs.packages,
@@ -514,8 +623,10 @@ impl Daemon {
                     ),
                     held_halt: ctx.halts.get(&service).ok(),
                     locked: holder.is_some(),
-                    stuck: holder.is_some_and(|held| held.stuck),
-                    record: RecordState::of(ctx.store(&service).load()),
+                    stuck: holder.as_ref().is_some_and(|held| held.stuck),
+                    lifecycle: ctx.lifecycle_of(&service, tombstoned, holder.as_ref(), &record),
+                    uninstall: ctx.last_uninstall(&service),
+                    record,
                     service,
                 }
             })

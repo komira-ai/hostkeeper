@@ -140,6 +140,10 @@ impl Fs for Flaky {
         self.inner.remove_file(path)
     }
 
+    fn remove_dir(&self, dir: &Path) -> io::Result<()> {
+        self.inner.remove_dir(dir)
+    }
+
     fn create_dirs(&self, dir: &Path) -> io::Result<()> {
         self.inner.create_dirs(dir)
     }

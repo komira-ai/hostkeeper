@@ -1,0 +1,45 @@
+{
+ "from": "kbf-coordinator/tests/farm.rs::an_enrolled_updater_is_answered_over_mutual_tls and ::ci_sets_the_state_and_the_operator_reads_it_over_https (the two sequences of calls, run over one coordinator; the 200 body of the desired call is the state as kbf's desired.rs serialiser writes it, which farm.rs did not assert)",
+ "steps": [
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"max_updating\":{\"daemon\":1},\"min_up\":{\"storage\":1,\"frontend\":1}}",
+   "expect_status": 401,
+   "auth": "operator",
+   "expect_body": "{\"error\":\"unauthorized\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "status",
+   "expect_status": 401,
+   "expect_body": "{\"error\":\"unauthorized\"}",
+   "auth": "ci"
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"max_updating\":{\"daemon\":1},\"min_up\":{\"storage\":1,\"frontend\":1}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":1,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  }
+ ]
+}

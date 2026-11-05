@@ -1,16 +1,26 @@
-//! `update`, and through the same path `force_rollback`: a hooked order (design section 5.2).
+//! `update`, and through the same path `force_rollback` and `install`: a hooked order (design
+//! section 5.2).
 //!
 //! In order: the service's lock, never waited for (another package's order is `busy`, the same
 //! package's a resend that runs nothing); the held halt generation, which must read; the step
-//! record and the try rules ([`checks::try_rule`]); an `update` below the running version is
-//! refused; the package from the [`crate::packages::Packages`] port, outside the step lock; its
-//! manifest, read by the manifest's loader for the order's service and version and this
-//! daemon's version; the release it replaces; then the step lock and
-//! [`hostkeeper_steps::StepRunner::run`], whose verdict is the reply. Every refusal before the
-//! runner writes nothing. An update that ends `Succeeded`, `promotion_pending` or not, confirms
-//! its switch: under its locks, before a pending promotion is watched, the service's package
-//! directory is pruned to `current` and `previous` ([`crate::prune::confirmed_switch`]),
-//! keeping the update's target. A resend answered from the record prunes nothing.
+//! record and the try rules ([`checks::try_rule`]); where the service is in its life
+//! ([`checks::installed_rule`]: nothing while it is being uninstalled, `install` only with no
+//! release installed, `update` and `force_rollback` only with one); an `update` below the
+//! running version is refused; the package from the [`crate::packages::Packages`] port, outside
+//! the step lock; its manifest, read by the manifest's loader for the order's service and
+//! version and this daemon's version; the release it replaces, none for an `install`; for an
+//! order with no release to replace, the paths it places checked against `placed.json`
+//! (`path_conflict`); then the step lock and [`hostkeeper_steps::StepRunner::run`], whose verdict
+//! is the reply. Every refusal before the runner writes nothing. An order that ends `Succeeded`,
+//! `promotion_pending` or not, confirms its switch: under its locks, before a pending promotion is
+//! watched, the service's package directory is pruned to `current` and `previous`
+//! ([`crate::prune::confirmed_switch`]), keeping the order's target. A resend answered from the
+//! record prunes nothing.
+//!
+//! An `install` is the update path with no previous release: no `updater.previous_*` key in the
+//! params file and no `previous_digest` in the step record. The runner's switch
+//! ([`crate::executor::Ctx::runner`]) places the package and points `current` at it immediately
+//! before `cutover`, and removes both immediately before `rollback`.
 
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -25,13 +35,13 @@ use crate::checks::{self, OrderKey, TryRule};
 use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT, PREVIOUS};
-use crate::locks::{Held, Package, ServiceGuard};
+use crate::locks::{Held, Holder, Package, ServiceGuard};
 use crate::packages::VersionDir;
 use crate::prune;
 use crate::refusal::Refusal;
 use crate::verb::{Hooked, HookedVerb};
 
-/// `update`: refused below the running version.
+/// `update`: refused below the running version, and for a service with no release installed.
 pub fn run(ctx: &Ctx, order: Hooked) -> Reply {
     hooked(ctx, HookedVerb::Update, order)
 }
@@ -43,9 +53,10 @@ pub fn hooked(ctx: &Ctx, verb: HookedVerb, order: Hooked) -> Reply {
         version: order.version.clone(),
         digest: order.digest.clone(),
     };
-    let guard = match ctx.locks.take(&order.service, package.clone()) {
+    let holder = Holder::Package(package.clone());
+    let guard = match ctx.locks.take(&order.service, package) {
         Ok(guard) => guard,
-        Err(held) => return while_held(&order.service, &held, &package),
+        Err(held) => return while_held(&order.service, &held, &holder),
     };
     let reply = steps(ctx, verb, &order, &guard).unwrap_or_else(|refused| refused);
     match reply.refusal() {
@@ -58,16 +69,12 @@ pub fn hooked(ctx: &Ctx, verb: HookedVerb, order: Hooked) -> Reply {
 
 /// The answer to an order for a service whose lock is held: a resend of the order that holds
 /// it runs nothing, any other is `busy`.
-pub(crate) fn while_held(service: &ServiceName, held: &Held, package: &Package) -> Reply {
-    match held.package == *package {
+pub(crate) fn while_held(service: &ServiceName, held: &Held, holder: &Holder) -> Reply {
+    match held.holder == *holder {
         true => Reply::Running,
         false => Reply::refused(
             Refusal::Busy,
-            format!(
-                "{service} is locked by an order to {} it to {}",
-                held.package.verb.name(),
-                held.package.version
-            ),
+            format!("{service} is locked by {}", held.holder),
         ),
     }
 }
@@ -126,6 +133,26 @@ fn steps(
         }
     }
     let running = installed::linked_version(&ctx.dirs.packages, service, CURRENT);
+    // An order the record holds unfinished for this package is resumed, whatever `current` says.
+    let resuming = last
+        .as_deref()
+        .is_some_and(|rec| checks::finished_of(rec).is_none() & checks::same_package(rec, &key));
+    let tombstoned = crate::uninstall::tombstoned(ctx, service)
+        .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
+    checks::installed_rule(verb, running.is_some(), resuming, tombstoned).map_err(|refusal| {
+        let had = running.as_ref().map_or("none", Version::as_str);
+        Reply::refused(
+            refusal,
+            format!(
+                "{} of {service}: its installed release is {had}{}",
+                verb.name(),
+                match tombstoned {
+                    true => ", and it is being uninstalled",
+                    false => "",
+                }
+            ),
+        )
+    })?;
     checks::not_below_running(verb, &order.version, running.as_ref()).map_err(|refusal| {
         let running = running.as_ref().map_or("", Version::as_str);
         Reply::refused(refusal, format!("{} is below {running}", order.version))
@@ -140,7 +167,17 @@ fn steps(
     };
     let manifest = Manifest::load(dir.dir(), &expected, &ctx.own_version)
         .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
-    let previous = previous(ctx, service, &order.version, running)?;
+    let previous = match verb {
+        HookedVerb::Install => None,
+        HookedVerb::Update | HookedVerb::ForceRollback | HookedVerb::Force => {
+            previous(ctx, service, &order.version, running)?
+        }
+    };
+    // With no release to replace, the runner's switch places this package: its paths are
+    // checked now, before anything changes.
+    if previous.is_none() {
+        claims_check(ctx, &manifest)?;
+    }
     let declared = declared_params(&manifest.params)?;
     let update = update_order(order, &dir, &manifest, previous, declared);
     files::make_private(&ctx.service_dir(service))
@@ -164,6 +201,18 @@ fn steps(
         }
     }
     Ok(ran(ended))
+}
+
+/// The paths `manifest` places, checked against `placed.json` and what is on disk: a path
+/// another service owns, or one occupied by anything the record does not list, is
+/// `path_conflict`; a unit or `[[files]]` entry that breaks a rule of linking is
+/// `manifest_mismatch`. Reads only.
+fn claims_check(ctx: &Ctx, manifest: &Manifest) -> Result<(), Reply> {
+    let placer = ctx.placer();
+    placer
+        .desired(manifest)
+        .and_then(|claims| placer.check(&claims))
+        .map_err(|e| Reply::refused(Refusal::from(&e), e))
 }
 
 /// A manifest's `[params]` as the hook's declared params. The manifest's loader already refuses
@@ -263,6 +312,7 @@ pub fn interrupted(error: RunError) -> Reply {
         RunError::Unreadable(_) => Refusal::ReleaseUnreadable,
         RunError::Busy { .. } => Refusal::Busy,
         RunError::RecordNewer(_) => Refusal::RecordNewer,
+        RunError::Switch(_) => Refusal::LinkFailed,
         RunError::BadOrder(_) | RunError::UnitNameTooLong { .. } => Refusal::InvalidOrder,
     };
     Reply::Interrupted {

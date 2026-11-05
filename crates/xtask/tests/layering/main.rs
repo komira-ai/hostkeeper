@@ -8,8 +8,16 @@
 //!   `hostkeeper-hook`, and `hostkeeper-unpack` on `hostkeeper-config`,
 //!   `hostkeeper-hook` and `hostkeeper-steps`, and on no other workspace crate
 //!   (dev-dependencies: themselves and `hostkeeper-testkit`);
+//! - `hostkeeper-wire`, `hostkeeper-oidc` and `hostkeeper-tls` depend on no workspace crate;
+//!   `hostkeeper-coordinator` depends on exactly those three (dev-dependencies: itself,
+//!   `hostkeeper-testkit` and `hostkeeper-oidc`, whose `testkit` feature its tests use);
+//! - `hostkeeper-enrollment` (the coordinator's CA and enrollment store) depends on no other
+//!   crate of this workspace (dev-dependencies: itself and `hostkeeper-testkit`);
 //! - `hostkeeper-testkit` depends on no workspace crate, and no crate has it but as a
-//!   dev-dependency.
+//!   dev-dependency;
+//! - no non-test source file under `crates/*/src` brings back a closed set of roles (the enum
+//!   `HostRole`, an enum named `...Role`, a `const` or `static` of `RoleName`, a function
+//!   returning an array of `RoleName`): roles are open strings.
 //!
 //! The rules are in `check.rs`. The fixture workspaces under `fixtures/` are copied to a
 //! scratch directory, locked offline and checked; each failing one has an exact expected
@@ -21,13 +29,18 @@ mod testdir;
 
 use std::path::{Path, PathBuf};
 
-use check::{cargo, check, check_hook_harness, metadata_of, parse_lock, read_lock};
+use check::{
+    cargo, check, check_hook_harness, closed_role_enums, metadata_of, parse_lock, read_lock,
+};
 use testdir::TestDir;
 
 const HOOK_DEP: &str = "hostkeeper-hook = { path = \"../hostkeeper-hook\" }\n";
 const CONFIG_DEP: &str = "hostkeeper-config = { path = \"../hostkeeper-config\" }\n";
 const RIGHTS_DEP: &str = "hostkeeper-rights = { path = \"../hostkeeper-rights\" }\n";
 const TESTKIT_DEP: &str = "hostkeeper-testkit = { path = \"../hostkeeper-testkit\" }\n";
+const WIRE_DEP: &str = "hostkeeper-wire = { path = \"../hostkeeper-wire\" }\n";
+const OIDC_DEP: &str = "hostkeeper-oidc = { path = \"../hostkeeper-oidc\" }\n";
+const TLS_DEP: &str = "hostkeeper-tls = { path = \"../hostkeeper-tls\" }\n";
 
 const KBF_CHAIN: &str = "kbf-types is a kbf package (kbf, kbf-* or kbf_*), reached through";
 
@@ -589,7 +602,10 @@ fn a_missing_layer_crate_is_refused() {
     let root = (
         "Cargo.toml".to_string(),
         "[workspace]\nresolver = \"3\"\nexclude = [\"vendored\"]\nmembers = [\n    \
-         \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
+         \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-enrollment\",\n    \
+         \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
+         \"crates/hostkeeper-wire\",\n    \"crates/hostkeeper-oidc\",\n    \
+         \"crates/hostkeeper-tls\",\n    \"crates/hostkeeper-coordinator\",\n    \
          \"crates/hostkeeper-testkit\",\n    \"crates/hostkeeper-unpack\",\n]\n"
             .to_string(),
     );
@@ -660,4 +676,180 @@ version = "9.9.9"
     assert_eq!(edges["alpha"], expected(&["beta", "delta", "gamma"]));
     assert_eq!(edges["beta"], expected(&[]));
     assert_eq!(edges["gamma"], expected(&["beta"]));
+}
+
+/// The manifest of the coordinator with `deps` as its normal dependencies.
+fn coordinator(deps: &str) -> (String, String) {
+    manifest_of(
+        "hostkeeper-coordinator",
+        layered("hostkeeper-coordinator", deps, "", TESTKIT_DEP),
+    )
+}
+
+/// Catches: the coordinator reaching a kbf crate (here a path crate outside the members) going
+/// unseen; the refusal must name the chain from the coordinator.
+#[test]
+fn layering_refuses_a_coordinator_with_a_kbf_dependency() {
+    let mut edits = bare_crate("vendored", "kbf-types");
+    edits.push(coordinator(&format!(
+        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{}",
+        vendored_dep("kbf-types")
+    )));
+    let dir = fixture("clean", edits);
+    assert_eq!(
+        check(&dir),
+        refused(&format!("{KBF_CHAIN} hostkeeper-coordinator -> kbf-types"))
+    );
+}
+
+/// Catches: the coordinator losing one of its three workspace dependencies (the set must be
+/// exactly wire, oidc and tls, not a subset of them).
+#[test]
+fn a_coordinator_missing_a_workspace_dependency_is_refused() {
+    let dir = fixture("clean", vec![coordinator(&format!("{OIDC_DEP}{TLS_DEP}"))]);
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-coordinator depends (normal or build) on the workspace crates \
+             {hostkeeper-oidc, hostkeeper-tls}, but must depend on exactly \
+             {hostkeeper-oidc, hostkeeper-tls, hostkeeper-wire}"
+        )
+    );
+}
+
+/// Catches: the coordinator gaining a fourth workspace dependency (here the hook contract)
+/// beside wire, oidc and tls.
+#[test]
+fn a_coordinator_with_an_extra_workspace_dependency_is_refused() {
+    let dir = fixture(
+        "clean",
+        vec![coordinator(&format!(
+            "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{HOOK_DEP}"
+        ))],
+    );
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-coordinator depends (normal or build) on the workspace crates \
+             {hostkeeper-hook, hostkeeper-oidc, hostkeeper-tls, hostkeeper-wire}, \
+             but must depend on exactly {hostkeeper-oidc, hostkeeper-tls, hostkeeper-wire}"
+        )
+    );
+}
+
+/// Catches: the coordinator's dev-dependency on oidc (for its `testkit` feature) being refused,
+/// and a dev-dependency on any other layer crate (here the hook contract) being let through.
+#[test]
+fn a_coordinator_may_have_oidc_as_a_dev_dependency_and_no_other_layer_crate() {
+    let deps = format!("{WIRE_DEP}{OIDC_DEP}{TLS_DEP}");
+    let with_dev = |dev: &str| {
+        manifest_of(
+            "hostkeeper-coordinator",
+            layered("hostkeeper-coordinator", &deps, "", dev),
+        )
+    };
+    let dir = fixture("clean", vec![with_dev(&format!("{TESTKIT_DEP}{OIDC_DEP}"))]);
+    assert_eq!(check(&dir), Ok(()));
+    let dir = fixture("clean", vec![with_dev(&format!("{TESTKIT_DEP}{HOOK_DEP}"))]);
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-coordinator has a dev-dependency on the workspace crate hostkeeper-hook, \
+             which is neither itself nor hostkeeper-testkit"
+        )
+    );
+}
+
+/// Catches: wire, oidc or tls gaining a dependency on another workspace crate (wire on oidc,
+/// oidc on tls, tls on wire), each of which must stand alone.
+#[test]
+fn wire_oidc_and_tls_depending_on_a_workspace_crate_are_refused() {
+    for (name, dep, target) in [
+        ("hostkeeper-wire", OIDC_DEP, "hostkeeper-oidc"),
+        ("hostkeeper-oidc", TLS_DEP, "hostkeeper-tls"),
+        ("hostkeeper-tls", WIRE_DEP, "hostkeeper-wire"),
+    ] {
+        let dir = fixture(
+            "clean",
+            vec![manifest_of(name, layered(name, dep, "", TESTKIT_DEP))],
+        );
+        assert_eq!(
+            check(&dir),
+            refused(&format!(
+                "{name} depends (normal or build) on the workspace crates {{{target}}}, \
+                 but must depend on exactly {{}}"
+            )),
+            "{name}"
+        );
+    }
+}
+
+/// Catches: the closed set of roles coming back in non-test source: the enum `HostRole`, an
+/// enum named `...Role`, a `const` or `static` of `RoleName`, a function returning an array of
+/// `RoleName` (its name possibly path-qualified, its declaration possibly split over lines);
+/// each is named by file and the line the declaration starts on. Test files, a `#[cfg(test)]`
+/// module, and line and block comments, string literals (plain and raw) and character literals
+/// holding the same words are left alone, as are `const fn` and a const generic parameter.
+#[test]
+fn layering_refuses_a_closed_role_enum() {
+    let (scanned, found) = closed_role_enums(&fixtures().join("closed-role-enum"));
+    assert_eq!(scanned, 4);
+    assert_eq!(
+        found,
+        vec![
+            "crates/hostkeeper-coordinator/src/lib.rs:9: \
+             a const or static of type RoleName"
+                .to_string(),
+            "crates/hostkeeper-oidc/src/lib.rs:3: a const or static of type RoleName".to_string(),
+            "crates/hostkeeper-oidc/src/lib.rs:5: a const or static of type RoleName".to_string(),
+            "crates/hostkeeper-tls/src/lib.rs:1: the enum NodeRole, a closed set of roles"
+                .to_string(),
+            "crates/hostkeeper-tls/src/lib.rs:5: a function returning an array of RoleName"
+                .to_string(),
+            "crates/hostkeeper-tls/src/lib.rs:9: a function returning an array of RoleName"
+                .to_string(),
+            "crates/hostkeeper-tls/src/lib.rs:13: a function returning an array of RoleName"
+                .to_string(),
+            "crates/hostkeeper-wire/src/lib.rs:2: the identifier HostRole".to_string(),
+        ]
+    );
+}
+
+/// Catches: a closed role enum in this repository's own source, and a scan that passes only
+/// because it read no file.
+#[test]
+fn the_workspace_has_no_closed_role_enum() {
+    let (scanned, found) = closed_role_enums(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    assert!(scanned > 0, "the scan read no source file");
+    assert_eq!(found, Vec::<String>::new());
+}
+
+/// Catches: the enrollment crate (the coordinator's CA and enrollment store) gaining a normal
+/// or build dependency on another workspace crate, or a dev-dependency on one other than the
+/// testkit; and the crate missing from the workspace going unseen.
+#[test]
+fn enrollment_depending_on_a_workspace_crate_is_refused() {
+    let dir = fixture(
+        "clean",
+        vec![manifest_of(
+            "hostkeeper-enrollment",
+            layered("hostkeeper-enrollment", HOOK_DEP, CONFIG_DEP, RIGHTS_DEP),
+        )],
+    );
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-enrollment depends (normal or build) on the workspace crates \
+             {hostkeeper-config, hostkeeper-hook}, but must depend on exactly {}\n\
+             hostkeeper-enrollment has a dev-dependency on the workspace crate \
+             hostkeeper-rights, which is neither itself nor hostkeeper-testkit"
+        )
+    );
+    let dir = fixture("clean", vec![]);
+    std::fs::remove_dir_all(dir.join("crates/hostkeeper-enrollment")).expect("remove the crate");
+    cargo(&["generate-lockfile", "--offline"], &dir.join("Cargo.toml"));
+    assert_eq!(
+        check(&dir),
+        refused("hostkeeper-enrollment is not a workspace member")
+    );
 }

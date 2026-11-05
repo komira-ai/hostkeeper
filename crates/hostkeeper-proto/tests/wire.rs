@@ -424,7 +424,18 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 19] = [
+const FIELDS: [(&str, &[(&str, u32)]); 20] = [
+    (
+        "hostkeeper.local.v1.ServiceRecord",
+        &[
+            ("service", 1),
+            ("current", 2),
+            ("last", 3),
+            ("state", 4),
+            ("record_problem", 5),
+            ("lifecycle", 6),
+        ],
+    ),
     (
         "hostkeeper.agent.v1.EnrollRequest",
         &[
@@ -585,7 +596,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 9] = [
+    let cases: [(&str, &str, &[&str]); 10] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -701,6 +712,11 @@ fn wire_names_are_pinned() {
                 "record_reads",
                 "store_failed",
             ],
+        ),
+        (
+            "hostkeeper.local.v1.Lifecycle",
+            "LIFECYCLE_",
+            &["absent", "installing", "running", "removing"],
         ),
     ];
     for (name, prefix, want) in cases {

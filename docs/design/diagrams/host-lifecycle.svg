@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" role="img" aria-label="Host lifecycle as two state diagrams. The host: unenrolled, pending, enrolled, retired. A service on an enrolled host: absent, installing, running, updating, rolled back, halted, removing, forced failed. Every edge is labelled by its event.">
 <title>Host lifecycle state machines</title>
-<desc>Two state diagrams side by side. A host goes from unenrolled to pending when it posts a request, to enrolled when approved, and to retired when revoked. A service on an enrolled host goes from absent to installing to running, from running to updating and back, to rolled back or halted on failure, and from running to removing to absent on uninstall; a Force from running, updating, halted or rolled back goes to running, or to forced failed if the units do not start, and a second Force repairs it. Holds, exclusions and bad versions are coordinator marks, not host states.</desc>
+<desc>Two state diagrams side by side. A host goes from unenrolled to pending when it posts a request, to enrolled when approved, and to retired when revoked. A service on an enrolled host goes from absent to installing to running, from running to updating and back, to rolled back or halted on failure, and from running to removing to absent on uninstall; a Force from running, updating, halted, rolled back or absent (which it installs) goes to running, or to forced failed if the units do not start, and a second Force repairs it; a Force while installing or removing is refused. Holds, exclusions and bad versions are coordinator marks, not host states.</desc>
 <defs><marker id="host-lifecycle-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="host-lifecycle-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -100,8 +100,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M1110,150 L1110,128 L930,128 L930,150" class="ln-o" marker-end="url(#host-lifecycle-ao)"/>
 <text x="1020" y="122" class="t-m lbl" text-anchor="middle">Force again, to previous</text>
 <text x="486" y="396" class="t-m" text-anchor="start">Install, update and uninstall are orders from the coordinator.</text>
-<text x="486" y="412" class="t-m" text-anchor="start">Force starts from running, updating, halted or rolled back. From absent, installing or</text>
-<text x="486" y="428" class="t-m" text-anchor="start">removing it is refused and nothing changes.</text>
+<text x="486" y="412" class="t-m" text-anchor="start">Force starts from running, updating, halted, rolled back or absent, which it</text>
+<text x="486" y="428" class="t-m" text-anchor="start">installs. From installing or removing it is refused and nothing changes.</text>
 <text x="486" y="446" class="t-m" text-anchor="start">After Failed (after commit) the service stays running and the coordinator may roll it back.</text>
 <rect x="20" y="510" width="1160" height="120" rx="6" class="box-p"/>
 <text x="36" y="534" class="b" text-anchor="start">Coordinator marks, not host states</text>

@@ -19,8 +19,9 @@ pub enum FileKind {
     Other,
 }
 
-/// The filesystem operations of this crate. Reads: [`Fs::read`], [`Fs::kind`],
-/// [`Fs::read_link`], [`Fs::list`]. Every other method writes.
+/// The filesystem operations of this crate and of its caller's removal of a service's
+/// directories. Reads: [`Fs::read`], [`Fs::kind`], [`Fs::read_link`], [`Fs::list`]. Every other
+/// method writes.
 pub trait Fs {
     /// Where `path` is on the disk this process sees: the path a loader that opens files itself
     /// (`Manifest::load`) is given.
@@ -42,6 +43,8 @@ pub trait Fs {
     /// Makes a link at `link` whose target is `target`, written as it is.
     fn symlink(&self, target: &Path, link: &Path) -> io::Result<()>;
     fn remove_file(&self, path: &Path) -> io::Result<()>;
+    /// Removes the empty directory `dir`.
+    fn remove_dir(&self, dir: &Path) -> io::Result<()>;
     /// Makes `dir` and its missing parents, each mode 0755 whatever the creation mask.
     fn create_dirs(&self, dir: &Path) -> io::Result<()>;
 }
@@ -141,6 +144,10 @@ impl Fs for RealFs {
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         fs::remove_file(self.host_path(path))
+    }
+
+    fn remove_dir(&self, dir: &Path) -> io::Result<()> {
+        fs::remove_dir(self.host_path(dir))
     }
 
     /// Each directory made gets mode 0755 whatever the creation mask; directories that were
