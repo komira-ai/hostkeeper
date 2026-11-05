@@ -20,30 +20,41 @@
 //! writes is the deferral of [`deferral`]. [`PkiCertSource`] is the file-based [`CertSource`]:
 //! the pair under the `current` link of the pki directory, read at every heartbeat. The fakes of
 //! every port are in `testing`, behind the feature `testing`.
+//!
+//! [`JsonMtlsLink`] ([`mtls`]) is the [`CoordinatorLink`] the daemon gives the loop: the frozen
+//! JSON heartbeat route of `hostkeeper-wire` over rustls mutual TLS, with the conversions between
+//! the loop's types and the wire's in one private module (`wire_map`). It reaches the
+//! coordinator through a [`Transport`]; [`TcpTransport`] ([`dial`]) is the production one and
+//! the only code of the crate that opens a socket.
 
 pub mod beat;
 pub mod deferral;
+pub mod dial;
 pub mod heartbeater;
+pub mod mtls;
 pub mod names;
 pub mod order;
 pub mod pki;
 pub mod ports;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod wire_map;
 
 pub use beat::{
     ANNOUNCED, Feature, Features, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
     Observed, OptionalFact, Oversize, Platform, ServiceFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
+pub use dial::{CALL_SECS, TcpTransport};
 pub use heartbeater::{
     ACKED_KEPT, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
 };
+pub use mtls::{Conn, EndpointError, HEAD_MAX, JsonMtlsLink, REPLY_MAX, Transport};
 pub use names::{OrderId, PackageDigest, Reason, WordError};
 pub use order::{DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb};
 pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, HeldHalts, Job,
     LinkError, Log, Observation, OrderSink, RecordedService, ReplyFault, ServiceObserver,
-    ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, UnixClock,
+    ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault, UnixClock, Unsendable,
 };
