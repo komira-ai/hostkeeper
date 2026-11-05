@@ -119,10 +119,10 @@ jobs:
   #
   # cargo-llvm-cov leaves out every `examples/` directory by default, and `examples/hello` is
   # a crate of the workspace that the gate judges. The report therefore turns the default
-  # ignore pattern off and spells it again without `examples`: the std sources of rustc,
-  # `tests/` and `benches/` directories, `tests.rs` files, the target directory (generated
-  # code) and the registry's crates. That leaves exactly the files the default left, plus
-  # `examples/hello/src`.
+  # ignore pattern off and spells its parts again without `examples`: the sources of rustc,
+  # `tests/` and `benches/` directories, `tests.rs` and `*_tests.rs` files, the crates of the
+  # registry and of git, and the target directory (generated code). Over the same run, its
+  # report lists the files the default's lists, plus those of `examples/hello/src`.
   #
   # The gate judges every crate of the workspace, the tooling (`xtask`, `coverage-gate`)
   # included: it has no way to exclude one.
@@ -175,7 +175,7 @@ jobs:
       - name: Report
         env:
           LLVM_COV_FLAGS: -skip-functions
-        run: cargo "+$COVERAGE_TOOLCHAIN" llvm-cov report --branch --lcov --disable-default-ignore-filename-regex --ignore-filename-regex '(^|/)(rustc/[0-9a-f]+|tests|benches|target)/|(^|/)tests\.rs$|/\.cargo/registry/' --output-path target/coverage/lcov.info
+        run: cargo "+$COVERAGE_TOOLCHAIN" llvm-cov report --branch --lcov --disable-default-ignore-filename-regex --ignore-filename-regex '(^|/)(rustc/([0-9a-f]+|[0-9]+\.[0-9]+\.[0-9]+)|tests|benches)/|(^|/)(tests\.rs|[0-9a-zA-Z_-]+[_-]tests\.rs)$|/\.cargo/(registry|git)/|(^|/)target/' --output-path target/coverage/lcov.info
       # Fails when a crate is under 99.00% of its lines or of its branches.
       - name: Per-crate table and 99% gate
         run: cargo "+$COVERAGE_TOOLCHAIN" run -p coverage-gate --locked -- --lcov target/coverage/lcov.info --root "$GITHUB_WORKSPACE" --summary-file "$GITHUB_STEP_SUMMARY"

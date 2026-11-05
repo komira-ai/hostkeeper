@@ -270,6 +270,44 @@ fn rolling_back_a_first_install_stops_the_new_slot_and_starts_none() {
     );
 }
 
+/// Catches the rollback of a failed first install failing on a real host: the daemon has stopped
+/// and unlinked the units before the rollback runs, so `systemctl stop` answers 5 (not loaded),
+/// which is nothing to stop and must not fail the rollback. Any other non-zero stop still fails.
+#[test]
+fn a_stop_of_a_unit_that_is_not_loaded_is_nothing_to_stop() {
+    let world = World::systemd("first-rollback-unlinked");
+    let runner = FakeRunner::default();
+    let probe = FakeProbe::default();
+    go(&world, Step::Prepare, &runner, &probe);
+    go(&world, Step::Cutover, &runner, &probe);
+    runner.take_calls();
+
+    runner.answer(STOP_A, Ok(5));
+    let ran = go(&world, Step::Rollback, &runner, &probe);
+    assert_eq!(ran.stdout, "{\"class\":\"release\",\"reversible\":true}\n");
+    assert!(
+        ran.stderr
+            .contains("`/usr/bin/systemctl stop hello@a.service` exited with 5: ignored"),
+        "{}",
+        ran.stderr
+    );
+    assert_eq!(runner.take_calls(), [STOP_A]);
+    assert_eq!(
+        world.snapshot(),
+        files(&[("slots", None)]),
+        "no marker is left"
+    );
+
+    let (world, runner, probe) = installed("start-not-loaded", Units::Systemd);
+    go(&world, Step::Prepare, &runner, &probe);
+    runner.answer(START_B, Ok(5));
+    let ran = world.step(Step::Cutover, &runner, &probe);
+    assert_eq!(
+        ran.code, 1,
+        "a start that answers 5 started nothing: {ran:?}"
+    );
+}
+
 /// Catches a server that does not answer being a failure (which would roll back at the first
 /// refused connection) and not a deferral with the backoff, or one that never ends in a rollback
 /// at the deadline.
@@ -610,12 +648,12 @@ fn a_failed_start_or_stop_fails_the_cutover_and_leaves_it_recorded() {
     let (world, runner, probe) = installed("cutover-fails", Units::Systemd);
     go(&world, Step::Prepare, &runner, &probe);
 
-    runner.answer(STOP_A, Ok(5));
+    runner.answer(STOP_A, Ok(1));
     let ran = world.step(Step::Cutover, &runner, &probe);
     let want = failure(
         Class::Release,
         None,
-        "systemctl stop hello@a.service` exited with 5",
+        "systemctl stop hello@a.service` exited with 1",
     );
     let next = contract(Step::Cutover, &ran, &want, &ctx());
     assert_eq!(next, rollback_then(Phase::BeforeCommit, Class::Release));

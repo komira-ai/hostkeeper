@@ -129,7 +129,7 @@ stops at the 503 and never compares it.)
 
 **Watch:**
 
-- Host, `Last update` of the canary: `Verdict` failed, `Phase` gate release, `Reason`
+- Host, `Last update` of the canary: `Verdict` failed, `Phase` `gate_release`, `Reason`
   `not_ready`. The host's own hook rolled it back: the slot of `<v2>` serves again, and Fleet
   shows `hello <v2>, healthy`.
 - Rollout, section `hello`: `Bad versions` lists `<v2>-fail-ready`, and `Desired` is back at

@@ -188,21 +188,23 @@ impl Steps<'_> {
                 format!("system/hello.{}", slot.name()),
             ],
         };
-        self.command(&argv, false)
+        self.command(&argv, Accept::Zero)
     }
 
     /// Removes the marker of `slot` and stops its unit. A job launchd has no process for answers
-    /// non-zero to the stop; that is logged and is no failure.
+    /// non-zero to the stop, and `systemctl stop` exits 5 for a unit that is not loaded (the
+    /// daemon has unlinked the units before the rollback of a first install): there is nothing
+    /// to stop, which is logged and is no failure.
     fn stop(&mut self, slot: Slot) -> Result<(), Failure> {
         self.record.unmark(slot)?;
-        let (argv, lenient) = match self.settings.units {
+        let (argv, accept) = match self.settings.units {
             Units::Systemd => (
                 vec![
                     "/usr/bin/systemctl".to_owned(),
                     "stop".to_owned(),
                     format!("hello@{}.service", slot.name()),
                 ],
-                false,
+                Accept::ZeroOrNotLoaded,
             ),
             Units::Launchd => (
                 vec![
@@ -211,18 +213,18 @@ impl Steps<'_> {
                     "SIGTERM".to_owned(),
                     format!("system/hello.{}", slot.name()),
                 ],
-                true,
+                Accept::Any,
             ),
         };
-        self.command(&argv, lenient)
+        self.command(&argv, accept)
     }
 
-    fn command(&mut self, argv: &[String], lenient: bool) -> Result<(), Failure> {
+    fn command(&mut self, argv: &[String], accept: Accept) -> Result<(), Failure> {
         let words: Vec<&str> = argv.iter().map(String::as_str).collect();
         let shown = argv.join(" ");
         match self.host.runner.run(&words) {
             Ok(0) => Ok(()),
-            Ok(code) if lenient => {
+            Ok(code) if accept.takes(code) => {
                 let _ = writeln!(
                     self.err,
                     "hello update-hook: `{shown}` exited with {code}: ignored"
@@ -237,4 +239,28 @@ impl Steps<'_> {
 
 fn bad_status(path: &str, status: u16) -> Failure {
     Failure::release(format!("GET {path} answered {status}")).with_reason("bad_status")
+}
+
+/// The exit codes besides 0 a unit command is taken with (logged on standard error).
+#[derive(Clone, Copy)]
+enum Accept {
+    /// Only 0.
+    Zero,
+    /// 0, or `systemctl`'s 5 for a unit that is not loaded.
+    ZeroOrNotLoaded,
+    /// Any exit code: launchd answers non-zero for a job with no process.
+    Any,
+}
+
+/// What `systemctl stop` exits with for a unit that is not loaded: nothing to stop.
+const EXIT_NOT_LOADED: i32 = 5;
+
+impl Accept {
+    fn takes(self, code: i32) -> bool {
+        match self {
+            Accept::Zero => false,
+            Accept::ZeroOrNotLoaded => code == EXIT_NOT_LOADED,
+            Accept::Any => true,
+        }
+    }
 }
