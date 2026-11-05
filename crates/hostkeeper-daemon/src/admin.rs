@@ -18,8 +18,8 @@ use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_proto::hostkeeper::agent::v1::{FailureClass, FailurePhase};
 use hostkeeper_proto::hostkeeper::local::v1::admin_server::{Admin, AdminServer};
 use hostkeeper_proto::hostkeeper::local::v1::{
-    AbortRequest, AbortResponse, ClearRecordRequest, ClearRecordResponse, RecordProblem,
-    ServiceRecord, StatusRequest, StatusResponse, StepOutcome, StepRecord,
+    AbortRequest, AbortResponse, ClearRecordRequest, ClearRecordResponse, Lifecycle as Life,
+    RecordProblem, ServiceRecord, StatusRequest, StatusResponse, StepOutcome, StepRecord,
 };
 use hostkeeper_steps::record::{Record, State};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -28,7 +28,8 @@ use tonic::transport::server::Connected;
 use tonic::transport::{Error, Server};
 use tonic::{Request, Response, Status};
 
-use crate::executor::{Daemon, RecordState, ServiceStatus};
+use crate::executor::{Daemon, LastUninstall, RecordState, ServiceStatus};
+use crate::installed::Lifecycle;
 use crate::refusal::Refusal;
 
 /// Who is at the other end of a connection.
@@ -107,7 +108,8 @@ impl Admin for AdminService {
 
 /// One service as `Status` reports it. What the service manager says of it (`state`) is not
 /// observed by this daemon yet and is left out. A service whose step could not be stopped is
-/// under way, with the reason `unstoppable_unit`.
+/// under way, with the reason `unstoppable_unit`. A service being removed says so in its
+/// lifecycle, and its `last` is the verdict of its uninstall's last run when the daemon has one.
 pub fn service_record(status: &ServiceStatus) -> ServiceRecord {
     let (mut current, last, problem) = match &status.record {
         RecordState::Absent => (None, None, RecordProblem::Unspecified),
@@ -120,12 +122,39 @@ pub fn service_record(status: &ServiceStatus) -> ServiceRecord {
     if let (true, Some(current)) = (status.stuck, current.as_mut()) {
         current.reason = crate::boot::ALERT_UNSTOPPABLE.to_owned();
     }
+    let last = match (status.lifecycle, &status.uninstall) {
+        (Lifecycle::Removing, Some(uninstall)) => Some(uninstall_record(uninstall)),
+        _ => last,
+    };
     ServiceRecord {
         service: status.service.to_string(),
         current,
         last,
         state: None,
         record_problem: problem as i32,
+        lifecycle: lifecycle(status.lifecycle) as i32,
+    }
+}
+
+/// An uninstall's last run, in the fields of a step record: its try, the step `uninstall`, and
+/// its verdict.
+pub fn uninstall_record(uninstall: &LastUninstall) -> StepRecord {
+    let mut out = StepRecord {
+        order_try: uninstall.order_try,
+        step: hostkeeper_hook::Step::Uninstall.name().to_owned(),
+        reason: uninstall.finished.reason.clone().unwrap_or_default(),
+        ..StepRecord::default()
+    };
+    verdict_into(&uninstall.finished.verdict, &mut out);
+    out
+}
+
+fn lifecycle(lifecycle: Lifecycle) -> Life {
+    match lifecycle {
+        Lifecycle::Absent => Life::Absent,
+        Lifecycle::Installing => Life::Installing,
+        Lifecycle::Running => Life::Running,
+        Lifecycle::Removing => Life::Removing,
     }
 }
 

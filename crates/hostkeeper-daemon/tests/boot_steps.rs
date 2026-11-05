@@ -93,7 +93,7 @@ fn the_boot_hook_runs_from_current_after_all_updates_and_before_ready() {
 fn a_service_without_a_boot_step_runs_no_boot_hook() {
     let rig = Rig::new("steps-none");
     rig.running("alpha", "1.0.0");
-    rig.add("beta", "1.0.0");
+    rig.stage("beta", "1.0.0");
     let log = Log::default();
     let notifier = FakeNotifier::new(log.clone());
     let started = start::startup_notifying(&rig.settings(), rig.ports(), OWN, &*notifier)

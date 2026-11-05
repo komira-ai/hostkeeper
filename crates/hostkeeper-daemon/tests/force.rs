@@ -720,7 +720,11 @@ fn a_force_that_cannot_stop_the_running_step_changes_nothing_else() {
             .iter()
             .any(|line| line.contains("alert=unstoppable_unit"))
     );
-    assert_eq!(link_of(&rig, WEB, "current"), None);
+    // Nothing was switched: `current` still names the release `rig.add` installed.
+    assert_eq!(
+        link_of(&rig, WEB, "current").as_deref(),
+        Some(support::BASE)
+    );
     assert!(rig.placed_log.events().is_empty());
     assert!(rig.record(WEB).expect("the record").forced);
 }

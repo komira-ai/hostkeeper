@@ -7,6 +7,11 @@
 //! leaves a record that [`StepRunner::run`] picks up: a step found `running` has its unit
 //! stopped by name and is run again, a step found `done` is not.
 //!
+//! The daemon's own moves around the hook's steps, `current` and the placed links switched to
+//! the target immediately before `cutover` and back immediately before `rollback` (design
+//! section 5.2, steps 5 and 6), come in through [`StepRunner::with_switch`]: the runner calls the
+//! [`Switch`] before every run of those two steps, resumed ones included, so the switch must be
+//! idempotent.
 //! A `force` of the service may flag the record `forced` while an update runs (design section
 //! 5.6, steps 4 to 6). The runner reads the flag on disk, under the record lock, before it
 //! launches any step (a resumed one included) and in every write after a step returns: once it
@@ -49,6 +54,24 @@ pub const MAX_RETRY_SECS: u64 = 3600;
 pub const REASON_HALT_CLEARED: &str = "halt_cleared";
 /// The reason of a `Deferred` for a hook that needs a newer updater.
 pub const REASON_UPDATER_OLD: &str = "updater_old";
+/// The reason of a `rollback` that declines a first install: there is no previous release to go
+/// back to (design section 5.7, step 6; docs/design/host-updates.md, section 9, C3).
+pub const REASON_NO_PREVIOUS_RELEASE: &str = "no_previous_release";
+
+/// Which way the daemon switches a service around a step of the hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toward {
+    /// To the target, immediately before `cutover`.
+    Target,
+    /// Back, immediately before `rollback`.
+    Back,
+}
+
+/// The daemon's switch of `current` and the placed links around the hook's steps
+/// ([`StepRunner::with_switch`]): called with [`Toward::Target`] before each run of `cutover` and
+/// [`Toward::Back`] before each run of `rollback`, with the order. `Err` says why it could not
+/// switch: the step does not run, and the runner stops with [`RunError::Switch`].
+pub type Switch = Arc<dyn Fn(Toward, &UpdateOrder) -> Result<(), String> + Send + Sync>;
 
 /// The bounds of the declaration the runner reads (and no other key of it).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +98,8 @@ impl Bounds {
             Step::Verify => self.verify_secs,
             Step::Rollback => self.rollback_secs,
             Step::Cleanup => self.cleanup_secs,
+            // Not a step of an update: the runner never runs it, and it has no bound here.
+            Step::Uninstall => 0,
         }
     }
 }
@@ -150,6 +175,11 @@ pub enum RunError {
         "the staged release cannot be read now; nothing ran and the step is still pending: {0}"
     )]
     Unreadable(ArtifactError),
+    /// The switch before `cutover` or `rollback` failed ([`StepRunner::with_switch`]): nothing of
+    /// the step ran and it is still `pending` in the record. Calling [`StepRunner::run`] again
+    /// switches again.
+    #[error("the switch before the step failed; nothing ran and the step is still pending: {0}")]
+    Switch(String),
     /// The dead-man could not stop the step at its bound, and the step ended later: it is left
     /// `running` in the record, so that [`StepRunner::run`] again stops its unit by name before
     /// anything else and runs the step again. `error` is the launcher's, as its stop gave it.
@@ -177,6 +207,7 @@ pub struct StepRunner {
     store: RecordStore,
     watch: Arc<Watch>,
     fault: Option<CheckFault>,
+    switch: Option<Switch>,
 }
 
 impl StepRunner {
@@ -191,6 +222,26 @@ impl StepRunner {
             store,
             watch: Watch::new(),
             fault: None,
+            switch: None,
+        }
+    }
+
+    /// The same runner, `switch` called before every run of `cutover` and of `rollback`.
+    pub fn with_switch(mut self, switch: Switch) -> StepRunner {
+        self.switch = Some(switch);
+        self
+    }
+
+    /// The switch before `step`, if the runner has one and the step has one.
+    fn switch_for(&self, order: &UpdateOrder, step: Step) -> Result<(), RunError> {
+        let toward = match step {
+            Step::Cutover => Toward::Target,
+            Step::Rollback => Toward::Back,
+            _ => return Ok(()),
+        };
+        match &self.switch {
+            Some(switch) => switch(toward, order).map_err(RunError::Switch),
+            None => Ok(()),
         }
     }
 
@@ -300,13 +351,16 @@ impl StepRunner {
             Loaded::Newer { schema } => return Err(RunError::RecordNewer(schema)),
             Loaded::Absent => 1,
             Loaded::Current(rec) => {
-                // A verdict stands: the same order again is answered with it and runs nothing,
-                // and a halt holds the service for every order until `clear_halt`. A `Deferred`
-                // is run again, because the order comes back after its wait.
+                // A verdict stands: the same order again (the same update, and the same try of
+                // it) is answered with it and runs nothing, and a halt holds the service for every
+                // order until `clear_halt`. A `Deferred` is run again, because the order comes
+                // back after its wait; so is an update the coordinator orders again with another
+                // try, a new order of the same package.
                 if let State::Finished { verdict, reason } = &rec.state {
                     let ended =
                         matches!(verdict, Verdict::Succeeded { .. } | Verdict::Failed { .. });
-                    if matches!(verdict, Verdict::Halt) || (ended && same_update(&rec, order)) {
+                    let again = same_update(&rec, order) & (rec.order_try == order.order_try);
+                    if matches!(verdict, Verdict::Halt) || (ended && again) {
                         // The updater may have died between the verdict and the removal.
                         self.store.remove_params()?;
                         return Ok(Finished {
@@ -491,6 +545,9 @@ impl StepRunner {
         rec: &mut Record,
         executable: &Path,
     ) -> Result<Option<Ran>, RunError> {
+        // `current` and the links are switched before the step starts; a failed switch leaves it
+        // pending, and nothing of it runs.
+        self.switch_for(order, rec.step)?;
         let started = Stamp::now(&*self.clock);
         let timeout = self.timeout(order, rec);
         // Nothing is left of the bound (the verify window has passed): the step is not started,
@@ -613,7 +670,23 @@ impl StepRunner {
         ctx.observe(step, &report);
         rec.progress.committed = ctx.committed;
         rec.progress.promotion_pending = ctx.promotion_pending;
-        match next(step, outcome, &report, &ctx) {
+        // A first install has no release to go back to: a `rollback` that fails saying so
+        // declines the install, which ends `Failed` rather than in a halt (C3).
+        let declined = (step == Step::Rollback)
+            & order.previous.is_none()
+            & (outcome == Outcome::Failure)
+            & (report.reason.as_deref() == Some(REASON_NO_PREVIOUS_RELEASE));
+        let then = match declined {
+            true => Next::Report(Verdict::Failed {
+                phase: match ctx.committed {
+                    true => Phase::AfterCommit,
+                    false => Phase::BeforeCommit,
+                },
+                class: report.class,
+            }),
+            false => next(step, outcome, &report, &ctx),
+        };
+        match then {
             Next::Run(then) => {
                 if step == Step::Cutover {
                     rec.progress.verify_started = Some(Stamp::now(&*self.clock));

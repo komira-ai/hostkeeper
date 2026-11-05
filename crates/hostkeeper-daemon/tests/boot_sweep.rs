@@ -84,7 +84,7 @@ fn expected_cell(rec: &Record) -> ResumeAction {
             phase: Phase::GateRelease,
         },
         (_, _, Step::Verify, true) => ResumeAction::ContinueVerifyFreshWindow,
-        (_, _, Step::Rollback | Step::Cleanup, _) => ResumeAction::RerunStep,
+        (_, _, Step::Rollback | Step::Cleanup | Step::Uninstall, _) => ResumeAction::RerunStep,
     }
 }
 

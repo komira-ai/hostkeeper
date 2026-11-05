@@ -282,7 +282,7 @@ impl World {
             .into_iter()
             .filter_map(|event| match event {
                 Event::Fs(write) => Some(write),
-                Event::Unit(_) => None,
+                Event::Unit(_) | Event::Mark(_) => None,
             })
             .collect()
     }
@@ -294,7 +294,7 @@ impl World {
             .into_iter()
             .filter_map(|event| match event {
                 Event::Unit(call) => Some(call),
-                Event::Fs(_) => None,
+                Event::Fs(_) | Event::Mark(_) => None,
             })
             .collect()
     }

@@ -38,6 +38,6 @@ pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{AdditiveCall, LaunchError, StepCall, StepExit, StepLauncher};
 pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore, WriteFault};
 pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
-pub use runner::{Bounds, Finished, RunError, StepRunner, UpdateOrder};
+pub use runner::{Bounds, Finished, RunError, StepRunner, Switch, Toward, UpdateOrder};
 pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
 pub use selfupdate::Layout;

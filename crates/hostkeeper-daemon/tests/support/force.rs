@@ -95,7 +95,7 @@ pub fn calls(rig: &Rig) -> Vec<String> {
             Event::Fs(FsWrite::Symlink { link, .. }) if !temporary(&link) => {
                 Some(format!("link {}", link.display()))
             }
-            Event::Unit(UnitCall::IsActive(_)) | Event::Fs(_) => None,
+            Event::Unit(UnitCall::IsActive(_)) | Event::Fs(_) | Event::Mark(_) => None,
         })
         .collect()
 }
@@ -155,7 +155,7 @@ pub fn writes_of_step_12(installed: fn(&str) -> Rig, file: &str) -> (u64, u64) {
         .into_iter()
         .filter_map(|event| match event {
             Event::Fs(write) => Some(write),
-            Event::Unit(_) => None,
+            Event::Unit(_) | Event::Mark(_) => None,
         })
         .collect();
     let switched = writes

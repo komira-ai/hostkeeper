@@ -5,7 +5,8 @@
 //! In order:
 //!
 //! - Refused before any lock, fetch or write: the service `hostkeeper` (`self_service`: it
-//!   updates itself by its own path); an order whose fields break their grammars, an empty or
+//!   updates itself by its own path); a service whose first install is under way (`installing`)
+//!   or whose uninstall is unfinished (`uninstalling`), by [`checks::force_allowed`]; an order whose fields break their grammars, an empty or
 //!   malformed digest included (refused as the order is decoded, [`crate::verb`]); a held halt
 //!   generation or a step record that cannot be read; and the try rules
 //!   ([`checks::try_rule_with`] held to [`Checks::for_force`]): a resend of a force that ended is
@@ -52,7 +53,7 @@ use crate::checks::{self, Checks, OrderKey, TryRule};
 use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT};
-use crate::locks::{Package, ServiceGuard};
+use crate::locks::{Holder, Package, ServiceGuard};
 use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{Forced, HookedVerb, PackageDigest};
@@ -74,6 +75,18 @@ struct Target {
     tree_digest: String,
 }
 
+/// The lifecycle rule of a force ([`checks::force_allowed`]): a force of a service whose first
+/// install is under way, or whose uninstall is unfinished, is refused, and nothing changes. A
+/// `placed.json` that cannot be read refuses it too.
+fn lifecycle_check(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
+    let lifecycle = ctx
+        .lifecycle(service)
+        .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
+    checks::force_allowed(lifecycle).map_err(|refusal| {
+        Reply::refused(refusal, format!("force of {service}: it is {lifecycle:?}"))
+    })
+}
+
 /// A `force`.
 pub fn run(ctx: &Ctx, order: Forced) -> Reply {
     let service = order.package.service.clone();
@@ -82,6 +95,9 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
             Refusal::SelfService,
             format!("{service} updates itself by its own path, never by a force"),
         );
+    }
+    if let Err(refused) = lifecycle_check(ctx, &service) {
+        return refused;
     }
     let held_halt = match ctx.halts.get(&service) {
         Ok(held) => held,
@@ -97,8 +113,8 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
     // lock is had, so that a resend arriving just as the force ends reads its verdict.
     let guard = match ctx.locks.take(&service, package.clone()) {
         Ok(guard) => Some(guard),
-        Err(held) if held.package.verb == HookedVerb::Force => {
-            return while_held(&service, &held, &package);
+        Err(held) if held.is_force() => {
+            return while_held(&service, &held, &Holder::Package(package));
         }
         Err(_) => None,
     };
@@ -336,6 +352,7 @@ fn locked<'c>(
     mut guard: Option<ServiceGuard<'c>>,
 ) -> Result<ServiceGuard<'c>, Reply> {
     drop(ctx.watchers.stop(service));
+    let holder = Holder::Package(package.clone());
     loop {
         stop_running(ctx, service)?;
         if let Some(guard) = guard.take() {
@@ -343,8 +360,8 @@ fn locked<'c>(
         }
         match ctx.locks.take_over(service, package.clone()) {
             Ok(guard) => return Ok(guard),
-            Err(held) if held.package.verb == HookedVerb::Force => {
-                return Err(while_held(service, &held, package));
+            Err(held) if held.is_force() => {
+                return Err(while_held(service, &held, &holder));
             }
             Err(_) => ctx.clock.sleep_secs(FORCE_POLL_SECS),
         }

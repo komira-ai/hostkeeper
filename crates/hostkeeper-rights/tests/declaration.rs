@@ -54,6 +54,15 @@ fn the_example_reads_into_every_field() {
     assert_eq!(d.hook.timeout_secs.get(Step::Cleanup), 1300);
 }
 
+/// Catches a declaration that grew an `uninstall` step: it has neither a bound nor a capability
+/// entry for it, so the launcher of declarations never runs it.
+#[test]
+fn a_declaration_has_no_uninstall_step() {
+    let d = sample();
+    assert_eq!(d.hook.timeout_secs.get(Step::Uninstall), 0);
+    assert_eq!(d.hook.step_capabilities.get(Step::Uninstall), None);
+}
+
 /// Catches a default that is not the old one: `hook_args` is `["update-hook"]`, and every set
 /// starts empty.
 #[test]
