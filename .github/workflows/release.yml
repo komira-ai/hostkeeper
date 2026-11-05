@@ -16,11 +16,9 @@
 #   commit that qualifies under the number that commit has.
 # - `workflow_dispatch`, from main: the same walk as the schedule, by hand.
 #
-# For now the file has `workflow_dispatch` alone: the `cargo xtask release` verbs it runs, and
-# the coordinator's files the release's asset list holds, land separately, and `workflow_run`
-# and `schedule` come with them, so that no push to main starts a run that cannot succeed. The
-# workflow lint (crates/xtask/tests/workflows) holds the triggers to these three and nothing
-# else, and to no pull-request trigger.
+# The workflow lint (crates/xtask/tests/workflows) holds the triggers to these three and nothing
+# else, and to no pull-request trigger. Until a workflow named `privileged` exists on main, no
+# commit has its successful run, and the plan releases nothing: it says which run is missing.
 #
 # plan     decides which commits are released and as which version (cargo xtask release plan),
 #          and prints them as a matrix, oldest first. No release while the repository variable
@@ -34,8 +32,11 @@
 #          push run of each required workflow (cargo xtask release locate), downloads the files
 #          of its artifacts run, checks them against SHA256SUMS, verifies every attestation
 #          online as a deployment does and every bundle offline as a host does
-#          (cargo xtask release check), and runs the downloaded linux-x86_64 binary, which must
-#          print exactly `hostkeeper X.Y.Z+<12 hex>` (cargo xtask release check-binary).
+#          (cargo xtask release check), and runs the downloaded linux-x86_64 binaries, which
+#          must print exactly `hostkeeper X.Y.Z+<12 hex>` and `hostkeeper-coordinator
+#          X.Y.Z+<12 hex>` (cargo xtask release check-binary). These are the commands of
+#          docs/deploy/verify-a-release.md, and a test keeps the two the same
+#          (crates/xtask/src/release/doc_tests.rs).
 # publish  the one job that holds `contents: write`, per release: creates a draft release at the
 #          commit with the tag v<X.Y.Z>, uploads the checked files, reads the draft back, then
 #          publishes it (cargo xtask release publish). A release that holds exactly these files
@@ -50,6 +51,12 @@
 name: release
 
 on:
+  workflow_run:
+    workflows: [ci, privileged, artifacts]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -162,13 +169,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: cargo xtask release check dist --version "$RELEASE_VERSION" --commit "$COMMIT"
-      # The runner is linux-x86_64: the binary of that tarball runs here, unpacked outside dist.
-      # The linux-arm64 and macos-arm64 binaries were run and checked the same way by their own
-      # build jobs.
+      # The runner is linux-x86_64: the binaries of those tarballs run here, unpacked outside
+      # dist. The linux-arm64 and macos-arm64 binaries were run and checked the same way by their
+      # own build jobs.
       - run: mkdir "$RUNNER_TEMP/binary"
       - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper
-      - name: The binary says the version and the commit it is released under
+      - name: hostkeeper says the version and the commit it is released under
         run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper" "$RELEASE_VERSION" "$COMMIT"
+      - run: tar -xzf "dist/hostkeeper-coordinator-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-coordinator
+      - name: hostkeeper-coordinator says the version and the commit it is released under
+        run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-coordinator" "$RELEASE_VERSION" "$COMMIT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.tag }}

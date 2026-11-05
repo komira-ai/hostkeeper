@@ -3867,6 +3867,7 @@ dependencies = [
  "tar",
  "thiserror",
  "toml",
+ "xtask",
 ]
 
 [[package]]

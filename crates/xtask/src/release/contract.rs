@@ -4,7 +4,8 @@
 //!
 //! - the version `X.Y.Z` ([`Version`]) and the tag `v<X.Y.Z>` ([`Version::tag`]);
 //! - the text a shipped binary prints for `--version`, `hostkeeper X.Y.Z+<12 hex>`
-//!   ([`stamp_string`]), and [`RELEASE_COMMIT`], the build-time input that carries the commit;
+//!   ([`stamp_string`]) and `hostkeeper-coordinator X.Y.Z+<12 hex>` ([`stamp_of`]), and
+//!   [`RELEASE_COMMIT`], the build-time input that carries the commit;
 //! - the identity that signs every attestation: [`SIGNER_WORKFLOW`] on [`SIGNER_REF`] of
 //!   [`REPO`];
 //! - the asset names of a release ([`asset_names`], the one function that lists them; the
@@ -57,8 +58,12 @@ pub(crate) const PROGRAM: &str = "hostkeeper";
 /// stem.
 pub(crate) const HELLO: &str = "hello";
 
-/// The coordinator's asset stem.
+/// The coordinator's asset stem, and the name of its binary.
 pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
+
+/// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
+/// `--version` ([`stamp_of`]).
+pub(crate) const PROGRAMS: [&str; 2] = [PROGRAM, COORDINATOR];
 
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
@@ -253,10 +258,16 @@ impl fmt::Display for Repo {
     }
 }
 
-/// The text a shipped binary prints for `--version`: `hostkeeper X.Y.Z+<12 hex>`, the release
-/// version and the first [`SHORT_COMMIT`] digits of the commit it was built from.
+/// The text the hostkeeper binary prints for `--version`: `hostkeeper X.Y.Z+<12 hex>`, the
+/// release version and the first [`SHORT_COMMIT`] digits of the commit it was built from.
 pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
-    format!("{PROGRAM} {version}+{}", commit.short())
+    stamp_of(PROGRAM, version, commit)
+}
+
+/// The text the shipped binary `program` (one of [`PROGRAMS`]) prints for `--version`:
+/// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`.
+pub(crate) fn stamp_of(program: &str, version: &Version, commit: &Commit) -> String {
+    format!("{program} {version}+{}", commit.short())
 }
 
 /// A platform: an OS and CPU family. The set is closed; the daemon knows its own from the target

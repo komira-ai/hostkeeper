@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 description = "The CI steps of this repository (cargo xtask <verb>)."
+# `cargo xtask` (the alias in .cargo/config.toml) runs this binary; the crate's other one is a
+# program of its tests.
+default-run = "xtask"
 
 [dependencies]
 clap.workspace = true
@@ -28,7 +31,22 @@ thiserror.workspace = true
 # The member manifests `release set-version` checks.
 toml.workspace = true
 
+# The program the package launch test (tests/package_launch.rs) packages as bin/hostkeeper and
+# starts through the committed unit of hostkeeper's own package: it prints what it was started
+# with. A program of the tests, not shipped: it is built only with `test-support`, which only the
+# tests of this crate turn on.
+[[bin]]
+name = "xtask-exec-fixture"
+path = "tests/bin/exec_fixture.rs"
+required-features = ["test-support"]
+
+[features]
+# Builds the launch test's fixture program and `xtask::test_support`. Off for everything else.
+test-support = []
+
 [dev-dependencies]
+# Its own tests turn on `test-support`.
+xtask = { path = ".", features = ["test-support"] }
 # The packaging test (tests/packaging) loads the config template with the daemon config's loader,
 # and the package test loads the produced `manifest.toml` with the manifest loader.
 hostkeeper-config = { path = "../hostkeeper-config" }

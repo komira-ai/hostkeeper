@@ -1,7 +1,7 @@
 //! The release rules ([`super::release`]) on the repository's own `release.yml` and
-//! `artifacts.yml`: each file passes as it is and in the shape it takes once its push and
-//! completion triggers are on, and each rule is shown to refuse its defect by putting the defect
-//! into an otherwise clean copy of the file and finding the problem it reports.
+//! `artifacts.yml`: each file passes as it is, and each rule is shown to refuse its defect by
+//! putting the defect into an otherwise clean copy of the file and finding the problem it
+//! reports.
 
 use super::lint::{WRITE_ALLOWED, lint};
 use super::release::{
@@ -35,37 +35,23 @@ fn assert_refused(file: &str, text: &str, want: &str) {
     );
 }
 
-const DISPATCH: &str = "on:\n  workflow_dispatch:\n";
-
-/// release.yml with the triggers it takes once the release verbs land.
-fn release_final() -> String {
-    with_in(
-        &workflow("release.yml"),
-        DISPATCH,
-        "on:\n  workflow_run:\n    workflows: [ci, privileged, artifacts]\n    types: [completed]\n    branches: [main]\n  schedule:\n    - cron: '17 4 * * *'\n  workflow_dispatch:\n",
-    )
+/// The repository's release.yml.
+fn release_yml() -> String {
+    workflow("release.yml")
 }
 
-/// artifacts.yml with the triggers it takes once the release verbs land.
-fn artifacts_final() -> String {
-    with_in(
-        &workflow("artifacts.yml"),
-        DISPATCH,
-        "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n",
-    )
+/// The repository's artifacts.yml.
+fn artifacts_yml() -> String {
+    workflow("artifacts.yml")
 }
 
 #[test]
-fn the_release_workflows_pass_now_and_with_their_final_triggers() {
-    // Catches: a rule that refuses the release workflows as they are, or as they will be when
-    // `workflow_run`, `schedule` and `push` are switched on, so that every case below would fail
-    // for that reason instead of the defect it adds.
-    for (file, text) in [
-        ("release.yml", workflow("release.yml")),
-        ("release.yml", release_final()),
-        ("artifacts.yml", workflow("artifacts.yml")),
-        ("artifacts.yml", artifacts_final()),
-    ] {
+fn the_release_workflows_pass_the_release_rules() {
+    // Catches: a rule that refuses the release workflows as they are (with their push,
+    // completion and schedule triggers), so that every case below would fail for that reason
+    // instead of the defect it adds.
+    for file in ["release.yml", "artifacts.yml"] {
+        let text = workflow(file);
         assert_eq!(
             all_problems(file, &text),
             Vec::<String>::new(),
@@ -80,7 +66,7 @@ fn release_workflow_is_refused_on_pull_request_trigger() {
     // review events, and any other workflow that tags or publishes doing the same.
     for trigger in ["pull_request", "pull_request_review", "merge_group"] {
         let text = with_in(
-            &release_final(),
+            &release_yml(),
             "\non:\n  workflow_run:\n",
             &format!("\non:\n  {trigger}:\n  workflow_run:\n"),
         );
@@ -121,18 +107,14 @@ fn release_workflow_is_refused_on_pull_request_trigger() {
 fn artifacts_workflow_is_refused_on_pull_request_trigger() {
     // Catches: release files built (and a signing job planned) for every pull request, which
     // AGENTS.md B9 refuses, and a push trigger wider than main.
-    let text = with_in(
-        &artifacts_final(),
-        "  push:\n",
-        "  pull_request:\n  push:\n",
-    );
+    let text = with_in(&artifacts_yml(), "  push:\n", "  pull_request:\n  push:\n");
     assert_refused(
         "artifacts.yml",
         &text,
         "artifacts.yml: trigger pull_request is not one of",
     );
     let tags = with_in(
-        &artifacts_final(),
+        &artifacts_yml(),
         "    branches: [main]\n  workflow_dispatch:\n",
         "    branches: [main]\n    tags: ['v*']\n  workflow_dispatch:\n",
     );
@@ -424,7 +406,7 @@ fn release_workflow_run_names_exactly_the_three_required_workflows() {
     // Catches: a release that no longer waits for one of ci, privileged and artifacts (a red
     // privileged run would no longer hold it), or that starts for a run on another branch.
     let text = with_in(
-        &release_final(),
+        &release_yml(),
         "workflows: [ci, privileged, artifacts]",
         "workflows: [ci, artifacts]",
     );
@@ -434,7 +416,7 @@ fn release_workflow_run_names_exactly_the_three_required_workflows() {
         "release.yml: workflow_run.workflows is [\"artifacts\", \"ci\"], not [\"artifacts\", \"ci\", \"privileged\"]",
     );
     let text = with_in(
-        &release_final(),
+        &release_yml(),
         "    branches: [main]\n",
         "    branches: [main, 'release/*']\n",
     );
@@ -444,7 +426,7 @@ fn release_workflow_run_names_exactly_the_three_required_workflows() {
         "release.yml: workflow_run.branches is",
     );
     let text = with_in(
-        &release_final(),
+        &release_yml(),
         "  schedule:\n",
         "  push:\n    branches: [main]\n  schedule:\n",
     );
@@ -479,13 +461,60 @@ fn release_workflow_keeps_its_three_jobs_and_checks_the_binary() {
         &text,
         "release.yml: jobs are [\"notify\", \"plan\", \"publish\", \"verify\"], not plan, verify and publish",
     );
-    let check = "      - name: The binary says the version and the commit it is released under\n        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/hostkeeper\" \"$RELEASE_VERSION\" \"$COMMIT\"\n";
-    let text = with_in(&workflow("release.yml"), check, "");
-    assert_refused(
-        "release.yml",
-        &text,
-        "release.yml: job verify runs no `cargo xtask release check-binary`",
-    );
+    for program in ["hostkeeper", "hostkeeper-coordinator"] {
+        let check = format!(
+            "      - name: {program} says the version and the commit it is released under\n        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/{program}\" \"$RELEASE_VERSION\" \"$COMMIT\"\n"
+        );
+        let text = with_in(&workflow("release.yml"), &check, "");
+        let found = all_problems("release.yml", &text);
+        assert_eq!(
+            found,
+            vec![format!(
+                "release.yml: job verify runs no `cargo xtask release check-binary` of {program}"
+            )],
+            "without the check of {program}"
+        );
+    }
+}
+
+#[test]
+fn the_image_job_builds_twice_from_scratch_and_compares() {
+    // Catches: an image released from one build (nothing shows it can be rebuilt), a second
+    // build that reuses the first one's cache, two builds never compared, or an image never
+    // started through its entrypoint (or compared with another stamp than the coordinator's).
+    let build_b = "      - name: The second build\n        run: docker buildx build --builder image-b --no-cache ";
+    let compare = "        run: cargo xtask release compare-images ";
+    let entrypoint = "test \"$(docker run --rm ";
+    for (from, to, want) in [
+        (
+            entrypoint,
+            "true \"$(docker run --rm ",
+            "artifacts.yml: job image must run the image through its entrypoint",
+        ),
+        (
+            "--version)\" = \"hostkeeper-coordinator $RELEASE_VERSION+${GITHUB_SHA:0:12}\"",
+            "--version)\" = \"hostkeeper $RELEASE_VERSION+${GITHUB_SHA:0:12}\"",
+            "artifacts.yml: job image must run the image through its entrypoint",
+        ),
+    ] {
+        let text = with_in(&workflow("artifacts.yml"), from, to);
+        assert_refused("artifacts.yml", &text, want);
+    }
+    let want = "artifacts.yml: job image must build the image twice";
+    for (from, to) in [
+        (
+            build_b,
+            "      - name: The second build\n        run: docker build --no-cache ",
+        ),
+        (
+            build_b,
+            "      - name: The second build\n        run: docker buildx build --builder image-b ",
+        ),
+        (compare, "        run: cmp "),
+    ] {
+        let text = with_in(&workflow("artifacts.yml"), from, to);
+        assert_refused("artifacts.yml", &text, want);
+    }
 }
 
 #[test]

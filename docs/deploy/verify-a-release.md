@@ -14,7 +14,7 @@ before it uses them.
 | Signer workflow | `komira-ai/hostkeeper/.github/workflows/artifacts.yml` |
 | Source ref | `refs/heads/main` |
 | Tag | `v<X.Y.Z>` |
-| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>` |
+| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>` |
 
 The workflow `artifacts.yml` builds the assets on a push to `refs/heads/main`, writes one
 `SHA256SUMS`, and signs build-provenance attestations (sigstore) for every summed asset, plus SBOM
@@ -24,9 +24,10 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 
 ## The assets
 
-`<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`; `<deb-arch>`
-is `amd64` or `arm64`; `<rpm-arch>` is `x86_64` or `aarch64`. The deb and the rpm are for the two
-Linux platforms; the installer pkg is for `macos-arm64`.
+`<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`;
+`<linux-platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or `arm64`;
+`<rpm-arch>` is `x86_64` or `aarch64`. The deb, the rpm and the coordinator are for the two Linux
+platforms; the installer pkg is for `macos-arm64`.
 
 | Asset | Content |
 |---|---|
@@ -40,25 +41,70 @@ Linux platforms; the installer pkg is for `macos-arm64`.
 | `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package |
+| `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
+| `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
+| `hostkeeper-coordinator-<version>-<linux-platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
 | `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755) and `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), owned by root and wheel, no scripts; not signed, attested |
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm` and `.pkg` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` |
 
 Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
 own, and a host trusts a package for its own attestation and manifest, never for its entry in the
 index. (`SHA256SUMS` lists every index, so the provenance of a release covers their bytes too.)
 Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
 
+The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
+distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It is
+built twice from clean contexts and released only when the two builds are byte for byte equal, so
+anyone can rebuild it from the commit and compare; before it is released it is also loaded and run
+through its entrypoint with `--version`, which must print the coordinator's stamp.
+
 A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
 lacks any of them, and each index lists the package of each. The pkg carries no installer
 signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
-verify it by its attestation, steps 3 and 4, like any other asset. The coordinator's assets
-(`hostkeeper-coordinator-<version>-<platform>.tar.gz`, `.cdx.json` and `.image.tar`, each attested)
-are added when the coordinator lands. Names are only ever added, never renamed or removed, so a
-consumer ignores assets it does not know.
+verify it by its attestation, steps 3 and 4, like any other asset. Names are only ever added,
+never renamed or removed, so a consumer ignores assets it does not know.
+
+### Every name
+
+The whole list. A line with placeholders stands for one name per value of them, the placeholders
+of one line taken together in the order the sentence above gives their values: a `<platform>`
+line for each of the three platforms, a `<linux-platform>`, `<deb-arch>` or `<rpm-arch>` line for
+each Linux platform. The release tooling produces exactly these names (`cargo xtask release
+check` refuses a directory that holds any other), and a test keeps this list equal to them.
+
+```text
+SHA256SUMS
+index.json
+hello-index.json
+hello-fail-ready-index.json
+hostkeeper-<version>-<platform>.tar.gz
+hostkeeper-<version>-<platform>.tar.gz.sigstore.json
+hostkeeper-<version>-<platform>.cdx.json
+hostkeeper-<version>-<platform>.tar.zst
+hostkeeper-<version>-<platform>.tar.zst.sigstore.json
+hostkeeper-<version>-<platform>.tar.zst.sha256
+hostkeeper_<version>_<deb-arch>.deb
+hostkeeper_<version>_<deb-arch>.deb.sigstore.json
+hostkeeper-<version>-1.<rpm-arch>.rpm
+hostkeeper-<version>-1.<rpm-arch>.rpm.sigstore.json
+hostkeeper-coordinator-<version>-<linux-platform>.tar.gz
+hostkeeper-coordinator-<version>-<linux-platform>.tar.gz.sigstore.json
+hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
+hostkeeper-coordinator-<version>-<linux-platform>.image.tar
+hostkeeper-coordinator-<version>-<linux-platform>.image.tar.sigstore.json
+hostkeeper-<version>-macos-arm64.pkg
+hostkeeper-<version>-macos-arm64.pkg.sigstore.json
+hello-<version>-<platform>.tar.zst
+hello-<version>-<platform>.tar.zst.sigstore.json
+hello-<version>-<platform>.tar.zst.sha256
+hello-<version>-fail-ready-<platform>.tar.zst
+hello-<version>-fail-ready-<platform>.tar.zst.sigstore.json
+hello-<version>-fail-ready-<platform>.tar.zst.sha256
+```
 
 ## Steps
 
@@ -128,8 +174,8 @@ For a host without access to the GitHub API. Once, on a host that has it:
 gh attestation trusted-root > trusted_root.jsonl
 ```
 
-Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm` and `.pkg` you use, with the bundle released
-next to it (the other assets have no bundle and are verified online, step 3):
+Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` you use, with the
+bundle released next to it (the other assets have no bundle and are verified online, step 3):
 
 ```sh
 gh attestation verify release/<asset> \
@@ -149,7 +195,8 @@ Refuse when: the same as step 3, or the bundle is absent.
 
 ### 5. SBOM attestation (optional)
 
-The SBOM is attested as well. Verify the binary tarball with the same identity flags as step 3 and
+The SBOM is attested as well. Verify the binary tarball (the daemon's, or the coordinator's
+`hostkeeper-coordinator-<version>-<linux-platform>.tar.gz`) with the same identity flags as step 3 and
 with `--predicate-type` set to the CycloneDX predicate type that `attest-sbom` records:
 
 ```sh
@@ -175,6 +222,10 @@ tar -xzf release/hostkeeper-<version>-<platform>.tar.gz
 
 Expected output, exactly: `hostkeeper <X.Y.Z>+<first 12 hex digits of $PIN>`.
 
+For the coordinator, unpack `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` and run
+`./hostkeeper-coordinator --version`; its output is, exactly,
+`hostkeeper-coordinator <X.Y.Z>+<first 12 hex digits of $PIN>`.
+
 What it proves: the binary was built from the pinned commit and reports the version of the tag.
 
 Refuse when: the output differs in any character.
@@ -196,12 +247,23 @@ Refuse when: the two digests differ, or the package did not pass step 3 or step 
 
 ## What the release workflow runs
 
-Before anything is published, the `verify` job of `release.yml` checks the files of the commit
-against `SHA256SUMS` (step 2) and runs `cargo xtask release check`, which verifies each attested
-file online and from its bundle (steps 3 and 4) against the same repository, signer workflow and
-ref, and requires the attested commit to be the commit released. It then runs the linux-x86_64
-binary (step 6). A test that keeps the commands in this document equal to the ones that job runs
-comes with the release tooling.
+Before anything is published, the `verify` job of `release.yml`, on the files of the commit's
+`artifacts.yml` run:
+
+- runs step 2 as `sha256sum --check --strict SHA256SUMS`: the download is whole, so without
+  `--ignore-missing`;
+- runs `cargo xtask release check`, which holds the files to the names above, and for every
+  attested file runs the command of step 3 and the command of step 4 with `$PIN` the commit
+  released. Step 4 runs without `--custom-trusted-root`: the runner fetches the trusted root
+  itself. Each command gets `--format json` added, so that the attestations it verified are read
+  back, and each must name this commit and the file's SHA-256;
+- runs step 6 on the linux-x86_64 binaries, the daemon's and the coordinator's
+  (`cargo xtask release check-binary`).
+
+The test `verify_a_release_commands_match_the_ones_the_verify_job_runs`
+(`cargo test -p xtask`, in `crates/xtask/src/release/doc_tests.rs`) keeps these commands equal to
+the ones written here, and `asset_names_are_the_documented_contract` keeps the list of every name
+equal to the names the tooling produces.
 
 The CI client, `.github/workflows/set-desired.yml` ([The CI client](ci-client.md)), runs steps 2
 and 3 and the `--version` check of step 6 as written here, on the binary tarball for
@@ -219,4 +281,5 @@ Do not use a release when any of these holds:
 - the ref is not `refs/heads/main` (a tag, a branch, a pull request);
 - the source commit differs from the pin;
 - the build ran on a self-hosted runner;
-- the binary's `--version` differs from `hostkeeper <X.Y.Z>+<first 12 hex digits of $PIN>`.
+- the binary's `--version` differs from `hostkeeper <X.Y.Z>+<first 12 hex digits of $PIN>`
+  (`hostkeeper-coordinator <X.Y.Z>+<first 12 hex digits of $PIN>` for the coordinator).
