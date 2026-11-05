@@ -56,7 +56,7 @@ impl Files {
         self.dir.path().join(file)
     }
 
-    /// The arguments of a `serve` without enrollment, then `extra`; each `@name` is the path of
+    /// The arguments of a `serve` without enrollment, then `extra`; each `=name` is the path of
     /// `name` in the directory.
     fn args(&self, extra: &[&str]) -> Vec<OsString> {
         let mut args: Vec<OsString> = vec!["hostkeeper-coordinator".into(), "serve".into()];
@@ -66,24 +66,24 @@ impl Files {
             "--private-listen",
             "192.0.2.1:2",
             "--tls-cert",
-            "@tls.pem",
+            "=tls.pem",
             "--tls-key",
-            "@tls.key",
+            "=tls.key",
             "--client-ca",
-            "@ca.pem",
+            "=ca.pem",
             "--state-file",
-            "@desired.json",
+            "=desired.json",
             "--oidc-config",
-            "@oidc.toml",
+            "=oidc.toml",
             "--operator-token-file",
-            "@operator.token",
+            "=operator.token",
             "--rollout-file",
-            "@rollout.toml",
+            "=rollout.toml",
             "--legacy-service",
             "kbf",
         ];
         for arg in base.iter().chain(extra) {
-            args.push(match arg.strip_prefix('@') {
+            args.push(match arg.strip_prefix('=') {
                 Some(file) => self.path(file).into_os_string(),
                 None => OsString::from(arg),
             });
@@ -96,11 +96,11 @@ impl Files {
 fn enrollment_flags(init: bool) -> Vec<&'static str> {
     let mut flags = vec![
         "--enrollment-dir",
-        "@enrollment",
+        "=enrollment",
         "--ca-key-file",
-        "@ca.key",
+        "=ca.key",
         "--server-cert-file",
-        "@server.pem",
+        "=server.pem",
         "--server-name",
         "localhost",
     ];
@@ -127,8 +127,8 @@ fn start(files: &Files, extra: &[&str]) -> Result<Parts, StartError> {
 fn enrollment_flags_go_together_and_a_missing_ca_needs_ca_init() {
     let files = Files::new("enrollment-flags");
     for alone in [
-        vec!["--enrollment-dir", "@enrollment"],
-        vec!["--ca-key-file", "@ca.key"],
+        vec!["--enrollment-dir", "=enrollment"],
+        vec!["--ca-key-file", "=ca.key"],
         vec!["--server-name", "localhost"],
         vec!["--ca-init"],
     ] {

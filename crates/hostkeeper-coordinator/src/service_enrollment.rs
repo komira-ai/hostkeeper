@@ -1,14 +1,12 @@
 //! The calls of [`Coordinator`] that ask enrollment: who an enrolled host's certificate names,
 //! whether a host is denied, retiring or duplicate, and a retiring host's final report.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hostkeeper_wire::wire::{Answer, Heartbeat};
 
-use super::{Coordinator, HeartbeatRefused, sends};
+use super::{Coordinator, HeartbeatRefused};
 use crate::enrollment::{Admission, Enrollment};
-use crate::halt;
 use crate::identity::{Identity, IdentityError, identity_of};
 
 /// What a heartbeat's turn is, once it is heard.
