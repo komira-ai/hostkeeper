@@ -88,6 +88,7 @@ async fn a_halted_service_with_a_bad_desired_version_holds_at_halted() {
             check: "tainted".to_owned(),
             target: version("2.0"),
             report: None,
+            origin: crate::ops::HaltOrigin::Hook,
         });
         m.bad = vec![version("2.0")];
     });
@@ -120,6 +121,7 @@ async fn a_halted_service_with_release_failures_marks_nothing_bad() {
             check: "tainted".to_owned(),
             target: version("2.0"),
             report: None,
+            origin: crate::ops::HaltOrigin::Hook,
         });
     });
     restart(&mut rig, AUTO);

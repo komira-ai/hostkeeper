@@ -388,7 +388,7 @@ fn an_order_ages_out_after_120_seconds() {
 /// No order in the first 30 s after the coordinator starts.
 #[test]
 fn thirty_seconds_of_quiet() {
-    let mut f = Fleet::new(secs(970));
+    let mut f = Fleet::new(secs(970), crate::fleet::QUIET_START);
     f.record_in(LEGACY, id("d1"), role("daemon"), beat("1.0"), secs(999));
     let d = desired("2.0", 1, 1);
     assert_eq!(run(&mut f, &d, &["d1"], secs(999), false), ["d1: nothing"]);

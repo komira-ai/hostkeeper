@@ -47,6 +47,7 @@ fn every_refusal_has_its_own_name() {
         Refusal::Runner,
         Refusal::Replayed,
         Refusal::ReplayCacheFull,
+        Refusal::ReplayCacheUnavailable,
     ];
     let names: std::collections::BTreeSet<_> = all.iter().map(|r| r.name()).collect();
     assert_eq!(names.len(), all.len());
@@ -397,6 +398,7 @@ fn verifier_for(text: &str) -> Arc<super::Verifier> {
         Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
         Duration::from_secs(30),
         clock,
+        super::testkit::spent(),
     ))
 }
 
@@ -532,6 +534,7 @@ fn steered(
         Arc::clone(&source) as Arc<dyn KeySource>,
         Duration::from_secs(30),
         clock,
+        super::testkit::spent(),
     ));
     (source, verifier, now)
 }
@@ -757,6 +760,7 @@ async fn the_canary_allow_list_takes_a_workflow_run_and_not_a_pull_request_targe
         Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
         Duration::from_secs(30),
         clock,
+        super::testkit::spent(),
     );
     let claims = |edit: fn(&mut Value)| {
         let mut c = good_claims("https://token.actions.githubusercontent.com");

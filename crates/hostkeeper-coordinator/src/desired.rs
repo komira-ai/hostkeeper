@@ -18,6 +18,15 @@
 //! wrote, so a downgrade keeps working); a file with `{"services": {name: state}}` is the map.
 //! A file that cannot be read back is a refusal to start: the coordinator does not guess what
 //! an operator meant.
+//!
+//! A desired state may name the digest of its version's package (`release_digest`), and each
+//! service's state in the file carries the registry of every version CI has set with a digest
+//! (`digests`, [`crate::registry`]), written in the same replacement of the file as the state,
+//! so a crash leaves both or neither. Both keys are written only when they hold something: a
+//! farm whose CI sends no digest keeps the bytes it had, which earlier builds read. Earlier
+//! builds refuse a file that has either key (their reader refuses a key it does not know), so a
+//! coordinator rolled back below this one refuses to start rather than run without the
+//! digests.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -31,6 +40,7 @@ use hostkeeper_wire::version::Version;
 
 use serde::{Deserialize, Serialize};
 
+use crate::registry::{Digest, Registry, RegistryError};
 use crate::services::Services;
 
 /// The most any count may be: a typo's order of magnitude, not a plan.
@@ -184,6 +194,10 @@ pub struct Desired {
     /// decides on it, and the convergence needs no number of hosts up.
     #[serde(serialize_with = "write_min_up")]
     pub min_up: RoleLimits,
+    /// The digest of the package of `version`, as CI set it ([`crate::registry`]); none when CI
+    /// sent none. Written only when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_digest: Option<Digest>,
 }
 
 /// Why a desired state is refused.
@@ -201,6 +215,9 @@ pub enum DesiredError {
     /// The file holds one desired state, the legacy service's, and no legacy service is set.
     #[error("the file holds one desired state and no legacy service is set")]
     NoLegacyService,
+    /// The registry of digests of a service is refused.
+    #[error(transparent)]
+    Registry(#[from] RegistryError),
 }
 
 impl Desired {
@@ -319,31 +336,90 @@ impl Desired {
     }
 }
 
-/// The state file in its map form.
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MapFile {
-    services: BTreeMap<String, Desired>,
+/// What the file holds of one service: its desired state and its registry of digests.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Held {
+    desired: BTreeMap<String, Desired>,
+    digests: BTreeMap<String, Registry>,
+}
+
+/// One service's state as the file writes it: the desired state, then its registry when it holds
+/// any.
+#[derive(Serialize)]
+struct EntryOut<'a> {
+    #[serde(flatten)]
+    desired: &'a Desired,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    digests: Option<&'a Registry>,
+}
+
+/// The state file in its map form, as written.
+#[derive(Serialize)]
+struct MapFileOut<'a> {
+    services: BTreeMap<&'a str, EntryOut<'a>>,
+}
+
+/// The desired state and the registry of one service's entry in the file: the state's own keys,
+/// read strictly, and `digests`.
+fn parse_entry(value: serde_json::Value) -> Result<(Desired, Registry), DesiredError> {
+    let malformed = |e: serde_json::Error| DesiredError::Malformed(e.to_string());
+    let mut fields: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_value(value).map_err(malformed)?;
+    let digests = match fields.remove("digests") {
+        Some(value) => Registry::read(value)?,
+        None => Registry::default(),
+    };
+    let desired: Desired = serde_json::from_value(fields.into()).map_err(malformed)?;
+    desired.checked()?;
+    Ok((desired, digests))
 }
 
 /// The services in `bytes`: a map file, or the single state of earlier builds as the
 /// legacy service's (`legacy`; with none set that file is refused).
-fn parse_file(
-    bytes: &[u8],
-    legacy: Option<&str>,
-) -> Result<BTreeMap<String, Desired>, DesiredError> {
-    let is_map = serde_json::from_slice::<serde_json::Value>(bytes)
-        .is_ok_and(|v| v.get("services").is_some());
-    if !is_map {
+fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, DesiredError> {
+    let malformed = |e: serde_json::Error| DesiredError::Malformed(e.to_string());
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(malformed)?;
+    let mut held = Held::default();
+    let Some(services) = value.get("services").cloned() else {
         let name = legacy.ok_or(DesiredError::NoLegacyService)?;
-        return Ok(BTreeMap::from([(name.to_owned(), Desired::parse(bytes)?)]));
+        let (desired, digests) = parse_entry(value)?;
+        held.insert(name, desired, digests);
+        return Ok(held);
+    };
+    if let Some(other) = value
+        .as_object()
+        .and_then(|map| map.keys().find(|key| *key != "services"))
+    {
+        return Err(DesiredError::Malformed(format!("unknown field `{other}`")));
     }
-    let file: MapFile =
-        serde_json::from_slice(bytes).map_err(|e| DesiredError::Malformed(e.to_string()))?;
-    for desired in file.services.values() {
-        desired.checked()?;
+    let services: BTreeMap<String, serde_json::Value> =
+        serde_json::from_value(services).map_err(malformed)?;
+    for (name, entry) in services {
+        let (desired, digests) = parse_entry(entry)?;
+        held.insert(&name, desired, digests);
     }
-    Ok(file.services)
+    Ok(held)
+}
+
+impl Held {
+    fn insert(&mut self, name: &str, desired: Desired, digests: Registry) {
+        self.desired.insert(name.to_owned(), desired);
+        if !digests.is_empty() {
+            self.digests.insert(name.to_owned(), digests);
+        }
+    }
+
+    fn digests_of(&self, service: &str) -> Registry {
+        self.digests.get(service).cloned().unwrap_or_default()
+    }
+
+    /// The entry of `name`, whose state is `desired`, as the file writes it.
+    fn entry<'a>(&'a self, name: &str, desired: &'a Desired) -> EntryOut<'a> {
+        EntryOut {
+            desired,
+            digests: self.digests.get(name).filter(|r| !r.is_empty()),
+        }
+    }
 }
 
 /// Why the state file could not be read or written.
@@ -380,13 +456,22 @@ pub enum StoreError {
 /// Syncs a directory to disk.
 pub(crate) type SyncDir = fn(&Path) -> io::Result<()>;
 
+/// Whether a set changed the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recorded {
+    /// The state and the registry were already what the set asked for: nothing was written.
+    Unchanged,
+    /// The file was replaced.
+    Written,
+}
+
 /// The desired state, in memory and in its file.
 #[derive(Debug)]
 pub struct DesiredStore {
     path: PathBuf,
     /// The legacy service: the one whose state alone is written as the single state.
     legacy: Option<String>,
-    current: Mutex<BTreeMap<String, Desired>>,
+    current: Mutex<Held>,
     /// Syncs the directory of the file after a rename.
     sync_dir: SyncDir,
     /// Held across a whole replacement, so that writers wait for each other and not readers:
@@ -422,7 +507,7 @@ impl DesiredStore {
                 path: path.to_owned(),
                 source,
             })?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Held::default(),
             Err(e) => return Err(io_at(path)(e)),
         };
         let sync_dir: SyncDir = sync_dir;
@@ -438,13 +523,19 @@ impl DesiredStore {
     /// The desired state of `service` now, if one was ever set.
     #[must_use]
     pub fn get(&self, service: &str) -> Option<Desired> {
-        self.lock().get(service).cloned()
+        self.lock().desired.get(service).cloned()
     }
 
     /// The desired state of every service, by name.
     #[must_use]
     pub fn all(&self) -> BTreeMap<String, Desired> {
-        self.lock().clone()
+        self.lock().desired.clone()
+    }
+
+    /// The registry of digests of `service` now: every version CI has set with a digest.
+    #[must_use]
+    pub fn digests(&self, service: &str) -> Registry {
+        self.lock().digests_of(service)
     }
 
     /// The store with `sync_dir` as its directory sync, to fail the sync after the rename.
@@ -455,16 +546,58 @@ impl DesiredStore {
     }
 
     /// Replaces the desired state of `service` (the others stay), in the file first and in
-    /// memory only if the file holds it.
+    /// memory only if the file holds it. The registry of digests stays as it is.
     ///
     /// # Errors
     /// [`StoreError::Io`]: the file could not be replaced; the old state stands.
     /// [`StoreError::NotSynced`]: the file holds the new state, so memory does too; the caller
     /// still reports the failure, and setting the same state again is safe.
     pub fn set(&self, service: &str, desired: Desired) -> Result<(), StoreError> {
+        self.replace(service, desired, None, &|_| true).map(drop)
+    }
+
+    /// Sets the desired state of `service` as [`Self::set`] does, and, when it names a digest,
+    /// records its version and digest in the service's registry ([`Registry::record`], which
+    /// drops past the cap only a version `keep` does not keep), in the same replacement of the
+    /// file. When the state and the registry are already what is asked, nothing is written.
+    ///
+    /// # Errors
+    /// [`StoreError`], as [`Self::set`]: on [`StoreError::Io`] neither the state nor the
+    /// registry changed, in the file or in memory.
+    pub fn record(
+        &self,
+        service: &str,
+        desired: Desired,
+        keep: impl Fn(&Version) -> bool,
+    ) -> Result<Recorded, StoreError> {
+        let digest = desired
+            .release_digest
+            .clone()
+            .map(|digest| (desired.version.clone(), digest));
+        self.replace(service, desired, digest, &keep)
+    }
+
+    /// The one replacement of the file: the state of `service`, and the version and digest to
+    /// record, if any, with the cap's `keep`.
+    fn replace(
+        &self,
+        service: &str,
+        desired: Desired,
+        digest: Option<(Version, Digest)>,
+        keep: &dyn Fn(&Version) -> bool,
+    ) -> Result<Recorded, StoreError> {
         let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut next = self.all();
-        next.insert(service.to_owned(), desired);
+        let before = self.lock().clone();
+        let mut next = before.clone();
+        next.desired.insert(service.to_owned(), desired);
+        if let Some((version, digest)) = digest {
+            let mut registry = next.digests_of(service);
+            registry.record(&version, digest, keep);
+            next.digests.insert(service.to_owned(), registry);
+        }
+        if next == before {
+            return Ok(Recorded::Unchanged);
+        }
         match self.write(&next) {
             Ok(()) => {}
             Err(e @ StoreError::NotSynced { .. }) => {
@@ -474,22 +607,26 @@ impl DesiredStore {
             Err(e) => return Err(e),
         }
         *self.lock() = next;
-        Ok(())
+        Ok(Recorded::Written)
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Desired>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Held> {
         self.current.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn write(&self, services: &BTreeMap<String, Desired>) -> Result<(), StoreError> {
+    fn write(&self, held: &Held) -> Result<(), StoreError> {
         // Only the legacy service is the single state of earlier builds, which
         // refuses the map form.
-        let encoded = match services.iter().collect::<Vec<_>>().as_slice() {
+        let encoded = match held.desired.iter().collect::<Vec<_>>().as_slice() {
             [(name, only)] if Some(name.as_str()) == self.legacy.as_deref() => {
-                serde_json::to_vec_pretty(only)
+                serde_json::to_vec_pretty(&held.entry(name, only))
             }
-            _ => serde_json::to_vec_pretty(&MapFile {
-                services: services.clone(),
+            _ => serde_json::to_vec_pretty(&MapFileOut {
+                services: held
+                    .desired
+                    .iter()
+                    .map(|(name, desired)| (name.as_str(), held.entry(name, desired)))
+                    .collect(),
             }),
         };
         let mut text = encoded

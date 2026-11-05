@@ -611,6 +611,7 @@ async fn a_jwks_uri_off_the_issuers_origin_is_not_followed() {
         std::sync::Arc::new(source),
         std::time::Duration::from_secs(30),
         clock,
+        super::testkit::spent(),
     );
     let token = mint(&keys()[0], &good_claims(&issuer.url));
     assert_eq!(verifier.verify(&token).await, Err(Refusal::KeysUnavailable));
@@ -637,6 +638,7 @@ async fn an_untrusted_issuer_certificate_yields_no_keys() {
         std::sync::Arc::new(source),
         std::time::Duration::from_secs(30),
         clock,
+        super::testkit::spent(),
     );
     let token = mint(&keys()[0], &good_claims(&issuer.url));
     assert_eq!(verifier.verify(&token).await, Err(Refusal::KeysUnavailable));

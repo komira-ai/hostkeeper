@@ -79,7 +79,7 @@ fn bake_zero_changes_nothing() {
     );
     for extra in ["", "bake_beats = 0"] {
         let s = services(extra);
-        let mut f = Fleet::new(Duration::ZERO);
+        let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
         beats(&mut f, "a", &beat("2.0"), 100);
         beats(&mut f, "b", &beat("1.0"), 100);
         assert_eq!(why(&s, &f, "b", 100), go());
@@ -91,7 +91,7 @@ fn bake_zero_changes_nothing() {
 #[test]
 fn an_updated_host_holds_its_slot_until_it_has_beaten_healthy_bake_beats_times() {
     let s = services("bake_beats = 3");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "b", &beat("1.0"), 100);
     for (n, at) in [100, 115, 130].into_iter().enumerate() {
         beats(&mut f, "a", &beat("2.0"), at);
@@ -114,7 +114,7 @@ fn an_unhealthy_or_updating_beat_resets_the_bake() {
     ];
     for broken in breaks {
         let s = services("bake_beats = 3");
-        let mut f = Fleet::new(Duration::ZERO);
+        let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
         let mut at = 100;
         for b in [beat("2.0"), beat("2.0"), broken, beat("2.0"), beat("2.0")] {
             beats(&mut f, "a", &b, at);
@@ -132,7 +132,7 @@ fn an_unhealthy_or_updating_beat_resets_the_bake() {
 #[test]
 fn a_baking_host_that_went_silent_frees_its_slot() {
     let s = services("bake_beats = 3");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &beat("2.0"), 100);
     beats(&mut f, "b", &beat("1.0"), 100);
     assert_eq!(why(&s, &f, "b", 100), gate(Gate::Baking));
@@ -144,7 +144,7 @@ fn a_baking_host_that_went_silent_frees_its_slot() {
 #[test]
 fn a_slot_held_by_an_update_is_no_slot_not_baking() {
     let s = services("bake_beats = 3");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &updating(beat("1.0"), "2.0"), 100);
     beats(&mut f, "b", &beat("1.0"), 100);
     assert_eq!(why(&s, &f, "b", 100), gate(Gate::NoSlot));
@@ -158,7 +158,7 @@ fn promotion_pending_holds_the_slot_and_is_not_up_until_it_clears() {
     pending.promotion_pending = true;
 
     let slot = services("");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &pending, 100);
     beats(&mut f, "b", &beat("1.0"), 100);
     assert_eq!(why(&slot, &f, "b", 100), gate(Gate::NoSlot));
@@ -175,7 +175,7 @@ fn a_pending_or_baking_host_keeps_the_service_in_progress() {
     let s = services("bake_beats = 2");
     let def = s.get(LEGACY).expect("kbf");
     let want = desired("2.0", 0, 0);
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &beat("2.0"), 100);
     let state = |f: &Fleet, at| converge_service(def, Some(&want), f, secs(at)).state;
     assert_eq!(state(&f, 100), State::InProgress, "one beat of two");
@@ -199,7 +199,7 @@ pub(crate) fn started(f: &mut Fleet, at: u64) {
 #[test]
 fn with_a_canary_of_one_nobody_else_is_ordered_until_it_has_baked() {
     let s = services("bake_beats = 2\ncanary = { count = 1 }");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     started(&mut f, 100);
     assert_eq!(why(&s, &f, "a", 100), go());
     assert_eq!(why(&s, &f, "b", 100), gate(Gate::CanaryWait));
@@ -234,7 +234,7 @@ pub(crate) fn started_others(f: &mut Fleet, at: u64) {
 #[test]
 fn a_canary_with_a_pending_promotion_keeps_the_gate_closed() {
     let s = services("canary = { count = 1 }");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     started(&mut f, 100);
     let mut pending = beat("2.0");
     pending.promotion_pending = true;
@@ -250,7 +250,7 @@ fn a_canary_with_a_pending_promotion_keeps_the_gate_closed() {
 #[test]
 fn a_canary_of_two_orders_two_hosts() {
     let s = services("canary = { count = 2 }");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     started(&mut f, 100);
     assert_eq!(why(&s, &f, "a", 100), go());
     assert_eq!(why(&s, &f, "b", 100), go());
@@ -268,7 +268,7 @@ fn a_canary_of_two_orders_two_hosts() {
 fn a_failed_canary_blocks_the_service_and_orders_nobody_else() {
     let s = services("canary = { count = 1 }");
     let def = s.get(LEGACY).expect("kbf");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     started(&mut f, 100);
     let failed = last(beat("1.0"), "2.0", hostkeeper_wire::wire::Outcome::Failed);
     beats(&mut f, "a", &failed, 115);
@@ -284,7 +284,7 @@ fn a_failed_canary_blocks_the_service_and_orders_nobody_else() {
 #[test]
 fn a_canary_that_is_down_and_never_started_is_replaced_by_the_next_host() {
     let s = services("canary = { count = 1 }");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     started(&mut f, 100);
     beats(&mut f, "b", &beat("1.0"), 200);
     beats(&mut f, "c", &beat("1.0"), 200);
@@ -297,7 +297,7 @@ fn a_canary_that_is_down_and_never_started_is_replaced_by_the_next_host() {
 #[test]
 fn one_that_started_and_went_down_still_counts() {
     let s = services("canary = { count = 1 }");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &updating(beat("1.0"), "2.0"), 100);
     beats(&mut f, "b", &beat("1.0"), 200);
     beats(&mut f, "c", &beat("1.0"), 200);
@@ -311,7 +311,7 @@ fn one_that_started_and_went_down_still_counts() {
 fn a_canary_is_chosen_by_node_id_whatever_the_role() {
     let text = "[[service]]\nname = \"kbf\"\ncanary = { count = 1 }\nroles = [\"frontend\", \"storage\"]\n";
     let s = Services::parse(text).expect("services");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     f.record_in(LEGACY, id("a1"), role("frontend"), beat("1.0"), secs(100));
     f.record_in(LEGACY, id("s1"), role("storage"), beat("1.0"), secs(100));
     assert_eq!(why(&s, &f, "a1", 100), go());

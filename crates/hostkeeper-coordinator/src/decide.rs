@@ -6,7 +6,8 @@
 //! every rule below holds, checked in this order (the role is the host's role in that service's
 //! definition):
 //!
-//! 1. the coordinator has been up for [`crate::fleet::QUIET_START`];
+//! 1. the coordinator has been up for its quiet start (`--quiet-secs`, by default
+//!    [`crate::fleet::QUIET_START`]);
 //! 2. the host is not already updating, and no other service updates on it or has an order
 //!    outstanding for it (a host does one update at a time);
 //! 3. the host is behind: it does not run the desired version (a rollback is a desired
@@ -31,7 +32,9 @@
 //!    ([`Fleet::occupants_of`]).
 //!
 //! A version marked bad ([`crate::reconcile`]) is ordered to nobody, whatever the rules above
-//! say, and is held at [`Gate::Bad`] after the quiet start.
+//! say, and is held at [`Gate::Bad`] after the quiet start; so is a desired version below the
+//! service's `min_version` ([`Gate::BelowMinVersion`]), however it got into the state file: CI's
+//! set refuses one, and a hand edit of the file does not reach a host.
 //! A host that reports the service `absent` (declared, never registered) is held back before
 //! all of these but the first, unless the definition says `install_when_absent` ([`Skip::Absent`]).
 //!
@@ -89,13 +92,15 @@ pub enum Gate {
     Halted,
     /// The desired version is marked bad ([`crate::reconcile`]).
     Bad,
+    /// The desired version is below the service's `min_version`: no order goes below the floor.
+    BelowMinVersion,
     /// The host is updating this service.
     Updating,
     /// The host is updating another service or has an order outstanding for one.
     BusyElsewhere,
     /// A host, of any role, holds an update slot for some service (one live update at a time).
     NoSlot,
-    /// The coordinator started less than [`crate::fleet::QUIET_START`] ago.
+    /// The coordinator started less than its quiet start (`--quiet-secs`) ago.
     Quiet,
     /// The service's canary gate is closed and the host is not one of the canaries.
     CanaryWait,
@@ -235,6 +240,12 @@ fn first_hold(
     let rules = [
         (fleet.is_quiet(now), Decision::Gate(Gate::Quiet)),
         (bad.contains(&desired.version), Decision::Gate(Gate::Bad)),
+        (
+            def.min_version
+                .as_ref()
+                .is_some_and(|floor| !desired.version.at_least(floor)),
+            Decision::Gate(Gate::BelowMinVersion),
+        ),
         (
             host.beat.health == Health::Absent && !def.install_when_absent,
             Decision::Skip(Skip::Absent),

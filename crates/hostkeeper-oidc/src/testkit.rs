@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream};
 use tokio_rustls::TlsAcceptor;
 
-use super::{Clock, Dial, HttpsKeys, OidcConfig, Roots, Stream, Verifier};
+use super::{Clock, Dial, HttpsKeys, OidcConfig, Roots, SpentJtis, Stream, Verifier};
 
 /// The fixed "now" of the tests, in unix seconds.
 pub const NOW: u64 = 1_800_000_000;
@@ -292,6 +292,63 @@ pub fn clock() -> (Clock, Arc<AtomicU64>) {
     (Arc::new(move || shared.load(Ordering::SeqCst)), now)
 }
 
+/// Spent token ids kept in memory: a test's stand-in for the caller's file. Two verifiers given
+/// the same one stand for a caller before and after a restart. While [`Self::fail`] is set,
+/// recording fails.
+#[derive(Default)]
+pub struct SpentInMemory {
+    entries: Mutex<Vec<(String, u64)>>,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl SpentInMemory {
+    /// One holding `entries` already.
+    #[must_use]
+    pub fn holding(entries: Vec<(String, u64)>) -> Arc<Self> {
+        Arc::new(Self {
+            entries: Mutex::new(entries),
+            failing: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    /// Makes recording fail (`true`) or work again (`false`).
+    pub fn fail(&self, failing: bool) {
+        self.failing.store(failing, Ordering::SeqCst);
+    }
+
+    /// Every id recorded, in order, with its expiry.
+    #[must_use]
+    pub fn entries(&self) -> Vec<(String, u64)> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl SpentJtis for SpentInMemory {
+    fn load(&self) -> Vec<(String, u64)> {
+        self.entries()
+    }
+
+    fn record(&self, jti: &str, until: u64) -> std::io::Result<()> {
+        if self.failing.load(Ordering::SeqCst) {
+            return Err(std::io::Error::other("recording is made to fail"));
+        }
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((jti.to_owned(), until));
+        Ok(())
+    }
+}
+
+/// An empty [`SpentInMemory`].
+#[must_use]
+pub fn spent() -> Arc<SpentInMemory> {
+    Arc::new(SpentInMemory::default())
+}
+
 /// A verifier over `issuer`, with a 30 s refetch interval and a clock the test sets.
 pub fn verifier(issuer: &FakeIssuer) -> (Arc<Verifier>, Arc<AtomicU64>) {
     let config = OidcConfig::parse(&config_text(&issuer.url)).expect("a config");
@@ -303,6 +360,7 @@ pub fn verifier(issuer: &FakeIssuer) -> (Arc<Verifier>, Arc<AtomicU64>) {
             Arc::new(source),
             std::time::Duration::from_secs(30),
             clock,
+            spent(),
         )),
         now,
     )
@@ -377,6 +435,7 @@ pub fn static_verifier() -> (Arc<Verifier>, Arc<AtomicU64>) {
             Arc::new(source),
             std::time::Duration::from_secs(30),
             clock,
+            spent(),
         )),
         now,
     )

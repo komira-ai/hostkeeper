@@ -274,7 +274,7 @@ fn a_service_waits_for_no_other_service() {
     let want = desired("2.0", 0, 0);
     let w = wants(&[("server", &want), ("agent", &want)]);
     let fleet_of = |server: hostkeeper_wire::wire::Heartbeat, seen: u64| {
-        let mut f = Fleet::new(Duration::ZERO);
+        let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
         f.record_in(
             "server",
             id("s1"),
@@ -309,7 +309,7 @@ fn a_host_updates_one_service_at_a_time() {
     let s = Services::parse(text).expect("parsed");
     let want = desired("2.0", 0, 0);
     let w = wants(&[("one", &want), ("two", &want)]);
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     f.record_in("one", id("h"), role("daemon"), beat("1.0"), NOW);
     f.record_in("two", id("h"), role("daemon"), beat("1.0"), NOW);
     assert!(!f.is_busy_besides("two", &id("h"), NOW));
@@ -369,7 +369,7 @@ fn a_host_is_ordered_only_for_a_service_that_runs_on_its_role() {
     let s = Services::parse(text).expect("parsed");
     let want = desired("2.0", 0, 0);
     let w = wants(&[("loose", &want)]);
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     f.record_in("loose", id("d1"), role("daemon"), beat("1.0"), NOW);
     f.record_in("loose", id("m1"), role("mac-daemon"), beat("1.0"), NOW);
     assert_eq!(ask(&s, &w, &f, "loose", "d1"), update("2.0"));

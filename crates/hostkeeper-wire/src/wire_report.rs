@@ -68,6 +68,48 @@ impl From<Token> for String {
     }
 }
 
+/// The most bytes of an [`OrderId`].
+pub const MAX_ORDER_ID: usize = 64;
+
+/// The id of the order a verdict ends, as the coordinator named it: 1 to [`MAX_ORDER_ID`] bytes
+/// of ASCII letters, digits, `.`, `_` and `-`. The coordinator counts a verdict once per host,
+/// order id and try ([`crate::wire::UpdateResult::order_try`]).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct OrderId(String);
+
+impl OrderId {
+    /// `text` as an order id, if it is one.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let ok = (1..=MAX_ORDER_ID).contains(&text.len())
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+        ok.then(|| Self(text.to_owned()))
+    }
+
+    /// The text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for OrderId {
+    type Error = &'static str;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::parse(&text).ok_or("not an order id: [A-Za-z0-9._-], 1 to 64 bytes")
+    }
+}
+
+impl From<OrderId> for String {
+    fn from(id: OrderId) -> Self {
+        id.0
+    }
+}
+
 /// Whether `text` is 1 to `max` bytes of lowercase letters, digits and `_`.
 fn is_word(text: &str, max: usize) -> bool {
     (1..=max).contains(&text.len())
