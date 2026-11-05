@@ -714,6 +714,8 @@ fn package_info_of_another_identifier_version_or_location_or_with_a_script_is_re
         Some(2)
     );
     assert_eq!(pkg_info_attributes("<pkg-info identifier=\"i\""), None);
+    // A value whose closing quote never comes is not read as running to the end.
+    assert_eq!(pkg_info_attributes("<pkg-info identifier=\"i>"), None);
 }
 
 #[test]
@@ -764,6 +766,13 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
         (
             good[..7].to_vec(),
             vec!["missing /usr/local/bin/hostkeeper in the payload".to_owned()],
+        ),
+        (
+            [&good[..3], &good[4..]].concat(),
+            vec![
+                "missing /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist in the payload"
+                    .to_owned(),
+            ],
         ),
         (
             with(

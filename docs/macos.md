@@ -138,7 +138,8 @@ Every release ships macos-arm64 beside the two Linux platforms: the binary tarba
 `hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, hostkeeper's own package `.tar.zst` (its
 `manifest.toml` and `bin/hostkeeper`, and no `units/`), and the installer pkg
 `hostkeeper-<v>-macos-arm64.pkg`. The artifacts workflow builds them on a GitHub-hosted Apple
-silicon runner, on a push to `main` or by hand, never on a pull request.
+silicon runner, never on a pull request; it runs by hand until its push-to-`main` trigger lands with
+the rest of the release automation.
 
 The pkg is the first install of a Mac. It installs exactly two files, and the directories that
 hold them (each 0755, as macOS has them already), all owned by root and wheel:

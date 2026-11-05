@@ -28,7 +28,8 @@
 # job published (their digest is a job output) and then files that differ from the sums.
 #
 # No pull request runs this workflow (AGENTS.md B9: a pull request runs only build and unit tests
-# with coverage, and never a macOS job: the macOS build is here, on a push to main or by hand). A push to main builds, sums, signs and checks what it signed (`verify`); a run
+# with coverage, and never a macOS job: the macOS build is here, run by hand until the push
+# trigger below lands). A push to main builds, sums, signs and checks what it signed (`verify`); a run
 # by hand on a branch builds and sums and signs nothing.
 #
 # Triggers: only `workflow_dispatch` for now. The `cargo xtask release` verbs this file runs and
@@ -222,8 +223,13 @@ jobs:
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
       - name: Check cargo-cyclonedx (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cyclonedx.tar.xz" --sha256 "$CYCLONEDX_SHA256" --out "$RUNNER_TEMP/cyclonedx-checked.tar.xz"
+      # The macOS image keeps cargo outside $HOME/.cargo/bin, so the tool goes into a directory of
+      # its own on the PATH.
+      - run: mkdir "$RUNNER_TEMP/bin"
       - name: Install cargo-cyclonedx
-        run: tar -xJf "$RUNNER_TEMP/cyclonedx-checked.tar.xz" -C "$HOME/.cargo/bin" --strip-components 1 "cargo-cyclonedx-$TARGET/cargo-cyclonedx"
+        run: tar -xJf "$RUNNER_TEMP/cyclonedx-checked.tar.xz" -C "$RUNNER_TEMP/bin" --strip-components 1 "cargo-cyclonedx-$TARGET/cargo-cyclonedx"
+      - name: Put the tool directory on the PATH
+        run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: cargo cyclonedx --version
       - run: gtar --version
       - name: The workspace takes the version of the release
