@@ -15,7 +15,8 @@ use crate::decide::{Gate, Why};
 use crate::marks_support::{
     OLD_DAEMON, WEB, ask, ask_typed, beat_of, rig, runs, set, start, update,
 };
-use crate::ops::{OpsState, OpsStore};
+use crate::ops::{FailureAck, OpsState, OpsStore};
+use crate::rollback_tests::unwritable;
 use crate::testutil::{OPERATOR, version};
 
 /// Catches: a failed install that holds the farm's slot for ever because the service it left
@@ -159,4 +160,61 @@ async fn the_calls_know_the_hosts_and_roles_the_ops_file_names() {
         assign(&rig, WEB, "", "builder").expect_err("named no more"),
         proto::ServicesRefusal::UnknownRole
     );
+}
+
+/// Catches: an install order ended by a staged copy (a host that lists the service `absent` at
+/// the version it is installing), which would free the farm's slot before the install ran.
+#[tokio::test]
+async fn an_absent_copy_at_the_target_does_not_end_the_install_order() {
+    let rig = rig("edge-install-staged", "");
+    set(&rig, WEB, "2.0", 1).await;
+    assert_eq!(order_to(&rig, "d1", vec![]), Some(install("2.0", 1)));
+    assert_eq!(
+        order_to(&rig, "d1", vec![absent(WEB, "2.0")]),
+        Some(install("2.0", 1)),
+        "still under its own order"
+    );
+    assert_eq!(
+        told(&rig, "d2", vec![runs(WEB, "1.0")]).0,
+        ServiceReply::Nothing
+    );
+    assert_eq!(why_of(&rig, WEB, "d2"), Some(Why::Gate(Gate::NoSlot)));
+}
+
+/// Catches: a host whose role changed away from the service's having its beats of it taken as
+/// the service's, or ordered: it is told nothing of the service at its new role.
+#[tokio::test]
+async fn a_host_that_changed_role_is_not_ordered_the_service_of_its_old_role() {
+    let rig = rig("edge-role-change", "");
+    order_to(&rig, "d1", vec![runs(WEB, "1.0")]);
+    set(&rig, WEB, "2.0", 1).await;
+    let (reply, order) = ask_typed(
+        &rig,
+        "d1",
+        "frontend",
+        beat_of(crate::marks_support::INSTALLER, vec![runs(WEB, "1.0")]),
+    );
+    assert_eq!((reply, order), (ServiceReply::Nothing, None));
+}
+
+/// Catches: an install given while the host's failure ack could not be dropped from the ops
+/// file: no order goes out while the ack is on disk.
+#[tokio::test]
+async fn no_install_goes_out_while_the_hosts_ack_cannot_be_dropped() {
+    let mut rig = rig("edge-install-ack", "");
+    set(&rig, WEB, "2.0", 1).await;
+    let mut state = OpsState::default();
+    state
+        .services
+        .entry(WEB.to_owned())
+        .or_default()
+        .failure_acked
+        .push(FailureAck {
+            node_id: "d1".to_owned(),
+            report: UpdateResult::new(version("1.9"), Outcome::Failed),
+        });
+    rig.coordinator = start(&rig.dir, &rig.clock, "").with_ops(unwritable(state));
+    rig.at(2_031);
+    assert_eq!(order_to(&rig, "d1", vec![]), None);
+    assert_eq!(why_of(&rig, WEB, "d1"), None, "the gate would order it");
 }

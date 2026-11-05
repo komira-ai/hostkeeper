@@ -638,9 +638,7 @@ impl Fleet {
     /// uninstall), so nothing of it occupies a slot.
     pub fn drop_in(&mut self, service: &str, id: &HostId) {
         for hosts in [&mut self.hosts, &mut self.outside] {
-            if let Some(hosts) = hosts.get_mut(service) {
-                hosts.remove(id);
-            }
+            hosts.entry(service.to_owned()).or_default().remove(id);
         }
         self.orders.remove(&(id.clone(), service.to_owned()));
         self.bake.remove(&(service.to_owned(), id.clone()));
