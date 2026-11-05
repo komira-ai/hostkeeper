@@ -8,8 +8,8 @@
 //! the heartbeat listener serves the server certificate the start keeps in `--server-cert-file`
 //! for the names of `--server-name`, lets a client without a certificate through the handshake,
 //! and admits a client certificate of its own CA as well as one of `--client-ca`. The handlers
-//! of `Enroll`, `Poll` and `Renew` are built; no listener carries them yet (the gRPC serving
-//! change does). The services it manages are the ones `--rollout-file` defines; `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
+//! of `Enroll`, `Poll` and `Renew` are served as gRPC on the heartbeat listener
+//! ([`crate::grpc`]). The services it manages are the ones `--rollout-file` defines; `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
@@ -457,7 +457,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 key: server_cert.clone(),
                 client_ca: Some(flags.client_ca.clone()),
             };
-            TlsSource::files_with("heartbeat", served, interval, Alpn::Http1, client)?
+            TlsSource::files_with("heartbeat", served, interval, Alpn::H2AndHttp1, client)?
         }
         // clap requires the three together: one alone is no enrollment.
         _ => TlsSource::files("heartbeat", files(Some(flags.client_ca.clone())), interval)?,

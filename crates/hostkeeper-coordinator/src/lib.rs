@@ -41,6 +41,9 @@
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
+//! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
+//!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
+//!   operator API, and the router that tells them from the frozen JSON routes;
 //! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
 //! - [`config`]: the flags and the start, under the [`lock`] of the state files, with CI's spent
 //!   token ids in the [`jti_file`] beside them.
@@ -64,6 +67,7 @@ pub mod desired;
 pub mod enrollment;
 pub mod fleet;
 pub mod force;
+pub mod grpc;
 pub mod halt;
 pub mod holds;
 pub mod http;

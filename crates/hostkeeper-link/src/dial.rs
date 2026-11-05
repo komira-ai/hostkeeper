@@ -1,9 +1,11 @@
-//! [`TcpTransport`]: the one way out of this crate to the network, the [`Transport`] the
-//! daemon gives [`crate::JsonMtlsLink`]. It resolves the coordinator's name, connects, and
+//! [`TcpTransport`] and [`TcpDial`]: the one way out of this crate to the network, the
+//! [`Transport`] the daemon gives [`crate::JsonMtlsLink`] and the [`GrpcDial`] it gives
+//! [`crate::GrpcMtlsLink`]. [`TcpTransport`] resolves the coordinator's name, connects, and
 //! bounds the whole call (connect, handshake, request and reply) by [`CALL_SECS`] on the
 //! monotonic clock it is given, so a coordinator that answers a byte at a time cannot hold the
-//! loop. Nothing else of the crate names a socket: the link speaks to any [`Transport`], and the
-//! tests give it an in-process one.
+//! loop. [`TcpDial`] connects on the async side; the gRPC link bounds the whole call, connect
+//! included, by [`CALL_SECS`]. Nothing else of the crate names a socket: the links speak to any
+//! [`Transport`] or [`GrpcDial`], and the tests give them in-process ones.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -12,6 +14,7 @@ use std::time::Duration;
 
 use hostkeeper_steps::Clock;
 
+use crate::grpc::{AsyncConn, Dialing, GrpcDial};
 use crate::mtls::{Conn, Transport};
 
 /// The most seconds one heartbeat call may take, from the connect to the end of the reply.
@@ -34,6 +37,21 @@ impl Transport for TcpTransport {
         let deadline = self.clock.mono_secs().saturating_add(CALL_SECS);
         connect_any(&addrs, Arc::clone(&self.clock), deadline)
             .map(|conn| Box::new(conn) as Box<dyn Conn>)
+    }
+}
+
+/// The production [`GrpcDial`]: a TCP connection to the coordinator's address, resolved when
+/// it is dialed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TcpDial;
+
+impl GrpcDial for TcpDial {
+    fn dial(&self, host: &str, port: u16) -> Dialing<'_> {
+        let host = host.to_owned();
+        Box::pin(async move {
+            let stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
+            Ok(Box::new(stream) as Box<dyn AsyncConn>)
+        })
     }
 }
 

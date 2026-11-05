@@ -45,9 +45,11 @@ futures.workspace = true
 # The poll nonces.
 getrandom.workspace = true
 http-body-util.workspace = true
-hyper = { workspace = true, features = ["http1", "server"] }
+hyper = { workspace = true, features = ["http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 prost.workspace = true
+# The descriptors the JSON gateway of the operator API reads and writes messages by.
+prost-reflect = { workspace = true, features = ["serde"] }
 # The key of the coordinator's server certificate.
 rcgen.workspace = true
 serde.workspace = true
@@ -66,8 +68,13 @@ tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+# `hostkeeper ctl` run against an in-process coordinator, through gRPC and the gateway
+# (`src/grpc/tests/ctl.rs`).
+hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The HTTP/2 client that calls a listener in the listener's tests.
+hyper = { workspace = true, features = ["client"] }
 # The descriptors of the enrollment calls, read in their tests.
 prost-types.workspace = true
 rustls = { workspace = true, features = ["tls12"] }

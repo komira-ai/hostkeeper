@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use hostkeeper_coordinator::desired::DesiredStore;
+use hostkeeper_coordinator::grpc::route;
 use hostkeeper_coordinator::http::{Peer, Surface, handle};
 use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::service::Coordinator;
@@ -131,7 +132,10 @@ pub struct Rig {
     pub spec: Spec,
     pub dir: Scratch,
     pub clock: Arc<AtomicU64>,
-    pub coordinator: Coordinator,
+    pub coordinator: Arc<Coordinator>,
+    /// Whether a call goes through `grpc::route`, the entry point of the listeners, instead of
+    /// `http::handle`.
+    pub routed: bool,
 }
 
 /// The time every rig's coordinator starts at.
@@ -141,13 +145,20 @@ impl Rig {
     pub fn new(name: &str, spec: Spec) -> Self {
         let dir = scratch(name);
         let clock = Arc::new(AtomicU64::new(STARTED_AT));
-        let coordinator = spec.coordinator(&dir, &clock);
+        let coordinator = Arc::new(spec.coordinator(&dir, &clock));
         Self {
             spec,
             dir,
             clock,
             coordinator,
+            routed: false,
         }
+    }
+
+    /// The same rig with every call going through `grpc::route`.
+    pub fn routed(mut self) -> Self {
+        self.routed = true;
+        self
     }
 
     /// The rig of the recorded services and flags.
@@ -157,7 +168,7 @@ impl Rig {
 
     /// A coordinator over the same files that starts now: what a restart makes.
     pub fn restart(&mut self) {
-        self.coordinator = self.spec.coordinator(&self.dir, &self.clock);
+        self.coordinator = Arc::new(self.spec.coordinator(&self.dir, &self.clock));
     }
 
     pub fn at(&self, seconds: u64) {
@@ -171,14 +182,17 @@ impl Rig {
         peer: &Peer,
         request: Request<Full<Bytes>>,
     ) -> (u16, String) {
-        let response = handle(&self.coordinator, surface, peer, request, PATIENCE).await;
-        let code = response.status().as_u16();
-        let bytes = response
-            .into_body()
-            .collect()
-            .await
-            .expect("a body")
-            .to_bytes();
+        let (code, bytes) = if self.routed {
+            let response = route(&self.coordinator, surface, peer, request, PATIENCE).await;
+            let code = response.status().as_u16();
+            let bytes = response.into_body().collect().await.expect("a body");
+            (code, bytes.to_bytes())
+        } else {
+            let response = handle(&self.coordinator, surface, peer, request, PATIENCE).await;
+            let code = response.status().as_u16();
+            let bytes = response.into_body().collect().await.expect("a body");
+            (code, bytes.to_bytes())
+        };
         (code, String::from_utf8(bytes.to_vec()).expect("text"))
     }
 

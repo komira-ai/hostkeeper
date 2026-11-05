@@ -182,4 +182,4 @@ impl Enrollment {
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -31,16 +31,16 @@ use crate::tls::{Close, Farm, PipeTransport, Pki, Request, http, link, serve};
 use crate::{Rig, digest, recorded, service, version};
 
 /// The operator token of the coordinator.
-const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
+pub(crate) const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
 
 /// How long the handler waits for a body: the whole body is there when it is called.
-const PATIENCE: Duration = Duration::from_secs(30);
+pub(crate) const PATIENCE: Duration = Duration::from_secs(30);
 
 /// A coordinator that runs `web` on the role `daemon` and wants it at 2.0 (whose package digest
 /// CI registered as [`digest`]), with one halt of
 /// `web` cleared, over the files of `dir`; started at second 1000 of its clock, which then
 /// reads 1100, past its quiet start.
-fn coordinator(dir: &Path) -> Arc<Coordinator> {
+pub(crate) fn coordinator(dir: &Path) -> Arc<Coordinator> {
     std::fs::write(
         dir.join("desired.json"),
         format!(
@@ -69,7 +69,7 @@ fn coordinator(dir: &Path) -> Arc<Coordinator> {
 }
 
 /// The coordinator's answer to one request, on `surface`, from `peer`: the status and the body.
-fn call(
+pub(crate) fn call(
     coordinator: &Coordinator,
     surface: Surface,
     peer: &Peer,
@@ -95,7 +95,7 @@ fn call(
 
 /// Serves one heartbeat on `transport` with the coordinator's handler, the client's
 /// certificate as the caller.
-fn serve_coordinator(
+pub(crate) fn serve_coordinator(
     transport: &PipeTransport,
     farm: &Farm,
     coordinator: &Arc<Coordinator>,
@@ -160,7 +160,8 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
                 Feature::DeferredV1,
                 Feature::HaltV1,
                 Feature::HeartbeatV2,
-                Feature::OrderV1
+                Feature::OrderV1,
+                Feature::GrpcV1
             ],
             halt_generations: vec![(service("web"), 1)],
             acknowledged: Vec::new(),

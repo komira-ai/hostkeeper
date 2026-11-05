@@ -30,7 +30,7 @@ const OUTSIDE: [&str; 13] = [
 /// a step-record directory. It starts and signals nothing.
 const OWNER_CHECK: &str = "rustix::process::geteuid";
 
-/// The one source that reaches the network, the transport of the link, and the names of
+/// The one source that reaches the network, the transports of the links, and the names of
 /// [`OUTSIDE`] it uses: a TCP connection to the coordinator's address, and nothing else.
 const TRANSPORT: (&str, [&str; 4]) = (
     "dial.rs",
@@ -135,13 +135,16 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "beat.rs",
         "deferral.rs",
         "dial.rs",
+        "grpc.rs",
         "heartbeater.rs",
         "lib.rs",
         "mtls.rs",
         "names.rs",
+        "negotiated.rs",
         "order.rs",
         "pki.rs",
         "ports.rs",
+        "proto_map.rs",
         "testing.rs",
         "wire_map.rs",
     ];
@@ -170,13 +173,19 @@ fn the_loop_dials_only_the_coordinator_link_port() {
             "hostkeeper-proto",
             "hostkeeper-steps",
             "hostkeeper-wire",
+            "hyper-util",
             "p256",
+            "prost",
             "rustix",
             "rustls",
             "serde",
             "serde_json",
             "sha2",
             "thiserror",
+            "tokio",
+            "tokio-rustls",
+            "tonic",
+            "tower",
             "x509-cert",
         ])
     );

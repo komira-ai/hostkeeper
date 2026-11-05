@@ -1,8 +1,10 @@
-//! The heartbeat loop, over the fakes of `hostkeeper_link::testing`, and its link: no wall
-//! clock, and no network but the one loopback socket of `dial`.
-//! Each module is one subject of the loop or of its link. The link's tests run real TLS over
+//! The heartbeat loop, over the fakes of `hostkeeper_link::testing`, and its links: no wall
+//! clock, and no network but the loopback sockets of `dial` and of the one test of `TcpDial` in
+//! `grpc`.
+//! Each module is one subject of the loop or of its links. The JSON link's tests run real TLS over
 //! in-process pipes, with a server thread on the other end (`tls`); `coordinator` puts the real
-//! coordinator's handler behind it; `dial` is the one test of a socket, the transport's, on the
+//! coordinator's handler behind it; `grpc` runs the gRPC link against the coordinator's listener
+//! code over in-memory streams; `dial` is the test of the blocking transport's socket, on the
 //! loopback address with a port the system chose.
 
 mod certs;
@@ -11,6 +13,7 @@ mod deferral;
 mod dial;
 mod facts;
 mod features;
+mod grpc;
 mod halts;
 mod kbf;
 mod link;

@@ -118,7 +118,7 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
     );
     let mut expected = recorded.trim_end_matches('}').to_owned();
     expected.push_str(&format!(
-        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}}}}"#
+        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","grpc-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}}}}"#
     ));
     assert!(recorded.ends_with("}]}"), "{recorded}");
     assert_eq!(
@@ -154,7 +154,8 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
             "halt-v1",
             "heartbeat-v2",
             "forced-v1",
-            "order-v1"
+            "order-v1",
+            "grpc-v1"
         ]
     );
     assert_eq!(ours.agent_name(), "hostkeeper");
@@ -279,7 +280,7 @@ fn every_word_of_a_heartbeat_is_the_wires() {
                     "deferred": { "target": "2.0", "reason": "drain_bound", "retry_after_secs": 60 },
                 },
             ],
-            "agent_features": ["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1","order-v1"],
+            "agent_features": ["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1","order-v1","grpc-v1"],
             "agent": { "name": "hostkeeper", "version": "0.9.0" },
         })
     );
@@ -354,7 +355,7 @@ fn a_heartbeat_over_the_bound_the_coordinator_reads_is_refused_and_one_at_it_is_
     assert!(len > wire::MAX_HEARTBEAT_BYTES, "{len}");
     assert_eq!(
         LinkError::Unsendable(Unsendable::Bytes { len }).to_string(),
-        format!("the heartbeat is not sent: the JSON heartbeat is {len} bytes, more than 16384")
+        format!("the heartbeat is not sent: the encoded heartbeat is {len} bytes, more than 16384")
     );
     // Each byte taken from an order id or a reason is a byte of the JSON.
     let mut excess = len - wire::MAX_HEARTBEAT_BYTES;

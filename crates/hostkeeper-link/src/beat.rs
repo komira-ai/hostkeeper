@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::order::{DeferredReport, OrderResult};
 
-/// The most bytes of a heartbeat, as JSON.
+/// The most bytes of a heartbeat: its JSON on the JSON route, its encoded message on the gRPC one.
 pub const MAX_HEARTBEAT_BYTES: usize = 16 * 1024;
 
 /// The name the daemon gives itself in `agent`.
@@ -36,15 +36,19 @@ pub enum Feature {
     /// `order-v1`: the JSON route's update answer carries the order's id, try and package
     /// digest, and the heartbeat's top level is the daemon itself, never a legacy service.
     OrderV1,
+    /// `grpc-v1`: the coordinator serves the heartbeat as gRPC over HTTP/2 on its heartbeat
+    /// listener; the daemon uses it for the next heartbeat.
+    GrpcV1,
 }
 
 /// The features every heartbeat announces, in this order.
-pub const ANNOUNCED: [Feature; 5] = [
+pub const ANNOUNCED: [Feature; 6] = [
     Feature::DeferredV1,
     Feature::HaltV1,
     Feature::HeartbeatV2,
     Feature::ForcedV1,
     Feature::OrderV1,
+    Feature::GrpcV1,
 ];
 
 impl Feature {
@@ -56,6 +60,7 @@ impl Feature {
             Feature::HeartbeatV2 => "heartbeat-v2",
             Feature::ForcedV1 => "forced-v1",
             Feature::OrderV1 => hostkeeper_wire::wire::ORDER_FEATURE,
+            Feature::GrpcV1 => "grpc-v1",
         }
     }
 

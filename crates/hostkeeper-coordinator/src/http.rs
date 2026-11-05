@@ -35,20 +35,29 @@
 //! services, at a coordinator with no legacy service, is a bad request. An agent that announces
 //! `order-v1` is answered with the order terms of [`crate::order_terms`] on an update, and its
 //! heartbeat's top level is never read as the legacy service.
+//!
+//! These are the frozen JSON routes. [`crate::grpc`] routes a request first: a gRPC call, and
+//! the JSON gateway of the operator API, are answered there, and every other request comes here.
+//! The heartbeat's caller check ([`beat_caller`]) and the reading and answering of its bytes
+//! ([`beat`]) are shared with the gRPC `Heartbeat`, so the two transports have one rule.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use hostkeeper_wire::wire::{HEARTBEAT_PATH, HeartbeatRead, MAX_HEARTBEAT_BYTES, read_heartbeat};
+use hostkeeper_wire::wire::{
+    Answer as WireAnswer, HEARTBEAT_PATH, HeartbeatRead, MAX_HEARTBEAT_BYTES, read_heartbeat,
+};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Body;
 use hyper::header::{AUTHORIZATION, CONTENT_TYPE};
-use hyper::{Method, Request, Response, StatusCode};
+use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 use serde::Serialize;
 
 use crate::enrollment::Admission;
+use crate::identity::Identity;
 use crate::ops::OperateError;
+use crate::orders::Order;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
 
 /// The path CI posts the desired state to.
@@ -98,17 +107,22 @@ fn json<T: Serialize>(status: StatusCode, value: &T) -> Answer {
         .unwrap_or_default()
 }
 
-fn error(status: StatusCode, code: &'static str) -> Answer {
+/// An answer of `status` whose body is `{"error":"<code>"}`.
+pub(crate) fn error(status: StatusCode, code: &'static str) -> Answer {
     json(status, &serde_json::json!({ "error": code }))
 }
 
-fn bearer<B>(request: &Request<B>) -> Option<&str> {
-    request
-        .headers()
+/// The bearer token in the `Authorization` header of `headers`, if there is one.
+pub(crate) fn bearer_in(headers: &HeaderMap) -> Option<&str> {
+    headers
         .get(AUTHORIZATION)?
         .to_str()
         .ok()?
         .strip_prefix("Bearer ")
+}
+
+fn bearer<B>(request: &Request<B>) -> Option<&str> {
+    bearer_in(request.headers())
 }
 
 /// The body of `request`, if it is at most `limit` bytes and all of it arrives within
@@ -205,6 +219,115 @@ fn service_of<'a>(query: Option<&'a str>, legacy: Option<&'a str>) -> Option<&'a
     }
 }
 
+/// The host a heartbeat comes from, as its client certificate and its deny row say.
+#[derive(Clone, Debug)]
+pub(crate) struct BeatCaller {
+    /// The host the certificate names, with its role.
+    pub identity: Identity,
+    /// Whether the host retires: its heartbeat is heard for its final report only.
+    pub retiring: bool,
+}
+
+/// Why a heartbeat was not answered. Both transports say it in their own words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BeatRefused {
+    /// No client certificate, or one that names no updater.
+    Forbidden,
+    /// The host is denied, or retiring and heard for its final report only.
+    Denied,
+    /// The heartbeat is not one the coordinator reads, or lists no service it can attribute.
+    BadRequest,
+}
+
+/// The caller of a heartbeat from `peer`: the host its certificate names, and whether it
+/// retires.
+///
+/// # Errors
+/// [`BeatRefused::Forbidden`] for no certificate or one that is no updater's;
+/// [`BeatRefused::Denied`] for a host whose deny row is final.
+pub(crate) fn beat_caller(
+    coordinator: &Coordinator,
+    peer: &Peer,
+) -> Result<BeatCaller, BeatRefused> {
+    let identity = match peer.as_deref().map(|der| coordinator.identify(der)) {
+        Some(Ok(identity)) => identity,
+        Some(Err(why)) => {
+            tracing::warn!(%why, "refused a heartbeat: the certificate is no updater's");
+            return Err(BeatRefused::Forbidden);
+        }
+        None => {
+            tracing::warn!("refused a heartbeat: no client certificate");
+            return Err(BeatRefused::Forbidden);
+        }
+    };
+    let retiring = match coordinator.admission(&identity) {
+        Admission::Admitted => false,
+        Admission::Retiring => true,
+        Admission::Denied => {
+            tracing::warn!(node_id = %identity.host_id, "refused a heartbeat: the host is denied");
+            return Err(BeatRefused::Denied);
+        }
+    };
+    Ok(BeatCaller { identity, retiring })
+}
+
+/// Reads the heartbeat in `bytes` (the JSON of `hostkeeper_wire::wire`) from `caller` and
+/// answers it: the one path both the JSON route and the gRPC `Heartbeat` take once the body is
+/// read. The optional facts and the `services` list that were bad are counted and logged and
+/// the rest is answered. A retiring host is heard for its final report and then refused. With
+/// `typed`, the operator's order for the host, or the update as a typed order, comes beside the
+/// answer ([`Coordinator::heartbeat_with_orders`]).
+///
+/// # Errors
+/// [`BeatRefused::BadRequest`] for bytes that are no heartbeat, or one that lists no service
+/// and has no legacy service to stand for; [`BeatRefused::Denied`] for a retiring host.
+pub(crate) fn beat(
+    coordinator: &Coordinator,
+    caller: BeatCaller,
+    bytes: &[u8],
+    typed: bool,
+) -> Result<(WireAnswer, Option<Order>), BeatRefused> {
+    let BeatCaller { identity, retiring } = caller;
+    let HeartbeatRead {
+        beat,
+        services_dropped,
+        extras_dropped,
+        extras_dropped_facts,
+    } = read_heartbeat(bytes, coordinator.legacy_service()).map_err(|_| BeatRefused::BadRequest)?;
+    if let Some(why) = services_dropped {
+        coordinator.note_services_dropped(&identity, &why);
+    }
+    if let Some(why) = extras_dropped {
+        coordinator.note_extras_dropped(&identity, &why, &extras_dropped_facts);
+    }
+    if retiring {
+        // Heard for its final report only: a slot it held is freed once the report is
+        // final, and the host is refused all the same.
+        coordinator.final_report(identity, beat);
+        return Err(BeatRefused::Denied);
+    }
+    let answered = if typed {
+        coordinator.heartbeat_with_orders(identity, beat)
+    } else {
+        coordinator
+            .heartbeat(identity, beat)
+            .map(|answer| (answer, None))
+    };
+    answered.map_err(|why| {
+        tracing::warn!("refused a heartbeat: {why}");
+        BeatRefused::BadRequest
+    })
+}
+
+/// The JSON route's answer to a refused heartbeat.
+fn beat_refusal(why: BeatRefused) -> Answer {
+    match why {
+        BeatRefused::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
+        BeatRefused::Denied => error(StatusCode::FORBIDDEN, DENIED),
+        BeatRefused::BadRequest => error(StatusCode::BAD_REQUEST, "bad_request"),
+    }
+}
+
 async fn heartbeat<B>(
     coordinator: &Coordinator,
     peer: &Peer,
@@ -215,56 +338,16 @@ where
     B: Body,
     B::Error: Into<BoxError>,
 {
-    let identity = match peer.as_deref().map(|der| coordinator.identify(der)) {
-        Some(Ok(identity)) => identity,
-        Some(Err(why)) => {
-            tracing::warn!(%why, "refused a heartbeat: the certificate is no updater's");
-            return error(StatusCode::FORBIDDEN, "forbidden");
-        }
-        None => {
-            tracing::warn!("refused a heartbeat: no client certificate");
-            return error(StatusCode::FORBIDDEN, "forbidden");
-        }
+    let caller = match beat_caller(coordinator, peer) {
+        Ok(caller) => caller,
+        Err(why) => return beat_refusal(why),
     };
-    let retiring = match coordinator.admission(&identity) {
-        Admission::Admitted => false,
-        Admission::Retiring => true,
-        Admission::Denied => {
-            tracing::warn!(node_id = %identity.host_id, "refused a heartbeat: the host is denied");
-            return error(StatusCode::FORBIDDEN, DENIED);
-        }
+    let Some(bytes) = read(request, MAX_HEARTBEAT_BYTES, patience).await else {
+        return beat_refusal(BeatRefused::BadRequest);
     };
-    let beat = read(request, MAX_HEARTBEAT_BYTES, patience)
-        .await
-        .and_then(|bytes| read_heartbeat(&bytes, coordinator.legacy_service()).ok());
-    match beat {
-        Some(HeartbeatRead {
-            beat,
-            services_dropped,
-            extras_dropped,
-            extras_dropped_facts,
-        }) => {
-            if let Some(why) = services_dropped {
-                coordinator.note_services_dropped(&identity, &why);
-            }
-            if let Some(why) = extras_dropped {
-                coordinator.note_extras_dropped(&identity, &why, &extras_dropped_facts);
-            }
-            if retiring {
-                // Heard for its final report only: a slot it held is freed once the report is
-                // final, and the host is refused all the same.
-                coordinator.final_report(identity, beat);
-                return error(StatusCode::FORBIDDEN, DENIED);
-            }
-            match coordinator.heartbeat(identity, beat) {
-                Ok(answer) => json(StatusCode::OK, &answer),
-                Err(why) => {
-                    tracing::warn!("refused a heartbeat: {why}");
-                    error(StatusCode::BAD_REQUEST, "bad_request")
-                }
-            }
-        }
-        None => error(StatusCode::BAD_REQUEST, "bad_request"),
+    match beat(coordinator, caller, &bytes, false) {
+        Ok((answer, _)) => json(StatusCode::OK, &answer),
+        Err(why) => beat_refusal(why),
     }
 }
 

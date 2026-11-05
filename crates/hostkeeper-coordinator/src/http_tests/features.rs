@@ -5,6 +5,7 @@ use super::*;
 
 use hostkeeper_wire::wire::ORDER_FEATURE;
 
+use crate::grpc::GRPC_FEATURE;
 use crate::service::FEATURES;
 
 const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
@@ -218,6 +219,8 @@ async fn advertised_features_equal_the_handled_set() {
     for name in FEATURES {
         if *name == ORDER_FEATURE {
             order_v1_is_acted_on().await;
+        } else if *name == GRPC_FEATURE {
+            grpc_v1_is_acted_on().await;
         } else if let Some(extra) = uses.get(name) {
             let without = beat_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
@@ -232,6 +235,7 @@ async fn advertised_features_equal_the_handled_set() {
     let mut handled: Vec<&str> = uses.keys().copied().collect();
     handled.push("heartbeat-v2");
     handled.push(ORDER_FEATURE);
+    handled.push(GRPC_FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);
@@ -249,5 +253,26 @@ async fn order_v1_is_acted_on() {
     assert_eq!(
         beat_text(&rig, "d2", "daemon", &beat("2.0", OTHER)).await,
         r#"{"reply":"update","service":"other","version":"3.0"}"#
+    );
+}
+
+/// Catches: `grpc-v1` advertised to an agent that did not announce it, or not advertised to
+/// one that did: it is in `features` of exactly the replies to a heartbeat that announces it,
+/// and the gRPC route is the code that handles it.
+async fn grpc_v1_is_acted_on() {
+    let rig = rig("http-features-grpc", FEATURES).await;
+    let announcing = beat("2.0", r#","agent_features":["grpc-v1"]"#);
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &announcing).await,
+        r#"{"reply":"nothing","features":["grpc-v1"]}"#
+    );
+    let other = beat("2.0", r#","agent_features":["halt-v1"]"#);
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &other).await,
+        r#"{"reply":"nothing","features":["halt-v1"]}"#
+    );
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &beat("2.0", "")).await,
+        r#"{"reply":"nothing"}"#
     );
 }
