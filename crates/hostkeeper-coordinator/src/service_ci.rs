@@ -2,9 +2,9 @@
 //! the token first and then call these with what the check returned. A CI token is checked
 //! by [`Coordinator::ci`], which spends it, so a token is checked once; an operator's token
 //! is resolved to its name by [`Coordinator::caller`] and spends nothing. CI and an operator
-//! both set the desired state and read the convergence; they differ in what may be set (CI:
-//! the services its allow-list entry names; an operator: any service the coordinator manages)
-//! and in who the audit names.
+//! both set the desired state, and only CI reads the convergence here. They differ in what may
+//! be set (CI: the services its allow-list entry names; an operator: any service the coordinator
+//! manages) and in who the audit names.
 
 use hostkeeper_oidc::Verified;
 

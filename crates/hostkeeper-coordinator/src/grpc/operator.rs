@@ -307,7 +307,7 @@ impl ReleasesApi for ReleasesService {
     ) -> Result<Response<proto::ConvergeResponse>, Status> {
         if !matches!(
             request.extensions().get::<Admitted>(),
-            Some(Admitted::Ci(_) | Admitted::Operator { .. })
+            Some(Admitted::Ci(_))
         ) {
             return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
         }

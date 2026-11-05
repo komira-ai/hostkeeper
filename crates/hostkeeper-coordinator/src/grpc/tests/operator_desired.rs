@@ -496,12 +496,12 @@ async fn a_failed_audit_write_is_store_failed_and_a_resend_lands() {
     assert_eq!(audited(&world).len(), 1);
 }
 
-/// Proves: `Converge` with the operator's token is answered as with CI's: the same convergence
-/// of the desired version; and the operator's token needs no issuer: with CI's keys
-/// unreachable, the operator's `SetDesired` and `Converge` are answered, and CI's are
-/// `keys_unavailable`.
+/// Proves: `Converge` stays CI's: the operator's token is `unauthorized` there while CI's is
+/// answered the convergence of the version the operator set; and the operator's `SetDesired`
+/// needs no issuer: with CI's keys unreachable it is answered, while CI's `SetDesired` and
+/// `Converge` are `keys_unavailable`, and the operator's `Converge` is still `unauthorized`.
 #[tokio::test]
-async fn converge_answers_the_operator_as_it_answers_ci_and_needs_no_issuer() {
+async fn converge_stays_ci_only_and_an_operator_set_needs_no_issuer() {
     let world = world("od-converge");
     operator_sets(&world, "kbf", "2.0").await.expect("a set");
     let converge = |bearer: String| {
@@ -510,12 +510,15 @@ async fn converge_answers_the_operator_as_it_answers_ci_and_needs_no_issuer() {
         async move { call(&coordinator, Surface::Control, &None, request).await }
     };
     let (code, message, by_operator) = converge(OPERATOR.to_owned()).await;
-    assert_eq!((code, message.as_str()), (Code::Ok, ""));
-    let (_, _, by_ci) = converge(ci_token()).await;
-    let by_operator: proto::ConvergeResponse = decode(&by_operator.expect("a message"));
-    assert_eq!(by_operator, decode(&by_ci.expect("a message")));
     assert_eq!(
-        by_operator.convergence.expect("a convergence").desired,
+        (code, message.as_str(), by_operator),
+        (Code::Unauthenticated, "unauthorized", None)
+    );
+    let (code, message, by_ci) = converge(ci_token()).await;
+    assert_eq!((code, message.as_str()), (Code::Ok, ""));
+    let by_ci: proto::ConvergeResponse = decode(&by_ci.expect("a message"));
+    assert_eq!(
+        by_ci.convergence.expect("a convergence").desired,
         Some("2.0".to_owned())
     );
 
@@ -532,7 +535,19 @@ async fn converge_answers_the_operator_as_it_answers_ci_and_needs_no_issuer() {
         (code, message.as_str()),
         (Code::Unavailable, "keys_unavailable")
     );
-    let request = grpc_request(CONVERGE, proto::ConvergeRequest::default(), Some(OPERATOR));
-    let (code, _, _) = call(&served.coordinator, Surface::Control, &None, request).await;
-    assert_eq!(code, Code::Ok);
+    let converge_with = |bearer: String| {
+        let request = grpc_request(CONVERGE, proto::ConvergeRequest::default(), Some(&bearer));
+        let coordinator = served.coordinator.clone();
+        async move { call(&coordinator, Surface::Control, &None, request).await }
+    };
+    let (code, message, _) = converge_with(ci_token()).await;
+    assert_eq!(
+        (code, message.as_str()),
+        (Code::Unavailable, "keys_unavailable")
+    );
+    let (code, message, _) = converge_with(OPERATOR.to_owned()).await;
+    assert_eq!(
+        (code, message.as_str()),
+        (Code::Unauthenticated, "unauthorized")
+    );
 }

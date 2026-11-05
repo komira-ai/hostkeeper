@@ -255,9 +255,10 @@ async fn set_desired_of_a_service_off_the_allow_list_is_forbidden() {
 }
 
 /// Proves: for every method of the operator API the credentials that are admitted are exactly
-/// these: the operator token for every method, CI's token for `SetDesired` and `Converge`
-/// only, and no credential for any. The others are refused with `unauthorized` (nothing) or
-/// `forbidden` (a CI token at a method that takes the operator's only).
+/// these: the operator token for every method but `Converge`, CI's token for `SetDesired` and
+/// `Converge` only, and no credential for any. The others are refused with `unauthorized`
+/// (nothing, or the operator token at `Converge`) or `forbidden` (a CI token at a method that
+/// takes the operator's only).
 #[tokio::test]
 async fn every_operator_method_admits_exactly_its_credential() {
     let served = served("grpc-cred-table");
@@ -280,9 +281,14 @@ async fn every_operator_method_admits_exactly_its_credential() {
         } else {
             refused(Code::PermissionDenied, "forbidden")
         };
+        let with_operator = if path == CONVERGE {
+            refused(Code::Unauthenticated, "unauthorized")
+        } else {
+            Outcome::Admitted
+        };
         assert_eq!(
             outcome(&served, path, Some(OPERATOR)).await,
-            Outcome::Admitted,
+            with_operator,
             "{path} with the operator token"
         );
         assert_eq!(

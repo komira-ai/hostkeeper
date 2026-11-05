@@ -7,12 +7,14 @@
 // and `/v1/operator`, which stay, frozen, as adapters onto the same handlers.
 //
 // Authentication: TLS authenticates the server only. The caller sends a bearer token in the
-// `authorization` metadata (`Bearer <token>`). `Releases.SetDesired` and `Releases.Converge` take
-// CI's OIDC token, checked against the coordinator's allow-list as `/v1/desired` checks it
-// (issuer, audience, repository, workflow, ref or environment, event, runner; each token is good
-// once), or the operator token. `SetDesired` with CI's token sets only the services the admitting
-// allow-list entry names; `Converge` answers any admitted token for any service. Every other RPC
-// takes the operator token only. The token is checked before the request is read.
+// `authorization` metadata (`Bearer <token>`). `Releases.SetDesired` takes CI's OIDC token,
+// checked against the coordinator's allow-list as `/v1/desired` checks it (issuer, audience,
+// repository, workflow, ref or environment, event, runner; each token is good once), or the
+// operator token. `SetDesired` with CI's token sets only the services the admitting allow-list
+// entry names; with the operator token it sets any service the coordinator manages, audited as
+// `set_desired` under the token's name. `Releases.Converge` takes CI's OIDC token only, and
+// answers it for any service. Every other RPC takes the operator token only. The token is checked
+// before the request is read.
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
 // (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`),
@@ -78,9 +80,12 @@ service Hosts {
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
 service Releases {
-  // Set a service's desired state. The coordinator moves its hosts there a role at a time.
+  // Set a service's desired state. The coordinator moves its hosts there a role at a time. Takes
+  // CI's OIDC token (the services its allow-list entry names) or the operator token (any service
+  // the coordinator manages, audited as `set_desired` under the token's name).
   rpc SetDesired(SetDesiredRequest) returns (SetDesiredResponse);
-  // How far a service's hosts are from its desired version. Changes nothing.
+  // How far a service's hosts are from its desired version. Changes nothing. Takes CI's OIDC
+  // token only.
   rpc Converge(ConvergeRequest) returns (ConvergeResponse);
   // Switch a service to a version on the targeted hosts at once, with no hook (see
   // `ForceRequest`).

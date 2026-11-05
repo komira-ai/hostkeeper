@@ -513,10 +513,10 @@ async fn set_desired_answers_the_state_as_stored_and_the_roles_it_dropped() {
     assert_eq!(reply.dropped_roles, ["search"]);
 }
 
-/// Proves that `Releases.Converge` is for CI and the operator only: a call with no admission,
-/// and one admitted as a peer, are `unauthorized`.
+/// Proves that `Releases.Converge` is CI's: a call with no admission, one admitted as a peer,
+/// and one admitted as the operator are `unauthorized`.
 #[tokio::test]
-async fn converge_refuses_a_call_that_was_not_admitted_as_ci_or_the_operator() {
+async fn converge_refuses_a_call_that_was_not_admitted_as_ci() {
     let world = world_of("adapters-converge-callers", None);
     let request = || proto::ConvergeRequest {
         service: "kbf".to_owned(),
@@ -530,6 +530,16 @@ async fn converge_refuses_a_call_that_was_not_admitted_as_ci_or_the_operator() {
     peer.extensions_mut().insert(Admitted::Peer(None));
     assert_refused(
         releases(&world).converge(peer).await,
+        Code::Unauthenticated,
+        "unauthorized",
+    );
+    let mut operator = Request::new(request());
+    operator.extensions_mut().insert(Admitted::Operator {
+        caller: Caller::Operator("operator".parse().expect("a token name")),
+        bearer: String::new(),
+    });
+    assert_refused(
+        releases(&world).converge(operator).await,
         Code::Unauthenticated,
         "unauthorized",
     );
