@@ -21,7 +21,7 @@ use hostkeeper_package::{
     ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_INVALID, NO_PACKAGE_FOR_PLATFORM, NO_SPACE,
     NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure, REASONS,
 };
-use hostkeeper_unpack::{Rule, UnpackError};
+use hostkeeper_unpack::{Rule, UnpackError, VerifyIoError};
 use support_archive::{Answer, Rig, SERVICE, VERSION, sha256_hex, valid_archive};
 
 const RELEASE: (Outcome, Class) = (Outcome::Failure, Class::Release);
@@ -177,6 +177,17 @@ fn every_package_failure_maps_to_one_closed_reason() {
             },
             Refusal::VersionTooLong,
             RELEASE,
+        ),
+        (
+            UnpackError::VerifyUnavailable {
+                entry: "bin/x".to_owned(),
+                source: VerifyIoError::Unfinished {
+                    tool: "codesign",
+                    why: "killed".to_owned(),
+                },
+            },
+            Refusal::VerifyUnavailable,
+            DEFERRED,
         ),
         (
             UnpackError::Io {

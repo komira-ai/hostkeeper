@@ -100,11 +100,14 @@ pub enum Refusal {
     /// The archive, the staging directory or a seal cannot be read or written right now, for a
     /// reason other than a full disk.
     PackageIoError,
+    /// On macOS, the check of the staged tree (quarantine attribute, code signature) cannot be
+    /// made now: the package is not judged, and the order is tried again later.
+    VerifyUnavailable,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 38] = [
+    pub const ALL: [Refusal; 39] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -143,6 +146,7 @@ impl Refusal {
         Refusal::ReservedVersion,
         Refusal::VersionTooLong,
         Refusal::PackageIoError,
+        Refusal::VerifyUnavailable,
     ];
 
     /// The token.
@@ -186,6 +190,7 @@ impl Refusal {
             Refusal::ReservedVersion => "reserved_version",
             Refusal::VersionTooLong => "version_too_long",
             Refusal::PackageIoError => "io_error",
+            Refusal::VerifyUnavailable => "verify_unavailable",
         }
     }
 }

@@ -27,9 +27,10 @@ use hostkeeper_package::{
 };
 use hostkeeper_steps::{Clock, Staged};
 use hostkeeper_unpack::{
-    HostFs, Limits, Owner, PackageFs, REASON_ARTIFACT_CHANGED, REASON_BAD_ARCHIVE,
-    REASON_DAEMON_TOO_OLD, REASON_DIGEST_MISMATCH, REASON_IO_ERROR, REASON_MANIFEST_MISMATCH,
-    REASON_NO_SPACE, REASON_RESERVED_VERSION, REASON_VERSION_TOO_LONG, UnpackError, UnpackOrder,
+    HostFs, Limits, Owner, PackageFs, Platform as UnpackPlatform, REASON_ARTIFACT_CHANGED,
+    REASON_BAD_ARCHIVE, REASON_DAEMON_TOO_OLD, REASON_DIGEST_MISMATCH, REASON_IO_ERROR,
+    REASON_MANIFEST_MISMATCH, REASON_NO_SPACE, REASON_RESERVED_VERSION, REASON_VERIFY_UNAVAILABLE,
+    REASON_VERSION_TOO_LONG, UnpackError, UnpackOrder,
 };
 
 use crate::packages::{PackageError, PackageRefusal, Packages, VersionDir};
@@ -68,6 +69,7 @@ const UNPACK_TOKENS: &[(&str, Refusal)] = &[
     (REASON_ARTIFACT_CHANGED, Refusal::ArtifactChanged),
     (REASON_RESERVED_VERSION, Refusal::ReservedVersion),
     (REASON_VERSION_TOO_LONG, Refusal::VersionTooLong),
+    (REASON_VERIFY_UNAVAILABLE, Refusal::VerifyUnavailable),
     (REASON_IO_ERROR, Refusal::PackageIoError),
 ];
 
@@ -213,6 +215,8 @@ impl Packages for RealPackages {
             &unpack_order,
             &Limits::from(&self.bounds),
             &*self.fs,
+            // This store runs on Linux; the macOS checks come with the macOS store.
+            UnpackPlatform::Linux,
         )
         .map_err(|error| refused(refusal_of(Failure::Unpack(&error))))?;
         let staged =
