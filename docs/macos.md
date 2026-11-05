@@ -132,6 +132,35 @@ is refused.
 A package's `units/` may hold `<label>.plist` files. A label is the service name or starts with
 `<service>.`. The manifest's `[units] run` then names labels instead of systemd unit names.
 
+### Release and installer pkg
+
+Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
+`hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, hostkeeper's own package `.tar.zst` (its
+`manifest.toml` and `bin/hostkeeper`, and no `units/`), and the installer pkg
+`hostkeeper-<v>-macos-arm64.pkg`. The artifacts workflow builds them on a GitHub-hosted Apple
+silicon runner, never on a pull request; it runs by hand until its push-to-`main` trigger lands with
+the rest of the release automation.
+
+The pkg is the first install of a Mac. It installs exactly two files, and the directories that
+hold them (each 0755, as macOS has them already), all owned by root and wheel:
+
+- `/usr/local/bin/hostkeeper`, mode 0755, the released binary;
+- `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, mode 0644, the daemon's job as
+  `hostkeeper_launchd::daemon_plist` writes it for `DaemonJob::standard` (label
+  `dev.hostkeeper.hostkeeper`, running `/usr/local/bin/hostkeeper daemon`).
+
+It has no scripts: it starts nothing and writes no config. The operator's bootstrap places
+`hostkeeper.toml` and loads the job. The pkg carries no installer signature, since that needs an
+Apple Developer ID Installer identity. It is attested like every other asset, and the binary in it
+keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
+`cargo xtask release macos-pkg` builds it with `pkgbuild`; `cargo xtask release check-macos-pkg`
+reads back the pkg that `pkgutil --expand` expanded, and refuses any other file, mode, owner, bytes
+or script.
+
+hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
+or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
+pkg's plist.
+
 ## Specified, not built yet
 
 - The daemon run under launchd with the adapters above wired in, the launcher that runs a hook

@@ -3,14 +3,17 @@
 //!
 //! The archive is a ustar tar, compressed by [`compress`], holding exactly these entries in this
 //! order: the directory `bin/`, the file `bin/hostkeeper` (mode 0555), the file `manifest.toml`
-//! (0444), the directory `units/` and the file `units/hostkeeper.service` (0444). Directories are
-//! 0555. Every header has uid and gid 0, empty user and group names and, as its time, the
+//! (0444), and on Linux the directory `units/` and the file `units/hostkeeper.service` (0444).
+//! Directories are 0555. The macos-arm64 package has no `units/` and its manifest no `[units]`:
+//! on a Mac the daemon's launchd job is the plist the installer pkg places (`macos_pkg`), and
+//! the manifest's plist labels are `<service>` or `<service>.<more>`, which the daemon's label,
+//! `dev.hostkeeper.hostkeeper`, is not. Every header has uid and gid 0, empty user and group names and, as its time, the
 //! committer time of the commit built, so the bytes depend on the inputs alone. The archive is
 //! written to the name [`package_name`] gives, with beside it a file of the same name plus
 //! [`DIGEST_SUFFIX`] holding `<sha256>  <package name>` and a line break.
 //!
-//! Before the archive is built, the unit is checked (design section 4.7: a unit names package
-//! files only through `current`) and the entry list is checked against the rules of section 5.5
+//! Before the archive is built, the Linux unit is checked (design section 4.7: a unit names
+//! package files only through `current`) and the entry list is checked against the rules of section 5.5
 //! that apply to a list this module builds ([`check_entries`]).
 
 use std::collections::BTreeSet;
@@ -22,9 +25,12 @@ use super::Error;
 use super::contract::{Commit, DIGEST_SUFFIX, Platform, Version, package_name};
 use super::ports::GitHistory;
 
-/// Why there is no macos-arm64 package yet: its units are launchd plists, which the macOS
-/// daemon (design build item B18) defines.
-const MACOS_LATER: &str = "the macos-arm64 package waits for the macOS daemon: its units are launchd plists, not the systemd unit this verb packages";
+/// Why a Linux package needs `--unit`.
+const LINUX_NEEDS_UNIT: &str =
+    "a Linux package carries the systemd unit units/hostkeeper.service: pass --unit";
+
+/// Why a macOS package takes no `--unit`.
+const MACOS_TAKES_NO_UNIT: &str = "the macos-arm64 package carries no unit: the daemon's launchd job is the plist of the installer pkg (release macos-pkg)";
 
 /// What `release package` builds a package from.
 pub(crate) struct Request {
@@ -33,8 +39,8 @@ pub(crate) struct Request {
     pub(crate) commit: Commit,
     /// The hostkeeper binary of the platform.
     pub(crate) binary: PathBuf,
-    /// The systemd unit.
-    pub(crate) unit: PathBuf,
+    /// The systemd unit, for a Linux platform; none for macos-arm64.
+    pub(crate) unit: Option<PathBuf>,
     /// The directory the package and its digest file are written to.
     pub(crate) out: PathBuf,
 }
@@ -104,10 +110,16 @@ impl Entry {
     }
 }
 
-/// The manifest of hostkeeper's package for `version`: it needs a daemon of its own version.
-fn manifest(version: &Version) -> String {
+/// The manifest of hostkeeper's package for `version`: it needs a daemon of its own version, and
+/// with `units` runs [`UNIT_FILE`].
+fn manifest(version: &Version, units: bool) -> String {
+    let units = if units {
+        format!("\n[units]\nrun = [\"{UNIT_FILE}\"]\n")
+    } else {
+        String::new()
+    };
     format!(
-        "schema = 1\nname = \"hostkeeper\"\nversion = \"{version}\"\nmin_hostkeeper = \"{version}\"\n\n{HOOK}\n[units]\nrun = [\"{UNIT_FILE}\"]\n"
+        "schema = 1\nname = \"hostkeeper\"\nversion = \"{version}\"\nmin_hostkeeper = \"{version}\"\n\n{HOOK}{units}"
     )
 }
 
@@ -119,13 +131,19 @@ pub(crate) fn compress(tar: &[u8]) -> Vec<u8> {
 
 /// Builds the package of `request` and its digest file; the lines to print.
 pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<String>, Error> {
-    if request.platform == Platform::MacosArm64 {
-        return Err(Error::Failed(MACOS_LATER.to_owned()));
-    }
+    let unit = match (request.platform, &request.unit) {
+        (Platform::MacosArm64, Some(_)) => {
+            return Err(Error::Failed(MACOS_TAKES_NO_UNIT.to_owned()));
+        }
+        (Platform::MacosArm64, None) => None,
+        (_, None) => return Err(Error::Failed(LINUX_NEEDS_UNIT.to_owned())),
+        (_, Some(path)) => Some((path, read(path)?)),
+    };
     let binary = read(&request.binary)?;
-    let unit = read(&request.unit)?;
-    check_unit(&request.unit, &unit)?;
-    let entries = entries(&request.version, binary, unit);
+    if let Some((path, text)) = &unit {
+        check_unit(path, text)?;
+    }
+    let entries = entries(&request.version, binary, unit.map(|(_, text)| text));
     check_entries(&entries)?;
     let mtime = git.commit_time(&request.commit)?;
     let bytes = compress(&archive(&entries, mtime)?);
@@ -180,15 +198,18 @@ fn check_unit(path: &Path, unit: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// The entries of the package, sorted by name.
-fn entries(version: &Version, binary: Vec<u8>, unit: Vec<u8>) -> Vec<Entry> {
+/// The entries of the package, sorted by name: `units/` only with a unit.
+fn entries(version: &Version, binary: Vec<u8>, unit: Option<Vec<u8>>) -> Vec<Entry> {
+    let manifest = manifest(version, unit.is_some()).into_bytes();
     let mut entries = vec![
         Entry::dir("bin/"),
         Entry::file("bin/hostkeeper", 0o555, binary),
-        Entry::file("manifest.toml", 0o444, manifest(version).into_bytes()),
-        Entry::dir("units/"),
-        Entry::file(&format!("units/{UNIT_FILE}"), 0o444, unit),
+        Entry::file("manifest.toml", 0o444, manifest),
     ];
+    if let Some(unit) = unit {
+        entries.push(Entry::dir("units/"));
+        entries.push(Entry::file(&format!("units/{UNIT_FILE}"), 0o444, unit));
+    }
     entries.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
     entries
 }
