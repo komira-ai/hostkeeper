@@ -33,9 +33,6 @@ name = "hostkeeper-fixture-hook"
 path = "tests/bin/fixture_hook.rs"
 
 [features]
-# On for one CI run only, so that clippy compiles the privileged tests; the next commit turns
-# it off again.
-default = ["privileged"]
 # The tests that run as root against the host's systemd. Only privileged.yml turns it on.
 privileged = []
 
