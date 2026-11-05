@@ -14,7 +14,7 @@ use hostkeeper_hook::Invocation;
 pub enum Bound {
     /// At most this many seconds.
     Secs(NonZeroU64),
-    /// No bound: only `prepare`, declared with `prepare = 0`
+    /// No bound: only `prepare`, whose manifest timeout is 0
     /// (docs/design/hostkeeper-design.md, sections 4.7 and 8.5). Nothing but the hook's own end
     /// ends it: the dead-man is not armed and the unit has `RuntimeMaxSec=infinity`.
     Unbounded,
@@ -35,8 +35,9 @@ pub struct StepCall<'a> {
     /// The deterministic name of the transient unit: `updater-<service>-<step>-<generation>`.
     /// A launcher that runs the step as a unit uses it; it is stopped by name on resume.
     pub unit: &'a str,
-    /// The bound of this step: the declared bound of the step, or the time left of the verify
-    /// window when that is shorter; [`Bound::Unbounded`] only for a `prepare` declared with 0.
+    /// The bound of this step: the manifest's bound of the step, or the time left of the verify
+    /// window when that is shorter; [`Bound::Unbounded`] only for a `prepare` whose manifest timeout is
+    /// 0.
     pub bound: Bound,
 }
 
@@ -140,7 +141,7 @@ pub enum LaunchError {
 ///   `--collect`, so that systemd unloads it once it has ended, failed or not, and makes no
 ///   `systemctl reset-failed` call.
 /// - **The unit is bounded by itself.** The runner arms the dead-man with the step's bound, but
-///   the dead-man is a thread of the root part: if the root part is killed (`SIGKILL`, the OOM
+///   the dead-man is a thread of the daemon: if the daemon is killed (`SIGKILL`, the OOM
 ///   killer, a crash), the unit it started runs without a bound until the updater is back and
 ///   resumes. The launcher sets `RuntimeMaxSec=` from [`StepCall::bound`] on the unit (the
 ///   seconds, or `infinity` for [`Bound::Unbounded`]), so that systemd ends the step at its

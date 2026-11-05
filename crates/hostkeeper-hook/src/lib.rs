@@ -1,5 +1,6 @@
 //! The contract between a host updater and the update hook a service ships, and the harness that
-//! proves a hook keeps it. See the README of this crate, and docs/design/host-updates.md for why.
+//! proves a hook keeps it. See the README of this crate, and docs/design/hostkeeper-design.md
+//! (sections 4.7, 5.2, 5.3) for why.
 //!
 //! The hook is **any executable**: a binary or a script. The updater runs
 //! `<executable> <hook_args> <step> [args]`; `update-hook`, the default of `hook_args`, is the
@@ -9,7 +10,7 @@
 //!
 //! The params file also carries the updater's reserved `updater.*` keys (the staged and previous
 //! release, the target and previous version); a hook validates what it reads from it against its
-//! own record directory and declaration.
+//! own record directory and the manifest it shipped with.
 //!
 //! The harness is behind the feature `conformance`.
 //!

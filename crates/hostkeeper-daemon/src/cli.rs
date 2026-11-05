@@ -42,13 +42,16 @@ use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_package::ports::{Attest, Attested, Verifier, VerifyError};
 use hostkeeper_placed::roots::{STATE_DIR, SYSTEMD_UNIT_DIR};
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
-use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher, SystemClock};
+use hostkeeper_steps::{
+    Clock, LaunchError, StepCall, StepExit, StepLauncher, SystemClock, SystemdLauncher,
+};
 use hostkeeper_unpack::Owner;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
+use crate::hook_log::log_hook_output;
 use crate::links::{DaemonLog, Links, NoLink};
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::observer::host_observer;
@@ -434,9 +437,11 @@ impl Verifier for HostVerifier {
 
 /// The ports of this build. The package store is the real one ([`RealPackages`]: HTTPS over the
 /// CA bundle of `files`, `gh` for the attestation, unpacked into `--packages-dir` as root); the
-/// observer looks through `systemctl`, `/proc` and TCP ([`host_observer`]). The host's step
-/// launcher and service manager are not part of this build yet: until they are wired in, an
-/// order that reached them would be refused there, never run. Placed paths are linked under the
+/// observer looks through `systemctl`, `/proc` and TCP ([`host_observer`]). Steps run through the
+/// host's step launcher, one transient systemd unit per step ([`SystemdLauncher::system`]), whose
+/// hook standard error is logged under the step's unit ([`log_hook_output`]). The host's service
+/// manager is not part of this build yet ([`Unwired`]): an order that reached it is refused
+/// there. Placed paths are linked under the
 /// host's own directories, `--packages-dir` being the packages directory; the prune of step 18
 /// of a force deletes nothing yet. The directory `gh` runs in (`<state-dir>/.gh`) is made mode 0700
 /// here. `Err` when that directory cannot be made or the packages directory cannot be opened.
@@ -475,9 +480,7 @@ pub fn host_ports(
         source,
     })?;
     Ok(Ports {
-        // The production step launcher, SystemdLauncher<SystemdRunProcess>, replaces Unwired
-        // here once komira-ai/hostkeeper#9 lands.
-        launcher: Arc::new(Unwired),
+        launcher: Arc::new(SystemdLauncher::system().with_log(Arc::new(log_hook_output))),
         packages: Arc::new(packages),
         clock,
         deadman_poll_secs: Some(DEADMAN_POLL_SECS),
@@ -496,7 +499,9 @@ pub fn host_ports(
     })
 }
 
-/// The step launcher and service manager of a build that has none: each refuses.
+/// The service manager of a build that has none, and a step launcher that starts nothing: each
+/// refuses. The host's ports use it as their service manager ([`host_ports`]); the tests use it as
+/// a launcher that refuses every step.
 #[derive(Debug)]
 pub struct Unwired;
 

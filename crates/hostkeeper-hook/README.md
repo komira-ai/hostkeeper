@@ -1,16 +1,21 @@
 # hostkeeper-hook
 
 The contract between a host updater and the update hook a service ships, and the harness that
-proves a hook keeps it. Why it is shaped this way: [docs/design/host-updates.md](../../docs/design/host-updates.md)
-(sections 3.2 and 9). This page states what the code holds.
+proves a hook keeps it. Why it is shaped this way: [docs/design/hostkeeper-design.md](../../docs/design/hostkeeper-design.md)
+(sections 4.7, 5.2 and 5.3). This page states what the code holds.
 
 **The hook is any executable**: a binary or a script, in any language. The updater runs
-`<executable> <hook_args> <step> [args]`. `hook_args` is declared and defaults to `["update-hook"]`,
-the convention our own services follow (`tierstore update-hook cutover`); it is `[]` for an
-executable that takes the step first. This crate is our convention made code, not a requirement
-on a hook's language. It depends on no other crate of this workspace, so a service outside this
-repository can depend on it; `crates/xtask/tests/layering` keeps it so. The harness is behind the
-feature `conformance`, which a service turns on in its dev-dependencies.
+`<executable> <hook_args> <step> [args]`. The executable and `hook_args` are the `command` of the
+manifest's `[hook]` table (`manifest.toml` in the package): its first element is the executable, a
+path relative to the version directory, and the rest are `hook_args`. Our own services use
+`["update-hook"]` (`tierstore update-hook cutover`); it is `[]` for an executable that takes the
+step first. The harness's `HookCommand::new` takes the same convention as its default. The hook
+runs as root, as a transient unit with `RuntimeMaxSec` (the step's `timeout_secs` from the
+manifest) and nothing else; it is safe to run because it came, byte for byte, from the package a
+trusted signer attested, not because anything confines it. This crate is our convention made
+code, not a requirement on a hook's language. It depends on no other crate of this workspace, so
+a service outside this repository can depend on it; `crates/xtask/tests/layering` keeps it so. The
+harness is behind the feature `conformance`, which a service turns on in its dev-dependencies.
 
 ## The contract
 
@@ -23,8 +28,8 @@ feature `conformance`, which a service turns on in its dev-dependencies.
 | `cleanup` | | remove what only the update needed; run only after `verify` succeeded |
 | `uninstall` | | not a step of an update: run once, from the installed release, when the service is removed from the host; bounded by the manifest's `[hook.timeout_secs] uninstall`, and never run for a manifest without that bound |
 
-Every step may be followed by `--params <file>`: a TOML table of scalars, the declaration's
-`[hook.params]`, opaque to the updater. It also carries the reserved key
+Every step may be followed by `--params <file>`: a TOML table of scalars, the
+manifest's `[params]` table, opaque to the updater. It also carries the reserved key
 `"updater.promotion_ceiling_secs"` (quoted: it is one key with a dot in it), the ceiling the updater
 applies to a pending promotion and the hook must not fail for. The updater writes four more
 reserved keys, all in the namespace `updater.`, which a hook only reads: `updater.staged_release`
@@ -33,15 +38,16 @@ reserved keys, all in the namespace `updater.`, which a hook only reads: `update
 `updater.previous_version` (absent on a first install) and `updater.artifact_digest` (text,
 `sha256:` and 64 lowercase hex digits, the digest of the artifact the updater verified; present on
 every step). The digest is an identity the hook keys its record on; it is not for verifying the
-artifact again. `Params::artifact_digest` refuses any other shape. A declaration's own `[hook.params]` may not
-set any `updater.*` key (`Params::parse_declared` refuses it). **A hook still validates every value
-it reads from this file against its own record directory and its declaration**: a value read from a
-file is untrusted input.
+artifact again. `Params::artifact_digest` refuses any other shape. The manifest's own `[params]`
+may not set any `updater.*` key (`Params::parse_declared` refuses it, and so does the manifest
+loader).
+**A hook still validates every value it reads from this file against its own record directory and
+the manifest it shipped with**: a value read from a file is untrusted input.
 
 `updater.previous_release` and `updater.previous_version` go together: a first install has neither,
 an update has both (`Params::parse` and `Params::validate` refuse one without the other). The
 release paths are absolute (a relative path is refused). A hook MAY refuse an unknown key of its own
-`[hook.params]`, but it MUST ignore an `updater.*` key it does not know, so the updater can add
+`[params]`, but it MUST ignore an `updater.*` key it does not know, so the updater can add
 reserved keys without breaking an older hook.
 
 The updater writes **one params file per update** and passes that same file, with the same
@@ -91,6 +97,9 @@ counted toward `rollback_after_failed`. A line that states `false`, or leaves `r
 
 ## The harness
 
+The conformance suite runs in the service's own CI. At runtime nothing confines a hook: the
+harness is how a hook is shown to keep the contract before it ships.
+
 How a service repository outside this workspace depends on it, and what it does not check: [docs/conformance.md](../../docs/conformance.md).
 
 `hostkeeper_hook::conformance` is a library for a service's own tests (a dev-dependency). It is given the
@@ -113,9 +122,10 @@ the hook as the updater would and checks:
   and as a first install (neither); a params file with an unknown `updater.*` key is accepted;
 - with the record directory locked, every step refuses.
 
-**Allowances.** A hook may declare, with `Conformance::with_allowances` and an `Allowances`, up to
-three behaviours the checks above refuse by default and that a hook may show for safety. Each is
-off unless declared, so a hook that declares none is checked strictly:
+**Allowances.** The hook's author may declare to the harness, with `Conformance::with_allowances`
+and an `Allowances` in the hook's own test, up to three behaviours the checks above refuse by
+default and that a hook may show for safety. Each is off unless declared, so a hook that declares
+none is checked strictly. Nothing on the host reads these declarations:
 
 - `rollback_rerun_may_say_reversible`: a `rollback` run again may say `reversible: true` where the
   first run said `false` (a rerun that finds no record cannot know the first committed; the updater

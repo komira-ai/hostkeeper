@@ -13,16 +13,21 @@
 //!   inode check.
 //! - [`unit_control`]: [`LaunchdUnitControl`], the linking side's
 //!   [`UnitControl`](hostkeeper_placed::unit_control::UnitControl) over `launchctl`.
+//! - [`launcher`]: [`LaunchdLauncher`], the step runner's
+//!   [`StepLauncher`](hostkeeper_steps::StepLauncher): each step of a hook as a transient launchd
+//!   job, under the same contract as `hostkeeper_steps::SystemdLauncher`.
 //! - [`platform`]: [`Platform`], the paths and unit directory that differ between Linux and
 //!   macOS.
 //! - [`fake`]: [`FakeLaunchctl`], the scripted `launchctl` every test drives.
 //!
-//! Nothing here is compiled for macOS only except the real `PidInfo` of [`procid`]; the rest is
-//! built and measured on Linux, against the fakes.
+//! Nothing here is compiled for macOS only except the real `PidInfo` of [`procid`] and the host's
+//! launcher (`LaunchdLauncher::system` and its clock, in [`launcher`]); the rest is built and
+//! measured on Linux, against the fakes.
 
 pub mod fake;
 pub mod label;
 pub mod launchctl;
+pub mod launcher;
 pub mod manager;
 pub mod platform;
 pub mod plist;
@@ -35,6 +40,7 @@ pub use launchctl::{
     JobInfo, JobState, JobStatus, LAUNCHCTL, Launchctl, LaunchctlError, LaunchctlOutput,
     LaunchctlProcess, ParseError, PrintError, parse_print,
 };
+pub use launcher::{LaunchdLauncher, Pace};
 pub use manager::LaunchdServiceManager;
 pub use platform::{Platform, PlatformKind};
 pub use plist::{DaemonJob, PlistError, StepJob, daemon_plist, step_plist};

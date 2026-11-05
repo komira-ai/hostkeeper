@@ -2,11 +2,12 @@
 
 use hostkeeper_launchd::REVERSE_DNS_PREFIX;
 
-const SOURCES: [(&str, &str); 10] = [
+const SOURCES: [(&str, &str); 11] = [
     ("src/lib.rs", include_str!("../src/lib.rs")),
     ("src/fake.rs", include_str!("../src/fake.rs")),
     ("src/label.rs", include_str!("../src/label.rs")),
     ("src/launchctl.rs", include_str!("../src/launchctl.rs")),
+    ("src/launcher.rs", include_str!("../src/launcher.rs")),
     ("src/manager.rs", include_str!("../src/manager.rs")),
     ("src/platform.rs", include_str!("../src/platform.rs")),
     ("src/plist.rs", include_str!("../src/plist.rs")),

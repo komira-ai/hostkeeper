@@ -1355,8 +1355,10 @@ dependencies = [
  "hostkeeper-hook",
  "hostkeeper-observe",
  "hostkeeper-placed",
+ "hostkeeper-steps",
  "hostkeeper-testkit",
  "libproc",
+ "plist",
  "sha2",
  "thiserror",
 ]
@@ -1496,19 +1498,6 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
-]
-
-[[package]]
-name = "hostkeeper-rights"
-version = "0.1.0"
-dependencies = [
- "hostkeeper-config",
- "hostkeeper-hook",
- "hostkeeper-rights",
- "hostkeeper-testkit",
- "serde",
- "thiserror",
- "toml",
 ]
 
 [[package]]
@@ -3854,7 +3843,9 @@ dependencies = [
  "hex",
  "hostkeeper-config",
  "hostkeeper-daemon",
+ "hostkeeper-launchd",
  "hostkeeper-unpack",
+ "plist",
  "ruzstd",
  "saphyr-parser",
  "serde_json",

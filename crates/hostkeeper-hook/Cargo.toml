@@ -21,7 +21,7 @@ rustix = { workspace = true, features = ["process"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# The `--params` file is TOML, like the declaration table it is written from.
+# The `--params` file is TOML, like the manifest's `[params]` table it is written from.
 toml.workspace = true
 
 [features]
