@@ -33,7 +33,7 @@ const LAYERS: [(&str, &[&str]); 10] = [
     (WIRE, &[]),
     (OIDC, &[]),
     (TLS, &[]),
-    (COORDINATOR, &[WIRE, OIDC, TLS, PROTO]),
+    (COORDINATOR, &[WIRE, OIDC, TLS, ENROLLMENT, PROTO]),
     (UNPACK, &[CONFIG, HOOK, STEPS]),
     (ENROLLMENT, &[]),
 ];

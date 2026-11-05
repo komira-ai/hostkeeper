@@ -17,6 +17,7 @@ use crate::acks::release_ack;
 use crate::converge::{Convergence, role_counts};
 use crate::decide::Decision;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
+use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
 use crate::force::end_by_ci;
 use crate::halt;
@@ -30,6 +31,7 @@ use crate::services::{ServiceDef, Services};
 use crate::status::host_status;
 use crate::tokens::{OperatorTokens, TokenName};
 use crate::ui::UiDir;
+use enrollment_calls::Turn;
 
 pub use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
 
@@ -213,6 +215,8 @@ pub struct Coordinator {
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
     features: Vec<String>,
+    /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
+    enrollment: Option<Arc<Enrollment>>,
     ui: Option<UiDir>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
@@ -261,6 +265,7 @@ impl Coordinator {
             services_dropped: AtomicU64::new(0),
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
+            enrollment: None,
             ui: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
@@ -444,7 +449,8 @@ impl Coordinator {
     /// [`HeartbeatRefused`]: the heartbeat lists no services (none, or a list that was bad and
     /// dropped) and no legacy service is set.
     pub fn heartbeat(&self, who: Identity, beat: Heartbeat) -> Result<Answer, HeartbeatRefused> {
-        self.answer(who, beat, false).map(|(answer, _)| answer)
+        self.answer(who, beat, false, None)
+            .map(|(answer, _)| answer)
     }
 
     /// [`Self::heartbeat`] for a transport that carries typed orders (the `Order` of
@@ -459,7 +465,7 @@ impl Coordinator {
         who: Identity,
         beat: Heartbeat,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
-        self.answer(who, beat, true)
+        self.answer(who, beat, true, None)
     }
 
     fn answer(
@@ -467,12 +473,14 @@ impl Coordinator {
         who: Identity,
         beat: Heartbeat,
         orders: bool,
+        machine_id: Option<&str>,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
         if self.legacy.is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
+        let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
-        let (reply, order) = self.reply_to(who, beat, orders);
+        let (reply, order) = self.reply_to(who, beat, orders, turn);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -502,6 +510,7 @@ impl Coordinator {
         who: Identity,
         beat: Heartbeat,
         orders: bool,
+        turn: Turn,
     ) -> (ServiceReply, Option<Order>) {
         let now = (self.clock)();
         let legacy = self.legacy.as_deref();
@@ -568,6 +577,9 @@ impl Coordinator {
             }
         }
         fleet.note_node(who.host_id.clone(), node);
+        if turn == Turn::Hold {
+            return (ServiceReply::Nothing, None);
+        }
         let mut names: Vec<&str> = legacy
             .into_iter()
             .chain(announced.iter().map(|one| one.name.as_str()))
@@ -917,3 +929,7 @@ impl Coordinator {
 pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
     marks.last_good.as_ref() == Some(version) || marks.bad.contains(version)
 }
+
+/// The calls of the heartbeat path that ask enrollment.
+#[path = "service_enrollment.rs"]
+mod enrollment_calls;

@@ -1153,9 +1153,12 @@ dependencies = [
 name = "hostkeeper-coordinator"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "bytes",
  "clap",
  "futures",
+ "getrandom 0.4.3",
+ "hostkeeper-enrollment",
  "hostkeeper-oidc",
  "hostkeeper-proto",
  "hostkeeper-testkit",
@@ -1164,6 +1167,8 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "prost",
+ "prost-types",
  "rcgen",
  "rustls",
  "serde",
@@ -1174,8 +1179,10 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml",
+ "tonic",
  "tracing",
  "tracing-subscriber",
+ "x509-parser",
 ]
 
 [[package]]

@@ -12,7 +12,7 @@ use std::sync::PoisonError;
 use super::files::{DenyState, corrupt};
 use super::store::{EnrollmentStore, LIVE_WINDOW_SECS};
 use super::{RequestState, StoreError};
-use crate::names::{HostId, KeyHash};
+use crate::names::{HostId, KeyHash, Role};
 
 impl EnrollmentStore {
     /// Denies `host`: a retiring deny row (a row already retiring or retired is kept), and the
@@ -56,6 +56,20 @@ impl EnrollmentStore {
     /// [`StoreError`] when its deny file cannot be read.
     pub fn is_denied(&self, host: &HostId) -> Result<bool, StoreError> {
         self.denied(host)
+    }
+
+    /// The role `host` was approved for; `None` for a host id never approved. The heartbeat
+    /// path reads it as the role of a caller whose certificate names the host.
+    ///
+    /// # Errors
+    /// [`StoreError`] when the host file cannot be read, or holds no role.
+    pub fn host_role(&self, host: &HostId) -> Result<Option<Role>, StoreError> {
+        let Some(row) = self.load_host(host)? else {
+            return Ok(None);
+        };
+        Role::parse(&row.pb.role)
+            .map(Some)
+            .map_err(|e| corrupt(&self.host_path(host), &e.to_string()))
     }
 
     /// Whether `host` is denied and may still have an update in flight.
