@@ -4,6 +4,7 @@
 //! explicit peer certificate, and no socket is opened.
 
 mod heartbeat;
+mod inventory;
 mod nonces;
 mod refusals;
 mod renew;

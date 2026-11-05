@@ -136,6 +136,7 @@ impl Enrollment {
                         addresses: claims.addresses,
                         mac_serial: claims.mac_serial,
                         mac_platform_uuid: claims.platform_uuid,
+                        bmc_mac: claims.bmc_mac,
                     },
                     image: request.image,
                     renewal_of,

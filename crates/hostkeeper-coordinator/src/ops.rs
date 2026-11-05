@@ -2,7 +2,8 @@
 //! desired state (`docs/design/host-updates.md`, sections 3.8 and 5).
 //!
 //! It holds the hosts an operator excluded from a service, the labels an operator put on a
-//! host, the operator's holds ([`crate::holds`]), the per-service marks later changes fill (a
+//! host, the operator's holds ([`crate::holds`]), the host inventory ([`crate::inventory`]), the
+//! per-service marks later changes fill (a
 //! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), and
 //! a ring of the last changes made. A key this build added is written only when it holds
 //! something, so a file that never held one keeps the shape the release before reads; once it
@@ -63,6 +64,7 @@ use crate::audit_file::{self, AuditLine, AuditLog, UnixClock, wall_clock};
 use crate::desired::StoreError;
 use crate::force::ForceRecord;
 use crate::holds::HoldMark;
+use crate::inventory::InventoryRecord;
 use crate::ops_file;
 
 pub use crate::operate::{OperateError, operate};
@@ -310,6 +312,10 @@ pub struct OpsState {
     /// with none keeps the shape the release before reads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holds: Vec<HoldMark>,
+    /// The host inventory ([`crate::inventory`]), by host id; written only when there is a
+    /// record, so a file with none keeps the shape the release before reads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inventory: Vec<InventoryRecord>,
 }
 
 impl Default for OpsState {
@@ -321,6 +327,7 @@ impl Default for OpsState {
             services: BTreeMap::new(),
             audit: Vec::new(),
             holds: Vec::new(),
+            inventory: Vec::new(),
         }
     }
 }
