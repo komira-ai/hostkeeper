@@ -66,7 +66,7 @@ pub fn changes(before: &Tree, after: &Tree) -> Vec<String> {
 ///   besides the world.
 /// - `world/`: the fake service's world, which the hook changes through the fake. Its contents
 ///   are the observable state of the service.
-/// - `outside/`: everything else the declaration grants nothing in: the service's own data
+/// - `outside/`: everything else a hook has no business in: the service's own data
 ///   directory, the old location of a state file. A hook that writes here has gone outside
 ///   its record.
 /// - `control/`: the harness's own files (the params file, the kill-point count).

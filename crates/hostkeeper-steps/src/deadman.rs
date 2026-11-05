@@ -4,8 +4,8 @@
 //! monotonic clock) the step must end by, and disarms it when the step has ended. The dead-man
 //! looks at the watch and, when the second has passed with the step still armed, stops its
 //! unit. It does not wait for the runner, which is blocked in the launcher for as long as the
-//! step lives, and it does not wait for the unprivileged part of the updater, which may be gone
-//! (docs/design/host-updates.md, 3.5): the root part brings the host back by itself. The step
+//! step lives, and it does not wait for anything else of the updater, which may be gone
+//! (docs/design/hostkeeper-design.md, 6.3): the daemon brings the host back by itself. The step
 //! that was stopped ends without an exit code, which the runner reads as a failure and runs
 //! `rollback` for.
 //!
@@ -13,14 +13,14 @@
 //! window, so a `verify` that is still running at `verify_deadline_secs` is stopped here and the
 //! update rolls back.
 //!
-//! A step with no bound (a `prepare` declared with 0, [`crate::Bound::Unbounded`]) is not armed:
-//! the dead-man never stops it, and nothing but the hook's own end ends it.
+//! A step with no bound (a `prepare` whose manifest timeout is 0, [`crate::Bound::Unbounded`]) is
+//! not armed: the dead-man never stops it, and nothing but the hook's own end ends it.
 //!
 //! A stop that fails is tried again at every tick, and kept on the arming: when the step ends
 //! before a stop has worked, [`Watch::disarm`] gives the runner the error, and the runner stops
 //! with [`crate::RunError::Unstopped`] rather than read a step that ran past its bound. The
 //! dead-man waits in [`StepLauncher::stop`] for as long as it takes, so the launcher bounds its
-//! stop; and if the root part itself is killed, the dead-man dies with it, so the launcher also
+//! stop; and if the daemon itself is killed, the dead-man dies with it, so the launcher also
 //! bounds the unit itself (see [`StepLauncher`]).
 //!
 //! A stop under way is part of the arming ([`Watch::stopping`]): a step that ends while the
