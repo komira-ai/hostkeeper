@@ -7,8 +7,8 @@
 //! checks, the locks and the try rules are the daemon's.
 //!
 //! [`DaemonHalts`] is the loop's [`HeldHalts`] over the very store the executor reads
-//! ([`crate::executor::Ctx::halts`]): a generation the loop raises is the one the next order
-//! of the service is judged against.
+//! ([`crate::executor::Ctx::halts`]): a generation the loop raises lifts the service's halt as
+//! `clear_halt` does, and is the one the next order of the service is judged against.
 //!
 //! [`DaemonRecords`] is the loop's [`ServiceRecords`]: every service whose `current` link names a
 //! version, at that version, with the target of its step record while the record is unfinished
@@ -30,9 +30,9 @@ use hostkeeper_steps::record::{Loaded, State};
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
 
 use crate::executor::{Ctx, Daemon, Reply};
-use crate::halt::HaltError;
 use crate::installed::{self, CURRENT};
 use crate::observer;
+use crate::refusal::Refusal;
 
 /// The most bytes of a verdict's `detail` (`UpdateResult.detail` of `hostkeeper.agent.v1`).
 pub const MAX_DETAIL: usize = 512;
@@ -180,12 +180,16 @@ impl HeldHalts for DaemonHalts {
         self.daemon.ctx().halts.get(service).unwrap_or(u64::MAX)
     }
 
-    /// Raises the store's generation. A generation below the one held changes nothing and is
-    /// not an error; a store that cannot be read or written is.
+    /// Lifts the halt for a greater generation as `clear_halt` does ([`Daemon::clear_halt`]):
+    /// the service's `Halt` record cleared first, then the store's generation raised. A
+    /// generation not above the one held changes nothing and is not an error; a service whose
+    /// lock is held, and a store or record that cannot be read or written, are, and the loop
+    /// tries again at its next heartbeat.
     fn raise(&self, service: &ServiceName, generation: u64) -> io::Result<()> {
-        match self.daemon.ctx().halts.raise(service, generation) {
-            Ok(()) | Err(HaltError::Lower { .. }) => Ok(()),
-            Err(error) => Err(io::Error::other(error)),
+        match self.daemon.clear_halt(service, generation) {
+            Ok(_) => Ok(()),
+            Err(refused) if refused.refusal == Refusal::StaleHaltGeneration => Ok(()),
+            Err(refused) => Err(io::Error::other(refused.detail)),
         }
     }
 }

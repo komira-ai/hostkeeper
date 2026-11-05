@@ -8,8 +8,12 @@
 //! from any peer but uid 0, or from one whose credentials are unknown, is closed before a byte
 //! of it is read, so no request of it is ever decoded.
 //!
-//! `Status` is served. `Abort` and `ClearRecord` answer `UNIMPLEMENTED` with the token
-//! `not_implemented`.
+//! The service has exactly the three calls of `hostkeeper.local.v1.Admin`: `Status`, `Abort`
+//! ([`Daemon::abort`]) and `ClearRecord` ([`Daemon::clear_record`]). Nothing on the socket
+//! reaches `clear_halt` or a verb that installs, updates or switches a version. A refused call
+//! answers a gRPC status whose message is one token ([`admin_status`]) and changes nothing.
+//! The admin protobuf has no token for a service whose lock is held: that is answered
+//! `FAILED_PRECONDITION` with the daemon's own token `busy`.
 
 use std::io;
 use std::sync::Arc;
@@ -33,7 +37,8 @@ use tonic::transport::server::Connected;
 use tonic::transport::{Error, Server};
 use tonic::{Request, Response, Status};
 
-use crate::executor::{Daemon, LastUninstall, RecordState, ServiceStatus};
+use crate::checks;
+use crate::executor::{Daemon, LastUninstall, RecordState, Refused, ServiceStatus};
 use crate::installed::Lifecycle;
 use crate::refusal::Refusal;
 
@@ -80,7 +85,7 @@ where
 {
     let admitted = incoming.filter_map(admit);
     Server::builder()
-        .serve_with_incoming_shutdown(AdminServer::new(AdminService { daemon }), admitted, stop)
+        .serve_with_incoming_shutdown(server(daemon), admitted, stop)
         .await
 }
 
@@ -89,8 +94,43 @@ pub struct AdminService {
     daemon: Arc<Daemon>,
 }
 
-fn not_implemented() -> Status {
-    Status::unimplemented(Refusal::NotImplemented.token())
+/// The `Admin` server over `daemon`: its three calls, and `UNIMPLEMENTED` for any other path.
+/// [`serve_until`] puts it behind the peer check.
+pub fn server(daemon: Arc<Daemon>) -> AdminServer<AdminService> {
+    AdminServer::new(AdminService { daemon })
+}
+
+/// The `AdminRefusal` token of a request whose service name breaks its rule.
+pub const INVALID_REQUEST: &str = "invalid_request";
+
+/// The gRPC status of a refused admin call, with the code its `AdminRefusal` token names.
+pub fn admin_status(refused: &Refused) -> Status {
+    let token = refused.refusal.token();
+    match refused.refusal {
+        Refusal::InvalidOrder => Status::invalid_argument(INVALID_REQUEST),
+        Refusal::NothingRunning | Refusal::RecordReads | Refusal::Busy => {
+            Status::failed_precondition(token)
+        }
+        _ => Status::internal(Refusal::StoreFailed.token()),
+    }
+}
+
+/// The service a request names, or `invalid_request`.
+fn service(text: &str) -> Result<hostkeeper_config::names::ServiceName, Status> {
+    checks::service_name(text).map_err(|refusal| admin_status(&Refused::new(refusal, text)))
+}
+
+/// Runs `call` on a thread meant for blocking: an abort waits for the order it stops to end. A
+/// call whose thread failed is `store_failed`.
+async fn blocking<T: Send + 'static>(
+    call: impl FnOnce() -> Result<T, Refused> + Send + 'static,
+) -> Result<T, Status> {
+    let failed = Err(Refused::new(
+        Refusal::StoreFailed,
+        "the call's thread failed",
+    ));
+    let done = tokio::task::spawn_blocking(call).await.unwrap_or(failed);
+    done.map_err(|refused| admin_status(&refused))
 }
 
 #[tonic::async_trait]
@@ -114,16 +154,24 @@ impl Admin for AdminService {
 
     async fn abort(
         &self,
-        _request: Request<AbortRequest>,
+        request: Request<AbortRequest>,
     ) -> Result<Response<AbortResponse>, Status> {
-        Err(not_implemented())
+        let service = service(&request.get_ref().service)?;
+        let daemon = Arc::clone(&self.daemon);
+        let aborted = blocking(move || daemon.abort(&service)).await?;
+        let record = Some(step_record(&aborted.record));
+        Ok(Response::new(AbortResponse { record }))
     }
 
     async fn clear_record(
         &self,
-        _request: Request<ClearRecordRequest>,
+        request: Request<ClearRecordRequest>,
     ) -> Result<Response<ClearRecordResponse>, Status> {
-        Err(not_implemented())
+        let service = service(&request.get_ref().service)?;
+        let daemon = Arc::clone(&self.daemon);
+        blocking(move || daemon.clear_record(&service)).await?;
+        let problem = RecordProblem::Unreadable as i32;
+        Ok(Response::new(ClearRecordResponse { problem }))
     }
 }
 

@@ -211,6 +211,11 @@ pub struct ScriptedLauncher {
     runs: Mutex<Vec<Ran>>,
     stops: Mutex<Vec<String>>,
     failing_stops: Mutex<BTreeSet<String>>,
+    /// Per service, how many of its stops fail before they work.
+    failing_times: Mutex<BTreeMap<String, u32>>,
+    /// The held steps that a stop of their unit ends, by step until they run, then by unit.
+    ended_by_stop: Mutex<BTreeMap<Key, Sender<()>>>,
+    stoppable: Mutex<BTreeMap<String, Sender<()>>>,
     losses: Mutex<BTreeSet<Key>>,
     stop_seen: Mutex<Vec<Sender<String>>>,
     running: AtomicUsize,
@@ -284,6 +289,15 @@ impl ScriptedLauncher {
         }
     }
 
+    /// Holds the next run of `step` for `service` until a stop of its unit works, as a unit
+    /// that runs until it is stopped (an unbounded `prepare`), or the test releases it.
+    pub fn hold_until_stopped(&self, service: &str, step: Step) -> Gate {
+        let gate = self.hold(service, step);
+        let key = (service.to_owned(), step);
+        lock(&self.ended_by_stop).insert(key, gate.release.clone());
+        gate
+    }
+
     /// The next run of `step` for `service` fails in the launcher itself
     /// ([`LaunchError::Launcher`]), as when the launcher loses a unit it started.
     pub fn lose(&self, service: &str, step: Step) {
@@ -295,9 +309,15 @@ impl ScriptedLauncher {
         lock(&self.failing_stops).insert(service.to_owned());
     }
 
+    /// Makes the next `times` stops of a unit of `service` fail, and the later ones work.
+    pub fn fail_stops_times(&self, service: &str, times: u32) {
+        lock(&self.failing_times).insert(service.to_owned(), times);
+    }
+
     /// Lets the stops of the units of `service` work again.
     pub fn allow_stops(&self, service: &str) {
         lock(&self.failing_stops).remove(service);
+        lock(&self.failing_times).remove(service);
     }
 
     /// A channel that gets the unit of every stop asked for from now on.
@@ -347,8 +367,12 @@ impl StepLauncher for ScriptedLauncher {
         self.most_running.fetch_max(now, Ordering::SeqCst);
         let hold = lock(&self.holds).remove(&key);
         if let Some(hold) = hold {
+            let ends = lock(&self.ended_by_stop).remove(&key);
+            let stoppable = ends.map(|end| (call.unit.to_owned(), end));
+            lock(&self.stoppable).extend(stoppable);
             hold.entered.send(()).unwrap_or_default();
             lock(&hold.release).recv().unwrap_or_default();
+            lock(&self.stoppable).remove(call.unit);
         }
         let lost = lock(&self.losses).remove(&key);
         let code = lock(&self.exits)
@@ -415,14 +439,24 @@ impl StepLauncher for ScriptedLauncher {
         for seen in lock(&self.stop_seen).iter() {
             seen.send(unit.to_owned()).unwrap_or_default();
         }
-        let failing = lock(&self.failing_stops)
-            .iter()
-            .any(|service| unit.starts_with(&format!("updater-{service}-")));
-        match failing {
+        let of = |service: &str| unit.starts_with(&format!("updater-{service}-"));
+        let always = lock(&self.failing_stops).iter().any(|s| of(s.as_str()));
+        let mut times = lock(&self.failing_times);
+        let counted = times
+            .iter_mut()
+            .find(|(service, left)| of(service.as_str()) & (**left > 0));
+        let counted = counted.map(|(_, left)| *left -= 1).is_some();
+        drop(times);
+        match always | counted {
             true => Err(LaunchError::Launcher(format!(
                 "{unit} could not be stopped"
             ))),
-            false => Ok(()),
+            false => {
+                // A unit that is stopped ends: a step held until then returns.
+                let held = lock(&self.stoppable).remove(unit);
+                held.iter().for_each(|end| end.send(()).unwrap_or_default());
+                Ok(())
+            }
         }
     }
 }

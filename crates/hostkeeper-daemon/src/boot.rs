@@ -41,8 +41,9 @@
 //! `rollback`, not the boot step; its update is reported `Deferred` with the reason
 //! `journal_unavailable`. A boot id that cannot be written (or is kept, above) means no hook runs
 //! at all. A step that cannot be stopped (`unstopped`) leaves its record `running` and keeps its
-//! service locked for the life of the daemon; the daemon serves on. Each of these is logged at
-//! error level with an `alert=` field.
+//! service locked until `abort` ends it ([`crate::verbs::abort`]), or for the life of the daemon
+//! when it was the boot step, whose unit no step record names; the daemon serves on. Each of these
+//! is logged at error level with an `alert=` field.
 
 use std::collections::BTreeMap;
 use std::fmt;
