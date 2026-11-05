@@ -9,6 +9,7 @@ mod ctl;
 mod enrollment;
 mod gateway;
 mod heartbeat;
+mod install;
 mod limits;
 mod listeners;
 mod operator;

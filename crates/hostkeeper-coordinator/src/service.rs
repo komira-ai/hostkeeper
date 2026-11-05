@@ -13,9 +13,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
-use crate::acks::release_ack;
 use crate::converge::{Convergence, role_counts};
-use crate::decide::Decision;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
@@ -33,6 +31,7 @@ use crate::tokens::{OperatorTokens, TokenName};
 use crate::ui::UiDir;
 use crate::verdict_file::{self, VerdictFile};
 use enrollment_calls::Turn;
+use gate_orders::Asked;
 
 pub use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
 
@@ -710,86 +709,19 @@ impl Coordinator {
         {
             return (ServiceReply::Nothing, Some(order), None, acks);
         }
-        let desired = self.desired.all();
-        // Then the services the host does not list, which it may be told to install.
-        let unlisted: Vec<&str> = self
-            .services
-            .names()
-            .filter(|name| !names.contains(name))
-            .collect();
-        names.extend(unlisted);
-        for name in names {
-            if held.iter().any(|service| service == name) {
-                continue;
-            }
-            let decision = halt::decide(
-                &self.ops,
-                &self.services,
-                &desired,
-                name,
-                &fleet,
-                &who.host_id,
-                now,
-            );
-            let order = match decision {
-                Decision::Update { version } => {
-                    // An agent that reads order terms is ordered only a version with a digest.
-                    let terms = order_v1.then(|| {
-                        let digests = self.desired.digests(name);
-                        order_terms::of_beat(&digests, name, &version, &announced, &who.host_id)
-                    });
-                    let Some(terms) = terms.map_or(Some(None), |made| made.map(Some)) else {
-                        continue;
-                    };
-                    // The host's ack goes from the file before the order exists.
-                    if !release_ack(&self.ops, name, &who.host_id) {
-                        continue;
-                    }
-                    fleet.order(name, who.host_id.clone(), version.clone(), now);
-                    let service = (Some(name) != legacy).then(|| name.to_owned());
-                    return (ServiceReply::Update { service, version }, None, terms, acks);
-                }
-                Decision::Install { version, digest } if orders => {
-                    if !release_ack(&self.ops, name, &who.host_id) {
-                        continue;
-                    }
-                    let order_id = crate::orders::install_order_id(&digest);
-                    let order_try = crate::orders::next_try(
-                        fleet.get_in(name, &who.host_id).map(|h| &h.beat),
-                        &order_id,
-                    );
-                    fleet.order(name, who.host_id.clone(), version.clone(), now);
-                    Order::Install {
-                        service: name.to_owned(),
-                        version,
-                        digest,
-                        order_id,
-                        order_try,
-                    }
-                }
-                Decision::Uninstall { order_id, running } if orders => {
-                    let order_try = crate::orders::next_try(
-                        fleet.occupant(name, &who.host_id).map(|h| &h.beat),
-                        &order_id,
-                    );
-                    fleet.order_uninstall(
-                        name,
-                        who.host_id.clone(),
-                        running,
-                        order_id.clone(),
-                        now,
-                    );
-                    Order::Uninstall {
-                        service: name.to_owned(),
-                        order_id,
-                        order_try,
-                    }
-                }
-                _ => continue,
-            };
-            return (ServiceReply::Nothing, Some(order), None, acks);
-        }
-        (ServiceReply::Nothing, None, None, acks)
+        let asked = Asked {
+            who: &who,
+            legacy,
+            announced: &announced,
+            held: &held,
+            order_v1,
+            orders,
+            now,
+        };
+        let (reply, order, terms) = self
+            .gate_order(&mut fleet, &asked, names)
+            .unwrap_or((ServiceReply::Nothing, None, None));
+        (reply, order, terms, acks)
     }
 
     /// The CI token in `bearer`, checked by the verifier.
@@ -1031,3 +963,7 @@ mod enrollment_calls;
 /// The calls that act for a CI token already checked.
 #[path = "service_ci.rs"]
 mod ci_calls;
+
+/// The rollout gate's update, install or uninstall for a heartbeat.
+#[path = "service_orders.rs"]
+mod gate_orders;
