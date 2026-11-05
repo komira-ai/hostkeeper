@@ -1,0 +1,409 @@
+//! `cargo xtask release <verb>`: every push to `main` that changes code becomes a hostkeeper
+//! release, with no tag step and no manual gate. The release workflows run these verbs; each is
+//! in `release/<verb>.rs`, and each reads git and GitHub only through the ports of [`ports`].
+//!
+//! - `version` ([`version`]): the version of a commit, `X.Y.<patch>`: `X.Y` from the `VERSION`
+//!   file, the patch counted on the first-parent history of `main`.
+//! - `set-version` ([`set_version`]): writes a version into the workspace manifest and the lock
+//!   file before a build.
+//! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
+//!   ([`contract::stamp_string`]) and the check that a built binary prints exactly it.
+//! - `package` ([`package`]): the deterministic hostkeeper package, `.tar.zst`, and its SHA-256.
+//! - `index` ([`index`]): the release index, `index.json`: which package serves each platform.
+//! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
+//! - `plan` ([`plan`]): whether a commit (or, on the scheduled path, each missed commit) is
+//!   released, and under which version.
+//! - `locate` ([`locate`]): the commit is on `main` and its runs exist; the id of its build run.
+//! - `check` ([`check`]): every asset against `SHA256SUMS`, every attestation and bundle against
+//!   the signer identity of [`contract`] and the commit.
+//! - `publish` ([`publish`]): the GitHub release of a checked directory, idempotent.
+//!
+//! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`
+//! and `gh` are in [`git`] and [`github`], over the [`ports::Exec`] port; the only code that starts
+//! a process is `real::SystemExec`, built in [`real`] alone.
+
+mod check;
+mod check_binary;
+mod compare_images;
+pub(crate) mod contract;
+#[cfg(test)]
+mod fakes;
+mod git;
+mod github;
+mod index;
+mod locate;
+#[cfg(test)]
+mod no_network;
+mod package;
+mod plan;
+pub(crate) mod ports;
+mod publish;
+pub(crate) mod real;
+mod set_version;
+mod version;
+
+use std::fmt;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+
+use check_binary::VersionOf;
+use contract::{Commit, Platform, Repo, Version};
+use git::GitCli;
+use github::Gh;
+use ports::{Adapters, Exec, PortError, Ports, Run};
+
+/// Why a release verb failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum Error {
+    /// A port could not answer.
+    #[error(transparent)]
+    Port(#[from] PortError),
+    /// A file could not be read or written.
+    #[error("{what}: {why}")]
+    Io { what: String, why: String },
+    /// The verb refuses, for one reason.
+    #[error("{0}")]
+    Failed(String),
+    /// The verb refuses, for every reason listed (one per line).
+    #[error("{}", .0.join("\n"))]
+    Refused(Vec<String>),
+}
+
+impl Error {
+    /// The error for the file operation `what` that failed.
+    pub(crate) fn io(what: impl fmt::Display) -> impl FnOnce(std::io::Error) -> Error {
+        let what = what.to_string();
+        move |e| Error::Io {
+            what,
+            why: e.to_string(),
+        }
+    }
+}
+
+/// The verbs of `cargo xtask release`.
+#[derive(clap::Subcommand)]
+pub(crate) enum Verb {
+    /// Print the version of a commit: `X.Y` from the version file at that commit, the patch
+    /// counted on its first-parent history.
+    Version {
+        /// The commit, 40 lowercase hex digits.
+        #[arg(long)]
+        commit: Commit,
+        /// The version file, as a path from the repository root.
+        #[arg(long, default_value = "VERSION")]
+        version_file: String,
+        /// A file the `version=` line is appended to (on Actions, `GITHUB_OUTPUT`).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Write the version into `[workspace.package]` of the root `Cargo.toml` and into the
+    /// workspace members of `Cargo.lock`.
+    SetVersion {
+        /// The version, `X.Y.Z`.
+        #[arg(long)]
+        version: Version,
+        /// The repository root.
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
+    /// Print the `--version` text of a binary of this version and commit.
+    Stamp {
+        #[arg(long)]
+        version: Version,
+        #[arg(long)]
+        commit: Commit,
+    },
+    /// Run a binary with `--version` and refuse it unless it prints exactly the stamp of this
+    /// version and commit.
+    CheckBinary {
+        /// The binary to run.
+        binary: PathBuf,
+        /// The version, `X.Y.Z`.
+        version: Version,
+        /// The commit, 40 lowercase hex digits.
+        commit: Commit,
+    },
+    /// Build the hostkeeper package of one platform, and its `.sha256`.
+    Package {
+        #[arg(long, value_enum)]
+        platform: Platform,
+        #[arg(long)]
+        version: Version,
+        /// The commit built; the archive's times are its committer time.
+        #[arg(long)]
+        commit: Commit,
+        /// The hostkeeper binary of that platform: `bin/hostkeeper` in the package.
+        #[arg(long)]
+        binary: PathBuf,
+        /// The systemd unit: `units/hostkeeper.service` in the package.
+        #[arg(long)]
+        unit: PathBuf,
+        /// The directory the package and its `.sha256` are written to.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Write `index.json`, the release index of the hostkeeper packages of a version in a
+    /// directory: one entry per platform whose package is there.
+    Index {
+        #[arg(long)]
+        version: Version,
+        /// The directory holding the packages; the index is written there.
+        #[arg(long)]
+        dir: PathBuf,
+    },
+    /// Refuse two OCI image tarballs unless they are byte for byte equal.
+    CompareImages { a: PathBuf, b: PathBuf },
+    /// Whether a commit is released, and as which version.
+    Plan {
+        #[arg(long)]
+        repo: Repo,
+        /// The pushed commit, or on the scheduled path the tip of `main`.
+        #[arg(long)]
+        commit: Commit,
+        #[arg(long, default_value = "VERSION")]
+        version_file: String,
+        /// The value of the repository variable `RELEASE_FREEZE`: anything but empty or
+        /// `false` stops releases.
+        #[arg(long, default_value = "")]
+        freeze: String,
+        /// Plan every commit since the last release, oldest first, not only `--commit`.
+        #[arg(long)]
+        scheduled: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Refuse a commit that is not on `main` or lacks a successful push run of each required
+    /// workflow; print the id of its build run.
+    Locate {
+        #[arg(long)]
+        repo: Repo,
+        #[arg(long)]
+        commit: Commit,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Check a directory of assets: the sums, then every attestation online and from its bundle.
+    Check {
+        dir: PathBuf,
+        #[arg(long)]
+        version: Version,
+        #[arg(long)]
+        commit: Commit,
+    },
+    /// Publish a checked directory as the release of the version, at the commit.
+    Publish {
+        dir: PathBuf,
+        #[arg(long)]
+        repo: Repo,
+        #[arg(long)]
+        version: Version,
+        #[arg(long)]
+        commit: Commit,
+    },
+}
+
+/// Runs `verb`. The verbs that read no port run without adapters; the others get theirs from
+/// `connect`, which is called only for them.
+pub(crate) fn run<A: Adapters>(
+    verb: Verb,
+    connect: impl FnOnce() -> A,
+) -> Result<Vec<String>, Error> {
+    match verb {
+        Verb::SetVersion { version, root } => set_version::set_version(&root, &version),
+        Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
+        Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
+        Verb::Index { version, dir } => index::write_index(&dir, &version),
+        verb => run_with(verb, &connect().ports()),
+    }
+}
+
+/// Runs a verb that reads ports.
+fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
+    match verb {
+        Verb::Version {
+            commit,
+            version_file,
+            output,
+        } => {
+            let v = version::version(ports.git, &commit, &version_file)?;
+            answer(output.as_deref(), vec![format!("version={v}")])
+        }
+        Verb::CheckBinary {
+            binary,
+            version,
+            commit,
+        } => check_binary::check_binary(ports.run_version, &binary, &version, &commit),
+        Verb::Package {
+            platform,
+            version,
+            commit,
+            binary,
+            unit,
+            out,
+        } => package::package(
+            ports.git,
+            &package::Request {
+                platform,
+                version,
+                commit,
+                binary,
+                unit,
+                out,
+            },
+        ),
+        Verb::Plan {
+            repo,
+            commit,
+            version_file,
+            freeze,
+            scheduled,
+            output,
+        } => plan::plan(
+            ports,
+            &plan::Request {
+                repo,
+                commit,
+                version_file,
+                freeze,
+                scheduled,
+                output,
+            },
+        ),
+        Verb::Locate {
+            repo,
+            commit,
+            output,
+        } => locate::locate(ports.runs, &repo, &commit, output.as_deref()),
+        Verb::Check {
+            dir,
+            version,
+            commit,
+        } => check::check(ports.verifier, &dir, &version, &commit),
+        Verb::Publish {
+            dir,
+            repo,
+            version,
+            commit,
+        } => publish::publish(ports, &dir, &repo, &version, &commit),
+        Verb::SetVersion { .. }
+        | Verb::Stamp { .. }
+        | Verb::CompareImages { .. }
+        | Verb::Index { .. } => run(verb, || Lent(*ports)),
+    }
+}
+
+/// Ports already lent, as [`Adapters`]: [`run_with`] hands a verb that reads no port back to
+/// [`run`] with them.
+struct Lent<'a>(Ports<'a>);
+
+impl Adapters for Lent<'_> {
+    fn ports(&self) -> Ports<'_> {
+        self.0
+    }
+}
+
+/// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations) and
+/// the `--version` of a binary, each running its program through a copy of `exec`. The real
+/// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
+/// fake one.
+struct Wired<E> {
+    git: GitCli<E>,
+    gh: Gh<E>,
+    version_of: VersionOf<E>,
+}
+
+impl<E: Exec + Clone> Wired<E> {
+    fn new(exec: E) -> Wired<E> {
+        Wired {
+            git: GitCli::new(exec.clone()),
+            gh: Gh::new(exec.clone()),
+            version_of: VersionOf::new(exec),
+        }
+    }
+}
+
+impl<E: Exec> Adapters for Wired<E> {
+    fn ports(&self) -> Ports<'_> {
+        Ports {
+            git: &self.git,
+            runs: &self.gh,
+            store: &self.gh,
+            verifier: &self.gh,
+            run_version: &self.version_of,
+        }
+    }
+}
+
+/// Appends `lines` (`key=value`) to `output`, when there is one, and returns them to print.
+pub(crate) fn answer(output: Option<&Path>, lines: Vec<String>) -> Result<Vec<String>, Error> {
+    if let Some(path) = output {
+        let mut text = lines.join("\n");
+        text.push('\n');
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut f| f.write_all(text.as_bytes()))
+            .map_err(Error::io(format!("append to {}", path.display())))?;
+    }
+    Ok(lines)
+}
+
+/// The SHA-256 of the file at `path`, 64 lowercase hex digits, read in one streaming pass.
+pub(crate) fn file_sha256(path: &Path) -> Result<String, Error> {
+    use sha2::Digest;
+    let what = format!("read {}", path.display());
+    let mut file = std::fs::File::open(path).map_err(Error::io(&what))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = vec![0_u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf).map_err(Error::io(&what))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Where a workflow stands for one commit: its latest push run on `main` for that commit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RunState {
+    /// No push run on `main` for the commit.
+    Missing,
+    /// The latest such run has not completed.
+    Pending(u64),
+    /// The latest such run succeeded.
+    Succeeded(u64),
+    /// The latest such run failed (`failure`, `timed_out` or `startup_failure`).
+    Failed(u64),
+    /// The latest such run completed otherwise (`cancelled`, `skipped`, ...): not green, not
+    /// red.
+    Other(u64, String),
+}
+
+/// The state of a workflow for `commit` from its `runs`: only push runs on `main` whose head is
+/// exactly `commit` count, and of those the latest (highest id). A pull-request run, a run on
+/// another branch and a run for another commit never count.
+pub(crate) fn state(runs: &[Run], commit: &Commit) -> RunState {
+    let latest = runs
+        .iter()
+        .filter(|r| {
+            (r.event == "push") & (r.branch == contract::MAIN) & (r.head_sha == commit.as_str())
+        })
+        .max_by_key(|r| r.id);
+    let Some(run) = latest else {
+        return RunState::Missing;
+    };
+    match (run.status.as_str(), run.conclusion.as_deref()) {
+        ("completed", Some("success")) => RunState::Succeeded(run.id),
+        ("completed", Some("failure" | "timed_out" | "startup_failure")) => {
+            RunState::Failed(run.id)
+        }
+        ("completed", other) => RunState::Other(run.id, other.unwrap_or("none").to_owned()),
+        _ => RunState::Pending(run.id),
+    }
+}
+
+#[cfg(test)]
+mod tests;

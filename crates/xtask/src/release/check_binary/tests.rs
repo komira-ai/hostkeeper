@@ -1,0 +1,171 @@
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
+
+use super::*;
+use crate::release::fakes::{FakeExec, FakeRunVersion, nth_commit};
+
+const STAMP: &str = "hostkeeper 0.1.5+abcdef012345";
+
+fn version() -> Version {
+    "0.1.5".parse().expect("a version")
+}
+
+/// A commit whose first 12 digits are `abcdef012345`.
+fn pinned() -> Commit {
+    format!("abcdef012345{}", "0".repeat(28))
+        .parse()
+        .expect("a commit")
+}
+
+fn printing(success: bool, stdout: &str, stderr: &str) -> FakeRunVersion {
+    FakeRunVersion {
+        said: Said {
+            success,
+            stdout: stdout.to_owned(),
+            stderr: stderr.to_owned(),
+        },
+    }
+}
+
+fn check(run: &FakeRunVersion) -> Result<Vec<String>, Error> {
+    check_binary(run, Path::new("/opt/bin/hostkeeper"), &version(), &pinned())
+}
+
+#[test]
+fn check_binary_requires_version_and_commit_in_the_output() {
+    // Catches: a check that accepts a binary printing the version without its commit, or the
+    // stamp of another commit.
+    assert_eq!(
+        check(&printing(true, "hostkeeper 0.1.5\n", "")),
+        Err(Error::Failed(
+            "/opt/bin/hostkeeper --version printed \"hostkeeper 0.1.5\\n\", not \
+             \"hostkeeper 0.1.5+abcdef012345\""
+                .to_owned()
+        ))
+    );
+    assert_eq!(
+        check(&printing(true, "hostkeeper 0.1.5+abcdef012346\n", "")),
+        Err(Error::Failed(
+            "/opt/bin/hostkeeper --version printed \"hostkeeper 0.1.5+abcdef012346\\n\", not \
+             \"hostkeeper 0.1.5+abcdef012345\""
+                .to_owned()
+        ))
+    );
+    assert_eq!(
+        check(&printing(true, &format!("{STAMP}\n"), "")),
+        Ok(vec![format!("/opt/bin/hostkeeper: {STAMP}")])
+    );
+}
+
+#[test]
+fn the_stamp_passes_with_or_without_its_one_line_break() {
+    // Catches: a check that demands the line break, or that strips more than one.
+    let expected = Ok(vec![format!("/opt/bin/hostkeeper: {STAMP}")]);
+    assert_eq!(check(&printing(true, STAMP, "")), expected);
+    assert_eq!(check(&printing(true, &format!("{STAMP}\n"), "")), expected);
+    assert_eq!(
+        check(&printing(true, &format!("{STAMP}\n\n"), "")),
+        Err(Error::Failed(format!(
+            "/opt/bin/hostkeeper --version printed {:?}, not {STAMP:?}",
+            format!("{STAMP}\n\n")
+        )))
+    );
+}
+
+#[test]
+fn text_around_the_stamp_fails() {
+    // Catches: a substring match that accepts a prefix or a suffix around the stamp.
+    for printed in [
+        format!("v {STAMP}"),
+        format!("{STAMP} extra"),
+        String::new(),
+    ] {
+        assert_eq!(
+            check(&printing(true, &printed, "")),
+            Err(Error::Failed(format!(
+                "/opt/bin/hostkeeper --version printed {printed:?}, not {STAMP:?}"
+            )))
+        );
+    }
+}
+
+#[test]
+fn a_failing_exit_is_reported_with_its_trimmed_stderr() {
+    // Catches: a check that reads the stamp from a binary that exited with failure.
+    assert_eq!(
+        check(&printing(false, &format!("{STAMP}\n"), "  boom\n")),
+        Err(Error::Failed(
+            "/opt/bin/hostkeeper --version failed: boom".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn a_port_error_is_passed_on() {
+    // Catches: a check that swallows the port's error.
+    struct Broken;
+    impl RunVersion for Broken {
+        fn version_of(&self, _binary: &Path) -> Result<Said, PortError> {
+            Err(PortError::new("run", "no such file"))
+        }
+    }
+    assert_eq!(
+        check_binary(&Broken, Path::new("/x"), &version(), &nth_commit(1)),
+        Err(Error::Port(PortError::new("run", "no such file")))
+    );
+}
+
+#[test]
+fn the_adapter_runs_the_binary_with_version_and_reports_what_it_printed() {
+    // Catches: an adapter that passes other arguments, or drops the exit status or an output.
+    let exec = FakeExec::default().on(
+        &["/opt/bin/hostkeeper", "--version"],
+        false,
+        "out\n",
+        "err\n",
+    );
+    let of = VersionOf::new(exec);
+    assert_eq!(
+        of.version_of(Path::new("/opt/bin/hostkeeper")),
+        Ok(Said {
+            success: false,
+            stdout: "out\n".to_owned(),
+            stderr: "err\n".to_owned(),
+        })
+    );
+    assert_eq!(
+        *of.exec.calls.borrow(),
+        vec![vec![
+            "/opt/bin/hostkeeper".to_owned(),
+            "--version".to_owned()
+        ]]
+    );
+}
+
+#[test]
+fn the_adapter_names_the_binary_when_it_cannot_start() {
+    // Catches: a spawn error reported without the command that failed.
+    let of = VersionOf::new(FakeExec::default());
+    assert_eq!(
+        of.version_of(Path::new("/opt/bin/other")),
+        Err(PortError::new(
+            "/opt/bin/other --version",
+            "not scripted: /opt/bin/other --version"
+        ))
+    );
+}
+
+#[test]
+fn the_adapter_refuses_a_path_that_is_not_utf8() {
+    // Catches: a lossy conversion that runs a different program than the one named.
+    let of = VersionOf::new(FakeExec::default());
+    let path = Path::new(OsStr::from_bytes(b"/opt/bin/\xff"));
+    assert_eq!(
+        of.version_of(path),
+        Err(PortError::new(
+            "run /opt/bin/\u{fffd} --version",
+            "the path is not UTF-8"
+        ))
+    );
+    assert!(of.exec.calls.borrow().is_empty());
+}
