@@ -48,7 +48,7 @@ fn os(words: &[&str]) -> Vec<OsString> {
 fn ctl_args(line: &[&str]) -> Vec<OsString> {
     match Cli::parse_from(line).command {
         Command::Ctl { args } => args,
-        Command::Daemon(flags) => panic!("parsed as the daemon: {flags:?}"),
+        other => panic!("parsed as another command: {other:?}"),
     }
 }
 
