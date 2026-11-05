@@ -652,8 +652,9 @@ fn a_peer_that_does_not_speak_tls_fails_the_probe() {
 }
 
 /// Catches a connection after the probe to a coordinator whose chain ends in a CA other than the
-/// one read being made: the handshake fails naming the unknown issuer, and the coordinator of the
-/// other CA receives nothing.
+/// one read being made. The other CA has the same name as the one read and another key, as an
+/// impostor's would: the handshake fails on the signature of the coordinator's certificate, and the
+/// coordinator of the other CA receives nothing.
 #[test]
 fn a_new_connection_to_a_coordinator_of_another_ca_fails_the_handshake() {
     let read = probed("trusts-the-first-ca");
@@ -674,7 +675,10 @@ fn a_new_connection_to_a_coordinator_of_another_ca_fails_the_handshake() {
         said.starts_with(&format!("cannot connect to 127.0.0.1:{}: ", server.port)),
         "{said}"
     );
-    assert!(said.contains("UnknownIssuer"), "{said}");
+    assert!(
+        said.ends_with("invalid peer certificate: BadSignature"),
+        "{said}"
+    );
     assert!(double.calls().is_empty());
 }
 
