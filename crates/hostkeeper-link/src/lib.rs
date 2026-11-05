@@ -40,7 +40,9 @@ pub use heartbeater::{
     ACKED_KEPT, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
 };
 pub use names::{OrderId, PackageDigest, Reason, WordError};
-pub use order::{DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb};
+pub use order::{
+    Acknowledged, DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
+};
 pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, HeldHalts, Job,

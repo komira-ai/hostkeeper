@@ -427,7 +427,20 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 23] = [
+const FIELDS: [(&str, &[(&str, u32)]); 25] = [
+    (
+        "hostkeeper.agent.v1.HeartbeatResponse",
+        &[
+            ("order", 1),
+            ("features", 2),
+            ("halt_generations", 3),
+            ("acks", 4),
+        ],
+    ),
+    (
+        "hostkeeper.agent.v1.VerdictAck",
+        &[("service", 1), ("order_id", 2), ("order_try", 3)],
+    ),
     (
         "hostkeeper.local.v1.ServiceRecord",
         &[
@@ -608,7 +621,13 @@ const FIELDS: [(&str, &[(&str, u32)]); 23] = [
 fn wire_names_are_pinned() {
     assert_eq!(
         feature_names(),
-        ["deferred-v1", "forced-v1", "halt-v1", "heartbeat-v2"]
+        [
+            "deferred-v1",
+            "forced-v1",
+            "halt-v1",
+            "heartbeat-v2",
+            "verdict-acks-v1"
+        ]
     );
 
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");

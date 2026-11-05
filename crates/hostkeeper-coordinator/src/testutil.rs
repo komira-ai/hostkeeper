@@ -154,6 +154,7 @@ use hostkeeper_oidc::{AllowList, FetchCause, FetchError, KeySource, OidcConfig, 
 use crate::desired::DesiredStore;
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
+use crate::verdict_file::{VerdictFile, verdicts_path};
 
 /// The operator token of the tests.
 pub const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
@@ -161,6 +162,11 @@ pub const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
 /// The ops file of a rig's directory: the default of `--ops-file` beside `desired.json`.
 pub fn ops_of(dir: &Scratch) -> OpsStore {
     OpsStore::open(&dir.path().join("desired.json.ops")).expect("an ops store")
+}
+
+/// The file of verdicts of a rig's directory, beside `desired.json`.
+pub fn verdicts_of(dir: &Scratch) -> VerdictFile {
+    VerdictFile::open(&verdicts_path(&dir.path().join("desired.json"))).expect("a verdict file")
 }
 
 /// A coordinator whose clock the test sets, over a state file in a directory of its own.
@@ -262,6 +268,7 @@ impl Rig {
             .with_legacy_service(Some(LEGACY.to_owned()))
             .with_prefixes(kbf_prefixes())
             .with_ops(ops_of(dir))
+            .with_verdicts(verdicts_of(dir))
     }
 
     /// A coordinator on the same state file whose CI tokens are checked against the
@@ -287,6 +294,7 @@ impl Rig {
         .with_legacy_service(Some(LEGACY.to_owned()))
         .with_prefixes(kbf_prefixes())
         .with_ops(ops_of(dir))
+        .with_verdicts(verdicts_of(dir))
     }
 
     pub fn restart(&mut self) {

@@ -120,7 +120,8 @@ message HeartbeatRequest {
   // and is counted as `kbf-updater`.
   AgentInfo agent = 2;
   // What this agent can use of the coordinator's side, by feature name (`deferred-v1`,
-  // `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
+  // `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb,
+  // `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
   // as missing them.
@@ -301,6 +302,26 @@ message HeartbeatResponse {
   // number is greater than the one it saw when it halted, so a lost reply or a coordinator restart
   // cannot make it miss a clear. Only for an agent that announced `halt-v1`.
   map<string, uint64> halt_generations = 3;
+  // The verdicts of this heartbeat (`ServiceBeat.last_update`) that the coordinator has written
+  // to its state before this reply: the agent sends none of them again, and the
+  // coordinator reads a service entry with no `last_update` as still reporting the last verdict
+  // it acknowledged for the host, across its own restarts. A verdict with no order id or no try
+  // is never acknowledged. Only for an agent that announced `verdict-acks-v1`; an agent that did
+  // not resends each verdict until it reports another, as before. At most one per service
+  // listed.
+  repeated VerdictAck acks = 4;
+}
+
+// A verdict the coordinator acknowledges, by the service it is about and the order id and try it
+// ends (`UpdateResult.order_id`, `UpdateResult.order_try`). The service is named because an
+// order id is the coordinator's per service: two services may each have a `force-1`.
+message VerdictAck {
+  // The service the verdict is about.
+  string service = 1;
+  // The order the verdict ends.
+  string order_id = 2;
+  // The try of the order, from 1.
+  uint64 order_try = 3;
 }
 
 // One order: one verb with its typed arguments, and the coordinator's identity for it. No field
