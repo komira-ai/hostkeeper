@@ -68,7 +68,8 @@ by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-leve
 `permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
 `set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
 to the order of its steps: the release is verified before any step can request an OIDC token or
-run `ctl`. That job is the only one that may hold `id-token: write`.
+run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, that job is the only
+one that may hold `id-token: write`.
 
 ## Tests
 

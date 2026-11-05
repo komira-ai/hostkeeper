@@ -5,12 +5,14 @@
 use std::path::Path;
 
 use super::lint::{ID_TOKEN_ALLOWED, entries, entry, lint};
-use super::set_desired::{FILE, JOB, POLL_LOOP, TOKEN_STEP, VERIFY_STEPS};
+use super::set_desired::{CLIENT_STEP, FILE, JOB, VERIFY_STEPS};
 use super::yaml::{self, Node, Value};
 use super::{with_in, workflows_dir};
 
-/// A CI client that keeps every rule: the three verification steps, then the token, then the
-/// two calls, the poll bounded by `max_polls`. Its job's `runs-on` is on line 14.
+/// A CI client that keeps every rule: the download, the three provenance checks, the unpack and
+/// the version check, then the client, bounded by `max_polls`. Its job's `runs-on` is on line
+/// 14; its steps are, from 1: download, checksum, attestation, commit, unpack, version,
+/// set-desired.
 const CLIENT: &str = "\
 name: set-desired
 on:
@@ -30,36 +32,47 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - id: download
+        run: curl --fail --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/a.tar.gz
       - id: checksum
-        run: sha256sum --check --strict asset.sha256
+        run: sha256sum --check --strict --ignore-missing SHA256SUMS
       - id: attestation
         env:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: |
-          gh attestation verify a.tar.gz --bundle a.json \\
+          gh attestation verify a.tar.gz \\
             --repo komira-ai/hostkeeper \\
             --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \\
             --source-ref refs/heads/main \\
-            --source-digest \"$HOSTKEEPER_COMMIT\" > verified.json
+            --source-digest \"$HOSTKEEPER_COMMIT\" \\
+            --deny-self-hosted-runners \\
+            --format json > verified.json
       - id: commit
         env:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
-        run: test \"$(jq -r '.[0].verificationResult.signature.certificate.sourceRepositoryDigest' verified.json)\" = \"$HOSTKEEPER_COMMIT\"
-      - id: oidc-token
-        run: curl --header @request \"$ACTIONS_ID_TOKEN_REQUEST_URL\" > token
+        run: jq --exit-status '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique == [env.HOSTKEEPER_COMMIT]' verified.json
+      - id: unpack
+        run: tar --extract --gzip --file a.tar.gz --one-top-level=bin hostkeeper
+      - id: version
+        run: test \"$(\"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" --version)\" = \"hostkeeper 1.0.0+0123456789ab\"
       - id: set-desired
-        run: hostkeeper ctl --token-file token releases set-desired --service s
-      - id: converge
         env:
           MAX_POLLS: ${{ inputs.max_polls }}
         run: |
-          for ((poll = 1; poll <= MAX_POLLS; poll++)); do
-            hostkeeper ctl --token-file token releases converge --service s
-          done
+          \"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" ci set-desired \\
+            --service s \\
+            --max-polls \"$MAX_POLLS\"
 ";
 
-/// The token step of [`CLIENT`].
-const TOKEN_BLOCK: &str = "      - id: oidc-token\n        run: curl --header @request \"$ACTIONS_ID_TOKEN_REQUEST_URL\" > token\n";
+/// The client step of [`CLIENT`], whole.
+const CLIENT_BLOCK: &str = "      - id: set-desired
+        env:
+          MAX_POLLS: ${{ inputs.max_polls }}
+        run: |
+          \"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" ci set-desired \\
+            --service s \\
+            --max-polls \"$MAX_POLLS\"
+";
 
 /// The first lines of the attestation and commit steps of [`CLIENT`], with their commit.
 const ATTESTATION_ENV: &str = "      - id: attestation\n        env:\n          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}\n";
@@ -104,72 +117,87 @@ fn moved(text: &str, from: &str, to: &str, before: &str) -> String {
 
 #[test]
 fn the_oidc_request_comes_after_every_verification_step() {
-    // Catches: the token requested before the release is proven, in the real file (by
-    // reordering its steps) and in a small one.
+    // Catches: the client, the first step that requests a token, run before the release is
+    // proven and its version checked, in the real file (by reordering its steps) and in a small
+    // one.
     let text = real();
     assert_client(&text, &[]);
     let ids = step_ids(&text);
     let at = |id: &str| ids.iter().position(|s| s == id).expect(id);
     for id in VERIFY_STEPS {
-        assert!(at(TOKEN_STEP) > at(id), "{TOKEN_STEP} before {id}: {ids:?}");
+        assert!(
+            at(CLIENT_STEP) > at(id),
+            "{CLIENT_STEP} before {id}: {ids:?}"
+        );
     }
     assert_client(CLIENT, &[]);
-    let early = with_in(CLIENT, TOKEN_BLOCK, "");
+    let early = with_in(CLIENT, CLIENT_BLOCK, "");
     let early = with_in(
         &early,
         "      - id: checksum\n",
-        &format!("{TOKEN_BLOCK}      - id: checksum\n"),
+        &format!("{CLIENT_BLOCK}      - id: checksum\n"),
     );
-    assert_client(
-        &early,
-        &[
-            "the OIDC token step `oidc-token` (step 1) comes before the verification step `checksum` (step 2)",
-            "the OIDC token step `oidc-token` (step 1) comes before the verification step `attestation` (step 3)",
-            "the OIDC token step `oidc-token` (step 1) comes before the verification step `commit` (step 4)",
-            "step 1 (`oidc-token`) comes before the last verification step and names the OIDC token request",
-        ],
-    );
-    // The real file with its token step moved to just before the checksum: the inputs and the
-    // download are steps 1 and 2.
+    let want = |client: usize, checksum: usize| {
+        let mut lines: Vec<String> = [
+            ("checksum", checksum),
+            ("attestation", checksum + 1),
+            ("commit", checksum + 2),
+            ("version", checksum + 4),
+        ]
+        .iter()
+        .map(|(id, at)| {
+            format!(
+                "the OIDC token step `set-desired` (step {client}) comes before the verification step `{id}` (step {at})"
+            )
+        })
+        .collect();
+        lines.push(format!(
+            "step {client} (`set-desired`) comes before the last verification step and runs the hostkeeper program"
+        ));
+        lines
+    };
+    let early_want = want(2, 3);
+    let early_want: Vec<&str> = early_want.iter().map(String::as_str).collect();
+    assert_client(&early, &early_want);
+    // The real file with its client step moved to just before the checksum: the download is
+    // step 1.
     let reordered = moved(
         &text,
-        "      - name: Request the OIDC token\n",
-        "      - name: Set the desired version\n",
+        "      # The first step that can hold an OIDC token",
+        "      - name: Remove the token file\n",
         "      # Verification 1 of 3",
     );
-    assert_client(
-        &reordered,
-        &[
-            "the OIDC token step `oidc-token` (step 3) comes before the verification step `checksum` (step 4)",
-            "the OIDC token step `oidc-token` (step 3) comes before the verification step `attestation` (step 5)",
-            "the OIDC token step `oidc-token` (step 3) comes before the verification step `commit` (step 6)",
-            "step 3 (`oidc-token`) comes before the last verification step and names the OIDC token request",
-        ],
-    );
+    assert_client(&reordered, &early_want);
 }
 
 #[test]
 fn nothing_before_verification_touches_the_token_or_ctl() {
-    // Catches: a step before the last verification that runs ctl, reads the token request
-    // variables, or uses an action (which can read them); the job's `env` naming them; and a
-    // verification or token step that the job could run on past.
+    // Catches: a step before the last provenance check that runs ctl or the hostkeeper program,
+    // reads the token request variables, or uses an action (which can read them); the job's
+    // `env` naming them; and a check or the client that the job could run on past.
     let commit = "      - id: commit\n";
-    let cases: [(&str, &[&str]); 3] = [
+    let cases: [(&str, &[&str]); 4] = [
         (
             "      - id: early\n        run: hostkeeper ctl releases converge --service s\n",
-            &["step 3 (`early`) comes before the last verification step and runs ctl"],
+            &["step 4 (`early`) comes before the last verification step and runs ctl"],
+        ),
+        (
+            "      - id: early\n        run: exec \"$RUNNER_TEMP/hostkeeper-bin/hostkeeper\" --version\n",
+            &[
+                "step 4 (`early`) comes before the last verification step and runs the hostkeeper program",
+            ],
         ),
         (
             "      - id: early\n        run: echo \"$ACTIONS_ID_TOKEN_REQUEST_TOKEN\"\n",
             &[
-                "step 3 (`early`) comes before the last verification step and names the OIDC token request",
+                "step 4 (`early`) comes before the last verification step and names the OIDC token request",
             ],
         ),
         (
             "      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1\n        with:\n          script: core.getIDToken()\n",
             &[
-                "step 3 (`unnamed`) comes before the last verification step and uses an action, which can read the OIDC token request",
-                "step 3 (`unnamed`) comes before the last verification step and names the OIDC token request",
+                "step 4 (`unnamed`) comes before the last verification step and uses an action, which can read the OIDC token request",
+                "step 4 (`unnamed`) comes before the last verification step and names the OIDC token request",
             ],
         ),
     ];
@@ -191,24 +219,24 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             commit,
             &format!("{commit}        continue-on-error: true\n"),
         ),
-        &["step 3 (`commit`) has `continue-on-error`, which could run the job on past it"],
+        &["step 4 (`commit`) has `continue-on-error`, which could run the job on past it"],
     );
-    assert_client(
-        &with_in(
-            CLIENT,
-            "      - id: oidc-token\n",
-            "      - id: oidc-token\n        if: ${{ always() }}\n",
-        ),
-        &["step 4 (`oidc-token`) has `if`, which could run the job on past it"],
-    );
-    // The order is read from the one step with the token step's id: a second one is refused.
     assert_client(
         &with_in(
             CLIENT,
             "      - id: set-desired\n",
-            &format!("{TOKEN_BLOCK}      - id: set-desired\n"),
+            "      - id: set-desired\n        if: ${{ always() }}\n",
         ),
-        &["more than one step has `id: oidc-token`"],
+        &["step 7 (`set-desired`) has `if`, which could run the job on past it"],
+    );
+    // The order is read from the one step with the client's id: a second one is refused.
+    assert_client(
+        &with_in(
+            CLIENT,
+            CLIENT_BLOCK,
+            &format!("{CLIENT_BLOCK}{CLIENT_BLOCK}"),
+        ),
+        &["more than one step has `id: set-desired`"],
     );
 }
 
@@ -300,9 +328,9 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
 
 #[test]
 fn the_verification_step_names_the_signer_workflow_repo_and_ref() {
-    // Catches: the attestation accepted from another repository, another workflow, another ref
-    // or another commit, by a dropped, changed, repeated or widened flag; and the commit
-    // comparison made against anything but `hostkeeper_commit`.
+    // Catches: the attestation accepted from another repository, another workflow, another ref,
+    // another commit or a self-hosted runner, by a dropped, changed, repeated or widened flag;
+    // and the commit comparison made against anything but `hostkeeper_commit`.
     assert_client(&real(), &[]);
     let repo = "            --repo komira-ai/hostkeeper \\\n";
     let no_repo = "the attestation step does not pass `--repo komira-ai/hostkeeper` exactly once";
@@ -362,6 +390,10 @@ fn the_verification_step_names_the_signer_workflow_repo_and_ref() {
         &["the attestation step does not pass `--source-digest $HOSTKEEPER_COMMIT` exactly once"],
     );
     assert_client(
+        &with_in(CLIENT, "            --deny-self-hosted-runners \\\n", ""),
+        &["the attestation step does not pass `--deny-self-hosted-runners` exactly once"],
+    );
+    assert_client(
         &with_in(CLIENT, "gh attestation verify", "gh attestation download"),
         &["the attestation step does not run `gh attestation verify`"],
     );
@@ -382,48 +414,33 @@ fn the_verification_step_names_the_signer_workflow_repo_and_ref() {
         ),
         &["the commit step's `HOSTKEEPER_COMMIT` is not `${{ inputs.hostkeeper_commit }}`"],
     );
+    let compare =
+        "the commit step does not compare `sourceRepositoryDigest` with `env.HOSTKEEPER_COMMIT`";
     assert_client(
         &with_in(CLIENT, "sourceRepositoryDigest", "sourceRepositoryRef"),
-        &[
-            "the commit step does not compare `sourceRepositoryDigest` with `\"$HOSTKEEPER_COMMIT\"`",
-        ],
+        &[compare],
+    );
+    assert_client(
+        &with_in(CLIENT, "[env.HOSTKEEPER_COMMIT]", "[env.OTHER]"),
+        &[compare],
     );
 }
 
 #[test]
 fn the_poll_is_bounded_by_an_iteration_count_input() {
-    // Catches: a poll with no bound, a bound that is not `max_polls`, and an unbounded loop in
-    // any other step.
-    assert_client(&real(), &[]);
-    assert!(real().contains(POLL_LOOP));
-    let header = format!("          {POLL_LOOP}\n");
-    let no_loop = format!("the poll step has no loop `{POLL_LOOP}`");
-    let no_loop = no_loop.as_str();
-    let other_for = format!("step 6 (`converge`) has a `for ((` loop other than `{POLL_LOOP}`");
-    let other_for = other_for.as_str();
-    let cases: [(&str, Vec<&str>); 4] = [
-        (
-            "          while true; do\n",
-            vec![
-                no_loop,
-                "step 6 (`converge`) has a `while` loop, which no count bounds",
-            ],
-        ),
-        (
-            "          until false; do\n",
-            vec![
-                no_loop,
-                "step 6 (`converge`) has a `until` loop, which no count bounds",
-            ],
-        ),
-        ("          for ((;;)); do\n", vec![no_loop, other_for]),
-        (
-            "          for ((poll = 1; poll <= 100000; poll++)); do\n",
-            vec![no_loop, other_for],
-        ),
-    ];
-    for (line, want) in cases {
-        assert_client(&with_in(CLIENT, &header, line), &want);
+    // Catches: the client run without its bound, with a bound that is not `max_polls`, or not
+    // run at all; and a loop of the shell's own in any step.
+    let text = real();
+    assert_client(&text, &[]);
+    assert!(text.contains("--max-polls \"$MAX_POLLS\""));
+    let flag = "            --max-polls \"$MAX_POLLS\"\n";
+    let no_bound = "the client step does not pass `--max-polls \"$MAX_POLLS\"` exactly once";
+    for changed in [
+        String::new(),
+        "            --max-polls 100000\n".to_owned(),
+        format!("            --max-polls 1 \\\n{flag}"),
+    ] {
+        assert_client(&with_in(CLIENT, flag, &changed), &[no_bound]);
     }
     assert_client(
         &with_in(
@@ -431,20 +448,31 @@ fn the_poll_is_bounded_by_an_iteration_count_input() {
             "MAX_POLLS: ${{ inputs.max_polls }}",
             "MAX_POLLS: 100000",
         ),
-        &["the poll step's `MAX_POLLS` is not `${{ inputs.max_polls }}`"],
+        &["the client step's `MAX_POLLS` is not `${{ inputs.max_polls }}`"],
     );
     assert_client(
         &with_in(CLIENT, "        type: number\n", "        type: string\n"),
         &["no input `max_polls` of `type: number`"],
     );
     assert_client(
-        &with_in(
-            CLIENT,
-            "run: hostkeeper ctl --token-file token releases set-desired --service s",
-            "run: while true; do hostkeeper ctl --token-file token releases set-desired --service s; done",
-        ),
-        &["step 5 (`set-desired`) has a `while` loop, which no count bounds"],
+        &with_in(CLIENT, " ci set-desired \\", " ctl releases set-desired \\"),
+        &["the client step does not run `$RUNNER_TEMP/hostkeeper-bin/hostkeeper ci set-desired`"],
     );
+    let unpack =
+        "        run: tar --extract --gzip --file a.tar.gz --one-top-level=bin hostkeeper\n";
+    for (script, word) in [
+        ("while true; do sleep 10; done", "while"),
+        ("until false; do sleep 10; done", "until"),
+        ("for poll in 1 2 3; do sleep 10; done", "for"),
+    ] {
+        let want = format!(
+            "step 5 (`unpack`) has a `{word}` loop: the one loop is the client's, bounded by `max_polls`"
+        );
+        assert_client(
+            &with_in(CLIENT, unpack, &format!("        run: {script}\n")),
+            &[want.as_str()],
+        );
+    }
 }
 
 /// One input as the YAML declares it or the table documents it: name, type, whether it is

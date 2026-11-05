@@ -238,20 +238,31 @@ fn read(relative: &str) -> String {
 }
 
 /// Catches a command or flag renamed in the protos while `set-desired.yml` or `ci-client.md`
-/// still uses the old name, and an extraction that finds no invocation at all.
+/// still uses the old name, and an extraction that finds no invocation at all. The workflow runs
+/// the client (`hostkeeper ci set-desired`), which calls ctl in its own process, so it may name
+/// no ctl command; any it does name must resolve. The client's own calls are checked against the
+/// table where they are made, by the tests of `hostkeeper-ci`, which run them through ctl.
 #[test]
 fn the_documented_ctl_commands_exist_in_the_descriptor_table() {
     let lines = tree_lines(COMMANDS);
+    // (short name, path, whether it must invoke ctl at least once)
     let files = [
-        ("set-desired.yml", ".github/workflows/set-desired.yml"),
-        ("ci-client.md", "docs/deploy/ci-client.md"),
+        (
+            "set-desired.yml",
+            ".github/workflows/set-desired.yml",
+            false,
+        ),
+        ("ci-client.md", "docs/deploy/ci-client.md", true),
     ];
     let mut errors = Vec::new();
     let mut all = BTreeSet::new();
-    for (name, path) in files {
+    for (name, path, required) in files {
         let text = read(path);
         let (named, count) = invoked(&text, &lines);
-        assert!(count > 0, "{name} has no `hostkeeper ctl` invocation");
+        assert!(
+            count > 0 || !required,
+            "{name} has no `hostkeeper ctl` invocation"
+        );
         all.extend(named);
         errors.extend(unresolved(name, &text, &lines));
     }
