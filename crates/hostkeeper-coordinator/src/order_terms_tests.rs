@@ -106,10 +106,10 @@ async fn an_agent_without_order_v1_is_sent_the_bytes_it_always_was() {
         r#"{"reply":"update","service":"web","version":"2.0"}"#
     );
     // Another rig: the one slot of `web` is d1's in this one.
-    let rig = rig("terms-absent-featured", "");
-    bytes(&rig, "d2", agent(&["halt-v1"], "1.0", None));
-    set(&rig, WEB, "2.0", 1).await;
-    let featured = bytes(&rig, "d2", agent(&["halt-v1"], "1.0", None));
+    let other = crate::marks_support::rig("terms-absent-featured", "");
+    bytes(&other, "d2", agent(&["halt-v1"], "1.0", None));
+    set(&other, WEB, "2.0", 1).await;
+    let featured = bytes(&other, "d2", agent(&["halt-v1"], "1.0", None));
     assert!(
         featured.starts_with(r#"{"reply":"update","service":"web","version":"2.0","features":"#),
         "{featured}"
