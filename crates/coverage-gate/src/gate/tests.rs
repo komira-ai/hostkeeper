@@ -17,8 +17,9 @@ fn record(path: &str, coverage: CrateCoverage) -> FileRecord {
     }
 }
 
-fn names(list: &[&str]) -> BTreeSet<String> {
-    list.iter().map(|s| (*s).to_owned()).collect()
+/// Crates `list`, all under `crates`.
+fn names(list: &[&str]) -> BTreeMap<String, &'static str> {
+    list.iter().map(|s| ((*s).to_owned(), "crates")).collect()
 }
 
 fn row(measured: CrateCoverage) -> Row {
@@ -208,5 +209,113 @@ fn a_sum_that_does_not_fit_is_an_error_naming_the_crate() {
     assert_eq!(
         total(&measured),
         Err(Error::Overflow("the workspace".to_owned()))
+    );
+}
+
+/// A workspace of its own under the target directory with a manifest in each `base/name`.
+fn workspace(tag: &str, dirs: &[&str]) -> TestDir {
+    let exe = std::env::current_exe().expect("test binary");
+    let root = TestDir::under(&exe.parent().expect("deps").join("coverage-gate-unit"), tag);
+    for dir in dirs {
+        std::fs::create_dir_all(root.join(dir)).expect("dir");
+        std::fs::write(root.join(dir).join("Cargo.toml"), b"").expect("manifest");
+    }
+    root
+}
+
+/// Catches: `examples/<name>` crates left out of the list (their records would then be
+/// unattributed), a crate under `examples` listed under the wrong base, an examples directory
+/// holding a file or a directory without a manifest counted as a crate, and a workspace
+/// without an `examples` directory refused.
+#[test]
+fn workspace_crates_include_examples_and_tolerate_their_absence() {
+    let root = workspace("examples", &["crates/a", "examples/hello"]);
+    std::fs::create_dir_all(root.join("examples/no-manifest")).expect("dir");
+    std::fs::write(root.join("examples/file"), b"").expect("file");
+    let want: BTreeMap<String, &str> =
+        [("a".to_owned(), "crates"), ("hello".to_owned(), "examples")].into();
+    assert_eq!(workspace_crates(&root).expect("list"), want);
+
+    let bare = workspace("no-examples", &["crates/a"]);
+    assert_eq!(workspace_crates(&bare).expect("list"), names(&["a"]));
+}
+
+/// Catches: an `examples` that cannot be listed (here a file) read as no examples, which
+/// would let its crates skip the gate, and a missing `crates` accepted because `examples`
+/// exists.
+#[test]
+fn an_examples_path_that_cannot_be_listed_and_a_missing_crates_are_errors() {
+    let root = workspace("examples-file", &["crates/a"]);
+    std::fs::write(root.join("examples"), b"").expect("file");
+    assert!(matches!(workspace_crates(&root), Err(ListError::Io(_))));
+
+    let only = workspace("only-examples", &["examples/hello"]);
+    assert!(matches!(workspace_crates(&only), Err(ListError::Io(_))));
+}
+
+/// Catches: two crates with one directory name merged into one table row, and a message that
+/// does not name both directories.
+#[test]
+fn two_crates_with_one_directory_name_are_refused() {
+    let root = workspace("same-name", &["crates/hello", "examples/hello", "crates/b"]);
+    let e = workspace_crates(&root).expect_err("collision");
+    assert!(matches!(
+        e,
+        ListError::SameName {
+            first: "crates",
+            second: "examples",
+            ..
+        }
+    ));
+    assert_eq!(
+        e.to_string(),
+        "hello is the directory of both crates/hello and examples/hello: crates are named by \
+         directory in the table, so rename one"
+    );
+}
+
+/// Catches: a record under `examples/<name>` unattributed or attributed to another crate, a
+/// crate under `examples` credited with records from `crates/<name>` (or the reverse), and the
+/// error text still naming only `crates`.
+#[test]
+fn a_record_under_examples_is_attributed_to_its_crate_under_its_own_base_only() {
+    let root = Path::new("/w");
+    let crates: BTreeMap<String, &str> =
+        [("a".to_owned(), "crates"), ("hello".to_owned(), "examples")].into();
+    let files = [
+        record("/w/crates/a/src/lib.rs", cov(10, 9, 2, 1)),
+        record("/w/examples/hello/src/lib.rs", cov(4, 4, 1, 1)),
+        record("/w/examples/hello/src/main.rs", cov(1, 0, 0, 0)),
+    ];
+    let got = by_crate(root, &crates, &files).expect("attributed");
+    assert_eq!(got["a"], cov(10, 9, 2, 1));
+    assert_eq!(got["hello"], cov(5, 4, 1, 1));
+    for path in ["/w/crates/hello/src/lib.rs", "/w/examples/a/src/lib.rs"] {
+        let files = [record(path, cov(1, 1, 0, 0))];
+        let e = by_crate(root, &crates, &files).expect_err("wrong base");
+        assert_eq!(e, Error::Unattributed(PathBuf::from(path)), "{path}");
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "{path} is not under <root>/crates/<crate>/ or <root>/examples/<crate>/ for any workspace crate"
+            )
+        );
+    }
+}
+
+/// Catches: a record whose crate directory name is not UTF-8 attributed to some crate, or
+/// panicking, instead of refused as outside every crate.
+#[cfg(unix)]
+#[test]
+fn a_record_under_a_directory_that_is_not_utf8_is_an_error() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/w/examples/\xff/src/lib.rs"));
+    let files = [FileRecord {
+        path: path.clone(),
+        coverage: cov(1, 1, 0, 0),
+    }];
+    assert_eq!(
+        by_crate(Path::new("/w"), &names(&["a"]), &files),
+        Err(Error::Unattributed(path))
     );
 }

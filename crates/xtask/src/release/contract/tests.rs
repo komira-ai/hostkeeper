@@ -42,15 +42,13 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 40);
+    assert_eq!(names.len(), 60);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
-    let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar
-";
+    let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
     for to in [
         "",
-        "hostkeeper-coordinator-<version>-<linux-platform>.oci.tar
-",
+        "hostkeeper-coordinator-<version>-<linux-platform>.oci.tar\n",
     ] {
         assert_eq!(DOC.matches(image).count(), 1);
         let doc = DOC.replacen(image, to, 1);
@@ -211,16 +209,21 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 15);
-    assert_eq!(summed.len(), 24);
-    assert!(summed.contains(&INDEX.to_owned()) & !attested.contains(&INDEX.to_owned()));
+    assert_eq!(attested.len(), 21);
+    assert_eq!(summed.len(), 38);
+    for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX] {
+        assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
+    }
     assert!(attested.iter().all(|a| summed.contains(a)));
     assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
-    assert!(attested.contains(&package_name(&v, Platform::LinuxArm64)));
-    assert!(attested.contains(&package_name(&v, Platform::MacosArm64)));
+    for package in Package::ALL {
+        for platform in Platform::RELEASED {
+            assert!(attested.contains(&package.package_name(&v, platform)));
+        }
+    }
     assert!(attested.contains(&installer_name(&v)));
     assert_eq!(
-        package_name(&v, Platform::LinuxX86_64),
+        Package::Hostkeeper.package_name(&v, Platform::LinuxX86_64),
         "hostkeeper-0.1.3-linux-x86_64.tar.zst"
     );
     assert_eq!(bundle_of("a.deb"), "a.deb.sigstore.json");
@@ -261,13 +264,22 @@ fn there_are_exactly_three_platforms_and_a_release_ships_all_three() {
 
 #[test]
 fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux_assets() {
-    // Catches: a deb, an rpm, a coordinator or an image named for macOS, its package without a
-    // bundle or digest file, or its installer pkg missing or not attested.
+    // Catches: a deb, an rpm, a coordinator or an image named for macOS, its packages (the
+    // hostkeeper one, the hello one and hello's failing build) without a bundle or digest file,
+    // or its installer pkg missing or not attested.
     let v = version("0.2.1");
     assert_eq!(
         asset_names(&v, &[Platform::MacosArm64]),
         [
             "SHA256SUMS",
+            "hello-0.2.1-fail-ready-macos-arm64.tar.zst",
+            "hello-0.2.1-fail-ready-macos-arm64.tar.zst.sha256",
+            "hello-0.2.1-fail-ready-macos-arm64.tar.zst.sigstore.json",
+            "hello-0.2.1-macos-arm64.tar.zst",
+            "hello-0.2.1-macos-arm64.tar.zst.sha256",
+            "hello-0.2.1-macos-arm64.tar.zst.sigstore.json",
+            "hello-fail-ready-index.json",
+            "hello-index.json",
             "hostkeeper-0.2.1-macos-arm64.cdx.json",
             "hostkeeper-0.2.1-macos-arm64.pkg",
             "hostkeeper-0.2.1-macos-arm64.pkg.sigstore.json",
@@ -279,4 +291,62 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "index.json",
         ]
     );
+}
+
+#[test]
+fn the_services_and_packages_name_their_packages_and_indexes() {
+    // Catches: a hello package named as a hostkeeper one, a package's index under another's
+    // name, a failing build whose version, file or index is not the documented one, or a default
+    // service other than hostkeeper (which every existing invocation relies on).
+    let v = version("1.2.3");
+    assert_eq!(Service::default(), Service::Hostkeeper);
+    assert_eq!(Service::Hostkeeper.name(), "hostkeeper");
+    assert_eq!(Service::Hello.name(), "hello");
+    assert_eq!(
+        Package::ALL,
+        [Package::Hostkeeper, Package::Hello, Package::HelloFailReady]
+    );
+    assert_eq!(
+        Package::ALL.map(Package::index_name),
+        [
+            "index.json",
+            "hello-index.json",
+            "hello-fail-ready-index.json"
+        ]
+    );
+    assert_eq!(
+        Package::ALL.map(|p| p.service().name()),
+        ["hostkeeper", "hello", "hello"]
+    );
+    assert_eq!(
+        Package::ALL.map(|p| p.version_text(&v)),
+        ["1.2.3", "1.2.3", "1.2.3-fail-ready"]
+    );
+    assert_eq!(
+        Package::Hello.package_name(&v, Platform::MacosArm64),
+        "hello-1.2.3-macos-arm64.tar.zst"
+    );
+    assert_eq!(
+        Package::HelloFailReady.package_name(&v, Platform::LinuxX86_64),
+        "hello-1.2.3-fail-ready-linux-x86_64.tar.zst"
+    );
+    assert_eq!(
+        Package::Hostkeeper.package_name(&v, Platform::LinuxArm64),
+        "hostkeeper-1.2.3-linux-arm64.tar.zst"
+    );
+}
+
+#[test]
+fn a_package_is_chosen_by_service_and_fail_ready_and_hostkeeper_has_no_failing_build() {
+    // Catches: a failing build of hostkeeper that exists, or `--fail-ready` ignored for hello.
+    assert_eq!(
+        Package::of(Service::Hostkeeper, false),
+        Some(Package::Hostkeeper)
+    );
+    assert_eq!(Package::of(Service::Hello, false), Some(Package::Hello));
+    assert_eq!(
+        Package::of(Service::Hello, true),
+        Some(Package::HelloFailReady)
+    );
+    assert_eq!(Package::of(Service::Hostkeeper, true), None);
 }

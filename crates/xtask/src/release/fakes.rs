@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, INDEX, PROGRAM, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS,
-    Version, attested_names, bundle_of, summed_names,
+    Commit, DIGEST_SUFFIX, Package, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Version,
+    attested_names, bundle_of, summed_names,
 };
 use super::file_sha256;
 use super::index::ReleaseIndex;
@@ -38,14 +38,17 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
     };
     let summed = summed_names(version);
     for name in &summed {
-        if name.ends_with(DIGEST_SUFFIX) | (name == INDEX) {
+        if name.ends_with(DIGEST_SUFFIX) | Package::ALL.iter().any(|p| name == p.index_name()) {
             continue;
         }
         write(name, format!("{name} {marker}\n"));
     }
-    let index = ReleaseIndex::of_dir(dir, PROGRAM, version, &Platform::RELEASED)
-        .expect("index the packages");
-    write(INDEX, index.to_json());
+    for package in Package::ALL {
+        let (service, text) = (package.service().name(), package.version_text(version));
+        let index = ReleaseIndex::of_dir(dir, service, &text, &Platform::RELEASED)
+            .expect("index the packages");
+        write(package.index_name(), index.to_json());
+    }
     for name in &summed {
         if let Some(package) = name.strip_suffix(DIGEST_SUFFIX) {
             let digest = file_sha256(&dir.join(package)).expect("hash the package");

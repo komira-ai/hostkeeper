@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use super::contract::{Commit, Platform, Version};
+use super::contract::{Commit, Platform, Service, Version};
 use super::package::{Request, package_dated};
 
 /// Builds the linux-x86_64 hostkeeper package of `version` as `cargo xtask release package`
@@ -17,6 +17,7 @@ pub fn linux_package(
     mtime: u64,
 ) -> Result<Vec<String>, String> {
     let request = Request {
+        service: Service::Hostkeeper,
         platform: Platform::LinuxX86_64,
         version: version.parse::<Version>().map_err(|e| e.to_string())?,
         commit: "0"
@@ -25,6 +26,7 @@ pub fn linux_package(
             .map_err(|e| e.to_string())?,
         binary: binary.to_path_buf(),
         unit: Some(unit.to_path_buf()),
+        fail_ready: false,
         out: out.to_path_buf(),
     };
     package_dated(&request, || Ok(mtime)).map_err(|e| e.to_string())

@@ -1,4 +1,4 @@
-//! The plists of the daemon job and of a step job: their exact bytes, their key sets read back
+//! The plists of the daemon job, of a step job and of a service job: their exact bytes, their key sets read back
 //! through a small reader, the escaping of text, and the refusal of text that cannot be written.
 
 use std::ffi::OsString;
@@ -8,8 +8,10 @@ use std::path::PathBuf;
 use hostkeeper_hook::Step;
 use hostkeeper_launchd::label::Label;
 use hostkeeper_launchd::plist::{
-    DAEMON_LOG_DIR, DAEMON_PROGRAM, DaemonJob, PlistError, StepJob, daemon_plist, step_plist,
+    DAEMON_LOG_DIR, DAEMON_PROGRAM, DaemonJob, PlistError, ServiceJob, StepJob, daemon_plist,
+    service_plist, step_plist,
 };
+use hostkeeper_placed::lint::check_unit_text;
 
 const HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -171,6 +173,19 @@ fn standard_step_job() -> StepJob {
         .iter()
         .map(OsString::from)
         .collect(),
+    }
+}
+
+const HELLO_PROGRAM: &str = "/var/lib/hostkeeper/packages/hello/current/bin/hello";
+
+fn standard_service_job() -> ServiceJob {
+    ServiceJob {
+        label: Label::parse("hello.a").expect("a valid label"),
+        program: PathBuf::from(HELLO_PROGRAM),
+        args: ["--port", "9310"].iter().map(OsString::from).collect(),
+        run_while: PathBuf::from("/var/lib/updater/hooks/hello/slots/a"),
+        stdout: PathBuf::from("/var/log/hello.a.out.log"),
+        stderr: PathBuf::from("/var/log/hello.a.err.log"),
     }
 }
 
@@ -404,4 +419,184 @@ fn plist_refuses_text_that_is_not_utf8() {
         error.to_string(),
         "plist text \"\u{fffd}\" is not valid UTF-8"
     );
+}
+
+/// Catches a change to the service plist's bytes: key order, the nested `KeepAlive` dictionary,
+/// tabs, header or trailer.
+#[test]
+fn the_service_plist_matches_the_golden_bytes() {
+    let xml = service_plist(&standard_service_job()).expect("the service job renders");
+    assert_eq!(xml, include_str!("golden/service.plist"));
+}
+
+/// Catches a service job that starts at load, is kept alive unconditionally, loses its
+/// arguments, or carries a user, sandbox, environment or sockets.
+#[test]
+fn a_service_plist_is_kept_alive_only_while_its_path_exists() {
+    let dict = parse(&service_plist(&standard_service_job()).expect("renders"));
+    assert_eq!(
+        keys(&dict),
+        [
+            "Label",
+            "ProgramArguments",
+            "RunAtLoad",
+            "KeepAlive",
+            "StandardOutPath",
+            "StandardErrorPath"
+        ]
+    );
+    for absent in [
+        "UserName",
+        "GroupName",
+        "SandboxProfile",
+        "EnvironmentVariables",
+        "Sockets",
+        "AbandonProcessGroup",
+    ] {
+        assert!(!keys(&dict).contains(&absent), "{absent} must be absent");
+    }
+    let expected = vec![
+        ("Label".to_owned(), s("hello.a")),
+        (
+            "ProgramArguments".to_owned(),
+            strs(&[HELLO_PROGRAM, "--port", "9310"]),
+        ),
+        ("RunAtLoad".to_owned(), Val::Bool(false)),
+        (
+            "KeepAlive".to_owned(),
+            Val::Dict(vec![(
+                "PathState".to_owned(),
+                Val::Dict(vec![(
+                    "/var/lib/updater/hooks/hello/slots/a".to_owned(),
+                    Val::Bool(true),
+                )]),
+            )]),
+        ),
+        ("StandardOutPath".to_owned(), s("/var/log/hello.a.out.log")),
+        (
+            "StandardErrorPath".to_owned(),
+            s("/var/log/hello.a.err.log"),
+        ),
+    ];
+    assert_eq!(dict, expected);
+}
+
+/// Catches a service job with no arguments writing a wrong `ProgramArguments`, which must hold
+/// the program alone.
+#[test]
+fn a_service_plist_without_arguments_runs_the_program_alone() {
+    let job = ServiceJob {
+        args: Vec::new(),
+        ..standard_service_job()
+    };
+    let dict = parse(&service_plist(&job).expect("renders"));
+    assert_eq!(dict[1].1, strs(&[HELLO_PROGRAM]));
+}
+
+/// Catches service plist text written unescaped (markup injection through the program, an
+/// argument, the `PathState` key or an output path), and an escape that does not read back.
+#[test]
+fn service_plist_text_is_escaped() {
+    let nasty = "a&b<c>d\"e'f &amp; g";
+    let job = ServiceJob {
+        program: PathBuf::from(format!("/bin/{nasty}")),
+        args: vec![OsString::from(nasty), OsString::new()],
+        run_while: PathBuf::from(format!("/run/{nasty}")),
+        stdout: PathBuf::from(format!("/log/{nasty}")),
+        ..standard_service_job()
+    };
+    let xml = service_plist(&job).expect("escapable text renders");
+    let escaped = "a&amp;b&lt;c&gt;d&quot;e&apos;f &amp;amp; g";
+    assert!(xml.contains(&format!("<string>{escaped}</string>")));
+    assert!(xml.contains(&format!("<key>/run/{escaped}</key>")));
+    assert!(!xml.contains(nasty));
+    let dict = parse(&xml);
+    let program = format!("/bin/{nasty}");
+    assert_eq!(dict[1].1, strs(&[program.as_str(), nasty, ""]));
+    let Val::Dict(keep_alive) = &dict[3].1 else {
+        panic!("KeepAlive is a dictionary");
+    };
+    let Val::Dict(paths) = &keep_alive[0].1 else {
+        panic!("PathState is a dictionary");
+    };
+    assert_eq!(paths[0].0, format!("/run/{nasty}"));
+    assert_eq!(dict[4].1, s(&format!("/log/{nasty}")));
+}
+
+/// Every field of a service job, each set to `bad`.
+fn service_jobs_with(bad: &dyn Fn() -> OsString) -> Vec<ServiceJob> {
+    vec![
+        ServiceJob {
+            args: vec![bad()],
+            ..standard_service_job()
+        },
+        ServiceJob {
+            program: PathBuf::from(bad()),
+            ..standard_service_job()
+        },
+        ServiceJob {
+            run_while: PathBuf::from(bad()),
+            ..standard_service_job()
+        },
+        ServiceJob {
+            stdout: PathBuf::from(bad()),
+            ..standard_service_job()
+        },
+        ServiceJob {
+            stderr: PathBuf::from(bad()),
+            ..standard_service_job()
+        },
+    ]
+}
+
+/// Catches a control character reaching a service plist through an argument, the program, the
+/// run-while path or an output path, as the other jobs refuse it.
+#[test]
+fn service_plist_refuses_control_characters() {
+    for bad in ["a\nb", "a\tb", "a\u{7}b", "a\u{7f}b"] {
+        for job in service_jobs_with(&|| OsString::from(bad)) {
+            assert_eq!(service_plist(&job), Err(control_error(bad)));
+        }
+    }
+    let job = ServiceJob {
+        run_while: PathBuf::from("/run/\u{7}"),
+        ..standard_service_job()
+    };
+    assert_eq!(
+        service_plist(&job)
+            .expect_err("a bell is refused")
+            .to_string(),
+        "plist text \"/run/\\u{7}\" holds a control character"
+    );
+}
+
+/// Catches a non-UTF-8 argument or path of a service job being written lossily.
+#[test]
+fn service_plist_refuses_text_that_is_not_utf8() {
+    let expected = Err(PlistError::NotUtf8 {
+        value: "\u{fffd}".to_owned(),
+    });
+    for job in service_jobs_with(&|| OsString::from_vec(vec![0xff])) {
+        assert_eq!(service_plist(&job), expected);
+    }
+}
+
+/// Catches a service plist whose first `ProgramArguments` string the placed-unit lint does not
+/// read as the program: a plist through `current` passes, and one that names a version directory, or
+/// another service's `current`, is refused.
+#[test]
+fn the_placed_unit_lint_reads_the_service_programs_first_argument() {
+    let packages = std::path::Path::new("/var/lib/hostkeeper/packages");
+    let xml = service_plist(&standard_service_job()).expect("renders");
+    assert_eq!(
+        check_unit_text(packages, "hello", "hello.a.plist", &xml),
+        Ok(())
+    );
+    let elsewhere = service_plist(&ServiceJob {
+        program: PathBuf::from("/var/lib/hostkeeper/packages/hello/1.2.3/bin/hello"),
+        ..standard_service_job()
+    })
+    .expect("renders");
+    assert!(check_unit_text(packages, "hello", "hello.a.plist", &elsewhere).is_err());
+    assert!(check_unit_text(packages, "other", "hello.a.plist", &xml).is_err());
 }

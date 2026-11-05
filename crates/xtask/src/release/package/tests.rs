@@ -13,7 +13,7 @@ use crate::release::file_sha256;
 use crate::release::ports::PortError;
 
 /// The packaged binary; nothing reads it as a program.
-const BINARY: &[u8] = b"the hostkeeper binary";
+pub(super) const BINARY: &[u8] = b"the hostkeeper binary";
 const UNIT: &str = include_str!("../../../tests/release/hostkeeper.service");
 const NAMES: [&str; 5] = [
     "bin/",
@@ -28,7 +28,7 @@ fn version() -> Version {
 }
 
 /// A history of one commit, and that commit.
-fn history() -> (FakeHistory, Commit) {
+pub(super) fn history() -> (FakeHistory, Commit) {
     let mut history = FakeHistory::default();
     let commit = history.commit(None, &[("VERSION", Some("0.1\n"))]);
     (history, commit)
@@ -40,31 +40,33 @@ fn request(dir: &Path, unit: &[u8], commit: &Commit, platform: Platform, out: &s
     std::fs::write(dir.join("hostkeeper"), BINARY).expect("write the binary");
     std::fs::write(dir.join("hostkeeper.service"), unit).expect("write the unit");
     Request {
+        service: Service::Hostkeeper,
         platform,
         version: version(),
         commit: commit.clone(),
         binary: dir.join("hostkeeper"),
         unit: (platform != Platform::MacosArm64).then(|| dir.join("hostkeeper.service")),
+        fail_ready: false,
         out: dir.join(out),
     }
 }
 
 /// One entry of an archive as read back.
-struct Seen {
-    name: String,
-    kind: tar::EntryType,
-    mode: u32,
+pub(super) struct Seen {
+    pub(super) name: String,
+    pub(super) kind: tar::EntryType,
+    pub(super) mode: u32,
     uid: u64,
     gid: u64,
     mtime: u64,
     user: String,
     group: String,
     ustar: bool,
-    data: Vec<u8>,
+    pub(super) data: Vec<u8>,
 }
 
 /// Decompresses and reads every entry of `package`.
-fn read_back(package: &[u8]) -> Vec<Seen> {
+pub(super) fn read_back(package: &[u8]) -> Vec<Seen> {
     let decoder = ruzstd::decoding::StreamingDecoder::new(package).expect("a zstd frame");
     let mut archive = tar::Archive::new(decoder);
     let mut seen = Vec::new();
@@ -99,7 +101,7 @@ fn read_back(package: &[u8]) -> Vec<Seen> {
 
 /// The shape rules of design section 5.5, checked on the bytes of a package by this test alone (a
 /// quick check beside the daemon's own unpacker, which the last test of this file runs): every entry that breaks one, and the list when it is not sorted and unique.
-fn shape_problems(package: &[u8], mtime: u64) -> Vec<String> {
+pub(super) fn shape_problems(package: &[u8], mtime: u64) -> Vec<String> {
     let seen = read_back(package);
     let mut problems = Vec::new();
     for e in &seen {
@@ -139,7 +141,7 @@ fn shape_problems(package: &[u8], mtime: u64) -> Vec<String> {
 
 /// Unpacks `package` into `dir` as plain files, for the manifest loader (no bounds, no seal: the
 /// daemon's own unpacker is run by the last test of this file).
-fn unpack(package: &[u8], dir: &Path) {
+pub(super) fn unpack(package: &[u8], dir: &Path) {
     for e in read_back(package) {
         if e.kind.is_dir() {
             std::fs::create_dir_all(dir.join(&e.name)).expect("create a directory");
@@ -149,8 +151,10 @@ fn unpack(package: &[u8], dir: &Path) {
     }
 }
 
-fn built(request: &Request) -> Vec<u8> {
-    let name = package_name(&request.version, request.platform);
+pub(super) fn built(request: &Request) -> Vec<u8> {
+    let name = Package::of(request.service, request.fail_ready)
+        .expect("a package of the request")
+        .package_name(&request.version, request.platform);
     std::fs::read(request.out.join(name)).expect("the package")
 }
 
@@ -165,7 +169,7 @@ fn expected() -> Expected {
     }
 }
 
-fn host(patch: u64) -> HostkeeperVersion {
+pub(super) fn host(patch: u64) -> HostkeeperVersion {
     HostkeeperVersion::parse(&format!("0.1.{patch}")).expect("a hostkeeper version")
 }
 
@@ -191,7 +195,7 @@ fn package_is_deterministic_and_has_exactly_the_four_allowed_top_level_names() {
     let lines_a = package(&history, &a).expect("package a");
     let lines_b = package(&history, &b).expect("package b");
     assert_eq!(lines_a, lines_b);
-    let name = package_name(&version(), Platform::LinuxX86_64);
+    let name = Package::Hostkeeper.package_name(&version(), Platform::LinuxX86_64);
     let bytes = built(&a);
     assert_eq!(bytes, built(&b));
     let digest_a = std::fs::read(a.out.join(format!("{name}.sha256"))).expect("digest a");
@@ -409,6 +413,7 @@ fn a_unit_that_does_not_start_the_binary_through_current_is_refused() {
     let dir = scratch("package-unit-refused");
     let (history, commit) = history();
     let path = dir.join("hostkeeper.service").display().to_string();
+    let binary_path = binary_path("hostkeeper");
     let go = |unit: &[u8], out: &str| {
         let r = request(&dir, unit, &commit, Platform::LinuxX86_64, out);
         let result = package(&history, &r);
@@ -419,28 +424,28 @@ fn a_unit_that_does_not_start_the_binary_through_current_is_refused() {
     assert_eq!(
         go(versioned.as_bytes(), "o1"),
         Err(Error::Failed(format!(
-            "{path} has no ExecStart line naming {BINARY_PATH}"
+            "{path} has no ExecStart line naming {binary_path}"
         )))
     );
     let other = UNIT.replace("current/bin/hostkeeper daemon", "current/bin/other daemon");
     assert_eq!(
         go(other.as_bytes(), "o2"),
         Err(Error::Failed(format!(
-            "{path} has no ExecStart line naming {BINARY_PATH}"
+            "{path} has no ExecStart line naming {binary_path}"
         )))
     );
     let foreign = format!("{UNIT}WorkingDirectory=/var/lib/hostkeeper/packages/other/current/\n");
     assert_eq!(
         go(foreign.as_bytes(), "o3"),
         Err(Error::Failed(format!(
-            "{path} names a package file by a path other than {PACKAGES}{CURRENT}"
+            "{path} names a package file by a path other than {PACKAGES}hostkeeper/current/"
         )))
     );
     let pinned = format!("{UNIT}WorkingDirectory=/var/lib/hostkeeper/packages/hostkeeper/0.1.5/\n");
     assert_eq!(
         go(pinned.as_bytes(), "o4"),
         Err(Error::Failed(format!(
-            "{path} names a package file by a path other than {PACKAGES}{CURRENT}"
+            "{path} names a package file by a path other than {PACKAGES}hostkeeper/current/"
         )))
     );
     assert_eq!(
@@ -590,12 +595,24 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
             "files/a/: the same name as an earlier entry, ignoring ASCII case".to_owned(),
         ]))
     );
+    let with_unit = Contents {
+        manifest: manifest(&version(), true),
+        units: vec![Unit {
+            file: UNIT_FILE.to_owned(),
+            origin: String::new(),
+            data: Vec::new(),
+        }],
+    };
     assert_eq!(
-        check_entries(&entries(&version(), Vec::new(), Some(Vec::new()))),
+        check_entries(&entries("hostkeeper", Vec::new(), with_unit)),
         Ok(())
     );
+    let without_unit = Contents {
+        manifest: manifest(&version(), false),
+        units: Vec::new(),
+    };
     assert_eq!(
-        check_entries(&entries(&version(), Vec::new(), None)),
+        check_entries(&entries("hostkeeper", Vec::new(), without_unit)),
         Ok(())
     );
 }
@@ -604,7 +621,7 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
 /// unpacker seals a version read-only, so the scratch directory could not remove it, and the
 /// unpacked executable would stay under `target/`, where the coverage report loads every
 /// executable it finds.
-struct Unseal(std::path::PathBuf);
+pub(super) struct Unseal(pub(super) std::path::PathBuf);
 
 impl Drop for Unseal {
     fn drop(&mut self) {
@@ -645,7 +662,9 @@ fn unpacked_tree(
     std::fs::write(&req.binary, binary).expect("write the binary");
     req.version = running.parse().expect("the workspace version");
     package(&history, &req).expect("package");
-    let archive = req.out.join(package_name(&req.version, platform));
+    let archive = req
+        .out
+        .join(Package::Hostkeeper.package_name(&req.version, platform));
     let packages = dir.join("packages");
     std::fs::create_dir(&packages).expect("the packages directory");
     let unseal = Unseal(packages.clone());
