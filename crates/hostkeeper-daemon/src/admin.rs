@@ -125,10 +125,12 @@ fn service(text: &str) -> Result<hostkeeper_config::names::ServiceName, Status> 
 async fn blocking<T: Send + 'static>(
     call: impl FnOnce() -> Result<T, Refused> + Send + 'static,
 ) -> Result<T, Status> {
-    let joined = tokio::task::spawn_blocking(call).await;
-    let failed = |_| Refused::new(Refusal::StoreFailed, "the call's thread failed");
-    let refused = joined.map_err(failed).and_then(|done| done);
-    refused.map_err(|refused| admin_status(&refused))
+    let failed = Err(Refused::new(
+        Refusal::StoreFailed,
+        "the call's thread failed",
+    ));
+    let done = tokio::task::spawn_blocking(call).await.unwrap_or(failed);
+    done.map_err(|refused| admin_status(&refused))
 }
 
 #[tonic::async_trait]

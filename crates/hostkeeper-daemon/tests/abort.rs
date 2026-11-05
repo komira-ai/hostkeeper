@@ -53,8 +53,13 @@ fn halt_state(reason: &str) -> State {
 
 /// A coordinator's `abort` of `service`, try `order_try`.
 fn abort_order(service: &str, order_try: u64) -> Order {
+    abort_order_id(&format!("abort-{service}"), service, order_try)
+}
+
+/// A coordinator's `abort` of `service` with the order id `order_id`, try `order_try`.
+fn abort_order_id(order_id: &str, service: &str, order_try: u64) -> Order {
     Order {
-        order_id: format!("abort-{service}"),
+        order_id: order_id.to_owned(),
         r#try: order_try,
         verb: Some(order::Verb::Abort(Abort {
             service: service.to_owned(),
@@ -421,9 +426,10 @@ fn abort_takes_no_step_lock_and_touches_only_its_service() {
     assert_eq!(beta.join().expect("beta"), succeeded());
 }
 
-/// Catches try rules that do not cover `abort`: the same try of an abort order sent twice is
-/// answered from the first answer (marked resent) and stops nothing more; another try is a new
-/// abort, which finds nothing running.
+/// Catches try rules that do not cover `abort`, or that take another order for a resend: the
+/// same try of an abort order sent twice is answered from the first answer (marked resent) and
+/// stops nothing more; another try, and another abort order with the same try, are new aborts,
+/// which find nothing running.
 #[test]
 fn a_resent_abort_order_is_answered_from_the_first_answer() {
     let rig = Rig::new("abort-resend");
@@ -447,6 +453,8 @@ fn a_resent_abort_order_is_answered_from_the_first_answer() {
     let again = daemon.order(&abort_order("web", 5));
     assert_eq!(again.refusal(), Some(Refusal::NothingRunning), "{again:?}");
     assert_eq!(daemon.order(&abort_order("web", 5)), again);
+    let other = daemon.order(&abort_order_id("abort-web-later", "web", 4));
+    assert_eq!(other.refusal(), Some(Refusal::NothingRunning), "{other:?}");
     assert_eq!(rig.launcher.stops().len(), 1);
 }
 
@@ -518,4 +526,22 @@ fn abort_refuses_a_held_lock_its_record_does_not_name() {
             .expect("held")
             .stuck
     );
+}
+
+/// Catches a lock kept for good when the params file of an unstopped update cannot be removed:
+/// the abort closes the record and lets the lock go, then answers `store_failed` for the file.
+#[test]
+fn an_unstopped_abort_whose_params_file_cannot_be_removed_still_lets_the_lock_go() {
+    let rig = Rig::new("abort-params-stuck");
+    let daemon = unstopped(&rig);
+    rig.launcher.allow_stops("alpha");
+    let params = rig.state.join("alpha").join(PARAMS_FILE);
+    std::fs::remove_file(&params).expect("the params file");
+    std::fs::create_dir_all(params.join("in-the-way")).expect("a directory in its place");
+    let refused = daemon
+        .abort(&name("alpha"))
+        .expect_err("the params file stays");
+    assert_eq!(refused.refusal, Refusal::StoreFailed);
+    assert_eq!(record(&rig, "alpha").state, halt_state(REASON_ABORTED));
+    assert_eq!(daemon.ctx().locks.holder(&name("alpha")), None);
 }

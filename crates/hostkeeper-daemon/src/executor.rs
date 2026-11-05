@@ -539,8 +539,10 @@ pub struct StatusError {
     pub source: std::io::Error,
 }
 
-/// The answer to a coordinator's `abort` of one try; `None` while that abort is under way.
+/// The answer to a coordinator's `abort` of one order and try; `None` while that abort is under
+/// way.
 struct AbortTry {
+    order_id: String,
     order_try: u64,
     answer: Option<Reply>,
 }
@@ -627,15 +629,16 @@ impl Daemon {
     /// lock is taken.
     pub fn order(&self, order: &Order) -> Reply {
         match Verb::try_from(order) {
-            Ok(Verb::Abort(service)) => self.abort_order(&service, order.r#try),
+            Ok(Verb::Abort(service)) => self.abort_order(&service, &order.order_id, order.r#try),
             Ok(verb) => self.execute(verb),
             Err(bad) => Reply::refused(Refusal::InvalidOrder, bad),
         }
     }
 
-    /// A coordinator's `abort` of try `order_try`: a resend of that try is answered from the
-    /// first answer (`Running` while it is under way) and stops nothing more.
-    fn abort_order(&self, service: &ServiceName, order_try: u64) -> Reply {
+    /// A coordinator's `abort`, the order `order_id`'s try `order_try`: a resend of that order and
+    /// try is answered from the first answer (`Running` while it is under way) and stops nothing
+    /// more; another order, or another try, is a new abort.
+    fn abort_order(&self, service: &ServiceName, order_id: &str, order_try: u64) -> Reply {
         let tries = || {
             self.abort_tries
                 .lock()
@@ -645,11 +648,12 @@ impl Daemon {
             let mut tries = tries();
             let first = tries
                 .get(service.as_str())
-                .filter(|last| last.order_try == order_try);
+                .filter(|last| (last.order_id == order_id) & (last.order_try == order_try));
             if let Some(last) = first {
                 return last.answer.clone().map_or(Reply::Running, resent);
             }
             let under_way = AbortTry {
+                order_id: order_id.to_owned(),
                 order_try,
                 answer: None,
             };
@@ -657,6 +661,7 @@ impl Daemon {
         }
         let reply = self.execute(Verb::Abort(service.clone()));
         let answered = AbortTry {
+            order_id: order_id.to_owned(),
             order_try,
             answer: Some(reply.clone()),
         };

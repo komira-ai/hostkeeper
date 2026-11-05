@@ -17,7 +17,7 @@
 //! - **A step that could not be stopped holds the lock for good** (the runner stopped
 //!   `Unstopped`, and the record still says `running`): the unit the record names is stopped with
 //!   the same tries, the record is closed `Finished{Halt, aborted_by_operator}`, or `unstoppable`
-//!   with an alert when every try failed, the params file is removed and the lock let go.
+//!   with an alert when every try failed, the lock is let go and the params file removed.
 //! - **Otherwise** nothing runs: `nothing_running`, and nothing is written.
 //!
 //! Either way the record then says Halt, so the service's later orders are `halted` until
@@ -118,8 +118,9 @@ fn unstopped(ctx: &Ctx, service: &ServiceName) -> Result<Aborted, Refused> {
     if let Err(error) = &stopped {
         alert(ctx, service, &unit, error);
     }
-    ctx.store(service).remove_params().map_err(store_failed)?;
+    // The record is closed: the lock goes whatever becomes of the params file.
     ctx.locks.release_stuck(service);
+    ctx.store(service).remove_params().map_err(store_failed)?;
     Ok(Aborted {
         unit: Some(unit),
         record,

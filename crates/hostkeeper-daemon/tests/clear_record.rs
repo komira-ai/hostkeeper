@@ -187,3 +187,17 @@ fn clear_record_of_a_record_that_cannot_be_read_is_store_failed() {
     assert!(dir.join(RECORD_FILE).is_dir());
     assert!(!dir.join(CORRUPT_FILE).exists());
 }
+
+/// Catches a rename that fails reported as cleared: with a directory that holds a file in the
+/// place of `step-record.json.corrupt`, the rename fails, the answer is `store_failed`, and the
+/// corrupt record is still where it was.
+#[test]
+fn clear_record_whose_rename_fails_is_store_failed_and_leaves_the_record() {
+    let rig = Rig::new("clear-record-rename");
+    let daemon = rig.daemon();
+    let dir = with_record(&rig, b"{");
+    fs::create_dir_all(dir.join(CORRUPT_FILE).join("in-the-way")).expect("a directory in the way");
+    let refused = daemon.clear_record(&name("web")).expect_err("not renamed");
+    assert_eq!(refused.refusal, Refusal::StoreFailed);
+    assert_eq!(fs::read(dir.join(RECORD_FILE)).expect("in place"), b"{");
+}
