@@ -1072,6 +1072,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-ctl"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "hostkeeper-proto",
+ "hostkeeper-testkit",
+ "prost",
+ "prost-reflect",
+ "protox",
+ "rcgen",
+ "rustls",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+]
+
+[[package]]
 name = "hostkeeper-daemon"
 version = "0.1.0"
 dependencies = [
@@ -1079,6 +1099,7 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-daemon",
  "hostkeeper-hook",
+ "hostkeeper-placed",
  "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",
@@ -1195,6 +1216,19 @@ dependencies = [
  "sha2",
  "thiserror",
  "ureq",
+]
+
+[[package]]
+name = "hostkeeper-placed"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-config",
+ "hostkeeper-testkit",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -2855,6 +2889,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-rustls"
+version = "0.26.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9cc2678c2cdd569ef8215e2afd7954ada2ae20b4fdd2c5fe6139a3b02d105db"
+dependencies = [
+ "rustls",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-stream"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2951,6 +2995,7 @@ dependencies = [
  "socket2",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",

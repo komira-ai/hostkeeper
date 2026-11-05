@@ -1,0 +1,29 @@
+[package]
+name = "hostkeeper-placed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Placed-path linking: a package's units and files linked from current into their system paths, recorded write-ahead in placed.json."
+
+# Design section 4.7, "Placed paths": the daemon, not the hook, links a package into the system.
+# A library with its fakes (`testing`); the daemon calls it. Every directory it works in, and the
+# root every path is read under, is a parameter, so the tests run in a scratch directory.
+[dependencies]
+hostkeeper-config = { path = "../hostkeeper-config" }
+# `O_NOFOLLOW` for the files this crate opens: placed.json's temporary file and the lock file.
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# `mknodat`, to make the named pipe the tests use as a file that is neither a file, a directory
+# nor a link; `umask`, for the test of the mode of the directories `create_dirs` makes.
+rustix = { workspace = true, features = ["fs", "process"] }
+
+[lints]
+workspace = true

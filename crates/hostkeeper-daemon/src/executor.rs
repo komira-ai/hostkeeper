@@ -14,11 +14,12 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Verdict;
+use hostkeeper_placed::{Fs, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::{
-    Clock, DeadMan, Finished, LaunchError, RecordStore, RunError, StepLauncher, StepRunner,
-    UpdateOrder, Watch,
+    Clock, DeadMan, Finished, ForceVerdict, LaunchError, RecordStore, RunError, StepLauncher,
+    StepRunner, UpdateOrder, Watch,
 };
 
 use crate::boot::{ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
@@ -27,6 +28,7 @@ use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT};
 use crate::locks::{Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::packages::Packages;
+use crate::prune::Prune;
 use crate::refusal::Refusal;
 use crate::verb::Verb;
 use crate::verbs;
@@ -52,6 +54,21 @@ pub struct Ports {
     /// How often each service's dead-man looks at its running step, in seconds; `None` starts
     /// none (a test that drives the bounds itself).
     pub deadman_poll_secs: Option<u64>,
+    /// The service manager: the units a `force` stops, starts and asks after, and
+    /// `daemon-reload`.
+    pub units: Arc<dyn UnitControl + Send + Sync>,
+    /// Where placed-path linking works, and the filesystem it goes through.
+    pub placement: Placement,
+    /// Step 18 of a `force`: the prune of the versions a switch of `current` leaves behind.
+    pub prune: Arc<dyn Prune>,
+}
+
+/// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
+/// host names them, and the filesystem every path is read and written through. The packages
+/// directory of `roots`, as `fs` reaches it, is [`Dirs::packages`].
+pub struct Placement {
+    pub roots: Roots,
+    pub fs: Arc<dyn Fs + Send + Sync>,
 }
 
 /// Where the daemon keeps and finds things.
@@ -74,12 +91,17 @@ pub struct Ctx {
     pub launcher: Arc<dyn StepLauncher>,
     pub packages: Arc<dyn Packages>,
     pub clock: Arc<dyn Clock>,
+    pub units: Arc<dyn UnitControl + Send + Sync>,
+    pub placement: Placement,
+    pub prune: Arc<dyn Prune>,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
     /// The post-success watchers, one per service at most.
     pub watchers: Watchers,
     runners: Mutex<BTreeMap<String, Arc<StepRunner>>>,
+    /// The record lock of each service's state directory, shared by every store made for it.
+    record_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
     stores: Option<StoreSeam>,
     alerts: AlertSink,
     deadman_poll_secs: Option<u64>,
@@ -93,13 +115,30 @@ impl Ctx {
         self.dirs.state.join(service.as_str())
     }
 
-    /// The step record store of `service`.
+    /// The step record store of `service`, with the record lock every store of the service
+    /// shares: the runner's writes and a `force`'s flag on the record take turns.
     pub fn store(&self, service: &ServiceName) -> RecordStore {
-        let store = RecordStore::new(&self.service_dir(service));
+        let lock = {
+            let mut locks = self
+                .record_locks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            Arc::clone(locks.entry(service.to_string()).or_default())
+        };
+        let store = RecordStore::new(&self.service_dir(service)).with_lock(lock);
         match &self.stores {
             Some(seam) => seam(service, store),
             None => store,
         }
+    }
+
+    /// The placed-path linker of this host.
+    pub fn placer(&self) -> Placer<'_> {
+        Placer::new(
+            self.placement.roots.clone(),
+            &*self.placement.fs,
+            &*self.units,
+        )
     }
 
     /// Logs an alert: error level, with its `alert=` field.
@@ -255,6 +294,17 @@ impl RecordState {
     }
 }
 
+/// How a `force` ended, with the order it answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForcedResult {
+    /// The coordinator's id of the order, when it gave one.
+    pub order_id: Option<String>,
+    pub order_try: u64,
+    /// The version the force switched to.
+    pub target: String,
+    pub verdict: ForceVerdict,
+}
+
 /// What the daemon holds about one service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceStatus {
@@ -277,6 +327,23 @@ impl ServiceStatus {
             RecordState::Finished(rec) => checks::finished_of(rec),
             _ => None,
         }
+    }
+
+    /// The verdict of the last order, when it was a `force` that ended (design section 5.6, step
+    /// 17): what the heartbeat reports as a forced verdict (`UpdateResult.forced`), with the
+    /// order's id and try, beside [`ServiceStatus::last_result`]. The record keeps it until the
+    /// next order of the service, so every read until then returns it again.
+    pub fn forced(&self) -> Option<ForcedResult> {
+        let RecordState::Finished(rec) = &self.record else {
+            return None;
+        };
+        let force = rec.force.as_ref()?;
+        Some(ForcedResult {
+            order_id: force.order_id.clone(),
+            order_try: force.order_try,
+            target: force.target_version.clone(),
+            verdict: force.verdict?,
+        })
     }
 
     /// Whether a step of the service is running: an order holds its lock, or its record holds
@@ -325,11 +392,15 @@ impl Daemon {
                 launcher: ports.launcher,
                 packages: ports.packages,
                 clock: ports.clock,
+                units: ports.units,
+                placement: ports.placement,
+                prune: ports.prune,
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,
                 watchers: Watchers::default(),
                 runners: Mutex::default(),
+                record_locks: Mutex::default(),
                 stores: None,
                 alerts: Arc::new(|line: &str| eprintln!("{line}")),
                 deadman_poll_secs: ports.deadman_poll_secs,
