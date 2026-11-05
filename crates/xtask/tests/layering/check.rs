@@ -25,6 +25,7 @@ const ENROLLMENT: &str = "hostkeeper-enrollment";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
 const PROTO: &str = "hostkeeper-proto";
+const CTL: &str = "hostkeeper-ctl";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
 const LAYERS: [(&str, &[&str]); 10] = [
@@ -40,10 +41,12 @@ const LAYERS: [(&str, &[&str]); 10] = [
     (ENROLLMENT, &[]),
 ];
 
-/// Dev-dependencies on another layer crate that are allowed besides the crate itself and the
+/// Dev-dependencies on another workspace crate that are allowed besides the crate itself and the
 /// testkit: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature (a fake
-/// issuer), which a dev-dependency can do and a normal dependency must not.
-const DEV_ALLOWED: [(&str, &str); 1] = [(COORDINATOR, OIDC)];
+/// issuer), which a dev-dependency can do and a normal dependency must not; and they run
+/// `hostkeeper-ctl` against an in-process coordinator (`hostkeeper-ctl` depends on neither the
+/// coordinator nor any crate that does).
+const DEV_ALLOWED: [(&str, &str); 2] = [(COORDINATOR, OIDC), (COORDINATOR, CTL)];
 
 /// Pairs (crate, crate it must not reach): the first never depends on the second through its
 /// normal or build dependencies, directly or through any chain. A pair whose first crate is not a

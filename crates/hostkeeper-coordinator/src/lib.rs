@@ -22,6 +22,8 @@
 //! - [`reconcile`]: the last good version, the bad ones, and the automatic rollback;
 //! - [`holds`]: the operator's holds of a service on a host, a role or the fleet, which the
 //!   gate orders nothing and the counts leave out;
+//! - [`order_terms`]: the order id, try and package digest an update answer of the JSON route
+//!   carries to an agent that announced `order-v1`;
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the one live update,
 //!   and [`orders`], the operator's orders (`force`, `abort`) a typed heartbeat answer carries;
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
@@ -44,6 +46,9 @@
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
+//! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
+//!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
+//!   operator API, and the router that tells them from the frozen JSON routes;
 //! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
 //! - [`config`]: the flags and the start, under the [`lock`] of the state files, with CI's spent
 //!   token ids in the [`jti_file`] beside them.
@@ -67,6 +72,7 @@ pub mod desired;
 pub mod enrollment;
 pub mod fleet;
 pub mod force;
+pub mod grpc;
 pub mod halt;
 pub mod holds;
 pub mod http;
@@ -81,6 +87,7 @@ pub mod operator;
 pub mod operator_enrollment;
 pub mod ops;
 pub(crate) mod ops_file;
+pub mod order_terms;
 pub mod orders;
 pub mod reconcile;
 pub mod registry;
@@ -152,6 +159,8 @@ mod ops_crash_tests;
 mod ops_downgrade_tests;
 #[cfg(test)]
 mod ops_tests;
+#[cfg(test)]
+mod order_terms_tests;
 #[cfg(test)]
 mod priority_tests;
 #[cfg(test)]

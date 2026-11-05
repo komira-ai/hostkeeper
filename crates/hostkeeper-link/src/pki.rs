@@ -38,11 +38,13 @@ use x509_cert::der::{DecodePem, Encode};
 use crate::ports::{CertSource, CertState, ClientIdentity, Log};
 
 /// The link to the generation in use (as `hostkeeper-enroll` names it).
-const CURRENT: &str = "current";
+pub(crate) const CURRENT: &str = "current";
 /// The host certificate in a generation.
 const CERT: &str = "cert.pem";
 /// The key in a generation.
 const KEY: &str = "key";
+/// The CA bundle in a generation, which [`crate::JsonMtlsLink`] takes its root from.
+pub(crate) const CA: &str = "ca.pem";
 
 /// The file-based [`CertSource`]: the pair under the `current` link of a pki directory.
 pub struct PkiCertSource {

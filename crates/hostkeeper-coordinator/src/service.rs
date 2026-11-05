@@ -10,7 +10,7 @@ use std::time::Duration;
 use hostkeeper_oidc::{Refusal, Verified, Verifier};
 use hostkeeper_wire::identity::SanPrefixes;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Answer, Heartbeat, ServiceReply, VerdictAck};
+use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
 use crate::acks::release_ack;
@@ -19,12 +19,12 @@ use crate::decide::Decision;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
-use crate::force::end_by_ci;
 use crate::halt;
 use crate::holds::{alert_on_bad_version, marks_of, on_bad_version};
 use crate::identity::Identity;
 use crate::membership::{Standing, members, standing};
 use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
+use crate::order_terms::{self, Terms};
 use crate::orders::Order;
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
@@ -166,13 +166,18 @@ pub struct Set {
 /// heartbeat's `deferred` report ends the order, holds no slot and backs the host off
 /// ([`crate::defer`]). `halt-v1`: the clear generations of [`crate::halt`]. `heartbeat-v2`:
 /// selector membership, hosts that are `missing`, `absent` or `unmanaged`
-/// ([`crate::membership`]). `verdict-acks-v1`: the acks of the verdicts stored
-/// ([`crate::verdict_file`]).
+/// ([`crate::membership`]). `order-v1`: an update answer carries the order terms of
+/// [`crate::order_terms`], and the heartbeat's top level is the agent itself, never the legacy
+/// service. `verdict-acks-v1`: the acks of the verdicts stored ([`crate::verdict_file`]).
+/// `grpc-v1`: the coordinator serves `hostkeeper.agent.v1.Coordinator` on the heartbeat
+/// listener ([`crate::grpc`]), so an agent that announced it may send its next heartbeat there.
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
     crate::membership::HEARTBEAT_V2,
+    ORDER_FEATURE,
     verdict_file::FEATURE,
+    crate::grpc::GRPC_FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
@@ -180,8 +185,13 @@ pub const FEATURES: &[&str] = &[
 /// strictly and refuses a field it does not know, so a field listed here is left out of the
 /// answer to an agent that did not announce its feature, and to every agent while this
 /// coordinator does not advertise it ([`FEATURES`]). A field not listed is sent to every agent.
-pub const GATED_FIELDS: &[(&str, &str)] =
-    &[("halts", halt::FEATURE), ("acks", verdict_file::FEATURE)];
+pub const GATED_FIELDS: &[(&str, &str)] = &[
+    ("halts", halt::FEATURE),
+    ("order_id", ORDER_FEATURE),
+    ("order_try", ORDER_FEATURE),
+    ("package_digest", ORDER_FEATURE),
+    ("acks", verdict_file::FEATURE),
+];
 
 /// Whether the answer field `field` goes to an agent whose announced features this coordinator
 /// also advertises are `agreed` (none for an agent that announced none): yes for a field
@@ -457,10 +467,26 @@ impl Coordinator {
         tracing::warn!(node_id = %who.host_id, why, "dropped the services list of a heartbeat");
     }
 
+    /// The legacy service for the heartbeat `beat`: the coordinator's, except for an agent that
+    /// announced [`ORDER_FEATURE`], whose top level is the agent itself and which names every
+    /// service in `services`.
+    fn legacy_for(&self, beat: &Heartbeat) -> Option<&str> {
+        if beat.agent_features.iter().any(|name| name == ORDER_FEATURE) {
+            None
+        } else {
+            self.legacy.as_deref()
+        }
+    }
+
     /// Notes a heartbeat from `who` and answers it. With no desired state set, nothing.
     ///
     /// The top-level fields are the legacy service's, when one is set; without one they
-    /// belong to no service and only the entries of `services` count. Each entry of `services`
+    /// belong to no service and only the entries of `services` count. For an agent that
+    /// announced [`ORDER_FEATURE`] no legacy service is set, whatever the coordinator's: its
+    /// top level is the agent itself and every update names its service. Such an agent is
+    /// ordered a version only if CI registered a package digest for it, and the update then
+    /// carries the order terms of [`crate::order_terms`]; a version with no digest is not
+    /// ordered to it, and takes no slot. Each entry of `services`
     /// is noted as that service's heartbeat of the host, if the coordinator manages the
     /// service and runs it on the host's role (any other entry is ignored). The services are
     /// decided by priority, the highest first ([`crate::services::ServiceDef::priority`], 0
@@ -480,7 +506,10 @@ impl Coordinator {
     /// [`Self::heartbeat`] for a transport that carries typed orders (the `Order` of
     /// `hostkeeper.agent.v1`): with the answer, the operator's order for the host when one is
     /// due ([`crate::orders`]: an `abort` queued for it, or the `force` of a standing force),
-    /// which is sent instead of an update; the answer's reply is then `nothing`.
+    /// which is sent instead of an update, and the answer's reply is then `nothing`. When the
+    /// rollout gate orders an update with its terms (an agent that announced `order-v1`, a
+    /// registered digest), the update is the typed order ([`Order::Update`]): the order id, try
+    /// and package digest of the answer's terms, which the answer carries too.
     ///
     /// # Errors
     /// [`HeartbeatRefused`], as for [`Self::heartbeat`].
@@ -499,12 +528,12 @@ impl Coordinator {
         orders: bool,
         machine_id: Option<&str>,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
-        if self.legacy.is_none() && beat.services.is_none() {
+        if self.legacy_for(&beat).is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
         let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
-        let (reply, order, acks) = self.reply_to(who, beat, orders, turn);
+        let (reply, order, terms, acks) = self.reply_to(who, beat, orders, turn);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -521,6 +550,11 @@ impl Coordinator {
         } else {
             BTreeMap::new()
         };
+        // The terms only to an agent that announced `order-v1` and a coordinator that
+        // advertises it.
+        let terms = terms.filter(|_| sends("order_id", features.as_deref()));
+        // On a transport that carries typed orders, the update is one too, with the same terms.
+        let order = order.or_else(|| order_terms::typed(&reply, terms.as_ref()).filter(|_| orders));
         let acks = if sends("acks", features.as_deref()) {
             acks
         } else {
@@ -528,6 +562,9 @@ impl Coordinator {
         };
         let answer = Answer {
             reply,
+            order_id: terms.as_ref().map(|t| t.order_id.clone()),
+            order_try: terms.as_ref().map(|t| t.order_try),
+            package_digest: terms.map(|t| t.package_digest),
             features,
             halts,
             acks,
@@ -541,9 +578,11 @@ impl Coordinator {
         mut beat: Heartbeat,
         orders: bool,
         turn: Turn,
-    ) -> (ServiceReply, Option<Order>, Vec<VerdictAck>) {
+    ) -> (ServiceReply, Option<Order>, Option<Terms>, Vec<VerdictAck>) {
         let now = (self.clock)();
-        let legacy = self.legacy.as_deref();
+        let legacy = self.legacy_for(&beat);
+        let order_v1 = self.features.iter().any(|name| name == ORDER_FEATURE)
+            && beat.agent_features.iter().any(|name| name == ORDER_FEATURE);
         let announced = beat.services.clone().unwrap_or_default();
         let node = Node {
             role: who.role.name().to_owned(),
@@ -623,7 +662,7 @@ impl Coordinator {
         }
         fleet.note_node(who.host_id.clone(), node);
         if turn == Turn::Hold {
-            return (ServiceReply::Nothing, None, Vec::new());
+            return (ServiceReply::Nothing, None, None, Vec::new());
         }
         let mut names: Vec<&str> = legacy
             .into_iter()
@@ -653,7 +692,7 @@ impl Coordinator {
                 .ops
                 .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))
         {
-            return (ServiceReply::Nothing, Some(order), acks);
+            return (ServiceReply::Nothing, Some(order), None, acks);
         }
         let desired = self.desired.all();
         for name in names {
@@ -670,16 +709,24 @@ impl Coordinator {
                 now,
             );
             if let Decision::Update { version } = decision {
+                // An agent that reads order terms is ordered only a version with a digest.
+                let terms = order_v1.then(|| {
+                    let digests = self.desired.digests(name);
+                    order_terms::of_beat(&digests, name, &version, &announced, &who.host_id)
+                });
+                let Some(terms) = terms.map_or(Some(None), |made| made.map(Some)) else {
+                    continue;
+                };
                 // The host's ack goes from the file before the order exists.
                 if !release_ack(&self.ops, name, &who.host_id) {
                     continue;
                 }
                 fleet.order(name, who.host_id.clone(), version.clone(), now);
                 let service = (Some(name) != legacy).then(|| name.to_owned());
-                return (ServiceReply::Update { service, version }, None, acks);
+                return (ServiceReply::Update { service, version }, None, terms, acks);
             }
         }
-        (ServiceReply::Nothing, None, acks)
+        (ServiceReply::Nothing, None, None, acks)
     }
 
     /// The CI token in `bearer`, checked by the verifier.
@@ -733,62 +780,7 @@ impl Coordinator {
         body: &[u8],
     ) -> Result<Set, SetError> {
         let verified = self.ci(bearer).await?;
-        let (service, desired, dropped_roles) =
-            Desired::parse_request_noting(body, &self.services, self.legacy.as_deref())?;
-        // An allow-list entry that names no services stands for the legacy service.
-        let admitted = match &verified.services {
-            Some(names) => names.contains(&service),
-            None => self.legacy.as_deref() == Some(service.as_str()),
-        };
-        if !admitted {
-            tracing::warn!(
-                workflow = %verified.job_workflow_ref,
-                %service,
-                "refused a desired state: the allow-list entry does not name the service"
-            );
-            return Err(SetError::Forbidden);
-        }
-        // The fleet's lock is held to the end of the set: a heartbeat plans a rollback and
-        // writes it under that lock, so it cannot write a rollback from the state it read over
-        // the version CI stores meanwhile, and the refusals below are decided on the marks and
-        // the registry the set is made over. The desired state goes first and the lift of an
-        // updater's halt after it: a lift that fails leaves the service halted (the safe side),
-        // and the reverse would order the halted target again.
-        {
-            let _fleet = self.lock_fleet_for_set();
-            let def = self
-                .services
-                .get(&service)
-                .ok_or(SetError::Invalid(DesiredError::UnknownService))?;
-            self.refuse(def, &desired)?;
-            let marks = self.ops.marks(&service);
-            self.desired
-                .record(&service, desired.clone(), |v| kept(&marks, v))?;
-            // CI's set of another version ends a force that stands ([`crate::force`]), before
-            // the lift: a lift that fails then leaves no force ordering the old version.
-            end_by_ci(
-                &self.ops,
-                &service,
-                &desired.version,
-                &verified.job_workflow_ref,
-            )?;
-            halt::lift_by_ci(
-                &self.ops,
-                &service,
-                &desired.version,
-                &verified.job_workflow_ref,
-            )?;
-        }
-        tracing::info!(
-            workflow = %verified.job_workflow_ref,
-            sha = ?verified.sha,
-            %service,
-            "desired state set by CI"
-        );
-        Ok(Set {
-            desired,
-            dropped_roles,
-        })
+        self.set_desired_verified(&verified, body)
     }
 
     /// Why CI may not set `desired` for `service`, if it may not: the refusals of
@@ -959,15 +951,7 @@ impl Coordinator {
         service: &str,
     ) -> Result<Convergence, ConvergenceError> {
         self.ci(bearer).await?;
-        let def = self
-            .services
-            .get(service)
-            .ok_or(ConvergenceError::UnknownService)?;
-        let now = (self.clock)();
-        let fleet = self.lock_fleet();
-        let desired = self.desired.get(service);
-        let ops = self.ops.state();
-        Ok(convergence_of(def, desired.as_ref(), &fleet, &ops, now))
+        self.convergence_verified(service)
     }
 }
 
@@ -980,3 +964,7 @@ pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
 /// The calls of the heartbeat path that ask enrollment.
 #[path = "service_enrollment.rs"]
 mod enrollment_calls;
+
+/// The calls that act for a CI token already checked.
+#[path = "service_ci.rs"]
+mod ci_calls;

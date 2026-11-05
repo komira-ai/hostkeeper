@@ -30,6 +30,13 @@ const OUTSIDE: [&str; 13] = [
 /// a step-record directory. It starts and signals nothing.
 const OWNER_CHECK: &str = "rustix::process::geteuid";
 
+/// The one source that reaches the network, the transports of the links, and the names of
+/// [`OUTSIDE`] it uses: a TCP connection to the coordinator's address, and nothing else.
+const TRANSPORT: (&str, [&str; 4]) = (
+    "dial.rs",
+    ["net", "TcpStream", "ToSocketAddrs", "to_socket_addrs"],
+);
+
 /// The names of [`OUTSIDE`] the code of `source` uses, in order of first use: every identifier
 /// outside `//` comments, as a whole word, but for [`OWNER_CHECK`].
 fn outside_names(source: &str) -> Vec<String> {
@@ -87,9 +94,10 @@ fn the_outside_check_refuses_each_way_in_and_passes_a_clean_source() {
 }
 
 /// Catches a second way out of the loop: a source of the crate that opens a socket, starts a
-/// process or reads the wall clock, or a dependency that brings a network client. A full round
-/// (an order, its verdict, a halt generation, a deferral) calls the link once per heartbeat and
-/// nothing else.
+/// process or reads the wall clock, but for the link's transport, which opens a TCP connection
+/// and nothing else; or a dependency that brings a network client (the link's TLS is rustls,
+/// over that transport). A full round (an order, its verdict, a halt generation, a deferral)
+/// calls the link once per heartbeat and nothing else.
 #[test]
 fn the_loop_dials_only_the_coordinator_link_port() {
     let rig = Rig::new("ports-only-link");
@@ -110,29 +118,35 @@ fn the_loop_dials_only_the_coordinator_link_port() {
     for entry in std::fs::read_dir(root.join("src")).expect("the sources") {
         let path = entry.expect("an entry").path();
         let text = std::fs::read_to_string(&path).expect("a source");
-        assert_eq!(
-            outside_names(&text),
-            Vec::<String>::new(),
-            "{}",
-            path.display()
-        );
-        sources.insert(
-            path.file_name()
-                .expect("a file name")
-                .to_string_lossy()
-                .into_owned(),
-        );
+        let name = path
+            .file_name()
+            .expect("a file name")
+            .to_string_lossy()
+            .into_owned();
+        let allowed: &[&str] = if name == TRANSPORT.0 {
+            &TRANSPORT.1
+        } else {
+            &[]
+        };
+        assert_eq!(outside_names(&text), allowed, "{}", path.display());
+        sources.insert(name);
     }
     let expected = [
         "beat.rs",
         "deferral.rs",
+        "dial.rs",
+        "grpc.rs",
         "heartbeater.rs",
         "lib.rs",
+        "mtls.rs",
         "names.rs",
+        "negotiated.rs",
         "order.rs",
         "pki.rs",
         "ports.rs",
+        "proto_map.rs",
         "testing.rs",
+        "wire_map.rs",
     ];
     assert_eq!(
         sources,
@@ -158,11 +172,20 @@ fn the_loop_dials_only_the_coordinator_link_port() {
             "hostkeeper-hook",
             "hostkeeper-proto",
             "hostkeeper-steps",
+            "hostkeeper-wire",
+            "hyper-util",
             "p256",
+            "prost",
             "rustix",
+            "rustls",
             "serde",
             "serde_json",
+            "sha2",
             "thiserror",
+            "tokio",
+            "tokio-rustls",
+            "tonic",
+            "tower",
             "x509-cert",
         ])
     );

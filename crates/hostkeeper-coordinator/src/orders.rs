@@ -1,6 +1,7 @@
-//! The operator's orders a heartbeat answer carries instead of the rollout gate's update: an
-//! `abort` an operator queued (`Hosts.Abort`) and the `force` of a standing force
-//! ([`crate::force`]).
+//! The typed orders a heartbeat answer carries on a transport that carries them: the
+//! operator's, which go instead of the rollout gate's update (an `abort` an operator queued,
+//! `Hosts.Abort`, and the `force` of a standing force, [`crate::force`]); and the gate's update
+//! itself, with the terms the JSON answer carries ([`Order::Update`]).
 //!
 //! They go only over a transport that carries typed orders
 //! ([`crate::service::Coordinator::heartbeat_with_orders`], the `Order` of
@@ -19,6 +20,7 @@
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
+use hostkeeper_wire::wire::PackageDigest;
 
 use crate::fleet::Fleet;
 use crate::ops::OpsState;
@@ -27,9 +29,25 @@ use crate::registry::Digest;
 /// The feature a daemon announces to be sent an `abort`.
 pub const ABORT_FEATURE: &str = "abort-v1";
 
-/// An order of the operator's, as a heartbeat answer carries it.
+/// An order a heartbeat answer carries as a typed order: an operator's, or the rollout gate's
+/// update with its terms.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Order {
+    /// The rollout gate's update, with the terms the JSON answer of an `order-v1` agent carries
+    /// too ([`crate::order_terms`]): the same order id, try and package digest on both
+    /// transports.
+    Update {
+        /// The service.
+        service: String,
+        /// The version to run.
+        version: Version,
+        /// The package digest CI registered for the version.
+        digest: PackageDigest,
+        /// The order's id ([`crate::order_terms::order_id_text`]).
+        order_id: String,
+        /// The try, from 1.
+        order_try: u64,
+    },
     /// Stop the service's running step and end its order in the halt phase.
     Abort {
         /// The service.
@@ -54,12 +72,28 @@ pub enum Order {
 
 impl Order {
     /// The order as `hostkeeper.agent.v1` says it: the verb and its typed arguments, the order
-    /// id, and the first try.
+    /// id, and the try (the first, for an operator's order).
     #[must_use]
     pub fn to_proto(&self) -> agent::Order {
-        let (order_id, verb) = match self {
+        let (order_id, order_try, verb) = match self {
+            Self::Update {
+                service,
+                version,
+                digest,
+                order_id,
+                order_try,
+            } => (
+                order_id,
+                *order_try,
+                agent::order::Verb::Update(agent::Update {
+                    service: service.clone(),
+                    version: version.to_string(),
+                    package_digest: digest.as_str().to_owned(),
+                }),
+            ),
             Self::Abort { service, order_id } => (
                 order_id,
+                1,
                 agent::order::Verb::Abort(agent::Abort {
                     service: service.clone(),
                 }),
@@ -72,6 +106,7 @@ impl Order {
                 order_id,
             } => (
                 order_id,
+                1,
                 agent::order::Verb::Force(agent::Force {
                     service: service.clone(),
                     version: version.to_string(),
@@ -82,7 +117,7 @@ impl Order {
         };
         agent::Order {
             order_id: order_id.clone(),
-            r#try: 1,
+            r#try: order_try,
             verb: Some(verb),
         }
     }

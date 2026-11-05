@@ -11,8 +11,8 @@
 //! - `hostkeeper-wire`, `hostkeeper-oidc` and `hostkeeper-tls` depend on no workspace crate;
 //!   `hostkeeper-coordinator` depends on exactly those three, `hostkeeper-enrollment` (its CA
 //!   and enrollment store) and `hostkeeper-proto` (the messages of `Enroll`, `Poll` and
-//!   `Renew`) (dev-dependencies: itself, `hostkeeper-testkit` and `hostkeeper-oidc`, whose
-//!   `testkit` feature its tests use);
+//!   `Renew`) (dev-dependencies: itself, `hostkeeper-testkit`, `hostkeeper-oidc`, whose
+//!   `testkit` feature its tests use, and `hostkeeper-ctl`, which its tests run against it);
 //! - `hostkeeper-enrollment` (the coordinator's CA and enrollment store) depends on no other
 //!   crate of this workspace (dev-dependencies: itself and `hostkeeper-testkit`);
 //! - `hostkeeper-steps` and `hostkeeper-observe` reach `hostkeeper-launchd` through no normal or
