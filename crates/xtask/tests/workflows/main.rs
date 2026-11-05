@@ -7,6 +7,8 @@ mod release;
 mod release_tests;
 mod set_desired;
 mod set_desired_tests;
+mod verify_doc;
+mod verify_doc_tests;
 mod yaml;
 
 use std::path::PathBuf;
