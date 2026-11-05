@@ -616,7 +616,14 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
         max_unpacked_bytes: 1 << 30,
         max_entries: 1000,
     };
-    let unpacked = hostkeeper_unpack::unpack(&archive, &order, &limits, &fs).expect("unpack");
+    let unpacked = hostkeeper_unpack::unpack(
+        &archive,
+        &order,
+        &limits,
+        &fs,
+        hostkeeper_unpack::Platform::Linux,
+    )
+    .expect("unpack");
     assert!(unpacked.fresh);
     assert_eq!(unpacked.manifest.run, ["hostkeeper.service"]);
     assert_eq!(
