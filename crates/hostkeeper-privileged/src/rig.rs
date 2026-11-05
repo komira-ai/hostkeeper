@@ -151,8 +151,9 @@ impl Rig {
         Ok(path)
     }
 
-    /// The unit file of the fixture's `serve`: a `Type=simple` service whose main process is the
-    /// fixture, until it is stopped. A fixture path that `ExecStart=` would not read as itself
+    /// The unit file of the fixture's `serve`: a `Type=exec` service whose main process is the
+    /// fixture (`exec`: the start ends once the fixture runs, not at the fork), until it is
+    /// stopped. A fixture path that `ExecStart=` would not read as itself
     /// (a space, a quote, `%`, `\`, `$`, `;`, ...) is refused.
     pub fn unit_file_text(&self) -> Result<String, RigError> {
         if !plain_path(&self.fixture) {
@@ -160,7 +161,7 @@ impl Rig {
         }
         Ok(format!(
             "[Unit]\nDescription=hostkeeper privileged test: the fixture's {SERVE}\n\n\
-             [Service]\nType=simple\nExecStart={} {SERVE}\n",
+             [Service]\nType=exec\nExecStart={} {SERVE}\n",
             self.fixture.display()
         ))
     }

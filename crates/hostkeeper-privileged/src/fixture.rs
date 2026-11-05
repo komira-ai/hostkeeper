@@ -2,9 +2,10 @@
 //! tests (`CARGO_BIN_EXE_hostkeeper-fixture-hook`), that a privileged test runs as a hook through
 //! the production launcher, or as the main process of a unit.
 //!
-//! Its interface is kept stable, because the end-to-end tests drive it as well:
+//! Its interface is documented here and kept stable, so that tests outside this crate can drive
+//! it as the privileged tests and `tests/fixture_hook.rs` do:
 //!
-//! - `hostkeeper-fixture-hook serve`: the main process of a unit (`Type=simple`). It does
+//! - `hostkeeper-fixture-hook serve`: the main process of a unit (`Type=exec`). It does
 //!   nothing and ends only by a signal (`SIGTERM` from systemd's stop). `/proc/<pid>/exe` of it is
 //!   the fixture binary.
 //! - `hostkeeper-fixture-hook <step> [<artifact>] --params <file>`: one step of the hook contract
@@ -29,14 +30,15 @@
 //! environment variable and opens no socket. A refused command line or params file ends the
 //! program with exit `1` and the reason on standard error.
 //!
-//! The decisions are here, tested without root; the program (`tests/bin/fixture_hook.rs`) only
-//! starts the child of `sleep` and blocks.
+//! The decisions are here, tested without root, and so is the start of `sleep`'s child
+//! ([`start_child`]); the program (`tests/bin/fixture_hook.rs`) only forwards to them and blocks.
 
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 
 use hostkeeper_hook::{ArgsError, Invocation, Outcome, Params, ParamsError, Report, Scalar, Step};
 use sha2::{Digest, Sha256};
@@ -140,7 +142,7 @@ pub enum Run {
 }
 
 /// A text value of `params`, if the key is there.
-fn text(params: &Params, key: &'static str) -> Result<Option<&str>, FixtureError> {
+fn text<'a>(params: &'a Params, key: &'static str) -> Result<Option<&'a str>, FixtureError> {
     match params.get(key) {
         None => Ok(None),
         Some(Scalar::Text(text)) => Ok(Some(text.as_str())),
@@ -254,6 +256,20 @@ pub fn run_step(
     writeln!(err, "fixture: {step} ok")?;
     ok_report(step).write_to(out)?;
     Ok(Ending::Exit(Outcome::Success))
+}
+
+/// Starts the child of a `sleep` step: the fixture's own `serve`, with no input and no output (so
+/// that the step's output ends when the step and its child have ended), in the step's control
+/// group; then writes the step's pid and the child's to `pid_file`.
+pub fn start_child(me: &Me, pid_file: &Path) -> Result<Child, FixtureError> {
+    let child = Command::new(&me.exe)
+        .arg(SERVE)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    write_pid_file(pid_file, &[me.pid, child.id()], None)?;
+    Ok(child)
 }
 
 /// The SHA-256 of the file at `path`, in lowercase hex.

@@ -9,7 +9,7 @@
 //!
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its
-//!   interface is stable: the end-to-end tests drive it too.
+//!   interface is documented and kept stable for any test that drives it.
 //! - [`host`]: the check a privileged test makes before it acts: root, and systemd as the
 //!   service manager.
 //! - [`rig`]: the names and files of one test: a unique unit name per unit, the params files of

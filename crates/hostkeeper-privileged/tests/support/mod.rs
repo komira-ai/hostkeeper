@@ -118,9 +118,35 @@ pub fn wait_until(mut done: impl FnMut() -> bool) {
     }
 }
 
-/// Waits until the file at `path` exists: the fixture writes its pid file once it runs.
-pub fn wait_for_file(path: &Path) {
-    wait_until(|| path.exists());
+/// Waits until the file at `path` exists: the fixture writes its pid file once it runs. When
+/// `ended` says the step's run has returned first, the file will never come: fails at once.
+pub fn wait_for_file(path: &Path, ended: impl Fn() -> bool) {
+    wait_until(|| {
+        let written = path.exists();
+        assert!(
+            written || !ended(),
+            "the step ended before it wrote {}",
+            path.display()
+        );
+        written
+    });
+}
+
+/// Stops `unit` when dropped: a test that fails while a step runs on a thread of a
+/// `std::thread::scope` ends the step, so that the scope can join it and the failure is reported
+/// at once rather than at the step's bound.
+pub struct StopOnDrop<'a>(pub &'a str);
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        let unit = service_unit(self.0);
+        let _ = Command::new(SYSTEMCTL)
+            .args(["stop", "--system", unit.as_str()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 /// Whether the process `pid` has ended: it has no `/proc` entry, or it is a zombie (ended, not

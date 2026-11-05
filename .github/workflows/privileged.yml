@@ -28,9 +28,11 @@ on:
 
 permissions: {}
 
-# A run is never cancelled by a newer one: a run of main always completes.
+# A group per commit, never cancelled: a run of one commit never replaces or cancels the run of
+# another (a release needs a successful run on each commit), and a second run of the same commit
+# (a re-run, a dispatch) waits for the first.
 concurrency:
-  group: privileged
+  group: privileged-${{ github.sha }}
   cancel-in-progress: false
 
 env:

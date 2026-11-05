@@ -23,7 +23,7 @@ use hostkeeper_steps::{
     Bound, Captured, DeadMan, RING_BYTES, StepCall, StepExit, StepLauncher, SystemdLauncher,
     SystemdRunProcess, Watch,
 };
-use support::{Bench, FakeClock};
+use support::{Bench, FakeClock, StopOnDrop};
 
 /// The production launcher.
 fn launcher() -> SystemdLauncher<SystemdRunProcess> {
@@ -79,7 +79,7 @@ fn assert_unit_and_group_gone(unit: &str, pids: &[u32]) {
 }
 
 /// Catches a launcher that leaves `RuntimeMaxSec=` off the unit, or sets it to another bound: a
-/// `sleep` step with a bound of 3 seconds is ended by systemd itself (its result `timeout`), the
+/// `sleep` step with a bound of 10 seconds is ended by systemd itself (its result `timeout`), the
 /// launcher reads a failed step, and neither the step nor its child is left.
 #[test]
 fn a_step_runs_in_a_real_transient_unit_and_is_ended_at_its_bound() {
@@ -87,9 +87,17 @@ fn a_step_runs_in_a_real_transient_unit_and_is_ended_at_its_bound() {
     let rig = &bench.rig;
     let unit = rig.unit();
     let (params, pids) = sleeping(rig, "sleep");
-    let exit = launcher()
-        .run(&call(rig, &unit, Step::Cutover, &params, secs(3)))
-        .expect("the launcher runs the step");
+    let launcher = launcher();
+    // The bound starts with the unit; the pid file is waited for while the step runs, so the
+    // test does not depend on the fixture starting within the bound's first seconds.
+    let exit = std::thread::scope(|scope| {
+        let running =
+            scope.spawn(|| launcher.run(&call(rig, &unit, Step::Cutover, &params, secs(10))));
+        let _stop = StopOnDrop(&unit);
+        support::wait_for_file(&pids, || running.is_finished());
+        running.join().expect("the run thread")
+    })
+    .expect("the launcher runs the step");
     // systemd-run --wait exits 1 for a unit whose result is `timeout`: not a code of the contract
     // that reads as anything but a failure.
     assert_eq!(Outcome::from_exit(exit.code), Outcome::Failure, "{exit:?}");
@@ -136,7 +144,8 @@ fn the_transient_unit_carries_runtime_max_sec_and_nothing_else() {
     std::thread::scope(|scope| {
         let running =
             scope.spawn(|| launcher.run(&call(rig, &unit, Step::Verify, &params, secs(600))));
-        support::wait_for_file(&pids);
+        let _stop = StopOnDrop(&unit);
+        support::wait_for_file(&pids, || running.is_finished());
         support::start_serve(rig, &plain);
         let mut asked = compared.to_vec();
         asked.push("RuntimeMaxUSec");
@@ -188,7 +197,8 @@ fn an_unbounded_prepare_gets_runtime_max_sec_infinity() {
     std::thread::scope(|scope| {
         let running = scope
             .spawn(|| launcher.run(&call(rig, &unit, Step::Prepare, &params, Bound::Unbounded)));
-        support::wait_for_file(&pids);
+        let _stop = StopOnDrop(&unit);
+        support::wait_for_file(&pids, || running.is_finished());
         assert_eq!(support::property(&unit, "RuntimeMaxUSec"), "infinity");
         clock.set(u64::MAX / 2);
         assert!(
@@ -230,7 +240,8 @@ fn the_dead_man_stops_a_unit_by_name() {
     let exit = std::thread::scope(|scope| {
         let running =
             scope.spawn(|| launcher.run(&call(rig, &unit, Step::Cutover, &params, secs(3600))));
-        support::wait_for_file(&pids);
+        let _stop = StopOnDrop(&unit);
+        support::wait_for_file(&pids, || running.is_finished());
         assert_eq!(support::property(&unit, "ActiveState"), "active");
         watch.arm(&unit, 1010);
         assert!(

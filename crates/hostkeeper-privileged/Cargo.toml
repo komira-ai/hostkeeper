@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The tests that run as root against the real systemd of a host, in .github/workflows/privileged.yml only, and the workload fixture they and the end-to-end tests drive."
+description = "The tests that run as root against the real systemd of a host, in .github/workflows/privileged.yml only, and the workload fixture they drive."
 
 # The one place where the adapters behind the fakes of the pull-request set meet the real host:
 # the step launcher's transient units, the dead-man's stop by name, the observer's systemd and
@@ -26,7 +26,8 @@ thiserror.workspace = true
 
 # The workload fixture (`hostkeeper_privileged::fixture` says what it does). Built by cargo with
 # the crate's tests, nothing prebuilt or checked in; a program of the tests, not shipped. Its
-# decisions are in the library, measured; the program only starts a child and blocks.
+# decisions and the start of its child are in the library, measured; the program only forwards
+# to them and blocks.
 [[bin]]
 name = "hostkeeper-fixture-hook"
 path = "tests/bin/fixture_hook.rs"

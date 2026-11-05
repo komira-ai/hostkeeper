@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 
 use hostkeeper_hook::{Report, Step};
 use hostkeeper_privileged::Rig;
-use hostkeeper_privileged::fixture::{self, Mode, ok_report};
+use hostkeeper_privileged::fixture::{self, FixtureError, Me, Mode, ok_report};
 use hostkeeper_testkit::Scratch;
 use rustix::process::{Pid, Signal, kill_process};
 
@@ -153,4 +153,35 @@ fn sleep_runs_with_its_child_until_a_signal_ends_it() {
     }
     let status = child.wait().expect("it ends");
     assert_eq!(status.signal(), Some(Signal::TERM.as_raw()), "{status}");
+}
+
+/// Catches the child of `sleep` started without being written down, as another program than
+/// `serve`, or a start that cannot run reported as one that did: the child is the fixture's
+/// `serve`, which runs until it is signalled, and both pids are in the pid file, the step's first.
+#[test]
+fn start_child_starts_serve_and_writes_both_pids() {
+    let (_scratch, rig) = bench("start_child");
+    let pids = rig.pid_file("child");
+    let me = Me {
+        pid: 7,
+        exe: Path::new(FIXTURE).to_path_buf(),
+    };
+    let mut child = fixture::start_child(&me, &pids).expect("start the child");
+    let found = fixture::read_pid_file(&pids).expect("the pid file");
+    assert_eq!(found.pids, [7, child.id()]);
+    assert_eq!(child.try_wait().expect("look"), None, "serve runs on");
+    let pid = Pid::from_raw(i32::try_from(child.id()).expect("a pid")).expect("not 0");
+    kill_process(pid, Signal::TERM).expect("serve is there to signal");
+    let status = child.wait().expect("it ends");
+    assert_eq!(status.signal(), Some(Signal::TERM.as_raw()), "{status}");
+    let gone = Me {
+        pid: 7,
+        exe: rig.dir().join("no-such-program"),
+    };
+    let err = fixture::start_child(&gone, &rig.pid_file("none")).expect_err("no program");
+    assert!(matches!(err, FixtureError::Io(_)), "{err:?}");
+    assert!(
+        !rig.pid_file("none").exists(),
+        "nothing is written for a child that did not start"
+    );
 }

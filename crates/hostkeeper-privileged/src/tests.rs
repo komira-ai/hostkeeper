@@ -65,7 +65,7 @@ fn run(run: &StepRun, exe: &Path) -> (Result<Ending, FixtureError>, String, Stri
     )
 }
 
-/// Catches a mode the end-to-end tests rely on parsed as another, printed in a form it does not
+/// Catches a mode a test relies on parsed as another, printed in a form it does not
 /// read back, or an unknown or malformed mode taken as one: every mode round-trips through its
 /// text, `fail-at` takes every step, and anything else is refused with the list of modes.
 #[test]
@@ -488,13 +488,13 @@ fn a_rig_writes_params_the_fixture_reads_back() {
 }
 
 /// Catches a unit file whose main process is not the fixture's `serve`, or of another type than
-/// `simple`, and a transient unit of `serve` started with a property or waited for.
+/// `exec`, and a transient unit of `serve` started with a property or waited for.
 #[test]
 fn a_rig_writes_the_unit_of_serve_and_its_transient_line() {
     let dir = scratch("rig-unit-file");
     let rig = rig(dir.path());
     let text = "[Unit]\nDescription=hostkeeper privileged test: the fixture's serve\n\n\
-                [Service]\nType=simple\nExecStart=/target/debug/hostkeeper-fixture-hook serve\n";
+                [Service]\nType=exec\nExecStart=/target/debug/hostkeeper-fixture-hook serve\n";
     assert_eq!(rig.unit_file_text().expect("a plain path"), text);
     let path = rig.unit_file("hostkeeper-ci-x-1-0").expect("writes");
     assert_eq!(path, dir.path().join("hostkeeper-ci-x-1-0.service"));
@@ -546,5 +546,6 @@ fn show_asks_the_named_properties_and_its_output_is_read_by_key() {
 /// targets, never this one.
 #[test]
 fn privileged_tests_are_compiled_out_by_default() {
-    assert!(!PRIVILEGED);
+    // Read through `black_box`: the value is the build's, and the test is about the build.
+    assert!(!std::hint::black_box(PRIVILEGED));
 }

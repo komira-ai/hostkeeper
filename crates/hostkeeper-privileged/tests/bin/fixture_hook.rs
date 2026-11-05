@@ -1,11 +1,11 @@
-//! `hostkeeper-fixture-hook`, the workload fixture of the privileged and end-to-end tests. What it
-//! does and the interface it keeps are in `hostkeeper_privileged::fixture`, which decides
-//! everything; this program only reads its command line through it, starts the child of `sleep`,
-//! blocks where a signal must end it, and exits with the outcome it is given.
+//! `hostkeeper-fixture-hook`, the workload fixture of the privileged tests. What it does and the
+//! interface it keeps are in `hostkeeper_privileged::fixture`, which decides everything and starts
+//! `sleep`'s child; this program only forwards to it, blocks where a signal must end it, and exits
+//! with the outcome it is given.
 
 use std::error::Error;
 use std::io::{self, Write};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::ExitCode;
 
 use hostkeeper_hook::Outcome;
 use hostkeeper_privileged::fixture::{self, Ending, Me, Run};
@@ -36,15 +36,7 @@ fn run() -> Result<ExitCode, Box<dyn Error>> {
         Ending::Exit(outcome) => Ok(outcome.into()),
         Ending::Block { pid_file } => {
             if let Some(path) = pid_file {
-                // The child of the step's control group: `serve`, with no output of its own, so
-                // that the step's output ends when the step and its child have ended.
-                let mut child = Command::new(&me.exe)
-                    .arg(fixture::SERVE)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()?;
-                fixture::write_pid_file(&path, &[me.pid, child.id()], None)?;
+                let mut child = fixture::start_child(&me, &path)?;
                 // Reaped if it ends before the step does.
                 std::thread::spawn(move || child.wait());
             }
