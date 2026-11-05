@@ -85,12 +85,13 @@ hostkeeper is a Cargo workspace of Rust crates; these are the rules of its code.
 ## 3. This repository
 
 - B17 SHOULD. Host updates use one generic updater with per-service update-hook subcommands declared in a root-owned file; no per-roll scripts or per-service logic in the updater.
-- B10 BLOCK (this repository). Every workflow also has a top-level `permissions: {}`, and a write scope is held only by the jobs, and under the `if:`, that the workflow lint lists for it. Every job runs on a GitHub-hosted runner the workflow lint lists. A workflow that runs on `pull_request` has no privileged job (`sudo`, a privileged container, a write scope) and no macOS job or target, whatever the job's `if:` says.
+- B10 BLOCK (this repository). Every workflow also has a top-level `permissions: {}`, and a write scope is held only by the jobs, and under the `if:`, that the workflow lint lists for it. Every job runs on a GitHub-hosted runner the workflow lint lists. A workflow that runs on `pull_request` has no privileged job (`sudo`, a privileged container, a write scope) and no macOS job or target, whatever the job's `if:` says. A job runs as root (`sudo`, a privileged container) only in `privileged.yml`, whose triggers are exactly a push to `main` and `workflow_dispatch`, whose jobs run only on the runners the workflow lint lists for it, and which holds no write scope.
 
 Where the rules above are checked in this repository: format, licences, bans and sources, and clippy (R1, R6) by CI's `lint` job,
 which also enforces R2 (`unsafe_code` in `[workspace.lints]`) and the environment reads of S2 (`disallowed-methods` in `clippy.toml`;
 each allowed read carries an `#[expect(..., reason = "...")]`); the formatting options are in `rustfmt.toml`;
 coverage (T1, T3) by `coverage-gate` in CI's `test` job, which judges every crate of the workspace at 99.00% of its lines and of its
-branches, with no way to exclude one; workflow runners, triggers, permissions, action pins and pull-request jobs (B9, B10) by the
-workflow lint, `cargo test -p xtask --test workflows`, and by actionlint in CI's `lint` job; this file and `CLAUDE.md` by
-`cargo test -p xtask --test agents_md`.
+branches, with no way to exclude one; workflow runners, triggers, permissions, action pins, pull-request jobs and jobs as root (B9,
+B10) by the workflow lint, `cargo test -p xtask --test workflows`, and by actionlint in CI's `lint` job; this file and `CLAUDE.md` by
+`cargo test -p xtask --test agents_md`. The tests of `crates/hostkeeper-privileged` behind its feature `privileged` run as root in
+`privileged.yml` only, after a merge to `main`, and count toward no coverage gate.

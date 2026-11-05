@@ -31,6 +31,7 @@ const ENROLL: &str = "hostkeeper-enroll";
 const LINK: &str = "hostkeeper-link";
 const PACKAGE: &str = "hostkeeper-package";
 const PLACED: &str = "hostkeeper-placed";
+const PRIVILEGED: &str = "hostkeeper-privileged";
 const UI_TESTS: &str = "hostkeeper-ui-tests";
 const BINARY: &str = "hostkeeper";
 const HELLO: &str = "hello";
@@ -51,8 +52,9 @@ pub type Layer = (
 /// coordinator in process, and the daemon's run the example service hello's hook in process;
 /// hello's tests read its output with the hook contract and load its package with the
 /// manifest loader; the observer's tests run hooks through the step runner; the CLI
-/// crates' and the web app's tests read the protobuf descriptors.
-pub const LAYERS: [Layer; 22] = [
+/// crates' and the web app's tests read the protobuf descriptors; the privileged tests drive the
+/// step runner's launcher and dead-man and the observer's adapters against the host.
+pub const LAYERS: [Layer; 23] = [
     (BINARY, &[DAEMON], &[PROTO]),
     (CI, &[CTL], &[PROTO]),
     (CONFIG, &[], &[]),
@@ -83,6 +85,7 @@ pub const LAYERS: [Layer; 22] = [
     (OIDC, &[], &[]),
     (PACKAGE, &[CONFIG, HOOK, STEPS], &[]),
     (PLACED, &[CONFIG], &[]),
+    (PRIVILEGED, &[HOOK], &[OBSERVE, STEPS]),
     (PROTO, &[], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),
     (TLS, &[], &[]),

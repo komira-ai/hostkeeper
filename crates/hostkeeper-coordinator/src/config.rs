@@ -190,7 +190,7 @@ const KEY_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone, Debug, Parser)]
 #[command(
     name = "hostkeeper-coordinator",
-    version = concat!(env!("CARGO_PKG_VERSION"), "+", env!("HOSTKEEPER_BUILD_COMMIT"))
+    version = crate::stamp::version()
 )]
 pub struct Cli {
     /// What to do.

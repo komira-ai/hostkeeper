@@ -58,6 +58,65 @@ fn check_binary_requires_version_and_commit_in_the_output() {
 }
 
 #[test]
+fn the_coordinator_is_checked_against_its_own_program_name() {
+    // Catches: a check that holds the coordinator to the daemon's stamp, or accepts the daemon's
+    // stamp from the coordinator.
+    let binary = Path::new("/opt/bin/hostkeeper-coordinator");
+    let own = "hostkeeper-coordinator 0.1.5+abcdef012345";
+    assert_eq!(
+        check_binary(
+            &printing(true, &format!("{own}\n"), ""),
+            binary,
+            &version(),
+            &pinned()
+        ),
+        Ok(vec![format!("/opt/bin/hostkeeper-coordinator: {own}")])
+    );
+    assert_eq!(
+        check_binary(
+            &printing(true, &format!("{STAMP}\n"), ""),
+            binary,
+            &version(),
+            &pinned()
+        ),
+        Err(Error::Failed(format!(
+            "/opt/bin/hostkeeper-coordinator --version printed {:?}, not {own:?}",
+            format!("{STAMP}\n")
+        )))
+    );
+}
+
+#[test]
+fn a_binary_that_is_not_shipped_is_refused_before_it_runs() {
+    // Catches: a check that runs any file it is given, or that takes the program name from the
+    // output instead of from the file name the binary ships under.
+    struct Unrun;
+    impl RunVersion for Unrun {
+        fn version_of(&self, binary: &Path) -> Result<Said, PortError> {
+            panic!("{} was run", binary.display())
+        }
+    }
+    let refused = |path: &Path| -> Result<Vec<String>, Error> {
+        Err(Error::Failed(format!(
+            "{} is not a shipped binary: its file name is none of \
+             [\"hostkeeper\", \"hostkeeper-coordinator\"]",
+            path.display()
+        )))
+    };
+    for path in [
+        Path::new("/opt/bin/hostkeeperd"),
+        Path::new("/opt/bin/hostkeeper.old"),
+        Path::new("/"),
+        Path::new(OsStr::from_bytes(b"/opt/bin/\xff")),
+    ] {
+        assert_eq!(
+            check_binary(&Unrun, path, &version(), &pinned()),
+            refused(path)
+        );
+    }
+}
+
+#[test]
 fn the_stamp_passes_with_or_without_its_one_line_break() {
     // Catches: a check that demands the line break, or that strips more than one.
     let expected = Ok(vec![format!("/opt/bin/hostkeeper: {STAMP}")]);
@@ -110,7 +169,12 @@ fn a_port_error_is_passed_on() {
         }
     }
     assert_eq!(
-        check_binary(&Broken, Path::new("/x"), &version(), &nth_commit(1)),
+        check_binary(
+            &Broken,
+            Path::new("/x/hostkeeper"),
+            &version(),
+            &nth_commit(1)
+        ),
         Err(Error::Port(PortError::new("run", "no such file")))
     );
 }

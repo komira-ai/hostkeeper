@@ -97,9 +97,10 @@ pub struct ProbeExit {
 /// How a step ended, as the launcher saw it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepExit {
-    /// The exit code; `None` when the step was killed by a signal, or by its bound where the
-    /// launcher reports that as no code. Either way a code that is not `0`, `75` or `76`, and
-    /// no code, are a failed step.
+    /// The exit code; `None` when the step was killed by a signal, by its bound where the
+    /// launcher reports that as no code, or ended by a [`StepLauncher::stop`] of its unit
+    /// whatever it exited with. Either way a code that is not `0`, `75` or `76`, and no code,
+    /// are a failed step.
     pub code: Option<i32>,
     /// The last line the hook wrote to standard output that is not blank, `None` when it wrote
     /// none. [`crate::systemd::SystemdLauncher`] also gives `None` for a last line longer than
@@ -148,7 +149,9 @@ pub enum LaunchError {
 pub trait StepLauncher: Send + Sync {
     /// Runs the step and waits for it to end. A step killed by its bound is a [`StepExit`] of a
     /// failed step: no code, or (from `systemd-run --wait`) a code that is not one of the
-    /// contract's.
+    /// contract's. A run that a [`Self::stop`] of its unit ended has no code, even when the
+    /// process exited `0` (the stop's `SIGTERM` reads as a clean end of a service to systemd):
+    /// the dead-man's stop at the bound is a failed step.
     fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError>;
 
     /// Stops the unit of that name and waits until it has ended; a unit that is not running is

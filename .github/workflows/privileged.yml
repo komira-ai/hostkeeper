@@ -1,0 +1,89 @@
+# The privileged run: the tests of crates/hostkeeper-privileged, as root, against the real systemd
+# of a GitHub-hosted Ubuntu runner (passwordless sudo, systemd as PID 1). Everything a pull
+# request runs proves the daemon against fakes of the host; here the adapters behind those fakes
+# meet the real thing: the step launcher's transient units and their bound, the dead-man's stop
+# by name, and the observer's systemctl and /proc adapters.
+#
+# It runs after a merge to main and by hand (workflow_dispatch), never on a pull request. The
+# workflow lint (crates/xtask/tests/workflows) allows a privileged job in this file only, holds its
+# triggers to exactly these two and its runner to ubuntu-24.04, and gives it no write scope; it
+# refuses root in every other workflow. A release waits for a successful push run of this
+# workflow on its commit (release.yml).
+#
+# The test binaries are built as the runner's own user; only their run is as root, through the
+# cargo runner `sudo`, the one use of it in this file. So no file of the Cargo registry or of
+# target/ is owned by root, and a test writes only its scratch directory under target/. Each test
+# names its units hostkeeper-ci-<test>-<pid>-<n> and stops and resets them when it ends, failed or
+# not. The two test targets are named, in both steps, so that the run is the privileged tests and
+# nothing else of the crate; the workflow lint holds the list to the files that are privileged.
+#
+# These tests are not counted by the 99% coverage gate (ci.yml judges the pull-request set). A red
+# run on main is a defect, fixed forward in a new pull request.
+name: privileged
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# A group per commit, never cancelled: a run of one commit never replaces or cancels the run of
+# another (a release needs a successful run on each commit), and a second run of the same commit
+# (a re-run, a dispatch) waits for the first.
+concurrency:
+  group: privileged-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Incremental artifacts only bloat a cached target directory.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  privileged:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The service manager the tests run against, for the log (evidence, not a gate).
+      - name: systemctl version
+        run: systemctl --version
+      - name: systemd-analyze version
+        run: systemd-analyze --version
+      # A runner image without systemd as PID 1 is a setup failure, not a test to skip: this step
+      # fails, and its name says why. (The tests' own check refuses such a host too, with the
+      # same reason.)
+      - name: Fail unless systemd is the service manager (/run/systemd/system is a directory)
+        run: test -d /run/systemd/system
+      - run: rustup toolchain install
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      - name: Build the privileged tests as the runner's user
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer
+      - name: Run the privileged tests as root
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer -- --test-threads=1
+      - name: The journal of the test units
+        if: failure()
+        run: journalctl --unit 'hostkeeper-ci-*' --no-pager
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

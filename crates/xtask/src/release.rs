@@ -7,7 +7,7 @@
 //! - `set-version` ([`set_version`]): writes a version into the workspace manifest and the lock
 //!   file before a build.
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
-//!   ([`contract::stamp_string`]) and the check that a built binary prints exactly it.
+//!   ([`contract::stamp_of`]) and the check that a built binary prints exactly it.
 //! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
 //!   unless it says `hello`; for hello `--fail-ready` builds its failing build), `.tar.zst`, and
 //!   its SHA-256.
@@ -39,6 +39,8 @@ mod check_binary;
 mod compare_images;
 pub(crate) mod contract;
 #[cfg(test)]
+mod doc_tests;
+#[cfg(test)]
 mod fakes;
 mod git;
 mod github;
@@ -53,6 +55,8 @@ pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
 mod set_version;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 mod version;
 
 use std::fmt;
@@ -128,9 +132,10 @@ pub(crate) enum Verb {
         commit: Commit,
     },
     /// Run a binary with `--version` and refuse it unless it prints exactly the stamp of this
-    /// version and commit.
+    /// version and commit: `<file name> X.Y.Z+<12 hex>`, for a file named `hostkeeper` or
+    /// `hostkeeper-coordinator`.
     CheckBinary {
-        /// The binary to run.
+        /// The binary to run, under the name it ships with.
         binary: PathBuf,
         /// The version, `X.Y.Z`.
         version: Version,
