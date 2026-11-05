@@ -25,7 +25,7 @@
 //!    service injects: the hook ends each step as injected, and a deferral leaves the world as
 //!    it was.
 //! 7. **Unknown reserved keys.** A params file with an `updater.*` key the hook does not know
-//!    is no reason to refuse (a hook may refuse an unknown key of its own `[hook.params]`).
+//!    is no reason to refuse (a hook may refuse an unknown key of its own `[params]`).
 //! 8. **One at a time.** With an exclusive lock held on the record directory, every step
 //!    refuses (exit `1`) and changes nothing.
 //!
@@ -154,7 +154,7 @@ pub trait FakeService {
     /// else of the harness's environment is inherited.
     fn env(&self, sandbox: &Sandbox) -> Vec<(OsString, OsString)>;
 
-    /// The hook's `[hook.params]` table (the harness adds the reserved ceiling).
+    /// The hook's `[params]` table (the harness adds the reserved ceiling).
     fn params(&self) -> Params;
 
     /// Arranges for `step` to end as `fault`, from now on. `Ok(false)` if this fake cannot

@@ -53,7 +53,7 @@ impl FakeService for MyServiceFake {
     fn init(&mut self, sandbox: &Sandbox) -> io::Result<()> { /* ... */ }
     // The environment of the hook: how it finds the sandbox's directories. Nothing else is inherited.
     fn env(&self, sandbox: &Sandbox) -> Vec<(OsString, OsString)> { /* ... */ }
-    // The table that the hook sees as its `[hook.params]`.
+    // The table that the hook sees as its `[params]`.
     fn params(&self) -> Params { /* ... */ }
     // Make `step` end as the fault says (fail, defer or halt); Ok(false) if your service cannot.
     fn inject(&mut self, sandbox: &Sandbox, step: Step, fault: Fault) -> io::Result<bool> { /* ... */ }

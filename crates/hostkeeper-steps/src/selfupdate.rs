@@ -1,4 +1,4 @@
-//! The updater's own update (docs/design/host-updates.md, 3.5, "Updating the updater itself").
+//! The updater's own update (docs/design/hostkeeper-design.md, 6.6).
 //!
 //! The updater is updated like any service, but never inside the trial it guards. After the
 //! update of the release has run its steps and `verify` has succeeded, a follow-on step

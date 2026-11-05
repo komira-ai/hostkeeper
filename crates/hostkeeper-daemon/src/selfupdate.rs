@@ -72,7 +72,7 @@ use crate::verbs::update;
 
 /// The self-update protocol of this binary: what the verb `self-update-protocol` prints, and
 /// what a new binary's protocol is compared with ([`accepted`]). It is apart from the step
-/// runner's `UPDATER_PROTOCOL`, which the declarations' `min_updater_protocol` is compared with.
+/// runner's `UPDATER_PROTOCOL`, which an order's `min_updater_protocol` is compared with.
 pub const SELF_UPDATE_PROTOCOL: u32 = 1;
 /// The verb a new binary is asked for its protocol with.
 pub const PROTOCOL_VERB: &str = "self-update-protocol";
