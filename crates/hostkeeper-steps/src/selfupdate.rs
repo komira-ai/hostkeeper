@@ -255,6 +255,11 @@ impl Layout {
         Ok(())
     }
 
+    /// [`io::ErrorKind::InvalidInput`] unless this is a package directory.
+    pub(crate) fn expect_package(&self) -> io::Result<()> {
+        self.expect_kind(Kind::Package)
+    }
+
     fn expect_kind(&self, kind: Kind) -> io::Result<()> {
         if self.kind != kind {
             return Err(io::Error::new(

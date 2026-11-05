@@ -11,6 +11,9 @@
 //! - [`DeadMan`] enforces the bound of the running step on a thread of its own.
 //! - [`selfupdate`] is the updater's own update with its fallback, and [`Layout`] the directory
 //!   of versions with `current` and `previous` that it and every package share.
+//! - [`prune`] deletes the versions of a package directory that a confirmed switch leaves
+//!   behind: all but the ones `current` and `previous` name and the ones the caller protects
+//!   ([`prune_plan`], [`Layout::prune`]).
 //! - [`seal`] is the seal file of an unpacked package version, and [`tree_digest`] the digest
 //!   it holds (both public formats, docs/package-format.md).
 //! - [`force`] is the journal of a hookless `force` ([`ForceRecord`]), an optional field of the
@@ -25,6 +28,7 @@ pub mod clock;
 pub mod deadman;
 pub mod force;
 pub mod launcher;
+pub mod prune;
 pub mod record;
 pub mod resume;
 pub mod runner;
@@ -36,6 +40,9 @@ pub use clock::{Clock, Stamp, SystemClock};
 pub use deadman::{DeadMan, Watch};
 pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{AdditiveCall, LaunchError, StepCall, StepExit, StepLauncher};
+pub use prune::{
+    PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,
+};
 pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore, WriteFault};
 pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
 pub use runner::{Bounds, Finished, RunError, StepRunner, UpdateOrder};

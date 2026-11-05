@@ -12,7 +12,10 @@
 //!   `hostkeeper-steps` under the service's lock and the host's step lock ([`locks`]). `force`
 //!   is checked the same way but for `busy` and the standing halt, runs no hook, and switches
 //!   the service under its lock alone, through the placed-path linker of `hostkeeper-placed`
-//!   ([`verbs::force`]); [`prune`] is its last step.
+//!   ([`verbs::force`]).
+//! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
+//!   `current`), the service's version directories but `current` and `previous` are deleted,
+//!   under the lock the order already holds.
 //! - [`halt`]: the held halt generation of each service, persisted, never lowered.
 //! - [`packages`]: the port of the package store, and [`installed`] what the host runs.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).

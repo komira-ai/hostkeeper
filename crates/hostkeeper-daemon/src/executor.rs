@@ -28,7 +28,7 @@ use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT};
 use crate::locks::{Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::packages::Packages;
-use crate::prune::Prune;
+use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::verb::Verb;
 use crate::verbs;
@@ -59,8 +59,11 @@ pub struct Ports {
     pub units: Arc<dyn UnitControl + Send + Sync>,
     /// Where placed-path linking works, and the filesystem it goes through.
     pub placement: Placement,
-    /// Step 18 of a `force`: the prune of the versions a switch of `current` leaves behind.
+    /// The prune of the versions a confirmed switch leaves behind: at the end of an update that
+    /// ends `Succeeded`, and at step 18 of a `force` that moved `current`.
     pub prune: Arc<dyn Prune>,
+    /// The point of a `force` between its switch of `current` and its prune.
+    pub force_lock_point: Arc<dyn ForceLockPoint>,
 }
 
 /// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
@@ -94,6 +97,7 @@ pub struct Ctx {
     pub units: Arc<dyn UnitControl + Send + Sync>,
     pub placement: Placement,
     pub prune: Arc<dyn Prune>,
+    pub force_lock_point: Arc<dyn ForceLockPoint>,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
@@ -395,6 +399,7 @@ impl Daemon {
                 units: ports.units,
                 placement: ports.placement,
                 prune: ports.prune,
+                force_lock_point: ports.force_lock_point,
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,
