@@ -190,6 +190,17 @@ impl Pki {
     pub fn root(&self) -> PathBuf {
         self.scratch.path().join("pki")
     }
+
+    /// Writes generation `number` with the CA bundle `bundle` and switches `current` to it by
+    /// rename, as enrollment does.
+    pub fn switch_to(&self, number: u64, bundle: &str) {
+        let generation = self.root().join(format!("gen-{number}"));
+        std::fs::create_dir_all(&generation).expect("a generation");
+        std::fs::write(generation.join("ca.pem"), bundle).expect("the CA bundle");
+        let staged = self.root().join("current.tmp");
+        std::os::unix::fs::symlink(format!("gen-{number}"), &staged).expect("a staged link");
+        std::fs::rename(&staged, self.root().join("current")).expect("current switched");
+    }
 }
 
 /// One end of an in-process connection. A write sends its bytes to the other end, and is lost

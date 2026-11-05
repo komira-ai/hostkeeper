@@ -32,7 +32,7 @@ struct Bench {
     transport: Arc<PipeTransport>,
     log: Arc<RecordingLog>,
     link: JsonMtlsLink,
-    _pki: Pki,
+    pki: Pki,
 }
 
 impl Bench {
@@ -52,7 +52,7 @@ impl Bench {
             transport,
             log,
             link,
-            _pki: pki,
+            pki,
         }
     }
 
@@ -148,6 +148,38 @@ fn the_mtls_link_refuses_a_server_that_does_not_chain_to_the_pinned_ca() {
     for (fault, text) in cases {
         assert_eq!(LinkError::Untrusted(fault).to_string(), text);
     }
+}
+
+/// Catches a link that keeps the roots of its first heartbeat: the CA bundle is read again at
+/// every heartbeat of one link, so once `current` names a generation whose bundle holds no
+/// certificate with the pinned SHA-256 the next heartbeat dials nothing, and once it names one
+/// that holds it again the heartbeat after that is sent.
+#[test]
+fn the_ca_bundle_is_read_again_at_every_heartbeat() {
+    let farm = Farm::new();
+    let pinned = farm.ca.pem.clone();
+    let bench = Bench::with_bundle("link-bundle-reread", farm, &pinned);
+    let nothing = || http(200, r#"{"reply":"nothing"}"#);
+    assert_eq!(
+        bench.answered(nothing(), Close::Notify),
+        (Ok(Reply::default()), true)
+    );
+    assert_eq!(bench.transport.dialed().len(), 1);
+
+    let other = Ca::new("a later ca");
+    bench.pki.switch_to(2, &other.pem);
+    assert_eq!(
+        bench.link.heartbeat(&bench.farm.host.identity(), &beat()),
+        Err(LinkError::Untrusted(TrustFault::NoPinnedCa))
+    );
+    assert_eq!(bench.transport.dialed().len(), 1, "nothing is dialed");
+
+    bench.pki.switch_to(3, &pinned);
+    assert_eq!(
+        bench.answered(nothing(), Close::Notify),
+        (Ok(Reply::default()), true)
+    );
+    assert_eq!(bench.transport.dialed().len(), 2);
 }
 
 /// A body of exactly `len` bytes: the answer `nothing`, padded with JSON white space.
