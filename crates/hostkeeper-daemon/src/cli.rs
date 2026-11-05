@@ -1,13 +1,15 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags. Configuration
-//! comes in as flags only, never from the environment (AGENTS.md S2); every default is a
-//! constant here.
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
+//! `hostkeeper ctl`, which hands every argument after it to `hostkeeper-ctl`. Configuration comes
+//! in as flags only, never from the environment (AGENTS.md S2); every default is a constant here.
 //!
 //! The one value read from the environment is the address of systemd's notify socket, a
 //! platform-set marker, and only `--notify-systemd` makes the daemon use it.
 //!
-//! Exit status: [`EXIT_FAILED`] when the daemon could not start or serve, `2` for a usage error
-//! (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not load, [`EXIT_LOCKED`]
-//! when another daemon holds the state directory.
+//! Exit status of `hostkeeper daemon`: [`EXIT_FAILED`] when the daemon could not start or serve,
+//! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
+//! load, [`EXIT_LOCKED`] when another daemon holds the state directory. The exit status of
+//! `hostkeeper ctl` is the code `hostkeeper_ctl::exit` assigns to the call, `2` for a usage error
+//! among them.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -17,6 +19,8 @@ use std::sync::Arc;
 use clap::{Args, Parser, Subcommand};
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_ctl::transport::Network;
+use hostkeeper_ctl::{Connect, Io};
 use hostkeeper_placed::roots::{STATE_DIR, SYSTEMD_UNIT_DIR};
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
 use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, SystemClock};
@@ -30,6 +34,8 @@ use crate::verb::PackageDigest;
 
 pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
 
+/// The program name `hostkeeper ctl` shows in its usage and help.
+pub const CTL_PROGRAM: &str = "hostkeeper ctl";
 /// The default of `--config`.
 pub const DEFAULT_CONFIG: &str = "/etc/hostkeeper/hostkeeper.toml";
 /// The default of `--state-dir`.
@@ -55,6 +61,14 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
+    /// Call the coordinator's API: one command per RPC, generated from the protobuf services.
+    /// `hostkeeper ctl --help` lists them.
+    #[command(disable_help_flag = true)]
+    Ctl {
+        /// Everything after `ctl`, unparsed: `hostkeeper-ctl` parses it, `--help` included.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., value_name = "ARGS")]
+        args: Vec<OsString>,
+    },
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -114,10 +128,39 @@ pub fn run(cli: Cli) -> ExitCode {
 /// Runs a parsed command line to its exit status; `notify_socket` is the address of the notify
 /// socket systemd set for the process, used with `--notify-systemd` only.
 pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
-    let Command::Daemon(flags) = cli.command;
+    let flags = match cli.command {
+        Command::Daemon(flags) => flags,
+        Command::Ctl { args } => return ExitCode::from(ctl_on_terminal(args)),
+    };
     let started = notifier(&flags, notify_socket)
         .and_then(|notifier| daemon(&flags.settings(), notifier.as_ref()));
     started.err().map_or(ExitCode::SUCCESS, report)
+}
+
+/// Runs `hostkeeper ctl` with `args`, the arguments after `ctl`, and returns its exit code
+/// (`hostkeeper_ctl::exit`). `connect` makes the transport of a call.
+pub fn ctl(args: Vec<OsString>, connect: &dyn Connect, io: Io<'_>) -> u8 {
+    hostkeeper_ctl::run(
+        std::iter::once(OsString::from(CTL_PROGRAM)).chain(args),
+        connect,
+        io,
+    )
+}
+
+/// [`ctl`] on the process's own streams and the real network.
+fn ctl_on_terminal(args: Vec<OsString>) -> u8 {
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    let mut stderr = std::io::stderr().lock();
+    ctl(
+        args,
+        &Network,
+        Io {
+            stdin: &mut stdin,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    )
 }
 
 /// The readiness notifier the flags ask for: systemd's with `--notify-systemd`, refused when no

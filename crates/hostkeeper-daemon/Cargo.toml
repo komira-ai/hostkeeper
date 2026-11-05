@@ -23,7 +23,11 @@ testing = []
 [dependencies]
 clap.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
+# `hostkeeper ctl`, which the binary reaches through `cli`.
+hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The heartbeat loop's ports, which `link_adapters` implements over the daemon.
+hostkeeper-link = { path = "../hostkeeper-link" }
 # The placed-path linker a `force` and a first install link, unlink and switch through, an
 # uninstall removes a service's paths through, and the service-manager port it stops, starts and
 # asks after units with.

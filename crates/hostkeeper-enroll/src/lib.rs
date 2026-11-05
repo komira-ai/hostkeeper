@@ -10,7 +10,8 @@
 //!
 //! Everything outside the crate is a port, so tests touch nothing of the host:
 //!
-//! - [`CoordinatorEnroll`]: the coordinator's enrollment API (`wire.rs`);
+//! - [`CoordinatorEnroll`]: the coordinator's enrollment API (`wire.rs`), over gRPC with TLS in
+//!   [`GrpcEnroll`] (`grpc.rs`);
 //! - [`Store`]: the pki directory ([`PkiDir`] on disk, `store.rs`);
 //! - [`ClaimsSource`]: what the host says about itself ([`LinuxClaims`], `claims.rs`);
 //! - [`Entropy`]: random bytes for the key ([`OsEntropy`], `key.rs`);
@@ -22,6 +23,7 @@
 
 mod claims;
 mod enroller;
+mod grpc;
 mod key;
 mod store;
 mod validity;
@@ -32,6 +34,7 @@ pub use claims::{ClaimsSource, LinuxClaims};
 pub use enroller::{
     Enroller, Error, Identity, NOT_ENROLLED, Outcome, Ports, ProtocolError, RETRY_SECS, Settings,
 };
+pub use grpc::{GrpcEnroll, GrpcError};
 pub use key::{Entropy, EntropyError, KEY_DRAWS, KeyError, OsEntropy};
 pub use store::{
     CurrentPaths, Fault, FaultGate, KeyFrom, PkiDir, SCHEMA, Store, StoreError, StoreLock, Stored,

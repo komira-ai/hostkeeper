@@ -18,8 +18,12 @@
 //! - [`halt`]: the held halt generation of each service, persisted, never lowered.
 //! - [`packages`]: the port of the package store, and [`installed`] what the host runs.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
-//! - [`cli`]: `hostkeeper daemon` and its flags; the binary only forwards to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags, and `hostkeeper ctl`, which it hands to
+//!   `hostkeeper-ctl`; the binary only forwards to it.
 //! - [`refusal`]: the closed set of reason tokens.
+//! - [`link_adapters`]: the daemon as the executor and the held halts of the heartbeat loop
+//!   (`hostkeeper_link`): its order becomes a protobuf `Order` for [`Daemon::order`], and the
+//!   daemon's reply the verdict the loop reports.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
 //! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
@@ -35,6 +39,7 @@ pub mod executor;
 mod files;
 pub mod halt;
 pub mod installed;
+pub mod link_adapters;
 pub mod locks;
 pub mod notify;
 pub mod packages;

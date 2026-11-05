@@ -50,3 +50,24 @@ fn a_missing_config_exits_with_the_config_status() {
     assert!(stderr.contains(&config.display().to_string()), "{stderr}");
     assert!(!scratch.path().join("state").exists());
 }
+
+/// Catches `ctl` not reaching `hostkeeper-ctl` through the real binary, or its help going to the
+/// wrong stream: `hostkeeper ctl --help` exits 0 and lists every service of the generated table
+/// on stdout.
+#[test]
+fn ctl_is_forwarded_and_main_has_no_logic() {
+    let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+        .arg("ctl")
+        .arg("--help")
+        .output()
+        .expect("run hostkeeper");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for command in hostkeeper_proto::ctl::COMMANDS {
+        assert!(stdout.contains(command.service_command), "{stdout}");
+    }
+    assert!(out.stderr.is_empty(), "{out:?}");
+    let main = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+        .expect("main.rs");
+    assert!(!main.contains("ctl"), "{main}");
+}

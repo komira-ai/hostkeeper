@@ -273,7 +273,9 @@ fn the_systemd_notifier_writes_ready_to_an_abstract_socket() {
 #[test]
 fn the_notify_systemd_flag_needs_the_socket_systemd_sets() {
     let rig = Rig::new("steps-flag");
-    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
+        panic!("`daemon` parses to the daemon command");
+    };
     assert!(!flags.notify_systemd);
     assert!(cli::notifier(&flags, Some(OsString::from("/x"))).is_ok());
     let missing = rig.scratch.path().join("missing.toml");

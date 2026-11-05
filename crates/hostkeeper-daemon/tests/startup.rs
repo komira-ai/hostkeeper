@@ -203,7 +203,9 @@ fn the_command_line_exits_with_the_config_errors_status() {
 /// trusted when root owns it, and the README states each default and each exit status.
 #[test]
 fn daemon_flag_defaults_are_the_documented_ones() {
-    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
+        panic!("`daemon` parses to the daemon command");
+    };
     assert_eq!(
         flags,
         DaemonFlags {
