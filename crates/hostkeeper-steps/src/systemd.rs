@@ -20,14 +20,22 @@
 //! ended by `RuntimeMaxSec=` exits with one that is not the contract's: a failed step);
 //! `--collect` makes systemd unload the unit once it has ended, failed or not, so its name can
 //! be used again without `systemctl reset-failed`; `--pipe` carries the hook's output through.
+//!
+//! A step that [`StepLauncher::stop`] stopped is reported with no exit code, whatever
+//! `systemd-run` exited with. systemd counts the end of a service's main process by the `SIGTERM`
+//! of a stop as a clean end (result `success`), so `systemd-run --wait` exits `0` for a hook that
+//! does not handle the signal; without this, a step the dead-man stopped at its bound would read
+//! as a step that succeeded. A step ended by `RuntimeMaxSec=` needs no such rule: its result is
+//! `timeout`, and `systemd-run --wait` exits `1`.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_hook::Step;
 
@@ -185,6 +193,9 @@ pub type StepLog = Arc<dyn Fn(&str, &Captured) + Send + Sync>;
 pub struct SystemdLauncher<S> {
     spawner: S,
     log: Option<StepLog>,
+    /// The units [`StepLauncher::stop`] was asked to stop since the last run of a step under
+    /// that name started: the run that is under way reports no exit code.
+    stopped_units: Mutex<BTreeSet<String>>,
 }
 
 impl SystemdLauncher<SystemdRunProcess> {
@@ -196,7 +207,11 @@ impl SystemdLauncher<SystemdRunProcess> {
 
 impl<S: Spawner> SystemdLauncher<S> {
     pub fn new(spawner: S) -> SystemdLauncher<S> {
-        SystemdLauncher { spawner, log: None }
+        SystemdLauncher {
+            spawner,
+            log: None,
+            stopped_units: Mutex::default(),
+        }
     }
 
     /// The same launcher, giving `log` the output of every step it ran (the kept standard error
@@ -219,13 +234,25 @@ fn spawned(program: Program, spawn: io::Result<Captured>) -> Result<Captured, La
     spawn.map_err(|e| LaunchError::Launcher(format!("{program:?} could not be run: {e}")))
 }
 
-/// How a step ended, after `log` (if any) was given what was captured.
-fn step_exit(log: Option<&StepLog>, unit: &str, captured: &Captured) -> StepExit {
+/// The units a launcher stopped. A poisoned lock is still read: the set is only names.
+fn stops(stopped: &Mutex<BTreeSet<String>>) -> MutexGuard<'_, BTreeSet<String>> {
+    stopped.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// How a step ended, after `log` (if any) was given what was captured. A step that `stop`
+/// stopped while it ran has no exit code: `systemd-run` exits `0` for a hook that the stop's
+/// `SIGTERM` ended (see the module's documentation), and a step stopped at its bound failed.
+fn step_exit(
+    log: Option<&StepLog>,
+    unit: &str,
+    captured: &Captured,
+    was_stopped: bool,
+) -> StepExit {
     if let Some(log) = log {
         log(unit, captured);
     }
     StepExit {
-        code: captured.code,
+        code: if was_stopped { None } else { captured.code },
         last_line: captured.stdout.last_line(),
     }
 }
@@ -259,11 +286,23 @@ impl<S: Spawner> StepLauncher for SystemdLauncher<S> {
     fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
         let args = command(call)?;
         executable(call.executable)?;
+        // A stop of an earlier run under this name (a resume stops the unit it finds running)
+        // says nothing of this run.
+        stops(&self.stopped_units).remove(call.unit);
         let captured = self.spawn(Program::SystemdRun, &args)?;
-        Ok(step_exit(self.log.as_ref(), call.unit, &captured))
+        let was_stopped = stops(&self.stopped_units).remove(call.unit);
+        Ok(step_exit(
+            self.log.as_ref(),
+            call.unit,
+            &captured,
+            was_stopped,
+        ))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {
+        // Marked before the stop starts, so that the run it ends finds the mark when
+        // `systemd-run` returns.
+        stops(&self.stopped_units).insert(unit.to_owned());
         let captured = self.spawn(Program::Systemctl, &stop_command(unit))?;
         stopped(unit, &captured)
     }

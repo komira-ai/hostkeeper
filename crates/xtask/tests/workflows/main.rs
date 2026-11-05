@@ -1,8 +1,10 @@
 //! The workflow lint: every file in `.github/workflows` is held to the rules in [`lint`], and
 //! the lint is shown to refuse each defect by putting it into a workflow that is otherwise
-//! clean ([`CLEAN`]) and reading the exact problems it reports.
+//! clean ([`CLEAN`]) and reading the exact problems it reports. The rules of `privileged.yml`, the
+//! one workflow that runs a job as root, are tested in `privileged_tests.rs`.
 
 mod lint;
+mod privileged_tests;
 mod release;
 mod release_tests;
 mod set_desired;
@@ -13,7 +15,7 @@ mod yaml;
 
 use std::path::PathBuf;
 
-use lint::{HOSTED_RUNNERS, WRITE_ALLOWED, lint};
+use lint::{HOSTED_RUNNERS, PRIVILEGED_WORKFLOW, WRITE_ALLOWED, lint};
 
 /// The directory of the workflows of this repository.
 fn workflows_dir() -> PathBuf {
@@ -98,10 +100,12 @@ fn every_workflow_of_the_repository_passes_the_lint() {
     // publishes on pull_request or outside the release group, in any workflow file of this
     // repository.
     let all = workflows();
-    assert!(
-        all.iter().any(|(name, _)| name == "ci.yml"),
-        "ci.yml is missing"
-    );
+    for required in ["ci.yml", PRIVILEGED_WORKFLOW] {
+        assert!(
+            all.iter().any(|(name, _)| name == required),
+            "{required} is missing"
+        );
+    }
     let mut found = Vec::new();
     for (file, text) in all {
         let publish = release::publish_problems(&file, &text);
@@ -380,7 +384,9 @@ fn a_macos_job_on_pull_request_is_refused() {
 #[test]
 fn the_pull_request_rule_holds_in_every_shape_of_on_and_only_there() {
     // Catches: `on: pull_request` written as one name or a list escaping the rule, and the rule
-    // refusing privileged or macOS jobs in a workflow that never runs on a pull request.
+    // refusing a macOS job in a workflow that never runs on a pull request. Root in such a
+    // workflow is refused by the rule of privileged.yml, not by this one; in privileged.yml on
+    // its runner it is clean.
     let on = "on:\n  pull_request:\n  push:\n    branches: [main]\n";
     let mac = "    runs-on: macos-15\n";
     let want = ["job test: macOS on pull_request (`macos-15`)"];
@@ -390,12 +396,18 @@ fn the_pull_request_rule_holds_in_every_shape_of_on_and_only_there() {
     }
     let push = push_only();
     let text = with_in(&push, "    runs-on: ubuntu-latest\n", mac);
+    assert_problems(&text, &[]);
     let text = with_in(
         &text,
         "      - run: cargo test --workspace --locked\n",
         "      - run: sudo -E cargo test\n",
     );
-    assert_problems(&text, &[]);
+    assert_problems(
+        &text,
+        &["job test: privileged outside privileged.yml (`sudo -E cargo test`)"],
+    );
+    let ubuntu = with_in(&text, mac, "    runs-on: ubuntu-24.04\n");
+    assert_eq!(lint(PRIVILEGED_WORKFLOW, &ubuntu), Vec::<String>::new());
 }
 
 #[test]
@@ -485,9 +497,16 @@ fn workflow_level_env_and_defaults_on_pull_request_are_held_to_the_same_rule() {
             "workflow: privileged on pull_request (`sudo bash {0}`)",
         ),
     ];
-    for (top, want) in cases {
+    // Where no pull request runs, a darwin target is allowed and root is refused by the rule of
+    // privileged.yml.
+    let push_only_wants: [&[&str]; 3] = [
+        &["workflow: privileged outside privileged.yml (`sudo`)"],
+        &[],
+        &["workflow: privileged outside privileged.yml (`sudo bash {0}`)"],
+    ];
+    for ((top, want), push_want) in cases.into_iter().zip(push_only_wants) {
         assert_problems(&with(at, &format!("{at}{top}")), &[want]);
-        assert_problems(&with_in(&push_only(), at, &format!("{at}{top}")), &[]);
+        assert_problems(&with_in(&push_only(), at, &format!("{at}{top}")), push_want);
     }
 }
 
