@@ -27,6 +27,8 @@
 //!   `current`), the service's version directories but `current` and `previous` are deleted,
 //!   under the lock the order already holds.
 //! - [`halt`]: the held halt generation of each service, persisted, never lowered.
+//! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
+//!   daemon's log under the step's unit.
 //! - [`packages`]: the port of the package store, [`real_packages`] its real implementation
 //!   (fetch, prove, unpack and seal, with the one table that maps their failures onto
 //!   [`refusal`]), and [`installed`] what the host runs.
@@ -58,6 +60,7 @@ pub mod executor;
 pub mod fallback;
 mod files;
 pub mod halt;
+pub mod hook_log;
 pub mod installed;
 pub mod link_adapters;
 pub mod links;
