@@ -1,9 +1,10 @@
 //! The release index: which package file serves each platform of one version of a service. It
 //! sits beside the packages in the channel (`{channel}/{S}/{V}/index.json`, with
 //! `{S}-{V}-{platform}.tar.zst` and its `.sigstore.json` bundle) and is a release asset of
-//! hostkeeper itself. A release holds two: `index.json` of the hostkeeper packages and
-//! `hello-index.json` of the hello packages ([`Service::index_name`]), the same schema with
-//! `service` `hostkeeper` or `hello`:
+//! hostkeeper itself. A release holds three, the same schema each ([`Package::index_name`]):
+//! `index.json` of the hostkeeper packages, `hello-index.json` of the hello packages and
+//! `hello-fail-ready-index.json` of hello's failing build (`service` `hello`, `version` the
+//! release's followed by `-fail-ready`, so its files are `hello-V-fail-ready-<platform>.tar.zst`):
 //!
 //! ```json
 //! {"packages":[{"bytes":N,"file":"S-V-linux-x86_64.tar.zst","platform":"linux-x86_64","sha256":"<64 hex>"}],
@@ -24,7 +25,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::contract::{PACKAGE_SUFFIX, Platform, Service, Version};
+use super::contract::{PACKAGE_SUFFIX, Package, Platform, Version};
 use super::{Error, file_sha256};
 
 /// The one schema of the index.
@@ -50,7 +51,7 @@ pub(crate) struct IndexEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReleaseIndex {
     pub(crate) service: String,
-    pub(crate) version: Version,
+    pub(crate) version: String,
     /// Sorted by platform name, each platform once, at least one.
     pub(crate) packages: Vec<IndexEntry>,
 }
@@ -61,7 +62,7 @@ pub(crate) struct ReleaseIndex {
 pub(crate) struct IndexInvalid(pub(crate) String);
 
 /// The file name of the package of `service` at `version` for `platform`.
-pub(crate) fn package_file(service: &str, version: &Version, platform: Platform) -> String {
+pub(crate) fn package_file(service: &str, version: &str, platform: Platform) -> String {
     format!("{service}-{version}-{}{PACKAGE_SUFFIX}", platform.name())
 }
 
@@ -104,7 +105,7 @@ fn entry(
     value: &Value,
     n: usize,
     service: &str,
-    version: &Version,
+    version: &str,
 ) -> Result<IndexEntry, IndexInvalid> {
     let what = format!("packages[{n}]");
     let object = object(value, &PACKAGE_FIELDS, &what)?;
@@ -155,7 +156,7 @@ impl ReleaseIndex {
             "packages": packages,
             "schema": SCHEMA,
             "service": self.service,
-            "version": self.version.to_string(),
+            "version": self.version,
         })
         .to_string()
     }
@@ -167,7 +168,7 @@ impl ReleaseIndex {
     pub(crate) fn parse(
         text_of_index: &str,
         service: &str,
-        version: &Version,
+        version: &str,
     ) -> Result<ReleaseIndex, IndexInvalid> {
         let value: Value = serde_json::from_str(text_of_index)
             .map_err(|e| IndexInvalid(format!("not JSON: {e}")))?;
@@ -182,7 +183,7 @@ impl ReleaseIndex {
             text(object, "service", "the index")?,
             text(object, "version", "the index")?,
         );
-        let wanted = (service, version.to_string());
+        let wanted = (service, version);
         if (found.0 != wanted.0) | (found.1 != wanted.1) {
             return Err(IndexInvalid(format!(
                 "the index is of {} {}, not {} {}",
@@ -206,7 +207,7 @@ impl ReleaseIndex {
         }
         Ok(ReleaseIndex {
             service: service.to_owned(),
-            version: *version,
+            version: version.to_owned(),
             packages,
         })
     }
@@ -217,7 +218,7 @@ impl ReleaseIndex {
     pub(crate) fn of_dir(
         dir: &Path,
         service: &str,
-        version: &Version,
+        version: &str,
         platforms: &[Platform],
     ) -> Result<ReleaseIndex, Error> {
         let mut sorted = platforms.to_vec();
@@ -248,29 +249,30 @@ impl ReleaseIndex {
         }
         Ok(ReleaseIndex {
             service: service.to_owned(),
-            version: *version,
+            version: version.to_owned(),
             packages,
         })
     }
 }
 
-/// The `release index --service S --version V --dir D` verb: writes `D/<index name of S>`, the
-/// index of the packages of `service` at `version` in `dir`, for every platform whose package is
-/// there.
+/// The `release index --service S [--fail-ready] --version V --dir D` verb: writes
+/// `D/<index name of the package>`, the index of the packages of `package` at the release
+/// `version` in `dir`, for every platform whose package is there.
 pub(crate) fn write_index(
     dir: &Path,
-    service: Service,
+    package: Package,
     version: &Version,
 ) -> Result<Vec<String>, Error> {
-    let index = ReleaseIndex::of_dir(dir, service.name(), version, &Platform::ALL)?;
-    let path = dir.join(service.index_name());
+    let service = package.service().name();
+    let version = package.version_text(version);
+    let index = ReleaseIndex::of_dir(dir, service, &version, &Platform::ALL)?;
+    let path = dir.join(package.index_name());
     std::fs::write(&path, index.to_json())
         .map_err(Error::io(format!("write {}", path.display())))?;
     let platforms: Vec<&str> = index.packages.iter().map(|e| e.platform.name()).collect();
     Ok(vec![format!(
-        "{}: the packages of {} {version} for {}",
+        "{}: the packages of {service} {version} for {}",
         path.display(),
-        service.name(),
         platforms.join(", ")
     )])
 }

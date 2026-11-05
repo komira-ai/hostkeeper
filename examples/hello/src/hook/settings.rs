@@ -50,8 +50,12 @@ impl Settings {
             return Err(bad("record_dir", "must be an absolute path"));
         }
         let target_version = match table.get(TARGET_VERSION_KEY) {
-            Some(Value::Text(version)) => Some(version.clone()),
-            Some(_) => return Err(bad(TARGET_VERSION_KEY, "must be text")),
+            Some(value) => Some(
+                value
+                    .as_text()
+                    .ok_or_else(|| bad(TARGET_VERSION_KEY, "must be text"))?
+                    .to_owned(),
+            ),
             None => None,
         };
         Ok(Settings {
@@ -65,8 +69,7 @@ impl Settings {
 
 fn text<'t>(table: &'t Table, key: &str) -> Result<&'t str, Failure> {
     match table.get(key) {
-        Some(Value::Text(text)) => Ok(text),
-        Some(_) => Err(bad(key, "must be text")),
+        Some(value) => value.as_text().ok_or_else(|| bad(key, "must be text")),
         None => Err(missing(key)),
     }
 }

@@ -2,7 +2,10 @@
 //! built the same bytes every time for one commit and version. There are two services
 //! ([`Service`]): hostkeeper's own package, from a unit file given with `--unit`, and `hello`, the
 //! example service of `examples/hello`, whose manifest and units this module's [`hello`] child
-//! renders from one description for each platform's kind of unit.
+//! renders from one description for each platform's kind of unit. Hello's package has a failing
+//! build, `--fail-ready`: the same package at the version `<V>-fail-ready`, differing from hello's
+//! only in that version (the manifest's), in the unit's `ExecStart` and in the plists'
+//! `ProgramArguments`, which gain `--fail-ready`.
 //!
 //! The archive is a ustar tar, compressed by [`compress`], holding exactly these entries in this
 //! order. Hostkeeper: the directory `bin/`, the file `bin/hostkeeper` (mode 0555), the file
@@ -11,7 +14,7 @@
 //! and `hello.b.plist` (a package holds one kind of unit). Directories are 0555. Every header has
 //! uid and gid 0, empty user and group names and, as its time, the committer time of the commit
 //! built, so the bytes depend on the inputs alone. The archive is written to the name
-//! [`Service::package_name`] gives, with beside it a file of the same name plus [`DIGEST_SUFFIX`]
+//! [`Package::package_name`] gives, with beside it a file of the same name plus [`DIGEST_SUFFIX`]
 //! holding `<sha256>  <package name>` and a line break.
 //!
 //! Hostkeeper's package refuses `macos-arm64` (its units there are not defined yet), `--fail-ready`
@@ -26,7 +29,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::Error;
-use super::contract::{Commit, DIGEST_SUFFIX, Platform, Service, Version};
+use super::contract::{Commit, DIGEST_SUFFIX, Package, Platform, Service, Version};
 use super::ports::GitHistory;
 
 mod hello;
@@ -35,8 +38,9 @@ mod hello;
 /// daemon (design build item B18) defines.
 const MACOS_LATER: &str = "the macos-arm64 package waits for the macOS daemon: its units are launchd plists, not the systemd unit this verb packages";
 
-/// Why hostkeeper's package takes no `--fail-ready`: only hello has that flag to give its units.
-const FAIL_READY_ONLY_HELLO: &str =
+/// Why hostkeeper's package and index take no `--fail-ready`: only hello has that flag to give
+/// its units.
+pub(super) const FAIL_READY_ONLY_HELLO: &str =
     "--fail-ready is an option of the hello package; hostkeeper has no such flag";
 
 /// Why hostkeeper's package needs `--unit`.
@@ -164,29 +168,30 @@ pub(crate) fn compress(tar: &[u8]) -> Vec<u8> {
 enum Source<'a> {
     /// The file given with `--unit`.
     File(&'a Path),
-    /// Rendered for the platform, with `--fail-ready` or without.
-    Rendered { fail_ready: bool },
+    /// Rendered for the platform.
+    Rendered,
 }
 
-/// What the request asks the units to come from, or why it asks for something the service's
-/// package does not take.
-fn source(request: &Request) -> Result<Source<'_>, Error> {
+/// The package the request builds and where its units come from, or why the request asks for
+/// something the service's package does not take.
+fn source(request: &Request) -> Result<(Package, Source<'_>), Error> {
     let refuse = |why: &str| Err(Error::Failed(why.to_owned()));
     match (request.service, request.unit.as_deref()) {
         (Service::Hostkeeper, _) if request.platform == Platform::MacosArm64 => refuse(MACOS_LATER),
         (Service::Hostkeeper, _) if request.fail_ready => refuse(FAIL_READY_ONLY_HELLO),
         (Service::Hostkeeper, None) => refuse(UNIT_REQUIRED),
-        (Service::Hostkeeper, Some(unit)) => Ok(Source::File(unit)),
+        (Service::Hostkeeper, Some(unit)) => Ok((Package::Hostkeeper, Source::File(unit))),
         (Service::Hello, Some(_)) => refuse(UNIT_REFUSED),
-        (Service::Hello, None) => Ok(Source::Rendered {
-            fail_ready: request.fail_ready,
-        }),
+        (Service::Hello, None) if request.fail_ready => {
+            Ok((Package::HelloFailReady, Source::Rendered))
+        }
+        (Service::Hello, None) => Ok((Package::Hello, Source::Rendered)),
     }
 }
 
 /// Builds the package of `request` and its digest file; the lines to print.
 pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<String>, Error> {
-    let source = source(request)?;
+    let (kind, source) = source(request)?;
     let name = request.service.name();
     let binary = read(&request.binary)?;
     let contents = match source {
@@ -198,9 +203,11 @@ pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<Str
                 data: read(path)?,
             }],
         },
-        Source::Rendered { fail_ready } => {
-            hello::contents(request.platform, &request.version, fail_ready)?
-        }
+        Source::Rendered => hello::contents(
+            request.platform,
+            &kind.version_text(&request.version),
+            request.fail_ready,
+        )?,
     };
     for unit in contents
         .units
@@ -213,9 +220,7 @@ pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<Str
     check_entries(&entries)?;
     let mtime = git.commit_time(&request.commit)?;
     let bytes = compress(&archive(&entries, mtime)?);
-    let name = request
-        .service
-        .package_name(&request.version, request.platform);
+    let name = kind.package_name(&request.version, request.platform);
     let hex = hex::encode(Sha256::digest(&bytes));
     std::fs::create_dir_all(&request.out)
         .map_err(Error::io(format!("create {}", request.out.display())))?;

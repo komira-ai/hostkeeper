@@ -9,9 +9,11 @@
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
 //!   ([`contract::stamp_string`]) and the check that a built binary prints exactly it.
 //! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
-//!   unless it says `hello`), `.tar.zst`, and its SHA-256.
-//! - `index` ([`index`]): the release index of a service, `index.json` for hostkeeper and
-//!   `hello-index.json` for hello: which package serves each platform.
+//!   unless it says `hello`; for hello `--fail-ready` builds its failing build), `.tar.zst`, and
+//!   its SHA-256.
+//! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
+//!   `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing build: which
+//!   package serves each platform.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `plan` ([`plan`]): whether a commit (or, on the scheduled path, each missed commit) is
 //!   released, and under which version.
@@ -50,7 +52,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use check_binary::VersionOf;
-use contract::{Commit, Platform, Repo, Service, Version};
+use contract::{Commit, Package, Platform, Repo, Service, Version};
 use git::GitCli;
 use github::Gh;
 use ports::{Adapters, Exec, PortError, Ports, Run};
@@ -147,7 +149,8 @@ pub(crate) enum Verb {
         /// refused for hello.
         #[arg(long)]
         unit: Option<PathBuf>,
-        /// Start hello with `--fail-ready`, so it never reports ready. Refused for hostkeeper.
+        /// Build hello's failing build: version `<version>-fail-ready`, started with
+        /// `--fail-ready`, so it never reports ready. Refused for hostkeeper.
         #[arg(long)]
         fail_ready: bool,
         /// The directory the package and its `.sha256` are written to.
@@ -156,11 +159,14 @@ pub(crate) enum Verb {
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per platform whose package is there: `index.json` for hostkeeper, `hello-index.json` for
-    /// hello.
+    /// hello and `hello-fail-ready-index.json` for its failing build.
     Index {
         /// The service: hostkeeper (the default) or hello.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
+        /// Index hello's failing build (`hello-fail-ready-index.json`). Refused for hostkeeper.
+        #[arg(long)]
+        fail_ready: bool,
         #[arg(long)]
         version: Version,
         /// The directory holding the packages; the index is written there.
@@ -230,9 +236,13 @@ pub(crate) fn run<A: Adapters>(
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
         Verb::Index {
             service,
+            fail_ready,
             version,
             dir,
-        } => index::write_index(&dir, service, &version),
+        } => match Package::of(service, fail_ready) {
+            Some(package) => index::write_index(&dir, package, &version),
+            None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
+        },
         verb => run_with(verb, &connect().ports()),
     }
 }

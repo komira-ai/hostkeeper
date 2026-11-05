@@ -19,6 +19,16 @@ pub enum Value {
     Other,
 }
 
+impl Value {
+    /// The text, when the value is text.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Value::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+}
+
 /// A flat table of scalars.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Table(BTreeMap<String, Value>);
@@ -78,7 +88,10 @@ impl Parser {
 
     /// The line (from 1) the parser is on.
     fn line(&self) -> usize {
-        1 + self.chars[..self.pos].iter().filter(|c| **c == '\n').count()
+        1 + self.chars[..self.pos]
+            .iter()
+            .filter(|c| **c == '\n')
+            .count()
     }
 
     /// Spaces and tabs.
@@ -196,7 +209,11 @@ impl Parser {
                 Some('\\') if quote == '"' => {
                     // A backslash at the end of a line takes the line break and the blanks after.
                     let mut ahead = self.pos;
-                    while self.chars.get(ahead).is_some_and(|c| *c == ' ' || *c == '\t') {
+                    while self
+                        .chars
+                        .get(ahead)
+                        .is_some_and(|c| *c == ' ' || *c == '\t')
+                    {
                         ahead += 1;
                     }
                     if matches!(self.chars.get(ahead), Some('\n' | '\r')) {
@@ -252,10 +269,7 @@ impl Parser {
     /// An unquoted value: `true`, `false`, an integer or a float.
     fn word(&mut self) -> Result<Value, String> {
         let start = self.pos;
-        while self
-            .peek()
-            .is_some_and(|c| !c.is_whitespace() && c != '#')
-        {
+        while self.peek().is_some_and(|c| !c.is_whitespace() && c != '#') {
             self.pos += 1;
         }
         let word: String = self.chars[start..self.pos].iter().collect();

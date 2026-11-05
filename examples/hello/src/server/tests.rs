@@ -91,7 +91,13 @@ fn an_unparsable_head_is_400() {
     }
     let not_text = [b'G', b'E', b'T', b' ', 0xff, b'\r', b'\n', b'\r', b'\n'];
     assert_eq!(
-        answer(&not_text, &Answer { version: VERSION, fail_ready: false }),
+        answer(
+            &not_text,
+            &Answer {
+                version: VERSION,
+                fail_ready: false
+            }
+        ),
         want.into_bytes()
     );
 }
@@ -109,7 +115,10 @@ fn a_head_over_eight_kib_is_400() {
     assert_eq!(find_end(over.as_bytes()), Some(MAX_HEAD + 1));
     assert_eq!(ask(&over, false), reply("400 Bad Request", "bad request\n"));
     let no_end = "a".repeat(MAX_HEAD + 1);
-    assert_eq!(ask(&no_end, false), reply("400 Bad Request", "bad request\n"));
+    assert_eq!(
+        ask(&no_end, false),
+        reply("400 Bad Request", "bad request\n")
+    );
 }
 
 /// Catches a request line ended by a bare line feed, or followed by a body, being misread.
@@ -129,19 +138,28 @@ fn the_request_line_is_the_first_line_only() {
 /// Catches a head read past its blank line, or cut short when it arrives in pieces.
 #[test]
 fn a_head_is_read_to_its_blank_line() {
-    struct Pieces(Vec<&'static [u8]>);
+    struct Pieces(std::vec::IntoIter<&'static [u8]>);
     impl Read for Pieces {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            if self.0.is_empty() {
-                return Ok(0);
-            }
-            let piece = self.0.remove(0);
+            let piece = self.0.next().unwrap_or_default();
             buf[..piece.len()].copy_from_slice(piece);
             Ok(piece.len())
         }
     }
-    let mut pieces = Pieces(vec![b"GET /rea", b"dyz HTTP/1.1\r", b"\n\r", b"\n", b"never read"]);
-    assert_eq!(read_head(&mut pieces), b"GET /readyz HTTP/1.1\r\n\r\n".to_vec());
+    let mut pieces = Pieces(
+        vec![
+            b"GET /rea".as_slice(),
+            b"dyz HTTP/1.1\r",
+            b"\n\r",
+            b"\n",
+            b"never read",
+        ]
+        .into_iter(),
+    );
+    assert_eq!(
+        read_head(&mut pieces),
+        b"GET /readyz HTTP/1.1\r\n\r\n".to_vec()
+    );
     assert_eq!(pieces.0.len(), 1);
 }
 
@@ -165,5 +183,10 @@ fn a_head_that_stops_early_is_what_arrived() {
 fn a_head_without_a_blank_line_is_read_only_past_the_limit() {
     let mut endless = Cursor::new(vec![b'a'; MAX_HEAD * 4]);
     let head = read_head(&mut endless);
-    assert!(head.len() > MAX_HEAD && head.len() <= MAX_HEAD + 1024, "{}", head.len());
+    assert_eq!(
+        (head.len() > MAX_HEAD, head.len() <= MAX_HEAD + 1024),
+        (true, true),
+        "{}",
+        head.len()
+    );
 }

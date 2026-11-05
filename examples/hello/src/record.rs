@@ -1,8 +1,9 @@
 //! The hook record: one file per key in the record directory, the slot markers in `slots/`, and
 //! the lock that one step holds on the directory from the moment it opens it.
 
-use std::fs::{self, File, TryLockError};
+use std::fs::{self, DirBuilder, File, TryLockError};
 use std::io;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use crate::report::Failure;
@@ -60,11 +61,20 @@ pub struct Record {
 }
 
 impl Record {
-    /// Opens `dir` and takes its lock without waiting. A directory that is missing, or that
+    /// Makes `dir` (owner only, with its parents) if it is missing, opens it and takes its lock
+    /// without waiting. A path that cannot be opened or is not a directory, or a directory that
     /// another step holds, is a failure of class `environment`.
+    ///
+    /// The hook makes its own record directory: the daemon does not (the design names one per
+    /// service, `/var/lib/updater/hooks/<service>`, and no daemon code makes it).
     pub fn open(dir: &Path) -> Result<Record, Failure> {
+        // A failure to make it shows in the open below, which names the path.
+        let _ = DirBuilder::new().recursive(true).mode(0o700).create(dir);
         let handle = File::open(dir).map_err(|why| {
-            Failure::environment(format!("cannot open the record directory {}: {why}", dir.display()))
+            Failure::environment(format!(
+                "cannot open the record directory {}: {why}",
+                dir.display()
+            ))
         })?;
         if !handle.metadata().is_ok_and(|meta| meta.is_dir()) {
             return Err(Failure::environment(format!(
@@ -112,7 +122,10 @@ impl Record {
             .find(|slot| slot.name() == text.trim())
             .map(Some)
             .ok_or_else(|| {
-                Failure::environment(format!("the record key {key} holds {:?}, not a slot", text.trim()))
+                Failure::environment(format!(
+                    "the record key {key} holds {:?}, not a slot",
+                    text.trim()
+                ))
             })
     }
 

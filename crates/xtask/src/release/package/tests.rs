@@ -151,8 +151,8 @@ pub(super) fn unpack(package: &[u8], dir: &Path) {
 }
 
 pub(super) fn built(request: &Request) -> Vec<u8> {
-    let name = request
-        .service
+    let name = Package::of(request.service, request.fail_ready)
+        .expect("a package of the request")
         .package_name(&request.version, request.platform);
     std::fs::read(request.out.join(name)).expect("the package")
 }
@@ -194,7 +194,7 @@ fn package_is_deterministic_and_has_exactly_the_four_allowed_top_level_names() {
     let lines_a = package(&history, &a).expect("package a");
     let lines_b = package(&history, &b).expect("package b");
     assert_eq!(lines_a, lines_b);
-    let name = Service::Hostkeeper.package_name(&version(), Platform::LinuxX86_64);
+    let name = Package::Hostkeeper.package_name(&version(), Platform::LinuxX86_64);
     let bytes = built(&a);
     assert_eq!(bytes, built(&b));
     let digest_a = std::fs::read(a.out.join(format!("{name}.sha256"))).expect("digest a");
@@ -631,7 +631,7 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
     let mut req = request(&dir, UNIT.as_bytes(), &commit, Platform::LinuxX86_64, "out");
     req.version = running.parse().expect("the workspace version");
     package(&history, &req).expect("package");
-    let name = Service::Hostkeeper.package_name(&req.version, Platform::LinuxX86_64);
+    let name = Package::Hostkeeper.package_name(&req.version, Platform::LinuxX86_64);
     let archive = req.out.join(&name);
     let packages = dir.join("packages");
     std::fs::create_dir(&packages).expect("the packages directory");

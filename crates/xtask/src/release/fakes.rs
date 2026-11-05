@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Service, Version,
+    Commit, DIGEST_SUFFIX, Package, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Version,
     attested_names, bundle_of, summed_names,
 };
 use super::file_sha256;
@@ -36,15 +36,16 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
     };
     let summed = summed_names(version);
     for name in &summed {
-        if name.ends_with(DIGEST_SUFFIX) | Service::ALL.iter().any(|s| name == s.index_name()) {
+        if name.ends_with(DIGEST_SUFFIX) | Package::ALL.iter().any(|p| name == p.index_name()) {
             continue;
         }
         write(name, format!("{name} {marker}\n"));
     }
-    for service in Service::ALL {
-        let index = ReleaseIndex::of_dir(dir, service.name(), version, &Platform::RELEASED)
+    for package in Package::ALL {
+        let (service, text) = (package.service().name(), package.version_text(version));
+        let index = ReleaseIndex::of_dir(dir, service, &text, &Platform::RELEASED)
             .expect("index the packages");
-        write(service.index_name(), index.to_json());
+        write(package.index_name(), index.to_json());
     }
     for name in &summed {
         if let Some(package) = name.strip_suffix(DIGEST_SUFFIX) {

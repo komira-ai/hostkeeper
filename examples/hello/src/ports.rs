@@ -1,10 +1,9 @@
 //! What the hook runs through, so that its tests never run a real program or open a real
 //! connection: running a command, and asking the server a question.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
-use std::os::fd::AsFd;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 /// Runs a program.
@@ -26,9 +25,9 @@ pub struct Host<'a> {
     pub probe: &'a dyn Probe,
 }
 
-/// The real [`Runner`]: the program as a child process with an empty environment, no standard
-/// input, and its standard output on this process's standard error (the hook's standard output
-/// is the report line and nothing else).
+/// The real [`Runner`]: the program as a child process with an empty environment and no standard
+/// input. What it prints goes to this process's standard error (the hook's standard output is the
+/// report line and nothing else).
 pub struct ProcessRunner;
 
 impl Runner for ProcessRunner {
@@ -36,22 +35,24 @@ impl Runner for ProcessRunner {
         let Some((program, args)) = argv.split_first() else {
             return Err("no program to run".to_owned());
         };
-        let stdout = std::io::stderr()
-            .as_fd()
-            .try_clone_to_owned()
-            .map_or_else(|_| Stdio::null(), Stdio::from);
-        let status = Command::new(program)
+        let output = Command::new(program)
             .args(args)
             .env_clear()
             .stdin(Stdio::null())
-            .stdout(stdout)
-            .stderr(Stdio::inherit())
-            .status()
+            .output()
             .map_err(|why| format!("cannot run {program}: {why}"))?;
-        status
-            .code()
-            .ok_or_else(|| format!("{program} ended without an exit code: {status}"))
+        let mut log = std::io::stderr().lock();
+        let _ = log.write_all(&output.stdout);
+        let _ = log.write_all(&output.stderr);
+        exit_code(program, output.status)
     }
+}
+
+/// The exit code of a program that ended, or why it had none (a signal ended it).
+fn exit_code(program: &str, status: ExitStatus) -> Result<i32, String> {
+    status
+        .code()
+        .ok_or_else(|| format!("{program} ended without an exit code: {status}"))
 }
 
 /// How long the real probe waits to connect and to read: a bound for a wedged server, never a
@@ -66,23 +67,26 @@ pub struct HttpProbe;
 impl Probe for HttpProbe {
     fn get(&self, port: u16, path: &str) -> Result<(u16, String), String> {
         let address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
-        let mut stream = TcpStream::connect_timeout(&address, PROBE_TIMEOUT)
+        let stream = TcpStream::connect_timeout(&address, PROBE_TIMEOUT)
             .map_err(|why| format!("cannot connect to {address}: {why}"))?;
-        // Neither fails on a connected socket with a non-zero timeout; a failure would surface as
-        // the write or the read below.
-        let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
-        let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
-        let request = format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|why| format!("cannot send to {address}: {why}"))?;
-        let mut answer = Vec::new();
-        stream
-            .take(PROBE_MAX)
-            .read_to_end(&mut answer)
-            .map_err(|why| format!("cannot read from {address}: {why}"))?;
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+        let answer = exchange(stream, request.as_bytes())
+            .map_err(|why| format!("cannot talk to {address}: {why}"))?;
         parse_answer(&answer)
     }
+}
+
+/// Sends `request` and reads the answer to its end, or to [`PROBE_MAX`] bytes.
+fn exchange(mut stream: TcpStream, request: &[u8]) -> io::Result<Vec<u8>> {
+    // Neither fails on a connected socket with a non-zero timeout; a failure would surface as
+    // the write or the read below.
+    let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
+    stream.write_all(request)?;
+    let mut answer = Vec::new();
+    stream.take(PROBE_MAX).read_to_end(&mut answer)?;
+    Ok(answer)
 }
 
 /// The status and the body of an HTTP response.
@@ -99,3 +103,6 @@ fn parse_answer(answer: &[u8]) -> Result<(u16, String), String> {
         .ok_or_else(|| format!("the answer has no status: {status_line:?}"))?;
     Ok((status, body.to_owned()))
 }
+
+#[cfg(test)]
+mod tests;

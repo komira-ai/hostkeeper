@@ -17,6 +17,15 @@ use hostkeeper_testkit::Scratch;
 pub const PORT: u16 = 9310;
 pub const TARGET: &str = "1.2.3";
 
+pub const START_A: &str = "/usr/bin/systemctl start hello@a.service";
+pub const START_B: &str = "/usr/bin/systemctl start hello@b.service";
+pub const STOP_A: &str = "/usr/bin/systemctl stop hello@a.service";
+pub const STOP_B: &str = "/usr/bin/systemctl stop hello@b.service";
+pub const KICK_A: &str = "/bin/launchctl kickstart system/hello.a";
+pub const KICK_B: &str = "/bin/launchctl kickstart system/hello.b";
+pub const KILL_A: &str = "/bin/launchctl kill SIGTERM system/hello.a";
+pub const KILL_B: &str = "/bin/launchctl kill SIGTERM system/hello.b";
+
 pub fn scratch(name: &str) -> Scratch {
     Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("a scratch directory")
 }
@@ -47,11 +56,14 @@ impl Runner for FakeRunner {
     }
 }
 
+/// What a probe answers: the status and the body, or why it could not ask.
+pub type ProbeAnswer = Result<(u16, String), String>;
+
 /// A probe that records what it is asked and answers from a script.
 #[derive(Default)]
 pub struct FakeProbe {
     pub calls: RefCell<Vec<(u16, String)>>,
-    pub script: RefCell<BTreeMap<String, Result<(u16, String), String>>>,
+    pub script: RefCell<BTreeMap<String, ProbeAnswer>>,
 }
 
 impl FakeProbe {
@@ -63,7 +75,7 @@ impl FakeProbe {
         probe
     }
 
-    pub fn answer(&self, path: &str, answer: Result<(u16, String), String>) {
+    pub fn answer(&self, path: &str, answer: ProbeAnswer) {
         self.script.borrow_mut().insert(path.to_owned(), answer);
     }
 
@@ -79,7 +91,7 @@ impl Probe for FakeProbe {
             .borrow()
             .get(path)
             .cloned()
-            .unwrap_or_else(|| Err("no answer scripted".to_owned()))
+            .unwrap_or(Err(String::new()))
     }
 }
 
@@ -211,11 +223,8 @@ impl World {
     }
 
     /// Runs `args` (from the step on) in the world's form.
-    pub fn run_args(&self, args: &[OsString], runner: &FakeRunner, probe: &FakeProbe) -> Ran {
-        let host = Host {
-            runner,
-            probe,
-        };
+    pub fn run_args(&self, args: &[OsString], runner: &dyn Runner, probe: &dyn Probe) -> Ran {
+        let host = Host { runner, probe };
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = match self.form {
             Form::UpdateHook => {
@@ -233,7 +242,7 @@ impl World {
         }
     }
 
-    pub fn step(&self, step: Step, runner: &FakeRunner, probe: &FakeProbe) -> Ran {
+    pub fn step(&self, step: Step, runner: &dyn Runner, probe: &dyn Probe) -> Ran {
         self.run_args(&self.step_args(step), runner, probe)
     }
 
@@ -249,7 +258,11 @@ impl World {
 fn walk(root: &Path, dir: &Path, found: &mut BTreeMap<String, Option<String>>) {
     for entry in fs::read_dir(dir).expect("a directory") {
         let path = entry.expect("an entry").path();
-        let name = path.strip_prefix(root).expect("below the root").display().to_string();
+        let name = path
+            .strip_prefix(root)
+            .expect("below the root")
+            .display()
+            .to_string();
         if path.is_dir() {
             found.insert(name, None);
             walk(root, &path, found);
@@ -303,19 +316,33 @@ pub fn contract(step: Step, ran: &Ran, want: &Want<'_>, ctx: &Context) -> Next {
         ran.stdout
     );
     assert!(ran.stdout.ends_with('\n'), "{:?}", ran.stdout);
-    let strict = Report::from_stdout(&ran.stdout)
-        .unwrap_or_else(|why| panic!("the strict reader refuses {:?}: {why}", ran.stdout));
+    let strict = Report::from_stdout(&ran.stdout).expect("the strict reader reads the line");
     let lenient = Report::read(&ran.stdout);
-    assert_eq!(strict, lenient, "the two readers disagree on {:?}", ran.stdout);
+    assert_eq!(
+        strict, lenient,
+        "the two readers disagree on {:?}",
+        ran.stdout
+    );
     assert_eq!(strict.class, want.class, "{ran:?}");
     assert_eq!(strict.reason.as_deref(), want.reason, "{ran:?}");
     assert_eq!(strict.retry_after_secs, want.retry_after_secs, "{ran:?}");
     assert_eq!(strict.promotion_pending, want.promotion_pending, "{ran:?}");
-    assert_eq!(strict.reversible_stated, want.reversible.is_some(), "{ran:?}");
-    assert_eq!(strict.reversible, want.reversible.unwrap_or(true), "{ran:?}");
+    assert_eq!(
+        strict.reversible_stated,
+        want.reversible.is_some(),
+        "{ran:?}"
+    );
+    assert_eq!(
+        strict.reversible,
+        want.reversible.unwrap_or(true),
+        "{ran:?}"
+    );
     match want.detail {
         Some(detail) => assert!(
-            strict.detail.as_deref().is_some_and(|got| got.contains(detail)),
+            strict
+                .detail
+                .as_deref()
+                .is_some_and(|got| got.contains(detail)),
             "detail {:?} lacks {detail:?}",
             strict.detail
         ),
@@ -327,4 +354,32 @@ pub fn contract(step: Step, ran: &Ran, want: &Want<'_>, ctx: &Context) -> Next {
 /// `Context::default()` with the knobs the updater would set.
 pub fn ctx() -> Context {
     Context::default()
+}
+
+/// A command line the hook cannot read: exit 2, which the contract reads as a failure, with the
+/// one line of class `environment` naming what is wrong.
+pub fn usage(ran: &Ran, detail: &str) {
+    assert_eq!(ran.code, 2, "{ran:?}");
+    assert_eq!(Outcome::from_code(2), None);
+    assert_eq!(Outcome::from_exit(Some(2)), Outcome::Failure);
+    assert_eq!(ran.stdout.lines().count(), 1, "{:?}", ran.stdout);
+    let strict = Report::from_stdout(&ran.stdout).expect("the strict reader reads the line");
+    assert_eq!(strict, Report::read(&ran.stdout));
+    assert_eq!(strict.class, Class::Environment);
+    assert!(
+        strict
+            .detail
+            .as_deref()
+            .is_some_and(|got| got.contains(detail)),
+        "detail {:?} lacks {detail:?}",
+        strict.detail
+    );
+}
+
+/// A snapshot of the record from `(name, content)` pairs, `None` for a directory.
+pub fn files(entries: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String>> {
+    entries
+        .iter()
+        .map(|(name, content)| ((*name).to_owned(), content.map(str::to_owned)))
+        .collect()
 }

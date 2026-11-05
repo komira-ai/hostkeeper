@@ -9,16 +9,16 @@ before a real service (tierstore) is deployed with hostkeeper.
 
 ## What is built and what each step waits for
 
-Each step below names the surface that does it. Most are on main. Four are not: the steps
-that need them say so.
+Each step below names the surface that does it. A step whose surface is not built yet is
+marked **specified, not built**, with the pull request that builds it.
 
-| Needed for | Built | Not built yet |
+| Needed for | Built | Specified, not built |
 |---|---|---|
 | the package, its hook, its units and its release assets | `examples/hello`, `cargo xtask release package --service hello`, `artifacts.yml` | the macos-arm64 assets (the verb builds the package; the macOS release job adds it to the release) |
-| running a hook step on a host | the daemon's step runner | the systemd step launcher, komira-ai/hostkeeper#9 (on main the daemon refuses every step) |
-| the UI's calls | the pages | the HTTP/JSON gateway they call, komira-ai/hostkeeper#51 |
-| assigning to a role | the rollout file's `roles` and `install_when_absent` | — |
-| setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow | a UI control: the Rollout page shows the desired version and never sets it |
+| running a hook step on a host | the step launcher `SystemdLauncher` (`hostkeeper-steps`) | the daemon running its steps through it, komira-ai/hostkeeper#52 (until then the daemon refuses every step) |
+| the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
+| assigning to a role | the rollout file's `roles` and `install_when_absent` | `Services.Assign` per host, komira-ai/hostkeeper#45 |
+| setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow | a UI control: the Rollout page shows the desired version and does not set it |
 | unassigning with uninstall | the daemon's uninstall verb and hello's `uninstall` step | `Services.Unassign`, komira-ai/hostkeeper#45, and a UI control |
 
 ## The package
@@ -135,8 +135,8 @@ One failed host is enough for the rollback: the entry sets `rollback_after_faile
 
 ## 5. Unassign with uninstall
 
-Not built yet: the coordinator's `Services.Unassign` is komira-ai/hostkeeper#45, and the UI has
-no control for it. When it lands, unassign hello from each host of the role:
+**Specified, not built:** the coordinator's `Services.Unassign` is komira-ai/hostkeeper#45, and
+the UI has no control for it. When it lands, unassign hello from each host of the role:
 
 ```sh
 hostkeeper ctl ... services unassign --node-id <host> --service hello --uninstall true

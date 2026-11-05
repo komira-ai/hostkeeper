@@ -83,7 +83,9 @@ impl Steps<'_> {
         let (status, _) = self.ask("/readyz")?;
         match status {
             200 => {}
-            503 => return Err(Failure::release("GET /readyz answered 503").with_reason("not_ready")),
+            503 => {
+                return Err(Failure::release("GET /readyz answered 503").with_reason("not_ready"));
+            }
             other => return Err(bad_status("/readyz", other)),
         }
         let (status, body) = self.ask("/version")?;
@@ -106,12 +108,12 @@ impl Steps<'_> {
     /// Undoes `cutover` (stops the started slot and starts the serving one again) and forgets
     /// the update.
     fn rollback(&mut self) -> Result<Report, Failure> {
-        if self.record.has(CUTOVER)? {
-            if let Some(next) = self.record.slot(NEXT)? {
-                self.stop(next)?;
-                if let Some(active) = self.record.slot(ACTIVE)?.filter(|active| *active != next) {
-                    self.start(active)?;
-                }
+        if self.record.has(CUTOVER)?
+            && let Some(next) = self.record.slot(NEXT)?
+        {
+            self.stop(next)?;
+            if let Some(active) = self.record.slot(ACTIVE)?.filter(|active| *active != next) {
+                self.start(active)?;
             }
         }
         for key in [NEXT, PREPARED, CUTOVER, VERIFIED] {
@@ -221,7 +223,10 @@ impl Steps<'_> {
         match self.host.runner.run(&words) {
             Ok(0) => Ok(()),
             Ok(code) if lenient => {
-                let _ = writeln!(self.err, "hello update-hook: `{shown}` exited with {code}: ignored");
+                let _ = writeln!(
+                    self.err,
+                    "hello update-hook: `{shown}` exited with {code}: ignored"
+                );
                 Ok(())
             }
             Ok(code) => Err(Failure::release(format!("`{shown}` exited with {code}"))),

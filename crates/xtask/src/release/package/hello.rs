@@ -21,7 +21,7 @@ use hostkeeper_launchd::{Label, ServiceJob, service_plist};
 
 use super::{Contents, Unit, binary_path};
 use crate::release::Error;
-use crate::release::contract::{Platform, Version};
+use crate::release::contract::Platform;
 
 /// The oldest hostkeeper that can run the package: the daemon of the first release.
 const MIN_HOSTKEEPER: &str = "0.1.0";
@@ -73,11 +73,12 @@ impl Kind {
     }
 }
 
-/// The manifest and units of the hello package of `version` for `platform`; `fail_ready` starts
+/// The manifest and units of the hello package of `version` (the text of the version the
+/// manifest names, which the failing build has a suffix on) for `platform`; `fail_ready` starts
 /// the service with `--fail-ready`.
 pub(super) fn contents(
     platform: Platform,
-    version: &Version,
+    version: &str,
     fail_ready: bool,
 ) -> Result<Contents, Error> {
     HELLO.contents(Kind::of(platform), version, fail_ready)
@@ -104,7 +105,7 @@ impl Description {
             .collect()
     }
 
-    fn contents(&self, kind: Kind, version: &Version, fail_ready: bool) -> Result<Contents, Error> {
+    fn contents(&self, kind: Kind, version: &str, fail_ready: bool) -> Result<Contents, Error> {
         let units = match kind {
             Kind::Systemd => vec![Unit {
                 file: format!("{}@.service", self.name),
@@ -131,7 +132,7 @@ impl Description {
     }
 
     /// `manifest.toml`: the hook, the units, the health URL and the params the hook reads.
-    fn manifest(&self, kind: Kind, version: &Version) -> String {
+    fn manifest(&self, kind: Kind, version: &str) -> String {
         let name = self.name;
         let port = self.port;
         let run = self

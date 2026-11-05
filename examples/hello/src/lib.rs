@@ -40,12 +40,7 @@ pub fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
 
 /// The whole program over its ports. `args` exclude the program name (`argv[0]`). The real
 /// program is [`run_with`] over [`bind_loopback`].
-pub fn run(
-    args: &[OsString],
-    host: &Host<'_>,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> i32 {
+pub fn run(args: &[OsString], host: &Host<'_>, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     run_with(args, host, out, err, &bind_loopback)
 }
 

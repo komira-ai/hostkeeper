@@ -36,14 +36,28 @@ fn port_and_fail_ready_are_read_in_any_order() {
 /// Catches a port outside 1 to 65535, or one that is not plain decimal digits, being accepted.
 #[test]
 fn a_port_outside_one_to_65535_or_not_decimal_is_refused() {
-    for bad in ["0", "65536", "-1", "+80", "80x", "", " 80", "99999999999999999999", "0x50"] {
+    for bad in [
+        "0",
+        "65536",
+        "-1",
+        "+80",
+        "80x",
+        "",
+        " 80",
+        "99999999999999999999",
+        "0x50",
+    ] {
         let got = parse(&args(&["--port", bad]));
         assert!(
-            got.as_ref().is_err_and(|why| why.starts_with("--port needs a number from 1 to 65535")),
+            got.as_ref()
+                .is_err_and(|why| why.starts_with("--port needs a number from 1 to 65535")),
             "{bad:?} gave {got:?}"
         );
     }
-    let not_text = [OsString::from("--port"), OsStr::from_bytes(b"8\xff").to_owned()];
+    let not_text = [
+        OsString::from("--port"),
+        OsStr::from_bytes(b"8\xff").to_owned(),
+    ];
     assert!(parse(&not_text).is_err());
 }
 
@@ -93,7 +107,10 @@ fn update_hook_and_a_bare_step_both_reach_the_hook() {
         parse(&args(&["update-hook", "verify", "--params", "f"])),
         Ok(Command::Hook(args(&["verify", "--params", "f"])))
     );
-    assert_eq!(parse(&args(&["update-hook"])), Ok(Command::Hook(Vec::new())));
+    assert_eq!(
+        parse(&args(&["update-hook"])),
+        Ok(Command::Hook(Vec::new()))
+    );
     for step in STEPS {
         assert_eq!(
             parse(&args(&[step, "--params", "f"])),
@@ -103,6 +120,8 @@ fn update_hook_and_a_bare_step_both_reach_the_hook() {
     }
     assert_eq!(
         parse(&args(&["prepare", "/staged", "--params", "f"])),
-        Ok(Command::Hook(args(&["prepare", "/staged", "--params", "f"])))
+        Ok(Command::Hook(args(&[
+            "prepare", "/staged", "--params", "f"
+        ])))
     );
 }

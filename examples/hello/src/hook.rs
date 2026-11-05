@@ -31,12 +31,7 @@ pub const EXIT_USAGE: i32 = 2;
 
 /// Runs one step. `args` start at the step (after `update-hook`). Returns the exit status; the
 /// report line has been written to `out` by then, and the log text to `err`.
-pub fn run(
-    args: &[OsString],
-    host: &Host<'_>,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> i32 {
+pub fn run(args: &[OsString], host: &Host<'_>, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let (code, report) = match execute(args, host, err) {
         Ok(report) => (0, report),
         Err(failure) => (failure.code, failure.report),
@@ -58,10 +53,16 @@ fn execute(args: &[OsString], host: &Host<'_>, err: &mut dyn Write) -> Result<Re
         .clone()
         .ok_or_else(|| Failure::environment("the step needs --params <file>"))?;
     let text = std::fs::read_to_string(&file).map_err(|why| {
-        Failure::environment(format!("cannot read the params file {}: {why}", file.display()))
+        Failure::environment(format!(
+            "cannot read the params file {}: {why}",
+            file.display()
+        ))
     })?;
     let table = crate::params::parse(&text).map_err(|why| {
-        Failure::environment(format!("the params file {} is malformed: {why}", file.display()))
+        Failure::environment(format!(
+            "the params file {} is malformed: {why}",
+            file.display()
+        ))
     })?;
     let settings = Settings::from_table(&table)?;
     let record = Record::open(&settings.record_dir)?;

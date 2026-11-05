@@ -12,10 +12,10 @@
 //!
 //! There are exactly three platforms, linux-x86_64, linux-arm64 and macos-arm64
 //! ([`Platform::ALL`]): one package per OS and CPU family, listed in the release index of its
-//! service (`index.json` for hostkeeper, `hello-index.json` for hello, see `index`). A release
-//! ships the platforms of [`Platform::RELEASED`], the two Linux ones until the macOS daemon
-//! exists. A release carries the packages of two services ([`Service`]): hostkeeper's own and
-//! `hello`, the example service of `examples/hello`.
+//! package (see `index`). A release ships the platforms of [`Platform::RELEASED`], the two Linux
+//! ones until the macOS daemon exists. A release carries three kinds of package ([`Package`]):
+//! hostkeeper's own (`index.json`), `hello`, the example service of `examples/hello`
+//! (`hello-index.json`), and hello's failing build (`hello-fail-ready-index.json`).
 
 use std::fmt;
 use std::str::FromStr;
@@ -67,6 +67,10 @@ pub(crate) const INDEX: &str = "index.json";
 
 /// The release index of the hello packages: the same schema as [`INDEX`], `service` `hello`.
 pub(crate) const HELLO_INDEX: &str = "hello-index.json";
+
+/// The release index of the failing build of hello: the same schema as [`INDEX`], `service`
+/// `hello`, its version the release's followed by [`FAIL_READY_SUFFIX`].
+pub(crate) const HELLO_FAIL_READY_INDEX: &str = "hello-fail-ready-index.json";
 
 /// What a provenance bundle's file name adds to its asset's.
 pub(crate) const BUNDLE_SUFFIX: &str = ".sigstore.json";
@@ -301,9 +305,9 @@ impl Platform {
     }
 }
 
-/// A service whose packages a release carries: each has a package per platform and a release
-/// index of its own. Hostkeeper is the default of every verb that takes one, so a verb given no
-/// service does what it did before there were two.
+/// A service whose package `release package` and `release index` build. Hostkeeper is the
+/// default of every verb that takes one, so a verb given no service does what it did before there
+/// were two.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Service {
     /// The daemon's own package, for its self-update.
@@ -316,9 +320,6 @@ pub(crate) enum Service {
 }
 
 impl Service {
-    /// Every service, hostkeeper first.
-    pub(crate) const ALL: [Service; 2] = [Service::Hostkeeper, Service::Hello];
-
     /// The service's name: its package name, its binary and the `service` of its release index.
     pub(crate) fn name(self) -> &'static str {
         match self {
@@ -326,20 +327,71 @@ impl Service {
             Service::Hello => HELLO,
         }
     }
+}
 
-    /// The file name of the service's release index.
-    pub(crate) fn index_name(self) -> &'static str {
-        match self {
-            Service::Hostkeeper => INDEX,
-            Service::Hello => HELLO_INDEX,
+/// What a version is followed by in the version of the failing build of hello.
+pub(crate) const FAIL_READY_SUFFIX: &str = "-fail-ready";
+
+/// One kind of package a release carries: each has a package per platform and a release index of
+/// its own. The release carries hostkeeper's package, hello's and hello's failing build, the
+/// same package started with `--fail-ready`, which a host can be rolled back from: a host trusts
+/// only packages this repository's workflow attested, so the failing build is released and
+/// attested like the others.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Package {
+    Hostkeeper,
+    Hello,
+    HelloFailReady,
+}
+
+impl Package {
+    /// Every package, hostkeeper's first.
+    pub(crate) const ALL: [Package; 3] =
+        [Package::Hostkeeper, Package::Hello, Package::HelloFailReady];
+
+    /// The package `service` gives with or without `--fail-ready`; none for hostkeeper's failing
+    /// build, which does not exist.
+    pub(crate) fn of(service: Service, fail_ready: bool) -> Option<Package> {
+        match (service, fail_ready) {
+            (Service::Hostkeeper, false) => Some(Package::Hostkeeper),
+            (Service::Hello, false) => Some(Package::Hello),
+            (Service::Hello, true) => Some(Package::HelloFailReady),
+            (Service::Hostkeeper, true) => None,
         }
     }
 
-    /// The file name of the service's package of `version` for `platform`.
+    /// The service the package is of: its name is the package's, binary's and index's `service`.
+    pub(crate) fn service(self) -> Service {
+        match self {
+            Package::Hostkeeper => Service::Hostkeeper,
+            Package::Hello | Package::HelloFailReady => Service::Hello,
+        }
+    }
+
+    /// The version the package, its manifest and its index carry for the release `version`: the
+    /// release's own, or for the failing build the release's followed by [`FAIL_READY_SUFFIX`].
+    pub(crate) fn version_text(self, version: &Version) -> String {
+        match self {
+            Package::Hostkeeper | Package::Hello => version.to_string(),
+            Package::HelloFailReady => format!("{version}{FAIL_READY_SUFFIX}"),
+        }
+    }
+
+    /// The file name of the package's release index.
+    pub(crate) fn index_name(self) -> &'static str {
+        match self {
+            Package::Hostkeeper => INDEX,
+            Package::Hello => HELLO_INDEX,
+            Package::HelloFailReady => HELLO_FAIL_READY_INDEX,
+        }
+    }
+
+    /// The file name of the package of the release `version` for `platform`.
     pub(crate) fn package_name(self, version: &Version, platform: Platform) -> String {
         format!(
-            "{}-{version}-{}{PACKAGE_SUFFIX}",
-            self.name(),
+            "{}-{}-{}{PACKAGE_SUFFIX}",
+            self.service().name(),
+            self.version_text(version),
             platform.name()
         )
     }
@@ -362,6 +414,7 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-<v>-<p>.tar.gz`, the binary;
 /// - `hostkeeper-<v>-<p>.tar.zst`, the hostkeeper package, and its `.sha256`;
 /// - `hello-<v>-<p>.tar.zst`, the hello package, and its `.sha256`;
+/// - `hello-<v>-fail-ready-<p>.tar.zst`, the failing build of hello, and its `.sha256`;
 /// - `hostkeeper-<v>-<p>.cdx.json`, the SBOM;
 ///
 /// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:
@@ -371,17 +424,18 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
 ///
-/// the bundle of each binary tarball, Linux package, hostkeeper package, hello package and image;
-/// and once, [`INDEX`] (the release index of the hostkeeper packages), [`HELLO_INDEX`] (that of
-/// the hello packages) and `SHA256SUMS`.
+/// the bundle of each binary tarball, Linux package, hostkeeper package, hello package, hello's
+/// failing build and image; and once, [`INDEX`] (the release index of the hostkeeper packages),
+/// [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`] (that of the failing
+/// build) and `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
     let mut names = vec![SUMS.to_owned()];
-    names.extend(Service::ALL.map(|s| s.index_name().to_owned()));
+    names.extend(Package::ALL.map(|p| p.index_name().to_owned()));
     for &platform in platforms {
         let p = platform.name();
         let mut attested = vec![format!("{PROGRAM}-{version}-{p}.tar.gz")];
-        for service in Service::ALL {
-            let package = service.package_name(version, platform);
+        for kind in Package::ALL {
+            let package = kind.package_name(version, platform);
             names.push(format!("{package}{DIGEST_SUFFIX}"));
             attested.push(package);
         }

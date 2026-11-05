@@ -1,10 +1,11 @@
 use super::{Table, Value, parse};
 
 fn text(table: &Table, key: &str) -> String {
-    match table.get(key) {
-        Some(Value::Text(text)) => text.clone(),
-        other => panic!("{key} is {other:?}"),
-    }
+    table
+        .get(key)
+        .and_then(Value::as_text)
+        .unwrap_or("<missing, or not text>")
+        .to_owned()
 }
 
 fn refused(text: &str) -> String {
@@ -111,7 +112,10 @@ fn malformed_text_is_refused_with_its_line() {
     let cases = [
         ("port = \n", "line 1: \"\" is not a value"),
         ("port = nope\n", "line 1: \"nope\" is not a value"),
-        ("\n\nport 9310\n", "line 3: expected `=` after the key \"port\""),
+        (
+            "\n\nport 9310\n",
+            "line 3: expected `=` after the key \"port\"",
+        ),
         ("= 1\n", "line 1: expected a key"),
         ("[table]\nx = 1\n", "line 1: expected a key"),
         ("a.b = 1\n", "line 1: expected `=` after the key \"a\""),
@@ -120,15 +124,36 @@ fn malformed_text_is_refused_with_its_line() {
         ("a = \"open\n", "line 1: a string is not closed on its line"),
         ("a = \"open", "line 1: a string is not closed on its line"),
         ("a = 'open\n", "line 1: a string is not closed on its line"),
-        ("a = \"\"\"open\n", "line 1: a multi-line string is not closed"),
+        (
+            "a = \"\"\"open\n",
+            "line 1: a multi-line string is not closed",
+        ),
         ("a = '''open", "line 1: a multi-line string is not closed"),
-        ("a = \"\\q\"\n", "line 1: a string has an escape that TOML does not have"),
-        ("a = \"\\", "line 1: a string has an escape that TOML does not have"),
-        ("a = \"\\u12\"\n", "line 1: a unicode escape has too few hexadecimal digits"),
-        ("a = \"\\u12zz\"\n", "line 1: a unicode escape has too few hexadecimal digits"),
+        (
+            "a = \"\\q\"\n",
+            "line 1: a string has an escape that TOML does not have",
+        ),
+        (
+            "a = \"\\",
+            "line 1: a string has an escape that TOML does not have",
+        ),
+        (
+            "a = \"\\u12\"\n",
+            "line 1: a unicode escape has too few hexadecimal digits",
+        ),
+        (
+            "a = \"\\u12zz\"\n",
+            "line 1: a unicode escape has too few hexadecimal digits",
+        ),
         ("a = \"\\uD800\"\n", "line 1: U+D800 is not a character"),
-        ("a = \"\\UFFFFFFFFF\"\n", "line 1: U+FFFFFFFF is not a character"),
-        ("a = \"\"\"x\"\"\"\"\"\"\n", "line 1: too many quotes at the end of a string"),
+        (
+            "a = \"\\UFFFFFFFFF\"\n",
+            "line 1: U+FFFFFFFF is not a character",
+        ),
+        (
+            "a = \"\"\"x\"\"\"\"\"\"\n",
+            "line 1: too many quotes at the end of a string",
+        ),
         ("a = 1\na = 2\n", "line 2: key \"a\" is given twice"),
         ("\"a\" = 1\na = 2\n", "line 2: key \"a\" is given twice"),
     ];

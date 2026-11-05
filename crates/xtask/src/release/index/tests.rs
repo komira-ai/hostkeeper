@@ -1,6 +1,8 @@
 use super::*;
 use crate::release::fakes::scratch;
 
+/// The text of [`version`].
+const VERSION: &str = "1.5.0";
 const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -11,7 +13,7 @@ fn version() -> Version {
 fn two() -> ReleaseIndex {
     ReleaseIndex {
         service: "tierstore".to_owned(),
-        version: version(),
+        version: VERSION.to_owned(),
         packages: vec![
             IndexEntry {
                 platform: Platform::LinuxArm64,
@@ -40,7 +42,7 @@ fn two_text() -> String {
 }
 
 fn parse(text: &str) -> Result<ReleaseIndex, IndexInvalid> {
-    ReleaseIndex::parse(text, "tierstore", &version())
+    ReleaseIndex::parse(text, "tierstore", VERSION)
 }
 
 fn invalid(why: &str) -> Result<ReleaseIndex, IndexInvalid> {
@@ -202,14 +204,13 @@ fn the_index_of_a_directory_lists_each_package_there_by_platform_with_size_and_d
     // Catches: an index of a file that is not there, a size or digest of another file, the
     // platforms unsorted, or a platform listed twice when it is asked for twice.
     let dir = scratch("index-of-dir");
-    let v = version();
     std::fs::write(dir.join("hostkeeper-1.5.0-linux-x86_64.tar.zst"), b"x86").expect("write");
     std::fs::write(dir.join("hostkeeper-1.5.0-macos-arm64.tar.zst"), b"mac!").expect("write");
     std::fs::write(dir.join("hostkeeper-1.5.0-linux-arm64.tar.gz"), b"not it").expect("write");
     let index = ReleaseIndex::of_dir(
         &dir,
         "hostkeeper",
-        &v,
+        VERSION,
         &[
             Platform::MacosArm64,
             Platform::LinuxX86_64,
@@ -223,7 +224,7 @@ fn the_index_of_a_directory_lists_each_package_there_by_platform_with_size_and_d
         index,
         ReleaseIndex {
             service: "hostkeeper".to_owned(),
-            version: v,
+            version: VERSION.to_owned(),
             packages: vec![
                 IndexEntry {
                     platform: Platform::LinuxX86_64,
@@ -241,7 +242,7 @@ fn the_index_of_a_directory_lists_each_package_there_by_platform_with_size_and_d
         }
     );
     assert_eq!(
-        ReleaseIndex::parse(&index.to_json(), "hostkeeper", &v),
+        ReleaseIndex::parse(&index.to_json(), "hostkeeper", VERSION),
         Ok(index)
     );
 }
@@ -251,14 +252,14 @@ fn a_directory_without_a_package_has_no_index() {
     // Catches: an empty index written for a build that produced no package.
     let dir = scratch("index-of-empty-dir");
     assert_eq!(
-        ReleaseIndex::of_dir(&dir, "hostkeeper", &version(), &Platform::ALL),
+        ReleaseIndex::of_dir(&dir, "hostkeeper", VERSION, &Platform::ALL),
         Err(Error::Failed(format!(
             "{} holds no package of hostkeeper 1.5.0",
             dir.display()
         )))
     );
     assert_eq!(
-        write_index(&dir, Service::Hostkeeper, &version()),
+        write_index(&dir, Package::Hostkeeper, &version()),
         Err(Error::Failed(format!(
             "{} holds no package of hostkeeper 1.5.0",
             dir.display()
@@ -275,7 +276,7 @@ fn the_index_verb_writes_the_canonical_index_beside_the_packages() {
     std::fs::write(dir.join("hostkeeper-1.5.0-linux-arm64.tar.zst"), b"arm").expect("write");
     let path = dir.join("index.json");
     assert_eq!(
-        write_index(&dir, Service::Hostkeeper, &version()),
+        write_index(&dir, Package::Hostkeeper, &version()),
         Ok(vec![format!(
             "{}: the packages of hostkeeper 1.5.0 for linux-arm64",
             path.display()
@@ -283,7 +284,7 @@ fn the_index_verb_writes_the_canonical_index_beside_the_packages() {
     );
     let written = std::fs::read_to_string(&path).expect("read the index");
     let expected =
-        ReleaseIndex::of_dir(&dir, "hostkeeper", &version(), &Platform::ALL).expect("index");
+        ReleaseIndex::of_dir(&dir, "hostkeeper", VERSION, &Platform::ALL).expect("index");
     assert_eq!(written, expected.to_json());
 }
 
@@ -294,7 +295,7 @@ fn an_index_that_cannot_be_written_is_an_io_error() {
     std::fs::write(dir.join("hostkeeper-1.5.0-linux-arm64.tar.zst"), b"arm").expect("write");
     std::fs::create_dir(dir.join("index.json")).expect("a directory in the way");
     assert!(matches!(
-        write_index(&dir, Service::Hostkeeper, &version()),
+        write_index(&dir, Package::Hostkeeper, &version()),
         Err(Error::Io { what, .. }) if what == format!("write {}", dir.join("index.json").display())
     ));
 }
@@ -307,7 +308,7 @@ fn an_invalid_index_names_the_refusal_token() {
         "index_invalid: the schema is 2, not 1"
     );
     assert_eq!(
-        package_file("tierstore", &version(), Platform::MacosArm64),
+        package_file("tierstore", VERSION, Platform::MacosArm64),
         "tierstore-1.5.0-macos-arm64.tar.zst"
     );
 }
@@ -321,7 +322,7 @@ fn each_service_indexes_its_own_packages_under_its_own_file_name() {
     std::fs::write(dir.join("hostkeeper-1.5.0-linux-x86_64.tar.zst"), b"hk x86").expect("write");
     let hello = dir.join("hello-index.json");
     assert_eq!(
-        write_index(&dir, Service::Hello, &version()),
+        write_index(&dir, Package::Hello, &version()),
         Ok(vec![format!(
             "{}: the packages of hello 1.5.0 for linux-arm64",
             hello.display()
@@ -329,7 +330,7 @@ fn each_service_indexes_its_own_packages_under_its_own_file_name() {
     );
     assert!(!dir.join("index.json").exists());
     let written = std::fs::read_to_string(&hello).expect("read the index");
-    let parsed = ReleaseIndex::parse(&written, "hello", &version()).expect("a hello index");
+    let parsed = ReleaseIndex::parse(&written, "hello", VERSION).expect("a hello index");
     assert_eq!(parsed.service, "hello");
     assert_eq!(
         parsed
@@ -340,11 +341,11 @@ fn each_service_indexes_its_own_packages_under_its_own_file_name() {
         ["hello-1.5.0-linux-arm64.tar.zst"]
     );
     assert_eq!(
-        ReleaseIndex::parse(&written, "hostkeeper", &version()),
+        ReleaseIndex::parse(&written, "hostkeeper", VERSION),
         invalid("the index is of hello 1.5.0, not hostkeeper 1.5.0")
     );
     assert_eq!(
-        write_index(&dir, Service::Hostkeeper, &version()),
+        write_index(&dir, Package::Hostkeeper, &version()),
         Ok(vec![format!(
             "{}: the packages of hostkeeper 1.5.0 for linux-x86_64",
             dir.join("index.json").display()
@@ -354,7 +355,7 @@ fn each_service_indexes_its_own_packages_under_its_own_file_name() {
     let empty = scratch("index-hello-none");
     std::fs::write(empty.join("hostkeeper-1.5.0-linux-arm64.tar.zst"), b"hk").expect("write");
     assert_eq!(
-        write_index(&empty, Service::Hello, &version()),
+        write_index(&empty, Package::Hello, &version()),
         Err(Error::Failed(format!(
             "{} holds no package of hello 1.5.0",
             empty.display()

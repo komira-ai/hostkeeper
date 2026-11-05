@@ -33,17 +33,24 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 | `hostkeeper-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-<version>-<platform>.tar.zst` | the hostkeeper self-update package: `manifest.toml`, `bin/hostkeeper`, `units/hostkeeper.service` |
 | `hostkeeper-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
+| `hello-<version>-<platform>.tar.zst` | the package of `hello`, the example service of `examples/hello`: `manifest.toml`, `bin/hello`, `units/hello@.service` |
+| `hello-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
+| `hello-<version>-fail-ready-<platform>.tar.zst` | hello's failing build: the same package at the version `<version>-fail-ready`, whose unit starts `hello` with `--fail-ready`, so that it never reports ready (the build a host is rolled back from); it differs from the hello package only in the manifest's `version` and the command line its unit starts it with |
+| `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package |
-| `index.json` | the release index: for each platform the package file, its SHA-256 and size |
+| `index.json` | the release index of the hostkeeper packages: for each platform the package file, its SHA-256 and size |
+| `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
+| `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
 | `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb` and `.rpm` |
 
-`index.json` is a lookup, not a trust anchor: it has no bundle of its own, and a host trusts a
-package for its own attestation and manifest, never for its entry in the index. (`SHA256SUMS`
-lists `index.json`, so the provenance of a release covers its bytes too.)
+Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
+own, and a host trusts a package for its own attestation and manifest, never for its entry in the
+index. (`SHA256SUMS` lists every index, so the provenance of a release covers their bytes too.)
+Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
 
-macOS assets (`macos-arm64`) are not released yet. The coordinator's assets
+macOS assets (`macos-arm64`, hello's package among them) are not released yet. The coordinator's assets
 (`hostkeeper-coordinator-<version>-<platform>.tar.gz`, `.cdx.json` and `.image.tar`, each attested)
 are added when the coordinator lands. Names are only ever added, never renamed or removed, so a
 consumer ignores assets it does not know.

@@ -17,7 +17,10 @@ fn the_hello_entry_loads_with_the_settings_the_farm_proof_needs() {
     assert_eq!(services.names().collect::<Vec<_>>(), ["hello"]);
     let hello = services.get("hello").expect("hello is defined");
     assert_eq!(hello.role_names(), ["farm"]);
-    assert!(hello.install_when_absent, "a host of the role is ordered to install it");
+    assert!(
+        hello.install_when_absent,
+        "a host of the role is ordered to install it"
+    );
     assert_eq!(hello.bake_beats, 2);
     assert_eq!(hello.canary, Some(Canary { count: 1 }));
     assert_eq!(hello.rollback, Rollback::Automatic);

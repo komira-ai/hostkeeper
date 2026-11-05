@@ -14,14 +14,8 @@ fn quote_escapes_what_json_needs() {
 /// Catches keys written out of the contract's order, or a key that is not set being written.
 #[test]
 fn the_line_has_its_keys_in_the_order_of_the_contract() {
-    assert_eq!(
-        Report::release().line(),
-        "{\"class\":\"release\"}"
-    );
-    assert_eq!(
-        Report::environment().line(),
-        "{\"class\":\"environment\"}"
-    );
+    assert_eq!(Report::release().line(), "{\"class\":\"release\"}");
+    assert_eq!(Report::environment().line(), "{\"class\":\"environment\"}");
     let full = Report {
         class: Class::Environment,
         reversible: Some(false),

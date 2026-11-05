@@ -8,7 +8,12 @@ pub const DEFAULT_PORT: u16 = 9310;
 /// The words that start the update hook without `update-hook` before them: the launcher of a
 /// hostkeeper package may run `<hook> <step> ...` and not the manifest's `update-hook`.
 pub const STEPS: [&str; 6] = [
-    "prepare", "cutover", "verify", "rollback", "cleanup", "uninstall",
+    "prepare",
+    "cutover",
+    "verify",
+    "rollback",
+    "cleanup",
+    "uninstall",
 ];
 
 /// What the command line asks for.
@@ -74,7 +79,9 @@ fn parse_port(value: &OsString) -> Result<u16, String> {
     let digits = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
     match text.parse::<u16>() {
         Ok(port @ 1..) if digits => Ok(port),
-        _ => Err(format!("--port needs a number from 1 to 65535, not {value:?}")),
+        _ => Err(format!(
+            "--port needs a number from 1 to 65535, not {value:?}"
+        )),
     }
 }
 

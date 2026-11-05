@@ -85,6 +85,8 @@ pub fn serve_forever(listener: TcpListener, answer: &Answer<'_>) -> io::Error {
 
 /// Reads one request head and writes its answer. A client that fails mid-way is dropped.
 fn handle(mut stream: TcpStream, answer: &Answer<'_>) {
+    // A stream accepted from a non-blocking listener may be non-blocking itself (on the BSDs).
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(CLIENT_TIMEOUT));
     let _ = stream.set_write_timeout(Some(CLIENT_TIMEOUT));
     let head = read_head(&mut stream);

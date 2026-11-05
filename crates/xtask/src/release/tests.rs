@@ -240,6 +240,67 @@ fn index_for_hello_writes_hello_index_json_from_the_hello_packages_only() {
 }
 
 #[test]
+fn index_for_the_failing_build_writes_its_own_index_from_its_packages_only() {
+    // Catches: `--fail-ready` not reaching the index verb, so that the failing build's packages
+    // are listed in `hello-index.json` (or hello's in the failing build's index), an index whose
+    // version lacks the `-fail-ready` suffix, or a `--fail-ready` index of hostkeeper.
+    let d = scratch("release-index-fail-ready");
+    std::fs::write(d.join("hello-0.1.9-linux-arm64.tar.zst"), b"hello arm").expect("write");
+    std::fs::write(
+        d.join("hello-0.1.9-fail-ready-linux-arm64.tar.zst"),
+        b"failing arm",
+    )
+    .expect("write");
+    std::fs::write(
+        d.join("hello-0.1.9-fail-ready-linux-x86_64.tar.zst"),
+        b"failing x86",
+    )
+    .expect("write");
+    let index = |extra: &[&str]| {
+        let mut args = vec!["index", "--version", "0.1.9", "--dir", text(&d)];
+        args.extend_from_slice(extra);
+        connects(verb(&args))
+    };
+    let (out, connected) = index(&["--service", "hello", "--fail-ready"]);
+    assert_eq!(
+        out,
+        Ok(vec![format!(
+            "{}: the packages of hello 0.1.9-fail-ready for linux-arm64, linux-x86_64",
+            d.join("hello-fail-ready-index.json").display()
+        )])
+    );
+    assert!(!connected);
+    assert!(!d.join("hello-index.json").exists());
+    let digest = |name: &str| file_sha256(&d.join(name)).expect("hash");
+    assert_eq!(
+        std::fs::read_to_string(d.join("hello-fail-ready-index.json")).expect("the index"),
+        format!(
+            "{{\"packages\":[\
+             {{\"bytes\":11,\"file\":\"hello-0.1.9-fail-ready-linux-arm64.tar.zst\",\"platform\":\"linux-arm64\",\"sha256\":\"{}\"}},\
+             {{\"bytes\":11,\"file\":\"hello-0.1.9-fail-ready-linux-x86_64.tar.zst\",\"platform\":\"linux-x86_64\",\"sha256\":\"{}\"}}\
+             ],\"schema\":1,\"service\":\"hello\",\"version\":\"0.1.9-fail-ready\"}}",
+            digest("hello-0.1.9-fail-ready-linux-arm64.tar.zst"),
+            digest("hello-0.1.9-fail-ready-linux-x86_64.tar.zst"),
+        )
+    );
+    // Hello's own index lists the plain package alone.
+    let (out, _) = index(&["--service", "hello"]);
+    assert_eq!(
+        out,
+        Ok(vec![format!(
+            "{}: the packages of hello 0.1.9 for linux-arm64",
+            d.join("hello-index.json").display()
+        )])
+    );
+    // Hostkeeper has no failing build.
+    let (out, _) = index(&["--fail-ready"]);
+    assert_eq!(
+        out,
+        Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned()))
+    );
+}
+
+#[test]
 fn package_builds_the_package_of_the_service_asked_for_and_hostkeeper_by_default() {
     // Catches: `--service`, `--fail-ready` or an absent `--unit` not reaching the package verb:
     // a hello package built as hostkeeper's (or refused for want of a unit), `--fail-ready`
@@ -270,17 +331,18 @@ fn package_builds_the_package_of_the_service_asked_for_and_hostkeeper_by_default
         Fakes::over(h)
     });
     let lines = out.expect("the hello package");
-    let name = "hello-0.1.2-macos-arm64.tar.zst";
+    let name = "hello-0.1.2-fail-ready-macos-arm64.tar.zst";
     let hex = file_sha256(&out_dir.join(name)).expect("hash");
     assert_eq!(
         lines,
         [format!("{name}: sha256 {hex}"), format!("sha256={hex}")]
     );
-    assert!(
-        !d.join("out")
-            .join("hostkeeper-0.1.2-macos-arm64.tar.zst")
-            .exists()
-    );
+    for other in [
+        "hostkeeper-0.1.2-macos-arm64.tar.zst",
+        "hello-0.1.2-macos-arm64.tar.zst",
+    ] {
+        assert!(!d.join("out").join(other).exists(), "{other}");
+    }
 
     // Without `--service` the package is hostkeeper's: it needs a unit, and not for macOS.
     let (h, _) = one_commit();

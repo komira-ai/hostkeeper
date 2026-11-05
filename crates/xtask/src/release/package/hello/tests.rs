@@ -5,7 +5,7 @@ use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest, Manifes
 use hostkeeper_config::names::{ServiceName, Version as ConfigVersion};
 
 use super::*;
-use crate::release::contract::{Commit, Service};
+use crate::release::contract::{Commit, Package, Service};
 use crate::release::fakes::{scratch, time_of};
 use crate::release::file_sha256;
 use crate::release::package::tests::{
@@ -38,7 +38,7 @@ const MACOS_PLIST_B: &str =
 /// The version of the goldens.
 const VERSION: &str = "1.2.3";
 
-fn version() -> Version {
+fn version() -> crate::release::contract::Version {
     VERSION.parse().expect("a version")
 }
 
@@ -276,16 +276,20 @@ impl hostkeeper_unpack::MacVerify for Fine {
 
 /// Builds the hello package of `platform` at the running daemon's version and unpacks it with the
 /// daemon's unpacker; the unit files it unpacked and the binary's bytes.
-fn unpacked_by_the_daemon(name: &str, platform: Platform) -> (BTreeSet<String>, Vec<u8>) {
+fn unpacked_by_the_daemon(
+    name: &str,
+    platform: Platform,
+    fail_ready: bool,
+) -> (BTreeSet<String>, Vec<u8>) {
     let dir = scratch(name);
     let (history, commit) = history();
     let running = hostkeeper_unpack::running_hostkeeper().to_string();
-    let mut req = request(&dir, &commit, platform, false, "out");
+    let mut req = request(&dir, &commit, platform, fail_ready, "out");
     req.version = running.parse().expect("the workspace version");
     package(&history, &req).expect("package");
-    let archive = req
-        .out
-        .join(req.service.package_name(&req.version, platform));
+    let kind = Package::of(Service::Hello, fail_ready).expect("a hello package");
+    let version_text = kind.version_text(&req.version);
+    let archive = req.out.join(kind.package_name(&req.version, platform));
     let packages = dir.join("packages");
     std::fs::create_dir(&packages).expect("the packages directory");
     let unseal = Unseal(packages.clone());
@@ -297,7 +301,7 @@ fn unpacked_by_the_daemon(name: &str, platform: Platform) -> (BTreeSet<String>, 
     let fs = hostkeeper_unpack::HostFs::open(&packages, owner).expect("open the packages");
     let order = hostkeeper_unpack::UnpackOrder {
         service: ServiceName::new("hello").expect("a service name"),
-        version: ConfigVersion::new(&running).expect("a version"),
+        version: ConfigVersion::new(&version_text).expect("a version"),
         package_digest: hostkeeper_config::daemon::Sha256Hex::parse(
             &file_sha256(&archive).expect("hash the package"),
         )
@@ -315,7 +319,7 @@ fn unpacked_by_the_daemon(name: &str, platform: Platform) -> (BTreeSet<String>, 
     let unpacked =
         hostkeeper_unpack::unpack(&archive, &order, &limits, &fs, verifier).expect("unpack");
     assert!(unpacked.fresh);
-    let binary = std::fs::read(packages.join("hello").join(&running).join("bin/hello"))
+    let binary = std::fs::read(packages.join("hello").join(&version_text).join("bin/hello"))
         .expect("the unpacked binary");
     drop(unseal);
     assert!(!packages.exists(), "the unpacked tree is removed");
@@ -328,10 +332,28 @@ fn each_hello_package_unpacks_with_the_daemons_unpacker() {
     // the four top-level names, a mode bit it does not allow, a digest that is not the archive's,
     // a manifest it cannot load, or a macOS package it would refuse for its quarantine or
     // signature checks.
-    let (linux, binary) = unpacked_by_the_daemon("hello-daemon-linux", Platform::LinuxArm64);
+    let (linux, binary) = unpacked_by_the_daemon("hello-daemon-linux", Platform::LinuxArm64, false);
     assert_eq!(linux, BTreeSet::from(["hello@.service".to_owned()]));
     assert_eq!(binary, BINARY);
-    let (macos, binary) = unpacked_by_the_daemon("hello-daemon-macos", Platform::MacosArm64);
+    let (macos, binary) = unpacked_by_the_daemon("hello-daemon-macos", Platform::MacosArm64, false);
+    assert_eq!(
+        macos,
+        BTreeSet::from(["hello.a.plist".to_owned(), "hello.b.plist".to_owned()])
+    );
+    assert_eq!(binary, BINARY);
+}
+
+#[test]
+fn each_failing_build_package_unpacks_with_the_daemons_unpacker_at_its_own_version() {
+    // Catches: a failing build the daemon's unpacker refuses (its manifest names the plain
+    // version while the order asks for `<V>-fail-ready`, or the other way round), on either kind
+    // of unit.
+    let (linux, binary) =
+        unpacked_by_the_daemon("hello-daemon-ff-linux", Platform::LinuxX86_64, true);
+    assert_eq!(linux, BTreeSet::from(["hello@.service".to_owned()]));
+    assert_eq!(binary, BINARY);
+    let (macos, binary) =
+        unpacked_by_the_daemon("hello-daemon-ff-macos", Platform::MacosArm64, true);
     assert_eq!(
         macos,
         BTreeSet::from(["hello.a.plist".to_owned(), "hello.b.plist".to_owned()])
@@ -350,14 +372,19 @@ fn changed_lines<'a>(text: &'a str, other: &'a str) -> Vec<(&'a str, &'a str)> {
 
 #[test]
 fn fail_ready_changes_exactly_the_exec_start_line_of_the_unit() {
-    // Catches: a `--fail-ready` that lands in the manifest, the binary or any unit line but the
-    // command line, or that is dropped from the unit.
+    // Catches: a `--fail-ready` that lands in the binary or any unit line but the command line, in
+    // a manifest line but the version, or that is dropped from the unit.
     let plain = built_for("hello-fail-ready-plain", Platform::LinuxX86_64, false);
     let failing = built_for("hello-fail-ready-fail", Platform::LinuxX86_64, true);
     assert_eq!(listing(&plain), listing(&failing));
-    for name in ["manifest.toml", "bin/hello"] {
-        assert_eq!(text_of(&plain, name), text_of(&failing, name), "{name}");
-    }
+    assert_eq!(text_of(&plain, "bin/hello"), text_of(&failing, "bin/hello"));
+    assert_eq!(
+        changed_lines(
+            &text_of(&failing, "manifest.toml"),
+            &text_of(&plain, "manifest.toml")
+        ),
+        [("version = \"1.2.3-fail-ready\"", "version = \"1.2.3\"")]
+    );
     assert_eq!(
         changed_lines(
             &text_of(&failing, "units/hello@.service"),
@@ -373,12 +400,15 @@ fn fail_ready_changes_exactly_the_exec_start_line_of_the_unit() {
 #[test]
 fn fail_ready_changes_exactly_the_program_arguments_of_each_plist() {
     // Catches: a `--fail-ready` that lands in a plist key other than ProgramArguments, in only one
-    // slot's plist, or after another argument.
+    // slot's plist, after another argument, or in a manifest line but the version.
     let plain = built_for("hello-fail-ready-plain-mac", Platform::MacosArm64, false);
     let failing = built_for("hello-fail-ready-fail-mac", Platform::MacosArm64, true);
     assert_eq!(
-        text_of(&plain, "manifest.toml"),
-        text_of(&failing, "manifest.toml")
+        changed_lines(
+            &text_of(&failing, "manifest.toml"),
+            &text_of(&plain, "manifest.toml")
+        ),
+        [("version = \"1.2.3-fail-ready\"", "version = \"1.2.3\"")]
     );
     for plist in ["units/hello.a.plist", "units/hello.b.plist"] {
         let with = text_of(&failing, plist);
@@ -393,6 +423,161 @@ fn fail_ready_changes_exactly_the_program_arguments_of_each_plist() {
                 "\t\t<string>9310</string>\n\t\t<string>--fail-ready</string>\n\t</array>\n"
             ),
             "{plist}"
+        );
+    }
+}
+
+#[test]
+fn the_failing_build_is_the_golden_package_with_three_edits_on_every_platform() {
+    // Catches: a failing build that differs from hello's package in anything but the manifest's
+    // version, the unit's ExecStart and the plists' ProgramArguments (a changed entry, mode,
+    // binary, health URL, param or unit line), or that lacks one of the three edits. The expected
+    // bytes are the committed goldens with exactly those edits made by text replacement.
+    let failing = |name: &str, platform: Platform| built_for(name, platform, true);
+    let version_edit = |manifest: &str| {
+        assert!(manifest.contains("version = \"1.2.3\"\n"));
+        manifest.replace("version = \"1.2.3\"\n", "version = \"1.2.3-fail-ready\"\n")
+    };
+
+    for platform in [Platform::LinuxX86_64, Platform::LinuxArm64] {
+        let bytes = failing("hello-golden-edits-linux", platform);
+        assert_eq!(listing(&bytes), LINUX_ENTRIES);
+        assert_eq!(text_of(&bytes, "bin/hello").as_bytes(), BINARY);
+        assert_eq!(
+            text_of(&bytes, "manifest.toml"),
+            version_edit(LINUX_MANIFEST)
+        );
+        let exec = "hello --port 9310\n";
+        assert_eq!(LINUX_UNIT.matches(exec).count(), 1);
+        assert_eq!(
+            text_of(&bytes, "units/hello@.service"),
+            LINUX_UNIT.replace(exec, "hello --port 9310 --fail-ready\n")
+        );
+        assert_eq!(shape_problems(&bytes, time_of(1)), Vec::<String>::new());
+    }
+
+    let bytes = failing("hello-golden-edits-macos", Platform::MacosArm64);
+    assert_eq!(listing(&bytes), MACOS_ENTRIES);
+    assert_eq!(text_of(&bytes, "bin/hello").as_bytes(), BINARY);
+    assert_eq!(
+        text_of(&bytes, "manifest.toml"),
+        version_edit(MACOS_MANIFEST)
+    );
+    let argument = "\t\t<string>9310</string>\n";
+    for (file, golden) in [
+        ("units/hello.a.plist", MACOS_PLIST_A),
+        ("units/hello.b.plist", MACOS_PLIST_B),
+    ] {
+        assert_eq!(golden.matches(argument).count(), 1, "{file}");
+        assert_eq!(
+            text_of(&bytes, file),
+            golden.replace(
+                argument,
+                &format!("{argument}\t\t<string>--fail-ready</string>\n")
+            ),
+            "{file}"
+        );
+    }
+    assert_eq!(shape_problems(&bytes, time_of(1)), Vec::<String>::new());
+}
+
+#[test]
+fn the_failing_build_is_its_own_package_file_with_its_own_digest_on_each_platform() {
+    // Catches: a failing build written to the plain package's file name (overwriting hello's), a
+    // digest file under the wrong name or holding another name, Linux architectures that differ
+    // beyond the file name, or a failing build whose bytes equal the plain package's.
+    let dir = scratch("hello-fail-ready-files");
+    let (history, commit) = history();
+    let x86 = request(&dir, &commit, Platform::LinuxX86_64, true, "x86");
+    let arm = request(&dir, &commit, Platform::LinuxArm64, true, "arm");
+    let lines_x86 = package(&history, &x86).expect("package x86");
+    let lines_arm = package(&history, &arm).expect("package arm");
+    assert_eq!(built(&x86), built(&arm));
+    let name_x86 = "hello-1.2.3-fail-ready-linux-x86_64.tar.zst";
+    let name_arm = "hello-1.2.3-fail-ready-linux-arm64.tar.zst";
+    let hex = file_sha256(&x86.out.join(name_x86)).expect("hash");
+    assert_eq!(
+        lines_x86,
+        [format!("{name_x86}: sha256 {hex}"), format!("sha256={hex}")]
+    );
+    assert_eq!(
+        lines_arm,
+        [format!("{name_arm}: sha256 {hex}"), format!("sha256={hex}")]
+    );
+    for (r, name) in [(&x86, name_x86), (&arm, name_arm)] {
+        assert_eq!(
+            std::fs::read_to_string(r.out.join(format!("{name}.sha256"))).expect("digest"),
+            format!("{hex}  {name}\n")
+        );
+        let mut written: Vec<String> = std::fs::read_dir(&r.out)
+            .expect("the output directory")
+            .map(|e| {
+                e.expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        written.sort();
+        assert_eq!(written, [name.to_owned(), format!("{name}.sha256")]);
+    }
+    let plain = built_for("hello-fail-ready-plain-linux", Platform::LinuxX86_64, false);
+    assert_ne!(plain, built(&x86));
+}
+
+/// The manifest of the failing build of `platform` loaded with the manifest loader as the order
+/// for `version` of hello.
+fn loaded_failing(
+    name: &str,
+    platform: Platform,
+    version: &str,
+) -> Result<Manifest, ManifestRefusal> {
+    let dir = scratch(name);
+    let (history, commit) = history();
+    let r = request(&dir, &commit, platform, true, "out");
+    package(&history, &r).expect("package");
+    let version_dir = scratch(&format!("{name}-unpacked"));
+    unpack(&built(&r), &version_dir);
+    let expected = Expected {
+        name: ServiceName::new("hello").expect("a service name"),
+        version: ConfigVersion::new(version).expect("a version"),
+    };
+    Manifest::load(&version_dir, &expected, &host(0))
+}
+
+#[test]
+fn the_failing_build_manifest_loads_for_its_own_version_and_not_for_the_plain_one() {
+    // Catches: a failing build whose manifest the loader refuses on either kind of unit, one that
+    // names the plain version (so a host ordered to install `<V>-fail-ready` refuses it, or one
+    // ordered to install `<V>` takes it), or one that lost the hook, units or health URL of the
+    // plain package.
+    for (name, platform, run) in [
+        (
+            "hello-ff-loader-linux",
+            Platform::LinuxArm64,
+            ["hello@a.service", "hello@b.service"],
+        ),
+        (
+            "hello-ff-loader-macos",
+            Platform::MacosArm64,
+            ["hello.a", "hello.b"],
+        ),
+    ] {
+        let manifest = loaded_failing(name, platform, "1.2.3-fail-ready").expect("it loads");
+        assert_eq!(manifest.name.as_str(), "hello");
+        assert_eq!(manifest.version.as_str(), "1.2.3-fail-ready");
+        assert_eq!(manifest.run, run);
+        assert_eq!(manifest.hook.command, ["bin/hello", "update-hook"]);
+        assert_eq!(
+            manifest.health_url.as_deref(),
+            Some("http://127.0.0.1:9310/readyz")
+        );
+        assert_eq!(
+            loaded_failing(name, platform, VERSION).err(),
+            Some(ManifestRefusal::VersionMismatch {
+                expected: VERSION.to_owned(),
+                found: "1.2.3-fail-ready".to_owned(),
+            })
         );
     }
 }
@@ -488,7 +673,7 @@ fn text_a_unit_cannot_hold_is_refused_naming_the_file() {
         ..HELLO
     };
     assert_eq!(
-        bad_label.contents(Kind::Launchd, &version(), false).err(),
+        bad_label.contents(Kind::Launchd, VERSION, false).err(),
         Some(Error::Failed(
             "units/he llo.a.plist: launchd label \"he llo.a\" holds the byte 0x20, which a label may not"
                 .to_owned()
@@ -499,14 +684,14 @@ fn text_a_unit_cannot_hold_is_refused_naming_the_file() {
         ..HELLO
     };
     assert_eq!(
-        bad_path.contents(Kind::Launchd, &version(), false).err(),
+        bad_path.contents(Kind::Launchd, VERSION, false).err(),
         Some(Error::Failed(
             "units/hello.a.plist: plist text \"/var/lib/updater/hooks/hello\\n/slots/a\" holds a control character"
                 .to_owned()
         ))
     );
     // The systemd kind has no plist to refuse.
-    assert!(bad_path.contents(Kind::Systemd, &version(), false).is_ok());
+    assert!(bad_path.contents(Kind::Systemd, VERSION, false).is_ok());
 }
 
 #[test]
@@ -521,7 +706,7 @@ fn the_description_alone_decides_the_text() {
         log_dir: "/var/log/other",
     };
     let systemd = other
-        .contents(Kind::Systemd, &version(), false)
+        .contents(Kind::Systemd, VERSION, false)
         .expect("contents");
     assert!(systemd.manifest.contains("name = \"other\"\n"));
     assert!(
@@ -554,7 +739,7 @@ fn the_description_alone_decides_the_text() {
     );
     assert_eq!(systemd.units[0].file, "other@.service");
     let launchd = other
-        .contents(Kind::Launchd, &version(), false)
+        .contents(Kind::Launchd, VERSION, false)
         .expect("contents");
     assert!(
         launchd
