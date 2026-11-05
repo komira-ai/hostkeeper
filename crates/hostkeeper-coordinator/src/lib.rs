@@ -1,0 +1,131 @@
+//! `hostkeeper-coordinator`: tells each host's updater which version to run, one live update at a
+//! time across every service and role (`docs/design/host-updates.md`). The per-role limits and
+//! minimums a desired state carries are kept, written and printed, and no decision reads them.
+//!
+//! - [`identity`]: who is calling, from the client certificate's subjectAltNames alone;
+//! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically;
+//! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
+//! - [`acks`]: the failure reports a by-hand set of a bad version acknowledged;
+//! - [`bake`] and [`canary`]: how long an updated host holds its slot, and the hosts that go
+//!   alone first;
+//! - [`converge`]: whether the farm has reached the desired version, for CI to wait on;
+//! - [`decide`]: the decision as a pure function of the desired state, the fleet, the host
+//!   and the time;
+//! - [`reconcile`]: the last good version, the bad ones, and the automatic rollback;
+//! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
+//!   last good versions and the audit ring, in the operations file, and every change as a line of
+//!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
+//!   file beside it (`ops_file`);
+//! - [`services`]: services as data, from the rollout file: the roles each runs on and the
+//!   settings of its rollout;
+//! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
+//!   runs;
+//! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
+//!   token, the status read by the operator token;
+//! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
+//!   surface of CI and the operator) and the TLS listeners under them;
+//! - [`config`]: the flags and the start.
+//!
+//! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
+
+/// The commit this coordinator was built from: the 12 digits `--version` shows after the
+/// `+`, or `unknown` where the build had no git checkout. `GET /v1/status` and
+/// `GET /v1/convergence` say it as `commit`.
+pub const BUILD_COMMIT: &str = env!("HOSTKEEPER_BUILD_COMMIT");
+
+pub mod acks;
+pub(crate) mod audit_file;
+pub mod bake;
+pub mod canary;
+pub mod config;
+pub mod converge;
+pub mod decide;
+pub mod defer;
+pub mod desired;
+pub mod fleet;
+pub mod halt;
+pub mod http;
+pub mod identity;
+pub mod listen;
+pub mod membership;
+pub mod ops;
+pub(crate) mod ops_file;
+pub mod reconcile;
+pub mod service;
+pub mod services;
+pub mod tokens;
+
+#[cfg(test)]
+mod audit_file_tests;
+#[cfg(test)]
+mod bake_canary_tests;
+#[cfg(test)]
+mod bake_review_tests;
+#[cfg(test)]
+mod converge_tests;
+#[cfg(test)]
+mod decide_golden_tests;
+#[cfg(test)]
+mod decide_tests;
+#[cfg(test)]
+mod decide_why_tests;
+#[cfg(test)]
+mod defer_tests;
+#[cfg(test)]
+mod desired_dropped_tests;
+#[cfg(test)]
+mod desired_sync_tests;
+#[cfg(test)]
+mod desired_tests;
+#[cfg(test)]
+mod extras_dropped_tests;
+#[cfg(test)]
+mod halt_membership_tests;
+#[cfg(test)]
+mod halt_race_tests;
+#[cfg(test)]
+mod http_tests;
+#[cfg(test)]
+mod membership_tests;
+#[cfg(test)]
+mod one_live_update_coordinator_tests;
+#[cfg(test)]
+mod one_live_update_release_tests;
+#[cfg(test)]
+mod one_live_update_tests;
+#[cfg(test)]
+mod ops_commit_tests;
+#[cfg(test)]
+mod ops_crash_tests;
+#[cfg(test)]
+mod ops_downgrade_tests;
+#[cfg(test)]
+mod ops_tests;
+#[cfg(test)]
+mod priority_tests;
+#[cfg(test)]
+mod recorded_definition_tests;
+#[cfg(test)]
+mod recorded_review_tests;
+#[cfg(test)]
+mod rollback_definition_tests;
+#[cfg(test)]
+mod rollback_membership_tests;
+#[cfg(test)]
+mod rollback_override_tests;
+#[cfg(test)]
+mod rollback_race_tests;
+#[cfg(test)]
+mod rollback_tests;
+#[cfg(test)]
+mod service_tests;
+#[cfg(test)]
+mod services_tests;
+#[cfg(test)]
+mod status_service_tests;
+#[cfg(test)]
+mod testutil;
+#[cfg(test)]
+mod tierstore_service_tests;
+#[cfg(test)]
+mod tokens_tests;
