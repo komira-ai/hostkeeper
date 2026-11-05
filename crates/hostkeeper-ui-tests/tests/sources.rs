@@ -115,16 +115,33 @@ fn calls_json_matches_the_source() {
 }
 
 #[test]
-fn no_ui_call_names_a_method_the_ci_token_set_desired_path_owns() {
-    // Catches: a page that grows a set-desired button, or a list that names the method.
-    for file in UI_FILES {
+fn only_the_rollout_page_calls_set_desired() {
+    // Catches: a page other than Rollout that grows a set-desired call, a call site of it
+    // outside pages/, a list that names it under another page, and a Rollout page that stops
+    // calling it while the list still names it.
+    let method = "hostkeeper.operator.v1.Releases/SetDesired";
+    let callers: BTreeSet<String> = sites()
+        .into_iter()
+        .filter(|s| s.method == method)
+        .map(|s| s.page().unwrap_or("outside pages/").to_owned())
+        .collect();
+    assert_eq!(callers, BTreeSet::from(["rollout".to_owned()]));
+    let pages: Vec<Vec<String>> = listed()
+        .into_iter()
+        .filter(|l| l.method == method)
+        .map(|l| l.pages)
+        .collect();
+    assert_eq!(pages, vec![vec!["rollout".to_owned()]]);
+    for file in UI_FILES
+        .iter()
+        .filter(|f| f.path != "pages/rollout.js" && f.path != "calls.json")
+    {
         assert!(
             !file.text.contains("SetDesired"),
-            "{} names SetDesired: CI sets the desired version",
+            "{} names SetDesired: only the Rollout page sets the desired version",
             file.path
         );
     }
-    assert!(listed().iter().all(|l| !l.method.contains("SetDesired")));
 }
 
 fn assert_none(found: Vec<Finding>) {

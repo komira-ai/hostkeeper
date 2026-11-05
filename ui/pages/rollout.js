@@ -1,8 +1,9 @@
 // Rollout: per service, the desired version against the converged hosts, the canary and bake, the
 // halt, the bad versions and the holder of the update slot; and the operator's overrides.
-// Calls: Releases.Status; on a button, one of Releases.MarkBad, Releases.UnmarkBad,
-// Releases.Halt, Releases.ClearHalt, Releases.Converge and Releases.Force, and Hosts.List to
-// count a force's hosts. It never sets the desired version: CI does.
+// Calls: Releases.Status, then Services.List for each service's roles, assignments and hosts; on a
+// button, one of Releases.MarkBad, Releases.UnmarkBad, Releases.Halt, Releases.ClearHalt,
+// Releases.Converge, Releases.Force, Releases.SetDesired, Services.Assign and Services.Unassign,
+// and Hosts.List to count a force's hosts. The desired version is set here or by CI.
 
 import {
   h, action, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select, table,
@@ -240,7 +241,102 @@ function byGate(svc, reason) {
   return (svc.hosts || []).filter((host) => host.view && host.view.gateReason === reason).map((host) => host.nodeId);
 }
 
-function serviceSection(ctx, svc) {
+// The limits of a desired state that an operator's set keeps: CI's per-role maxUpdating and minUp.
+function limitsOf(desired) {
+  const limits = {};
+  for (const key of ["maxUpdating", "minUp"]) {
+    if (desired && desired[key] !== undefined) {
+      limits[key] = desired[key];
+    }
+  }
+  return limits;
+}
+
+function setDesired(ctx, svc, form) {
+  const service = svc.service;
+  return action(ctx, "Set desired", "set-desired", async () => {
+    const version = trimmed(form.version);
+    if (version === "") {
+      return "Name the version.";
+    }
+    if (!ctx.confirm(`Set the desired version of ${service} to ${version}? Its hosts are moved there a role at a time.`)) {
+      return "Desired version not changed.";
+    }
+    const request = { service, desired: Object.assign({ version }, limitsOf(svc.desired)) };
+    if (trimmed(form.digest) !== "") {
+      request.packageDigest = trimmed(form.digest);
+    }
+    const reply = await ctx.api.call("hostkeeper.operator.v1.Releases/SetDesired", request);
+    ctx.refresh();
+    const dropped = list(reply, "droppedRoles");
+    return `Set the desired version of ${service} to ${version}.`
+      + (dropped.length > 0 ? ` Limits dropped for roles: ${dropped.join(", ")}.` : "");
+  });
+}
+
+function assignButton(ctx, service, form) {
+  return action(ctx, "Assign to the role", "assign", async () => {
+    const role = trimmed(form.role);
+    if (role === "") {
+      return "Name the role.";
+    }
+    await ctx.api.call("hostkeeper.operator.v1.Services/Assign", { service, role });
+    ctx.refresh();
+    return `Assigned ${service} to role ${role}.`;
+  });
+}
+
+function unassignButton(ctx, service, form) {
+  return action(ctx, "Unassign from the role", "unassign", async () => {
+    const role = trimmed(form.role);
+    if (role === "") {
+      return "Name the role.";
+    }
+    const uninstall = form.uninstall === true;
+    if (uninstall && !ctx.confirm(`Unassign ${service} from role ${role} and uninstall it from each host that loses its last assignment?`)) {
+      return "Not unassigned.";
+    }
+    await ctx.api.call("hostkeeper.operator.v1.Services/Unassign", { service, role, uninstall });
+    ctx.refresh();
+    return uninstall
+      ? `Unassigned ${service} from role ${role}, uninstalling it where no assignment is left.`
+      : `Unassigned ${service} from role ${role}; its hosts keep running it, unmanaged.`;
+  });
+}
+
+// The role, version and digest grammar is the API's to check: the form only refuses a blank.
+function assignFieldset(ctx, svc) {
+  const service = svc.service;
+  const form = { version: "", digest: "", role: "", uninstall: false };
+  return h("fieldset", {},
+    h("legend", {}, `Assign and set the desired version of ${service}`),
+    field("Version", "desired-version", form, "version"),
+    field("Package digest (64 hex characters)", "desired-digest", form, "digest"),
+    h("div", { class: "buttons" }, setDesired(ctx, svc, form)),
+    field("Role", "assign-role", form, "role"),
+    checkbox("Uninstall from each host that loses its last assignment", "unassign-uninstall", form, "uninstall"),
+    h("div", { class: "buttons" }, assignButton(ctx, service, form), unassignButton(ctx, service, form)));
+}
+
+// The rows of the assignments of `service` from Services.List; `entries` are its services. A
+// service the list does not name has none.
+function assignmentRows(entries, service) {
+  const entry = entries.find((e) => e.service === service) || {};
+  const assignments = list(entry, "assignments").map((given) => {
+    const scope = typeof given["host"] === "string" ? `host ${given["host"]}` : `role ${given.role}`;
+    return given.removed === true ? `removed from ${scope}` : scope;
+  });
+  const assigned = list(entry, "assigned");
+  return [
+    ["Assigned roles", list(entry, "roles").join(", ") || "none"],
+    ["Operator assignments", assignments.join(", ") || "-"],
+    ["Hosts assigned", String(assigned.length > 0 ? assigned.length : list(entry, "hosts").length)],
+    ["Uninstalling", list(entry, "uninstalling").join(", ") || "-"],
+  ];
+}
+
+// `listing` is `{entries}` of Services.List, or `{error}` when it failed.
+function serviceSection(ctx, svc, listing) {
   const service = svc.service;
   const marks = svc.marks || {};
   const convergence = svc.convergence || {};
@@ -263,6 +359,7 @@ function serviceSection(ctx, svc) {
     h("h3", {}, service),
     table(["", ""], [
       ["Desired", svc.desired && svc.desired.version ? svc.desired.version : "none set"],
+      ...(listing.error ? [] : assignmentRows(listing.entries, service)),
       ["State", enumLabel(convergence.state, "CONVERGENCE_STATE_")],
       ["Up", `${svc.up || 0} hosts`],
       ["Update slot", holders.length > 0 ? `held by ${holders.join(", ")}` : "free"],
@@ -275,7 +372,9 @@ function serviceSection(ctx, svc) {
       ["Bad, left by a force", (marks.badByForce || []).join(", ") || "-"],
       ["Force standing", convergence.force ? `${convergence.force.version} (${convergence.force.reason || "-"})` : "-"],
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    listing.error ? h("p", { class: "error", role: "alert" }, describeError(listing.error)) : null,
     table(["Role", "At desired", "Updating", "Failed", "Down"], roles),
+    assignFieldset(ctx, svc),
     h("fieldset", {},
       h("legend", {}, `Act on ${service}`),
       field("Reason", "reason", form, "reason", { maxlength: 256 }),
@@ -325,6 +424,12 @@ export async function render(ctx) {
     return errorView("Rollout", error);
   }
   const services = list(status, "services");
+  let listing;
+  try {
+    listing = { entries: list(await ctx.api.call("hostkeeper.operator.v1.Services/List", {}), "services") };
+  } catch (error) {
+    listing = { error };
+  }
   const state = {
     force: { service: "", version: "", reason: "", targetKind: "fleet", role: "", hosts: "", includeHeld: false },
     phase: "idle",
@@ -334,9 +439,9 @@ export async function render(ctx) {
   };
   const page = () => h("section", { class: "page" },
     h("h2", {}, "Rollout"),
-    h("p", { class: "note" }, "CI sets the desired version; this page does not."),
+    h("p", { class: "note" }, "CI or an operator sets the desired version: an operator sets it here."),
     status.quiet === true ? h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.") : null,
-    services.map((svc) => serviceSection(ctx, svc)),
+    services.map((svc) => serviceSection(ctx, svc, listing)),
     forceSection(ctx, services, state, () => ctx.show(page())));
   return page();
 }

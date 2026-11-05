@@ -39,9 +39,9 @@ pub const PATIENCE: Duration = Duration::from_secs(30);
 
 /// The path of `Coordinator.Heartbeat`, which takes a host's certificate.
 pub const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
-/// The path of `Releases.SetDesired`, which takes CI's token.
+/// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 pub const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
-/// The path of `Releases.Converge`, which takes CI's token.
+/// The path of `Releases.Converge`, which takes CI's token or the operator's.
 pub const CONVERGE: &str = "/hostkeeper.operator.v1.Releases/Converge";
 
 /// A coordinator the tests call through the router, and the rig that keeps its directory and

@@ -11,11 +11,12 @@
 //! routes call and have no rule of their own.
 //!
 //! The caller is checked before the request is read ([`admit`]): a heartbeat by the host its
-//! client certificate names, `SetDesired` and `Converge` by CI's token (the operator does not
-//! set the desired version), every other operator method by the operator's token, and `Enroll`,
-//! `Poll` and `Renew` by nothing here (the key a host proves, or the certificate `Renew`
-//! checks itself). What the check learns goes to the adapter as [`Admitted`] in the request's
-//! extensions, so a bearer is resolved once: a CI token is good once.
+//! client certificate names, `SetDesired` by CI's token or the operator's (an operator's token
+//! is told first, so it spends no CI token), `Converge` by CI's token only, every other operator
+//! method by the operator's token, and `Enroll`, `Poll` and `Renew` by nothing here (the key a
+//! host proves, or the certificate `Renew` checks itself). What the check learns goes to the
+//! adapter as [`Admitted`] in the request's extensions, so a bearer is resolved once: a CI token
+//! is good once.
 //!
 //! A service is served on one surface only: the agent's on the heartbeat listener, the
 //! operator's on the private one. A path of any other service (the daemon's local one among
@@ -96,7 +97,7 @@ const AUDIT: &str = "hostkeeper.operator.v1.Audit";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
-/// The path of `Releases.SetDesired`, which takes CI's token, not the operator's.
+/// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token, not the operator's.
 const CONVERGE: &str = "/hostkeeper.operator.v1.Releases/Converge";
@@ -115,9 +116,10 @@ pub(crate) enum Admitted {
         /// Whether its heartbeat is heard for its final report only.
         retiring: bool,
     },
-    /// `SetDesired` and `Converge`: CI's verified token.
+    /// `SetDesired` and `Converge` with CI's token: the verified token.
     Ci(Verified),
-    /// Every other operator method: the operator, and the bearer it sent.
+    /// An operator method with the operator's token (`SetDesired` among them, `Converge` not):
+    /// the operator, and the bearer it sent.
     Operator {
         /// Who calls.
         caller: Caller,
@@ -173,8 +175,9 @@ enum Served {
 /// # Errors
 /// `UNIMPLEMENTED` for a path whose service this surface does not serve. Otherwise the
 /// refusal of the service the path names, as a status whose message is its token: a
-/// heartbeat's `forbidden` or `denied`; CI's `unauthorized` or `keys_unavailable`; the
-/// operator's `unauthorized` or `forbidden`.
+/// heartbeat's `forbidden` or `denied`; for `SetDesired` with no operator token, and for
+/// `Converge`, CI's `unauthorized` or `keys_unavailable`; the operator's `unauthorized` or
+/// `forbidden`.
 pub(crate) async fn admit(
     coordinator: &Coordinator,
     surface: Surface,
@@ -198,7 +201,18 @@ pub(crate) async fn admit(
             })
         }
         Served::Agent => Ok(Admitted::Peer(peer.clone())),
-        Served::Operator if path == SET_DESIRED || path == CONVERGE => {
+        Served::Operator if path == SET_DESIRED => {
+            // An operator's token is told before CI's is verified: it is no CI token and
+            // spends none.
+            if let Ok(name) = coordinator.operator(bearer(headers)) {
+                return Ok(Admitted::Operator {
+                    caller: Caller::Operator(name),
+                    bearer: bearer(headers).unwrap_or_default().to_owned(),
+                });
+            }
+            ci_token(coordinator, headers).await.map(Admitted::Ci)
+        }
+        Served::Operator if path == CONVERGE => {
             ci_token(coordinator, headers).await.map(Admitted::Ci)
         }
         Served::Operator => operator_token(coordinator, headers).await,

@@ -56,6 +56,7 @@ await Promise.all([send.on.click(), send.on.click()]);
         bodies(&ui),
         [
             (m("Releases/Status"), json!({})),
+            (m("Services/List"), json!({})),
             (m("Hosts/List"), json!({})),
             (
                 m("Releases/Force"),
@@ -100,7 +101,10 @@ const button = named(latest(), "force-send")[0];
 steps.push(text(latest()), button.attrs.disabled === true, Object.keys(button.on).length);
 "#,
     ));
-    assert_eq!(ui.methods(), [m("Releases/Status"), m("Hosts/List")]);
+    assert_eq!(
+        ui.methods(),
+        [m("Releases/Status"), m("Services/List"), m("Hosts/List")]
+    );
     let dialog = out["out"][0].as_str().expect("the dialog's text");
     assert!(
         dialog.contains("could not be counted (UNAVAILABLE store_failed)"),
@@ -133,7 +137,10 @@ steps.push(nodes(latest()).some((n) => n.attrs["name"] === "force-send"));
         "{dialog}"
     );
     assert_eq!(out["out"][1], false);
-    assert_eq!(ui.methods(), [m("Releases/Status"), m("Hosts/List")]);
+    assert_eq!(
+        ui.methods(),
+        [m("Releases/Status"), m("Services/List"), m("Hosts/List")]
+    );
 }
 
 fn force_bodies(ui: &Ui) -> Vec<Value> {

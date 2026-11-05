@@ -375,7 +375,7 @@ async fn gateway_sends_no_cors_headers_and_refuses_options() {
 /// Proves: the caller is checked before the body is read and by the rule of the method: no
 /// bearer, a wrong one, a bearer of another scheme and one longer than the most the coordinator
 /// reads are 401 `unauthorized`; CI's token on an operator method is 403 `forbidden`; the
-/// operator's token on `SetDesired`, which takes CI's token only, is 401 `unauthorized`, even
+/// bearer on `SetDesired`, which takes CI's token or the operator's, is 401 `unauthorized`, even
 /// with a body that is not JSON. No refusal changes a file.
 #[tokio::test]
 async fn gateway_refuses_a_missing_or_wrong_bearer() {
@@ -395,8 +395,8 @@ async fn gateway_refuses_a_missing_or_wrong_bearer() {
         http("POST", EXCLUDE, Some(&long), EXCLUDE_BODY),
         basic,
         http("POST", EXCLUDE, Some("wrong"), "not json"),
-        http("POST", SET_DESIRED, Some(OPERATOR), SET_BODY),
-        http("POST", SET_DESIRED, Some(OPERATOR), "not json"),
+        http("POST", SET_DESIRED, Some("wrong"), SET_BODY),
+        http("POST", SET_DESIRED, Some("wrong"), "not json"),
         http("POST", SET_DESIRED, None, SET_BODY),
     ];
     for (n, request) in cases.into_iter().enumerate() {

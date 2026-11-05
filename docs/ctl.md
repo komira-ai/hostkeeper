@@ -263,7 +263,9 @@ The service `Releases` of the package `hostkeeper.operator.v1`. The desired vers
 
 `/hostkeeper.operator.v1.Releases/SetDesired`
 
-Set a service's desired state. The coordinator moves its hosts there a role at a time.
+Set a service's desired state. The coordinator moves its hosts there a role at a time. Takes
+CI's OIDC token (the services its allow-list entry names) or the operator token (any service
+the coordinator manages, audited as `set_desired` under the token's name).
 
 | flag | value | meaning |
 |---|---|---|
@@ -278,7 +280,8 @@ Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState).
 
 `/hostkeeper.operator.v1.Releases/Converge`
 
-How far a service's hosts are from its desired version. Changes nothing.
+How far a service's hosts are from its desired version. Changes nothing. Takes CI's OIDC
+token only.
 
 | flag | value | meaning |
 |---|---|---|

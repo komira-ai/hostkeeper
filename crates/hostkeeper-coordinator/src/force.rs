@@ -26,8 +26,8 @@
 //! nothing from the force; a host named in the call that does not run the service is listed
 //! `skipped` as `unknown_target`.
 //!
-//! The force stands until CI sets another version ([`end_by_ci`]) or another force replaces
-//! it. While it stands the automatic rollback of the service is suspended
+//! The force stands until CI or an operator sets another version ([`end_by_ci`],
+//! [`end_by_setter`]) or another force replaces it. While it stands the automatic rollback of the service is suspended
 //! ([`crate::reconcile`]) and the pairs it orders take no update slot ([`crate::decide`]), so
 //! the slot accounting is the same when it ends as if it had never been. Its order goes to each
 //! host it orders at every heartbeat until the host runs the version, is running the force, or
@@ -351,16 +351,31 @@ pub fn end_by_ci(
     version: &Version,
     workflow: &str,
 ) -> Result<bool, OpsError> {
+    end_by_setter(ops, service, version, crate::reconcile::CI, workflow)
+}
+
+/// [`end_by_ci`] for any setter of the desired version: the audit entry `force_ended` is by
+/// `actor`, and its reason says the version was set by `set_by`.
+///
+/// # Errors
+/// [`OpsError`]: the ops file could not be written; the force stands.
+pub(crate) fn end_by_setter(
+    ops: &OpsStore,
+    service: &str,
+    version: &Version,
+    actor: &str,
+    set_by: &str,
+) -> Result<bool, OpsError> {
     let ended = ops.decide_change(Write::BeforeMemory, |state| {
         let force = state
             .services
             .get_mut(service)
             .and_then(|marks| marks.force.take_if(|force| force.version != *version))
             .ok_or(Kept::Standing)?;
-        let mut entry = AuditEntry::new(crate::reconcile::CI, "force_ended");
+        let mut entry = AuditEntry::new(actor, "force_ended");
         entry.service = Some(service.to_owned());
         entry.reason = Some(format!(
-            "{version} set by {workflow}; the force to {} ends",
+            "{version} set by {set_by}; the force to {} ends",
             force.version
         ));
         Ok::<_, Kept>(entry)

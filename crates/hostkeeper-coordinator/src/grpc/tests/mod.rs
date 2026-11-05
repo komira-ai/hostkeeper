@@ -13,6 +13,7 @@ mod install;
 mod limits;
 mod listeners;
 mod operator;
+mod operator_desired;
 mod pending;
 mod refusal;
 mod report;

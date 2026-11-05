@@ -1,6 +1,6 @@
 //! Who a gRPC call must be, checked before the call is read: a heartbeat by a host's client
-//! certificate, `SetDesired` and `Converge` by CI's token alone, every other operator method by
-//! the operator's token alone, and `Enroll`, `Poll` and `Renew` by nothing at the router.
+//! certificate, every operator method by the operator's token, `SetDesired` and `Converge` also
+//! by CI's token, and `Enroll`, `Poll` and `Renew` by nothing at the router.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -171,8 +171,8 @@ async fn enroll_poll_and_renew_take_no_credential_at_the_router() {
 }
 
 /// Proves: CI's token reaches `SetDesired` and `Converge` and no other method: `Hosts.List`
-/// and `Releases.Force` refuse it as `PERMISSION_DENIED` `forbidden`, the operator's token is
-/// not CI's for `SetDesired`, `SetDesired` and `Converge` answer CI's token, and a
+/// and `Releases.Force` refuse it as `PERMISSION_DENIED` `forbidden`, `SetDesired` and
+/// `Converge` answer CI's token, and a
 /// `SetDesired` of a service that CI's allow-list entry does not name is `PERMISSION_DENIED`
 /// `forbidden` and changes nothing.
 #[tokio::test]
@@ -190,13 +190,6 @@ async fn ci_token_reaches_only_set_desired_and_converge() {
             "{path}"
         );
     }
-
-    let request = grpc_request(SET_DESIRED, set_kbf(), Some(OPERATOR));
-    let answer = call(&served.coordinator, Surface::Control, &None, request).await;
-    assert_eq!(
-        answer,
-        (Code::Unauthenticated, "unauthorized".to_owned(), None)
-    );
 
     let request = grpc_request(SET_DESIRED, set_kbf(), Some(&ci_token()));
     let (code, message, body) = call(&served.coordinator, Surface::Control, &None, request).await;
@@ -262,10 +255,10 @@ async fn set_desired_of_a_service_off_the_allow_list_is_forbidden() {
 }
 
 /// Proves: for every method of the operator API the credentials that are admitted are exactly
-/// these: the operator token for every method but `SetDesired` and `Converge`, CI's token for
-/// those two, and no credential for any. The others are refused with `unauthorized` (an
-/// operator token at a CI method, or nothing) or `forbidden` (a CI token at an operator
-/// method).
+/// these: the operator token for every method but `Converge`, CI's token for `SetDesired` and
+/// `Converge` only, and no credential for any. The others are refused with `unauthorized`
+/// (nothing, or the operator token at `Converge`) or `forbidden` (a CI token at a method that
+/// takes the operator's only).
 #[tokio::test]
 async fn every_operator_method_admits_exactly_its_credential() {
     let served = served("grpc-cred-table");
@@ -283,13 +276,15 @@ async fn every_operator_method_admits_exactly_its_credential() {
     for path in paths {
         let ci_method = path == SET_DESIRED || path == CONVERGE;
         let unauthorized = refused(Code::Unauthenticated, "unauthorized");
-        let (with_operator, with_ci) = if ci_method {
-            (unauthorized, Outcome::Admitted)
+        let with_ci = if ci_method {
+            Outcome::Admitted
         } else {
-            (
-                Outcome::Admitted,
-                refused(Code::PermissionDenied, "forbidden"),
-            )
+            refused(Code::PermissionDenied, "forbidden")
+        };
+        let with_operator = if path == CONVERGE {
+            refused(Code::Unauthenticated, "unauthorized")
+        } else {
+            Outcome::Admitted
         };
         assert_eq!(
             outcome(&served, path, Some(OPERATOR)).await,
@@ -303,7 +298,7 @@ async fn every_operator_method_admits_exactly_its_credential() {
         );
         assert_eq!(
             outcome(&served, path, None).await,
-            refused(Code::Unauthenticated, "unauthorized"),
+            unauthorized,
             "{path} with no token"
         );
     }

@@ -17,7 +17,7 @@ use crate::testutil::{OPERATOR, ci_token};
 /// Where `path` is served and with what credentials a call of it is admitted: the heartbeat
 /// listener and, for `Heartbeat`, an updater's certificate; for `Enroll`, `Poll` and `Renew`
 /// nothing; the private listener with CI's token for `SetDesired` and `Converge`, and with the
-/// operator token for every other method.
+/// operator token for every other method (it is admitted at those two as well).
 fn credentials(path: &str) -> (Surface, Peer, Option<String>) {
     if path == HEARTBEAT {
         (Surface::Heartbeat, updater("host-1", "storage"), None)
