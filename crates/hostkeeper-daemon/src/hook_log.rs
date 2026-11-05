@@ -6,6 +6,8 @@
 //! the step's unit. Standard output is not logged: its last line is the step's report, which the
 //! step record keeps.
 
+use std::io::{self, Write};
+
 use hostkeeper_steps::Captured;
 
 /// The line put before a hook's log when the launcher dropped the beginning of it.
@@ -30,10 +32,17 @@ pub fn hook_log_lines(unit: &str, captured: &Captured) -> Vec<String> {
     lines
 }
 
-/// Writes [`hook_log_lines`] to the daemon's standard error: the `hostkeeper_steps::StepLog` of
-/// the host's launcher.
-pub fn log_hook_output(unit: &str, captured: &Captured) {
+/// Writes [`hook_log_lines`] to `out`, one line each, ending in a line feed.
+pub fn write_hook_log(out: &mut dyn Write, unit: &str, captured: &Captured) -> io::Result<()> {
     for line in hook_log_lines(unit, captured) {
-        eprintln!("{line}");
+        writeln!(out, "{line}")?;
     }
+    Ok(())
+}
+
+/// Writes [`hook_log_lines`] to the daemon's standard error: the `hostkeeper_steps::StepLog` of
+/// the host's launcher. A standard error that cannot be written loses the lines; the step is not
+/// affected.
+pub fn log_hook_output(unit: &str, captured: &Captured) {
+    drop(write_hook_log(&mut io::stderr().lock(), unit, captured));
 }
