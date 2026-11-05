@@ -63,13 +63,53 @@ cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 ```
 
 Nothing privileged and nothing for macOS runs on a pull request. The workflow lint refuses such a
-job in any workflow that runs on `pull_request`, and it also refuses an action that is not pinned
+job in any workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
+container) in any workflow but `privileged.yml` (below), and it also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
 `permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
 `set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
 to the order of its steps: the release is verified before any step can request an OIDC token or
 run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, that job is the only
 one that may hold `id-token: write`.
+
+## The privileged workflow: real systemd, after a merge
+
+Everything a pull request runs proves hostkeeper against fakes of the host.
+`.github/workflows/privileged.yml` is the one place where the adapters behind those fakes meet the
+real thing: it runs the tests of `crates/hostkeeper-privileged` as root against the systemd of a
+GitHub-hosted `ubuntu-24.04` runner. It runs after a merge to `main` and by hand
+(`workflow_dispatch`), never on a pull request, so a pull request cannot show these tests passing:
+the first run on `main` after the merge is their proof. A release waits for a successful run of it
+on its commit. A red run on `main` is a defect: fix it forward in a new pull request.
+
+The tests, in `crates/hostkeeper-privileged/tests/`, drive the production code:
+
+- `transient_unit.rs`, the step launcher (`SystemdLauncher`) and the dead-man:
+  `a_step_runs_in_a_real_transient_unit_and_is_ended_at_its_bound`,
+  `the_transient_unit_carries_runtime_max_sec_and_nothing_else`,
+  `an_unbounded_prepare_gets_runtime_max_sec_infinity`, `the_dead_man_stops_a_unit_by_name`,
+  `a_unit_name_is_reusable_after_it_failed` and
+  `a_long_output_is_kept_to_its_last_bytes_with_the_last_line`;
+- `observer.rs`, the observer's `systemctl show` and `/proc` adapters:
+  `the_observer_reads_active_state_and_the_main_pid_digest_of_a_real_unit`.
+
+Each of these files starts with `#![cfg(feature = "privileged")]`. The feature is off by default,
+so `cargo test --workspace` and CI's `test` job compile none of them, and they count toward no
+coverage gate; the crate's library (the workload fixture `hostkeeper-fixture-hook`, the host
+check, the rig) is tested without root in the pull-request set like any crate. A privileged test
+refuses to start unless it runs as root on a host whose service manager is systemd.
+
+To run one yourself, use a throwaway VM with systemd, never a workstation: the tests start, stop
+and link units of the host's systemd. The workflow's two steps are the way: build as your own
+user, then run as root through the cargo runner (no `sudo -E`, no build as root):
+
+```sh
+cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit
+cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit -- --test-threads=1 the_dead_man_stops_a_unit_by_name
+```
+
+Each test names its units `hostkeeper-ci-<test>-<pid>-<n>` and stops, unlinks and resets them when
+it ends, failed or not; `journalctl --unit 'hostkeeper-ci-*'` shows what they logged.
 
 ## Tests
 

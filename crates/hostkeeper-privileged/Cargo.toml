@@ -1,0 +1,49 @@
+[package]
+name = "hostkeeper-privileged"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The tests that run as root against the real systemd of a host, in .github/workflows/privileged.yml only, and the workload fixture they drive."
+
+# The one place where the adapters behind the fakes of the pull-request set meet the real host:
+# the step launcher's transient units, the dead-man's stop by name, the observer's systemd and
+# /proc adapters. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
+# the feature is off by default and nothing of the workspace turns it on, so CI's `test` job
+# compiles and runs none of them; privileged.yml builds them as the runner's user and runs them
+# as root, after a merge to main. The library is what they share and what can be tested without
+# root (the fixture's arguments and modes, the host check, the names and files of the rig), and
+# is measured by the 99% gate like any crate.
+[dependencies]
+# The hook contract the fixture speaks: the step, its arguments, the params file, the last line.
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The SHA-256 of the fixture's own executable (mode `print-pid`).
+hex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+# The workload fixture (`hostkeeper_privileged::fixture` says what it does). Built by cargo with
+# the crate's tests, nothing prebuilt or checked in; a program of the tests, not shipped. Its
+# decisions and the start of its child are in the library, measured; the program only forwards
+# to them and blocks.
+[[bin]]
+name = "hostkeeper-fixture-hook"
+path = "tests/bin/fixture_hook.rs"
+
+[features]
+# The tests that run as root against the host's systemd. Only privileged.yml turns it on.
+privileged = []
+
+[dev-dependencies]
+# What the privileged tests drive: the production launcher and dead-man, and the observer's real
+# adapters.
+hostkeeper-observe = { path = "../hostkeeper-observe" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The effective uid the privileged tests check before they act.
+rustix = { workspace = true, features = ["process"] }
+
+[lints]
+workspace = true

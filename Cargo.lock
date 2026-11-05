@@ -1487,6 +1487,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-privileged"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hostkeeper-hook",
+ "hostkeeper-observe",
+ "hostkeeper-steps",
+ "hostkeeper-testkit",
+ "rustix",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-proto"
 version = "0.1.0"
 dependencies = [

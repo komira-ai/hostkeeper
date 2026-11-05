@@ -26,7 +26,17 @@
 //!   Privileged: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
 //!   cargo runner of `sudo` too), `--privileged` or `--cap-add` (a container's options), or the
 //!   job holds a `write` scope. macOS: a value of the job names `macos` or `darwin`, in any case
-//!   (a runner, a matrix value, a `--target aarch64-apple-darwin`).
+//!   (a runner, a matrix value, a `--target aarch64-apple-darwin`);
+//! - it is not [`PRIVILEGED_WORKFLOW`], it does not run for a pull request, and a job of it, or
+//!   what sits beside `jobs`, names root as above (`sudo` as a word, `--privileged`,
+//!   `--cap-add`), whatever its trigger: root runs in that one workflow or nowhere. (A pull-request
+//!   workflow is refused for the same values by the rule above, with its own message. A write
+//!   scope is not root; outside a pull request it is held to [`WRITE_ALLOWED`].)
+//! - it is [`PRIVILEGED_WORKFLOW`] and its `on` is not exactly `push` with `branches: [main]` and
+//!   nothing else, and `workflow_dispatch` with no inputs (no other trigger, no `tags`, `paths` or
+//!   other filter of `push`), or a job of it runs on a runner that is not in
+//!   [`PRIVILEGED_RUNNERS`]. Every other rule holds for it as for any file; [`WRITE_ALLOWED`] has
+//!   no entry for it, so no job of it holds a write scope.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
 //!   ([`release::release_rules`]).
@@ -90,6 +100,18 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
 /// to the repository: it lets the job's steps ask GitHub for an OIDC token. The one job is the
 /// CI client's, whose order of steps [`set_desired`] holds.
 pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired::JOB)];
+
+/// The one workflow that may run a job as root (`sudo`, a privileged container): the privileged
+/// tests, after a merge to main and by hand, never on a pull request.
+pub const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
+
+/// The runners a job of [`PRIVILEGED_WORKFLOW`] may run on: GitHub-hosted Ubuntu with systemd as
+/// PID 1 and passwordless `sudo`. No macOS runner, and no `-latest` label that moves under us.
+pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
+
+/// What a [`PRIVILEGED_WORKFLOW`] whose `on` is anything else is refused with.
+pub const PRIVILEGED_ON: &str =
+    "privileged.yml: on must be push to main and workflow_dispatch only";
 
 /// The one flag that names `self-hosted` to refuse it: `gh attestation verify`'s.
 pub const DENY_SELF_HOSTED: &str = "--deny-self-hosted-runners";
@@ -226,6 +248,10 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     if on.iter().any(|t| t == "pull_request_target") {
         problems.push("`on` names pull_request_target".to_owned());
     }
+    let privileged_file = file == PRIVILEGED_WORKFLOW;
+    if privileged_file && !push_to_main_and_dispatch_only(entry(&doc, "on")) {
+        problems.push(PRIVILEGED_ON.to_owned());
+    }
     let mut all = Vec::new();
     scalars(&doc, &mut all);
     for word in ["self-hosted", "pull_request_target"] {
@@ -243,17 +269,23 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.extend(pin_problem(text, line, value));
     }
     let on_pull_request = on.iter().any(|t| runs_on_pull_requests(t));
+    // Root anywhere but in the privileged workflow; a pull-request workflow is refused for it by
+    // the pull-request rule.
+    let root_refused = !privileged_file && !on_pull_request;
+    // What sits beside `jobs` (`env`, `defaults`, ...) applies to every job.
+    let mut beside_jobs = Vec::new();
+    for (k, v) in entries(&doc)
+        .iter()
+        .filter(|(k, _)| k.as_str() != Some("jobs"))
+    {
+        scalars(k, &mut beside_jobs);
+        scalars(v, &mut beside_jobs);
+    }
     if on_pull_request {
-        // What sits beside `jobs` (`env`, `defaults`, ...) applies to every job.
-        let mut values = Vec::new();
-        for (k, v) in entries(&doc)
-            .iter()
-            .filter(|(k, _)| k.as_str() != Some("jobs"))
-        {
-            scalars(k, &mut values);
-            scalars(v, &mut values);
-        }
-        problems.extend(word_problems("workflow", &values));
+        problems.extend(word_problems("workflow", &beside_jobs));
+    }
+    if root_refused {
+        problems.extend(root_problems("workflow", &beside_jobs));
     }
     let jobs = entry(&doc, "jobs").map_or(&[][..], entries);
     for (name, job) in jobs {
@@ -262,6 +294,14 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.extend(runner_problems(name, job));
         if on_pull_request {
             problems.extend(pull_request_problems(name, job));
+        }
+        if root_refused {
+            let mut values = Vec::new();
+            scalars(job, &mut values);
+            problems.extend(root_problems(&format!("job {name}"), &values));
+        }
+        if privileged_file {
+            problems.extend(privileged_runner_problems(name, job));
         }
     }
     problems.extend(release::release_rules(file, text));
@@ -456,13 +496,72 @@ fn pull_request_problems(name: &str, job: &Node) -> Vec<String> {
     problems
 }
 
+/// The first line of `values` that runs something as root: `sudo` as a word, a privileged
+/// container (`--privileged`) or one given a capability (`--cap-add`).
+pub fn root_line<'a>(values: &[&'a str]) -> Option<&'a str> {
+    first_line(values, |line| {
+        has_word(line, "sudo") || line.contains("--privileged") || line.contains("--cap-add")
+    })
+}
+
+/// Root among `values`, the values of `who` (a job or the workflow) of a workflow that is not
+/// [`PRIVILEGED_WORKFLOW`].
+fn root_problems(who: &str, values: &[&str]) -> Vec<String> {
+    root_line(values)
+        .map(|line| format!("{who}: privileged outside {PRIVILEGED_WORKFLOW} (`{line}`)"))
+        .into_iter()
+        .collect()
+}
+
+/// Whether `on` is exactly `push` to `branches: [main]` and a `workflow_dispatch` with no inputs,
+/// as a mapping: no other trigger, no other branch, no `tags`, `paths` or other filter.
+fn push_to_main_and_dispatch_only(on: Option<&Node>) -> bool {
+    let Some(Value::Map(triggers)) = on.map(|on| &on.value) else {
+        return false;
+    };
+    let push_to_main = |push: &Node| match entries(push) {
+        [
+            (
+                key,
+                Node {
+                    value: Value::Seq(branches),
+                    ..
+                },
+            ),
+        ] => {
+            key.as_str() == Some("branches")
+                && matches!(&branches[..], [b] if b.as_str() == Some("main"))
+        }
+        _ => false,
+    };
+    let no_inputs = |dispatch: &Node| match &dispatch.value {
+        Value::Scalar { .. } => dispatch.as_str().is_none(),
+        Value::Map(entries) => entries.is_empty(),
+        Value::Seq(_) => false,
+    };
+    let has = |name: &str, holds: &dyn Fn(&Node) -> bool| {
+        triggers
+            .iter()
+            .any(|(k, v)| k.as_str() == Some(name) && holds(v))
+    };
+    triggers.len() == 2 && has("push", &push_to_main) && has("workflow_dispatch", &no_inputs)
+}
+
+/// A job of [`PRIVILEGED_WORKFLOW`] on a runner that is not in [`PRIVILEGED_RUNNERS`]. Labels that
+/// cannot be read are refused by [`runner_problems`] already.
+fn privileged_runner_problems(name: &str, job: &Node) -> Vec<String> {
+    match runner_labels(name, job) {
+        Ok(labels) if labels.iter().any(|l| !PRIVILEGED_RUNNERS.contains(l)) => vec![format!(
+            "job {name}: privileged job on a runner outside the privileged list"
+        )],
+        Ok(_) | Err(_) => Vec::new(),
+    }
+}
+
 /// The privileged and macOS words among `values`, the values of `who` (a job or the workflow).
 fn word_problems(who: &str, values: &[&str]) -> Vec<String> {
     let mut problems = Vec::new();
-    let privileged = first_line(values, |line| {
-        has_word(line, "sudo") || line.contains("--privileged") || line.contains("--cap-add")
-    });
-    if let Some(line) = privileged {
+    if let Some(line) = root_line(values) {
         problems.push(format!("{who}: privileged on pull_request (`{line}`)"));
     }
     let macos = first_line(values, |line| {
