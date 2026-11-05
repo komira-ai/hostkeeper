@@ -120,42 +120,44 @@ fn the_macos_package_holds_the_committed_goldens_byte_for_byte() {
 }
 
 #[test]
-fn the_linux_platforms_differ_by_file_name_only() {
+fn the_linux_platforms_differ_by_file_name_and_manifest_platform_only() {
     // Catches: per-platform code in the Linux package: bytes, digest or digest file that depend
-    // on the architecture beyond the name of the file.
+    // on the architecture beyond the name of the file and the manifest's own platform line, or a
+    // manifest that does not name the platform it was built for.
     let dir = scratch("hello-linux-platforms");
     let (history, commit) = history();
     let x86 = request(&dir, &commit, Platform::LinuxX86_64, false, "x86");
     let arm = request(&dir, &commit, Platform::LinuxArm64, false, "arm");
     let lines_x86 = package(&history, &x86).expect("package x86");
     let lines_arm = package(&history, &arm).expect("package arm");
-    assert_eq!(built(&x86), built(&arm));
-    let hex = file_sha256(&x86.out.join("hello-1.2.3-linux-x86_64.tar.zst")).expect("hash");
-    assert_eq!(
-        lines_x86,
-        [
-            format!("hello-1.2.3-linux-x86_64.tar.zst: sha256 {hex}"),
-            format!("sha256={hex}")
-        ]
-    );
-    assert_eq!(
-        lines_arm,
-        [
-            format!("hello-1.2.3-linux-arm64.tar.zst: sha256 {hex}"),
-            format!("sha256={hex}")
-        ]
-    );
-    for (r, name) in [
-        (&x86, "hello-1.2.3-linux-x86_64.tar.zst"),
-        (&arm, "hello-1.2.3-linux-arm64.tar.zst"),
+    for (r, name, lines) in [
+        (&x86, "hello-1.2.3-linux-x86_64.tar.zst", &lines_x86),
+        (&arm, "hello-1.2.3-linux-arm64.tar.zst", &lines_arm),
     ] {
+        let hex = file_sha256(&r.out.join(name)).expect("hash");
+        assert_eq!(
+            lines,
+            &[format!("{name}: sha256 {hex}"), format!("sha256={hex}")]
+        );
         assert_eq!(
             std::fs::read_to_string(r.out.join(format!("{name}.sha256"))).expect("digest"),
             format!("{hex}  {name}\n")
         );
     }
+    let (x86_bytes, arm_bytes) = (built(&x86), built(&arm));
+    assert_eq!(listing(&x86_bytes), listing(&arm_bytes));
+    assert_eq!(text_of(&x86_bytes, "manifest.toml"), LINUX_MANIFEST);
+    assert_eq!(
+        text_of(&arm_bytes, "manifest.toml"),
+        LINUX_MANIFEST.replace("platform = \"linux-x86_64\"", "platform = \"linux-arm64\"")
+    );
+    for (x, a) in read_back(&x86_bytes).iter().zip(&read_back(&arm_bytes)) {
+        if x.name != "manifest.toml" {
+            assert_eq!(x.data, a.data, "{}", x.name);
+        }
+    }
     let macos = built_for("hello-macos-differs", Platform::MacosArm64, false);
-    assert_ne!(macos, built(&x86));
+    assert_ne!(macos, x86_bytes);
 }
 
 #[test]
@@ -178,6 +180,7 @@ fn loaded(name: &str, platform: Platform, running: u64) -> Manifest {
     let expected = Expected {
         name: ServiceName::new("hello").expect("a service name"),
         version: ConfigVersion::new(VERSION).expect("a version"),
+        platform: platform.name().parse().expect("a platform"),
     };
     Manifest::load(&version_dir, &expected, &host(running)).expect("the manifest loads")
 }
@@ -247,6 +250,7 @@ fn a_daemon_older_than_the_first_release_refuses_the_package() {
     let expected = Expected {
         name: ServiceName::new("hello").expect("a service name"),
         version: ConfigVersion::new(VERSION).expect("a version"),
+        platform: hostkeeper_config::platform::Platform::LinuxX86_64,
     };
     let older = HostkeeperVersion::parse("0.0.9").expect("a hostkeeper version");
     assert_eq!(
@@ -303,6 +307,7 @@ fn unpacked_by_the_daemon(
     let order = hostkeeper_unpack::UnpackOrder {
         service: ServiceName::new("hello").expect("a service name"),
         version: ConfigVersion::new(&version_text).expect("a version"),
+        platform: platform.name().parse().expect("a platform"),
         package_digest: hostkeeper_config::daemon::Sha256Hex::parse(
             &file_sha256(&archive).expect("hash the package"),
         )
@@ -433,7 +438,9 @@ fn the_failing_build_is_the_golden_package_with_three_edits_on_every_platform() 
     // Catches: a failing build that differs from hello's package in anything but the manifest's
     // version, the unit's ExecStart and the plists' ProgramArguments (a changed entry, mode,
     // binary, health URL, param or unit line), or that lacks one of the three edits. The expected
-    // bytes are the committed goldens with exactly those edits made by text replacement.
+    // bytes are the committed goldens with exactly those edits made by text replacement; the
+    // Linux golden is the linux-x86_64 build, so for linux-arm64 the manifest's platform line
+    // names linux-arm64.
     let failing = |name: &str, platform: Platform| built_for(name, platform, true);
     let version_edit = |manifest: &str| {
         assert!(manifest.contains("version = \"1.2.3\"\n"));
@@ -446,7 +453,10 @@ fn the_failing_build_is_the_golden_package_with_three_edits_on_every_platform() 
         assert_eq!(text_of(&bytes, "bin/hello").as_bytes(), BINARY);
         assert_eq!(
             text_of(&bytes, "manifest.toml"),
-            version_edit(LINUX_MANIFEST)
+            version_edit(LINUX_MANIFEST).replace(
+                "platform = \"linux-x86_64\"",
+                &format!("platform = \"{}\"", platform.name())
+            )
         );
         let exec = "hello --port 9310\n";
         assert_eq!(LINUX_UNIT.matches(exec).count(), 1);
@@ -486,26 +496,28 @@ fn the_failing_build_is_the_golden_package_with_three_edits_on_every_platform() 
 fn the_failing_build_is_its_own_package_file_with_its_own_digest_on_each_platform() {
     // Catches: a failing build written to the plain package's file name (overwriting hello's), a
     // digest file under the wrong name or holding another name, Linux architectures that differ
-    // beyond the file name, or a failing build whose bytes equal the plain package's.
+    // beyond the file name and the manifest's platform line, or a failing build whose bytes equal
+    // the plain package's.
     let dir = scratch("hello-fail-ready-files");
     let (history, commit) = history();
     let x86 = request(&dir, &commit, Platform::LinuxX86_64, true, "x86");
     let arm = request(&dir, &commit, Platform::LinuxArm64, true, "arm");
     let lines_x86 = package(&history, &x86).expect("package x86");
     let lines_arm = package(&history, &arm).expect("package arm");
-    assert_eq!(built(&x86), built(&arm));
+    for (x, a) in read_back(&built(&x86)).iter().zip(&read_back(&built(&arm))) {
+        assert_eq!(x.name, a.name);
+        if x.name != "manifest.toml" {
+            assert_eq!(x.data, a.data, "{}", x.name);
+        }
+    }
     let name_x86 = "hello-1.2.3-fail-ready-linux-x86_64.tar.zst";
     let name_arm = "hello-1.2.3-fail-ready-linux-arm64.tar.zst";
-    let hex = file_sha256(&x86.out.join(name_x86)).expect("hash");
-    assert_eq!(
-        lines_x86,
-        [format!("{name_x86}: sha256 {hex}"), format!("sha256={hex}")]
-    );
-    assert_eq!(
-        lines_arm,
-        [format!("{name_arm}: sha256 {hex}"), format!("sha256={hex}")]
-    );
-    for (r, name) in [(&x86, name_x86), (&arm, name_arm)] {
+    for (r, name, lines) in [(&x86, name_x86, &lines_x86), (&arm, name_arm, &lines_arm)] {
+        let hex = file_sha256(&r.out.join(name)).expect("hash");
+        assert_eq!(
+            lines,
+            &[format!("{name}: sha256 {hex}"), format!("sha256={hex}")]
+        );
         assert_eq!(
             std::fs::read_to_string(r.out.join(format!("{name}.sha256"))).expect("digest"),
             format!("{hex}  {name}\n")
@@ -542,6 +554,7 @@ fn loaded_failing(
     let expected = Expected {
         name: ServiceName::new("hello").expect("a service name"),
         version: ConfigVersion::new(version).expect("a version"),
+        platform: platform.name().parse().expect("a platform"),
     };
     Manifest::load(&version_dir, &expected, &host(0))
 }
@@ -678,7 +691,7 @@ fn text_a_unit_cannot_hold_is_refused_naming_the_file() {
         ..HELLO
     };
     assert_eq!(
-        bad_label.contents(Kind::Launchd, VERSION, false).err(),
+        bad_label.contents(Kind::Launchd, Platform::MacosArm64, VERSION, false).err(),
         Some(Error::Failed(
             "units/he llo.a.plist: launchd label \"he llo.a\" holds the byte 0x20, which a label may not"
                 .to_owned()
@@ -689,14 +702,18 @@ fn text_a_unit_cannot_hold_is_refused_naming_the_file() {
         ..HELLO
     };
     assert_eq!(
-        bad_path.contents(Kind::Launchd, VERSION, false).err(),
+        bad_path.contents(Kind::Launchd, Platform::MacosArm64, VERSION, false).err(),
         Some(Error::Failed(
             "units/hello.a.plist: plist text \"/var/lib/updater/hooks/hello\\n/slots/a\" holds a control character"
                 .to_owned()
         ))
     );
     // The systemd kind has no plist to refuse.
-    assert!(bad_path.contents(Kind::Systemd, VERSION, false).is_ok());
+    assert!(
+        bad_path
+            .contents(Kind::Systemd, Platform::LinuxX86_64, VERSION, false)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -711,7 +728,7 @@ fn the_description_alone_decides_the_text() {
         log_dir: "/var/log/other",
     };
     let systemd = other
-        .contents(Kind::Systemd, VERSION, false)
+        .contents(Kind::Systemd, Platform::LinuxX86_64, VERSION, false)
         .expect("contents");
     assert!(systemd.manifest.contains("name = \"other\"\n"));
     assert!(
@@ -744,7 +761,7 @@ fn the_description_alone_decides_the_text() {
     );
     assert_eq!(systemd.units[0].file, "other@.service");
     let launchd = other
-        .contents(Kind::Launchd, VERSION, false)
+        .contents(Kind::Launchd, Platform::MacosArm64, VERSION, false)
         .expect("contents");
     assert!(
         launchd

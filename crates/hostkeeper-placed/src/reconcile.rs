@@ -255,6 +255,7 @@ impl Placer<'_> {
         let expected = Expected {
             name: ServiceName::new(service).map_err(|e| e.to_string())?,
             version: Version::new(version).map_err(|e| e.to_string())?,
+            platform: hostkeeper_config::platform::Platform::current(),
         };
         let dir = self.roots.packages().version(service, version);
         Manifest::load(&self.fs.host_path(&dir), &expected, running)

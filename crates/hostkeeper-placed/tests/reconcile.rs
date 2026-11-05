@@ -624,6 +624,7 @@ fn a_current_whose_manifest_does_not_load_is_reported_unresolved() {
     let expected = Expected {
         name: service("tierstore"),
         version: version("9.9.9"),
+        platform: hostkeeper_config::platform::Platform::current(),
     };
     let refusal = Manifest::load(
         &world.version_dir("tierstore", "9.9.9"),

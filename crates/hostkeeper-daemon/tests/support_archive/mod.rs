@@ -40,10 +40,12 @@ refs = ["refs/tags/*"]
 hosted_runner = true
 "#;
 
-/// A manifest the loader takes for tierstore 1.5.0.
+/// A manifest the loader takes for tierstore 1.5.0, once `{platform}` is the host's platform
+/// ([`manifest`]).
 const MANIFEST: &str = "schema = 1
 name = \"tierstore\"
 version = \"1.5.0\"
+platform = \"{platform}\"
 min_hostkeeper = \"0.1.0\"
 [hook]
 command = [\"bin/x\", \"update-hook\"]
@@ -176,10 +178,18 @@ fn zstd(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// [`MANIFEST`] for the platform of the host the daemon runs on, the one it asks for.
+fn manifest() -> String {
+    MANIFEST.replace(
+        "{platform}",
+        hostkeeper_config::platform::Platform::current().as_str(),
+    )
+}
+
 /// The archive of a valid package: the manifest, `bin/x`, a unit and `files/c.conf`.
 pub fn valid_archive() -> Vec<u8> {
     let mut tar = Tar::default();
-    tar.file("manifest.toml", 0o644, MANIFEST.as_bytes())
+    tar.file("manifest.toml", 0o644, manifest().as_bytes())
         .dir("bin")
         .file("bin/x", 0o755, b"#!x\n")
         .dir("units")

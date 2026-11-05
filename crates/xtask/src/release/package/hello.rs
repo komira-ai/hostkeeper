@@ -81,7 +81,7 @@ pub(super) fn contents(
     version: &str,
     fail_ready: bool,
 ) -> Result<Contents, Error> {
-    HELLO.contents(Kind::of(platform), version, fail_ready)
+    HELLO.contents(Kind::of(platform), platform, version, fail_ready)
 }
 
 impl Description {
@@ -105,7 +105,13 @@ impl Description {
             .collect()
     }
 
-    fn contents(&self, kind: Kind, version: &str, fail_ready: bool) -> Result<Contents, Error> {
+    fn contents(
+        &self,
+        kind: Kind,
+        platform: Platform,
+        version: &str,
+        fail_ready: bool,
+    ) -> Result<Contents, Error> {
         let units = match kind {
             Kind::Systemd => vec![Unit {
                 file: format!("{}@.service", self.name),
@@ -126,13 +132,15 @@ impl Description {
                 .collect::<Result<Vec<_>, Error>>()?,
         };
         Ok(Contents {
-            manifest: self.manifest(kind, version),
+            manifest: self.manifest(kind, platform, version),
             units,
         })
     }
 
-    /// `manifest.toml`: the hook, the units, the health URL and the params the hook reads.
-    fn manifest(&self, kind: Kind, version: &str) -> String {
+    /// `manifest.toml`: the platform, the hook, the units, the health URL and the params the hook
+    /// reads.
+    fn manifest(&self, kind: Kind, platform: Platform, version: &str) -> String {
+        let platform = platform.name();
         let name = self.name;
         let port = self.port;
         let run = self
@@ -147,6 +155,7 @@ impl Description {
             "schema = 1\n\
              name = \"{name}\"\n\
              version = \"{version}\"\n\
+             platform = \"{platform}\"\n\
              min_hostkeeper = \"{MIN_HOSTKEEPER}\"\n\
              \n\
              [hook]\n\

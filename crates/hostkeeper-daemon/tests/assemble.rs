@@ -111,6 +111,7 @@ fn the_daemon_reaches_ready_only_after_the_boot_pass_and_reconcile() {
         &Expected {
             name: name("web"),
             version: version("1.0.0"),
+            platform: hostkeeper_config::platform::Platform::current(),
         },
         &OWN,
     )

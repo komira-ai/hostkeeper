@@ -234,6 +234,38 @@ fn min_hostkeeper_above_the_running_daemon_is_refused() {
     assert!(no_record(&rig, "web"));
 }
 
+/// Catches a package built for another platform being run: a manifest naming any platform but
+/// this daemon's own (`Platform::current()`) is `manifest_mismatch`, naming both platforms, and
+/// nothing runs.
+#[test]
+fn a_package_for_another_platform_is_refused() {
+    let own = hostkeeper_config::platform::Platform::current();
+    let others = hostkeeper_config::platform::Platform::ALL
+        .into_iter()
+        .filter(|platform| *platform != own);
+    for other in others {
+        let rig = Rig::new("other-platform");
+        rig.running("web", support::BASE);
+        let daemon = rig.daemon();
+        let text = manifest("web", "2.0.0").replace(
+            &format!("platform = \"{own}\""),
+            &format!("platform = \"{other}\""),
+        );
+        rig.store.add("web", "2.0.0", &text);
+        let Reply::Refused { refusal, detail } = daemon.order(&update("web", "2.0.0", &d(), 1))
+        else {
+            panic!("not refused");
+        };
+        assert_eq!(refusal, Refusal::ManifestMismatch);
+        assert_eq!(
+            detail,
+            format!("the manifest is for the platform {other}, not {own}")
+        );
+        assert!(rig.launcher.runs().is_empty());
+        assert!(no_record(&rig, "web"));
+    }
+}
+
 /// Catches a downgrade rule that ignores the verb, or compares versions as strings: with
 /// `1.10.0` running, an `update` to `1.9.0` is `below_running` (as text it would sort above),
 /// and a `force_rollback` of the same package runs.

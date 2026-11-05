@@ -28,6 +28,11 @@ fn load(platform: &str) -> Manifest {
     let expected = Expected {
         name: ServiceName::new("hello").expect("a service name"),
         version: Version::new("1.2.3").expect("a version"),
+        // The golden of each directory is the package built for this platform.
+        platform: match platform {
+            "macos" => hostkeeper_config::platform::Platform::MacosArm64,
+            _ => hostkeeper_config::platform::Platform::LinuxX86_64,
+        },
     };
     Manifest::load(&dir(platform), &expected, &DAEMON)
         .unwrap_or_else(|why| panic!("the {platform} manifest is refused: {why}"))

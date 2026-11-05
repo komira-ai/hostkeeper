@@ -10,6 +10,7 @@ hostkeeper is the generic host lifecycle system: it installs, updates, rolls bac
 - **The coordinator owns which services each host runs,** per host or role, with the desired version and `min_version` of each.
 - **A service ships as a hostkeeper package:** an attested archive holding `manifest.toml`, `bin/`, `units/` and optional `files/`. The daemon unpacks each version read-only, switches `current` atomically and links units and files itself (section 4.7).
 - **A host keeps two versions of a service,** `current` and `previous` (section 4.7).
+- **One package per operating system and CPU family, found through one release index** (section 5.5). The platforms are `linux-x86_64`, `linux-arm64` and `macos-arm64`; the daemon knows its own from the target it was compiled for. The order names a service and a version only, and the size and digest the daemon checks come from the version's `index.json`. Instruction-set variants live inside a package and are the build system's business.
 - **Force is the primary fix, and it is hookless** (section 5.6). The local pin, the `activate` verb and the hold file are replaced by a coordinator-side hold (section 5.4).
 - **The UI is a static app over the operator API** (sections 5.10, 4.8). Sections 5.5, 5.6 and 6.1 are rewritten to explain first.
 - **Kept:** `decide()` as the rollout gate (section 5.4), one root process per host, compiled-in verbs, no rights filtering, a simple coordinator. Q3, Q4 and Q14 are settled; their numbers stay so earlier references stay valid.
@@ -136,14 +137,14 @@ force_start_secs       = 60
 
 Every table refuses unknown keys. A config that fails to load stops the daemon with an error naming the key; nothing changes on the host. There is no list of services in it: a host runs the services the coordinator assigns (section 5.7), and the daemon learns each service's lifecycle from the manifest of a package whose signature verified.
 
-**The verbs** are code. The coordinator can send every row but `clear_record`; the local CLI runs only the three marked local. There is no other way to make the daemon do anything:
+**The verbs** are code. The coordinator can send every row but `clear_record`; the local CLI runs only the three marked local. No verb names a platform or a digest: the daemon takes the package of its own platform and that package's size and digest from the version's release index (section 5.5). There is no other way to make the daemon do anything:
 
 | Verb | Typed arguments | Meaning |
 |---|---|---|
-| `update` | service, version, package digest, try | fetch, verify, unpack, read the manifest, run the five steps; refused below the running version |
-| `install` / `uninstall` | service (+ version, digest for install) | add a service the coordinator assigned, through the update path with no previous version; or stop its units, run its `uninstall` hook, unlink and remove its package directories, placed paths and step records, in the order of section 4.7. The daemon never deletes `/var/lib/<service>`; that is the hook's business |
-| `force_rollback` | service, version, package digest | a hooked update to a lower version (used by automatic rollback, section 5.4) |
-| `force` | service, version, package digest (filled by the coordinator from CI's registered digest), halt generation | hookless: stop the service's units, switch `current`, link, start the units, report (section 5.6); refused for the service `hostkeeper` |
+| `update` | service, version, try | fetch, verify, unpack, read the manifest, run the five steps; refused below the running version |
+| `install` / `uninstall` | service (+ version for install) | add a service the coordinator assigned, through the update path with no previous version; or stop its units, run its `uninstall` hook, unlink and remove its package directories, placed paths and step records, in the order of section 4.7. The daemon never deletes `/var/lib/<service>`; that is the hook's business |
+| `force_rollback` | service, version | a hooked update to a lower version (used by automatic rollback, section 5.4) |
+| `force` | service, version, halt generation | hookless: stop the service's units, switch `current`, link, start the units, report (section 5.6); refused for the service `hostkeeper` |
 | `abort` (also local) | service | stop the running step and end the order `Halt` |
 | `clear_halt` | service, halt generation | lift a halt |
 | `status` (also local) | none | report; also sent with every heartbeat |
@@ -151,7 +152,7 @@ Every table refuses unknown keys. A config that fails to load stops the daemon w
 
 Updating hostkeeper itself is `update` for the service named `hostkeeper` followed by the self-update follow-on (section 6.6).
 
-An order never carries a command, a path, a URL or a script. The release channel comes from the daemon config; the hook command, units, timeouts and files come from the manifest of the package whose digest verified; the order gives a service name and a version that match their grammars, and a digest.
+An order never carries a command, a path, a URL or a script. The release channel comes from the daemon config; the hook command, units, timeouts and files come from the manifest of the package whose digest verified; the order gives a service name and a version that match their grammars; the size and digest of the package come from the release index of that version (section 5.5).
 
 Per service on the host: its package directory `/var/lib/hostkeeper/packages/<service>/` with `current` and `previous` (section 4.7), a step record directory under `/var/lib/updater/state/<service>/`, a hook record directory `/var/lib/updater/hooks/<service>`, and the service's own data in `/var/lib/<service>`, which the daemon never touches.
 
@@ -183,10 +184,10 @@ Linux: a PXE-installed Ubuntu boot image carries the daemon, its unit and `/etc/
 
 ### 4.7 The package
 
-A hostkeeper package is one archive per service version, e.g. `tierstore-1.5.0.tar.zst` (compression is Q10). It is attested rather than signed inside: CI computes its SHA-256 and puts it in the desired state, and the daemon accepts the archive only if the digest matches and an attestation for that digest names a trusted signer (section 5.5). It is **not a tarball unpacked into `/`**: the daemon extracts only inside the version directory and places units and files itself.
+A hostkeeper package is one archive per service version and platform, e.g. `tierstore-1.5.0-linux-x86_64.tar.zst` (compression is Q10; the platforms are in section 5.5). It is attested rather than signed inside: CI builds one archive per platform, attests each, and lists each archive's size and SHA-256 in the version's release index; the daemon accepts the archive of its own platform only if its size and digest match the index entry and its own attestation names a trusted signer (section 5.5). It is **not a tarball unpacked into `/`**: the daemon extracts only inside the version directory and places units and files itself.
 
 ```
-tierstore-1.5.0.tar.zst
+tierstore-1.5.0-linux-x86_64.tar.zst
   manifest.toml     the service's lifecycle config; never named hostkeeper.toml, which is the daemon config
   bin/              the service's files; the hook is a subcommand of one of them
   units/            systemd units (launchd plists on macOS)
@@ -219,6 +220,7 @@ A switch is confirmed when an update ends `Succeeded` (one with `promotion_pendi
 schema         = 1
 name           = "tierstore"
 version        = "1.5.0"
+platform       = "linux-x86_64"   # one of linux-x86_64, linux-arm64, macos-arm64
 min_hostkeeper = "0.4.0"          # oldest daemon that can run this package
 
 [hook]
@@ -248,7 +250,7 @@ path   = "/etc/tierstore/tierstore.conf"
 [params]           # opaque scalars handed to the hook in its params file
 ```
 
-**The manifest is trusted only because the package signature verified.** The daemon reads it after the digest and attestation checks and the archive shape check (section 5.5), never before. Load rules: `name` and `version` equal the order's; every table refuses unknown keys; `prepare = 0` is the unbounded form and valid for `prepare` only, every other step needs a bound from 1 up; `verify_deadline_secs` is at least the verify and rollback bounds together; every `[[files]]` source exists under `files/`; a `min_hostkeeper` above the running daemon is `Deferred`, class environment, `daemon_too_old` (update hostkeeper first). There is no `user`, `capabilities`, write-path or signer field, no release URL and no `min_version`: a hook is root (section 5.3), the signer is the daemon config's, the URL is the channel's and the floor is the coordinator's.
+**The manifest is trusted only because the package signature verified.** The daemon reads it after the digest and attestation checks and the archive shape check (section 5.5), never before. Load rules: `name` and `version` equal the order's, and `platform` is required and equals the daemon's own platform; every table refuses unknown keys; `prepare = 0` is the unbounded form and valid for `prepare` only, every other step needs a bound from 1 up; `verify_deadline_secs` is at least the verify and rollback bounds together; every `[[files]]` source exists under `files/`; a `min_hostkeeper` above the running daemon is `Deferred`, class environment, `daemon_too_old` (update hostkeeper first). There is no `user`, `capabilities`, write-path or signer field, no release URL and no `min_version`: a hook is root (section 5.3), the signer is the daemon config's, the URL is the channel's and the floor is the coordinator's.
 
 **Units, enable and boot.**
 
@@ -311,27 +313,27 @@ The operator does not set the desired version: CI does (Q6).
 | Local root | uid 0 on the host | everything, including editing the daemon config |
 | Trusted signer | the organisation's release workflow named in the daemon config | publish packages (binaries and hooks) that run as root on every host the coordinator assigns them to |
 
-**The daemon checks every order itself,** from its own files, because the coordinator can order anything: the service name and version match their grammars and the digest is well formed; after the package verified, its manifest `name` and `version` equal the order's and `min_hostkeeper` is not above the running daemon; the target is not below the running version unless the verb is `force_rollback` or `force`; no unfinished record of a different package (`busy`); no standing halt; no path conflict (section 4.7). `force` skips exactly two of these: `busy` (it interrupts the running step of that service instead, section 5.6) and the standing halt (the order carries a halt generation greater than the one the host holds, and the daemon lifts its hold on it, section 5.4). Every other check applies to `force` unchanged: the grammars, the digest, `min_hostkeeper`, the shape and path-claim checks, and the refusal of the service `hostkeeper`. It does not know the coordinator's holds, bad marks, `min_version`, canary or the single live update: those are the coordinator's. The package is verified against the digest and the trusted signers regardless (section 5.5).
+**The daemon checks every order itself,** from its own files, because the coordinator can order anything: the service name and version match their grammars; after the package verified against its index entry and attestation, its manifest `name` and `version` equal the order's and its `platform` is the daemon's own and `min_hostkeeper` is not above the running daemon; the target is not below the running version unless the verb is `force_rollback` or `force`; no unfinished record of a different package (`busy`); no standing halt; no path conflict (section 4.7). `force` skips exactly two of these: `busy` (it interrupts the running step of that service instead, section 5.6) and the standing halt (the order carries a halt generation greater than the one the host holds, and the daemon lifts its hold on it, section 5.4). Every other check applies to `force` unchanged: the grammars, the index, size and digest checks, `min_hostkeeper`, the shape and path-claim checks, and the refusal of the service `hostkeeper`. It does not know the coordinator's holds, bad marks, `min_version`, canary or the single live update: those are the coordinator's. The package is verified against its index entry and the trusted signers regardless (section 5.5).
 
 **Threat model, plainly.**
 
 - **A compromised daemon is root on that host.** It is root's own program. Nothing here contains it. It holds the host certificate, so it can also falsify its heartbeat and verdicts, which are the inputs of the one slot, bake and automatic rollback: a lying host can hold the slot or advance bake.
 - **A compromised coordinator, or a stolen operator token, can put any of our signed packages on any host and force-switch versions.** In detail: `install`, `update`, `force_rollback` and `force` of any package a trusted signer signed, for any service name and any version the channel holds, downgrades included, because the floor (`min_version`) and the services per host are the coordinator's own and nothing on the host re-checks them (Q13); `uninstall`, which runs the package's signed `uninstall` hook and deletes its directories and placed paths; `abort` (a denial of service) and `clear_halt`; update of `hostkeeper` itself to any signed version; and, at the coordinator, exclude, halt, hold (a service held where it is is ordered nothing, so a fleet-wide hold keeps the fleet on a vulnerable version; the Fleet and Holds pages and the audit log show every hold) and approving a rogue enrollment (which receives fleet information and can hold the single live-update slot). It **cannot run code that was not signed by a trusted signer, and cannot add a signer, change the release channel or the coordinator address**: those live in the daemon config. Every byte that executes comes from a package whose digest and attestation verified against the daemon config, and no order field can carry a command (a descriptor test, B1). The CA key sits with the coordinator (Q5), so a coordinator compromise includes certificate issuance.
-- **Force, the widest case.** A compromised coordinator or operator token can, in one call, stop and switch any service on every host, cutting running work, past the one-live-update slot and canary, and can switch to a signed version the operator never released (the digest comes from the coordinator's own per-version record, section 5.6, and the release channel holds what signers published). The daemon-side checks of an update apply, so the blast radius is bounded by what signers signed; it cannot run unsigned code or change the trust root.
+- **Force, the widest case.** A compromised coordinator or operator token can, in one call, stop and switch any service on every host, cutting running work, past the one-live-update slot and canary, and can switch to a signed version the operator never released (the package comes from the version's release index and the release channel holds what signers published, section 5.5). The daemon-side checks of an update apply, so the blast radius is bounded by what signers signed; it cannot run unsigned code or change the trust root.
 - **A compromised trusted signer** (the release workflow of any repository the org-level entry covers) can sign a package for any service name, so it is root on every host that is assigned that service, and a root hook can touch any file, so this is root-equivalent on those hosts for every service. For `hostkeeper` itself that is every host. Because the entry is org-level, every release workflow in the organisation counts (Q12). A signer cannot choose which hosts get its package: only the coordinator assigns. A compromised signer together with a compromised coordinator is root on any host.
 - **Holds are an operational control, not a security boundary.** The old local pin could not be overridden remotely; a hold is a coordinator mark, so a compromised coordinator or token sets and removes holds freely, and a host can no longer refuse the coordinator's orders. Local break-glass is root switching `current` by hand (section 5.6).
 - **A stolen CI token** can set the desired version of the services on its allow-list, to a version that has a signed package.
 - **A compromised release channel** can only serve bytes; the digest and attestation checks refuse any that a trusted signer did not sign.
-- **The daemon is the only process that parses network data, and it is root.** That is the coordinator's messages, the package bytes from the channel, the attestation bundle, the archive and its decompressor, and the manifest. What limits it: it listens on no port and connects out; the coordinator's certificate must chain to the CA pinned in the daemon config (section 5.7), so a message needs the CA key or the coordinator; messages are protobuf decoded by Rust code with size caps and a small fixed message set; the archive and manifest are parsed only after the package digest equals the one in the order and the attestation verified. What does not limit it: the release channel and the attestation bundle are not CA-bound (the attestation is parsed before it verifies, the channel's TLS is the web's), nothing sandboxes the daemon, and the TLS, protobuf, attestation and decompression parsers read bytes from parties that may be compromised. A memory-safety bug in one of them would be root on the host. We claim no more than that.
+- **The daemon is the only process that parses network data, and it is root.** That is the coordinator's messages, the package bytes from the channel, the attestation bundle, the archive and its decompressor, and the manifest. What limits it: it listens on no port and connects out; the coordinator's certificate must chain to the CA pinned in the daemon config (section 5.7), so a message needs the CA key or the coordinator; messages are protobuf decoded by Rust code with size caps and a small fixed message set; the archive and manifest are parsed only after the package's size and digest equal its release index entry and its attestation verified; the index itself, small JSON, is read by a strict parser before that, and is not trusted (section 5.5). What does not limit it: the release channel and the attestation bundle are not CA-bound (the attestation is parsed before it verifies, the channel's TLS is the web's), nothing sandboxes the daemon, and the TLS, protobuf, attestation and decompression parsers read bytes from parties that may be compromised. A memory-safety bug in one of them would be root on the host. We claim no more than that.
 
 ### 5.2 One update, end to end
 
 ![Update sequence across CI, coordinator, daemon, hook and service, including release verification, each step as a transient unit, and the drain inside prepare](diagrams/update-sequence.svg)
 
-1. CI sets the desired version of service S to V, with the package digest D that CI computed from the archive it built and attested. The coordinator refuses, as its own check, a V below the service's `min_version`, a V it cannot parse, a V marked bad, and a V it already holds with a different D (a re-publish with different bytes is a new version).
-2. At the next heartbeat of a host that is assigned S and is behind, the rollout gate (section 5.4) checks its rules and, if every one passes, the reply carries the order `update S V D try`. `try` is assigned by the coordinator as one more than the highest try it has seen for that order, so a restarted coordinator never re-issues a lower one.
+1. CI publishes V of service S to the release channel (one attested archive per platform and the index of V, section 5.5), then sets the desired version of S to V. The coordinator refuses, as its own check, a V below the service's `min_version`, a V it cannot parse and a V marked bad.
+2. At the next heartbeat of a host that is assigned S and is behind, the rollout gate (section 5.4) checks its rules and, if every one passes, the reply carries the order `update S V try`. `try` is assigned by the coordinator as one more than the highest try it has seen for that order, so a restarted coordinator never re-issues a lower one.
 3. The daemon runs its own checks (section 5.1).
-4. The daemon fetches the package from the release channel (the order names service, version and digest, never a URL), verifies the digest and the attestation against the trusted signers, unpacks it into the staged read-only version directory `/var/lib/hostkeeper/packages/<S>/<V>/`, writes the seal and reads `manifest.toml` (section 5.5). Fetch and verify have their own deadlines and do not use the dead-man.
+4. The daemon fetches the index of V and the package for its own platform from the release channel (the order names a service and a version, never a URL or a platform), verifies the size and digest against the index entry and the archive's attestation against the trusted signers, unpacks it into the staged read-only version directory `/var/lib/hostkeeper/packages/<S>/<V>/`, writes the seal and reads `manifest.toml` (section 5.5). Fetch and verify have their own deadlines and do not use the dead-man.
 5. The step runner writes the step record, then runs `prepare <version directory>`. The daemon then switches `current` to V and links the package's units and `files/` (section 4.7), and runs `cutover`, `verify` and `cleanup` in order. Each step is a transient unit running as root (section 5.3) and is preceded by a re-check of the version directory against its seal. The hook is the new package's hook, the command the manifest names.
 6. After each step the runner reads the exit code and last stdout line, and `next()` (a pure function, `crates/hostkeeper-hook/src/next.rs`) says what follows. Failure before commit makes the daemon switch `current` back to the previous version and relink (if cutover had begun), then run `rollback`, and report Failed. Deferral does the same for what `prepare` did and reports Deferred.
 7. The verdict goes in the step record and in `last_update` of each heartbeat until the coordinator acknowledges it (section 5.4).
@@ -409,35 +411,61 @@ Holds show on the Fleet and Holds pages and in `Hosts.Get` and `Services.List`.
 
 ![Package fetch, verify and unpack in four steps: download from the release channel, prove it is ours by digest and attestation, unpack safely in one pass with bounds and shape checks, publish by manifest, seal and rename; linking happens later, at cutover](diagrams/release-fetch-verify-stage.svg)
 
-Designed; kbf has the logic inside its own installer, and the seal reader is built (`crates/hostkeeper-steps/src/artifact.rs`, `Staged::check`, test `a_release_that_cannot_be_read_is_tried_again_and_never_halts`). The fetch step does not exist yet (B5).
+Designed; kbf has the logic inside its own installer, and the seal reader is built (`crates/hostkeeper-steps/src/artifact.rs`, `Staged::check`, test `a_release_that_cannot_be_read_is_tried_again_and_never_halts`). The release index, the platforms and the channel paths are built (`crates/hostkeeper-config/src/index.rs` and `platform.rs`, tests in `crates/hostkeeper-config/tests/index.rs`); the fetch step does not exist yet (B5).
 
-The order carries only a service, a version and the digest D that CI set with the version, so the daemon decides everything else. It does four things, in this order:
+**One package per operating system and CPU family.** A version of a service is built once for each platform it supports, and each build is its own package. There are exactly three platforms: `linux-x86_64`, `linux-arm64` and `macos-arm64`. The set is closed in the code. The daemon knows its own platform from the target it was compiled for, never from a config file or from asking the machine at run time.
 
-1. **Download** the package from the release channel, at `<release_channel>/<service>/<service>-<version>.tar.zst`. The coordinator names a version and a digest, never a place.
-2. **Prove it is ours.** The SHA-256 of the bytes equals D, and an attestation for D names a trusted signer. The channel is not trusted; only bytes a trusted signer built go further.
+**The release channel.** For service S at version V the channel holds:
+
+```
+{release_channel}/S/V/index.json
+{release_channel}/S/V/S-V-{platform}.tar.zst                 one per platform built
+{release_channel}/S/V/S-V-{platform}.tar.zst.sigstore.json   that archive's own attestation bundle
+```
+
+The index lists the packages of that version, one entry per platform, with each file's size and SHA-256:
+
+```json
+{"packages":[{"bytes":1048576,"file":"tierstore-1.5.0-linux-x86_64.tar.zst","platform":"linux-x86_64","sha256":"<64 hex digits>"}],"schema":1,"service":"tierstore","version":"1.5.0"}
+```
+
+It is canonical JSON: keys sorted, packages sorted by platform, each platform at most once, at least one entry. The daemon refuses an index with a key it does not know, a schema other than 1, another service or version than it asked for, no package, a platform outside the three, a platform listed twice or out of order, a `file` other than `S-V-{platform}.tar.zst`, or a `sha256` that is not 64 hex digits.
+
+**The index is a lookup, not a trust anchor.** It is not signed. It says which file to fetch and what size and digest that file must have, nothing more. What the daemon trusts is the archive's own attestation, checked against `[trusted_signers]` as before, and then the archive's own manifest, which must name the service, version and platform the daemon asked for. So a tampered index can at most cause a refusal: it can never get anything unsigned installed, nor a package of another service, version or platform.
+
+**Instruction-set variants are the build system's business.** A package may carry several builds for one CPU family, for example glibc-hwcaps directories, per-instruction-set shared objects, or a launcher that picks a binary at start. Choosing among them happens inside the package, by the dynamic loader or by the package's own launcher. hostkeeper picks only the platform; it never inspects or selects variants within a package.
+
+The order names only a service and a version. It names no platform, URL or place, and the coordinator assigns no platform anywhere: not in assignments, the API, the CLI or the UI. (The order message still has a `package_digest` field on the wire; the daemon does not take the digest it checks from it.) The daemon does four things, in this order:
+
+1. **Download** `S/V/index.json` from the release channel, take the entry for its own platform, and download that entry's archive and its attestation bundle.
+2. **Prove it is ours.** The byte count and SHA-256 of the archive equal the index entry, and the archive's attestation names a trusted signer. The channel is not trusted, and neither is the index; only bytes a trusted signer built go further.
 3. **Unpack it safely** into a staging directory, in one streaming pass. The decompressor and the archive parser are the first code in a root process to read untrusted bytes, so they run only after step 2 and under hard bounds.
-4. **Publish it.** Read the manifest, seal the tree, rename it into `packages/<service>/<version>/`. A version directory is whole or absent. Nothing is linked and `current` is untouched; linking happens at cutover (section 5.2), or in a force (section 5.6).
+4. **Publish it.** Read the manifest, whose `name`, `version` and `platform` must be the ones asked for, seal the tree, and rename it into `packages/<service>/<version>/`. A version directory is whole or absent. Nothing is linked and `current` is untouched; linking happens at cutover (section 5.2), or in a force (section 5.6).
 
 The bounds and refusals. A check that fails stops everything after it.
 
 | Step | Check | Bound or rule | If it fails |
 |---|---|---|---|
-| 1 Download | Fetch | The daemon fetches into a staging file, counting bytes. Connect timeout 30 s; total `fetch_timeout_secs`. The config is refused at load if `max_package_bytes` cannot be read in that time at 256 KiB/s | `Deferred`, `environment`, `fetch_failed` |
-| 2 Prove | Size and digest | At most `max_package_bytes`; the SHA-256 and byte count of the bytes read equal D | `Failed`, `release`, `digest_mismatch`; nothing is unpacked |
-| 2 Prove | Attestation | Within `attestation_timeout_secs`; verified offline by a pinned verifier: the attested repository belongs to the organisation, the signing workflow is the named one, hosted runner, allowed ref, source commit equal to the package's; the provenance lists the archive's SHA-256 | Verifier unreachable or timed out: `Deferred`, `environment`, `attestation_unavailable`. Verification failed: `Failed`, `release` |
+| 1 Download | Fetch | The daemon fetches the index, the archive and the bundle into staging files, counting bytes. Connect timeout 30 s; total `fetch_timeout_secs`. The config is refused at load if `max_package_bytes` cannot be read in that time at 256 KiB/s | `Deferred`, `environment`, `fetch_failed` |
+| 1 Download | Index | Parsed by the rules above, for the service and version of the order | `Failed`, `release`, `index_invalid` |
+| 1 Download | Platform | The index has an entry for the daemon's own platform | `Failed`, `release`, `no_package_for_platform` |
+| 2 Prove | Size and digest | At most `max_package_bytes`; the byte count and the SHA-256 of the bytes read equal the index entry's `bytes` and `sha256` | `Failed`, `release`, `package_digest_mismatch`; nothing is unpacked |
+| 2 Prove | Attestation | The archive's own bundle, within `attestation_timeout_secs`; verified offline by a pinned verifier: the attested repository belongs to the organisation, the signing workflow is the named one, hosted runner, allowed ref, source commit equal to the package's; the provenance lists the archive's SHA-256 | Verifier unreachable or timed out: `Deferred`, `environment`, `attestation_unavailable`. Verification failed: `Failed`, `release` |
 | 3 Unpack | Unpack | One pass that also hashes, into `packages/<service>/.stage-*`, root-owned, writing only inside it. The two checks below run on each entry as it streams, so a bound is enforced while unpacking. Tar uid, gid and mtime are ignored; the mode is normalised to 0555 when any execute bit is set and 0444 otherwise. The tree hash covers sorted names, kind, normalised mode, size and bytes. Compression: Q10 | `Deferred`, `environment`, `no_space` on a full disk (the staging directory is removed) |
 | 3 Unpack | Archive bounds | Decompressed bytes at most `max_unpacked_bytes`; entries at most `max_entries`; a name at most 255 bytes; depth at most 16; `manifest.toml` at most 64 KiB, with a nesting limit in the TOML parser | `Failed`, `release`, `bad_archive` |
 | 3 Unpack | Archive shape | Top-level entries only `manifest.toml`, `bin/`, `units/`, `files/`; regular files and directories only; no links, devices, absolute or `..` paths; no duplicate name and no two names equal after case folding; no extended attributes or ACLs; no setuid, setgid or sticky bit (as `artifact.rs` refuses them); nothing after the archive end; on macOS no quarantine attribute and a valid code signature on the binaries | `Failed`, `release`, `bad_archive` |
-| 4 Publish | Manifest | Load rules of section 4.7, with `name` and `version` equal to the order's; the path-claim check against `placed.json` | `Failed`, `release`, `manifest_mismatch` or `path_conflict` |
+| 4 Publish | Manifest | Load rules of section 4.7, with `name`, `version` and `platform` equal to the ones asked for; the path-claim check against `placed.json` | `Failed`, `release`, `manifest_mismatch` or `path_conflict` |
 | 4 Publish | Publish | Mode 0555, rename into the version directory, write `<version>.seal {tree_digest, package_digest}` root-owned. Only now does the version exist | None: a crash before the rename leaves no version directory |
 
 `Deferred` means nothing changed on the host and the order is retried later. `Failed`, class `release`, means this package is bad. The *seal* is the digest of the unpacked tree (glossary).
 
-No privilege-dropped helper does the fetch: it would be a filter between the daemon and the code it runs, which this design does not have (section 5.3), and the bytes are not parsed until step 3.
+No privilege-dropped helper does the fetch: it would be a filter between the daemon and the code it runs, which this design does not have (section 5.3), and the bytes are not parsed until step 3, except the index, which is small JSON read by a strict parser.
 
 Before every later step the daemon recomputes the digest of the version directory and compares it with the seal written at publish. If the tree changed, the service halts (`artifact_changed`). If the tree cannot be read right now, the step is retried and never halts. Orphan `.stage-*` directories are removed at daemon start and before each new fetch of the same service.
 
 Nothing on the host refuses an older attested package: the downgrade bound is the coordinator's `min_version` (Q13). Residual trust: the trusted signers' repositories are the trust root (section 5.1).
+
+**Follow-up for the coordinator, not required for v1.** Before a rollout reaches a host, the coordinator may read the version's index and skip a host whose platform has no entry, with the same reason, `no_package_for_platform`.
 
 ### 5.6 Force: the fleet-wide fix
 
@@ -450,7 +478,6 @@ A broken version must be fixable on every host with one call, with no hook, beca
 **What the coordinator does.**
 
 - Takes the service, the target version, a reason and the targets: the whole fleet, a role, or a list of hosts.
-- Fills the order's digest D from the one CI registered for that (service, version; section 10), and refuses the call if it holds none.
 - Refuses the service `hostkeeper` (self-update has its own path, section 6.6) and any version below `min_version` (lowering that is a separate, audit-logged change).
 - Records the force.
 - Lifts the bad mark of the target.
@@ -465,7 +492,7 @@ A broken version must be fixable on every host with one call, with no hook, beca
 
 **What each host does.** The verb is `force`; no hook runs. The daemon-side checks of section 5.1 apply.
 
-*Before anything changes.* Failure in steps 1 to 3 (`digest_mismatch`, `path_conflict` and the like) changes nothing on the host and is reported.
+*Before anything changes.* Failure in steps 1 to 3 (`package_digest_mismatch`, `path_conflict` and the like) changes nothing on the host and is reported.
 
 1. Fetch, verify and unpack the target version if it is not on the host (section 5.5).
 2. Read its manifest.
@@ -518,7 +545,7 @@ Designed. The boot image or package carries the daemon and `/etc/hostkeeper/host
 2. **Claims are not proof.** They help an operator recognise a machine. They authorise nothing alone.
 3. **Approval.** The operator approves a request in the UI or CLI, naming host id, role, optional services, and the SHA-256 of the pending CSR's public key. An approval for a different key is refused; host ids are unique (re-enrollment uses `--replace`), checked under the store lock that records the approval. A match against an inventory record (below) fills in the host id and role the operator sees; it approves nothing. On a Mac the one automatic path is the MDM nonce (section 5.9).
 4. **Certificate.** The daemon polls with a signed nonce and receives a 7-day certificate, its host id and the CA bundle. Issuance is idempotent per request id. The daemon renews at half life, signing with the key it holds. A host offline past expiry posts a new request marked `renewal_of <host id>` with the same key; one approval returns it. A cloned disk is seen as two live daemons on one host id with different machine ids: the host is `duplicate`, ordered nothing, with an alert.
-5. **Assignment.** The coordinator assigns services to the host or its role (section 4.3); this is a coordinator change, not a host change. For each assigned service not installed, the rollout gate emits `install S V D` under the same rules as an update.
+5. **Assignment.** The coordinator assigns services to the host or its role (section 4.3); this is a coordinator change, not a host change. For each assigned service not installed, the rollout gate emits `install S V` under the same rules as an update.
 6. **Install.** The same path as an update with no `updater.previous_*` keys and no previous version to switch back to. A failed first install rolls back or declines with `no_previous_release`.
 7. **Remove.** A retiring host with an update in flight finishes or aborts that step, frees its slot when the record is final (or by `Exclude --abandon` if the host is gone), and is sent no `uninstall`: retiring revokes the host and leaves its services as they are. `uninstall S` is a separate order that runs the additive `uninstall` hook step if the hook has one (otherwise `uninstall_unsupported`), then removes the package directories, placed paths and `state/<service>` in the order of section 4.7; the daemon deletes no data directory.
 
@@ -679,7 +706,7 @@ Reconcile on every heartbeat: advance `last_good`, mark bad, plan automatic roll
 | Newer-schema step record | read, reported, never rewritten | `RecordNewer` |
 | Corrupt step record | the run fails; the operator runs `clear_record` on the host's admin socket (section 4.1, B20) | `RecordError::Corrupt` |
 | First start of a daemon not yet enrolled | logs once, calls nothing, retries every few seconds, finishes a half-written enrollment under the store lock | designed from kbf `enrolled.rs` |
-| Package whose manifest `name` or `version` differs from the order's | `manifest_mismatch`, nothing is linked | daemon (to build, B5) |
+| Package whose manifest `name`, `version` or `platform` differs from the one asked for | `manifest_mismatch`, nothing is linked | `a_manifest_for_another_name_version_or_platform_is_manifest_mismatch` (unpack), `a_manifest_for_another_platform_is_manifest_mismatch` (loader) |
 | Order carrying a version that is not a version | refused by grammar | `crates/hostkeeper-wire/src/version.rs` (open PR #5) |
 | Coordinator restarted | quiet 30 seconds, fleet rebuilt from heartbeats | `crates/hostkeeper-coordinator/src/fleet.rs` (open PR #5) |
 | Hold set while an update runs | the update finishes; `abort` stops it; the hold applies from the next order | `a_hold_set_during_an_update_lets_it_finish` **(to build, B7)** |
@@ -730,7 +757,7 @@ The daemon keeps running whatever step it is in. The coordinator declares the ho
 
 **Locks and resume.** Lock order everywhere is the service lock, then the step lock. A force takes only the service lock (step 7); pruning takes only the service lock; `placed.json` and `daemon-reload` have their own short lock. The runner checks the `forced` flag after every step and before launching any step. Every sub-step of a force is safe to run twice, so a crash resumes the force from the top of its record (section 6.5).
 
-Tests are the Force rows of section 8.10 and, **(to build)**: `force_interrupts_an_unbounded_prepare_and_the_runner_launches_no_rollback`, `force_does_not_wait_for_another_services_step`, `force_is_refused_for_hostkeeper_and_without_a_registered_digest`, `force_over_a_standing_halt_lifts_the_halt`, `force_with_unit_that_fails_to_start_reports_failed_and_a_second_force_recovers`, `force_reaches_every_target_in_one_heartbeat_round_and_passes_the_slot`, `a_forced_host_that_crashes_resumes_the_force`, `the_runner_checks_the_forced_flag_before_launching_a_step` (B7, B28); for holds, `a_held_pair_is_never_ordered`, `force_skips_a_held_pair_unless_include_held_and_then_removes_no_hold`, `a_force_with_include_held_leaves_a_role_hold_in_place`, `a_hold_on_a_role_covers_a_host_that_joins_later`, `a_hold_survives_a_coordinator_restart`, `a_held_pair_is_left_out_of_canary_bake_and_converged` (B7); for pruning, `a_confirmed_switch_leaves_exactly_current_and_previous`, `a_switch_after_a_rollback_keeps_the_version_rolled_back_from`, `a_prune_racing_a_force_never_removes_the_target` (B13).
+Tests are the Force rows of section 8.10 and, **(to build)**: `force_interrupts_an_unbounded_prepare_and_the_runner_launches_no_rollback`, `force_does_not_wait_for_another_services_step`, `force_is_refused_for_hostkeeper`, `force_over_a_standing_halt_lifts_the_halt`, `force_with_unit_that_fails_to_start_reports_failed_and_a_second_force_recovers`, `force_reaches_every_target_in_one_heartbeat_round_and_passes_the_slot`, `a_forced_host_that_crashes_resumes_the_force`, `the_runner_checks_the_forced_flag_before_launching_a_step` (B7, B28); for holds, `a_held_pair_is_never_ordered`, `force_skips_a_held_pair_unless_include_held_and_then_removes_no_hold`, `a_force_with_include_held_leaves_a_role_hold_in_place`, `a_hold_on_a_role_covers_a_host_that_joins_later`, `a_hold_survives_a_coordinator_restart`, `a_held_pair_is_left_out_of_canary_bake_and_converged` (B7); for pruning, `a_confirmed_switch_leaves_exactly_current_and_previous`, `a_switch_after_a_rollback_keeps_the_version_rolled_back_from`, `a_prune_racing_a_force_never_removes_the_target` (B13).
 
 ### 8.8 Enrollment and CI replay
 
@@ -745,7 +772,9 @@ The hook drains inside `prepare`; the updater does not cut work at a deadline. T
 | Case | Decision | Test |
 |---|---|---|
 | Version directory changed after verification | re-seal before every step; mismatch halts `artifact_changed` | runner tests with a mutated tree |
-| Channel serves other bytes for a version | `digest_mismatch`, nothing staged | `a_changed_artifact_for_a_version_is_refused` **(to build, B5)** |
+| Channel serves other bytes for a version | `package_digest_mismatch` against the index entry, nothing staged | `a_changed_artifact_for_a_version_is_refused` **(to build, B5)** |
+| Index missing the host's platform | `no_package_for_platform`, nothing fetched past the index | `entry_for_finds_a_listed_platform_and_refuses_another` (the lookup); the fetch step **(to build, B5)** |
+| Index malformed, of another schema, service or version, or with a platform twice | `index_invalid`, nothing fetched past the index | one test per refusal in `crates/hostkeeper-config/tests/index.rs`; the fetch step **(to build, B5)** |
 | Fetch or attestation hangs | per-stage deadlines; `Deferred`, slot freed | `a_stalled_fetch_defers_and_frees_the_slot` **(to build, B5)** |
 | `set-desired`, `Force` or an order below the coordinator's `min_version` | refused at the coordinator; the host has no floor of its own (Q13) | `an_order_below_min_version_is_never_issued` **(to build, B7)** |
 | Two packages claim one placed path, or a path is occupied by an unlisted file | refused before any switch: `Failed`, class release, `path_conflict`; the file is never overwritten | `a_second_package_claiming_a_placed_path_is_refused_before_any_switch` **(to build, B27)** |
@@ -793,7 +822,7 @@ The hook drains inside `prepare`; the updater does not cut work at a deadline. T
 | Hook record | `/var/lib/updater/hooks/<service>` | hook | hook | created by the daemon |
 | Held halt generation | beside the step records | daemon | daemon | persisted so a restart cannot lift a halt wrongly |
 | Host certificate and key | `/etc/updater/pki/gen-<n>/` with `current` link | daemon (renew) | daemon | key generated on host and never leaves |
-| Desired state | coordinator `--state-file` | coordinator (CI writes through it) | coordinator | version and release digest per service, and the digest of every version CI has set (a Force needs one) |
+| Desired state | coordinator `--state-file` | coordinator (CI writes through it) | coordinator | desired version per service, and every version CI has set |
 | Rollout file | `--rollout-file` | operator | coordinator | services, roles that run each, `version_scheme`, `min_version`, canary, bake and backoff settings |
 | Operator tokens and audit | `--tokens-file`, `<ops-file>.audit` | operator (tokens); coordinator (audit, append-only) | coordinator | one named token per person |
 | Ops file, halts file | `--ops-file`, `<ops-file>.halts` | coordinator | coordinator | exclusions, labels, holds, bad marks, `last_good`, per-host service additions, force records, host inventory records (`inventory`, written only when there is one, so a file with none keeps the shape the release before reads); strict reader refuses unknown keys and newer schema |
@@ -839,7 +868,7 @@ Today: the hook, rights and steps crates are on `main`; the protobuf crate and t
 | B2 | **Replace the declaration with the daemon config and the manifest:** two loaders (`hostkeeper.toml`, `manifest.toml`) keeping the root-owned-file check and the name grammar; accept `prepare = 0` (kbf `main` already launches it with `RuntimeMaxSec=infinity`; test `unbounded_prepare` in kbf's `update-rights`; the import re-checks anything else kbf gained after the imported tag); **delete** the per-service declaration loader (no `services.toml` loader is built), the widening check, the gate, the approval store, the `approve` command, the account and reserved-path checks | 4.1, 4.7, 5.3 | none | M |
 | B3 | Production `StepLauncher`: transient unit with `RuntimeMaxSec` only (no user, capabilities or sandbox), `infinity` for unbounded `prepare`; bounded output capture | 5.3, 6.2, 8.10 | B2 | M |
 | B4 | **The daemon program:** one root unit that merges kbf's agent and root part; admin socket; the compiled verbs; per-service and step locks; try semantics; boot pass; watchers | 4.1, 5.2, 6.5, 8.1 to 8.3 | B1, B3 | L |
-| B5 | Package fetch, verify, unpack (one-pass hash) with the archive bounds and normalisation of section 5.5 (after Q10 is decided), manifest read, seal; `no_space`; generalise the single-binary `Layout` to directories | 4.7, 5.5, 8.10 | B4 | L |
+| B5 | Package fetch through the release index of the daemon's platform, verify, unpack (one-pass hash) with the archive bounds and normalisation of section 5.5 (after Q10 is decided), manifest read, seal; `no_space`; generalise the single-binary `Layout` to directories | 4.7, 5.5, 8.10 | B4 | L |
 | B6 | Merge the coordinator import (PR #5); rollout file as data (with `min_version` and roles); legacy-service flag; named operator tokens file and append-only audit; one private listener; cut `waiting_for_role`, `waiting_for_service`, `after`, `max_updating` and `min_up`; rename `decide()` rules to the rollout gate's list | 4.3, 5.4 | none | M |
 | B7 | Coordinator: file lock at start; `Hosts.Exclude --abandon`, `Releases.{MarkBad,Halt}`, `Hosts.Abort`; `Services.{Hold,Unhold}` with the `held` rule in the gate and holds in the ops file (section 5.4); `Releases.Force` with targets and `include_held` that passes the single live update, canary and bake (coordinator side of B28); desired state carries the package digest; `set-desired` refusals; persisted `jti`; unwritten-halt rule; replayed-verdict counting, and verdict acks over the verdicts file; canary rule; updater-halt lifted by CI; `quiet` flag floor; bake and slot tests | 4.8, 5.2, 5.4, 8.1, 8.2, 8.4, 8.7, 8.8, 8.9 | B6 | L |
 | B8 | Service-state observer (systemd, launchd ports; health probe; bake from observation) | 5.8, 8.5 | B4 | M |
@@ -927,7 +956,7 @@ Recommendation: (a) until the build and management networks are trusted, or a ha
 | Fix for a broken version | Hookless fleet-wide `Force` from the coordinator; break-glass access on the host is not the plan | 5.6 |
 | Is MDM part of hostkeeper? | Yes; own document; profile identifier renamed before any Mac enrolls | 5.9 |
 | Is hostkeeper built in kbf first or here? | Here; kbf is frozen against hostkeeper-like work | 3.1, 12.3 |
-| Abort, force, `jti`, halt-write failure, digest source, version order | `abort` exists; `Force` passes the slot; `jti` persisted; refuse to start on an unfinished halt write; CI supplies the digest; `version_scheme` | 4.3, 5.2, 5.4, 6.3, 8.2 |
+| Abort, force, `jti`, halt-write failure, digest source, version order | `abort` exists; `Force` passes the slot; `jti` persisted; refuse to start on an unfinished halt write; the release index supplies the digest (section 5.5); `version_scheme` | 4.3, 5.2, 5.4, 6.3, 8.2 |
 
 ## 14. Glossary
 
@@ -948,10 +977,12 @@ Recommendation: (a) until the build and management networks are trusted, or a ha
 - **Live update:** an update from the order to the end of its bake.
 - **`min_version`:** the lowest version of a service the coordinator will order, set in the coordinator; the only downgrade bound, and not checked on the host.
 - **Order:** a verb plus typed arguments, sent by the coordinator in a heartbeat reply.
-- **Package:** the attested archive of one service version (its digest is the one CI registered, and an attestation for that digest names a trusted signer): `manifest.toml`, `bin/`, `units/`, optional `files/`. Not a tarball unpacked into `/`.
+- **Package:** the attested archive of one service version for one platform (its size and digest are those of its release index entry, and its own attestation names a trusted signer): `manifest.toml`, `bin/`, `units/`, optional `files/`. Not a tarball unpacked into `/`.
 - **Placed path:** a system path (a unit, or a `files/` entry) that the daemon links from `current`; `placed.json` records which package owns it, and a second claim is refused.
+- **Platform:** one operating system and CPU family a package is built for: `linux-x86_64`, `linux-arm64` or `macos-arm64`. The daemon's own is the target it was compiled for.
 - **Promotion pending:** the update succeeded but the hook cannot yet call it final; the coordinator holds the slot.
-- **Release channel:** where packages are served (the daemon config's `release_channel`).
+- **Release channel:** where packages are served (the daemon config's `release_channel`), at `S/V/index.json`, `S/V/S-V-{platform}.tar.zst` and its `.sigstore.json` bundle (section 5.5).
+- **Release index:** `index.json` of one service version in the release channel: per platform, the package file, its size and its SHA-256. A lookup, not signed and not trusted.
 - **Rollout gate:** the coordinator's `decide()`: halts, excluded hosts, holds, bad versions, the one live update, canary then bake. Order construction (`install` or `update`, up to date, backoff) is outside it.
 - **Role:** a label on a host (1 to 32 bytes, `a-z0-9-`) used by service assignment and Force targets.
 - **Quiet start:** the time after coordinator start in which nothing is ordered: 30 seconds by default, never below two heartbeat intervals.

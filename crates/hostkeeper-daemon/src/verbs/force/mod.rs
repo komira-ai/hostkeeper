@@ -301,6 +301,7 @@ fn read_manifest(
     let expected = Expected {
         name: service.clone(),
         version: version.clone(),
+        platform: hostkeeper_config::platform::Platform::current(),
     };
     Manifest::load(dir, &expected, &ctx.own_version)
         .map_err(|error| failed_before(error.class(), Refusal::from(&error).token()))

@@ -229,6 +229,7 @@ fn current_release(ctx: &Ctx, service: &ServiceName, version: &Version) -> Resul
     let expected = Expected {
         name: service.clone(),
         version: version.clone(),
+        platform: hostkeeper_config::platform::Platform::current(),
     };
     let manifest = Manifest::load(&dir, &expected, &ctx.own_version).map_err(text)?;
     let seal = read_seal(&layout.seal_path(version.as_str())).map_err(text)?;

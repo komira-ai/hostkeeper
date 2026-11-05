@@ -10,6 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::platform::Platform;
 use hostkeeper_placed::testing::{Event, FakeUnitControl, FaultFs, FsWrite, Log, UnitCall};
 use hostkeeper_placed::{Fs, PlacedRecord, Placer, Roots, Store};
 
@@ -93,8 +94,9 @@ impl Spec {
 
 /// The text of the manifest of `service` `version` with `spec`'s run units and files.
 pub fn manifest_text(service: &str, version: &str, spec: &Spec) -> String {
+    let platform = Platform::current();
     let mut text = format!(
-        "schema = 1\nname = \"{service}\"\nversion = \"{version}\"\nmin_hostkeeper = \"0.4.0\"\n\n\
+        "schema = 1\nname = \"{service}\"\nversion = \"{version}\"\nplatform = \"{platform}\"\nmin_hostkeeper = \"0.4.0\"\n\n\
          [hook]\ncommand = [\"bin/{service}\", \"update-hook\"]\nverify_deadline_secs = 1600\n\
          [hook.timeout_secs]\nprepare = 0\ncutover = 300\nverify = 1000\nrollback = 600\n\
          cleanup = 1300\n"
@@ -203,6 +205,7 @@ impl World {
         let expected = Expected {
             name: service(service_name),
             version: version(version_text),
+            platform: Platform::current(),
         };
         Manifest::load(
             &self.version_dir(service_name, version_text),

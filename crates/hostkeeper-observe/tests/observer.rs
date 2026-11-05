@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::platform::Platform;
 use hostkeeper_observe::fake::{
     FakeExpectedExe, FakeHealthClient, FakeProcessProbe, FakeServiceManager,
 };
@@ -825,6 +826,7 @@ fn package(dir: &Path, manifest: &str) {
 const MANIFEST_HEAD: &str = r#"schema         = 1
 name           = "tierstore"
 version        = "1.5.0"
+platform       = "linux-x86_64"
 min_hostkeeper = "0.4.0"
 
 [hook]
@@ -842,6 +844,7 @@ fn load(dir: &Path) -> Manifest {
     let expected = Expected {
         name: ServiceName::new("tierstore").expect("a name"),
         version: Version::new("1.5.0").expect("a version"),
+        platform: Platform::LinuxX86_64,
     };
     let running = HostkeeperVersion {
         major: 0,
