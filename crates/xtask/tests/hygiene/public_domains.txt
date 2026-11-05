@@ -8,8 +8,8 @@ github.com
 crates.io
 
 # What a package attestation names (hostkeeper-package): the OIDC issuer of GitHub Actions
-# (token.actions.githubusercontent.com), the SLSA provenance predicate type and the in-toto
-# statement type.
+# (token.actions.githubusercontent.com), which the coordinator's OIDC allow-list tests name too,
+# the SLSA provenance predicate type and the in-toto statement type.
 githubusercontent.com
 slsa.dev
 in-toto.io
@@ -35,6 +35,7 @@ yaml.org
 # a word the IANA list delegates as a top-level domain (`new`, `download`, `group`, `name`).
 # They are names, not hosts; each is an exact entry (`=`).
 =current.new
+=desired.json.new
 =approved.new
 =tool.download
 =hook.group

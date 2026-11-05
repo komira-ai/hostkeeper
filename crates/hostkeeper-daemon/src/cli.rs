@@ -8,6 +8,9 @@
 //! Exit status: [`EXIT_FAILED`] when the daemon could not start or serve, `2` for a usage error
 //! (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not load, [`EXIT_LOCKED`]
 //! when another daemon holds the state directory.
+//!
+//! `--version` prints `hostkeeper X.Y.Z+<12 hex digits of the commit>` for a release build and
+//! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -45,7 +48,7 @@ pub const DEADMAN_POLL_SECS: u64 = 1;
 
 /// hostkeeper: keeps a host's services on the versions its coordinator orders.
 #[derive(Debug, Parser)]
-#[command(name = "hostkeeper", version)]
+#[command(name = "hostkeeper", version = crate::stamp::version())]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

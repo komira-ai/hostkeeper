@@ -1,0 +1,31 @@
+{
+ "from": "kbf-coordinator/src/http_tests.rs::a_v0_0_18_updater_and_deploy_farm_get_the_bytes_they_always_got (GOLDEN_DESIRED, GOLDEN_BEAT and the expected bytes are the test's literals)",
+ "services_fixture": "kbf.services.toml",
+ "steps": [
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"min_up\":{\"frontend\":1,\"storage\":2},\"version\":\"0.0.19+g123456abcdef-1\"}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"0.0.19+g123456abcdef-1\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":2,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"0.0.18+gabcdefabcdef-2\",\"health\":\"healthy\",\"last_update\":{\"target\":\"0.0.18+gabcdefabcdef-2\",\"outcome\":\"succeeded\"},\"updating\":null}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"0.0.19+g123456abcdef-1\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"0.0.19+g123456abcdef-1\",\"health\":\"healthy\",\"last_update\":{\"target\":\"0.0.19+g123456abcdef-1\",\"outcome\":\"succeeded\"},\"updating\":null}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  }
+ ]
+}

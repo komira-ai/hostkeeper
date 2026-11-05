@@ -1,0 +1,34 @@
+{
+ "from": "kbf-coordinator/src/http_tests/features.rs::a_heartbeat_with_every_new_fact_is_accepted_and_ordered_as_without_them",
+ "services_fixture": "kbf.services.toml",
+ "services_text": "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n",
+ "oidc_services": [
+  "kbf",
+  "other"
+ ],
+ "steps": [
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":1,\"frontend\":1}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 1000,
+   "call": "desired",
+   "body": "{\"service\":\"other\",\"version\":\"3.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"3.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"step\":{\"name\":\"verify\",\"attempt\":2},\"commit\":\"committed\",\"step_secs\":{\"cutover\":41},\"promotion_pending\":false,\"deferred\":{\"target\":\"1.2\",\"reason\":\"drain_bound\",\"retry_after_secs\":300}}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  }
+ ]
+}
