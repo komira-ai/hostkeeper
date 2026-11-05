@@ -12,7 +12,9 @@ use crate::release::fakes::{FakeHistory, nth_commit, scratch, time_of};
 use crate::release::file_sha256;
 use crate::release::ports::PortError;
 
-const BINARY: &[u8] = b"\x7fELF the hostkeeper binary";
+/// The packaged binary. Not an ELF file: a test unpacks it, executable, into a scratch
+/// directory under `target/`, where the coverage tool loads every ELF executable it finds.
+const BINARY: &[u8] = b"the hostkeeper binary";
 const UNIT: &str = include_str!("../../../tests/release/hostkeeper.service");
 const NAMES: [&str; 5] = [
     "bin/",
