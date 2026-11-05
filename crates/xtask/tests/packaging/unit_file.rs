@@ -5,8 +5,8 @@ use crate::unit::{self, Unit};
 use crate::{UNIT, altered, read, refuses};
 
 /// The daemon's command line: the `daemon` verb with each path of design sections 4.1 and 10
-/// spelled out as a flag, and the flag that makes it report ready to systemd. The daemon is not
-/// in this workspace yet; the test that parses this line with its own flag parser comes with it.
+/// spelled out as a flag, and the flag that makes it report ready to systemd. `daemon_flags.rs`
+/// parses this line with the binary's own flag parser.
 const DAEMON_COMMAND: [&str; 11] = [
     "/usr/bin/hostkeeper",
     "daemon",

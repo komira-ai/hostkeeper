@@ -3,18 +3,24 @@
 //! [`startup`] does, in this order: load the daemon config (a config that fails to load stops the
 //! daemon with an error naming the key, and nothing on the host changes: no directory, no lock
 //! file, no socket); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a
-//! second daemon on the same state directory gets [`StartError::Locked`]); [`settle_self_update`];
-//! [`before_records`] and [`boot_pass`]; bind the admin socket, removing a stale socket only now
-//! that the lock is held; [`after_boot`]. [`serve`] then serves the admin socket, until the
-//! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
+//! second daemon on the same state directory gets [`StartError::Locked`]); remove the
+//! registration socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is
+//! touched; [`settle_self_update`]; [`before_records`] and [`boot_pass`]; bind the admin socket,
+//! removing a stale socket only now that the lock is held; [`after_boot`]. [`serve`] then serves
+//! the admin socket, until the daemon is asked to exit for its own update
+//! ([`crate::selfupdate::Restart`]).
 //!
 //! [`settle_self_update`] settles the update of hostkeeper itself that waits for this start
 //! (design section 6.6), before any step record is read by the boot pass: the new binary
 //! confirms it, any other records it failed.
 //!
 //! [`before_records`], [`boot_pass`] and [`after_boot`] are the boot work of design section 6.5.
-//! [`before_records`] is the place of the placed links (finished or undone, and compared with
-//! `current`), which a later change fills. [`boot_pass`] reads the step records against the boot
+//! [`before_records`] removes what a crashed package fetch or unpack left, for every service
+//! directory of the packages directory, and then reconciles the placed links: each switch a step
+//! record says was begun is finished or undone ([`crate::boot::switch_intent`]), and every link
+//! is compared with `current` ([`hostkeeper_placed::Placer::reconcile`]). A sweep or a
+//! reconciliation that fails is an alert and does not stop the start; what it could not do is in
+//! [`BootReport::reconciled`]. [`boot_pass`] reads the step records against the boot
 //! id, runs each unfinished update to its verdict and restarts the watchers
 //! ([`crate::boot`]). [`after_boot`] runs the manifest's `boot` steps, then sends the readiness
 //! notice. The admin socket is bound before [`after_boot`] but served only by [`serve`], after
@@ -29,16 +35,22 @@ use std::sync::Arc;
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
+use hostkeeper_observe::unlink_stale_registration_socket;
+use hostkeeper_placed::BootView;
 
 use crate::admin;
-use crate::boot::{BootError, BootReport, Stage};
+use crate::boot::{ALERT_START, BootError, BootReport, Stage, boot_changed};
 use crate::executor::{Daemon, Dirs, Ports};
 use crate::files;
+use crate::installed;
 use crate::notify::{NoNotifier, ReadyNotifier};
 use crate::socket;
 
 /// The lock file in the state directory.
 pub const LOCK_FILE: &str = "lock";
+
+/// The directory of kbf's agent under the run directory the admin socket's directory is in.
+const KBF_RUN_DIR: &str = "updater";
 
 /// The exit status of a daemon that could not start or serve for any reason but these below.
 pub const EXIT_FAILED: u8 = 1;
@@ -57,6 +69,18 @@ pub struct Settings {
     pub admin_socket: PathBuf,
     /// The account the daemon config must be owned by: root (0) on a host.
     pub trusted_uid: u32,
+}
+
+impl Settings {
+    /// The run directory kbf's agent kept its registration socket in, `updater` beside the
+    /// admin socket's directory (`/run/updater` for `/run/hostkeeper/admin.sock`).
+    pub fn kbf_run_dir(&self) -> PathBuf {
+        self.admin_socket
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new("/"))
+            .join(KBF_RUN_DIR)
+    }
 }
 
 /// Why the daemon could not start or serve.
@@ -162,6 +186,17 @@ fn lock_state_dir(state_dir: &Path) -> Result<File, StartError> {
     Ok(file)
 }
 
+/// Loads the daemon config of `settings`: owned by `trusted_uid`, an error naming the key or the
+/// file otherwise.
+pub fn load_config(settings: &Settings) -> Result<DaemonConfig, StartError> {
+    DaemonConfig::load(&settings.config, settings.trusted_uid).map_err(|source| {
+        StartError::Config {
+            path: settings.config.clone(),
+            source,
+        }
+    })
+}
+
 /// Starts the daemon: the config, the lock, the boot work, the admin socket. `own_version` is
 /// the daemon's own, which a manifest's `min_hostkeeper` is compared with. Nobody is told it is
 /// ready ([`NoNotifier`]).
@@ -180,19 +215,19 @@ pub fn startup_notifying(
     own_version: HostkeeperVersion,
     notifier: &dyn ReadyNotifier,
 ) -> Result<Started, StartError> {
-    let config = DaemonConfig::load(&settings.config, settings.trusted_uid).map_err(|source| {
-        StartError::Config {
-            path: settings.config.clone(),
-            source,
-        }
-    })?;
+    let config = load_config(settings)?;
     let lock = lock_state_dir(&settings.state_dir)?;
+    let mut report = BootReport::default();
+    unlink_stale_registration_socket(&settings.kbf_run_dir()).map_err(|e| StartError::Io {
+        path: e.path,
+        source: e.source,
+    })?;
+    report.stages.push(Stage::UnlinkRegistrationSocket);
     let dirs = Dirs {
         state: settings.state_dir.clone(),
         packages: settings.packages_dir.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
-    let mut report = BootReport::default();
     settle_self_update(&daemon, &mut report);
     before_records(&daemon, &mut report);
     boot_pass(&daemon, &mut report)?;
@@ -222,10 +257,46 @@ fn settle_self_update(daemon: &Daemon, report: &mut BootReport) {
     report.self_update = Some(settled);
 }
 
-/// Before the step records are read: finish or undo a placed link left half done, and relink
-/// what differs from `current` (design section 6.5). Nothing yet but its place in the order.
-fn before_records(_daemon: &Daemon, report: &mut BootReport) {
+/// Before the step records are read: remove what a crashed package fetch or unpack left under
+/// each service directory of the packages directory, then finish or undo each placed link left
+/// half done and relink what differs from `current` (design section 6.5). Neither stops the
+/// start: each is an alert, and a reconciliation that could not run is in the report.
+pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
+    let ctx = daemon.ctx();
     report.stages.push(Stage::BeforeRecords);
+    let services = installed::service_dirs(&ctx.dirs.packages).unwrap_or_else(|error| {
+        ctx.alert(
+            ALERT_START,
+            &format!("the package directory cannot be listed, so no leftover is removed: {error}"),
+        );
+        Default::default()
+    });
+    for service in services.into_values() {
+        if let Err(error) = ctx.packages.remove_orphans(&service) {
+            ctx.alert(ALERT_START, &format!("service={service}: {error}"));
+        }
+    }
+    let reconciled = reconcile(daemon);
+    if let Err(why) = &reconciled {
+        ctx.alert(
+            ALERT_START,
+            &format!("the placed paths could not be reconciled: {why}"),
+        );
+    }
+    report.reconciled = Some(reconciled);
+    report.stages.push(Stage::Reconcile);
+}
+
+/// The placed paths reconciled with the switches the step records say were begun.
+fn reconcile(daemon: &Daemon) -> Result<hostkeeper_placed::ReconcileReport, String> {
+    let ctx = daemon.ctx();
+    let rebooted = boot_changed(&ctx.dirs.state, &*ctx.clock);
+    let intents = daemon.switch_intents(rebooted).map_err(|e| e.to_string())?;
+    let view = BootView {
+        intents,
+        running: ctx.own_version,
+    };
+    ctx.placer().reconcile(&view).map_err(|e| e.to_string())
 }
 
 /// The step records against the boot id, each unfinished update run to its verdict, and the

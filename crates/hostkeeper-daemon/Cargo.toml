@@ -12,8 +12,9 @@ description = "The hostkeeper daemon: start-up, the order executor with its lock
 # 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3). Everything the daemon does is here, so that it is measured;
 # the `hostkeeper` binary only forwards to `cli::main`. Everything privileged comes in through
 # ports it is given: the step launcher (`hostkeeper_steps::StepLauncher`), the package store
-# (`packages::Packages`), the service manager (`hostkeeper_placed::UnitControl`) and the
-# filesystem placed-path linking writes through (`hostkeeper_placed::Fs`).
+# (`packages::Packages`), the service manager (`hostkeeper_placed::UnitControl`), the
+# filesystem placed-path linking writes through (`hostkeeper_placed::Fs`) and the service
+# observer (`hostkeeper_observe::Observer`).
 
 [features]
 # The test doubles in `hostkeeper_daemon::testing` (a scripted launcher, a fake clock, fake
@@ -26,14 +27,22 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 # `hostkeeper ci`: the CI client, a subcommand of the one binary (docs/deploy/ci-client.md).
 hostkeeper-ci = { path = "../hostkeeper-ci" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The service observer whose `Observation` the admin `Status` reports, and its real adapters.
+hostkeeper-observe = { path = "../hostkeeper-observe" }
+# Steps 1 and 2 of design section 5.5 (download, prove), which the real package store composes.
+hostkeeper-package = { path = "../hostkeeper-package" }
 # The placed-path linker a `force` and a first install link, unlink and switch through, an
 # uninstall removes a service's paths through, and the service-manager port it stops, starts and
 # asks after units with.
 hostkeeper-placed = { path = "../hostkeeper-placed" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
+# Steps 3 and 4 of design section 5.5 (unpack, publish), which the real package store composes.
+hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # `O_NOFOLLOW` for the lock file.
 libc.workspace = true
+# The host's CA bundle (PEM) read into the DER roots the package fetch's HTTPS client trusts.
+rustls-pki-types.workspace = true
 thiserror.workspace = true
 # A manifest's `[params]` table is handed to the hook's params file as TOML text.
 toml.workspace = true
@@ -44,6 +53,10 @@ tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["server"] }
 
 [dev-dependencies]
+# The fixture package of the package pipeline's test: its attestation bundle and digest.
+base64.workspace = true
+hex.workspace = true
+sha2.workspace = true
 # Its own tests turn on `testing`.
 hostkeeper-daemon = { path = ".", features = ["testing"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
