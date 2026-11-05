@@ -53,7 +53,9 @@ pub type Layer = (
 /// hello's tests read its output with the hook contract and load its package with the
 /// manifest loader; the observer's tests run hooks through the step runner; the CLI
 /// crates' and the web app's tests read the protobuf descriptors; the privileged tests drive the
-/// step runner's launcher and dead-man and the observer's adapters against the host.
+/// step runner's launcher and dead-man and the observer's adapters against the host, and on a
+/// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
+/// normal dependency), the launchd adapters and the package check, and call its admin socket.
 pub const LAYERS: [Layer; 23] = [
     (BINARY, &[DAEMON], &[PROTO]),
     (CI, &[CTL], &[PROTO]),
@@ -67,7 +69,8 @@ pub const LAYERS: [Layer; 23] = [
     (
         DAEMON,
         &[
-            CI, CONFIG, CTL, ENROLL, HOOK, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS, UNPACK,
+            CI, CONFIG, CTL, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS,
+            UNPACK,
         ],
         &[COORDINATOR, HELLO, OIDC, WIRE],
     ),
@@ -85,7 +88,11 @@ pub const LAYERS: [Layer; 23] = [
     (OIDC, &[], &[]),
     (PACKAGE, &[CONFIG, HOOK, STEPS], &[]),
     (PLACED, &[CONFIG], &[]),
-    (PRIVILEGED, &[HOOK], &[OBSERVE, STEPS]),
+    (
+        PRIVILEGED,
+        &[DAEMON, HOOK],
+        &[LAUNCHD, OBSERVE, PROTO, STEPS, UNPACK],
+    ),
     (PROTO, &[], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),
     (TLS, &[], &[]),

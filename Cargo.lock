@@ -1278,6 +1278,7 @@ dependencies = [
  "hostkeeper-daemon",
  "hostkeeper-enroll",
  "hostkeeper-hook",
+ "hostkeeper-launchd",
  "hostkeeper-link",
  "hostkeeper-observe",
  "hostkeeper-oidc",
@@ -1491,13 +1492,21 @@ name = "hostkeeper-privileged"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "hostkeeper-daemon",
  "hostkeeper-hook",
+ "hostkeeper-launchd",
  "hostkeeper-observe",
+ "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",
+ "hostkeeper-unpack",
+ "hyper-util",
  "rustix",
  "sha2",
  "thiserror",
+ "tokio",
+ "tonic",
+ "tower",
 ]
 
 [[package]]

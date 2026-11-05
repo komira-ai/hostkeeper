@@ -115,11 +115,12 @@ impl BadVersions {
     }
 }
 
-/// Writes `bytes` to `path` durably, mode 0600: a temporary file beside it (its mode set again,
-/// whatever a crash left there), fsync, rename, directory fsync.
-fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+/// Writes `bytes` to `path` durably, mode 0600: a temporary file beside it, `<name>.tmp` (its
+/// mode set again, whatever a crash left there), fsync, rename, directory fsync.
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
-    let tmp = dir.join(format!("{BAD_VERSIONS_FILE}.tmp"));
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!("{name}.tmp"));
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)

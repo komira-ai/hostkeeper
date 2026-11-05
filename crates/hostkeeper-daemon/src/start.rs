@@ -121,6 +121,9 @@ pub enum StartError {
         "--notify-systemd was given, but no notify socket was set for the daemon (NOTIFY_SOCKET)"
     )]
     NoNotifySocket,
+    /// The host's platform has no adapters in this build: a macOS daemon is a build for macOS.
+    #[error("this build of hostkeeper has no adapters for {platform}")]
+    NoAdapters { platform: &'static str },
 }
 
 impl StartError {
@@ -134,7 +137,8 @@ impl StartError {
             | StartError::Runtime(_)
             | StartError::OwnVersion(_)
             | StartError::Boot(_)
-            | StartError::NoNotifySocket => EXIT_FAILED,
+            | StartError::NoNotifySocket
+            | StartError::NoAdapters { .. } => EXIT_FAILED,
         }
     }
 }
@@ -168,7 +172,7 @@ impl Started {
 }
 
 /// Takes the exclusive lock of the state directory, made mode 0700 when it is missing.
-fn lock_state_dir(state_dir: &Path) -> Result<File, StartError> {
+pub(crate) fn lock_state_dir(state_dir: &Path) -> Result<File, StartError> {
     files::make_private(state_dir).map_err(io_at(state_dir))?;
     let path = state_dir.join(LOCK_FILE);
     let file = OpenOptions::new()

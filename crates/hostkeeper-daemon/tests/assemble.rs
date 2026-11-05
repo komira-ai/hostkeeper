@@ -15,6 +15,7 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_daemon::adapters::Adapters;
 use hostkeeper_daemon::boot::{ALERT_START, BootReport, BootStep, Stage, alert_line};
 use hostkeeper_daemon::cli::{
     CA_BUNDLE, DEADMAN_POLL_SECS, GH_BINARY, GH_HOME, HostFiles, HostVerifier, PKI_DIR,
@@ -26,6 +27,7 @@ use hostkeeper_daemon::testing::{FakeNotifier, FakePackages, Log};
 use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_daemon::{NoNotifier, Ports, ReadyNotifier, Refusal};
 use hostkeeper_hook::{Invocation, Step};
+use hostkeeper_launchd::Platform;
 use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier, VerifyError};
 use hostkeeper_placed::testing::{Event, FsWrite, Log as PlacedLog, UnitCall};
 use hostkeeper_steps::{Bound, Stamp, StepCall};
@@ -33,6 +35,11 @@ use support::{OWN, Rig, Tap, alerting, config, d, lines, name, update};
 use support_archive::{Answer, Rig as ArchiveRig, SERVICE, VERSION};
 
 const RESTORE: &str = r#"boot = "restore""#;
+
+/// The adapters of a Linux host.
+fn linux() -> Adapters {
+    Adapters::linux(&Platform::linux())
+}
 
 /// A readiness notifier that puts a mark in the placed log, in its place among the writes and
 /// calls of the service manager, and then tells `inner`.
@@ -380,7 +387,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         trusted_root: rig.scratch.path().join("trusted_root.json"),
         pki: rig.scratch.path().join("pki"),
     };
-    let error = host_ports(&config(), &rig.settings(), &files, OWN)
+    let error = host_ports(&config(), &rig.settings(), &files, OWN, linux())
         .err()
         .expect("no packages directory");
     assert!(
@@ -401,7 +408,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         state_dir: under_a_file.join("state"),
         ..rig.settings()
     };
-    let error = host_ports(&config(), &settings, &files, OWN)
+    let error = host_ports(&config(), &settings, &files, OWN, linux())
         .err()
         .expect("gh's home cannot be made");
     let wanted = under_a_file.join("state").join(GH_HOME);
@@ -412,7 +419,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
 
     make_dir(&rig.packages, 0o755);
     fs::write(rig.packages.join("web"), "x").expect("a file where a service goes");
-    let ports = host_ports(&config(), &rig.settings(), &files, OWN).expect("the ports");
+    let ports = host_ports(&config(), &rig.settings(), &files, OWN, linux()).expect("the ports");
     assert_eq!(ports.deadman_poll_secs, Some(DEADMAN_POLL_SECS));
     assert_eq!(ports.placement.roots.packages().dir(), rig.packages);
     let swept = ports.packages.remove_orphans(&name("web"));
@@ -464,7 +471,7 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         pki: rig.scratch.path().join("pki"),
     };
     let notifier = FakeNotifier::new(Log::default());
-    let error = start_with(&rig.settings(), &files, OWN, &*notifier)
+    let error = start_with(&rig.settings(), &files, OWN, &*notifier, &Platform::linux())
         .err()
         .expect("no packages directory");
     assert!(
@@ -477,10 +484,24 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         config: rig.scratch.path().join("no-such.toml"),
         ..rig.settings()
     };
-    let error = start_with(&settings, &files, OWN, &*notifier)
+    let error = start_with(&settings, &files, OWN, &*notifier, &Platform::linux())
         .err()
         .expect("no config");
     assert!(matches!(error, StartError::Config { .. }), "{error}");
+
+    let error = start_with(&rig.settings(), &files, OWN, &*notifier, &Platform::macos())
+        .err()
+        .expect("no macOS adapters in a Linux build");
+    assert!(
+        matches!(error, StartError::NoAdapters { platform: "macOS" }),
+        "{error}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "this build of hostkeeper has no adapters for macOS"
+    );
+    assert_eq!(error.exit_code(), EXIT_FAILED);
+    assert_eq!(notifier.sent(), 0);
 }
 
 /// Catches the host's files moved without the constants: where a host keeps the CA bundle, the

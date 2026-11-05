@@ -47,13 +47,16 @@
 //! `N + 1` adds readers and writes only formats protocol `N` reads, and only the release after it
 //! writes the formats of `N + 1`.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Phase, Verdict};
-use hostkeeper_steps::record::{AwaitingRestart, Loaded, REASON_SELF_UPDATE_FALLBACK, State};
+use hostkeeper_steps::record::{
+    AwaitingRestart, Loaded, REASON_SELF_UPDATE_FALLBACK, RecordError, State,
+};
 use hostkeeper_steps::selfupdate::settle_with;
 use hostkeeper_steps::{
     ArtifactError, BadVersions, FollowOn, LaunchError, Layout, ProbeCall, ProbeExit,
@@ -356,10 +359,27 @@ fn waiting_for(awaiting: &AwaitingRestart, version: &str) -> Result<Reply, Reply
 /// first that has, or whose record cannot be read, or when the records cannot be listed.
 fn others_idle(ctx: &Ctx, own: &ServiceName) -> Result<(), Reply> {
     let busy = |detail: String| Reply::refused(Refusal::Busy, detail);
-    let names = installed::service_dirs(&ctx.dirs.state)
-        .map_err(|e| busy(format!("the step records cannot be listed: {e}")))?;
-    for service in names.values().filter(|service| *service != own) {
-        let unfinished = match ctx.store(service).load() {
+    match unfinished_other(&ctx.dirs.state, own.as_str(), &|service| {
+        ctx.store(service).load()
+    }) {
+        Ok(None) => Ok(()),
+        Ok(Some(detail)) => Err(busy(detail)),
+        Err(e) => Err(busy(format!("the step records cannot be listed: {e}"))),
+    }
+}
+
+/// The first service of the state directory `state` but `own` whose step record, as `load`
+/// reads it, holds an unfinished update (or cannot be read), in the words of the refusal; `None`
+/// when there is none. `Err` when the records cannot be listed. The one rule of both the
+/// self-update order ([`run`]) and the fallback verb on macOS (`crate::fallback`).
+pub(crate) fn unfinished_other(
+    state: &Path,
+    own: &str,
+    load: &dyn Fn(&ServiceName) -> Result<Loaded, RecordError>,
+) -> io::Result<Option<String>> {
+    let names = installed::service_dirs(state)?;
+    for service in names.values().filter(|service| service.as_str() != own) {
+        let unfinished = match load(service) {
             Ok(Loaded::Absent) => None,
             Ok(Loaded::Current(rec)) => match rec.state {
                 State::Finished { .. } => None,
@@ -371,13 +391,13 @@ fn others_idle(ctx: &Ctx, own: &ServiceName) -> Result<(), Reply> {
             Err(_) => Some("unreadable"),
         };
         if let Some(why) = unfinished {
-            return Err(busy(format!(
+            return Ok(Some(format!(
                 "the step record of {service} is {why}: {SELF_SERVICE} updates itself only while \
                  no other update is unfinished"
             )));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 impl Daemon {

@@ -142,7 +142,8 @@ update after its verdict), which `tests/digest_change.rs` holds.
 - Built: B1, B2, B3, B4, B5, B6, B7, B8, B9, B10, B11, B13, B16, B17, B19, B22, B24, B25, B26,
   B27, B28.
 - Partly: B14 (the release workflows and verbs, but no release is published), B18 (the launchd
-  crate, but no launchd daemon), B23 (`install` and `uninstall`, but no assignment of services).
+  crate and the daemon's Mac adapters, run under launchd only in the device run, with no update
+  through it on a device), B23 (`install` and `uninstall`, but no assignment of services).
 - Not yet: B12, B15, B20, B21.
 
 # The update coordinator

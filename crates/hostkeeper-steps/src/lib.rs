@@ -12,7 +12,9 @@
 //! - [`selfupdate`] is the updater's own update with its fallback, and [`Layout`] the directory
 //!   of versions with `current` and `previous` that it and every package share. The update waits
 //!   in its step record for the restart until the new binary has run ([`settle`]), and a
-//!   version that fell back is kept in [`bad`], the local list of bad versions.
+//!   version that fell back is kept in [`bad`], the local list of bad versions. On macOS the
+//!   fallback decides the burst of failed starts itself, from the daemon's [`starts`] log, with
+//!   [`should_fall_back`], the rule systemd's start limit keeps on Linux.
 //! - [`prune`] deletes the versions of a package directory that a confirmed switch leaves
 //!   behind: all but the ones `current` and `previous` name and the ones the caller protects
 //!   ([`prune_plan`], [`Layout::prune`]).
@@ -41,6 +43,7 @@ pub mod resume;
 pub mod runner;
 pub mod seal;
 pub mod selfupdate;
+pub mod starts;
 pub mod systemd;
 
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
@@ -59,5 +62,8 @@ pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore
 pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
 pub use runner::{Bounds, Finished, RunError, StepRunner, Switch, Toward, UpdateOrder};
 pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
-pub use selfupdate::{FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_with};
+pub use selfupdate::{
+    FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_with, should_fall_back,
+};
+pub use starts::{DaemonStart, StartLog, StartLogError};
 pub use systemd::{Captured, Program, Spawner, StepLog, SystemdLauncher, SystemdRunProcess};

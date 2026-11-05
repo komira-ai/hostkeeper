@@ -10,7 +10,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use hostkeeper_launchd::{
     FileIdentity, LaunchdProcessProbe, PidInfo, PidInfoError, StdFileIdentity,
 };
-use hostkeeper_observe::{ExeStat, ObserveError, ProcessIdentity, ProcessProbe};
+use std::time::Duration;
+
+use hostkeeper_observe::fake::{FakeExpectedExe, FakeHealthClient, FakeServiceManager};
+use hostkeeper_observe::{
+    ActiveState, Current, Deadline, ExeStat, ObserveError, ObserveOptions, Observer,
+    Ports as ObservePorts, ProcessIdentity, ProcessProbe, ServiceInput, ServiceState,
+    UnobservedReason, VersionView,
+};
 use hostkeeper_testkit::Scratch;
 use sha2::{Digest, Sha256};
 
@@ -18,19 +25,30 @@ fn scratch(name: &str) -> Scratch {
     Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("scratch directory")
 }
 
-/// A pid lookup with a fixed path and a start time the test can change.
+/// A pid lookup with a fixed path, a start time the test can change, and the (device, inode)
+/// of the image the process runs.
 #[derive(Clone)]
 struct FakePids {
     path: Result<PathBuf, String>,
     start: Result<Arc<AtomicU64>, String>,
+    image: Result<(u64, u64), String>,
 }
 
 impl FakePids {
+    /// A process running the file at `path` as it is now: its image is the file's real
+    /// (device, inode), or (1, 2) when there is no file there.
     fn at(path: &Path) -> FakePids {
+        let image = fs::metadata(path).map_or((1, 2), |meta| (meta.dev(), meta.ino()));
         FakePids {
             path: Ok(path.to_path_buf()),
             start: Ok(Arc::new(AtomicU64::new(1))),
+            image: Ok(image),
         }
+    }
+
+    /// The same process, running the image `image`.
+    fn running(self, image: Result<(u64, u64), String>) -> FakePids {
+        FakePids { image, ..self }
     }
 }
 
@@ -47,6 +65,10 @@ impl PidInfo for FakePids {
                 why: why.clone(),
             }),
         }
+    }
+
+    fn image(&self, pid: u32) -> Result<(u64, u64), PidInfoError> {
+        self.image.clone().map_err(|why| PidInfoError { pid, why })
     }
 }
 
@@ -106,7 +128,7 @@ fn a_path_replaced_between_path_lookup_and_open_is_an_error() {
         by_path: Some((1, 2)),
         by_file: Some((1, 3)),
     };
-    let probe = LaunchdProcessProbe::new(FakePids::at(&exe), files);
+    let probe = LaunchdProcessProbe::new(FakePids::at(&exe).running(Ok((1, 2))), files);
     let why = format!("{} was replaced while it was read", exe.display());
     assert_eq!(probe.exe_digest(10), Err(process(10, &why)));
 }
@@ -130,7 +152,8 @@ fn a_path_that_no_longer_exists_is_an_error() {
 #[test]
 fn a_file_that_cannot_be_read_is_an_error() {
     let dir = scratch("procid-unreadable");
-    let probe = LaunchdProcessProbe::new(FakePids::at(dir.path()), same_files());
+    let pids = FakePids::at(dir.path()).running(Ok((1, 2)));
+    let probe = LaunchdProcessProbe::new(pids, same_files());
     let io_error = File::open(dir.path())
         .and_then(|f| {
             let mut buf = [0u8; 1];
@@ -173,6 +196,7 @@ fn a_start_time_error_is_an_error() {
     let pids = FakePids {
         path: Ok(PathBuf::new()),
         start: Err("no such process".to_string()),
+        image: Err(String::new()),
     };
     let probe = LaunchdProcessProbe::new(pids, StdFileIdentity);
     assert_eq!(probe.identity(5), Err(process(5, "no such process")));
@@ -184,6 +208,7 @@ fn a_path_lookup_error_is_an_error_for_stat_and_digest() {
     let pids = FakePids {
         path: Err("denied".to_string()),
         start: Err(String::new()),
+        image: Err(String::new()),
     };
     let probe = LaunchdProcessProbe::new(pids, StdFileIdentity);
     assert_eq!(probe.exe_stat(6), Err(process(6, "denied")));
@@ -242,7 +267,7 @@ fn a_file_identity_error_on_the_descriptor_side_is_an_error() {
         by_path: Some((1, 2)),
         by_file: None,
     };
-    let probe = LaunchdProcessProbe::new(FakePids::at(&exe), files);
+    let probe = LaunchdProcessProbe::new(FakePids::at(&exe).running(Ok((1, 2))), files);
     let why = format!("{}: no identity by descriptor", exe.display());
     assert_eq!(probe.exe_digest(4), Err(process(4, &why)));
 }
@@ -274,4 +299,116 @@ fn a_pid_info_error_names_the_pid_and_reason() {
         why: "gone".to_string(),
     };
     assert_eq!(error.to_string(), "process 8: gone");
+}
+
+/// The error text of a path whose file is not the image the process runs.
+fn not_the_image(path: &Path, at_path: (u64, u64), image: (u64, u64)) -> String {
+    format!(
+        "{} is not the file the process runs: the path is device {} inode {}, the process runs device {} inode {}",
+        path.display(),
+        at_path.0,
+        at_path.1,
+        image.0,
+        image.1
+    )
+}
+
+/// Catches a stat or a digest taken of a file renamed over the path while the process runs: the
+/// path's (device, inode) differs from the image's, so both are errors naming the two, and the
+/// new file is never read.
+#[test]
+fn a_path_renamed_over_while_the_process_runs_is_an_error_for_stat_and_digest() {
+    let dir = scratch("procid-renamed-over");
+    let exe = dir.path().join("exe");
+    fs::write(&exe, b"old").expect("write exe");
+    let pids = FakePids::at(&exe);
+    let old = pids.image.clone().expect("old image");
+    let new = dir.path().join("new");
+    fs::write(&new, b"new").expect("write new");
+    fs::rename(&new, &exe).expect("rename over");
+    let meta = fs::metadata(&exe).expect("metadata");
+    let at_path = (meta.dev(), meta.ino());
+    assert_ne!(at_path, old);
+    let probe = LaunchdProcessProbe::new(pids, StdFileIdentity);
+    let why = not_the_image(&exe, at_path, old);
+    assert_eq!(probe.exe_stat(12), Err(process(12, &why)));
+    assert_eq!(probe.exe_digest(12), Err(process(12, &why)));
+}
+
+/// Catches an image lookup failure being ignored: neither a stat nor a digest is given without
+/// knowing what the process runs.
+#[test]
+fn an_image_lookup_error_is_an_error_for_stat_and_digest() {
+    let dir = scratch("procid-image-error");
+    let exe = dir.path().join("exe");
+    fs::write(&exe, b"x").expect("write exe");
+    let pids = FakePids::at(&exe).running(Err("no region".to_string()));
+    let probe = LaunchdProcessProbe::new(pids, StdFileIdentity);
+    assert_eq!(probe.exe_stat(13), Err(process(13, "no region")));
+    assert_eq!(probe.exe_digest(13), Err(process(13, "no region")));
+}
+
+/// Catches the inode comparison being dropped: through a real observer round, a running unit
+/// whose path now names another inode than the one the process runs is `unobserved` with
+/// `proc_error`, never a version `Recorded` and confirmed (nor stopped, nor absent), even though
+/// the new file's digest is the sealed one.
+#[test]
+fn a_path_replaced_while_running_is_unobserved_when_the_inode_differs() {
+    let dir = scratch("procid-observer-replaced");
+    let exe = dir.path().join("exe");
+    fs::write(&exe, b"the new release").expect("write exe");
+    let meta = fs::metadata(&exe).expect("metadata");
+    let at_path = (meta.dev(), meta.ino());
+    let old = (at_path.0, at_path.1 + 1);
+    let sealed: [u8; 32] = Sha256::digest(b"the new release").into();
+
+    let manager = FakeServiceManager::default();
+    manager.set("web-main", ActiveState::Active, Some(77));
+    let expected = FakeExpectedExe::default();
+    expected.seal("web", "2.0.0", sealed);
+    let observer = |image: (u64, u64)| {
+        let pids = FakePids::at(&exe).running(Ok(image));
+        Observer::new(
+            ObservePorts {
+                manager: Box::new(manager.clone()),
+                process: Box::new(LaunchdProcessProbe::new(pids, StdFileIdentity)),
+                health: Box::new(FakeHealthClient::default()),
+                expected: Box::new(expected.clone()),
+            },
+            ObserveOptions::default(),
+        )
+    };
+    let web = ServiceInput {
+        service: "web".to_owned(),
+        current: Some(Current {
+            run: vec!["web-main".to_owned()],
+            health_url: None,
+        }),
+        recorded_version: Some("2.0.0".to_owned()),
+    };
+    let deadline = Deadline {
+        connect: Duration::from_secs(1),
+        read: Duration::from_secs(1),
+    };
+
+    let replaced = observer(old).observe(&web, deadline);
+    assert_eq!(
+        replaced.state,
+        ServiceState::Unobserved {
+            reason: UnobservedReason::ProcError,
+            detail: process(77, &not_the_image(&exe, at_path, old)).to_string(),
+        }
+    );
+    assert_eq!(replaced.state.token(), "unobserved");
+    assert_eq!(replaced.version, VersionView::NotLive);
+
+    let same = observer(at_path).observe(&web, deadline);
+    assert_eq!(same.state, ServiceState::Live);
+    assert_eq!(
+        same.version,
+        VersionView::Recorded {
+            version: "2.0.0".to_owned(),
+            confirmed: true
+        }
+    );
 }
