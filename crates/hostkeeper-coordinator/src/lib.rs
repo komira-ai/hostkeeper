@@ -18,12 +18,15 @@
 //!   last good versions and the audit ring, in the operations file, and every change as a line of
 //!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
 //!   file beside it (`ops_file`);
+//! - [`operate`]: the operator actions of the JSON route `/v1/operator`, each validated before it
+//!   changes the ops store;
 //! - [`services`]: services as data, from the rollout file: the roles each runs on and the
 //!   settings of its rollout;
 //! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
 //!   token, the status read by the operator token;
+//! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
 //! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
@@ -54,12 +57,14 @@ pub mod jti_file;
 pub mod listen;
 pub mod lock;
 pub mod membership;
+pub mod operate;
 pub mod ops;
 pub(crate) mod ops_file;
 pub mod reconcile;
 pub mod registry;
 pub mod service;
 pub mod services;
+pub mod status;
 pub mod tokens;
 pub mod ui;
 pub mod verdicts;
