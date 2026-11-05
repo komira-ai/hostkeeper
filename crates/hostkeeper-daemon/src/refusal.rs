@@ -13,7 +13,8 @@ pub enum Refusal {
     /// The order is malformed: no verb, no try, or a field that breaks its grammar. Refused
     /// before any lock is taken.
     InvalidOrder,
-    /// The verb is not built into this daemon yet.
+    /// The verb is not built into this daemon. Every verb of design section 4.1 is built now; the
+    /// token stays in the closed set.
     NotImplemented,
     /// Another package's order of the service is unfinished, or holds the service's lock.
     Busy,
@@ -107,11 +108,22 @@ pub enum Refusal {
     /// On macOS, the check of the staged tree (quarantine attribute, code signature) cannot be
     /// made now: the package is not judged, and the order is tried again later.
     VerifyUnavailable,
+    /// `abort` of a service with no running step and none that could not be stopped: nothing is
+    /// written. The admin socket's `AdminRefusal` token.
+    NothingRunning,
+    /// `clear_record` of a step record that reads, is absent, or is of a newer schema: only a
+    /// corrupt record is cleared. The admin socket's `AdminRefusal` token.
+    RecordReads,
+    /// `clear_halt` with a halt generation not above the one the service is held under: nothing
+    /// is written.
+    StaleHaltGeneration,
+    /// `clear_record` in a coordinator's order: it is the admin socket's alone.
+    Forbidden,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 40] = [
+    pub const ALL: [Refusal; 44] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -152,6 +164,10 @@ impl Refusal {
         Refusal::VersionTooLong,
         Refusal::PackageIoError,
         Refusal::VerifyUnavailable,
+        Refusal::NothingRunning,
+        Refusal::RecordReads,
+        Refusal::StaleHaltGeneration,
+        Refusal::Forbidden,
     ];
 
     /// The token.
@@ -197,6 +213,10 @@ impl Refusal {
             Refusal::VersionTooLong => "version_too_long",
             Refusal::PackageIoError => "io_error",
             Refusal::VerifyUnavailable => "verify_unavailable",
+            Refusal::NothingRunning => "nothing_running",
+            Refusal::RecordReads => "record_reads",
+            Refusal::StaleHaltGeneration => "stale_halt_generation",
+            Refusal::Forbidden => "forbidden",
         }
     }
 }

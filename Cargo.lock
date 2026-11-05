@@ -1292,6 +1292,8 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "prost",
+ "prost-types",
  "rustix",
  "rustls-pki-types",
  "serde_json",

@@ -13,7 +13,7 @@ use hostkeeper_daemon::packages::PackageError;
 use hostkeeper_daemon::testing::{FakeClock, manifest};
 use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE};
 use hostkeeper_daemon::verbs::update::declared_params;
-use hostkeeper_daemon::{Refusal, Reply, Verb};
+use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Abort, ClearHalt, Force, Install, Order, Uninstall, order,
@@ -57,62 +57,6 @@ fn record_of(rig: &Rig, service: &str) -> Box<hostkeeper_steps::Record> {
 
 fn no_record(rig: &Rig, service: &str) -> bool {
     !rig.state.join(service).join(RECORD_FILE).exists()
-}
-
-/// Catches a verb that is not built doing something anyway (or panicking): each answers
-/// `not_implemented`, takes no lock, asks for no package and writes nothing, whether it comes as
-/// an order or as a verb (`clear_record` comes only from the admin socket). `force`, `install`
-/// and `uninstall` are built (tests/force.rs, tests/install.rs, tests/uninstall.rs).
-#[test]
-fn unimplemented_verbs_are_refused_not_implemented_and_touch_nothing() {
-    let rig = Rig::new("unimpl");
-    let daemon = rig.daemon();
-    let web = name("web");
-    let verbs = [
-        ("abort", Verb::Abort(web.clone())),
-        (
-            "clear_halt",
-            Verb::ClearHalt {
-                service: web.clone(),
-                halt_generation: 1,
-            },
-        ),
-        ("clear_record", Verb::ClearRecord(web.clone())),
-    ];
-    for (verb_name, verb) in verbs {
-        let detail = format!("`{verb_name}` is not implemented in this daemon yet (a later task)");
-        assert_eq!(
-            daemon.execute(verb),
-            Reply::Refused {
-                refusal: Refusal::NotImplemented,
-                detail
-            },
-            "{verb_name}"
-        );
-    }
-    let service = "web".to_owned();
-    let orders = [
-        order::Verb::Abort(Abort {
-            service: service.clone(),
-        }),
-        order::Verb::ClearHalt(ClearHalt {
-            service,
-            halt_generation: 2,
-        }),
-    ];
-    for verb in orders {
-        let order = Order {
-            order_id: "o".to_owned(),
-            r#try: 1,
-            verb: Some(verb.clone()),
-        };
-        let reply = daemon.order(&order);
-        assert_eq!(reply.refusal(), Some(Refusal::NotImplemented), "{verb:?}");
-    }
-    assert!(!rig.state.exists());
-    assert!(rig.store.asked().is_empty());
-    assert!(rig.launcher.runs().is_empty());
-    assert_eq!(daemon.ctx().locks.holder(&web), None);
 }
 
 /// Catches a malformed order that reaches the package store or a lock: every row is refused

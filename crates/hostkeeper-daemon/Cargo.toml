@@ -80,6 +80,9 @@ hyper.workspace = true
 hostkeeper-daemon = { path = ".", features = ["testing"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 hyper-util = { workspace = true, features = ["tokio"] }
+# The admin service's calls, read from the protobuf descriptor set.
+prost.workspace = true
+prost-types.workspace = true
 # The effective uid: the owner the tests' daemon config is trusted for.
 rustix = { workspace = true, features = ["process"] }
 serde_json.workspace = true

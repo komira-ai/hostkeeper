@@ -263,6 +263,28 @@ impl RecordStore {
         self.lock.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Under the record lock, closes the unfinished hooked update the record holds
+    /// `Finished{Halt}` with `reason`, launching nothing: what an `abort` writes for an update
+    /// whose runner is gone (it stopped `Unstopped`) or held in a step whose unit the abort could
+    /// not stop (`unstoppable`). A record that is already finished is left as it is. Returns the
+    /// record as it now stands; `None`, and nothing written, when it is absent, the journal of a
+    /// force, or written by a newer daemon. The params file is left to the caller.
+    pub fn close_halted(&self, reason: &str) -> Result<Option<Record>, RecordError> {
+        let _held = self.hold();
+        let mut rec = match self.load()? {
+            Loaded::Current(rec) if rec.force.is_none() => rec,
+            Loaded::Current(_) | Loaded::Absent | Loaded::Newer { .. } => return Ok(None),
+        };
+        if !matches!(rec.state, State::Finished { .. }) {
+            rec.state = State::Finished {
+                verdict: Verdict::Halt,
+                reason: Some(reason.to_owned()),
+            };
+            self.save(&rec)?;
+        }
+        Ok(Some(*rec))
+    }
+
     /// Step 4 of a `force` (design section 5.6): under the record lock, flags the unfinished
     /// hooked update the record holds `forced` and writes it, unless it already is. Returns that
     /// record; `None`, and nothing written, when the record is absent, finished, the journal of

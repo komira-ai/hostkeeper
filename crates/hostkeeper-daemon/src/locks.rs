@@ -1,6 +1,8 @@
 //! The daemon's locks (design sections 8.1 and 8.7): one per service, taken for the whole of an
-//! order and never waited for, and one step lock for the host, held while a step runs. A `force`
-//! takes its service's lock only, never the step lock.
+//! order (or of a `clear_halt` or a `clear_record`) and never waited for, and one step lock for
+//! the host, held while a step runs. A `force` takes its service's lock only, never the step lock;
+//! an `abort` takes neither, and waits for the order it stops to let go of the service's lock
+//! ([`ServiceLocks::wait_let_go`]).
 //!
 //! The order is service, then step, and the types keep it: the step lock is taken only through
 //! [`ServiceGuard::step`] ([`StepLock`] has no other way to be taken), so no code can hold it
@@ -9,7 +11,8 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
 
@@ -23,11 +26,14 @@ pub struct Package {
     pub digest: PackageDigest,
 }
 
-/// What a service's lock is held for: an order of a package, or the service's uninstall.
+/// What a service's lock is held for: an order of a package, the service's uninstall, or the
+/// clearing of its halt or of its corrupt step record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Holder {
     Package(Package),
     Uninstall,
+    ClearHalt,
+    ClearRecord,
 }
 
 impl fmt::Display for Holder {
@@ -41,6 +47,8 @@ impl fmt::Display for Holder {
                 package.version
             ),
             Holder::Uninstall => f.write_str("an order to uninstall it"),
+            Holder::ClearHalt => f.write_str("a `clear_halt`"),
+            Holder::ClearRecord => f.write_str("a `clear_record`"),
         }
     }
 }
@@ -65,6 +73,10 @@ impl Held {
 #[derive(Clone, Debug, Default)]
 pub struct ServiceLocks {
     held: Arc<Mutex<BTreeMap<String, Held>>>,
+    /// Signalled whenever a lock is let go of or kept for good.
+    changed: Arc<Condvar>,
+    /// The callers in [`ServiceLocks::wait_let_go`] now.
+    waiting: Arc<AtomicUsize>,
 }
 
 impl ServiceLocks {
@@ -124,6 +136,36 @@ impl ServiceLocks {
         })
     }
 
+    /// Lets go of the lock of `service` when a step that could not be stopped holds it for good
+    /// ([`ServiceGuard::keep`]): `abort` has closed that step's record. A lock held otherwise is
+    /// left as it is.
+    pub fn release_stuck(&self, service: &ServiceName) {
+        let mut map = self.map();
+        map.retain(|name, held| !(held.stuck & (name == service.as_str())));
+        drop(map);
+        self.changed.notify_all();
+    }
+
+    /// Waits until the lock of `service` is free, or held for good by a step that could not be
+    /// stopped: the order holding it has ended.
+    pub fn wait_let_go(&self, service: &ServiceName) {
+        self.waiting.fetch_add(1, Ordering::SeqCst);
+        let mut map = self.map();
+        while map.get(service.as_str()).is_some_and(|held| !held.stuck) {
+            map = self
+                .changed
+                .wait(map)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        self.waiting.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// How many callers wait in [`ServiceLocks::wait_let_go`] now: what a test watches for to
+    /// know that an abort has asked its runner and waits for the order.
+    pub fn waiting(&self) -> usize {
+        self.waiting.load(Ordering::SeqCst)
+    }
+
     /// Who holds the lock of `service` now, `None` when nobody does.
     pub fn holder(&self, service: &ServiceName) -> Option<Held> {
         self.map().get(service.as_str()).cloned()
@@ -155,6 +197,7 @@ impl ServiceGuard<'_> {
             .map()
             .entry(self.service.to_string())
             .and_modify(|held| held.stuck = true);
+        self.locks.changed.notify_all();
     }
 }
 
@@ -162,6 +205,7 @@ impl Drop for ServiceGuard<'_> {
     fn drop(&mut self) {
         if !self.kept {
             self.locks.map().remove(self.service.as_str());
+            self.locks.changed.notify_all();
         }
     }
 }
