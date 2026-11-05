@@ -300,9 +300,14 @@ async fn a_hold_on_a_role_covers_a_host_that_joins_later() {
         "a storage host that joined after the hold is held"
     );
     assert_eq!(
-        ask(&rig, "d1", "daemon", web_at("1.0")),
+        ask(&rig, "d2", "daemon", web_at("1.0")),
         update(WEB, "2.0"),
         "a daemon is not covered"
+    );
+    // The daemon's update ends, and its slot with it.
+    assert_eq!(
+        ask(&rig, "d2", "daemon", web_at("2.0")),
+        ServiceReply::Nothing
     );
 
     let answer = rig

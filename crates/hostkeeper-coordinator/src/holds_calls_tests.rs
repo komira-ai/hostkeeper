@@ -3,14 +3,12 @@
 //! replace a hold of the same scope, keep to the cap and say each scope in the audit.
 
 use std::fs;
-use std::time::Duration;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_wire::wire::Heartbeat;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::fleet::{Fleet, Marks, QUIET_START};
+use crate::fleet::Marks;
 use crate::holds::{HoldMark, HoldScope, MAX_HOLDS, holding, marks_of};
 use crate::marks_support::{
     DB, WEB, hold, operator, rig, scope_fleet, scope_host, scope_role, start, unhold,
@@ -18,7 +16,7 @@ use crate::marks_support::{
 use crate::operator::Caller;
 use crate::ops::{AuditEntry, OpsError, OpsState, OpsStore, Write};
 use crate::rollback_tests::unwritable;
-use crate::testutil::{OPERATOR, Rig, ci_token, id, role, scratch, secs, version};
+use crate::testutil::{OPERATOR, Rig, ci_token, scratch, version};
 
 /// A hold of `web` on the host `host`, as the ops file keeps it.
 fn hold_mark(host: &str) -> HoldMark {
@@ -45,20 +43,6 @@ fn hold_with(
             reason: reason.to_owned(),
         },
     )
-}
-
-/// A fleet of `web` hosts, all daemons that heartbeated at 2000, with an operator's hold on
-/// each host of `held`.
-fn farm(hosts: &[(&str, Heartbeat)], held: &[&str]) -> Fleet {
-    let mut fleet = Fleet::new(Duration::ZERO, QUIET_START);
-    for (name, b) in hosts {
-        fleet.record_in(WEB, id(name), role("daemon"), b.clone(), secs(2_000));
-    }
-    fleet.set_marks(Marks {
-        holds: held.iter().copied().map(hold_mark).collect(),
-        ..Marks::default()
-    });
-    fleet
 }
 
 // ---- the ops file -----------------------------------------------------------------------
