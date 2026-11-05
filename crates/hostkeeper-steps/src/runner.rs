@@ -19,11 +19,14 @@
 //! launches any step (a resumed one included) and in every write after a step returns: once it
 //! is set, the update is closed `Failed`, `forced_over` ([`Record::close_forced_over`]), its
 //! params file is removed, and nothing more is launched, `rollback` and `cleanup` included.
+//! An `abort` ([`StepRunner::abort`]) is read at the same places, from memory: the update is
+//! closed `Halt`, `aborted_by_operator`, with nothing more launched either.
 
 use std::io;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use hostkeeper_config::names::{MAX_UNIT_NAME, is_service_name};
 use hostkeeper_hook::{
@@ -56,6 +59,11 @@ pub const MAX_RETRY_SECS: u64 = 3600;
 pub const REASON_HALT_CLEARED: &str = "halt_cleared";
 /// The reason of a `Deferred` for a hook that needs a newer updater.
 pub const REASON_UPDATER_OLD: &str = "updater_old";
+/// The reason of the `Halt` that ends an update an operator aborted ([`StepRunner::abort`]).
+pub const REASON_ABORTED: &str = "aborted_by_operator";
+/// The reason of the `Halt` that ends an aborted update whose unit could not be stopped
+/// ([`RecordStore::close_halted`]).
+pub const REASON_UNSTOPPABLE: &str = "unstoppable";
 /// The reason of a `rollback` that declines a first install: there is no previous release to go
 /// back to (design section 5.7, step 6; docs/design/host-updates.md, section 9, C3).
 pub const REASON_NO_PREVIOUS_RELEASE: &str = "no_previous_release";
@@ -229,6 +237,8 @@ pub struct StepRunner {
     switch: Option<Switch>,
     /// [`StepRunner::with_held_success`].
     held_success: bool,
+    /// The generation of the update an abort asked to end ([`StepRunner::abort`]); 0 for none.
+    aborted: AtomicU64,
 }
 
 impl StepRunner {
@@ -245,7 +255,67 @@ impl StepRunner {
             fault: None,
             switch: None,
             held_success: false,
+            aborted: AtomicU64::new(0),
         }
+    }
+
+    /// Asks the runner to end the unfinished hooked update the record holds, at its next look:
+    /// before it launches any step, and in the write that records how a step ended. It then
+    /// launches nothing more (no `rollback`, no `cleanup`, no watcher) and closes the update
+    /// `Finished{Halt}`, `aborted_by_operator`, through the record's durable write. The ask is
+    /// made under the record lock, as a `force`'s flag is, so a write of the record either sees it
+    /// or came before it, and it names the update's generation, so it never ends another update.
+    /// The record as it stood; `None`, and nothing asked, when it is absent, finished, the journal
+    /// of a force, or written by a newer daemon.
+    pub fn abort(&self) -> Result<Option<Record>, RunError> {
+        let _held = self.store.hold();
+        let rec = match self.store.load()? {
+            Loaded::Current(rec) => rec,
+            Loaded::Absent | Loaded::Newer { .. } => return Ok(None),
+        };
+        let unfinished = !matches!(rec.state, State::Finished { .. }) & rec.force.is_none();
+        match unfinished {
+            true => self.aborted.store(rec.generation, Ordering::SeqCst),
+            false => return Ok(None),
+        }
+        Ok(Some(*rec))
+    }
+
+    /// Whether an abort asked to end the update of `generation`.
+    fn aborting(&self, generation: u64) -> bool {
+        self.aborted.load(Ordering::SeqCst) == generation
+    }
+
+    /// Under the record lock the caller holds: when an abort asked to end `rec`'s update, closes
+    /// `rec` `Halt`, `aborted_by_operator`, or, when the abort already closed the record on disk
+    /// (it could not stop the step's unit, [`RecordStore::close_halted`]), makes `rec` that
+    /// record, so that writing it changes nothing. `true` when `rec` is closed.
+    fn take_abort(&self, rec: &mut Record) -> Result<bool, RunError> {
+        let asked =
+            self.aborted
+                .compare_exchange(rec.generation, 0, Ordering::SeqCst, Ordering::SeqCst);
+        if asked.is_err() {
+            return Ok(false);
+        }
+        let closed = match self.store.load()? {
+            Loaded::Current(disk)
+                if (disk.generation == rec.generation)
+                    & matches!(disk.state, State::Finished { .. }) =>
+            {
+                Some(disk)
+            }
+            _ => None,
+        };
+        match closed {
+            Some(disk) => *rec = *disk,
+            None => {
+                rec.state = State::Finished {
+                    verdict: Verdict::Halt,
+                    reason: Some(REASON_ABORTED.to_owned()),
+                };
+            }
+        }
+        Ok(true)
     }
 
     /// The same runner, the `Succeeded` of an update that replaces a release (one with a
@@ -487,8 +557,9 @@ impl StepRunner {
     ) -> Result<Finished, RunError> {
         loop {
             let finished = matches!(rec.state, State::Finished { .. });
-            // A force flagged the update: it ends here, before anything else is launched.
-            if !finished && self.forced(&mut rec)? {
+            // A force flagged the update, or an abort asked to end it: it ends here, before
+            // anything else is launched.
+            if !finished && self.interrupted(&mut rec)? {
                 continue;
             }
             // The watcher is left to a later run ([`StepRunner::run_until_watching`]).
@@ -611,7 +682,8 @@ impl StepRunner {
             unbounded,
         };
         self.write(rec)?;
-        if rec.forced {
+        // A force flagged the update, or an abort asked to end it: the write closed it.
+        if matches!(rec.state, State::Finished { .. }) {
             return Ok(None);
         }
         let unit = rec.unit(rec.step);
@@ -631,9 +703,18 @@ impl StepRunner {
             unit: &unit,
             bound,
         });
+        let stop_error = self.watch.disarm();
+        // An aborted step's report is not read, whoever stopped it: the write of its end closes
+        // the update.
+        if self.aborting(rec.generation) {
+            return Ok(Some(Ran::Exit(StepExit {
+                code: None,
+                last_line: None,
+            })));
+        }
         // A step the dead-man could not stop at its bound ran past it: what it reports is not
         // read. It stays `running` in the record, and the next run stops its unit by name first.
-        if let Some(error) = self.watch.disarm() {
+        if let Some(error) = stop_error {
             return Err(RunError::Unstopped { unit, error });
         }
         match result {
@@ -655,11 +736,14 @@ impl StepRunner {
     }
 
     /// Writes `rec`, under the record lock; when a force flagged the update meanwhile, `rec` is
-    /// closed `forced_over` first, so that the write never clears the flag.
+    /// closed `forced_over` first, so that the write never clears the flag, and when an abort
+    /// asked to end it, `rec` is closed `Halt` first ([`StepRunner::take_abort`]).
     fn write(&self, rec: &mut Record) -> Result<(), RunError> {
         let _held = self.store.hold();
         if self.flagged(rec)? {
             rec.close_forced_over();
+        } else {
+            self.take_abort(rec)?;
         }
         let succeeded = matches!(
             rec.state,
@@ -675,15 +759,22 @@ impl StepRunner {
         Ok(self.store.save(rec)?)
     }
 
-    /// When a force flagged the update, closes `rec` `forced_over` and writes it: `true`.
-    fn forced(&self, rec: &mut Record) -> Result<bool, RunError> {
+    /// The one look at what interrupts an update, under the record lock: when a force flagged
+    /// it, closes `rec` `forced_over`, and when an abort asked to end it, closes `rec` `Halt`
+    /// ([`StepRunner::take_abort`]); either is written. `true` when `rec` is closed.
+    fn interrupted(&self, rec: &mut Record) -> Result<bool, RunError> {
         let _held = self.store.hold();
-        if !self.flagged(rec)? {
-            return Ok(false);
+        let closed = match self.flagged(rec)? {
+            true => {
+                rec.close_forced_over();
+                true
+            }
+            false => self.take_abort(rec)?,
+        };
+        if closed {
+            self.store.save(rec)?;
         }
-        rec.close_forced_over();
-        self.store.save(rec)?;
-        Ok(true)
+        Ok(closed)
     }
 
     /// The bound of the step about to run: its own, and for `verify` before the update has

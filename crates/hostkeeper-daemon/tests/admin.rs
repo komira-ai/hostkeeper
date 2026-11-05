@@ -1,5 +1,5 @@
 //! The admin service over in-process pipes that carry an explicit peer: who is served, what
-//! `Status` reports, and the calls that are not built.
+//! `Status` reports, which calls the socket has, and how `Abort` and `ClearRecord` refuse.
 
 mod support;
 
@@ -8,24 +8,33 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;
 
+use bytes::Bytes;
 use hostkeeper_config::names::ServiceName;
+use hostkeeper_ctl::transport::InMemory;
+use hostkeeper_ctl::{CtlTransport, PeerIdentity};
 use hostkeeper_daemon::admin::{self, Peer, step_record, verdict_into};
 use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::halt::HaltStore;
+use hostkeeper_daemon::locks::Package;
 use hostkeeper_daemon::testing::Counted;
+use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Dirs};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_observe::{HealthView, Observation, ServiceState as Observed, VersionView};
+use hostkeeper_proto::FILE_DESCRIPTOR_SET;
 use hostkeeper_proto::hostkeeper::agent::v1::{FailureClass, FailurePhase};
 use hostkeeper_proto::hostkeeper::local::v1::{
     AbortRequest, ClearRecordRequest, Liveness, RecordProblem, ServiceState, StatusRequest,
     StepOutcome, StepRecord, Unhealthy,
 };
 use hostkeeper_steps::record::RECORD_FILE;
-use support::{OWN, Rig, client, config, d, update};
+use prost::Message;
+use prost_types::FileDescriptorSet;
+use support::{OWN, Rig, client, config, d, snapshot, update};
 use tokio::io::duplex;
 use tokio_stream::StreamExt;
 use tonic::Code;
+use tonic::metadata::MetadataMap;
 
 /// Serves `daemon` on one in-process connection from `peer`; the client's end, and the count
 /// of the bytes the server read.
@@ -213,30 +222,141 @@ async fn status_reports_running_version_last_result_and_held_halt() {
     running.join().expect("the running order");
 }
 
-/// Catches `Abort` or `ClearRecord` doing something before they are built: each answers
-/// `UNIMPLEMENTED` with the token `not_implemented`.
-#[tokio::test]
-async fn unimplemented_admin_calls_answer_not_implemented() {
-    let rig = Rig::new("admin-unimpl");
-    let (mut client, _) = connect(Arc::new(rig.daemon()), Peer { uid: Some(0) });
-    let abort = client
-        .abort(AbortRequest {
-            service: "web".to_owned(),
-        })
-        .await
-        .expect_err("abort is not built");
-    let clear = client
-        .clear_record(ClearRecordRequest {
-            service: "web".to_owned(),
-        })
-        .await
-        .expect_err("clear_record is not built");
-    for status in [abort, clear] {
-        assert_eq!(
-            (status.code(), status.message()),
-            (Code::Unimplemented, "not_implemented")
-        );
+/// Catches a verb reachable that design section 4.1 keeps off the local socket: the admin
+/// service's calls in the protobuf descriptors are exactly `Status`, `Abort` and `ClearRecord`,
+/// the server answers `Status` by its path, and `ClearHalt` and `Update` by that service's path
+/// answer `UNIMPLEMENTED`, with nothing read or written.
+#[test]
+fn the_admin_socket_serves_exactly_status_abort_and_clear_record() {
+    let set = FileDescriptorSet::decode(FILE_DESCRIPTOR_SET).expect("the descriptors");
+    let methods: Vec<&str> = set
+        .file
+        .iter()
+        .filter(|file| file.package() == "hostkeeper.local.v1")
+        .flat_map(|file| &file.service)
+        .filter(|service| service.name() == "Admin")
+        .flat_map(|service| &service.method)
+        .map(|method| method.name())
+        .collect();
+    assert_eq!(methods, ["Status", "Abort", "ClearRecord"]);
+
+    let rig = Rig::new("admin-table");
+    rig.add("web", "2.0.0");
+    let daemon = Arc::new(rig.daemon());
+    let transport = InMemory::new(PeerIdentity::Anonymous).serve(admin::server(daemon));
+    let metadata = MetadataMap::new();
+    let status = transport.call("/hostkeeper.local.v1.Admin/Status", Bytes::new(), &metadata);
+    assert!(status.is_ok(), "{status:?}");
+    let before = snapshot(rig.scratch.path());
+    for method in ["ClearHalt", "Update"] {
+        let path = format!("/hostkeeper.local.v1.Admin/{method}");
+        let refused = transport
+            .call(&path, Bytes::new(), &metadata)
+            .expect_err(method);
+        assert_eq!(refused.code(), Code::Unimplemented, "{method}");
     }
+    assert_eq!(snapshot(rig.scratch.path()), before);
+    assert!(rig.launcher.runs().is_empty());
+}
+
+/// Catches a peer check made after the request is decoded for the calls that change things:
+/// `Abort` and `ClearRecord` from uid 1000 and from a peer whose credentials are unknown are
+/// refused with nothing read from the connection, and nothing written.
+#[tokio::test]
+async fn admin_abort_and_clear_record_refuse_every_peer_but_uid_zero_before_decoding() {
+    let rig = Rig::new("admin-peer-calls");
+    let daemon = Arc::new(rig.daemon());
+    fs::create_dir_all(rig.state.join("web")).expect("the service's directory");
+    fs::write(rig.state.join("web").join(RECORD_FILE), "{").expect("a corrupt record");
+    let before = snapshot(&rig.state);
+    for peer in [Peer { uid: Some(1000) }, Peer { uid: None }] {
+        let (mut client, read) = connect(Arc::clone(&daemon), peer);
+        let abort = client
+            .abort(AbortRequest {
+                service: "web".to_owned(),
+            })
+            .await;
+        assert!(abort.is_err(), "{peer:?} was served an abort");
+        assert_eq!(read.load(Ordering::SeqCst), 0, "{peer:?}");
+        let (mut client, read) = connect(Arc::clone(&daemon), peer);
+        let clear = client
+            .clear_record(ClearRecordRequest {
+                service: "web".to_owned(),
+            })
+            .await;
+        assert!(clear.is_err(), "{peer:?} was served a clear_record");
+        assert_eq!(read.load(Ordering::SeqCst), 0, "{peer:?}");
+    }
+    assert_eq!(snapshot(&rig.state), before);
+}
+
+/// Catches a refusal on the admin socket that is not one token with its code: a service name
+/// that breaks its rule is `INVALID_ARGUMENT` `invalid_request`; an abort with nothing running is
+/// `FAILED_PRECONDITION` `nothing_running`; a record that reads is `FAILED_PRECONDITION`
+/// `record_reads`; a held lock is `FAILED_PRECONDITION` `busy`; a record that cannot be read is
+/// `INTERNAL` `store_failed`; and a corrupt record is cleared, answered `RECORD_PROBLEM_UNREADABLE`.
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_abort_and_clear_record_answer_each_refusal_with_its_token() {
+    let rig = Rig::new("admin-tokens");
+    rig.add("web", "2.0.0");
+    let daemon = Arc::new(rig.daemon());
+    let (mut client, _) = connect(Arc::clone(&daemon), Peer { uid: Some(0) });
+    let abort = |service: &str| AbortRequest {
+        service: service.to_owned(),
+    };
+    let clear = |service: &str| ClearRecordRequest {
+        service: service.to_owned(),
+    };
+    let code_of = |status: tonic::Status| (status.code(), status.message().to_owned());
+    let token = |code: Code, token: &str| (code, token.to_owned());
+
+    let bad = client.abort(abort("a b")).await.expect_err("a bad name");
+    assert_eq!(
+        code_of(bad),
+        token(Code::InvalidArgument, "invalid_request")
+    );
+    let bad = client
+        .clear_record(clear("a b"))
+        .await
+        .expect_err("a bad name");
+    assert_eq!(
+        code_of(bad),
+        token(Code::InvalidArgument, "invalid_request")
+    );
+    let idle = client.abort(abort("web")).await.expect_err("idle");
+    assert_eq!(
+        code_of(idle),
+        token(Code::FailedPrecondition, "nothing_running")
+    );
+    let absent = client.clear_record(clear("web")).await.expect_err("absent");
+    assert_eq!(
+        code_of(absent),
+        token(Code::FailedPrecondition, "record_reads")
+    );
+
+    let dir = rig.state.join("web");
+    fs::create_dir_all(&dir).expect("the service's directory");
+    fs::write(dir.join(RECORD_FILE), "{").expect("a corrupt record");
+    let package = Package {
+        verb: HookedVerb::Update,
+        version: hostkeeper_config::names::Version::new("2.0.0").expect("a version"),
+        digest: PackageDigest::new(&d()).expect("a digest"),
+    };
+    let web = ServiceName::new("web").expect("a name");
+    let guard = daemon.ctx().locks.take(&web, package).expect("free");
+    let held = client.clear_record(clear("web")).await.expect_err("held");
+    assert_eq!(code_of(held), token(Code::FailedPrecondition, "busy"));
+    drop(guard);
+    let cleared = client
+        .clear_record(clear("web"))
+        .await
+        .expect("cleared")
+        .into_inner();
+    assert_eq!(cleared.problem, RecordProblem::Unreadable as i32);
+
+    fs::create_dir(dir.join(RECORD_FILE)).expect("a directory in the record's place");
+    let unread = client.clear_record(clear("web")).await.expect_err("unread");
+    assert_eq!(code_of(unread), token(Code::Internal, "store_failed"));
 }
 
 /// Catches a status that cannot list the services reported as an empty host: it is `INTERNAL`

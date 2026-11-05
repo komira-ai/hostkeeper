@@ -15,8 +15,8 @@ It is planned as:
 Every API is a protobuf service, and the command line is generated from those definitions.
 
 **hostkeeper is pre-release.** There is no release yet. Two programs are built from source: the
-one host program, `hostkeeper daemon`, which serves its admin socket's `Status` and runs no order
-yet (see [Running the daemon](#running-the-daemon)), and the update coordinator,
+one host program, `hostkeeper daemon`, which serves its admin socket (`Status`, `Abort`,
+`ClearRecord`) and runs no order yet (see [Running the daemon](#running-the-daemon)), and the update coordinator,
 `hostkeeper-coordinator serve`. The parts listed above are being moved here from
 [kbf](https://github.com/komira-ai/kbf), where they are developed today. So far this repository
 holds the generic half of the host updater and its coordinator, moved from kbf
@@ -87,7 +87,8 @@ and while there is none it says once what it waits for and sends nothing. It the
 admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
 new binary. This build fetches, verifies and unpacks packages, and observes each service for
 `Status`, but has no step launcher or service manager wired in and no coordinator link for its
-heartbeats yet, so it serves the admin socket's `Status` and runs no order.
+heartbeats yet, so it serves the admin socket (`Status`, `Abort`, `ClearRecord`) and runs no
+order.
 
 | exit status | meaning |
 |---|---|
@@ -96,6 +97,36 @@ heartbeats yet, so it serves the admin socket's `Status` and runs no order.
 | 2 | a usage error: an unknown flag or subcommand |
 | 3 | the daemon config did not load |
 | 4 | another daemon holds the state directory's lock |
+
+### Operator verbs on the host
+
+Root on the host has two verbs besides `Status` on the admin socket, because they must work with
+the coordinator down or a hook hung: `abort` and `clear_record` (the admin service's `Abort` and
+`ClearRecord`). The socket carries nothing else: no `clear_halt`, and nothing that installs,
+updates or switches a version.
+
+- `abort <service>` stops the service's running step and ends its update. The daemon asks the
+  update's runner to launch nothing more (no `rollback`, no `cleanup`), stops the unit of the
+  step that runs by name, trying three times, and the update ends `Halt` with the reason
+  `aborted_by_operator`. It is the only end of a `prepare` declared unbounded (`prepare = 0`)
+  that does not return. When every try to stop the unit fails, the update ends `Halt` with the
+  reason `unstoppable`, the daemon logs an alert (`alert=unstoppable_unit`) naming the unit, and
+  the unit may still be running: stop it by name (`systemctl stop <unit>`). A step the daemon's
+  dead-man could not stop at its bound keeps the service locked (`Status` shows the update under
+  way with the reason `unstoppable_unit`), and `abort` is what ends it and lets the service go.
+  With no step running, `abort` is refused `nothing_running` and changes nothing.
+- An aborted update ends in a halt: the service takes no other order until the coordinator lifts
+  the halt (an operator's halt clear, which reaches the host as a halt generation greater than
+  the one it holds, in a heartbeat reply or a `clear_halt` order). A coordinator's `abort` order
+  is answered the same way as the local one, and takes no farm slot; this build's heartbeat loop
+  carries only `update` and `force` orders.
+- `clear_record <service>` sets aside a step record that does not read (the record problem
+  `RECORD_PROBLEM_UNREADABLE` in `Status`), so that orders run for the service again: the file is
+  renamed `step-record.json.corrupt` in the service's state directory, for the operator to read,
+  and nothing else changes (not the params file, the held halt or the package directory). A
+  record that reads, in any state, or that a newer hostkeeper wrote, is refused `record_reads`.
+  A unit that the lost record had started is not stopped, since nothing names it any more: find
+  it (`systemctl list-units 'updater-<service>-*'`) and stop it by name before the next order.
 
 ## Force on a host
 

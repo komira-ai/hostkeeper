@@ -83,7 +83,7 @@ pub mod watchers;
 
 pub use boot::{BootError, BootReport, BootStep, Outcome, ServiceBoot, Stage};
 pub use executor::{
-    Ctx, Daemon, DaemonStatus, Dirs, ForcedResult, LastUninstall, Placement, Ports, Reply,
+    Ctx, Daemon, DaemonStatus, Dirs, ForcedResult, LastUninstall, Placement, Ports, Refused, Reply,
     ServiceStatus, StoreSeam,
 };
 pub use files::WriteStep;

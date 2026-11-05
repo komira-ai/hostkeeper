@@ -638,6 +638,20 @@ pub fn snapshot(dir: &Path) -> Vec<(PathBuf, String)> {
     out
 }
 
+/// Serves `daemon`'s admin service on one in-process connection from `peer`, as the admin socket
+/// does: the client's end, and the count of the bytes the server read. Needs a tokio runtime.
+pub fn admin_from(
+    daemon: Arc<Daemon>,
+    peer: hostkeeper_daemon::admin::Peer,
+) -> (AdminClient<Channel>, Arc<std::sync::atomic::AtomicUsize>) {
+    use tokio_stream::StreamExt;
+    let (near, far) = tokio::io::duplex(64 * 1024);
+    let (counted, read) = hostkeeper_daemon::testing::Counted::new(far);
+    let incoming = tokio_stream::iter([Ok((counted, peer))]).chain(tokio_stream::pending());
+    tokio::spawn(hostkeeper_daemon::admin::serve(daemon, incoming));
+    (client(near), read)
+}
+
 /// A client of the admin service over `io`, the other end of an in-process pipe.
 pub fn client(io: DuplexStream) -> AdminClient<Channel> {
     let slot = Arc::new(Mutex::new(Some(io)));

@@ -1,6 +1,8 @@
 //! The executor: [`Daemon::order`] takes one order of the coordinator, decodes it into a
 //! [`Verb`] and hands it to the verb's module under `verbs/`, which answers with a [`Reply`].
-//! [`Daemon::status`] reports what the daemon holds for each service.
+//! [`Daemon::status`] reports what the daemon holds for each service. [`Daemon::abort`] and
+//! [`Daemon::clear_record`] are also the admin socket's; [`Daemon::clear_halt`] is the
+//! coordinator's alone, and `clear_record` is never a coordinator's.
 //!
 //! The executor only dispatches: each verb is one module with one function taking the shared
 //! [`Ctx`] and its typed arguments, so that a later verb fills one file and one arm.
@@ -35,6 +37,9 @@ use crate::refusal::Refusal;
 use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
 use crate::verb::Verb;
 use crate::verbs;
+use crate::verbs::abort::Aborted;
+use crate::verbs::clear_halt::Lifted;
+use crate::verbs::clear_record::Cleared;
 use crate::verbs::force::SELF_SERVICE;
 use crate::watchers::{STOPPED, SlicedClock, WatchEnd, Watchers, Yielding};
 
@@ -250,6 +255,13 @@ impl Ctx {
         (self.alerts)(&format!("hostkeeper daemon: {line}"));
     }
 
+    /// The step runner of `service` when one was made, without stopping a watcher: the runner an
+    /// `abort` asks to end its update ([`hostkeeper_steps::StepRunner::abort`]).
+    pub fn made_runner(&self, service: &ServiceName) -> Option<Arc<StepRunner>> {
+        let runners = self.runners.lock().unwrap_or_else(PoisonError::into_inner);
+        runners.get(service.as_str()).cloned()
+    }
+
     /// The step runner of `service`, made with its dead-man on first use. A watcher of the
     /// service is stopped first, and waited for: whoever asks for the runner is about to run an
     /// order, and a new order replaces the watcher (design section 6.4). Its switch places every
@@ -379,6 +391,32 @@ impl Reply {
     }
 }
 
+/// A refusal of `abort`, `clear_halt` or `clear_record`: its token, and a text for the log.
+/// Nothing was written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused {
+    pub refusal: Refusal,
+    pub detail: String,
+}
+
+impl Refused {
+    pub fn new(refusal: Refusal, detail: impl ToString) -> Refused {
+        Refused {
+            refusal,
+            detail: detail.to_string(),
+        }
+    }
+}
+
+impl From<Refused> for Reply {
+    fn from(refused: Refused) -> Reply {
+        Reply::Refused {
+            refusal: refused.refusal,
+            detail: refused.detail,
+        }
+    }
+}
+
 /// How the last uninstall of a service ended, and the try of its order (0 for one the daemon's
 /// start resumed).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -501,9 +539,17 @@ pub struct StatusError {
     pub source: std::io::Error,
 }
 
+/// The answer to a coordinator's `abort` of one try; `None` while that abort is under way.
+struct AbortTry {
+    order_try: u64,
+    answer: Option<Reply>,
+}
+
 /// The daemon: one per host.
 pub struct Daemon {
     ctx: Ctx,
+    /// The last coordinator's `abort` of each service, by try: a resend is answered from it.
+    abort_tries: Mutex<BTreeMap<String, AbortTry>>,
 }
 
 impl Daemon {
@@ -542,6 +588,7 @@ impl Daemon {
                 probe,
                 restart: Restart::default(),
             },
+            abort_tries: Mutex::default(),
         }
     }
 
@@ -580,9 +627,59 @@ impl Daemon {
     /// lock is taken.
     pub fn order(&self, order: &Order) -> Reply {
         match Verb::try_from(order) {
+            Ok(Verb::Abort(service)) => self.abort_order(&service, order.r#try),
             Ok(verb) => self.execute(verb),
             Err(bad) => Reply::refused(Refusal::InvalidOrder, bad),
         }
+    }
+
+    /// A coordinator's `abort` of try `order_try`: a resend of that try is answered from the
+    /// first answer (`Running` while it is under way) and stops nothing more.
+    fn abort_order(&self, service: &ServiceName, order_try: u64) -> Reply {
+        let tries = || {
+            self.abort_tries
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        };
+        {
+            let mut tries = tries();
+            let first = tries
+                .get(service.as_str())
+                .filter(|last| last.order_try == order_try);
+            if let Some(last) = first {
+                return last.answer.clone().map_or(Reply::Running, resent);
+            }
+            let under_way = AbortTry {
+                order_try,
+                answer: None,
+            };
+            tries.insert(service.to_string(), under_way);
+        }
+        let reply = self.execute(Verb::Abort(service.clone()));
+        let answered = AbortTry {
+            order_try,
+            answer: Some(reply.clone()),
+        };
+        tries().insert(service.to_string(), answered);
+        reply
+    }
+
+    /// `abort` (design sections 6.3 and 8.5): stops the service's running step and ends its
+    /// update `Finished{Halt}`, taking neither the service's lock nor the step lock. The
+    /// coordinator's order and the admin socket's call both come here.
+    pub fn abort(&self, service: &ServiceName) -> Result<Aborted, Refused> {
+        verbs::abort::abort(&self.ctx, service)
+    }
+
+    /// `clear_halt` (design sections 5.4 and 6.2): lifts the service's halt for a halt generation
+    /// strictly above the one it is held under.
+    pub fn clear_halt(&self, service: &ServiceName, generation: u64) -> Result<Lifted, Refused> {
+        verbs::clear_halt::clear_halt(&self.ctx, service, generation)
+    }
+
+    /// `clear_record` (design sections 4.1 and 7): sets aside a step record that cannot be read.
+    pub fn clear_record(&self, service: &ServiceName) -> Result<Cleared, Refused> {
+        verbs::clear_record::clear_record(&self.ctx, service)
     }
 
     /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service
@@ -635,7 +732,11 @@ impl Daemon {
                 service,
                 halt_generation,
             } => verbs::clear_halt::run(ctx, service, halt_generation),
-            Verb::ClearRecord(service) => verbs::clear_record::run(ctx, service),
+            // The admin socket's alone: refused before any lock is taken or anything read.
+            Verb::ClearRecord(service) => Reply::refused(
+                Refusal::Forbidden,
+                format!("`clear_record` of {service} is the admin socket's, not an order's"),
+            ),
         }
     }
 
@@ -697,6 +798,20 @@ impl Daemon {
             version: ctx.own_version,
             services,
         })
+    }
+}
+
+/// An answer given again for a resend: a verdict says so.
+fn resent(reply: Reply) -> Reply {
+    match reply {
+        Reply::Finished {
+            verdict, reason, ..
+        } => Reply::Finished {
+            verdict,
+            reason,
+            resent: true,
+        },
+        other => other,
     }
 }
 
