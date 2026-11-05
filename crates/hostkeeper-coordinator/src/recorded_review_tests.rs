@@ -210,6 +210,7 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
         match gate {
             Gate::Halted => "halted",
             Gate::Bad => "bad",
+            Gate::BelowMinVersion => "below_min_version",
             Gate::Updating => "updating",
             Gate::BusyElsewhere => "busy_elsewhere",
             Gate::NoSlot => "no_slot",
@@ -232,6 +233,7 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
     for g in [
         Gate::Halted,
         Gate::Bad,
+        Gate::BelowMinVersion,
         Gate::Updating,
         Gate::BusyElsewhere,
         Gate::NoSlot,

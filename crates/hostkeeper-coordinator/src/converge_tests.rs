@@ -302,7 +302,7 @@ fn a_service_converges_on_its_own_hosts() {
 #[test]
 fn convergence_reads_no_minimum() {
     let def = ServiceDef::new("pool", &["builder"]);
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     f.record_named_in(
         "pool",
         id("b1"),
@@ -355,7 +355,7 @@ fn kbf_roles_in_convergence_keep_the_legacy_order() {
 #[test]
 fn roles_of_a_definition_come_legacy_first_then_by_name() {
     let def = ServiceDef::new("pool", &["zeta", "alpha", "daemon", "frontend"]);
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for role in ["zeta", "alpha", "daemon", "frontend"] {
         f.record_named_in(
             "pool",
@@ -379,7 +379,7 @@ fn roles_of_a_definition_come_legacy_first_then_by_name() {
 #[test]
 fn convergence_counts_only_the_roles_of_the_definition() {
     let def = ServiceDef::new("pool", &["builder"]);
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     f.record_named_in("pool", id("b1"), "builder", beat("2.0"), secs(990));
     f.record_named_in("pool", id("x1"), "stranger", beat("1.0"), secs(990));
     let c = converge_service(&def, Some(&desired("2.0", 0, 0)), &f, secs(NOW));

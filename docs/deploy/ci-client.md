@@ -8,7 +8,10 @@ service calls it; it does not write the step itself.
 The workflow does the steps of the design's CI client (section 4.5), in this order. Steps 2, 3 and
 6 run the checks of [Verify a release](verify-a-release.md) (steps 2, 3 and 6 there), with
 `--format json` added to the attestation check so that step 4 can read it; step 1 downloads with
-`curl` instead of `gh release download`, and step 4 is a further check of the attested commit:
+`curl` instead of `gh release download`, and step 4 is a further check of the attested commit.
+The workflow lint keeps steps 2 and 3 equal to the commands of that page, word for word, step 6
+equal to its `--version` check and expected output, and the downloaded asset and tag equal to
+its tables: a change to either file alone is refused.
 
 1. Download the pinned hostkeeper release's binary tarball for `linux-x86_64` and its
    `SHA256SUMS`.

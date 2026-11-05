@@ -14,6 +14,7 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Verdict;
+use hostkeeper_observe::{Observation, Observer};
 use hostkeeper_placed::{Fs, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
@@ -27,6 +28,7 @@ use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT, Lifecycle};
 use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
+use crate::observer;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
@@ -66,6 +68,8 @@ pub struct Ports {
     pub prune: Arc<dyn Prune>,
     /// The point of a `force` between its switch of `current` and its prune.
     pub force_lock_point: Arc<dyn ForceLockPoint>,
+    /// Looks at how each installed service runs: what `Status` reports of it.
+    pub observer: Arc<Observer>,
 }
 
 /// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
@@ -100,6 +104,8 @@ pub struct Ctx {
     pub placement: Placement,
     pub prune: Arc<dyn Prune>,
     pub force_lock_point: Arc<dyn ForceLockPoint>,
+    /// Observes the installed services; it takes none of the daemon's locks.
+    pub observer: Arc<Observer>,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
@@ -239,13 +245,13 @@ impl Ctx {
 
     /// The step runner of `service`, made with its dead-man on first use. A watcher of the
     /// service is stopped first, and waited for: whoever asks for the runner is about to run an
-    /// order, and a new order replaces the watcher (design section 6.4). Its switch places a
-    /// first install ([`crate::place::first_install`]).
+    /// order, and a new order replaces the watcher (design section 6.4). Its switch places every
+    /// hooked order ([`crate::place::hooked_switch`]).
     pub fn runner(&self, service: &ServiceName) -> Arc<StepRunner> {
         drop(self.watchers.stop(service));
         let mut runners = self.runners.lock().unwrap_or_else(PoisonError::into_inner);
         let made = runners.entry(service.to_string()).or_insert_with(|| {
-            let switch = crate::place::first_install(
+            let switch = crate::place::hooked_switch(
                 self.placement.roots.clone(),
                 Arc::clone(&self.placement.fs),
                 Arc::clone(&self.units),
@@ -431,6 +437,10 @@ pub struct ServiceStatus {
     pub lifecycle: Lifecycle,
     /// How its last uninstall ended, while the daemon runs; `None` when none ran or it succeeded.
     pub uninstall: Option<LastUninstall>,
+    /// How the service runs now, as the service manager, the running executable and its health
+    /// check say ([`crate::observer`]); `None` when it has no `current`, or the manifest of the
+    /// version `current` names does not load.
+    pub observation: Option<Observation>,
 }
 
 impl ServiceStatus {
@@ -510,6 +520,7 @@ impl Daemon {
                 placement: ports.placement,
                 prune: ports.prune,
                 force_lock_point: ports.force_lock_point,
+                observer: ports.observer,
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,
@@ -551,6 +562,11 @@ impl Daemon {
     /// What every verb works with.
     pub fn ctx(&self) -> &Ctx {
         &self.ctx
+    }
+
+    /// The observer of the installed services.
+    pub fn observer(&self) -> &Arc<Observer> {
+        &self.ctx.observer
     }
 
     /// One order of the coordinator. A malformed order is refused naming its field, before any
@@ -618,7 +634,9 @@ impl Daemon {
 
     /// What the daemon holds about every service with a package directory, a state directory or
     /// a tombstone. A `placed.json` that cannot be read shows no tombstone (every order of a
-    /// service is refused while it cannot be read).
+    /// service is refused while it cannot be read). Each service with a `current` is observed
+    /// ([`observer::observe`]); the read takes no service lock and no step lock, so it does not
+    /// wait for a running step.
     pub fn status(&self) -> Result<DaemonStatus, StatusError> {
         let ctx = &self.ctx;
         let listed = |dir: &PathBuf| {
@@ -657,6 +675,12 @@ impl Daemon {
                     stuck: holder.as_ref().is_some_and(|held| held.stuck),
                     lifecycle: ctx.lifecycle_of(&service, tombstoned, holder.as_ref(), &record),
                     uninstall: ctx.last_uninstall(&service),
+                    observation: observer::observe(
+                        &ctx.observer,
+                        &ctx.dirs.packages,
+                        &ctx.own_version,
+                        &service,
+                    ),
                     record,
                     service,
                 }

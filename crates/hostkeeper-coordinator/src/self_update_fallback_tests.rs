@@ -78,6 +78,8 @@ fn fell_back(target: &str) -> UpdateResult {
         phase: Some(Phase::AfterCommit),
         class: Some(Class::Release),
         reason: Token::parse("self_update_fallback"),
+        order_id: None,
+        order_try: None,
     }
 }
 

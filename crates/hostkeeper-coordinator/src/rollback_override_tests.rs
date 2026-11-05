@@ -1,6 +1,8 @@
-//! The floor `min_version` sets under a rollback, and the failures a by-hand set of a bad
-//! version acknowledges: an override of the coordinator is not undone by the reports of the
-//! failure it overrode, and a new failure counts again.
+//! The floor `min_version` sets under a rollback, and the failures an override of a bad
+//! version acknowledged: an override of the coordinator is not undone by the reports of the
+//! failure it overrode, and a new failure counts again. CI does not lift a mark (only the
+//! operator's unmark or a force does), so the acks an override writes are seeded in the ops file
+//! here.
 
 use hostkeeper_testkit::Scratch;
 use std::time::Duration;
@@ -37,6 +39,8 @@ fn ack_of(node: &str, phase: Option<Phase>, class: Option<Class>, target: &str) 
             phase,
             class,
             reason: None,
+            order_id: None,
+            order_try: None,
         },
     }
 }
@@ -92,7 +96,7 @@ fn setting_min_version_clears_last_good() {
         vec![]
     );
     // Converged on min_version: it becomes the last good version.
-    let mut at_two = Fleet::new(Duration::ZERO);
+    let mut at_two = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for h in HOSTS {
         at_two.record_in(LEGACY, id(h), role("daemon"), beat("2.0"), secs(2_000));
     }
@@ -197,7 +201,7 @@ fn an_acked_failure_does_not_count_and_a_stale_ack_is_dropped() {
     );
 
     // d0 reports another update now, d1 still the failure, d9 is not known at all.
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     fleet.record_in(LEGACY, id("d0"), role("daemon"), beat("1.0"), secs(2_000));
     fleet.record_in(
         LEGACY,
@@ -223,58 +227,42 @@ fn an_acked_failure_does_not_count_and_a_stale_ack_is_dropped() {
     );
 }
 
-/// The roll-back, then CI sets the bad version again by hand while the hosts that failed
-/// still report it: the failures were acknowledged, so the next beats do not roll it back,
-/// the mark is gone, and the acks are in the file and survive a restart.
-#[tokio::test]
-async fn re_setting_a_bad_version_by_hand_is_not_rolled_back_by_the_old_failures() {
-    let mut rig = rig("ov-reset", AUTO, ONE).await;
-    round(&rig, 2_000, &[]);
-    rig.set(TWO).await;
-    round(&rig, 2_030, &two_failed());
-    assert_eq!(wanted(&rig), version("1.0"));
-    assert_eq!(marks(&rig).bad, vec![version("2.0")]);
-
-    rig.set(TWO).await;
-    assert!(marks(&rig).bad.is_empty());
-    assert_eq!(
-        persisted(&rig).failure_acked,
-        vec![
-            ack("d1", "2.0"),
-            ack_of("d2", Some(Phase::GateRelease), None, "2.0")
-        ]
-    );
-
-    round(&rig, 2_045, &two_failed());
-    assert_eq!(wanted(&rig), version("2.0"), "the override stands");
-    assert!(marks(&rig).bad.is_empty());
-
-    restart(&mut rig, AUTO);
-    round(&rig, 2_100, &two_failed());
-    round(&rig, 2_115, &two_failed());
-    assert_eq!(wanted(&rig), version("2.0"), "and after a restart");
-    assert!(marks(&rig).bad.is_empty());
+/// The acks an override of 2.0 writes for the two failures of [`two_failed`], whole.
+fn override_acks() -> Vec<FailureAck> {
+    vec![
+        ack("d1", "2.0"),
+        ack_of("d2", Some(Phase::GateRelease), None, "2.0"),
+    ]
 }
 
-/// After the override, failures of hosts that had not failed count as before: one new one
-/// beside the two acked is below the threshold, two are at it.
-#[tokio::test]
-async fn a_new_failure_after_the_override_counts_again() {
-    let rig = rig("ov-new", AUTO, ONE).await;
+/// A rig past its quiet start with 1.0 recorded as last good, 2.0 desired and the acks of an
+/// override of 2.0 in the ops file, read at a restart: the state an override leaves.
+async fn overridden(test: &str) -> crate::testutil::Rig {
+    let mut rig = rig(test, AUTO, ONE).await;
     round(&rig, 2_000, &[]);
     rig.set(TWO).await;
-    round(&rig, 2_030, &two_failed());
-    rig.set(TWO).await;
+    seed(&rig, |m| m.failure_acked = override_acks());
+    restart(&mut rig, AUTO);
+    rig
+}
+
+/// After an override, the acked failures do not count and failures of hosts that had not failed
+/// count as before: one new one beside the two acked is below the threshold, two are at it.
+#[tokio::test]
+async fn a_new_failure_after_the_override_counts_again() {
+    let rig = overridden("ov-new").await;
+    round(&rig, 2_045, &two_failed());
+    assert_eq!(wanted(&rig), version("2.0"), "the acked failures");
 
     let (phase, class) = release();
     let mut three = two_failed();
     three.push(("d3", failure(phase, class, "2.0")));
-    round(&rig, 2_045, &three);
+    round(&rig, 2_060, &three);
     assert_eq!(wanted(&rig), version("2.0"), "one new failure");
 
     let mut four = three.clone();
     four.push(("d4", failure(Some(Phase::AfterCommit), None, "2.0")));
-    round(&rig, 2_060, &four);
+    round(&rig, 2_075, &four);
     assert_eq!(wanted(&rig), version("1.0"), "two new failures");
     assert_eq!(marks(&rig).bad, vec![version("2.0")]);
 }
@@ -283,16 +271,13 @@ async fn a_new_failure_after_the_override_counts_again() {
 /// again, that counts.
 #[tokio::test]
 async fn an_ack_drops_when_the_host_reports_something_else() {
-    let rig = rig("ov-drop", AUTO, ONE).await;
-    round(&rig, 2_000, &[]);
-    rig.set(TWO).await;
-    round(&rig, 2_030, &two_failed());
-    rig.set(TWO).await;
+    let rig = overridden("ov-drop").await;
     assert_eq!(persisted(&rig).failure_acked.len(), 2);
 
     round(&rig, 2_045, &[]);
     assert!(persisted(&rig).failure_acked.is_empty());
     assert!(marks(&rig).failure_acked.is_empty());
+    assert_eq!(wanted(&rig), version("2.0"), "nothing failed");
 
     round(&rig, 2_060, &two_failed());
     assert_eq!(wanted(&rig), version("1.0"), "the new failures count");
@@ -346,12 +331,7 @@ fn an_ack_matches_the_whole_report_and_not_one_of_the_same_target() {
 /// phase has made a different report: it counts at once.
 #[tokio::test]
 async fn a_new_failure_at_the_same_target_with_another_class_or_phase_counts_again() {
-    let rig = rig("ov-same-target", AUTO, ONE).await;
-    round(&rig, 2_000, &[]);
-    rig.set(TWO).await;
-    round(&rig, 2_030, &two_failed());
-    rig.set(TWO).await;
-
+    let rig = overridden("ov-same-target").await;
     let (phase, class) = release();
     round(&rig, 2_045, &two_failed());
     assert_eq!(wanted(&rig), version("2.0"), "the same reports stay hidden");

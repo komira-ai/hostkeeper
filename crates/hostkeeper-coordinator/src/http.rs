@@ -22,8 +22,11 @@
 //!
 //! An answer of the API is JSON (a file under `/ui/` is the file's bytes), and an error is
 //! `{"error":"<code>"}` with a code from a closed set: never a claim value, a path or the text
-//! of an internal error. A heartbeat that lists no services, at a coordinator with no legacy
-//! service, is a bad request.
+//! of an internal error. A desired state may name the digest of its version's package
+//! (`release_digest`, 64 lowercase hex characters); a version the coordinator refuses is
+//! answered with its reason as the code: `unparseable_version` (400), and
+//! `below_min_version`, `bad_version` and `digest_conflict` (409). A heartbeat that lists no
+//! services, at a coordinator with no legacy service, is a bad request.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -251,6 +254,16 @@ where
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(SetError::Invalid(_)) => error(StatusCode::BAD_REQUEST, "bad_request"),
+        Err(why @ SetError::UnparseableVersion) => error(
+            StatusCode::BAD_REQUEST,
+            why.reason().unwrap_or("bad_request"),
+        ),
+        Err(
+            why @ (SetError::BelowMinVersion | SetError::BadVersion | SetError::DigestConflict),
+        ) => {
+            tracing::warn!(%why, "refused a desired state");
+            error(StatusCode::CONFLICT, why.reason().unwrap_or("conflict"))
+        }
         Err(why @ (SetError::Store(_) | SetError::Ops(_))) => {
             tracing::error!(%why, "the desired state could not be stored");
             error(StatusCode::INTERNAL_SERVER_ERROR, "internal")

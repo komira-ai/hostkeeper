@@ -21,6 +21,14 @@
 //! it unraised. Every other change, a clearing one included, is written first and enters
 //! memory only if the file holds it, so a failed write never leaves it cleared.
 //!
+//! A halt is written under a marker ([`Write::Halt`]): the file `<ops-file>.halts.unfinished`
+//! is created before the write is tried and removed once a write of the state holding the halt
+//! has landed. Until then the halt stands in memory, the store says so
+//! ([`OpsStore::halt_unwritten`]), and the coordinator writes the state again at every
+//! heartbeat ([`OpsStore::retry_unwritten`]). A start that finds the marker is refused: the
+//! halt it was writing may be lost, and the operator settles the halts file by hand and
+//! removes the marker.
+//!
 //! Every change carries an [`AuditEntry`]: the store numbers it, keeps the last
 //! [`AUDIT_RING`] in the file and logs it on the target `hostkeeper_coordinator::audit`, and
 //! appends it as one JSON line to the audit file beside the ops file (`<ops-file>.audit`,
@@ -32,15 +40,17 @@
 //! The operator actions ([`operate`]) write exclusions, labels and the clear of a halt; the
 //! coordinator itself writes the raising of a halt ([`crate::halt`]) and, in
 //! [`crate::reconcile`], the last good version and the marking of a version bad (a raise, so in
-//! memory first); CI's override clears that mark when it sets that version by hand. The
-//! decision reads a halt and the bad versions ([`crate::halt::decide`]); nothing reads the rest
-//! when it decides what a host is told.
+//! memory first); CI's set of a new desired version lifts a halt the updater raised
+//! ([`crate::halt::lift_by_ci`]), and never a bad mark. The decision reads a halt and the bad
+//! versions ([`crate::halt::decide`]); nothing reads the rest when it decides what a host is
+//! told.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
@@ -95,6 +105,28 @@ pub struct Exclusion {
     pub reason: String,
 }
 
+/// Who raised a halt, which says what lifts it ([`crate::halt`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HaltOrigin {
+    /// A hook's check (its exit 76): only the operator's `clear_halt` lifts it. A halt read
+    /// from a file that says nothing is this one, the safe side.
+    #[default]
+    Hook,
+    /// The updater itself (a staged release whose digest changed, `artifact_changed`): CI's
+    /// set of a desired version other than the halt's target lifts it too, since a fix-forward
+    /// release is the remedy.
+    Updater,
+}
+
+impl HaltOrigin {
+    /// Whether it is [`HaltOrigin::Hook`], which is not written.
+    #[must_use]
+    pub fn is_hook(&self) -> bool {
+        *self == Self::Hook
+    }
+}
+
 /// A halt of a service: raised by a host's report ([`crate::halt`]), cleared by the operator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -109,6 +141,11 @@ pub struct Halt {
     /// a file written before reports were kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<UpdateResult>,
+    /// Who raised it. Kept in the halts file beside the ops file ([`crate::ops_file`]), so the
+    /// ops file keeps the shape the release before reads; written only when it is not
+    /// [`HaltOrigin::Hook`].
+    #[serde(default, skip_serializing_if = "HaltOrigin::is_hook")]
+    pub origin: HaltOrigin,
 }
 
 /// A host and the halt report an operator cleared. It matches that report, whole: the same
@@ -183,11 +220,12 @@ pub struct ServiceOps {
     /// version an automatic rollback goes back to.
     #[serde(default)]
     pub last_good: Option<Version>,
-    /// The versions never to order again, until CI sets one by hand.
+    /// The versions never to order again. CI cannot set one: only the operator's unmark or a
+    /// force lifts a mark.
     #[serde(default)]
     pub bad: Vec<Version>,
-    /// The failure reports standing when CI set a bad version by hand: one per host. A report
-    /// that is acked, whole, does not count towards an automatic rollback.
+    /// The failure reports standing when a bad version was lifted by hand: one per host. A
+    /// report that is acked, whole, does not count towards an automatic rollback.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failure_acked: Vec<FailureAck>,
 }
@@ -202,7 +240,8 @@ pub struct AuditEntry {
     /// `coordinator` for the coordinator's own changes, `ci` for CI's.
     pub by: String,
     /// What it was (`exclude`, `include`, `set_labels`, `clear_halt`, `halt`; the
-    /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`; CI's: `unmark_bad`).
+    /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`; CI's: `lift_halt`, and
+    /// `unmark_bad` in a file an earlier build wrote).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -299,9 +338,13 @@ pub enum OpsError {
 /// Which order a change reaches the file and memory in.
 #[derive(Clone, Copy, Debug)]
 pub enum Write {
-    /// In memory first, written after: for a change that raises protection (a halt). A
+    /// In memory first, written after: for a change that raises protection (a bad mark). A
     /// failed write leaves it raised, and the next write carries it.
     AfterMemory,
+    /// [`Write::AfterMemory`] for a halt: the write is tried under the unfinished-halt marker,
+    /// and one that fails is tried again at every heartbeat until it lands
+    /// ([`OpsStore::retry_unwritten`]).
+    Halt,
     /// Written first, in memory only if the file holds it: for every other change, a
     /// clearing one included. A failed write leaves the old state.
     BeforeMemory,
@@ -325,11 +368,27 @@ pub struct OpsStore {
     audit: Option<AuditLog>,
     /// Seconds since the epoch, for the lines of the audit file.
     unix: UnixClock,
+    /// The unfinished-halt marker, for a store over a file; the others have none.
+    marker: Option<PathBuf>,
+    /// Whether a halt is in memory and not yet in the file, and when the retry last logged.
+    unwritten: Mutex<Unwritten>,
     /// A change another writer makes between a caller's read and its change, applied once at
     /// the start of the next change, under the writers' lock: what a race would do there.
     #[cfg(test)]
     interleave: Mutex<Option<Interleaved>>,
 }
+
+/// A halt that is in memory and not yet in the file.
+#[derive(Debug, Default)]
+struct Unwritten {
+    /// The write of a halt failed and no write has landed since.
+    pending: bool,
+    /// When a retry last logged that it failed.
+    logged: Option<Duration>,
+}
+
+/// How often a failing retry of an unwritten halt is logged at most.
+pub const UNWRITTEN_LOG_EVERY: Duration = Duration::from_secs(60);
 
 fn parse(path: &Path, bytes: &[u8]) -> Result<OpsState, OpsError> {
     let invalid = |why: String| OpsError::Invalid {
@@ -384,9 +443,11 @@ impl OpsStore {
         };
         let (state, _skipped) = ops_file::joined(path, state)?;
         let log = AuditLog::open(audit_file::path_of(path))?;
+        let marker = ops_file::unfinished_path(path);
         let path = path.to_owned();
         Ok(Self {
             audit: Some(log),
+            marker: Some(marker),
             ..Self::with_writer(state, Box::new(move |state| ops_file::write(&path, state)))
         })
     }
@@ -400,6 +461,8 @@ impl OpsStore {
             write,
             audit: None,
             unix: wall_clock(),
+            marker: None,
+            unwritten: Mutex::new(Unwritten::default()),
             #[cfg(test)]
             interleave: Mutex::new(None),
         }
@@ -503,13 +566,118 @@ impl OpsStore {
                 self.record(&entry);
                 (self.write)(&next)?;
             }
+            Write::Halt => {
+                *self.lock() = next.clone();
+                self.record(&entry);
+                self.mark_unwritten();
+                (self.write)(&next)?;
+            }
             Write::BeforeMemory => {
                 (self.write)(&next)?;
                 *self.lock() = next;
                 self.record(&entry);
             }
         }
+        // The state just written holds every halt in memory: one whose write had failed has
+        // landed with it.
+        self.written();
         Ok(entry)
+    }
+
+    /// Whether a halt is in memory and not yet in the file: its write failed and no write has
+    /// landed since. Orders for its service stay held all the while: the halt is in memory.
+    #[must_use]
+    pub fn halt_unwritten(&self) -> bool {
+        self.unwritten_lock().pending
+    }
+
+    /// Writes the state again when a halt is not yet in the file: called at every heartbeat
+    /// with the coordinator's time `now`. A retry that fails is logged at most once per
+    /// [`UNWRITTEN_LOG_EVERY`]; one that lands removes the marker.
+    pub fn retry_unwritten(&self, now: Duration) {
+        if !self.halt_unwritten() {
+            return;
+        }
+        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        self.mark_unwritten();
+        match (self.write)(&self.state()) {
+            Ok(()) => {
+                self.written();
+                tracing::warn!(
+                    alert = "halt",
+                    "a halt that could not be written is written now"
+                );
+            }
+            Err(why) => {
+                let mut unwritten = self.unwritten_lock();
+                let due = unwritten
+                    .logged
+                    .is_none_or(|at| now.saturating_sub(at) >= UNWRITTEN_LOG_EVERY);
+                if due {
+                    unwritten.logged = Some(now);
+                    drop(unwritten);
+                    tracing::error!(
+                        alert = "halt",
+                        %why,
+                        "a halt is still not written to the ops file: it stands in memory, and the write is tried at every heartbeat"
+                    );
+                }
+            }
+        }
+    }
+
+    fn unwritten_lock(&self) -> MutexGuard<'_, Unwritten> {
+        self.unwritten
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Notes that a halt is about to be written: pending until a write lands, and the marker
+    /// created (and its directory synced) before the write is tried. A marker that cannot be
+    /// created is logged; the write is tried all the same.
+    fn mark_unwritten(&self) {
+        self.unwritten_lock().pending = true;
+        let Some(marker) = &self.marker else {
+            return;
+        };
+        let made = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(marker)
+            .and_then(|_| fs::File::open(crate::desired::dir_of(marker))?.sync_all());
+        if let Err(why) = made {
+            tracing::error!(
+                alert = "halt",
+                path = %marker.display(),
+                %why,
+                "the marker of a halt being written could not be made"
+            );
+        }
+    }
+
+    /// Notes that a write of the state landed: a halt pending is in the file, and the marker
+    /// is removed. A marker that cannot be removed keeps the halt pending, so the next
+    /// heartbeat tries again.
+    fn written(&self) {
+        let mut unwritten = self.unwritten_lock();
+        if !unwritten.pending {
+            return;
+        }
+        if let Some(marker) = &self.marker {
+            match fs::remove_file(marker) {
+                Err(why) if why.kind() != io::ErrorKind::NotFound => {
+                    tracing::error!(
+                        path = %marker.display(),
+                        %why,
+                        "the marker of a halt written could not be removed"
+                    );
+                    return;
+                }
+                _ => {}
+            }
+        }
+        *unwritten = Unwritten::default();
     }
 
     /// Logs `entry` and appends it to the audit file, if the store has one. A line that cannot be
@@ -535,6 +703,12 @@ impl OpsStore {
     /// The store with `unix` as its clock for the audit file.
     pub(crate) fn with_unix(mut self, unix: UnixClock) -> Self {
         self.unix = unix;
+        self
+    }
+
+    /// The store with `write` putting its states into the file instead, its marker kept.
+    pub(crate) fn with_write(mut self, write: Writer) -> Self {
+        self.write = write;
         self
     }
 

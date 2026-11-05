@@ -421,6 +421,7 @@ impl Farm {
             heartbeat_listen: HEARTBEAT_ADDR.parse().expect("an address"),
             control_listen: CONTROL_ADDR.parse().expect("an address"),
             reload,
+            lock: hostkeeper_coordinator::lock::LockGuard::new(()),
         };
         let net = Net::default();
         let registry = net.clone();

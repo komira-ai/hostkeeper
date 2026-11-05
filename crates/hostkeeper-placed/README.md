@@ -3,7 +3,8 @@
 Placed-path linking: the daemon, not the hook, puts a package into the system. Why it is shaped
 this way: `docs/design/hostkeeper-design.md`, section 4.7 ("Units, enable and boot", "Paths",
 "Placed paths", "Uninstall"), section 6.5 (boot) and section 8.10. This page states what the code
-holds. It is a library with its fakes; the daemon calls it for a first install and for uninstall.
+holds. It is a library with its fakes; the daemon calls it for install, update, force_rollback,
+force and uninstall, and to reconcile at start.
 
 Each file of a package's `units/` becomes a symlink at `<unit dir>/<name>`, and each `[[files]]`
 entry a symlink at its `path`, each pointing into

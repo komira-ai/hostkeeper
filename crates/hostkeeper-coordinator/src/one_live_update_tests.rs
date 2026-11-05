@@ -78,7 +78,7 @@ fn record(f: &mut Fleet, service: &str, host: &str, role: RoleName, b: Heartbeat
 /// down together, and a bake of one service not holding another's order.
 #[test]
 fn two_services_with_pending_updates_order_one_host_and_the_second_waits_for_the_first() {
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     record(&mut f, "a", "d1", role("daemon"), beat("1.0"), 100);
     record(&mut f, "b", "d1", role("daemon"), beat("1.0"), 100);
     record(&mut f, "b", "d2", role("daemon"), beat("1.0"), 100);
@@ -116,7 +116,7 @@ fn two_services_with_pending_updates_order_one_host_and_the_second_waits_for_the
 #[test]
 fn a_failed_unhealthy_host_blocks_every_services_next_order() {
     let failed = unhealthy(last(beat("1.0"), "2.0", Outcome::Failed));
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     record(&mut f, "a", "d1", role("daemon"), failed.clone(), 100);
     record(&mut f, "b", "d1", role("daemon"), beat("1.0"), 100);
     record(&mut f, "a", "d2", role("daemon"), beat("1.0"), 100);
@@ -158,7 +158,7 @@ fn a_failed_unhealthy_host_blocks_every_services_next_order() {
 #[test]
 fn one_service_of_four_daemons_updates_one_host_at_a_time() {
     let hosts = ["d1", "d2", "d3", "d4"];
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for host in hosts {
         record(&mut f, "wide", host, role("daemon"), beat("1.0"), 100);
     }

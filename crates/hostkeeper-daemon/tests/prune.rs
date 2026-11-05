@@ -568,7 +568,8 @@ impl Prune for Probe {
 
 /// Catches a prune that waits for the promotion: an update whose first `verify` says
 /// `promotion_pending` is pruned right after that `verify`, before the watcher's, once; the
-/// watcher then runs to `Succeeded`, and the update's target is kept.
+/// watcher then runs to `Succeeded`, and the update's target is kept with the release it
+/// replaced, now `previous` (design section 4.7: 1.0.0 goes when 3.0.0 is confirmed).
 #[test]
 fn a_promotion_pending_success_counts_as_confirmed() {
     let rig = Rig::new("prune-promotion");
@@ -590,7 +591,7 @@ fn a_promotion_pending_success_counts_as_confirmed() {
     assert_eq!(*probe.verifies.lock().expect("the notes"), [1]);
     let ran = rig.launcher.steps(WEB);
     assert_eq!(ran.iter().filter(|step| **step == Step::Verify).count(), 3);
-    assert_eq!(versions(&rig), ["1.0.0", "2.0.0", "3.0.0"]);
+    assert_eq!(versions(&rig), ["2.0.0", "3.0.0"]);
 }
 
 /// Catches a prune used to make room: a package that cannot be staged for want of space, by an
@@ -638,8 +639,9 @@ fn prune_does_not_take_the_step_lock() {
 }
 
 /// Catches a removal error that fails the update, goes unreported, or is never tried again: the
-/// removal of 0.9.0's tree is refused, the update is still `Succeeded`, the alert names the
-/// version, and the next confirmed switch removes what was left.
+/// removals of the trees of 0.9.0 and of 1.0.0 (no longer `previous` once the update switched
+/// `current` to 3.0.0) are refused, the update is still `Succeeded`, the alert names both
+/// versions, and the next confirmed switch removes what was left.
 #[test]
 fn a_failed_removal_is_reported_and_does_not_fail_the_update() {
     let rig = Rig::new("prune-removal-fails");
@@ -653,16 +655,16 @@ fn a_failed_removal_is_reported_and_does_not_fail_the_update() {
     assert_eq!(
         lines(&alerts),
         [
-            "hostkeeper daemon: level=error alert=prune_failed service=web: the old versions of web could not be pruned: 0.9.0: the removal was refused"
+            "hostkeeper daemon: level=error alert=prune_failed service=web: the old versions of web could not be pruned: 0.9.0: the removal was refused; 1.0.0: the removal was refused"
         ]
     );
-    assert_eq!(leftovers(&rig), 1);
-    assert_eq!(versions(&rig), ["1.0.0", "2.0.0", "3.0.0"]);
+    assert_eq!(leftovers(&rig), 2);
+    assert_eq!(versions(&rig), ["2.0.0", "3.0.0"]);
 
     rig.add(WEB, "4.0.0");
     assert_eq!(daemon.order(&update(WEB, "4.0.0", &d(), 4)), succeeded());
     assert_eq!(leftovers(&rig), 0);
-    assert_eq!(versions(&rig), ["1.0.0", "2.0.0", "4.0.0"]);
+    assert_eq!(versions(&rig), ["3.0.0", "4.0.0"]);
     assert_eq!(lines(&alerts).len(), 1);
 }
 
