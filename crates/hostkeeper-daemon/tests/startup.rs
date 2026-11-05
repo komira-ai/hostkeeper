@@ -15,6 +15,7 @@ use hostkeeper_daemon::cli::{
     DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED, Unwired,
 };
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
+use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
 use hostkeeper_placed::{UnitControl, UnitControlError};
 use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
@@ -152,7 +153,7 @@ fn what_is_in_the_way_of_the_socket_stops_start_up_and_is_left_alone() {
 async fn a_real_connection_from_a_non_root_uid_is_closed() {
     let rig = Rig::new("real-sock");
     let started = start(&rig).expect("started");
-    let served = tokio::spawn(start::serve(started));
+    let served = tokio::spawn(start::serve(started, support::idle_links()));
     let path = rig.socket.clone();
     let connector = tower::service_fn(move |_: Uri| {
         let path = path.clone();
@@ -211,6 +212,9 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
             admin_socket: DEFAULT_ADMIN_SOCKET.into(),
             notify_systemd: false,
+            link: LoopFlags {
+                heartbeat_secs: DEFAULT_HEARTBEAT_SECS,
+            },
         }
     );
     assert_eq!(flags.settings().trusted_uid, 0);
@@ -222,6 +226,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
         format!("`--admin-socket` | `{DEFAULT_ADMIN_SOCKET}`"),
         "`--notify-systemd` | off".to_owned(),
+        format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
         format!("| {EXIT_CONFIG} |"),
