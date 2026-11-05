@@ -12,8 +12,7 @@ use crate::release::fakes::{FakeHistory, nth_commit, scratch, time_of};
 use crate::release::file_sha256;
 use crate::release::ports::PortError;
 
-/// The packaged binary. Not an ELF file: a test unpacks it, executable, into a scratch
-/// directory under `target/`, where the coverage tool loads every ELF executable it finds.
+/// The packaged binary; nothing reads it as a program.
 const BINARY: &[u8] = b"the hostkeeper binary";
 const UNIT: &str = include_str!("../../../tests/release/hostkeeper.service");
 const NAMES: [&str; 5] = [
@@ -584,6 +583,28 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
     );
 }
 
+/// On drop, makes every directory under its path writable again and removes the path. The
+/// unpacker seals a version read-only, so the scratch directory could not remove it, and the
+/// unpacked executable would stay under `target/`, where the coverage report loads every
+/// executable it finds.
+struct Unseal(std::path::PathBuf);
+
+impl Drop for Unseal {
+    fn drop(&mut self) {
+        fn writable(dir: &std::path::Path) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
+            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    writable(&entry.path());
+                }
+            }
+        }
+        writable(&self.0);
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() {
     // Catches: a package the daemon's unpacker (design 5.5 steps 3 and 4, hostkeeper-unpack)
@@ -600,6 +621,7 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
     let archive = req.out.join(&name);
     let packages = dir.join("packages");
     std::fs::create_dir(&packages).expect("the packages directory");
+    let unseal = Unseal(packages.clone());
     let meta = std::fs::metadata(&packages).expect("stat the packages directory");
     let owner = hostkeeper_unpack::Owner {
         uid: std::os::unix::fs::MetadataExt::uid(&meta),
@@ -638,6 +660,8 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
         .expect("the unpacked binary"),
         BINARY
     );
+    drop(unseal);
+    assert!(!packages.exists(), "the unpacked tree is removed");
 }
 
 #[test]
