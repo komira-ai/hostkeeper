@@ -869,7 +869,7 @@ fn the_flags_take_the_daemons_names_and_platforms() {
 
     for bad in [
         ["--service", "tier+store", "--version", "1.5.0"],
-        ["--service", "-tierstore", "--version", "1.5.0"],
+        ["--service=-tierstore", "--version", "1.5.0", "--index=i"],
         ["--service", "tierstore", "--version", "../1.5.0"],
         ["--service", "tierstore", "--version", ".1.5.0"],
     ] {

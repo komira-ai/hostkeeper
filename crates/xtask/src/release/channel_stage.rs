@@ -199,7 +199,7 @@ fn load_index(
             index.to_json()
         )));
     }
-    Ok(text)
+    Ok((text, index))
 }
 
 /// The SHA-256 digests of the subjects of the in-toto statement in an attestation bundle, or what
