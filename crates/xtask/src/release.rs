@@ -24,12 +24,16 @@
 //!   packages, every attestation and bundle against the signer identity of [`contract`] and the
 //!   commit.
 //! - `publish` ([`publish`]): the GitHub release of a checked directory, idempotent.
+//! - `channel-stage` ([`channel_stage`]): one version of a service from a directory of release
+//!   assets, checked and laid out in a directory as the release channel serves it
+//!   (`S/V/index.json` beside each package and its bundle); copies files only, idempotent.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh` and `pkgbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
 //! port; the only code that starts
 //! a process is `real::SystemExec`, built in [`real`] alone.
 
+mod channel_stage;
 mod check;
 mod check_binary;
 mod compare_images;
@@ -245,6 +249,38 @@ pub(crate) enum Verb {
         #[arg(long)]
         commit: Commit,
     },
+    /// Stage one version of a service from a directory of release assets into a directory laid
+    /// out as the release channel serves it (`<out>/S/V/index.json`, each package and its
+    /// `.sigstore.json` bundle beside it), after checking the index, every package's size and
+    /// SHA-256 and every bundle; nothing is written unless all pass. Files already staged with the
+    /// same bytes are left alone; a different file at a staged path is refused. Copies files only:
+    /// no upload, no credentials.
+    ChannelStage {
+        /// The service: a service name of the daemon's grammar.
+        #[arg(long, value_parser = hostkeeper_config::names::ServiceName::new)]
+        service: hostkeeper_config::names::ServiceName,
+        /// The version: a version of the daemon's grammar (`+` allowed).
+        #[arg(long, value_parser = hostkeeper_config::names::Version::new)]
+        version: hostkeeper_config::names::Version,
+        /// The directory of the release's assets: `S-V-<platform>.tar.zst` and its
+        /// `.sigstore.json` for each platform.
+        #[arg(long)]
+        from: PathBuf,
+        /// The release index of the version (default: `index.json` in `--from`); staged as
+        /// `S/V/index.json`.
+        #[arg(long)]
+        index: Option<PathBuf>,
+        /// The platforms the index must list a package for, comma-separated.
+        #[arg(
+            long,
+            value_delimiter = ',',
+            default_values_t = hostkeeper_config::platform::Platform::ALL.to_vec()
+        )]
+        require_platforms: Vec<hostkeeper_config::platform::Platform>,
+        /// The root of the channel's tree; `S/V/` is made under it.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Publish a checked directory as the release of the version, at the commit.
     Publish {
         dir: PathBuf,
@@ -281,6 +317,21 @@ pub(crate) fn run<A: Adapters>(
             version,
             binary,
         } => macos_pkg::check(&expanded, &version, &binary),
+        Verb::ChannelStage {
+            service,
+            version,
+            from,
+            index,
+            require_platforms,
+            out,
+        } => channel_stage::stage(&channel_stage::Request {
+            service,
+            version,
+            from,
+            index,
+            require: require_platforms,
+            out,
+        }),
         verb => run_with(verb, &connect().ports()),
     }
 }
@@ -375,7 +426,8 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
         | Verb::Index { .. }
-        | Verb::CheckMacosPkg { .. } => run(verb, || Lent(*ports)),
+        | Verb::CheckMacosPkg { .. }
+        | Verb::ChannelStage { .. } => run(verb, || Lent(*ports)),
     }
 }
 

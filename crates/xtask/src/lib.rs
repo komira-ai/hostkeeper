@@ -4,7 +4,8 @@
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
 //! - `release <verb>`: the release steps: the version of a commit, the hostkeeper package, the
-//!   release plan, and the check and publication of a release's assets (`release`).
+//!   release plan, the check and publication of a release's assets, and the staging of one
+//!   version of a service into a release channel's tree (`release`).
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
 //! them to the rules of this repository. The crate's one export is [`main`], the entry point of

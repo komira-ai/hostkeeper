@@ -65,9 +65,12 @@ makes that directory, owner only, on its first step.
 1. **Releases.** Each release of this repository carries, per platform,
    `hello-<version>-<platform>.tar.zst` and its attestation, and `hello-index.json`. It also
    carries the failing build, version `<version>-fail-ready`, with
-   `hello-fail-ready-index.json`. Copy each index to the channel as
-   `<release_channel>/hello/<version>/index.json`, beside its packages. A host fetches nothing
-   else.
+   `hello-fail-ready-index.json`. Stage each version into the channel's tree with
+   `cargo xtask release channel-stage --service hello --version <version> --from <assets>
+   --index <assets>/hello-index.json --out <tree>` (and `--version <version>-fail-ready
+   --index <assets>/hello-fail-ready-index.json` for the failing build), which lays out
+   `hello/<version>/index.json` beside its packages and their bundles
+   ([docs/deploy/release-channel.md](deploy/release-channel.md)). A host fetches nothing else.
 2. **One platform.** The desired state carries one package digest, and every host checks the
    package it fetches against it. Run the proof on hosts of one platform, and use the digest
    of that platform's package: the `.sha256` file beside it.
