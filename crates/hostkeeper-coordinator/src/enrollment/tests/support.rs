@@ -18,6 +18,7 @@ use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Claims, EnrollRequest, PollRequest, PollResponse, PollState,
 };
+use hostkeeper_proto::hostkeeper::operator::v1::ApproveRequest;
 use hostkeeper_testkit::Scratch;
 use http_body_util::Full;
 use hyper::body::{Body, Frame};
@@ -120,14 +121,24 @@ impl Rig {
 
     /// A rig whose files go through `fs` and whose nonces come from `random`.
     pub fn over(name: &str, fs: Arc<dyn Fs>, random: Random) -> Rig {
+        Rig::configured(name, fs, random, |enrollment| enrollment)
+    }
+
+    /// [`Rig::over`], with the enrollment `configure` makes of the one started.
+    pub fn configured(
+        name: &str,
+        fs: Arc<dyn Fs>,
+        random: Random,
+        configure: impl FnOnce(Enrollment) -> Enrollment,
+    ) -> Rig {
         let dir = scratch(name);
         let files = Files::in_dir(&dir);
         let clock = FixedClock::at(NOW);
-        let enrollment = Arc::new(
+        let enrollment = Arc::new(configure(
             files
                 .start(fs, Arc::clone(&clock), random)
                 .expect("enrollment starts"),
-        );
+        ));
         Rig {
             _dir: dir,
             files,
@@ -138,12 +149,80 @@ impl Rig {
 
     /// Enrollment started again over the same files: what a restart makes.
     pub fn restart(&self) -> Arc<Enrollment> {
-        Arc::new(
+        self.restart_with(|enrollment| enrollment)
+    }
+
+    /// [`Rig::restart`], with the enrollment `configure` makes of the one started.
+    pub fn restart_with(
+        &self,
+        configure: impl FnOnce(Enrollment) -> Enrollment,
+    ) -> Arc<Enrollment> {
+        Arc::new(configure(
             self.files
                 .start(Arc::new(RealFs), Arc::clone(&self.clock), os_random())
                 .expect("enrollment starts again"),
-        )
+        ))
     }
+}
+
+/// The serial number of the Mac of the tests.
+pub const SERIAL: &str = "C02XK1ABJG5J";
+
+/// The `Enroll` of a Mac's `key` from machine `machine_id`, claiming `serial` and presenting
+/// `nonce`.
+pub fn mac_request(key: &HostKey, machine_id: &str, serial: &str, nonce: &[u8]) -> EnrollRequest {
+    EnrollRequest {
+        claims: Some(Claims {
+            machine_id: machine_id.to_owned(),
+            mac_serial: serial.to_owned(),
+            platform_uuid: "4C4C4544-0042-5A10-8048-B7C04F4E3332".to_owned(),
+            ..Claims::default()
+        }),
+        mac_nonce: nonce.to_vec(),
+        ..enroll_request(key, machine_id)
+    }
+}
+
+/// The operator's approval of `key`'s request as `host`, a storage host running `kbf`.
+pub fn approval(key: &HostKey, host: &str) -> ApproveRequest {
+    ApproveRequest {
+        request_id: key.key_hash().to_hex(),
+        key_sha256: key.key_hash().to_hex(),
+        host_id: host.to_owned(),
+        role: "storage".to_owned(),
+        services: vec!["kbf".to_owned()],
+        replace: false,
+        reason: "new rack".to_owned(),
+    }
+}
+
+/// An audit entry as the tests compare it: who, what, which host, and the reason.
+pub type Audited = (String, String, Option<String>, Option<String>);
+
+/// Every entry of the audit log of `coordinator`, oldest first, without its number.
+pub fn audit_of(coordinator: &crate::service::Coordinator) -> Vec<Audited> {
+    coordinator
+        .ops()
+        .audit_log()
+        .expect("the audit log")
+        .into_iter()
+        .map(|entry| (entry.by, entry.action, entry.node_id, entry.reason))
+        .collect()
+}
+
+/// The entries of the audit log of `coordinator` after the first `skip`.
+pub fn audit_after(coordinator: &crate::service::Coordinator, skip: usize) -> Vec<Audited> {
+    audit_of(coordinator).split_off(skip)
+}
+
+/// An audit entry by `by` of `action` about `node`, with `reason`.
+pub fn audited(by: &str, action: &str, node: Option<&str>, reason: &str) -> Audited {
+    (
+        by.to_owned(),
+        action.to_owned(),
+        node.map(str::to_owned),
+        Some(reason.to_owned()),
+    )
 }
 
 /// A host's key, as a daemon makes it.

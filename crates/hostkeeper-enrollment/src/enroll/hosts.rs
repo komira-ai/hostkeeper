@@ -72,6 +72,27 @@ impl EnrollmentStore {
             .map_err(|e| corrupt(&self.host_path(host), &e.to_string()))
     }
 
+    /// The role `host` was approved for, when its approval is for the key `key_hash`; `None`
+    /// for a host id never approved, or taken over by another key since (an approval with
+    /// `replace`): a certificate of the key before names the host no longer. The heartbeat
+    /// path reads it for the key of the certificate a caller presents.
+    ///
+    /// # Errors
+    /// [`StoreError`] when the host file cannot be read, or holds no role.
+    pub fn host_role_for(
+        &self,
+        host: &HostId,
+        key_hash: &KeyHash,
+    ) -> Result<Option<Role>, StoreError> {
+        let holds = self
+            .load_host(host)?
+            .is_some_and(|row| row.key.equals_in_constant_time(key_hash));
+        if !holds {
+            return Ok(None);
+        }
+        self.host_role(host)
+    }
+
     /// Whether `host` is denied and may still have an update in flight.
     ///
     /// # Errors

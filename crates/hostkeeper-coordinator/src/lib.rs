@@ -25,7 +25,10 @@
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the one live update,
 //!   and [`orders`], the operator's orders (`force`, `abort`) a typed heartbeat answer carries;
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
-//!   halts, aborts, exclusions, holds, the audit log);
+//!   halts, aborts, exclusions, holds, the audit log), and [`operator_enrollment`], its
+//!   `Enrollment.List` and `Enrollment.Approve`;
+//! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`),
+//!   kept in the ops file, and the match of each request `Enrollment.List` shows against it;
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
 //!   last good versions and the audit ring, in the operations file, and every change as a line of
 //!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
@@ -68,12 +71,14 @@ pub mod halt;
 pub mod holds;
 pub mod http;
 pub mod identity;
+pub mod inventory;
 pub mod jti_file;
 pub mod listen;
 pub mod lock;
 pub mod membership;
 pub mod operate;
 pub mod operator;
+pub mod operator_enrollment;
 pub mod ops;
 pub(crate) mod ops_file;
 pub mod orders;
@@ -125,6 +130,8 @@ mod holds_calls_tests;
 mod holds_tests;
 #[cfg(test)]
 mod http_tests;
+#[cfg(test)]
+mod inventory_tests;
 #[cfg(test)]
 mod marks_support;
 #[cfg(test)]

@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
 use futures::future::{Either, select};
+use hostkeeper_enrollment::enroll::DEFAULT_MAX_PENDING;
 use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_enrollment::validity::SystemClock;
 use hostkeeper_oidc::{AllowList, ConfigError, HttpsKeys, KeySourceError, Roots, Verifier};
@@ -45,7 +46,9 @@ use hostkeeper_wire::identity::{
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::desired::{DesiredStore, StoreError};
-use crate::enrollment::{Setup, SetupError, os_random, setup};
+use crate::enrollment::{
+    AllowlistError, MacAllowlist, MacPolicy, NoDeviceState, Setup, SetupError, os_random, setup,
+};
 use crate::fleet::QUIET_START;
 use crate::http::Surface;
 use crate::jti_file::{JtiError, JtiFile, jti_path};
@@ -120,6 +123,12 @@ pub enum StartError {
     /// Enrollment did not start: its CA, its store or the server certificate.
     #[error(transparent)]
     Enrollment(#[from] SetupError),
+    /// The Mac serial allowlist is refused.
+    #[error(transparent)]
+    MacAllowlist(#[from] AllowlistError),
+    /// The Mac serial allowlist names a service the rollout file does not define.
+    #[error("--mac-serial-allowlist names service {0}, which --rollout-file does not define")]
+    MacService(String),
     /// `--ui-dir` does not name a directory.
     #[error("--ui-dir: {0}")]
     UiDir(#[from] UiDirError),
@@ -292,6 +301,16 @@ pub struct Serve {
     /// one given.
     #[arg(long = "server-name", requires = "enrollment_dir")]
     pub server_names: Vec<String>,
+    /// How many enrollment requests may wait for an operator at once (default 256). A new
+    /// request over it is refused `pending_full`; no waiting request is dropped for it, and a
+    /// host posting its waiting request again is still answered.
+    #[arg(long, requires = "enrollment_dir", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_pending_enrollments: Option<u64>,
+    /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
+    /// prefix, role and services of each: a TOML file of `[[mac]]` entries (`serial`,
+    /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
+    #[arg(long, requires = "enrollment_dir")]
+    pub mac_serial_allowlist: Option<PathBuf>,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -441,6 +460,23 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         &flags.server_cert_file,
     ) {
         (Some(dir), Some(ca_key), Some(server_cert)) => {
+            let allowlist = flags
+                .mac_serial_allowlist
+                .as_deref()
+                .map(MacAllowlist::load)
+                .transpose()?
+                .unwrap_or_default();
+            if let Some(unknown) = allowlist
+                .services()
+                .find(|service| coordinator.services.get(service.as_str()).is_none())
+            {
+                return Err(StartError::MacService(unknown.as_str().to_owned()));
+            }
+            let max_pending = flags
+                .max_pending_enrollments
+                .map_or(DEFAULT_MAX_PENDING, |max| {
+                    usize::try_from(max).unwrap_or(usize::MAX)
+                });
             let enrollment = setup(
                 Arc::new(RealFs),
                 &Setup {
@@ -452,7 +488,13 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 },
                 Arc::new(SystemClock),
                 os_random(),
-            )?;
+            )?
+            .with_max_pending(max_pending)
+            // The MDM gate is not built into this coordinator: no device is known to it.
+            .with_mac(MacPolicy {
+                device_state: Arc::new(NoDeviceState),
+                allowlist,
+            });
             let client = ClientAuth {
                 optional: true,
                 extra_roots: vec![enrollment.ca_bundle().certificate_der().to_vec()],

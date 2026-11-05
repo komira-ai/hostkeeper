@@ -434,6 +434,9 @@ message Claims {
   string mac_serial = 5;
   // A Mac's platform UUID.
   string platform_uuid = 6;
+  // The MAC address of the host's BMC, as the BMC reports it for its LAN channel (IPMI LAN
+  // configuration parameter 5); empty when the daemon could not read one, and on a Mac.
+  string bmc_mac = 7;
 }
 
 message EnrollResponse {

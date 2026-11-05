@@ -13,6 +13,7 @@ import * as host from "./pages/host.js";
 import * as rollout from "./pages/rollout.js";
 import * as holds from "./pages/holds.js";
 import * as enrollment from "./pages/enrollment.js";
+import * as inventory from "./pages/inventory.js";
 import * as audit from "./pages/audit.js";
 
 const PAGES = [
@@ -21,6 +22,7 @@ const PAGES = [
   ["rollout", "Rollout", rollout],
   ["holds", "Holds", holds],
   ["enrollment", "Enrollment", enrollment],
+  ["inventory", "Inventory", inventory],
   ["audit", "Audit", audit],
 ];
 

@@ -145,6 +145,7 @@ fn linux_claims_are_trimmed_sorted_and_without_loopback() {
             network_addresses: vec!["02:00:00:00:00:01".into(), "02:00:00:00:00:02".into()],
             mac_serial: None,
             platform_uuid: None,
+            bmc_mac: None,
         }
     );
 }
