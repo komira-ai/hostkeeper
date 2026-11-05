@@ -32,8 +32,12 @@ const COMMAND: &str = concat!("Command::", "new");
 const CFG_TEST: &str = concat!("#[cfg(", "test)]");
 
 /// The test files that start a process on purpose, and why.
-const PROCESS_TESTS: [(&str, &str); 4] = [
+const PROCESS_TESTS: [(&str, &str); 5] = [
     ("tests/cli.rs", "runs the xtask binary as a process"),
+    (
+        "tests/package_launch.rs",
+        "starts the packaged test fixture through the package unit's ExecStart",
+    ),
     ("tests/hygiene/main.rs", "lists the tracked files with git"),
     (
         "tests/wallclock/main.rs",
