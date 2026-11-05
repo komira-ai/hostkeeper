@@ -1,0 +1,396 @@
+# The release files of one commit: for linux-x86_64 and linux-arm64, the `hostkeeper` binary as a
+# tarball with its CycloneDX SBOM, the deb and the rpm, and hostkeeper's own package (`.tar.zst`
+# with its `.sha256`); the release index `index.json`; one SHA256SUMS over them; and, on a push to
+# main, the build-provenance and SBOM attestations of this repository with a bundle per signed
+# file. The names are the release contract (docs/deploy/verify-a-release.md):
+#
+#   hostkeeper-<version>-<platform>.tar.gz          hostkeeper-<version>-<platform>.cdx.json
+#   hostkeeper-<version>-<platform>.tar.zst         hostkeeper-<version>-<platform>.tar.zst.sha256
+#   hostkeeper_<version>_<deb-arch>.deb             hostkeeper-<version>-1.<rpm-arch>.rpm
+#   index.json   SHA256SUMS   <signed file>.sigstore.json
+#
+# `<version>` is X.Y.Z (`cargo xtask release version`: X.Y from the VERSION file, Z the number of
+# first-parent commits of main since the commit that last changed it). Every build job writes it
+# into the workspace (`release set-version`) and builds with RELEASE_COMMIT set to the commit, so
+# `hostkeeper --version` prints `hostkeeper X.Y.Z+<12 hex>`, and `release check-binary` refuses a
+# binary that prints anything else.
+#
+# The attest job is in THIS file for one reason: the signer identity of an attestation is the
+# workflow file that ran the signing step, and every consumer verifies exactly
+# `komira-ai/hostkeeper/.github/workflows/artifacts.yml` on `refs/heads/main`. Do not move or
+# rename it. Only `attest` holds `id-token: write` and `attestations: write`, and only under its
+# exact `if:` (the workflow lint, crates/xtask/tests/workflows, holds both). While it holds them
+# no repository code runs and nothing is built: it runs pinned actions, two `sha256sum --check`
+# and a `cp` per bundle. The files reach it through the run's artifact store, where a job that ran
+# repository code could have replaced them, so it first refuses sums other than the ones the sums
+# job published (their digest is a job output) and then files that differ from the sums.
+#
+# No pull request runs this workflow (AGENTS.md B9: a pull request runs only build and unit tests
+# with coverage). A push to main builds, sums, signs and checks what it signed (`verify`); a run
+# by hand on a branch builds and sums and signs nothing.
+#
+# Triggers: only `workflow_dispatch` for now. The `cargo xtask release` verbs this file runs and
+# the coordinator's files (its tarball, SBOM and image, which the release's asset list holds)
+# land separately; `push` to main is added with them, so that no push to main fails here first.
+name: artifacts
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+# A run per commit: two runs for one commit (a re-run) queue behind each other, and different
+# commits do not wait for each other; a signing run is never cancelled. This workflow builds and
+# attests and never tags or publishes, so it is outside the release group of release.yml (the
+# workflow lint lists it as exempt and holds it to this group).
+concurrency:
+  group: artifacts-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # cargo-cyclonedx makes the SBOMs, nfpm the deb and the rpm: release binaries, checked
+  # against their published SHA-256 by `cargo xtask install-tool` before use (the digest of
+  # each platform's archive is in the build job's matrix).
+  CYCLONEDX_VERSION: 0.5.9
+  NFPM_VERSION: 2.48.0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The one computation of the version every build gives the binary. It reads the first-parent
+  # history, so the checkout is whole (a shallow one is refused, not counted).
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: The version of this commit
+        id: version
+        run: cargo xtask release version --commit "$GITHUB_SHA" --version-file VERSION --output "$GITHUB_OUTPUT"
+
+
+  # One job per Linux platform, each on a GitHub-hosted runner of its own architecture, so each
+  # binary runs where it is built. glibc: the binary needs the glibc of the runner image it was
+  # built on (Ubuntu 24.04) or newer.
+  build:
+    name: ${{ matrix.platform }}
+    needs: [version]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            rust-target: x86_64-unknown-linux-gnu
+            deb-arch: amd64
+            cyclonedx-sha256: fb8dbee9f182173e062a64a387b21a0badc6fab8b2abf9294973f012972bf6d8
+            nfpm-archive: Linux_x86_64
+            nfpm-sha256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            rust-target: aarch64-unknown-linux-gnu
+            deb-arch: arm64
+            cyclonedx-sha256: 7bf131ca5389b07a4f10c182bcf8a5ad339d64408b6f0d8f6834a0bd6120a06a
+            nfpm-archive: Linux_arm64
+            nfpm-sha256: a9a75213763783b7669719e505474c748c5ad7dc66591a195619deb50f85c2f4
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      TARGET: ${{ matrix.rust-target }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Download cargo-cyclonedx (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      # install-tool unpacks gzip tars only: it checks the xz archive and copies it, and tar
+      # unpacks the checked copy.
+      - name: Check cargo-cyclonedx (pinned checksum)
+        env:
+          SHA256: ${{ matrix.cyclonedx-sha256 }}
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/cyclonedx.tar.xz" --sha256 "$SHA256" --out "$RUNNER_TEMP/cyclonedx-checked.tar.xz"
+      - name: Install cargo-cyclonedx
+        run: tar -xJf "$RUNNER_TEMP/cyclonedx-checked.tar.xz" -C "$HOME/.cargo/bin" --strip-components 1 "cargo-cyclonedx-$TARGET/cargo-cyclonedx"
+      - run: cargo cyclonedx --version
+      - name: Download nfpm (HTTPS only, redirects included)
+        env:
+          ARCHIVE: ${{ matrix.nfpm-archive }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_$ARCHIVE.tar.gz"
+      - name: Install nfpm (pinned checksum)
+        env:
+          SHA256: ${{ matrix.nfpm-sha256 }}
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$SHA256" --out "$HOME/.cargo/bin/nfpm" --extract tar.gz --member nfpm
+      - run: nfpm --version
+      # The workspace's version is the release's; `Cargo.lock` gets it too, so the `--locked`
+      # build accepts it. The SBOM step must leave the lock file exactly as written here.
+      - name: The workspace takes the version of the release
+        run: cargo xtask release set-version --version "$RELEASE_VERSION"
+      - name: Keep the lock file as written
+        run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
+      # RELEASE_COMMIT is a build input of the binary (crates/hostkeeper-daemon/src/stamp.rs), not
+      # configuration the binary reads when it runs.
+      - name: Build hostkeeper
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release -p hostkeeper --bin hostkeeper
+      - name: hostkeeper says the version and the commit
+        run: cargo xtask release check-binary target/release/hostkeeper "$RELEASE_VERSION" "$GITHUB_SHA"
+      - name: SBOM
+        run: cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target "$TARGET"
+      - name: The SBOM step left Cargo.lock unchanged
+        run: cmp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
+      - run: mkdir dist
+      - name: Name the SBOM
+        run: cp crates/hostkeeper/hostkeeper_bin.cdx.json "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.cdx.json"
+      # The commit time is the one time the tarball holds, so its bytes depend on its inputs.
+      - name: The commit time
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
+      - name: Tarball of the binary
+        run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper | gzip -n > "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      # nfpm reads VERSION and ARCH into packaging/linux/nfpm.yaml and names the files
+      # hostkeeper_<version>_<deb-arch>.deb and hostkeeper-<version>-1.<rpm-arch>.rpm.
+      - name: The deb
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.deb-arch }}
+        run: nfpm package --config packaging/linux/nfpm.yaml --packager deb --target dist
+      - name: The rpm
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.deb-arch }}
+        run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target dist
+      - name: hostkeeper's own package and its SHA-256
+        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --unit packaging/linux/hostkeeper.service --out dist
+      # The tarball as a host takes it: unpacked with this runner's tar, the binary in it says the
+      # version and the commit, as the built one did.
+      - run: mkdir "$RUNNER_TEMP/unpacked"
+      - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper
+      - name: The packaged hostkeeper says the version and the commit
+        run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper" "$RELEASE_VERSION" "$GITHUB_SHA"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assets-${{ matrix.platform }}
+          path: dist/
+          retention-days: 90
+          if-no-files-found: error
+
+  # index.json over the packages of both platforms, then SHA256SUMS over every file but itself
+  # (the bundles come later, from attest). The attest job signs these sums, so they are the one
+  # list of what a release holds.
+  sums:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      # `assets-*` is the build jobs' artifacts, one per platform; the run's other artifacts are
+      # `sha256sums` and `bundles`.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: assets-*
+          path: dist
+          merge-multiple: true
+      - name: The release index
+        run: cargo xtask release index --version "$RELEASE_VERSION" --dir dist
+      # In the C locale, so the lines are in the byte order of the names; written outside dist,
+      # so that SHA256SUMS does not list itself.
+      - name: SHA256SUMS
+        working-directory: dist
+        env:
+          LC_ALL: C
+        run: sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS"
+      - run: mv "$RUNNER_TEMP/SHA256SUMS" dist/SHA256SUMS
+      - name: The digest of SHA256SUMS, for attest
+        id: digest
+        run: echo "sha256=$(sha256sum dist/SHA256SUMS | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sha256sums
+          path: |
+            dist/SHA256SUMS
+            dist/index.json
+          retention-days: 90
+          if-no-files-found: error
+
+  # Push to main only: build provenance for every summed file, an SBOM attestation for each
+  # binary tarball, and a provenance attestation of each attested file alone, whose bundle is
+  # copied beside it as `<file>.sigstore.json` for a host that verifies without GitHub.
+  attest:
+    needs: [version, sums]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      V: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: assets-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sha256sums
+          path: dist
+      - name: Refuse sums other than the build's
+        env:
+          SUMS_SHA256: ${{ needs.sums.outputs.sha256 }}
+        run: /usr/bin/sha256sum --check --strict <<< "$SUMS_SHA256  dist/SHA256SUMS"
+      - name: Refuse listed files that differ from the sums
+        working-directory: dist
+        run: /usr/bin/sha256sum --check --strict SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+          sbom-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-x86_64.cdx.json
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
+          sbom-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
+      - id: tarball-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+      - name: Name the bundle of the tarball for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.tarball-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-linux-x86_64.tar.gz.sigstore.json"
+      - id: package-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst
+      - name: Name the bundle of the package for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.package-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-linux-x86_64.tar.zst.sigstore.json"
+      - id: deb-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper_${{ needs.version.outputs.version }}_amd64.deb
+      - name: Name the bundle of the deb for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper_${V}_amd64.deb.sigstore.json"
+      - id: rpm-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-1.x86_64.rpm
+      - name: Name the bundle of the rpm for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.rpm-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.x86_64.rpm.sigstore.json"
+      - id: tarball-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
+      - name: Name the bundle of the tarball for linux-arm64
+        env:
+          BUNDLE: ${{ steps.tarball-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-linux-arm64.tar.gz.sigstore.json"
+      - id: package-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.tar.zst
+      - name: Name the bundle of the package for linux-arm64
+        env:
+          BUNDLE: ${{ steps.package-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-linux-arm64.tar.zst.sigstore.json"
+      - id: deb-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper_${{ needs.version.outputs.version }}_arm64.deb
+      - name: Name the bundle of the deb for linux-arm64
+        env:
+          BUNDLE: ${{ steps.deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper_${V}_arm64.deb.sigstore.json"
+      - id: rpm-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-1.aarch64.rpm
+      - name: Name the bundle of the rpm for linux-arm64
+        env:
+          BUNDLE: ${{ steps.rpm-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.aarch64.rpm.sigstore.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bundles
+          path: dist/*.sigstore.json
+          retention-days: 90
+          if-no-files-found: error
+
+  # Push to main only, after attest, with read-only scopes: the checks a consumer makes
+  # (docs/deploy/verify-a-release.md). `release check` holds the files to the release's asset
+  # names and to SHA256SUMS, and verifies each attestation online and from its bundle against
+  # the signer workflow, the ref refs/heads/main and this commit.
+  verify:
+    needs: [version, attest]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      # xtask is compiled before any step holds the token.
+      - name: Compile xtask
+        run: cargo xtask --help
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: assets-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sha256sums
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundles
+          path: dist
+      - name: Check the files against SHA256SUMS
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Verify every file and attestation as a consumer does
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release check dist --version "$RELEASE_VERSION" --commit "$GITHUB_SHA"

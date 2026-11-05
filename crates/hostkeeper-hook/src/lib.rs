@@ -25,7 +25,7 @@ mod params;
 mod step;
 
 pub use exit::{EXIT_DEFERRED, EXIT_FAILURE, EXIT_HALT, EXIT_OK, Outcome};
-pub use line::{Class, LineError, MAX_REASON_LEN, Report, is_reason_token};
+pub use line::{Class, LineError, MAX_REASON_LEN, REASON_LEASES_LIVE, Report, is_reason_token};
 pub use next::{Context, Next, Phase, Verdict, next};
 pub use params::{
     ARTIFACT_DIGEST_KEY, PREVIOUS_RELEASE_KEY, PREVIOUS_VERSION_KEY, PROMOTION_CEILING_KEY, Params,

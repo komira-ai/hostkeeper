@@ -3,6 +3,8 @@
 //! clean ([`CLEAN`]) and reading the exact problems it reports.
 
 mod lint;
+mod release;
+mod release_tests;
 mod yaml;
 
 use std::path::PathBuf;
@@ -88,7 +90,9 @@ fn assert_problems(text: &str, want: &[&str]) {
 fn every_workflow_of_the_repository_passes_the_lint() {
     // Catches: an unpinned action, a missing top-level `permissions: {}`, pull_request_target,
     // a runner that is not GitHub-hosted, a write scope outside the table, or a privileged or
-    // macOS job on pull_request, in any workflow file of this repository.
+    // macOS job on pull_request, a release workflow out of its shape, or a workflow that tags or
+    // publishes on pull_request or outside the release group, in any workflow file of this
+    // repository.
     let all = workflows();
     assert!(
         all.iter().any(|(name, _)| name == "ci.yml"),
@@ -96,7 +100,8 @@ fn every_workflow_of_the_repository_passes_the_lint() {
     );
     let mut found = Vec::new();
     for (file, text) in all {
-        for p in lint(&file, &text) {
+        let publish = release::publish_problems(&file, &text);
+        for p in lint(&file, &text).into_iter().chain(publish) {
             found.push(format!("{file}: {p}"));
         }
     }
@@ -279,8 +284,8 @@ fn pull_request_target_is_refused_in_every_shape() {
 fn a_write_scope_outside_the_table_or_a_permissions_scalar_is_refused() {
     // Catches: a job that grants itself a write scope no rule allows, or every scope at once.
     assert!(
-        WRITE_ALLOWED.is_empty(),
-        "no job of this repository writes yet"
+        WRITE_ALLOWED.iter().all(|a| a.file != "ci.yml"),
+        "no job of ci.yml writes"
     );
     let read = "      contents: read\n";
     assert_problems(

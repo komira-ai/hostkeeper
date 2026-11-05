@@ -25,6 +25,7 @@
 //! - [`observer`]: what the admin `Status` reports of a running service.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
 //! - [`cli`]: `hostkeeper daemon` and its flags; the binary only forwards to it.
+//! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
@@ -50,6 +51,7 @@ pub mod prune;
 pub mod real_packages;
 pub mod refusal;
 pub mod socket;
+pub mod stamp;
 pub mod start;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

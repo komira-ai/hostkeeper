@@ -122,7 +122,8 @@ impl fmt::Display for Reason {
 }
 
 /// What a host says about itself so that an operator can recognise it. Claims are not proof:
-/// they authorise nothing (design section 5.7, step 2). A claim the host cannot read is absent.
+/// they authorise nothing (design section 5.7, step 2). A claim a Linux host cannot read is absent;
+/// a Mac's serial and platform UUID are always present (see `claims.rs`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Claims {
     /// `/etc/machine-id`.
@@ -133,6 +134,10 @@ pub struct Claims {
     pub product_uuid: Option<String>,
     /// The link-layer addresses of the host's network interfaces, sorted, without duplicates.
     pub network_addresses: Vec<String>,
+    /// A Mac's serial number (`IOPlatformSerialNumber`).
+    pub mac_serial: Option<String>,
+    /// A Mac's platform UUID (`IOPlatformUUID`).
+    pub platform_uuid: Option<String>,
 }
 
 /// An `Enroll` request. It is a function of the key, the claims, the image and `renewal_of`

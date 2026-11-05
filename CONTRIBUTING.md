@@ -78,7 +78,8 @@ Nothing the updater decides reads the wall clock: decisions read `hostkeeper_ste
 read (`SystemTime::now()` and its equivalents, a realtime clock id) in any non-test source under
 `crates/*/src/`, and a rename of a wall-clock name (`use .. as ..`, `type .. = ..;`), except in a
 path listed, with its reason, in `crates/xtask/tests/wallclock/allowed.txt`: certificate, OIDC or
-enrollment-nonce validity only.
+enrollment-nonce validity, and the time stamp of the coordinator's audit file, which no decision
+reads.
 
 ## Small pull requests
 
