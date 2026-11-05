@@ -9,10 +9,12 @@
 //!   can break the protocol;
 //! - `store.rs`: the pki directory: lock, schema, ownership, crash recovery and pruning;
 //! - `host.rs`: the key, the entropy and the Linux claims over temporary trees;
+//! - `bmc.rs`: the BMC MAC claim of a Linux host, read through the IPMI port;
 //! - `mac.rs`: the claims of a Mac, read from `ioreg` output, and a request refused without them;
 //! - `pacing.rs`: the loop's log and sleeps.
 
 mod acceptance;
+mod bmc;
 mod faults;
 mod host;
 mod mac;
