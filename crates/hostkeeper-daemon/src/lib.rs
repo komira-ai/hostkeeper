@@ -12,13 +12,16 @@
 //!   `hostkeeper-steps` under the service's lock and the host's step lock ([`locks`]); a first
 //!   install is placed by the runner's switch ([`place`]). `force` is checked the same way but for
 //!   `busy` and the standing halt, runs no hook, and switches the service under its lock alone,
-//!   through the placed-path linker of `hostkeeper-placed` ([`verbs::force`]); [`prune`] is its
-//!   last step. `uninstall` runs the sequence of design section 4.7 ([`uninstall`]), resumed from
+//!   through the placed-path linker of `hostkeeper-placed` ([`verbs::force`]). `uninstall` runs the sequence of design section 4.7 ([`uninstall`]), resumed from
 //!   its tombstone in `placed.json`.
+//! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
+//!   `current`), the service's version directories but `current` and `previous` are deleted,
+//!   under the lock the order already holds.
 //! - [`halt`]: the held halt generation of each service, persisted, never lowered.
 //! - [`packages`]: the port of the package store, and [`installed`] what the host runs.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
 //! - [`cli`]: `hostkeeper daemon` and its flags; the binary only forwards to it.
+//! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
@@ -42,6 +45,7 @@ pub mod place;
 pub mod prune;
 pub mod refusal;
 pub mod socket;
+pub mod stamp;
 pub mod start;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

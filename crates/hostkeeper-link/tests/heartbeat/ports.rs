@@ -130,6 +130,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "lib.rs",
         "names.rs",
         "order.rs",
+        "pki.rs",
         "ports.rs",
         "testing.rs",
     ];
@@ -157,10 +158,12 @@ fn the_loop_dials_only_the_coordinator_link_port() {
             "hostkeeper-hook",
             "hostkeeper-proto",
             "hostkeeper-steps",
+            "p256",
             "rustix",
             "serde",
             "serde_json",
             "thiserror",
+            "x509-cert",
         ])
     );
 }

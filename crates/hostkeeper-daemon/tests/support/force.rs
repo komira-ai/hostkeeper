@@ -6,7 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hostkeeper_daemon::prune::{NoPrune, Prune};
+use hostkeeper_daemon::prune::Prune;
+use hostkeeper_daemon::testing::NoPrune;
 use hostkeeper_daemon::{Daemon, Placement, Ports, Reply};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_placed::placer::is_temporary;

@@ -25,6 +25,7 @@ use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsState, OpsStore};
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
 use crate::tokens::{OperatorTokens, TokenName};
+use crate::ui::UiDir;
 
 /// The time since the coordinator started.
 pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
@@ -319,6 +320,7 @@ pub struct Coordinator {
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
     features: Vec<String>,
+    ui: Option<UiDir>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -366,6 +368,7 @@ impl Coordinator {
             services_dropped: AtomicU64::new(0),
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
+            ui: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -420,6 +423,19 @@ impl Coordinator {
     #[must_use]
     pub fn tokens(&self) -> &OperatorTokens {
         &self.tokens
+    }
+
+    /// The same coordinator serving the static files of `ui` on the private surface, or none.
+    #[must_use]
+    pub fn with_ui(mut self, ui: Option<UiDir>) -> Self {
+        self.ui = ui;
+        self
+    }
+
+    /// The directory whose files the private surface serves under `/ui/`, if there is one.
+    #[must_use]
+    pub fn ui(&self) -> Option<&UiDir> {
+        self.ui.as_ref()
     }
 
     /// The same coordinator over `ops` instead of a store that keeps nothing.

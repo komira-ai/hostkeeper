@@ -1,8 +1,9 @@
 //! Test doubles of the daemon's ports, for this crate's tests and the tests of the crates that
 //! build on it (behind the feature `testing`): a clock that moves only when told to, a launcher
 //! that plays a script and can hold a step until released, a package store that builds version
-//! directories in a test's directory, a readiness notifier that counts its notices, and a
-//! connection that counts the bytes read from it. The launcher and the notifier can write what
+//! directories in a test's directory, a readiness notifier that counts its notices, a
+//! connection that counts the bytes read from it, and prunes that delete nothing or record
+//! their calls. The launcher and the notifier can write what
 //! they are asked to one shared [`Log`], so that a test sees the order across both.
 //! Nothing here sleeps or reads the wall clock: a test drives every wait with a channel.
 
@@ -20,13 +21,16 @@ use std::task::{Context, Poll};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Step;
 use hostkeeper_steps::{
-    AdditiveCall, Clock, LaunchError, Seal, Staged, StepCall, StepExit, StepLauncher, tree_digest,
+    AdditiveCall, Clock, LaunchError, Layout, Protected, PruneReport, PruneStep, Seal, Staged,
+    StepCall, StepExit, StepLauncher, tree_digest,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tonic::transport::server::Connected;
 
+use crate::locks::ServiceGuard;
 use crate::notify::ReadyNotifier;
 use crate::packages::{PackageError, Packages, VersionDir};
+use crate::prune::Prune;
 use crate::verb::PackageDigest;
 
 /// One log of what the fakes were asked, in order: `run <unit>`, `stop <unit>`,
@@ -645,4 +649,97 @@ impl<IO> Connected for Counted<IO> {
     type ConnectInfo = ();
 
     fn connect_info(&self) -> Self::ConnectInfo {}
+}
+
+/// A prune that deletes nothing: the prune of the tests that do not look at pruning.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoPrune;
+
+impl Prune for NoPrune {
+    fn prune(
+        &self,
+        _layout: &Layout,
+        _protect: &Protected,
+        _held: &ServiceGuard<'_>,
+    ) -> io::Result<PruneReport> {
+        Ok(PruneReport::default())
+    }
+}
+
+/// The points of a prune's deletion a test picks to fail.
+type Picks = Box<dyn Fn(&PruneStep<'_>) -> bool + Send + Sync>;
+
+/// A fault [`RecordingPrune`] puts in its next call.
+enum PruneFault {
+    /// The whole prune fails with this text, and nothing is deleted.
+    Whole(String),
+    /// Each point of the deletion the test picks fails, as a crash or a failed removal there
+    /// would.
+    At(Picks),
+}
+
+/// The host's prune ([`Layout::prune_with`]) that records the service of each call and the
+/// versions each was told to protect, and fails a call when told.
+#[derive(Default)]
+pub struct RecordingPrune {
+    calls: Mutex<Vec<(String, Protected)>>,
+    faults: Mutex<VecDeque<PruneFault>>,
+}
+
+impl RecordingPrune {
+    pub fn new() -> Arc<RecordingPrune> {
+        Arc::new(RecordingPrune::default())
+    }
+
+    /// The service of each call, in order.
+    pub fn calls(&self) -> Vec<String> {
+        lock(&self.calls)
+            .iter()
+            .map(|(service, _)| service.clone())
+            .collect()
+    }
+
+    /// What each call was told to protect, in order.
+    pub fn protected(&self) -> Vec<Protected> {
+        lock(&self.calls)
+            .iter()
+            .map(|(_, protect)| protect.clone())
+            .collect()
+    }
+
+    /// The next call fails with `why` and deletes nothing.
+    pub fn fail_next(&self, why: &str) {
+        lock(&self.faults).push_back(PruneFault::Whole(why.to_owned()));
+    }
+
+    /// In the next call, each point of the deletion `at` picks fails.
+    pub fn fault_next(&self, at: impl Fn(&PruneStep<'_>) -> bool + Send + Sync + 'static) {
+        lock(&self.faults).push_back(PruneFault::At(Box::new(at)));
+    }
+}
+
+impl Prune for RecordingPrune {
+    fn prune(
+        &self,
+        layout: &Layout,
+        protect: &Protected,
+        _held: &ServiceGuard<'_>,
+    ) -> io::Result<PruneReport> {
+        let service = layout
+            .dir()
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        lock(&self.calls).push((service, protect.clone()));
+        let fault = lock(&self.faults).pop_front();
+        let picks: Picks = match fault {
+            Some(PruneFault::Whole(why)) => return Err(io::Error::other(why)),
+            Some(PruneFault::At(picks)) => picks,
+            None => Box::new(|_: &PruneStep<'_>| false),
+        };
+        layout.prune_with(protect, &mut |step| match picks(&step) {
+            true => Err(io::Error::other("the removal was refused")),
+            false => Ok(()),
+        })
+    }
 }

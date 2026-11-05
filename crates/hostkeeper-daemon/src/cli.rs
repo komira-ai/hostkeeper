@@ -1,4 +1,6 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags. Configuration
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
+//! `hostkeeper ci`, the CI client a service's release job runs once it has verified this binary
+//! (`hostkeeper_ci`, docs/deploy/ci-client.md). Configuration
 //! comes in as flags only, never from the environment (AGENTS.md S2); every default is a
 //! constant here.
 //!
@@ -8,6 +10,9 @@
 //! Exit status: [`EXIT_FAILED`] when the daemon could not start or serve, `2` for a usage error
 //! (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not load, [`EXIT_LOCKED`]
 //! when another daemon holds the state directory.
+//!
+//! `--version` prints `hostkeeper X.Y.Z+<12 hex digits of the commit>` for a release build and
+//! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -24,7 +29,7 @@ use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, SystemCloc
 use crate::executor::{Placement, Ports};
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::packages::{PackageError, Packages, VersionDir};
-use crate::prune::NoPrune;
+use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::start::{self, Settings, StartError};
 use crate::verb::PackageDigest;
 
@@ -45,7 +50,7 @@ pub const DEADMAN_POLL_SECS: u64 = 1;
 
 /// hostkeeper: keeps a host's services on the versions its coordinator orders.
 #[derive(Debug, Parser)]
-#[command(name = "hostkeeper", version)]
+#[command(name = "hostkeeper", version = crate::stamp::version())]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -55,6 +60,10 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
+    /// The CI client: set a service's desired version from its release job and wait for the
+    /// fleet (docs/deploy/ci-client.md).
+    #[command(subcommand)]
+    Ci(hostkeeper_ci::CiCommand),
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -114,7 +123,10 @@ pub fn run(cli: Cli) -> ExitCode {
 /// Runs a parsed command line to its exit status; `notify_socket` is the address of the notify
 /// socket systemd set for the process, used with `--notify-systemd` only.
 pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
-    let Command::Daemon(flags) = cli.command;
+    let flags = match cli.command {
+        Command::Daemon(flags) => flags,
+        Command::Ci(command) => return hostkeeper_ci::run(command),
+    };
     let started = notifier(&flags, notify_socket)
         .and_then(|notifier| daemon(&flags.settings(), notifier.as_ref()));
     started.err().map_or(ExitCode::SUCCESS, report)
@@ -161,8 +173,8 @@ async fn start_and_serve(
 /// The ports of this build. The host's step launcher, package store and service manager are not
 /// part of it yet, and no order reaches the daemon yet (the heartbeat loop that brings them comes
 /// later): until they are wired in, an order that did come would be refused, never run. Placed
-/// paths are linked under the host's own directories, `packages_dir` being `--packages-dir`; the
-/// prune of step 18 of a force deletes nothing yet.
+/// paths are linked under the host's own directories, `packages_dir` being `--packages-dir`, and
+/// a confirmed switch prunes the service's package directory to `current` and `previous`.
 fn host_ports(packages_dir: &Path) -> Ports {
     Ports {
         launcher: Arc::new(Unwired),
@@ -178,7 +190,8 @@ fn host_ports(packages_dir: &Path) -> Ports {
             ),
             fs: Arc::new(RealFs::new(Path::new("/"))),
         },
-        prune: Arc::new(NoPrune),
+        prune: Arc::new(LayoutPrune),
+        force_lock_point: Arc::new(NoLockPoint),
     }
 }
 

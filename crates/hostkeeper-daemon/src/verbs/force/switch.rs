@@ -15,7 +15,9 @@
 //!     `force_start_secs`, polled on the daemon's clock;
 //! 16. the verdict, `Succeeded` or `Failed` with `link_failed` (steps 9 to 12),
 //!     `daemon_reload_failed` (step 13) or `start_failed` (steps 14 and 15);
-//! 18. when the force switched `current` to another version, the prune, whatever the verdict.
+//! 18. when the force switched `current` to another version, the prune, whatever the verdict
+//!     ([`crate::prune::confirmed_switch`]), after the force lock point
+//!     ([`crate::prune::ForceLockPoint`]).
 //!
 //! Step 17, the report, is the verdict in the record: the status read model reports it
 //! ([`crate::ServiceStatus::forced`]). After a failure the host stays where it is: nothing is
@@ -36,12 +38,11 @@ use hostkeeper_steps::{
 use super::FORCE_POLL_SECS;
 use crate::executor::{Ctx, Reply};
 use crate::locks::ServiceGuard;
+use crate::prune;
 use crate::refusal::Refusal;
 
 /// The alert of a force that ended `Failed` once it had begun to change the host.
 pub const ALERT_FORCE_FAILED: &str = "force_failed";
-/// The alert of a prune that failed after a force; the force's verdict stands.
-pub const ALERT_PRUNE: &str = "prune_failed";
 
 /// Why the parts of a force stopped before the end.
 enum Stop {
@@ -98,9 +99,11 @@ pub(super) fn run(
             detail: error.to_string(),
         };
     }
-    // Step 18: a switch of `current` is confirmed whatever the verdict.
-    if moved && let Err(error) = ctx.prune.prune(service, held) {
-        ctx.alert(ALERT_PRUNE, &format!("service={service}: {error}"));
+    // Step 18: a switch of `current` is confirmed whatever the verdict. A prune that fails is
+    // an alert, and the verdict stands.
+    if moved {
+        ctx.force_lock_point.after_switch_before_prune();
+        prune::confirmed_switch(ctx, held, service, &target.version);
     }
     Reply::Finished {
         verdict,
