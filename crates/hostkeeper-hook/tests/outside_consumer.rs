@@ -15,7 +15,10 @@ const DOCS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/conformance.
 const REPOSITORY: &str = "https://github.com/komira-ai/hostkeeper";
 
 /// Everything a coverage or CI run puts in the environment that would change the child build.
-const LEAKS: [&str; 14] = [
+/// `LLVM_PROFILE_FILE` is kept: the child does not build with coverage, but the example hook it
+/// runs was built by this run with coverage, and the harness hands that variable on to the hook
+/// so that the hook writes its profile there and not into the sandbox the harness inspects.
+const LEAKS: [&str; 13] = [
     "RUSTFLAGS",
     "CARGO_ENCODED_RUSTFLAGS",
     "RUSTDOCFLAGS",
@@ -25,7 +28,6 @@ const LEAKS: [&str; 14] = [
     "CARGO_BUILD_RUSTFLAGS",
     "CARGO_TARGET_DIR",
     "CARGO_BUILD_TARGET_DIR",
-    "LLVM_PROFILE_FILE",
     "CARGO_LLVM_COV",
     "CARGO_LLVM_COV_TARGET_DIR",
     "CARGO_INCREMENTAL",
