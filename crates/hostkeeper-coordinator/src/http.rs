@@ -26,7 +26,9 @@
 //! (`release_digest`, 64 lowercase hex characters); a version the coordinator refuses is
 //! answered with its reason as the code: `unparseable_version` (400), and
 //! `below_min_version`, `bad_version` and `digest_conflict` (409). A heartbeat that lists no
-//! services, at a coordinator with no legacy service, is a bad request.
+//! services, at a coordinator with no legacy service, is a bad request. An agent that announces
+//! `order-v1` is answered with the order terms of [`crate::order_terms`] on an update, and its
+//! heartbeat's top level is never read as the legacy service.
 
 use std::sync::Arc;
 use std::time::Duration;
