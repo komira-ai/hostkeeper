@@ -88,6 +88,8 @@ fn installed(dir: &Path) -> (PathBuf, String) {
         service: ServiceName::new("hostkeeper").expect("a service name"),
         version: Version::new(&version).expect("a version"),
         package_digest: hostkeeper_config::daemon::Sha256Hex::parse(&digest).expect("a digest"),
+        // The package built above is the linux-x86_64 one.
+        platform: hostkeeper_config::platform::Platform::LinuxX86_64,
     };
     let limits = hostkeeper_unpack::Limits {
         max_unpacked_bytes: 1 << 30,
