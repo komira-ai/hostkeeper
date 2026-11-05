@@ -7,6 +7,8 @@ use std::io;
 use hostkeeper_config::manifest::{Class as ManifestClass, ManifestRefusal};
 use hostkeeper_hook::{Class, Outcome};
 
+use crate::verify::VerifyIoError;
+
 /// The archive breaks a bound or a shape rule (design section 5.5).
 pub const REASON_BAD_ARCHIVE: &str = "bad_archive";
 /// The archive's SHA-256 is not the one the order names (the one its release index entry gives,
@@ -24,6 +26,11 @@ pub const REASON_ARTIFACT_CHANGED: &str = "artifact_changed";
 /// The order names a version that is one of the package directory's own names (`current`,
 /// `previous`, `*.seal`, `*.tmp`).
 pub const REASON_RESERVED_VERSION: &str = "reserved_version";
+/// The reason of [`UnpackError::VersionTooLong`].
+pub const REASON_VERSION_TOO_LONG: &str = "version_too_long";
+/// On macOS, the check of the staged tree (quarantine attribute, code signature) cannot be made
+/// right now: the package is not judged, and the step is tried again later.
+pub const REASON_VERIFY_UNAVAILABLE: &str = "verify_unavailable";
 /// The archive, the staging directory or a seal cannot be read or written right now, for a
 /// reason that is not a full disk: tried again later.
 pub const REASON_IO_ERROR: &str = "io_error";
@@ -79,6 +86,12 @@ pub enum Rule {
     Decoder(String),
     /// What was read back from the staging directory is not what was written.
     NotAsWritten,
+    /// On macOS, an entry of the staged tree that carries a `com.apple.quarantine` attribute.
+    Quarantined,
+    /// On macOS, a Mach-O file with no code signature.
+    Unsigned,
+    /// On macOS, a Mach-O file whose code signature does not verify; the text is the tool's.
+    InvalidSignature(String),
 }
 
 impl fmt::Display for Rule {
@@ -120,6 +133,12 @@ impl fmt::Display for Rule {
             ),
             Rule::Decoder(why) => write!(f, "the zstd stream is invalid: {why}"),
             Rule::NotAsWritten => write!(f, "the staged tree reads back other than it was written"),
+            Rule::Quarantined => write!(f, "a com.apple.quarantine attribute"),
+            Rule::Unsigned => write!(f, "a Mach-O binary with no code signature (unsigned)"),
+            Rule::InvalidSignature(note) => write!(
+                f,
+                "a Mach-O binary whose code signature is invalid (invalid_signature): {note}"
+            ),
         }
     }
 }
@@ -157,6 +176,20 @@ pub enum UnpackError {
     /// touched.
     #[error("the version {version:?} is a name the package directory holds for itself")]
     ReservedVersion { version: String },
+    /// The order's version keeps its rule but is too long for the names the package directory
+    /// derives from it (`.<version>.seal.tmp` would pass 255 bytes). Nothing was touched.
+    #[error(
+        "the version {version:?} is too long for the names the package directory derives from it"
+    )]
+    VersionTooLong { version: String },
+    /// On macOS, the check of the staged tree could not be made (the tool did not run or did
+    /// not finish), so the package is not judged. `entry` is the entry the check was on.
+    #[error("cannot verify {entry} on macOS: {source}")]
+    VerifyUnavailable {
+        entry: String,
+        #[source]
+        source: VerifyIoError,
+    },
     #[error("{what}: {source}")]
     Io {
         what: &'static str,
@@ -183,6 +216,8 @@ impl UnpackError {
             UnpackError::SealUnreadable { .. } => (DEFERRED, REASON_IO_ERROR),
             UnpackError::SealSchema { .. } => (DEFERRED, REASON_DAEMON_TOO_OLD),
             UnpackError::ReservedVersion { .. } => (FAILED, REASON_RESERVED_VERSION),
+            UnpackError::VersionTooLong { .. } => (FAILED, REASON_VERSION_TOO_LONG),
+            UnpackError::VerifyUnavailable { .. } => (DEFERRED, REASON_VERIFY_UNAVAILABLE),
             UnpackError::Io { .. } => (DEFERRED, REASON_IO_ERROR),
         };
         (kind.0, kind.1, reason)

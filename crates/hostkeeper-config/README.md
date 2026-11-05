@@ -13,7 +13,7 @@ loaders yet; the daemon and the package fetch do.
 | `platform` | `Platform`: `linux-x86_64`, `linux-arm64` or `macos-arm64`, a closed set read from exactly those spellings; `Platform::current()` is the platform of the compile target (any other target does not compile). |
 | `index` | `ReleaseIndex`: `index.json` of a version in the release channel, read by a strict parser (`ReleaseIndex::parse(text, service, version)`), written in canonical form (`to_json`), and `entry_for(platform)`; the channel paths `index_path`, `package_path` and `attestation_path`. |
 | `trust` | `read_trusted` and `check_dir`: the owner and mode check of a file or directory the host trusts. |
-| `names` | The grammars: service names (`A-Za-z0-9_-`, 1 to 64 bytes) and versions (1 to 128 bytes of `A-Za-z0-9._+-`, no leading dot) of design 11.8, absolute and relative paths, and the unit names of a package. |
+| `names` | The grammars: service names and versions of design 11.8 (1 to 255 bytes of the POSIX portable filename characters `A-Za-z0-9._-`, with `+` added for a version, not beginning with `-` or `.`), absolute and relative paths, and the unit names of a package. |
 
 The crate depends on no crate of this workspace; `crates/xtask/tests/layering` keeps it so.
 

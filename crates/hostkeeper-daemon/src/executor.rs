@@ -14,18 +14,38 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Verdict;
+use hostkeeper_observe::{Observation, Observer};
+use hostkeeper_placed::{Fs, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
-use hostkeeper_steps::{Clock, DeadMan, Finished, RecordStore, StepLauncher, StepRunner, Watch};
+use hostkeeper_steps::{
+    Clock, DeadMan, Finished, ForceVerdict, LaunchError, RecordStore, RunError, StepLauncher,
+    StepRunner, UpdateOrder, Watch,
+};
 
+use crate::boot::{ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
 use crate::checks;
 use crate::halt::HaltStore;
-use crate::installed::{self, CURRENT};
-use crate::locks::{ServiceLocks, StepLock};
+use crate::installed::{self, CURRENT, Lifecycle};
+use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
+use crate::observer;
 use crate::packages::Packages;
+use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
+use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
 use crate::verb::Verb;
 use crate::verbs;
+use crate::verbs::force::SELF_SERVICE;
+use crate::watchers::{STOPPED, SlicedClock, WatchEnd, Watchers, Yielding};
+
+/// A test's way to change every step record store the daemon makes, as it is made: to stop the
+/// daemon at a write ([`RecordStore::with_crash_gate`]) or fail one
+/// ([`RecordStore::with_write_fault`]). It can only make a store fail.
+pub type StoreSeam = Arc<dyn Fn(&ServiceName, RecordStore) -> RecordStore + Send + Sync>;
+
+/// Where the daemon's alerts go, one line each ([`alert_line`]): standard error, unless a test
+/// gives another sink ([`Daemon::with_alerts`]).
+pub type AlertSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// What the daemon runs on: the ports of everything privileged, and the clock.
 pub struct Ports {
@@ -38,6 +58,26 @@ pub struct Ports {
     /// How often each service's dead-man looks at its running step, in seconds; `None` starts
     /// none (a test that drives the bounds itself).
     pub deadman_poll_secs: Option<u64>,
+    /// The service manager: the units a `force` stops, starts and asks after, and
+    /// `daemon-reload`.
+    pub units: Arc<dyn UnitControl + Send + Sync>,
+    /// Where placed-path linking works, and the filesystem it goes through.
+    pub placement: Placement,
+    /// The prune of the versions a confirmed switch leaves behind: at the end of an update that
+    /// ends `Succeeded`, and at step 18 of a `force` that moved `current`.
+    pub prune: Arc<dyn Prune>,
+    /// The point of a `force` between its switch of `current` and its prune.
+    pub force_lock_point: Arc<dyn ForceLockPoint>,
+    /// Looks at how each installed service runs: what `Status` reports of it.
+    pub observer: Arc<Observer>,
+}
+
+/// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
+/// host names them, and the filesystem every path is read and written through. The packages
+/// directory of `roots`, as `fs` reaches it, is [`Dirs::packages`].
+pub struct Placement {
+    pub roots: Roots,
+    pub fs: Arc<dyn Fs + Send + Sync>,
 }
 
 /// Where the daemon keeps and finds things.
@@ -60,39 +100,236 @@ pub struct Ctx {
     pub launcher: Arc<dyn StepLauncher>,
     pub packages: Arc<dyn Packages>,
     pub clock: Arc<dyn Clock>,
+    pub units: Arc<dyn UnitControl + Send + Sync>,
+    pub placement: Placement,
+    pub prune: Arc<dyn Prune>,
+    pub force_lock_point: Arc<dyn ForceLockPoint>,
+    /// Observes the installed services; it takes none of the daemon's locks.
+    pub observer: Arc<Observer>,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
+    /// The post-success watchers, one per service at most.
+    pub watchers: Watchers,
     runners: Mutex<BTreeMap<String, Arc<StepRunner>>>,
+    /// How the last uninstall of each service ended, while the daemon runs: what `Status` reports
+    /// for a service being removed.
+    uninstalls: Mutex<BTreeMap<String, LastUninstall>>,
+    /// The record lock of each service's state directory, shared by every store made for it.
+    record_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
+    stores: Option<StoreSeam>,
+    alerts: AlertSink,
     deadman_poll_secs: Option<u64>,
     /// Ends the dead-men when the daemon is dropped.
     stop: Arc<AtomicBool>,
+    /// Asks a new hostkeeper binary for its self-update protocol.
+    probe: Arc<dyn ProtocolProbe>,
+    /// The daemon's request to exit so that its unit starts a new binary.
+    restart: Restart,
 }
 
 impl Ctx {
+    /// The probe a new hostkeeper binary's self-update protocol is asked with.
+    pub fn probe(&self) -> &dyn ProtocolProbe {
+        &*self.probe
+    }
+
+    /// The daemon's request to exit with status 0 after the follow-on of its own update.
+    pub fn restart(&self) -> &Restart {
+        &self.restart
+    }
+
     /// The state directory of `service`.
     pub fn service_dir(&self, service: &ServiceName) -> PathBuf {
         self.dirs.state.join(service.as_str())
     }
 
-    /// The step record store of `service`.
-    pub fn store(&self, service: &ServiceName) -> RecordStore {
-        RecordStore::new(&self.service_dir(service))
+    /// Where `service` is in its life (design section 6.1); `Err` when `placed.json` cannot be
+    /// read, which says nothing of its tombstone.
+    pub fn lifecycle(&self, service: &ServiceName) -> Result<Lifecycle, PlacedError> {
+        let tombstoned = crate::uninstall::tombstoned(self, service)?;
+        let record = RecordState::of(self.store(service).load());
+        Ok(self.lifecycle_of(
+            service,
+            tombstoned,
+            self.locks.holder(service).as_ref(),
+            &record,
+        ))
     }
 
-    /// The step runner of `service`, made with its dead-man on first use.
+    fn lifecycle_of(
+        &self,
+        service: &ServiceName,
+        tombstoned: bool,
+        holder: Option<&Held>,
+        record: &RecordState,
+    ) -> Lifecycle {
+        let installed = installed::linked_version(&self.dirs.packages, service, CURRENT).is_some();
+        let busy = holder.is_some() | matches!(record, RecordState::Unfinished(_));
+        Lifecycle::of(tombstoned, installed, busy)
+    }
+
+    /// Keeps how the uninstall of `service`, the order's try `order_try` (0 for one the start
+    /// resumed), ended, for `Status`; a reply without a verdict changes nothing, and an uninstall
+    /// that succeeded is forgotten with the service.
+    pub fn record_uninstall(&self, service: &ServiceName, reply: &Reply, order_try: u64) {
+        let mut uninstalls = self
+            .uninstalls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match reply {
+            Reply::Finished {
+                verdict: Verdict::Succeeded { .. },
+                ..
+            } => {
+                uninstalls.remove(service.as_str());
+            }
+            Reply::Finished {
+                verdict, reason, ..
+            } => {
+                let finished = Finished {
+                    verdict: verdict.clone(),
+                    reason: reason.clone(),
+                };
+                uninstalls.insert(
+                    service.to_string(),
+                    LastUninstall {
+                        finished,
+                        order_try,
+                    },
+                );
+            }
+            Reply::Running | Reply::Refused { .. } | Reply::Interrupted { .. } => {}
+        }
+    }
+
+    /// How the last uninstall of `service` ended, while the daemon runs.
+    pub fn last_uninstall(&self, service: &ServiceName) -> Option<LastUninstall> {
+        let uninstalls = self
+            .uninstalls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        uninstalls.get(service.as_str()).cloned()
+    }
+
+    /// The step record store of `service`, with the record lock every store of the service
+    /// shares: the runner's writes and a `force`'s flag on the record take turns.
+    pub fn store(&self, service: &ServiceName) -> RecordStore {
+        let lock = {
+            let mut locks = self
+                .record_locks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            Arc::clone(locks.entry(service.to_string()).or_default())
+        };
+        let store = RecordStore::new(&self.service_dir(service)).with_lock(lock);
+        match &self.stores {
+            Some(seam) => seam(service, store),
+            None => store,
+        }
+    }
+
+    /// The placed-path linker of this host.
+    pub fn placer(&self) -> Placer<'_> {
+        Placer::new(
+            self.placement.roots.clone(),
+            &*self.placement.fs,
+            &*self.units,
+        )
+    }
+
+    /// Logs an alert: error level, with its `alert=` field.
+    pub fn alert(&self, alert: &str, detail: &str) {
+        (self.alerts)(&alert_line(alert, detail));
+    }
+
+    /// Logs a line of the enrollment or heartbeat loop ([`crate::links`]) through the same sink
+    /// as the alerts, as `hostkeeper daemon: <line>`: the loops say themselves which of their
+    /// lines are errors.
+    pub fn log(&self, line: &str) {
+        (self.alerts)(&format!("hostkeeper daemon: {line}"));
+    }
+
+    /// The step runner of `service`, made with its dead-man on first use. A watcher of the
+    /// service is stopped first, and waited for: whoever asks for the runner is about to run an
+    /// order, and a new order replaces the watcher (design section 6.4). Its switch places every
+    /// hooked order ([`crate::place::hooked_switch`]).
     pub fn runner(&self, service: &ServiceName) -> Arc<StepRunner> {
+        drop(self.watchers.stop(service));
         let mut runners = self.runners.lock().unwrap_or_else(PoisonError::into_inner);
         let made = runners.entry(service.to_string()).or_insert_with(|| {
+            let switch = crate::place::hooked_switch(
+                self.placement.roots.clone(),
+                Arc::clone(&self.placement.fs),
+                Arc::clone(&self.units),
+                self.own_version,
+            );
             let runner = StepRunner::new(
                 Arc::clone(&self.launcher),
                 Arc::clone(&self.clock),
                 self.store(service),
-            );
+            )
+            .with_switch(switch);
+            let runner = selfupdate::runner_for(runner, service);
             self.watch(runner.watch());
             Arc::new(runner)
         });
         Arc::clone(made)
+    }
+
+    /// Starts the post-success watcher of `service` for `order` on a thread of its own, with a
+    /// runner of its own that a new order can stop ([`crate::watchers`]). `false`, and nothing
+    /// started, while a watcher of the service runs.
+    ///
+    /// How the watcher ends is handled on its thread: a `verify` the dead-man could not stop
+    /// locks the service for good, as `package`, unless an order holds its lock (that order's
+    /// run stops the unit first), and is an alert (`unstoppable_unit`); a record that cannot be
+    /// written (`journal_unavailable`) and any other stop without a verdict
+    /// (`watcher_interrupted`) are alerts. A watcher stopped by a new order or the daemon's end is
+    /// not.
+    pub fn start_watcher(
+        &self,
+        service: &ServiceName,
+        order: UpdateOrder,
+        package: Package,
+    ) -> bool {
+        let stop = Arc::new(AtomicBool::new(false));
+        let launcher = Yielding {
+            inner: Arc::clone(&self.launcher),
+            stop: Arc::clone(&stop),
+        };
+        let clock = SlicedClock {
+            inner: Arc::clone(&self.clock),
+            stop: Arc::clone(&stop),
+        };
+        let runner = StepRunner::new(Arc::new(launcher), Arc::new(clock), self.store(service));
+        let runner = selfupdate::runner_for(runner, service);
+        self.watch(runner.watch());
+        let (locks, alerts, name) = (
+            self.locks.clone(),
+            Arc::clone(&self.alerts),
+            service.clone(),
+        );
+        let supervise = move |end: &WatchEnd| {
+            let alert = |kind: &str, error: &dyn std::fmt::Display| {
+                alerts(&alert_line(kind, &format!("service={name}: {error}")));
+            };
+            match end {
+                Ok(_) => {}
+                Err(RunError::Launch(LaunchError::Launcher(why))) if why == STOPPED => {}
+                Err(error @ RunError::Unstopped { .. }) => {
+                    locks
+                        .take(&name, package)
+                        .into_iter()
+                        .for_each(ServiceGuard::keep);
+                    alert(ALERT_UNSTOPPABLE, error);
+                }
+                Err(RunError::Record(error)) => alert(ALERT_JOURNAL, error),
+                Err(error) => alert(ALERT_WATCHER, error),
+            }
+        };
+        self.watchers
+            .start(service, runner, order, stop, Box::new(supervise))
     }
 
     /// Starts the dead-man of a runner's watch, when the daemon has dead-men.
@@ -142,6 +379,14 @@ impl Reply {
     }
 }
 
+/// How the last uninstall of a service ended, and the try of its order (0 for one the daemon's
+/// start resumed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LastUninstall {
+    pub finished: Finished,
+    pub order_try: u64,
+}
+
 /// What a service's step record says, as [`Daemon::status`] reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordState {
@@ -171,6 +416,17 @@ impl RecordState {
     }
 }
 
+/// How a `force` ended, with the order it answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForcedResult {
+    /// The coordinator's id of the order, when it gave one.
+    pub order_id: Option<String>,
+    pub order_try: u64,
+    /// The version the force switched to.
+    pub target: String,
+    pub verdict: ForceVerdict,
+}
+
 /// What the daemon holds about one service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceStatus {
@@ -181,7 +437,17 @@ pub struct ServiceStatus {
     pub held_halt: Option<u64>,
     /// An order holds the service's lock now (or a step that could not be stopped holds it).
     pub locked: bool,
+    /// The lock is held by a step that could not be stopped: it stays held until `abort`.
+    pub stuck: bool,
     pub record: RecordState,
+    /// Where it is in its life.
+    pub lifecycle: Lifecycle,
+    /// How its last uninstall ended, while the daemon runs; `None` when none ran or it succeeded.
+    pub uninstall: Option<LastUninstall>,
+    /// How the service runs now, as the service manager, the running executable and its health
+    /// check say ([`crate::observer`]); `None` when it has no `current`, or the manifest of the
+    /// version `current` names does not load.
+    pub observation: Option<Observation>,
 }
 
 impl ServiceStatus {
@@ -191,6 +457,23 @@ impl ServiceStatus {
             RecordState::Finished(rec) => checks::finished_of(rec),
             _ => None,
         }
+    }
+
+    /// The verdict of the last order, when it was a `force` that ended (design section 5.6, step
+    /// 17): what the heartbeat reports as a forced verdict (`UpdateResult.forced`), with the
+    /// order's id and try, beside [`ServiceStatus::last_result`]. The record keeps it until the
+    /// next order of the service, so every read until then returns it again.
+    pub fn forced(&self) -> Option<ForcedResult> {
+        let RecordState::Finished(rec) = &self.record else {
+            return None;
+        };
+        let force = rec.force.as_ref()?;
+        Some(ForcedResult {
+            order_id: force.order_id.clone(),
+            order_try: force.order_try,
+            target: force.target_version.clone(),
+            verdict: force.verdict?,
+        })
     }
 
     /// Whether a step of the service is running: an order holds its lock, or its record holds
@@ -205,7 +488,7 @@ impl ServiceStatus {
 pub struct DaemonStatus {
     /// This daemon's version.
     pub version: HostkeeperVersion,
-    /// Every service with a package directory or a state directory, by name.
+    /// Every service with a package directory, a state directory or a tombstone, by name.
     pub services: Vec<ServiceStatus>,
 }
 
@@ -231,6 +514,7 @@ impl Daemon {
         own_version: HostkeeperVersion,
     ) -> Daemon {
         let halts = HaltStore::new(&dirs.state);
+        let probe = Arc::new(LauncherProbe::new(Arc::clone(&ports.launcher)));
         Daemon {
             ctx: Ctx {
                 config,
@@ -239,19 +523,57 @@ impl Daemon {
                 launcher: ports.launcher,
                 packages: ports.packages,
                 clock: ports.clock,
+                units: ports.units,
+                placement: ports.placement,
+                prune: ports.prune,
+                force_lock_point: ports.force_lock_point,
+                observer: ports.observer,
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,
+                watchers: Watchers::default(),
                 runners: Mutex::default(),
+                uninstalls: Mutex::default(),
+                record_locks: Mutex::default(),
+                stores: None,
+                alerts: Arc::new(|line: &str| eprintln!("{line}")),
                 deadman_poll_secs: ports.deadman_poll_secs,
                 stop: Arc::new(AtomicBool::new(false)),
+                probe,
+                restart: Restart::default(),
             },
         }
+    }
+
+    /// The same daemon, a new hostkeeper binary's self-update protocol asked of `probe` in place
+    /// of the step launcher: the seam of the tests of the protocol check.
+    pub fn with_probe(mut self, probe: Arc<dyn ProtocolProbe>) -> Daemon {
+        self.ctx.probe = probe;
+        self
+    }
+
+    /// The same daemon, every step record store it makes changed by `seam` as it is made: the
+    /// seam of the tests that stop the daemon at a write of a record, or fail one.
+    pub fn with_stores(mut self, seam: StoreSeam) -> Daemon {
+        self.ctx.stores = Some(seam);
+        self
+    }
+
+    /// The same daemon, its alerts sent to `sink` in place of standard error: the seam of the
+    /// tests that read what the daemon alerted.
+    pub fn with_alerts(mut self, sink: AlertSink) -> Daemon {
+        self.ctx.alerts = sink;
+        self
     }
 
     /// What every verb works with.
     pub fn ctx(&self) -> &Ctx {
         &self.ctx
+    }
+
+    /// The observer of the installed services.
+    pub fn observer(&self) -> &Arc<Observer> {
+        &self.ctx.observer
     }
 
     /// One order of the coordinator. A malformed order is refused naming its field, before any
@@ -263,14 +585,50 @@ impl Daemon {
         }
     }
 
-    /// One verb.
+    /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service
+    /// stays locked and its record `running`, and every hooked order of the service, the same
+    /// update's resend included, is `busy` until `abort` clears it.
     pub fn execute(&self, verb: Verb) -> Reply {
+        let hooked = match &verb {
+            Verb::Update(order) | Verb::ForceRollback(order) | Verb::Install(order) => {
+                Some(order.service.clone())
+            }
+            Verb::Uninstall(order) => Some(order.service.clone()),
+            _ => None,
+        };
+        let stuck = hooked
+            .and_then(|service| self.ctx.locks.holder(&service).map(|held| (service, held)))
+            .filter(|(_, held)| held.stuck);
+        if let Some((service, held)) = stuck {
+            return Reply::refused(
+                Refusal::Busy,
+                format!(
+                    "a step of {service} that could not be stopped holds it, for {}",
+                    held.holder
+                ),
+            );
+        }
+        let reply = self.dispatch(verb);
+        if let Reply::Interrupted {
+            refusal: Refusal::Unstopped,
+            detail,
+        } = &reply
+        {
+            self.ctx.alert(ALERT_UNSTOPPABLE, detail);
+        }
+        reply
+    }
+
+    fn dispatch(&self, verb: Verb) -> Reply {
         let ctx = &self.ctx;
         match verb {
+            Verb::Update(order) if order.service.as_str() == SELF_SERVICE => {
+                selfupdate::run(ctx, order)
+            }
             Verb::Update(order) => verbs::update::run(ctx, order),
             Verb::ForceRollback(order) => verbs::force_rollback::run(ctx, order),
             Verb::Install(order) => verbs::install::run(ctx, order),
-            Verb::Uninstall(service) => verbs::uninstall::run(ctx, service),
+            Verb::Uninstall(order) => verbs::uninstall::run(ctx, order),
             Verb::Force(order) => verbs::force::run(ctx, order),
             Verb::Abort(service) => verbs::abort::run(ctx, service),
             Verb::ClearHalt {
@@ -281,7 +639,11 @@ impl Daemon {
         }
     }
 
-    /// What the daemon holds about every service with a package directory or a state directory.
+    /// What the daemon holds about every service with a package directory, a state directory or
+    /// a tombstone. A `placed.json` that cannot be read shows no tombstone (every order of a
+    /// service is refused while it cannot be read). Each service with a `current` is observed
+    /// ([`observer::observe`]); the read takes no service lock and no step lock, so it does not
+    /// wait for a running step.
     pub fn status(&self) -> Result<DaemonStatus, StatusError> {
         let ctx = &self.ctx;
         let listed = |dir: &PathBuf| {
@@ -292,14 +654,43 @@ impl Daemon {
         };
         let mut names = listed(&ctx.dirs.packages)?;
         names.extend(listed(&ctx.dirs.state)?);
+        let tombstones = ctx
+            .placer()
+            .store()
+            .load()
+            .map(|record| record.uninstalling)
+            .unwrap_or_default();
+        names.extend(
+            tombstones
+                .keys()
+                .filter_map(|name| ServiceName::new(name).ok().map(|s| (name.clone(), s))),
+        );
         let services = names
             .into_values()
-            .map(|service| ServiceStatus {
-                running_version: installed::linked_version(&ctx.dirs.packages, &service, CURRENT),
-                held_halt: ctx.halts.get(&service).ok(),
-                locked: ctx.locks.holder(&service).is_some(),
-                record: RecordState::of(ctx.store(&service).load()),
-                service,
+            .map(|service| {
+                let holder = ctx.locks.holder(&service);
+                let record = RecordState::of(ctx.store(&service).load());
+                let tombstoned = tombstones.contains_key(service.as_str());
+                ServiceStatus {
+                    running_version: installed::linked_version(
+                        &ctx.dirs.packages,
+                        &service,
+                        CURRENT,
+                    ),
+                    held_halt: ctx.halts.get(&service).ok(),
+                    locked: holder.is_some(),
+                    stuck: holder.as_ref().is_some_and(|held| held.stuck),
+                    lifecycle: ctx.lifecycle_of(&service, tombstoned, holder.as_ref(), &record),
+                    uninstall: ctx.last_uninstall(&service),
+                    observation: observer::observe(
+                        &ctx.observer,
+                        &ctx.dirs.packages,
+                        &ctx.own_version,
+                        &service,
+                    ),
+                    record,
+                    service,
+                }
             })
             .collect();
         Ok(DaemonStatus {

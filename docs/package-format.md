@@ -79,6 +79,19 @@ a handle on the packages directory that never follows a link, so no entry can wr
 - **Modes.** A file whose tar mode has any execute bit gets 0555, every other file 0444, every
   directory 0555 (set after its contents are written).
 
+On a macOS host, after the archive's digest is checked and before the manifest is read, the
+unpacked tree is checked once more. Every entry, file or directory, must carry no
+`com.apple.quarantine` attribute, and every Mach-O file, found by its magic number (thin or fat,
+either byte order), must carry a valid code signature of its own bytes: the meaning of
+`codesign --verify --strict`, a signature of any identity or an ad-hoc one, with no team identity
+and no notarisation asked for. Hook scripts and other files that are not Mach-O are scripts or
+data, have no signature and are not checked. A package that fails is refused as a bad package
+(`Failed`, class `release`, `bad_archive`) and the message names the relative path and the rule
+(`a com.apple.quarantine attribute`, `unsigned`, `invalid_signature`). A check that cannot be made
+(the tool does not run, or does not finish) does not judge the package: the step is `Deferred`,
+class `environment`, `verify_unavailable`. On Linux none of this is done. Nothing in the format
+changes.
+
 Then `manifest.toml` is read by the manifest loader (`name`, `version` and `platform` must be the ones the daemon asked for;
 the load rules are those of the design's section 4.7), the tree is made durable and read back,
 and it must be what was written.

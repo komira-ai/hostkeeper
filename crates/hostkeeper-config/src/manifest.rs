@@ -52,7 +52,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use crate::names::{
-    ServiceName, UnitError, UnitName, Version, check_path, check_relative, is_within,
+    PLIST_SUFFIX, ServiceName, UNIT_SUFFIXES, UnitError, UnitName, Version, check_path,
+    check_relative, is_within, launchd_label, plist_label,
 };
 use crate::platform::Platform;
 use crate::table::{self, Fields, Problem, Shape};
@@ -506,7 +507,12 @@ fn unit_files(version_dir: &Path, service: &str) -> Result<BTreeSet<String>, Man
     let mut files = BTreeSet::new();
     for (name, kind) in names {
         let file = name.to_string_lossy().into_owned();
-        UnitName::of(service, &file, true).map_err(|why| ManifestRefusal::UnitFile {
+        let checked = if file.ends_with(PLIST_SUFFIX) {
+            plist_label(service, &file).map(|_| ())
+        } else {
+            UnitName::of(service, &file, true).map(|_| ())
+        };
+        checked.map_err(|why| ManifestRefusal::UnitFile {
             file: file.clone(),
             why,
         })?;
@@ -516,11 +522,21 @@ fn unit_files(version_dir: &Path, service: &str) -> Result<BTreeSet<String>, Man
         }
         files.insert(file);
     }
+    // A package carries systemd units or launchd plists, never both.
+    let (plists, systemd): (Vec<&String>, Vec<&String>) =
+        files.iter().partition(|file| file.ends_with(PLIST_SUFFIX));
+    if let Some(file) = plists.first().filter(|_| !systemd.is_empty()) {
+        return Err(ManifestRefusal::UnitFile {
+            file: (*file).clone(),
+            why: UnitError::MixedKinds,
+        });
+    }
     Ok(files)
 }
 
 /// `[units] run`: each entry is a unit of the service that is a unit file, or an instance of a
-/// template that is one.
+/// template that is one; an entry without a systemd suffix is a launchd label whose
+/// `<label>.plist` is a file of `units/`.
 fn run_units(
     top: &Fields<'_>,
     service: &str,
@@ -535,11 +551,16 @@ fn run_units(
             unit: (*unit).to_owned(),
             why,
         };
-        let name = UnitName::of(service, unit, false).map_err(|why| refuse(why.to_string()))?;
-        let linked = unit_files.contains(*unit)
-            | name
-                .template()
-                .is_some_and(|template| unit_files.contains(&template));
+        let linked = if UNIT_SUFFIXES.iter().any(|suffix| unit.ends_with(suffix)) {
+            let name = UnitName::of(service, unit, false).map_err(|why| refuse(why.to_string()))?;
+            unit_files.contains(*unit)
+                | name
+                    .template()
+                    .is_some_and(|template| unit_files.contains(&template))
+        } else {
+            let label = launchd_label(service, unit).map_err(|why| refuse(why.to_string()))?;
+            unit_files.contains(&format!("{label}{PLIST_SUFFIX}"))
+        };
         if !linked {
             return Err(refuse(
                 "is neither a file of units/ nor an instance of a template there".to_owned(),

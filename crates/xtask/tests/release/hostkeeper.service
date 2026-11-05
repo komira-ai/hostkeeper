@@ -1,0 +1,7 @@
+# The test fixture unit of `cargo xtask release package`; the Linux packaging supplies the real unit.
+[Unit]
+Description=hostkeeper
+
+[Service]
+ExecStart=/var/lib/hostkeeper/packages/hostkeeper/current/bin/hostkeeper daemon
+Restart=on-failure

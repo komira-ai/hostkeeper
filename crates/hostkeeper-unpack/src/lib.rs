@@ -7,6 +7,10 @@
 //!   reader and every rule of the archive run on each entry before any byte of it is written,
 //!   into a staging directory, through the [`PackageFs`] port; then the manifest is loaded with
 //!   the `hostkeeper-config` loader, the tree is sealed and renamed into place.
+//! - On macOS, after the archive's SHA-256 is checked and before the manifest is loaded, the
+//!   staged tree is checked through [`MacVerify`]: no entry carries a quarantine attribute and
+//!   every Mach-O file carries a valid code signature. [`Platform`] says which platform the
+//!   unpack runs on; Linux makes no such call.
 //! - [`remove_orphans`] removes what a crashed unpack left.
 //! - [`UnpackError::outcome`] says how a step record reports each failure.
 //!
@@ -36,13 +40,15 @@ mod fs;
 mod publish;
 mod seal;
 mod unpack;
+mod verify;
 
 pub use archive::{BUFFER, MAX_DEPTH, MAX_NAME_BYTES, MAX_WINDOW_BYTES};
 pub use error::{
     REASON_ARTIFACT_CHANGED, REASON_BAD_ARCHIVE, REASON_DAEMON_TOO_OLD, REASON_DIGEST_MISMATCH,
-    REASON_IO_ERROR, REASON_MANIFEST_MISMATCH, REASON_NO_SPACE, REASON_RESERVED_VERSION, Rule,
-    UnpackError,
+    REASON_IO_ERROR, REASON_MANIFEST_MISMATCH, REASON_NO_SPACE, REASON_RESERVED_VERSION,
+    REASON_VERIFY_UNAVAILABLE, REASON_VERSION_TOO_LONG, Rule, UnpackError,
 };
 pub use fs::{HostFs, Owner, PackageFs, ServiceLock, StagedFile};
 pub use seal::{SEAL_SCHEMA, Seal, SealError};
 pub use unpack::{Limits, UnpackOrder, Unpacked, remove_orphans, running_hostkeeper, unpack};
+pub use verify::{MacVerify, Platform, SignatureVerdict, VerifyIoError};

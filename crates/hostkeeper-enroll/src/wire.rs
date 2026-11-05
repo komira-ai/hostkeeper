@@ -12,8 +12,8 @@
 //! - `Renew` carries a new request for the same key, sent by a host whose certificate is still
 //!   valid; its self-signature is the proof that the host holds the key.
 //!
-//! This crate has no transport: the daemon's gRPC client implements the port in its own change,
-//! and the tests use an in-memory coordinator.
+//! [`GrpcEnroll`](crate::GrpcEnroll) implements the port over gRPC with TLS (`grpc.rs`); the
+//! tests of the enroller use an in-memory coordinator.
 
 use std::fmt;
 
@@ -61,9 +61,8 @@ impl fmt::Display for RequestId {
 pub const MAX_HOST_ID: usize = 64;
 
 /// The id the coordinator gave a host when an operator approved it; its certificate's subject is
-/// `host:<id>`. One to [`MAX_HOST_ID`] bytes of `A-Z a-z 0-9 . _ -`, the grammar of a service
-/// name with the dot added: it goes into certificate subjects and log lines, so it holds no
-/// space, separator or control character.
+/// `host:<id>`. One to [`MAX_HOST_ID`] bytes of `A-Z a-z 0-9 . _ -`: it goes into certificate
+/// subjects and log lines, so it holds no space, separator or control character.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HostId(String);
 
@@ -123,7 +122,8 @@ impl fmt::Display for Reason {
 }
 
 /// What a host says about itself so that an operator can recognise it. Claims are not proof:
-/// they authorise nothing (design section 5.7, step 2). A claim the host cannot read is absent.
+/// they authorise nothing (design section 5.7, step 2). A claim a Linux host cannot read is absent;
+/// a Mac's serial and platform UUID are always present (see `claims.rs`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Claims {
     /// `/etc/machine-id`.
@@ -134,6 +134,13 @@ pub struct Claims {
     pub product_uuid: Option<String>,
     /// The link-layer addresses of the host's network interfaces, sorted, without duplicates.
     pub network_addresses: Vec<String>,
+    /// A Mac's serial number (`IOPlatformSerialNumber`).
+    pub mac_serial: Option<String>,
+    /// A Mac's platform UUID (`IOPlatformUUID`).
+    pub platform_uuid: Option<String>,
+    /// The MAC address of the host's BMC, lower-case `aa:bb:cc:dd:ee:ff` (LAN configuration
+    /// parameter 5); absent when it cannot be read, and on a Mac.
+    pub bmc_mac: Option<String>,
 }
 
 /// An `Enroll` request. It is a function of the key, the claims, the image and `renewal_of`

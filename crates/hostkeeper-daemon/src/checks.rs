@@ -4,8 +4,12 @@
 //! The grammars are those of `hostkeeper_config::names` (design section 11.8); the package
 //! digest is the form the protobuf files fix. The manifest's `name`, `version` and
 //! `min_hostkeeper` are checked by the manifest's loader, `hostkeeper_config::manifest`, which
-//! [`crate::verbs::update`] calls with the order's service and version. Which paths a package
-//! places and whether they conflict are not checked here.
+//! [`crate::verbs::update`] and [`crate::verbs::force`] call with the order's service and
+//! version. Which paths a package places and whether they conflict are checked by the placed-path
+//! linker, `hostkeeper_placed::check`, which `force` calls before it changes anything.
+//!
+//! [`Checks`] says which of these an order is held to: every one for a hooked order, every one
+//! but `busy` and the standing halt for a `force` ([`Checks::for_force`]).
 
 use std::cmp::Ordering;
 
@@ -14,16 +18,17 @@ use hostkeeper_hook::Verdict;
 use hostkeeper_steps::Finished;
 use hostkeeper_steps::record::{Record, State};
 
+use crate::installed::Lifecycle;
 use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{HookedVerb, PackageDigest};
 
-/// A service name: 1 to 64 bytes of `A-Za-z0-9_-`.
+/// A service name: [`hostkeeper_config::names::is_service_name`].
 pub fn service_name(text: &str) -> Result<ServiceName, Refusal> {
     ServiceName::new(text).map_err(|_| Refusal::InvalidOrder)
 }
 
-/// A version: 1 to 128 bytes of `A-Za-z0-9._+-`, not beginning with `.`.
+/// A version: [`hostkeeper_config::names::is_version`].
 pub fn version(text: &str) -> Result<Version, Refusal> {
     Version::new(text).map_err(|_| Refusal::InvalidOrder)
 }
@@ -68,8 +73,80 @@ fn compare_parts(x: &str, y: &str) -> Ordering {
     }
 }
 
-/// An `update` is refused below the running version (`below_running`); a `force_rollback` is
-/// not. A service that runs no version has nothing to be below.
+/// One check of design section 5.1 the daemon makes of an order that names a package. Refusing a
+/// version below the running one is not among them: it is the rule of the verb `update` alone
+/// ([`not_below_running`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Check {
+    /// The service name and the version keep their grammars.
+    Grammar,
+    /// The package digest is 64 lower-case hex digits.
+    Digest,
+    /// The manifest's `name` is the order's service.
+    ManifestName,
+    /// The manifest's `version` is the order's version.
+    ManifestVersion,
+    /// The manifest's `min_hostkeeper` is not above this daemon.
+    MinHostkeeper,
+    /// The package's shape: its archive bounds and entries, and its manifest's rules.
+    Shape,
+    /// No path the package places is another service's, or occupied by what `placed.json` does
+    /// not list (`path_conflict`).
+    PathClaim,
+    /// No unfinished order of another package of the service (`busy`).
+    Busy,
+    /// No standing halt of the service (`halted`).
+    Halt,
+}
+
+impl Check {
+    /// Every check.
+    pub const ALL: [Check; 9] = [
+        Check::Grammar,
+        Check::Digest,
+        Check::ManifestName,
+        Check::ManifestVersion,
+        Check::MinHostkeeper,
+        Check::Shape,
+        Check::PathClaim,
+        Check::Busy,
+        Check::Halt,
+    ];
+}
+
+/// Which checks an order is held to: every one but those it skips.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Checks {
+    skipped: &'static [Check],
+}
+
+impl Checks {
+    /// A hooked order (`update`, `force_rollback`): every check.
+    pub const fn hooked() -> Checks {
+        Checks { skipped: &[] }
+    }
+
+    /// A `force` (design section 5.1): every check but `busy`, since a force stops the running
+    /// step of its service instead, and the standing halt, which its halt generation lifts.
+    pub const fn for_force() -> Checks {
+        Checks {
+            skipped: &[Check::Busy, Check::Halt],
+        }
+    }
+
+    /// The checks skipped.
+    pub const fn skipped(&self) -> &'static [Check] {
+        self.skipped
+    }
+
+    /// Whether `check` is skipped.
+    pub fn skips(&self, check: Check) -> bool {
+        self.skipped.contains(&check)
+    }
+}
+
+/// An `update` is refused below the running version (`below_running`); a `force_rollback` and a
+/// `force` are not. A service that runs no version has nothing to be below.
 pub fn not_below_running(
     verb: HookedVerb,
     target: &Version,
@@ -84,14 +161,56 @@ pub fn not_below_running(
     }
 }
 
+/// Which hooked orders a service takes, by where it is in its life (design section 6.1): none
+/// while its uninstall is unfinished (`tombstoned`: `uninstalling`); `install` only when no
+/// release is installed (`already_installed`), `update` and `force_rollback` only when one is
+/// (`not_installed`). An order the step record holds unfinished for the same package
+/// (`resuming`) is resumed whatever `current` says: an install may have switched `current`
+/// before the daemon stopped.
+pub fn installed_rule(
+    verb: HookedVerb,
+    installed: bool,
+    resuming: bool,
+    tombstoned: bool,
+) -> Result<(), Refusal> {
+    let wants_installed = verb != HookedVerb::Install;
+    let wrong = match verb {
+        HookedVerb::Install => Refusal::AlreadyInstalled,
+        HookedVerb::Update | HookedVerb::ForceRollback | HookedVerb::Force => Refusal::NotInstalled,
+    };
+    match (tombstoned, resuming | (installed == wants_installed)) {
+        (true, _) => Err(Refusal::Uninstalling),
+        (false, true) => Ok(()),
+        (false, false) => Err(wrong),
+    }
+}
+
+/// Whether a `force` may run for a service where it is in its life (design section 6.1): a
+/// force is refused, and nothing changes, for a service whose first install is under way
+/// (`installing`) and one whose uninstall is unfinished (`uninstalling`). A service with no
+/// release installed is forced as the `force` verb does it: its first switch places it.
+pub fn force_allowed(lifecycle: Lifecycle) -> Result<(), Refusal> {
+    match lifecycle {
+        Lifecycle::Running | Lifecycle::Absent => Ok(()),
+        Lifecycle::Installing => Err(Refusal::Installing),
+        Lifecycle::Removing => Err(Refusal::Uninstalling),
+    }
+}
+
+/// Whether `verb` may run for `service`: the service `hostkeeper` updates itself by its own path
+/// (design sections 5.1 and 6.6), so a `force` and a `force_rollback` of it are refused
+/// (`self_service`); every other verb, and every other service, passes.
+pub fn self_service(verb: HookedVerb, service: &ServiceName) -> Result<(), Refusal> {
+    let forced = matches!(verb, HookedVerb::Force | HookedVerb::ForceRollback);
+    match forced & (service.as_str() == crate::verbs::force::SELF_SERVICE) {
+        true => Err(Refusal::SelfService),
+        false => Ok(()),
+    }
+}
+
 /// The token of a package error.
 pub fn package_refusal(error: &PackageError) -> Refusal {
-    match error {
-        PackageError::NotFound(_) => Refusal::PackageNotFound,
-        PackageError::DigestMismatch(_) => Refusal::DigestMismatch,
-        PackageError::NoSpace(_) => Refusal::NoSpace,
-        PackageError::Other(_) => Refusal::PackageFailed,
-    }
+    error.refusal()
 }
 
 /// What a hooked order is, for the try rules: the verb, the package and the try.
@@ -125,9 +244,13 @@ pub fn finished_of(rec: &Record) -> Option<Finished> {
     }
 }
 
-/// Whether `rec` is the step record of an order for the package `key` names.
-fn same_package(rec: &Record, key: &OrderKey) -> bool {
-    (rec.target_version == key.version.as_str()) & (rec.tarball_digest == key.digest.as_str())
+/// Whether `rec` is the step record of an order for the package `key` names, of the same kind:
+/// the record of a force answers only a `force`, and a hooked record only a hooked order.
+pub fn same_package(rec: &Record, key: &OrderKey) -> bool {
+    let same_kind = rec.force.is_some() == (key.verb == HookedVerb::Force);
+    (rec.target_version == key.version.as_str())
+        & (rec.tarball_digest == key.digest.as_str())
+        & same_kind
 }
 
 /// The try rules of design section 8.3, in this order, for the service whose step record is
@@ -144,6 +267,13 @@ fn same_package(rec: &Record, key: &OrderKey) -> bool {
 ///
 /// A record written without a try (before the daemon kept one) counts as try 0.
 pub fn try_rule(last: Option<&Record>, key: &OrderKey) -> TryRule {
+    try_rule_with(last, key, Checks::hooked())
+}
+
+/// [`try_rule`] for an order held to `checks`. A `force` ([`Checks::for_force`]) skips rule 2,
+/// and rule 5 for an unfinished hooked update, which it stops instead; an unfinished force of
+/// another package is `busy` for it all the same.
+pub fn try_rule_with(last: Option<&Record>, key: &OrderKey, checks: Checks) -> TryRule {
     let Some(rec) = last else {
         return TryRule::Run;
     };
@@ -161,7 +291,7 @@ pub fn try_rule(last: Option<&Record>, key: &OrderKey) -> TryRule {
     if same_try & same {
         return finished.map_or(TryRule::Run, TryRule::Answer);
     }
-    if halted {
+    if halted & !checks.skips(Check::Halt) {
         return TryRule::Refuse(Refusal::Halted);
     }
     if same_try {
@@ -171,7 +301,8 @@ pub fn try_rule(last: Option<&Record>, key: &OrderKey) -> TryRule {
         return TryRule::Refuse(Refusal::StaleTry);
     }
     let in_the_way = finished.is_none() & rec.progress.watching.is_none() & !same;
-    match in_the_way {
+    let stopped_instead = checks.skips(Check::Busy) & rec.force.is_none();
+    match in_the_way & !stopped_instead {
         true => TryRule::Refuse(Refusal::Busy),
         false => TryRule::Run,
     }

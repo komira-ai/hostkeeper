@@ -25,15 +25,15 @@
 // field the coordinator could do without. A signed `Poll` before approval is not refused: it
 // is answered PENDING; an unsigned one is answered as the Enrollment paragraph says.
 //
-// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
-// A version is the release's version string: 1 to 128 bytes, a digit first, then letters,
-// digits and `.+~-`. A service name is 1 to 64 bytes of `[a-z0-9-]`. A token (a reason, a
-// check, a step name) is 1 to 64 bytes of `[a-z0-9_]`; a step name at most 16. A commit is 40
-// lower-case hex digits; a package digest is SHA-256 as 64 lower-case hex characters. A heartbeat
-// lists at most 16 services. A host id is 1 to 63 bytes of `[a-z0-9-]`, not starting or ending
-// with `-`. A CSR is DER, at most 4096 bytes; a certificate is DER, at most 8192 bytes; a CA
-// bundle is PEM. A request id is the SHA-256 of the DER SubjectPublicKeyInfo of the CSR's key, as
-// 64 lower-case hex characters.
+// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`). A
+// service name is 1 to 255 bytes of the POSIX portable filename characters (`A-Za-z0-9._-`), not
+// beginning with `-` or `.`; a version the same with `+` added. A token (a reason, a check, a step
+// name) is 1 to 64 bytes of `[a-z0-9_]`; a step name at most 16. A commit is 40 lower-case hex
+// digits; a package digest is SHA-256 as 64 lower-case hex characters. A heartbeat lists at most
+// 16 services. A host id is 1 to 63 bytes of `[a-z0-9-]`, not starting or ending with `-`. A CSR
+// is DER, at most 4096 bytes; a certificate is DER, at most 8192 bytes; a CA bundle is PEM. A
+// request id is the SHA-256 of the DER SubjectPublicKeyInfo of the CSR's key, as 64 lower-case hex
+// characters.
 //
 // Orders: an order is one verb with typed arguments (`Order`): a service name, a version, a
 // package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds
@@ -123,7 +123,8 @@ message HeartbeatRequest {
   // and is counted as `kbf-updater`.
   AgentInfo agent = 2;
   // What this agent can use of the coordinator's side, by feature name (`deferred-v1`,
-  // `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
+  // `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb,
+  // `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
   // as missing them.
@@ -304,6 +305,26 @@ message HeartbeatResponse {
   // number is greater than the one it saw when it halted, so a lost reply or a coordinator restart
   // cannot make it miss a clear. Only for an agent that announced `halt-v1`.
   map<string, uint64> halt_generations = 3;
+  // The verdicts of this heartbeat (`ServiceBeat.last_update`) that the coordinator has written
+  // to its state before this reply: the agent sends none of them again, and the
+  // coordinator reads a service entry with no `last_update` as still reporting the last verdict
+  // it acknowledged for the host, across its own restarts. A verdict with no order id or no try
+  // is never acknowledged. Only for an agent that announced `verdict-acks-v1`; an agent that did
+  // not resends each verdict until it reports another, as before. At most one per service
+  // listed.
+  repeated VerdictAck acks = 4;
+}
+
+// A verdict the coordinator acknowledges, by the service it is about and the order id and try it
+// ends (`UpdateResult.order_id`, `UpdateResult.order_try`). The service is named because an
+// order id is the coordinator's per service: two services may each have a `force-1`.
+message VerdictAck {
+  // The service the verdict is about.
+  string service = 1;
+  // The order the verdict ends.
+  string order_id = 2;
+  // The try of the order, from 1.
+  uint64 order_try = 3;
 }
 
 // One order: one verb with its typed arguments, and the coordinator's identity for it. No field
@@ -416,6 +437,9 @@ message Claims {
   string mac_serial = 5;
   // A Mac's platform UUID.
   string platform_uuid = 6;
+  // The MAC address of the host's BMC, as the BMC reports it for its LAN channel (IPMI LAN
+  // configuration parameter 5); empty when the daemon could not read one, and on a Mac.
+  string bmc_mac = 7;
 }
 
 message EnrollResponse {

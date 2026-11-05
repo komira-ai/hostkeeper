@@ -11,6 +11,8 @@ use hostkeeper_config::manifest::ManifestRefusal;
 use hostkeeper_config::platform::Platform;
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_steps::tree_digest;
+// The checks of the host the unpack runs on: these tests run the Linux path.
+use hostkeeper_unpack::Platform::Linux;
 use hostkeeper_unpack::{UnpackError, unpack};
 use support::{Faulty, MANIFEST, Rig, Tar, VERSION, limits, valid_tar, zstd};
 
@@ -60,7 +62,7 @@ fn a_package_unpacks_for_the_platform_its_order_names() {
         let rig = Rig::new("p-each");
         let (path, mut order) = rig.archive("a.tar.zst", &package_for(platform));
         order.platform = platform;
-        let unpacked = unpack(&path, &order, &limits(), &rig.host()).unwrap();
+        let unpacked = unpack(&path, &order, &limits(), &rig.host(), Linux).unwrap();
         assert!(unpacked.fresh, "{platform}");
         assert_eq!(unpacked.manifest.platform, platform);
         assert_eq!(
@@ -78,7 +80,7 @@ fn a_package_unpacks_for_the_platform_its_order_names() {
 fn a_sealed_version_is_refused_for_another_platform_and_left_alone() {
     let rig = Rig::new("p-sealed");
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
-    unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    unpack(&path, &order, &limits(), &rig.host(), Linux).unwrap();
     let dir = rig.service().join(VERSION);
     let seal_path = rig.service().join(format!("{VERSION}.seal"));
     let (seal, tree, files) = (
@@ -89,7 +91,7 @@ fn a_sealed_version_is_refused_for_another_platform_and_left_alone() {
     let mut arm = order.clone();
     arm.platform = Platform::LinuxArm64;
     let fake = Faulty::new(rig.host());
-    let err = unpack(&path, &arm, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &arm, &limits(), &fake, Linux).unwrap_err();
     assert!(
         matches!(
             &err,
@@ -112,7 +114,7 @@ fn a_sealed_version_is_refused_for_another_platform_and_left_alone() {
     assert_eq!(fs::read(&seal_path).unwrap(), seal);
     assert_eq!(tree_digest(&dir).unwrap(), tree);
     assert_eq!(files_below(&dir), files);
-    assert!(unpack(&path, &order, &limits(), &rig.host()).is_ok());
+    assert!(unpack(&path, &order, &limits(), &rig.host(), Linux).is_ok());
 }
 
 /// Catches hostkeeper choosing among instruction-set variants: a package carrying a launcher,
@@ -150,7 +152,7 @@ fn instruction_set_variants_are_unpacked_as_plain_files() {
     }
     let rig = Rig::new("p-isa");
     let (path, order) = rig.archive("a.tar.zst", &zstd(&tar.end().bytes()));
-    let unpacked = unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    let unpacked = unpack(&path, &order, &limits(), &rig.host(), Linux).unwrap();
     let mut expected: Vec<(String, Vec<u8>)> = variants
         .iter()
         .map(|(name, _, bytes)| ((*name).to_owned(), bytes.to_vec()))

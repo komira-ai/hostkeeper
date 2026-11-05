@@ -5,6 +5,7 @@
 //! adds its own variants here, and the heartbeat loop maps them onto the wire in one table.
 
 use hostkeeper_config::manifest::{Class, ManifestRefusal};
+use hostkeeper_placed::PlacedError;
 
 /// Why an order was refused or stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -51,13 +52,66 @@ pub enum Refusal {
     ReleaseUnreadable,
     /// The step launcher failed; the step is left `running` in the record and a resend resumes it.
     LauncherFailed,
-    /// The dead-man could not stop a step at its bound: the service stays locked.
+    /// The dead-man could not stop a step at its bound: the service stays locked. A `force` that
+    /// could not stop the running step of its service ends with it too.
     Unstopped,
+    /// A `force` or a `force_rollback` of the service `hostkeeper`, which updates itself by its
+    /// own path.
+    SelfService,
+    /// An `install` of a service that has a release installed (`current` names one).
+    AlreadyInstalled,
+    /// An `update` or `force_rollback` of a service with no release installed.
+    NotInstalled,
+    /// A `force` of a service whose first install is under way.
+    Installing,
+    /// An order of a service whose uninstall is unfinished (its tombstone in `placed.json`
+    /// stands), other than the uninstall itself.
+    Uninstalling,
+    /// An `uninstall` the installed release has no way to run: its manifest has no
+    /// `[hook.timeout_secs] uninstall`, or the service is `hostkeeper` itself, which the package
+    /// manager removes. Refused before anything changes.
+    UninstallUnsupported,
+    /// The package claims a path another service owns, or one occupied by something
+    /// `placed.json` does not list. Refused before anything changes.
+    PathConflict,
+    /// `placed.json` could not be read or written, or a placed link, `current` or a directory of
+    /// the service could not be made or removed.
+    LinkFailed,
+    /// An `update` of the service `hostkeeper` while its local list of bad versions
+    /// (`<state-dir>/hostkeeper/bad-versions`) cannot be read: no self-update runs until it can.
+    BadVersionsUnreadable,
+    /// The release index or the package could not be downloaded, or the host could not write it
+    /// down for a reason other than a full disk.
+    FetchFailed,
+    /// The attestation bundle could not be downloaded, or the verifier could not run or ran out
+    /// of time.
+    AttestationUnavailable,
+    /// The package is not attested by the trusted signer.
+    NotAttested,
+    /// The archive breaks a bound or a shape rule of design section 5.5.
+    BadArchive,
+    /// The version is on the host already and is not what its seal says, or was sealed for
+    /// another archive.
+    ArtifactChanged,
+    /// The release index is not the index of the version asked for.
+    IndexInvalid,
+    /// The release index lists no package for this host's platform.
+    NoPackageForPlatform,
+    /// The order's version is a name the package directory holds for itself.
+    ReservedVersion,
+    /// The order's version is too long for the names the package directory derives from it.
+    VersionTooLong,
+    /// The archive, the staging directory or a seal cannot be read or written right now, for a
+    /// reason other than a full disk.
+    PackageIoError,
+    /// On macOS, the check of the staged tree (quarantine attribute, code signature) cannot be
+    /// made now: the package is not judged, and the order is tried again later.
+    VerifyUnavailable,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 20] = [
+    pub const ALL: [Refusal; 40] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -78,6 +132,26 @@ impl Refusal {
         Refusal::ReleaseUnreadable,
         Refusal::LauncherFailed,
         Refusal::Unstopped,
+        Refusal::SelfService,
+        Refusal::AlreadyInstalled,
+        Refusal::NotInstalled,
+        Refusal::Installing,
+        Refusal::Uninstalling,
+        Refusal::UninstallUnsupported,
+        Refusal::PathConflict,
+        Refusal::LinkFailed,
+        Refusal::BadVersionsUnreadable,
+        Refusal::FetchFailed,
+        Refusal::AttestationUnavailable,
+        Refusal::NotAttested,
+        Refusal::BadArchive,
+        Refusal::ArtifactChanged,
+        Refusal::IndexInvalid,
+        Refusal::NoPackageForPlatform,
+        Refusal::ReservedVersion,
+        Refusal::VersionTooLong,
+        Refusal::PackageIoError,
+        Refusal::VerifyUnavailable,
     ];
 
     /// The token.
@@ -103,6 +177,26 @@ impl Refusal {
             Refusal::ReleaseUnreadable => "release_unreadable",
             Refusal::LauncherFailed => "launcher_failed",
             Refusal::Unstopped => "unstopped",
+            Refusal::SelfService => "self_service",
+            Refusal::AlreadyInstalled => "already_installed",
+            Refusal::NotInstalled => "not_installed",
+            Refusal::Installing => "installing",
+            Refusal::Uninstalling => "uninstalling",
+            Refusal::UninstallUnsupported => "uninstall_unsupported",
+            Refusal::PathConflict => "path_conflict",
+            Refusal::LinkFailed => "link_failed",
+            Refusal::BadVersionsUnreadable => "bad_versions_unreadable",
+            Refusal::FetchFailed => "fetch_failed",
+            Refusal::AttestationUnavailable => "attestation_unavailable",
+            Refusal::NotAttested => "not_attested",
+            Refusal::BadArchive => "bad_archive",
+            Refusal::ArtifactChanged => "artifact_changed",
+            Refusal::IndexInvalid => "index_invalid",
+            Refusal::NoPackageForPlatform => "no_package_for_platform",
+            Refusal::ReservedVersion => "reserved_version",
+            Refusal::VersionTooLong => "version_too_long",
+            Refusal::PackageIoError => "io_error",
+            Refusal::VerifyUnavailable => "verify_unavailable",
         }
     }
 }
@@ -114,6 +208,20 @@ impl From<&ManifestRefusal> for Refusal {
         match refusal.class() {
             Class::Environment => Refusal::DaemonTooOld,
             Class::Release => Refusal::ManifestMismatch,
+        }
+    }
+}
+
+impl From<&PlacedError> for Refusal {
+    /// `path_conflict` for a path held by another service or by something `placed.json` does not
+    /// list, `manifest_mismatch` for a package whose paths or units break a rule of linking,
+    /// `uninstalling` for a tombstoned service, and `link_failed` for every failure of the host.
+    fn from(error: &PlacedError) -> Refusal {
+        match error {
+            PlacedError::PathConflict { .. } => Refusal::PathConflict,
+            PlacedError::Claim(_) | PlacedError::Lint(_) => Refusal::ManifestMismatch,
+            PlacedError::Tombstoned { .. } => Refusal::Uninstalling,
+            _ => Refusal::LinkFailed,
         }
     }
 }

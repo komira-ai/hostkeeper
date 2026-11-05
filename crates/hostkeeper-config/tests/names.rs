@@ -1,67 +1,120 @@
 //! The grammars of names and paths. The path cases are those of `hostkeeper-rights` before the
-//! move; the service-name cases are the wider grammar of design section 11.8.
+//! move; the service-name and version cases are the rules of design section 11.8.
 
+use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{
-    MAX_PATH, NameError, PathError, ServiceName, UnitError, UnitName, Version, check_path,
-    check_relative, is_service_name, is_version, is_within,
+    MAX_NAME, MAX_PATH, MAX_UNIT_NAME, NameError, PathError, SERVICE_NAME_RULE, ServiceName,
+    UnitError, UnitName, VERSION_RULE, Version, check_path, check_relative, is_service_name,
+    is_version, is_within,
 };
 
-/// Catches a service name outside design 11.8: `A-Z`, `a-z`, `0-9`, `_` and `-`, 1 to 64 bytes.
-/// Upper case and `_` are new: the grammar before allowed lowercase, digits and `-` only.
-#[test]
-fn service_names() {
-    for good in [
-        "a",
+/// Strings both rules of design 11.8 accept: a service name and a version alike.
+fn accepted_by_both() -> Vec<String> {
+    [
         "tierstore",
-        "js-agent",
-        "k9",
-        "Tier",
-        "a_b",
-        "A-Z_0",
-        &"a".repeat(64),
-    ] {
-        assert!(is_service_name(good), "{good}");
-        assert_eq!(ServiceName::new(good).unwrap().as_str(), good);
-    }
-    for bad in ["", "a b", "a.b", "a/b", "a@b", "é", &"a".repeat(65)] {
-        assert!(!is_service_name(bad), "{bad}");
-        assert_eq!(
-            ServiceName::new(bad),
-            Err(NameError::Service(bad.to_owned()))
-        );
-    }
-    assert_eq!(ServiceName::new("web").unwrap().to_string(), "web");
+        "Tierstore_2",
+        "kbf-proxy",
+        "0.3.2",
+        "v1.2",
+        "1.0.0-rc.1",
+        "_a",
+        "a",
+        "a.",
+    ]
+    .into_iter()
+    .map(String::from)
+    .chain([
+        "a".repeat(MAX_NAME),
+        format!("1.{}", "0".repeat(MAX_NAME - 2)),
+    ])
+    .collect()
 }
 
-/// Catches a version outside design 11.8: 1 to 128 bytes of `A-Za-z0-9._+-`, no leading dot.
+/// Strings both rules refuse: the empty string, too long, a leading `-` or `.`, a path
+/// separator, white space, a control character, a non-ASCII letter and the characters bash gives
+/// a meaning.
+fn refused_by_both() -> Vec<String> {
+    [
+        "",
+        "-x",
+        ".hidden",
+        ".",
+        "..",
+        "a/b",
+        "a b",
+        "1.0~rc1",
+        "a$b",
+        "a*b",
+        "a?b",
+        "a\nb",
+        "a\tb",
+        "a\0b",
+        "caf\u{e9}",
+        "\u{e9}",
+        "a\"b",
+        "a'b",
+        "a:b",
+        "a@b",
+        "~a",
+    ]
+    .into_iter()
+    .map(String::from)
+    .chain([
+        "a".repeat(MAX_NAME + 1),
+        format!("+{}", "a".repeat(MAX_NAME)),
+    ])
+    .collect()
+}
+
+/// Strings with a `+`: a version, never a service name (a `+` cannot be in a systemd unit name).
+const PLUS: [&str; 4] = ["1.4.0+g1a2b3c", "a+b", "+a", "a+"];
+
+/// Catches a service name or a version outside design 11.8: the POSIX portable filename
+/// characters, 1 to 255 bytes, not beginning with `-` or `.`, and `+` in a version only. The
+/// checks and the constructors answer each string alike.
 #[test]
-fn versions() {
-    for good in [
-        "1",
-        "1.5.0",
-        "1.5.0-rc.1+build_7",
-        "v2",
-        "0.",
-        &"9".repeat(128),
-    ] {
-        assert!(is_version(good), "{good}");
-        assert_eq!(Version::new(good).unwrap().as_str(), good);
+fn service_names_and_versions_keep_their_rules() {
+    assert_eq!(MAX_NAME, 255);
+    for good in accepted_by_both() {
+        assert!(is_service_name(&good), "{good:?}");
+        assert!(is_version(&good), "{good:?}");
+        assert_eq!(ServiceName::new(&good).unwrap().as_str(), good);
+        assert_eq!(Version::new(&good).unwrap().as_str(), good);
     }
-    for bad in ["", ".1", "..", "1 0", "1/0", "1:0", "1~0", &"9".repeat(129)] {
-        assert!(!is_version(bad), "{bad}");
-        assert_eq!(Version::new(bad), Err(NameError::Version(bad.to_owned())));
+    for bad in refused_by_both() {
+        assert!(!is_service_name(&bad), "{bad:?}");
+        assert!(!is_version(&bad), "{bad:?}");
+        assert_eq!(ServiceName::new(&bad), Err(NameError::Service(bad.clone())));
+        assert_eq!(Version::new(&bad), Err(NameError::Version(bad.clone())));
     }
+    for plus in PLUS {
+        assert!(!is_service_name(plus), "{plus:?}");
+        assert_eq!(
+            ServiceName::new(plus),
+            Err(NameError::Service(plus.to_owned()))
+        );
+        assert!(is_version(plus), "{plus:?}");
+        assert_eq!(Version::new(plus).unwrap().as_str(), plus);
+    }
+}
+
+/// Catches a refusal that does not state its rule, and a name that does not print as itself.
+#[test]
+fn a_refused_name_states_the_rule() {
+    assert_eq!(
+        ServiceName::new("a+b").unwrap_err().to_string(),
+        "\"a+b\" is not a service name: 1 to 255 bytes of A-Z, a-z, 0-9, `.`, `_` and `-`, \
+         not beginning with `-` or `.`"
+    );
+    assert_eq!(
+        Version::new("-1").unwrap_err().to_string(),
+        "\"-1\" is not a version: 1 to 255 bytes of A-Z, a-z, 0-9, `.`, `_`, `+` and `-`, \
+         not beginning with `-` or `.`"
+    );
+    assert_eq!(ServiceName::new("web").unwrap().to_string(), "web");
     assert_eq!(Version::new("1.5.0").unwrap().to_string(), "1.5.0");
-    assert!(
-        NameError::Version("x".into())
-            .to_string()
-            .contains("version")
-    );
-    assert!(
-        NameError::Service("x".into())
-            .to_string()
-            .contains("service name")
-    );
+    assert!(SERVICE_NAME_RULE.contains(&format!("1 to {MAX_NAME} bytes")));
+    assert!(VERSION_RULE.contains(&format!("1 to {MAX_NAME} bytes")));
 }
 
 /// Catches a path that systemd would read as something else: a `-`, `+` or `!` prefix, a
@@ -177,6 +230,38 @@ fn units_belong_to_the_service() {
     assert!(UnitName::of("tierstore", &longest, false).is_ok());
 }
 
+/// Catches a unit name systemd cannot load passing for a service whose name keeps its rule: a
+/// unit name is at most 255 bytes, `.service` included, so a service name of 247 bytes still has
+/// its `<service>.service` and one of 248 bytes, or 255, is refused with its own error.
+#[test]
+fn a_unit_name_longer_than_systemd_takes_is_refused() {
+    assert_eq!(MAX_UNIT_NAME, 255);
+    let fits = "a".repeat(247);
+    let unit = format!("{fits}.service");
+    assert_eq!(unit.len(), 255);
+    assert!(UnitName::of(&fits, &unit, false).is_ok());
+    for service in ["a".repeat(248), "a".repeat(MAX_NAME)] {
+        assert!(is_service_name(&service));
+        let unit = format!("{service}.service");
+        assert_eq!(
+            UnitName::of(&service, &unit, false),
+            Err(UnitError::TooLong),
+            "{}",
+            unit.len()
+        );
+    }
+    let instance = format!("tierstore-{}@1.service", "a".repeat(236));
+    assert_eq!(instance.len(), 256);
+    assert_eq!(
+        UnitName::of("tierstore", &instance, false),
+        Err(UnitError::TooLong)
+    );
+    assert_eq!(
+        UnitError::TooLong.to_string(),
+        "is longer than 255 bytes, the most systemd takes for a unit name"
+    );
+}
+
 /// Catches an instance read as a port when it is not one, and the template of an instance
 /// named wrongly.
 #[test]
@@ -221,6 +306,30 @@ fn errors_read_as_sentences() {
         UnitError::NotAUnit.to_string(),
         UnitError::NotTheServices.to_string(),
         UnitError::BadInstance.to_string(),
+        UnitError::TooLong.to_string(),
     ];
     assert!(all.iter().all(|text| !text.is_empty()));
+}
+
+/// Catches a version of hostkeeper that the heartbeat names in another spelling, or that the
+/// version grammar would refuse: the conversion keeps `major.minor.patch` as written, the
+/// largest numbers included.
+#[test]
+fn a_hostkeeper_version_is_the_version_of_its_own_text() {
+    for own in [
+        HostkeeperVersion {
+            major: 0,
+            minor: 1,
+            patch: 0,
+        },
+        HostkeeperVersion {
+            major: u64::MAX,
+            minor: u64::MAX,
+            patch: u64::MAX,
+        },
+    ] {
+        let version = Version::from(own);
+        assert_eq!(version.as_str(), own.to_string());
+        assert_eq!(Version::new(version.as_str()), Ok(version));
+    }
 }

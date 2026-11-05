@@ -6,9 +6,10 @@ use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
 
 use hostkeeper_proto::hostkeeper::agent::v1::{
-    Claims, EnrollRequest, EnrollResponse, EnrollState, PollRequest, PollResponse, PollState,
-    RenewRequest, RenewResponse,
+    Claims, EnrollRequest, EnrollResponse, EnrollState, HeartbeatResponse, PollRequest,
+    PollResponse, PollState, RenewRequest, RenewResponse, VerdictAck,
 };
+use hostkeeper_proto::hostkeeper::local::v1::{Lifecycle, ServiceRecord, StepRecord};
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
 
 /// The descriptor set the last release committed: what a reader of that release knows.
@@ -43,6 +44,20 @@ fn claims() -> Claims {
         addresses: vec!["192.0.2.10".to_owned(), "198.51.100.7".to_owned()],
         mac_serial: "C02X".to_owned(),
         platform_uuid: "platform-uuid-2".to_owned(),
+        bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+    }
+}
+
+fn record() -> op::InventoryRecord {
+    op::InventoryRecord {
+        host_id: "db-1".to_owned(),
+        role: "storage".to_owned(),
+        data_macs: vec!["0c:c4:7a:00:00:02".to_owned()],
+        bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+        serial: "SN-1".to_owned(),
+        notes: "rack 4, slot 2".to_owned(),
+        added_by: "alice".to_owned(),
+        added_unix: 1_800_000_000,
     }
 }
 
@@ -154,6 +169,10 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                     renewal_of: "db-1".to_owned(),
                     duplicate_claim: true,
                     mac_nonce_presented: true,
+                    inventory_match: op::InventoryMatch::Ambiguous.into(),
+                    record_host_id: "db-1".to_owned(),
+                    record_role: "storage".to_owned(),
+                    candidate_host_ids: vec!["db-1".to_owned(), "db-2".to_owned()],
                 }],
                 next_page_token: "p3".to_owned(),
             }),
@@ -185,13 +204,72 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 reason: "daemon_too_old".to_owned(),
             }),
         ),
+        (
+            "hostkeeper.operator.v1.InventoryRecord",
+            round_trip(&record()),
+        ),
+        (
+            "hostkeeper.operator.v1.AddRecordRequest",
+            round_trip(&op::AddRecordRequest {
+                host_id: "db-1".to_owned(),
+                role: "storage".to_owned(),
+                data_macs: vec!["0C-C4-7A-00-00-02".to_owned()],
+                bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+                serial: "SN-1".to_owned(),
+                notes: "rack 4".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.AddRecordResponse",
+            round_trip(&op::AddRecordResponse {
+                record: Some(record()),
+                entry: Some(audit_entry("record_add")),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ListRecordsRequest",
+            round_trip(&op::ListRecordsRequest {
+                limit: 10,
+                page_token: "db-1".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ListRecordsResponse",
+            round_trip(&op::ListRecordsResponse {
+                records: vec![record()],
+                next_page_token: "db-1".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.RemoveRecordRequest",
+            round_trip(&op::RemoveRecordRequest {
+                host_id: "db-1".to_owned(),
+                reason: "returned to vendor".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.RemoveRecordResponse",
+            round_trip(&op::RemoveRecordResponse {
+                entry: Some(audit_entry("record_remove")),
+            }),
+        ),
+        ("hostkeeper.agent.v1.VerdictAck", round_trip(&verdict_ack())),
     ]
+}
+
+fn verdict_ack() -> VerdictAck {
+    VerdictAck {
+        service: "db".to_owned(),
+        order_id: "force-1".to_owned(),
+        order_try: 2,
+    }
 }
 
 /// Catches: a message added since the baseline that does not read back as written, and a new
 /// field or message that a reader built from the baseline drops: a new field of a released
 /// message (`ExcludeRequest.abandon`, `ForceResponse.skipped`) is kept by the older reader of
-/// that message, which still reads what it knows; a whole new message is kept, byte for byte, by
+/// that message, which still reads what it knows (`HeartbeatResponse.acks` too, and an answer of
+/// the release before reads with no acks); a whole new message is kept, byte for byte, by
 /// an older reader that knows none of its fields (a gateway or proxy of the release before).
 #[test]
 fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
@@ -233,17 +311,80 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
     let back = op::ForceResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(back, force);
 
+    let acked = HeartbeatResponse {
+        features: vec!["verdict-acks-v1".to_owned()],
+        acks: vec![verdict_ack()],
+        ..HeartbeatResponse::default()
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.agent.v1.HeartbeatResponse")
+        .expect("released");
+    assert!(message.get_field_by_name("acks").is_none());
+    let read = DynamicMessage::decode(message, round_trip(&acked).as_slice()).expect("decodes");
+    let features = read.get_field_by_name("features").expect("known");
+    assert_eq!(features.as_list().map(<[Value]>::len), Some(1));
+    let back = HeartbeatResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, acked);
+    let before = HeartbeatResponse::decode(
+        HeartbeatResponse {
+            features: vec!["halt-v1".to_owned()],
+            ..HeartbeatResponse::default()
+        }
+        .encode_to_vec()
+        .as_slice(),
+    )
+    .expect("decodes");
+    assert!(before.acks.is_empty());
+
     // A released message with no field: every field of a new message is unknown to it.
     let blind = older
         .get_message_by_name("hostkeeper.operator.v1.ListHostsRequest")
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 16);
+    assert_eq!(messages.len(), 24);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
         let read = DynamicMessage::decode(blind.clone(), bytes.as_slice()).expect("decodes");
         assert_eq!(read.encode_to_vec(), bytes, "{name}");
     }
+}
+
+/// Catches a service's lifecycle that an admin client of the release before cannot read past, or
+/// drops: a `ServiceRecord` that says `REMOVING` is read by the baseline's `ServiceRecord`, which
+/// has no `lifecycle`, with every field it knows, and written back with the lifecycle kept; a
+/// record of the release before reads with the lifecycle UNSPECIFIED.
+#[test]
+fn an_older_admin_reader_keeps_the_lifecycle_of_a_service() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.ServiceRecord")
+        .expect("released");
+    assert!(message.get_field_by_name("lifecycle").is_none());
+    let removing = ServiceRecord {
+        service: "web".to_owned(),
+        last: Some(StepRecord {
+            step: "uninstall".to_owned(),
+            reason: "unit_stuck".to_owned(),
+            ..StepRecord::default()
+        }),
+        lifecycle: Lifecycle::Removing.into(),
+        ..ServiceRecord::default()
+    };
+    let read = DynamicMessage::decode(message, round_trip(&removing).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("service").as_deref(),
+        Some(&Value::String("web".to_owned()))
+    );
+    let back = ServiceRecord::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, removing);
+    assert_eq!(back.lifecycle(), Lifecycle::Removing);
+
+    let before = ServiceRecord {
+        service: "web".to_owned(),
+        ..ServiceRecord::default()
+    };
+    let read = ServiceRecord::decode(round_trip(&before).as_slice()).expect("decodes");
+    assert_eq!(read.lifecycle(), Lifecycle::Unspecified);
 }

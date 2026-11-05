@@ -37,13 +37,18 @@ impl fmt::Display for PackageDigest {
     }
 }
 
-/// The two verbs that run a package's hook to a verdict through the step runner.
+/// The verbs that switch a service to a package under the service's lock: those that run its
+/// hook to a verdict through the step runner, and `force`, which runs no hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookedVerb {
     /// Refused below the running version.
     Update,
     /// A hooked update to any version, lower ones included (automatic rollback sends it).
     ForceRollback,
+    /// The hookless switch of design section 5.6, to any version, lower ones included.
+    Force,
+    /// The update path with no previous release, for a service with none installed.
+    Install,
 }
 
 impl HookedVerb {
@@ -52,6 +57,8 @@ impl HookedVerb {
         match self {
             HookedVerb::Update => "update",
             HookedVerb::ForceRollback => "force_rollback",
+            HookedVerb::Force => "force",
+            HookedVerb::Install => "install",
         }
     }
 }
@@ -66,12 +73,23 @@ pub struct Hooked {
     pub order_try: NonZeroU64,
 }
 
+/// The arguments of an `uninstall`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unhooked {
+    pub service: ServiceName,
+    /// The coordinator's try of the order, from 1: reported with the uninstall's verdict.
+    pub order_try: NonZeroU64,
+}
+
 /// The arguments of a `force`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Forced {
     pub package: Hooked,
     /// Greater than the generation the service is held under: a force lifts a standing halt.
     pub halt_generation: u64,
+    /// The coordinator's id of the order, kept in the force record and reported with its
+    /// verdict; `None` when the order carries none.
+    pub order_id: Option<String>,
 }
 
 /// One verb with its typed arguments. The executor matches it exhaustively; a verb a later
@@ -81,7 +99,7 @@ pub enum Verb {
     Update(Hooked),
     ForceRollback(Hooked),
     Install(Hooked),
-    Uninstall(ServiceName),
+    Uninstall(Unhooked),
     Force(Forced),
     Abort(ServiceName),
     ClearHalt {
@@ -104,10 +122,10 @@ pub struct BadOrder {
 pub const NO_VERB: &str = "is not set, or is a verb this daemon does not know";
 /// What a try of 0 breaks.
 pub const NO_TRY: &str = "is 0 or missing: a try counts from 1";
-/// What a service name that breaks its grammar breaks.
-pub const SERVICE_RULE: &str = "is not a service name: 1 to 64 bytes of A-Z, a-z, 0-9, `_` and `-`";
-/// What a version that breaks its grammar breaks.
-pub const VERSION_RULE: &str = "is not a version: 1 to 128 bytes of A-Z, a-z, 0-9, `.`, `_`, `+` and `-`, not beginning with `.`";
+/// What a service name that breaks its rule breaks: the config crate's words.
+pub const SERVICE_RULE: &str = hostkeeper_config::names::SERVICE_NAME_RULE;
+/// What a version that breaks its rule breaks: the config crate's words.
+pub const VERSION_RULE: &str = hostkeeper_config::names::VERSION_RULE;
 /// What a malformed package digest breaks.
 pub const DIGEST_RULE: &str = "is not a SHA-256 of 64 lower-case hex digits";
 
@@ -172,8 +190,12 @@ impl TryFrom<&Order> for Verb {
                     order_try,
                 )?,
                 halt_generation: a.halt_generation,
+                order_id: Some(order.order_id.clone()).filter(|id| !id.is_empty()),
             }),
-            order::Verb::Uninstall(a) => Verb::Uninstall(service("uninstall", &a.service)?),
+            order::Verb::Uninstall(a) => Verb::Uninstall(Unhooked {
+                service: service("uninstall", &a.service)?,
+                order_try,
+            }),
             order::Verb::Abort(a) => Verb::Abort(service("abort", &a.service)?),
             order::Verb::ClearHalt(a) => Verb::ClearHalt {
                 service: service("clear_halt", &a.service)?,

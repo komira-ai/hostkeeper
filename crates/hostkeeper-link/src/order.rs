@@ -24,6 +24,14 @@ pub struct OrderRef {
     pub order_try: u64,
 }
 
+/// A verdict the coordinator has stored: the service it is about and the order try. Order ids
+/// are per service on the coordinator, so the service is part of the identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Acknowledged {
+    pub service: ServiceName,
+    pub order: OrderRef,
+}
+
 /// What an order acts on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
@@ -206,6 +214,8 @@ pub struct Reply {
     pub features: Vec<Feature>,
     /// How many times an operator has cleared a halt of each service.
     pub halt_generations: Vec<(ServiceName, u64)>,
-    /// The verdicts the coordinator has counted, by order id and try: these are not sent again.
-    pub acknowledged: Vec<OrderRef>,
+    /// The verdicts the coordinator has stored, by service, order id and try: these are not
+    /// sent again. An acknowledgement drops only the verdict of the service it names (and,
+    /// from a coordinator that advertises `verdict-acks-v1`, the older ones of that service).
+    pub acknowledged: Vec<Acknowledged>,
 }

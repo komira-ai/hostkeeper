@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use hostkeeper_rights::{Declaration, Refusal};
 
 /// A declaration that keeps every rule, shaped like the example of the design (the numbers and
-/// the paths are the tierstore owner's), with only the keys the launch still reads.
+/// the paths are the tierstore owner's), with only the keys the declaration still has.
 pub const SAMPLE: &str = r#"
 name = "tierstore"
 binary = "tierstore"

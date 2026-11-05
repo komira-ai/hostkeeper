@@ -1,13 +1,26 @@
 //! The updater's own update (docs/design/host-updates.md, 3.5, "Updating the updater itself").
 //!
 //! The updater is updated like any service, but never inside the trial it guards. After the
-//! update of the release has finished and `verify` has succeeded, a follow-on step
-//! ([`follow_on`]) stages the new updater binary beside the old, points `current` at it and tells
-//! the caller to reply and exit cleanly; the
-//! unit's `Restart=always` starts the new binary. If the new binary cannot start, systemd gives
-//! up after `StartLimitBurst` starts, the unit fails, and its `OnFailure=` unit runs the
-//! *previous* binary's `self-update-fallback` verb, which calls [`Layout::flip_back`]: `current`
-//! points at the previous binary again and the unit is started.
+//! update of the release has run its steps and `verify` has succeeded, a follow-on step
+//! ([`follow_on`]) stages the new updater binary beside the old, writes in the step record that
+//! the update waits for the restart ([`AwaitingRestart`]), points `current` at it and tells the
+//! caller to reply and exit cleanly; the unit's `Restart=always` starts the new binary. If the
+//! new binary cannot start, systemd gives up after `StartLimitBurst` starts, the unit fails, and
+//! its `OnFailure=` unit runs the *previous* binary's `self-update-fallback` verb, which calls
+//! [`Layout::flip_back`]: `current` points at the previous binary again and the unit is started.
+//!
+//! The record says `Succeeded` only once the new binary has run (design section 6.6): the step
+//! runner of the update holds its success back ([`crate::StepRunner::with_held_success`]), the
+//! record waits for the restart (`done` at `cleanup`, with [`AwaitingRestart`]), and the binary
+//! that starts next settles it ([`settle`]): the new one confirms it `Succeeded`, and any other
+//! (the fallback, or a hand switch, put the previous binary back) closes it `Failed` after the
+//! commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], and adds the version to the local
+//! list of bad versions ([`crate::bad`]).
+//!
+//! On macOS the daemon runs from a LaunchDaemons plist ([`launchd_main_plist`]) that launchd keeps
+//! alive, and the fallback is a timer job ([`launchd_fallback_job`]) that runs the previous
+//! binary's `self-update-fallback` verb every interval, since launchd has neither a start limit
+//! nor `OnFailure=`.
 //!
 //! Two kinds of [`Layout`] share the switch:
 //!
@@ -39,9 +52,13 @@ use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
+use hostkeeper_config::names::{MAX_NAME, is_version};
 use hostkeeper_hook::Verdict;
 
 use crate::artifact::{ArtifactError, Staged, host_owner, trusted_owners, walk};
+use crate::bad::{BadVersions, BadVersionsError};
+pub use crate::record::{AwaitingRestart, REASON_SELF_UPDATE_FALLBACK};
+use crate::record::{Loaded, Record, RecordError, RecordStore, Settlement, State};
 use crate::runner::Finished;
 use crate::seal::{Seal, read_seal};
 
@@ -72,10 +89,42 @@ enum Kind {
 /// What the caller does after [`follow_on`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FollowOn {
-    /// The new binary is staged and `current` points at it: reply, then exit with status 0.
+    /// The new binary is staged, the record waits for the restart and `current` points at the
+    /// new binary: reply, then exit with status 0.
     Restart,
     /// This updater already is that version, or the update did not succeed: carry on.
     NotNeeded,
+}
+
+/// What [`settle`] found at the start of a binary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settled {
+    /// The new binary runs: the update is recorded `Succeeded`.
+    Confirmed,
+    /// Another binary runs: the update is recorded `Failed` after the commit, and its version is
+    /// bad here.
+    FellBack,
+    /// No update waited for the restart; nothing was written.
+    NotPending,
+}
+
+/// Why the updater's own update could not go on.
+#[derive(Debug, thiserror::Error)]
+pub enum SelfUpdateError {
+    /// The new binary could not be taken from its verified release.
+    #[error(transparent)]
+    Artifact(#[from] ArtifactError),
+    #[error(transparent)]
+    Record(#[from] RecordError),
+    #[error(transparent)]
+    BadVersions(#[from] BadVersionsError),
+    /// The binary directory could not be read or changed.
+    #[error("cannot use the binary directory: {0}")]
+    Io(#[from] io::Error),
+    /// The step record holds no unfinished update to the version: there is nothing to wait for
+    /// the restart.
+    #[error("the step record holds no unfinished update to {version}")]
+    NoUpdate { version: String },
 }
 
 impl Layout {
@@ -218,12 +267,29 @@ impl Layout {
         Ok(())
     }
 
-    /// A version is a plain name: ASCII letters, digits, `.`, `-`, `_` and `+`, not starting
-    /// with `.` ([`io::ErrorKind::InvalidInput`] otherwise). In a package directory it is also none of
+    /// A version keeps [`is_version`] ([`io::ErrorKind::InvalidInput`] otherwise), and is short
+    /// enough that every name the layout derives from it fits in [`MAX_NAME`] bytes
+    /// ([`io::ErrorKind::InvalidFilename`] otherwise): the longest is `.<version>.seal.tmp` in a
+    /// package directory and `.<version>.stage` in the binary directory. In a package directory
+    /// it is also none of
     /// the directory's own names: not `current` or `previous`, and not ending in `.seal` or
     /// `.tmp`, so that a version can never be a link, a seal or a temporary file.
     pub fn check_name(&self, version: &str) -> io::Result<()> {
         check_version(version)?;
+        let (affix, longest) = match self.kind {
+            Kind::Package => (PACKAGE_AFFIX, "`.<version>.seal.tmp`"),
+            Kind::Binary => (BINARY_AFFIX, "`.<version>.stage`"),
+        };
+        if version.len() + affix > MAX_NAME {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidFilename,
+                format!(
+                    "a version of {} bytes is too long for the names the layout puts beside it: \
+                     {longest} would pass {MAX_NAME} bytes",
+                    version.len()
+                ),
+            ));
+        }
         let own = (version == "current")
             | (version == "previous")
             | version.ends_with(".seal")
@@ -235,6 +301,11 @@ impl Layout {
             ));
         }
         Ok(())
+    }
+
+    /// [`io::ErrorKind::InvalidInput`] unless this is a package directory.
+    pub(crate) fn expect_package(&self) -> io::Result<()> {
+        self.expect_kind(Kind::Package)
     }
 
     fn expect_kind(&self, kind: Kind) -> io::Result<()> {
@@ -404,12 +475,17 @@ fn link_version(link: &Path) -> io::Result<Option<String>> {
     }
 }
 
-/// A version names a file: ASCII letters, digits, `.`, `-`, `_` and `+`, not starting with `.`.
+/// What the longest name a package directory derives from a version adds to it:
+/// `.<version>.seal.tmp`, the seal `hostkeeper-unpack` writes beside a package version before
+/// renaming it into place (`<version>.seal` is shorter).
+const PACKAGE_AFFIX: usize = ".".len() + ".seal.tmp".len();
+/// What the longest name the binary directory derives from a version adds to it:
+/// `.<version>.stage`, the copy [`Layout::stage`] renames into `versions/<version>`.
+const BINARY_AFFIX: usize = ".".len() + ".stage".len();
+
+/// A version names a file: it keeps [`is_version`].
 fn check_version(version: &str) -> io::Result<()> {
-    let plain = version
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'+'));
-    if version.is_empty() || version.starts_with('.') || !plain {
+    if !is_version(version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "a version that is not a plain file name",
@@ -418,32 +494,43 @@ fn check_version(version: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// The follow-on step of an update that finished: when it succeeded and this updater (version
-/// `running`) is not `version`, stages the updater binary of the verified release `release` as
-/// `version` and switches to it.
+/// The follow-on step of an update whose steps ended: when it succeeded and this updater
+/// (version `running`) is not `version`, stages the updater binary of the verified release
+/// `release` as `version`, writes in the record of `store` that the update waits for the restart
+/// ([`AwaitingRestart`]), and only then switches to it. When this updater already is `version`,
+/// the binary that runs is the new one, and an unfinished record of the update to it is finished
+/// `Succeeded` here.
 ///
 /// `binary` is the binary's path inside the release, relative and of plain names; it is taken
 /// only through [`Staged::check`], so a release that changed since it was sealed, or a path that
-/// leaves it, stages nothing and moves no link. There is no way to give this a file of no
-/// verified release.
+/// leaves it, stages nothing, writes nothing and moves no link. There is no way to give this a
+/// file of no verified release.
 ///
 /// A version `current` or `previous` already names (a repeat after a crash between the switch
 /// and the restart, or a return to the binary before) is not staged again: it is switched to
 /// when its file holds the bytes of the verified binary, and refused, with nothing changed,
 /// when it does not.
 ///
-/// The record of the update is finished before this is called ([`crate::StepRunner::run`]
-/// returned), so the restart interrupts nothing. It is safe to call again after a crash, and
-/// the new binary, started, finds `running == version` and does nothing.
+/// The record must hold the update to `version` unfinished: the step runner held its success
+/// back ([`crate::StepRunner::with_held_success`]), so the restart interrupts nothing and no
+/// binary reads the update as succeeded before the new one has run
+/// ([`SelfUpdateError::NoUpdate`] otherwise, with nothing switched). The record is written before
+/// the switch, so that a crash between the two leaves a record the next start settles
+/// ([`settle`]); a switch that fails takes the wait back. It is safe to call again after a crash.
 pub fn follow_on(
     finished: &Finished,
+    store: &RecordStore,
     layout: &Layout,
     running: &str,
     version: &str,
     release: &Staged,
     binary: &Path,
-) -> Result<FollowOn, ArtifactError> {
-    if !matches!(finished.verdict, Verdict::Succeeded { .. }) || running == version {
+) -> Result<FollowOn, SelfUpdateError> {
+    let Verdict::Succeeded { promotion_pending } = finished.verdict else {
+        return Ok(FollowOn::NotNeeded);
+    };
+    if running == version {
+        finish_running(store, version, finished)?;
         return Ok(FollowOn::NotNeeded);
     }
     let new_binary = release.check(binary)?;
@@ -459,8 +546,128 @@ pub fn follow_on(
     } else {
         layout.stage(version, &new_binary)?;
     }
-    layout.switch(version)?;
+    let awaiting = AwaitingRestart {
+        version: version.to_owned(),
+        verdict_promotion_pending: promotion_pending,
+    };
+    await_restart(store, awaiting.clone())?;
+    if let Err(error) = layout.switch(version) {
+        // The switch did not happen: the record waits for nothing, so that a start of this
+        // binary does not read it as a fallback, and a resend runs the follow-on again. Should
+        // that write fail too, the record waits, and the next start settles it as a fallback.
+        drop(stop_waiting(store, &awaiting));
+        return Err(error.into());
+    }
     Ok(FollowOn::Restart)
+}
+
+/// Under the record lock, takes back the wait for the restart [`await_restart`] wrote.
+fn stop_waiting(store: &RecordStore, awaiting: &AwaitingRestart) -> Result<(), SelfUpdateError> {
+    let _held = store.hold();
+    let mut rec = unfinished_update(store, &awaiting.version)?;
+    rec.progress.awaiting_restart = None;
+    store.save(&rec)?;
+    Ok(())
+}
+
+/// Under the record lock, marks the unfinished update to `awaiting.version` as waiting for the
+/// restart; a record that already says so is not written again.
+fn await_restart(store: &RecordStore, awaiting: AwaitingRestart) -> Result<(), SelfUpdateError> {
+    let _held = store.hold();
+    let mut rec = unfinished_update(store, &awaiting.version)?;
+    if rec.progress.awaiting_restart.as_ref() == Some(&awaiting) {
+        return Ok(());
+    }
+    rec.progress.awaiting_restart = Some(awaiting);
+    store.save(&rec)?;
+    Ok(())
+}
+
+/// Under the record lock, finishes the unfinished update to `version`, which this binary is, as
+/// `finished` says; a record of anything else is left as it is.
+fn finish_running(
+    store: &RecordStore,
+    version: &str,
+    finished: &Finished,
+) -> Result<(), SelfUpdateError> {
+    let _held = store.hold();
+    let mut rec = match unfinished_update(store, version) {
+        Ok(rec) => rec,
+        Err(SelfUpdateError::NoUpdate { .. }) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    rec.progress.awaiting_restart = None;
+    rec.state = State::Finished {
+        verdict: finished.verdict.clone(),
+        reason: finished.reason.clone(),
+    };
+    store.save(&rec)?;
+    Ok(())
+}
+
+/// The record of `store` when it holds an unfinished update to `version`.
+fn unfinished_update(store: &RecordStore, version: &str) -> Result<Box<Record>, SelfUpdateError> {
+    let no_update = || SelfUpdateError::NoUpdate {
+        version: version.to_owned(),
+    };
+    let Loaded::Current(rec) = store.load()? else {
+        return Err(no_update());
+    };
+    let unfinished = !matches!(rec.state, State::Finished { .. });
+    match unfinished & (rec.target_version == version) {
+        true => Ok(rec),
+        false => Err(no_update()),
+    }
+}
+
+/// At the start of a binary of version `running`: settles the update of the record of `store`
+/// that waits for the restart, if there is one ([`settle_with`] with nothing to do before a
+/// confirmation).
+pub fn settle(
+    layout: &Layout,
+    store: &RecordStore,
+    running: &str,
+) -> Result<Settled, SelfUpdateError> {
+    settle_with(layout, store, running, &mut || Ok(()))
+}
+
+/// At the start of a binary of version `running`: settles the update of the record of `store`
+/// that waits for the restart (design section 6.6).
+///
+/// - No update waits ([`Settled::NotPending`]): nothing is written.
+/// - The version it waits for is `running`, and `current` of `layout` names it: the new binary
+///   runs. `before_confirm` runs first, then the record is rewritten `Succeeded` in one write
+///   ([`Settled::Confirmed`]). A crash between the two leaves the record waiting, and the next
+///   start confirms again, so `before_confirm` must be safe to run again.
+/// - Otherwise the binary that runs is not the new one: the version is added to the list of bad
+///   versions in the store's directory ([`BadVersions`]), then the record is rewritten `Failed`
+///   after the commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`] ([`Settled::FellBack`]).
+///   The list is written first, so that a crash between the two never loses the mark.
+///
+/// Once settled the record waits for nothing, so a second call writes nothing.
+pub fn settle_with(
+    layout: &Layout,
+    store: &RecordStore,
+    running: &str,
+    before_confirm: &mut dyn FnMut() -> Result<(), SelfUpdateError>,
+) -> Result<Settled, SelfUpdateError> {
+    let awaiting = match store.load()? {
+        Loaded::Current(rec) => rec.progress.awaiting_restart,
+        Loaded::Absent | Loaded::Newer { .. } => None,
+    };
+    let Some(awaiting) = awaiting else {
+        return Ok(Settled::NotPending);
+    };
+    let current = layout.current()?;
+    let confirmed = (awaiting.version == running) & (current.as_deref() == Some(running));
+    if confirmed {
+        before_confirm()?;
+        store.settle_awaiting_restart(Settlement::Confirmed)?;
+        return Ok(Settled::Confirmed);
+    }
+    BadVersions::load(store.dir())?.add(&awaiting.version)?;
+    store.settle_awaiting_restart(Settlement::FellBack)?;
+    Ok(Settled::FellBack)
 }
 
 /// The drop-in for the updater's own unit: restart when it exits, and run the fallback unit
@@ -477,4 +684,85 @@ pub fn fallback_unit(layout: &Layout, main_unit: &str) -> String {
     format!(
         "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart={dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
     )
+}
+
+/// The plist of the updater's own daemon on macOS, for `/Library/LaunchDaemons`: it runs
+/// `<dir>/current`, starts at load, and is started again whenever it exits, with launchd waiting
+/// `throttle_secs` between starts.
+///
+/// `KeepAlive` is plain `true`, the counterpart of the unit's `Restart=always`: [`follow_on`]
+/// tells the caller to exit with status 0 so that the supervisor starts the new binary, and a
+/// `SuccessfulExit=false` condition would leave the daemon stopped after that clean exit.
+/// `label` and the directory are XML-escaped; the text is the same for the same arguments.
+pub fn launchd_main_plist(layout: &Layout, label: &str, throttle_secs: u32) -> String {
+    let dir = xml_escape(&layout.dir().display().to_string());
+    let label = xml_escape(label);
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \x20 <key>KeepAlive</key>\n\
+         \x20 <true/>\n\
+         \x20 <key>Label</key>\n\
+         \x20 <string>{label}</string>\n\
+         \x20 <key>ProgramArguments</key>\n\
+         \x20 <array>\n\
+         \x20   <string>{dir}/current</string>\n\
+         \x20 </array>\n\
+         \x20 <key>RunAtLoad</key>\n\
+         \x20 <true/>\n\
+         \x20 <key>ThrottleInterval</key>\n\
+         \x20 <integer>{throttle_secs}</integer>\n\
+         </dict>\n\
+         </plist>\n"
+    )
+}
+
+/// The plist of the fallback timer job on macOS, labelled `<label>.fallback`: every
+/// `interval_secs` it runs the previous binary's `self-update-fallback` verb, the command
+/// [`fallback_unit`] runs, so the verb is the same code on both systems.
+///
+/// launchd has no start limit and no `OnFailure=` to run the job when the daemon fails its
+/// burst, so the job runs on a timer. What the verb does when it runs, such as flipping
+/// `current` back ([`Layout::flip_back`]), is the verb's; this function only produces the text.
+/// The job does not run at load.
+pub fn launchd_fallback_job(layout: &Layout, label: &str, interval_secs: u32) -> String {
+    let dir = xml_escape(&layout.dir().display().to_string());
+    let label = xml_escape(label);
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \x20 <key>Label</key>\n\
+         \x20 <string>{label}.fallback</string>\n\
+         \x20 <key>ProgramArguments</key>\n\
+         \x20 <array>\n\
+         \x20   <string>{dir}/previous</string>\n\
+         \x20   <string>self-update-fallback</string>\n\
+         \x20   <string>--dir</string>\n\
+         \x20   <string>{dir}</string>\n\
+         \x20 </array>\n\
+         \x20 <key>RunAtLoad</key>\n\
+         \x20 <false/>\n\
+         \x20 <key>StartInterval</key>\n\
+         \x20 <integer>{interval_secs}</integer>\n\
+         </dict>\n\
+         </plist>\n"
+    )
+}
+
+/// `text` for the inside of an XML element: `&`, `<`, `>`, `"` and `'` become entities.
+fn xml_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            other => out.push(other),
+        }
+    }
+    out
 }

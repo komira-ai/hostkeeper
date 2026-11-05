@@ -4,17 +4,14 @@
 mod support;
 
 use std::fs;
-use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::packages::PackageError;
 use hostkeeper_daemon::testing::{FakeClock, manifest};
-use hostkeeper_daemon::verb::{
-    DIGEST_RULE, Forced, Hooked, NO_TRY, NO_VERB, PackageDigest, SERVICE_RULE, VERSION_RULE,
-};
+use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE};
 use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply, Verb};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -64,28 +61,14 @@ fn no_record(rig: &Rig, service: &str) -> bool {
 
 /// Catches a verb that is not built doing something anyway (or panicking): each answers
 /// `not_implemented`, takes no lock, asks for no package and writes nothing, whether it comes as
-/// an order or as a verb (`clear_record` comes only from the admin socket).
+/// an order or as a verb (`clear_record` comes only from the admin socket). `force`, `install`
+/// and `uninstall` are built (tests/force.rs, tests/install.rs, tests/uninstall.rs).
 #[test]
 fn unimplemented_verbs_are_refused_not_implemented_and_touch_nothing() {
     let rig = Rig::new("unimpl");
     let daemon = rig.daemon();
     let web = name("web");
-    let hooked = Hooked {
-        service: web.clone(),
-        version: Version::new("2.0.0").expect("a version"),
-        digest: PackageDigest::new(&d()).expect("a digest"),
-        order_try: NonZeroU64::MIN,
-    };
     let verbs = [
-        ("install", Verb::Install(hooked.clone())),
-        ("uninstall", Verb::Uninstall(web.clone())),
-        (
-            "force",
-            Verb::Force(Forced {
-                package: hooked.clone(),
-                halt_generation: 1,
-            }),
-        ),
         ("abort", Verb::Abort(web.clone())),
         (
             "clear_halt",
@@ -107,22 +90,8 @@ fn unimplemented_verbs_are_refused_not_implemented_and_touch_nothing() {
             "{verb_name}"
         );
     }
-    let (service, version, package_digest) = ("web".to_owned(), "2.0.0".to_owned(), d());
+    let service = "web".to_owned();
     let orders = [
-        order::Verb::Install(Install {
-            service: service.clone(),
-            version: version.clone(),
-            package_digest: package_digest.clone(),
-        }),
-        order::Verb::Uninstall(Uninstall {
-            service: service.clone(),
-        }),
-        order::Verb::Force(Force {
-            service: service.clone(),
-            version,
-            package_digest,
-            halt_generation: 2,
-        }),
         order::Verb::Abort(Abort {
             service: service.clone(),
         }),
@@ -153,8 +122,8 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
     let rig = Rig::new("malformed");
     let daemon = rig.daemon();
     let ok = d();
-    let long_version = "1".repeat(129);
-    let long_service = "s".repeat(65);
+    let long_version = "1".repeat(256);
+    let long_service = "s".repeat(256);
     let upper = "AB".repeat(32);
     let short = "a".repeat(63);
     let with_verb = |verb: order::Verb| Order {
@@ -255,7 +224,7 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
         ),
         (
             with_verb(order::Verb::ClearHalt(ClearHalt {
-                service: "x.y".to_owned(),
+                service: "x+y".to_owned(),
                 halt_generation: 1,
             })),
             "clear_halt.service",
@@ -282,6 +251,7 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
 #[test]
 fn manifest_name_or_version_that_differs_from_the_order_is_refused() {
     let rig = Rig::new("mismatch");
+    rig.running("web", support::BASE);
     let daemon = rig.daemon();
     rig.store.add("web", "2.0.0", &manifest("api", "2.0.0"));
     rig.store.add("web", "2.1.0", &manifest("web", "2.2.0"));
@@ -309,6 +279,7 @@ fn manifest_name_or_version_that_differs_from_the_order_is_refused() {
 #[test]
 fn min_hostkeeper_above_the_running_daemon_is_refused() {
     let rig = Rig::new("too-old");
+    rig.running("web", support::BASE);
     let daemon = rig.daemon();
     let text = manifest("web", "2.0.0")
         .replace("min_hostkeeper = \"0.1.0\"", "min_hostkeeper = \"0.2.0\"");
@@ -715,7 +686,8 @@ fn exit_75_reports_deferred_and_exit_76_reports_halt() {
 
 /// Catches a daemon that exits, or lets go of the service, when the dead-man cannot stop a step
 /// at its bound: the order is interrupted `unstopped`, the service stays locked (another
-/// package is `busy`, the same one a resend), and another service and the status still work.
+/// package is `busy`, and so is a resend of the same one, which nothing runs any more), and
+/// another service and the status still work.
 #[test]
 fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
     let rig = Rig::new("unstopped");
@@ -750,10 +722,8 @@ fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
     assert!(daemon.ctx().locks.holder(&alpha).expect("held").stuck);
     let other = daemon.order(&update("alpha", "3.0.0", &d(), 2));
     assert_eq!(other.refusal(), Some(Refusal::Busy));
-    assert_eq!(
-        daemon.order(&update("alpha", "2.0.0", &d(), 1)),
-        Reply::Running
-    );
+    let resend = daemon.order(&update("alpha", "2.0.0", &d(), 1));
+    assert_eq!(resend.refusal(), Some(Refusal::Busy), "{resend:?}");
     assert_eq!(daemon.order(&update("beta", "2.0.0", &d(), 1)), succeeded());
     let status = daemon.status().expect("status");
     let names: Vec<_> = status
@@ -810,6 +780,7 @@ fn lock_order_is_service_then_step() {
 #[test]
 fn package_errors_map_to_closed_reasons() {
     let rig = Rig::new("pkg-errors");
+    rig.running("web", "1.0.0");
     let daemon = rig.daemon();
     let rows = [
         (
@@ -919,6 +890,7 @@ fn a_state_directory_that_cannot_be_written_refuses_the_order() {
 #[test]
 fn a_package_the_store_cannot_seal_is_package_failed() {
     let rig = Rig::new("no-seal");
+    rig.running("web", "1.0.0");
     let reply = rig.daemon().order(&update("web", "9.9.9", &d(), 1));
     assert_eq!(reply.refusal(), Some(Refusal::PackageFailed), "{reply:?}");
     assert_eq!(rig.store.asked(), [("web".to_owned(), "9.9.9".to_owned())]);

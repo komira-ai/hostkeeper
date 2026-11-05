@@ -1,40 +1,95 @@
 //! The hostkeeper daemon: the one root process of a host (docs/design/hostkeeper-design.md,
 //! sections 4.1, 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3).
 //!
-//! - [`start`]: start-up, in order: the daemon config, the lock on the state directory, the boot
-//!   work, the admin socket; then serving the admin socket.
+//! - [`start`]: start-up, in order: the daemon config, the lock on the state directory, the
+//!   registration socket of kbf's agent unlinked, the sweep of package leftovers and the
+//!   reconciliation of the placed paths, the boot work, the admin socket; then serving: the
+//!   enrollment and heartbeat loops started ([`links`]), and the admin socket served.
+//! - [`boot`]: the boot work: the switch each step record says was begun
+//!   ([`boot::switch_intent`]), the step records read against the boot id, each unfinished
+//!   update run to its verdict, the post-success watchers restarted ([`watchers`]), the
+//!   manifest's `boot` steps, and the readiness notice ([`notify`]).
 //! - [`executor`]: [`Daemon::order`], one order of the coordinator, decoded into a [`Verb`]
-//!   ([`verb`]) and handed to its module under [`verbs`]. `update` and `force_rollback` are
-//!   checked by the daemon itself ([`checks`]) and run through the step runner of
-//!   `hostkeeper-steps` under the service's lock and the host's step lock ([`locks`]).
+//!   ([`verb`]) and handed to its module under [`verbs`]. `update`, `force_rollback` and
+//!   `install` are checked by the daemon itself ([`checks`]) and run through the step runner of
+//!   `hostkeeper-steps` under the service's lock and the host's step lock ([`locks`]); each is
+//!   placed, switched and confirmed by the runner's switch ([`place`]). `force` is checked the
+//!   same way but for `busy` and the standing halt, runs no hook, and switches the service under
+//!   its lock alone, through the placed-path linker of `hostkeeper-placed` ([`verbs::force`]).
+//!   `uninstall` runs the sequence of design section 4.7 ([`uninstall`]), resumed from its
+//!   tombstone in `placed.json`.
+//! - [`selfupdate`]: the update of hostkeeper itself (design section 6.6): an `update` of the
+//!   service `hostkeeper` refused while another service's update is unfinished, its new binary's
+//!   protocol checked, its steps run under the step lock, then the follow-on that switches the
+//!   binary and asks the daemon to exit; at start, the update settled by the binary that runs.
+//!   [`fallback`] is the verb `self-update-fallback` the fallback unit runs.
+//! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
+//!   `current`), the service's version directories but `current` and `previous` are deleted,
+//!   under the lock the order already holds.
 //! - [`halt`]: the held halt generation of each service, persisted, never lowered.
-//! - [`packages`]: the port of the package store, and [`installed`] what the host runs.
+//! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
+//!   daemon's log under the step's unit.
+//! - [`packages`]: the port of the package store, [`real_packages`] its real implementation
+//!   (fetch, prove, unpack and seal, with the one table that maps their failures onto
+//!   [`refusal`]), and [`installed`] what the host runs.
+//! - [`observer`]: what the admin `Status` reports of a running service.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
-//! - [`cli`]: `hostkeeper daemon` and its flags; the binary only forwards to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ctl`, which it hands to
+//!   `hostkeeper-ctl`, `hostkeeper ci`, and the plumbing verbs `self-update-fallback` and
+//!   `self-update-protocol`; the binary only forwards to it.
+//! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
+//! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and
+//!   the service observer of the heartbeat loop (`hostkeeper_link`): its order becomes a protobuf
+//!   `Order` for [`Daemon::order`], and the daemon's reply the verdict the loop reports.
+//! - [`links`]: the enrollment loop (`hostkeeper_enroll`) and the heartbeat loop, which
+//!   [`start::serve`] starts, in that order, once the daemon is ready; [`unix_clock`] is the
+//!   wall clock of the loop's deferrals, the daemon's one read of it.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
-//! (`hostkeeper_steps::StepLauncher`) and the package store ([`packages::Packages`]). Time is
-//! the `hostkeeper_steps::Clock`; nothing here reads the wall clock.
+//! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
+//! manager (`hostkeeper_placed::UnitControl`), the filesystem placed paths are linked through
+//! (`hostkeeper_placed::Fs`) and the service observer (`hostkeeper_observe::Observer`). Time is the
+//! `hostkeeper_steps::Clock`; nothing here reads the wall clock.
 
 pub mod admin;
+pub mod boot;
 pub mod checks;
 pub mod cli;
 pub mod executor;
+pub mod fallback;
 mod files;
 pub mod halt;
+pub mod hook_log;
 pub mod installed;
+pub mod link_adapters;
+pub mod links;
 pub mod locks;
+pub mod notify;
+pub mod observer;
 pub mod packages;
+pub mod place;
+pub mod prune;
+pub mod real_packages;
 pub mod refusal;
+pub mod selfupdate;
 pub mod socket;
+pub mod stamp;
 pub mod start;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod uninstall;
+pub mod unix_clock;
 pub mod verb;
 pub mod verbs;
+pub mod watchers;
 
-pub use executor::{Ctx, Daemon, DaemonStatus, Dirs, Ports, Reply, ServiceStatus};
+pub use boot::{BootError, BootReport, BootStep, Outcome, ServiceBoot, Stage};
+pub use executor::{
+    Ctx, Daemon, DaemonStatus, Dirs, ForcedResult, LastUninstall, Placement, Ports, Reply,
+    ServiceStatus, StoreSeam,
+};
 pub use files::WriteStep;
+pub use notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 pub use refusal::Refusal;
 pub use verb::Verb;

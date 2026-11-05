@@ -11,9 +11,14 @@ description = "The daemon's heartbeat loop: the facts of the installed services 
 # The heartbeat loop of the hostkeeper daemon (docs/design/hostkeeper-design.md, sections 5.2,
 # 8.2 to 8.4 and 11). A library over ports: the coordinator link, the certificate source, the
 # step records, the service observer, the executor, the held halts, the unix clock, the log and
-# the sleeper. It opens no socket and reads no wall clock itself; the daemon passes the real
-# ports in. The fakes of every port are in `hostkeeper_link::testing`, behind the feature
-# `testing`.
+# the sleeper. It implements the certificate source itself, over the files of the pki directory
+# (`PkiCertSource`), and the coordinator link, over the JSON heartbeat route and mutual TLS
+# (`JsonMtlsLink`), which reaches the coordinator through a transport port, and over gRPC
+# (`GrpcMtlsLink`), which reaches it through an async dial port; `NegotiatedLink` picks between
+# the two by the features the coordinator advertised. `TcpTransport` and `TcpDial`, in
+# `src/dial.rs`, are the one module that opens a socket. The loop reads no wall clock; the daemon
+# passes the real ports in. The fakes of every port are in `hostkeeper_link::testing`, behind the
+# feature `testing`.
 [dependencies]
 # The `--heartbeat-secs` flag the daemon flattens into its command line.
 clap.workspace = true
@@ -23,14 +28,38 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The one service limit of a heartbeat.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
-# The monotonic clock the production sleeper waits on.
+# The heartbeat and the answer of the JSON route `JsonMtlsLink` speaks, and their grammars.
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The pair check of `PkiCertSource`: the host's P-256 key (PKCS#8 DER in the pki directory, PEM
+# in the pair it gives) and the public key of its certificate, with the same crates
+# `hostkeeper-enroll` uses for them. Pure Rust: no OpenSSL, no C.
+p256.workspace = true
+x509-cert.workspace = true
+# The monotonic clock the production sleeper waits on, and that bounds a heartbeat call of
+# `TcpTransport`.
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The deferral file under a handle on its directory: `openat` without following a link or
 # waiting on a special file, `renameat`, `unlinkat`, `fsync`, and the owner check (`geteuid`).
 rustix = { workspace = true, features = ["fs", "process"] }
+# The messages of the heartbeat `GrpcMtlsLink` sends: their encoded length is bounded.
+prost.workspace = true
+# The mutual TLS of `JsonMtlsLink`, with the ring provider; the coordinator's certificate is
+# checked against the pinned CA by its SHA-256.
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+# The runtime `GrpcMtlsLink` blocks on for each heartbeat; `net` is for `TcpDial` only.
+tokio = { workspace = true, features = ["net", "rt", "time"] }
+# The TLS handshake of `GrpcMtlsLink`, over the stream its dial port gave.
+tokio-rustls.workspace = true
+# The gRPC client over a connection `GrpcMtlsLink` has already made secure: client side only, no
+# TLS of its own.
+tonic = { workspace = true, features = ["channel"] }
+# The connector that hands tonic the established stream, and the stream as hyper reads it.
+hyper-util = { workspace = true, features = ["tokio"] }
+tower = { workspace = true, features = ["util"] }
 
 [features]
 # The fakes of every port (`hostkeeper_link::testing`), for this crate's tests and for the
@@ -38,9 +67,29 @@ thiserror.workspace = true
 testing = []
 
 [dev-dependencies]
+# The request and the answer of the real coordinator's handler, driven in process by the test
+# that maps its reply.
+bytes.workspace = true
+# The real coordinator, whose heartbeat handler answers the link in one test; its CI verifier is
+# the testkit's static one, which needs no network.
+hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
+hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
+http-body-util.workspace = true
+hyper.workspace = true
 # Its own tests turn on `testing`.
 hostkeeper-link = { path = ".", features = ["testing"] }
+# The writer of the pki directory, so that `PkiCertSource` is tested on the layout enrollment
+# writes.
+hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The server TLS of the gRPC link's tests: the coordinator's own listener configuration.
+hostkeeper-tls = { path = "../hostkeeper-tls" }
+# The test PKI of the certificate source's and the link's tests, made at run time so that no key
+# is committed.
+rcgen.workspace = true
+# The runtime the real coordinator's handler runs on in those tests, and the in-memory streams
+# the gRPC link is dialed over: no network.
+tokio = { workspace = true, features = ["io-util", "rt", "rt-multi-thread", "time"] }
 # Reads this crate's manifest in the test that the loop dials nothing but its link.
 toml.workspace = true
 

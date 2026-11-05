@@ -11,7 +11,9 @@ use hostkeeper_config::manifest::{
     Expected, HostkeeperVersion, MANIFEST_FILE, MAX_MANIFEST_BYTES, Manifest,
 };
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_config::platform::Platform;
+// The platform a package is built for, apart from `verify::Platform`, the checks of the host the
+// unpack runs on.
+use hostkeeper_config::platform::Platform as PackagePlatform;
 use hostkeeper_steps::{
     ArtifactError, EntryKind, Layout, Seal, SealError, TreeEntry, read_seal, read_tree,
 };
@@ -22,15 +24,16 @@ use crate::error::{Rule, UnpackError, escape};
 use crate::fs::{PackageFs, ServiceLock};
 use crate::publish::publish;
 use crate::seal;
+use crate::verify::{self, HEAD_BYTES, Platform, StagedEntry, is_mach_o};
 
 /// What to unpack: the service and version the order names, the platform the package was
-/// fetched for (the daemon's own, `Platform::current()`), and the SHA-256 the archive was
-/// verified to have.
+/// fetched for (the daemon's own, `hostkeeper_config::platform::Platform::current()`), and the
+/// SHA-256 the archive was verified to have.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnpackOrder {
     pub service: ServiceName,
     pub version: Version,
-    pub platform: Platform,
+    pub platform: PackagePlatform,
     pub package_digest: Sha256Hex,
 }
 
@@ -90,22 +93,28 @@ pub fn running_hostkeeper() -> HostkeeperVersion {
 /// pass, hashing it, and writes each entry that keeps every rule into the staging directory,
 /// with modes normalised (0555 when the tar mode has an execute bit and for directories, 0444
 /// otherwise) and owner and times not taken from the archive; checks the archive's SHA-256;
-/// loads the manifest; makes the tree read-only and durable and reads it back (it must be what
-/// was written); writes the seal, then renames the tree in. On any error the staging
-/// directory, a temporary seal and a seal without its version are removed, and nothing else is
-/// touched; see [`UnpackError`] for the one error after which the version stays.
+/// on macOS (`platform` is [`Platform::MacOs`]) checks every entry of the staged tree for a
+/// quarantine attribute and every Mach-O file for a valid code signature, before the manifest
+/// is read (on Linux no such call is made); loads the manifest; makes the tree read-only and
+/// durable and reads it back (it must be what was written); writes the seal, then renames the
+/// tree in. On any error the staging directory, a temporary seal and a seal without its
+/// version are removed, and nothing else is touched; see [`UnpackError`] for the one error
+/// after which the version stays.
 pub fn unpack(
     archive: &Path,
     order: &UnpackOrder,
     limits: &Limits,
     fs: &dyn PackageFs,
+    platform: Platform<'_>,
 ) -> Result<Unpacked, UnpackError> {
     let service = Path::new(order.service.as_str());
     let version = order.version.as_str();
     let layout = Layout::package(&fs.real_path(service));
-    if layout.check_name(version).is_err() {
-        return Err(UnpackError::ReservedVersion {
-            version: version.to_owned(),
+    if let Err(refused) = layout.check_name(version) {
+        let version = version.to_owned();
+        return Err(match refused.kind() {
+            io::ErrorKind::InvalidFilename => UnpackError::VersionTooLong { version },
+            _ => UnpackError::ReservedVersion { version },
         });
     }
     fs.create_service(service)
@@ -118,7 +127,7 @@ pub fn unpack(
     let stage = fs
         .create_stage(service)
         .map_err(|e| UnpackError::of_io("cannot create the staging directory", e))?;
-    let result = stage_and_publish(archive, order, limits, fs, &layout, &stage);
+    let result = stage_and_publish(archive, order, limits, fs, platform, &layout, &stage);
     if result.is_err() {
         // What a failed cleanup leaves, the next remove_orphans removes. The seal goes only
         // when the version is known to be absent: after the tree's rename it is the version's.
@@ -245,6 +254,7 @@ fn stage_and_publish(
     order: &UnpackOrder,
     limits: &Limits,
     fs: &dyn PackageFs,
+    platform: Platform<'_>,
     layout: &Layout,
     stage: &Path,
 ) -> Result<Unpacked, UnpackError> {
@@ -259,6 +269,9 @@ fn stage_and_publish(
         });
     }
     let real = fs.real_path(stage);
+    if let Platform::MacOs(mac) = platform {
+        verify::verify_staged_tree(&real, &pass.staged, mac, pass.produced)?;
+    }
     let manifest = Manifest::load(&real, &expected(order), &running_hostkeeper())?;
     let sealing = |e| UnpackError::of_io("cannot seal the staging directory", e);
     // Contents first, then the directories that hold them, the staging directory last.
@@ -314,6 +327,8 @@ struct Pass<'a> {
     dirs: Vec<PathBuf>,
     /// Every entry written, as the digest of the staged tree must read it back.
     entries: Vec<TreeEntry>,
+    /// Every entry written, as the macOS checks need it.
+    staged: Vec<StagedEntry>,
     /// The decompressed bytes read when the pass ended.
     produced: u64,
     buf: Vec<u8>,
@@ -352,6 +367,7 @@ impl<'a> Pass<'a> {
             dir_names: BTreeSet::new(),
             dirs: Vec::new(),
             entries: Vec::new(),
+            staged: Vec::new(),
             produced: 0,
             buf: vec![0u8; BUFFER],
         }
@@ -475,6 +491,10 @@ impl<'a> Pass<'a> {
             self.fs.create_dir(&path).map_err(write_error)?;
             self.dirs.push(path);
             self.dir_names.insert(name.clone());
+            self.staged.push(StagedEntry {
+                name: name.clone(),
+                mach_o: false,
+            });
             self.entries.push(TreeEntry {
                 name: name.into_bytes(),
                 kind: EntryKind::Dir,
@@ -487,12 +507,15 @@ impl<'a> Pass<'a> {
         let mut out = self.fs.create_file(&path).map_err(write_error)?;
         let mut sha = Sha256::new();
         let mut left = size;
+        let mut head = Vec::with_capacity(HEAD_BYTES);
         while left > 0 {
             let n = left.min(BUFFER as u64) as usize;
             let chunk = &mut self.buf[..n];
             tar.data(chunk)
                 .map_err(|s| stopped(s, raw, tar.produced()))?;
             sha.update(&*chunk);
+            let take = (HEAD_BYTES - head.len()).min(n);
+            head.extend_from_slice(&chunk[..take]);
             out.write(chunk).map_err(write_error)?;
             left -= n as u64;
         }
@@ -500,6 +523,10 @@ impl<'a> Pass<'a> {
         let normal = if mode & 0o111 != 0 { 0o555 } else { 0o444 };
         out.set_mode(normal).map_err(write_error)?;
         out.sync().map_err(write_error)?;
+        self.staged.push(StagedEntry {
+            name: name.clone(),
+            mach_o: is_mach_o(&head),
+        });
         let mut content = [0u8; 32];
         content.copy_from_slice(&sha.finalize());
         self.entries.push(TreeEntry {

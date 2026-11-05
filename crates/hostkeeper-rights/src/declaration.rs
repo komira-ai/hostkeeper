@@ -1,12 +1,14 @@
-//! The declaration, reduced to what `launch.rs` reads.
+//! The declaration, reduced to what the deleted `launch.rs` read.
 //!
-//! B3 rewrites launch.rs and deletes this. The per-service declaration is replaced by the daemon
+//! B26 deletes this. The per-service declaration is replaced by the daemon
 //! config and the package manifest (`hostkeeper-config`); what is left here is the part of the
-//! old declaration that the transient unit of one step is still built from, and the rules on the
-//! values that reach a unit property. Every table refuses a key it does not know.
+//! old declaration that the transient unit of one step was built from, and the rules on the
+//! values that reached a unit property. Nothing launches from it now (the unit of a step is in
+//! `hostkeeper-steps`). Every table refuses a key it does not know.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use hostkeeper_config::names::MAX_UNIT_NAME;
 use hostkeeper_hook::Step;
 use serde::{Deserialize, Serialize};
 
@@ -16,17 +18,17 @@ use crate::names::{
     is_env_name, is_env_value, is_service_name,
 };
 
-/// The longest a step may be given: one day. B3 rewrites launch.rs and deletes this.
+/// The longest a step may be given: one day. B26 deletes this.
 pub const MAX_SECS: u64 = 86_400;
-/// The most leading arguments a hook may be given before the step. B3 rewrites launch.rs and
-/// deletes this.
+/// The most leading arguments a hook may be given before the step. B26 deletes
+/// this.
 pub const MAX_HOOK_ARGS: usize = 8;
 
 fn default_hook_args() -> Vec<String> {
     vec!["update-hook".to_owned()]
 }
 
-/// The bound of each step, in seconds. B3 rewrites launch.rs and deletes this.
+/// The bound of each step, in seconds. B26 deletes this.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Timeouts {
@@ -38,7 +40,7 @@ pub struct Timeouts {
 }
 
 impl Timeouts {
-    /// The bound of `step`. B3 rewrites launch.rs and deletes this.
+    /// The bound of `step`. B26 deletes this.
     pub fn get(&self, step: Step) -> u64 {
         match step {
             Step::Prepare => self.prepare,
@@ -46,13 +48,14 @@ impl Timeouts {
             Step::Verify => self.verify,
             Step::Rollback => self.rollback,
             Step::Cleanup => self.cleanup,
+            // A declaration has no `uninstall` step, so no bound for it.
+            Step::Uninstall => 0,
         }
     }
 }
 
 /// The capabilities of each step. A step with no entry falls back to the hook-wide
-/// `capabilities`; an entry with an empty list is a step that holds none. B3 rewrites launch.rs
-/// and deletes this.
+/// `capabilities`; an entry with an empty list is a step that holds none. B26 deletes this.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StepCapabilities {
@@ -64,7 +67,7 @@ pub struct StepCapabilities {
 }
 
 impl StepCapabilities {
-    /// The entry of `step`, if any. B3 rewrites launch.rs and deletes this.
+    /// The entry of `step`, if any. B26 deletes this.
     pub fn get(&self, step: Step) -> Option<&BTreeSet<Capability>> {
         match step {
             Step::Prepare => self.prepare.as_ref(),
@@ -72,12 +75,14 @@ impl StepCapabilities {
             Step::Verify => self.verify.as_ref(),
             Step::Rollback => self.rollback.as_ref(),
             Step::Cleanup => self.cleanup.as_ref(),
+            // A declaration has no `uninstall` step, so no entry for it.
+            Step::Uninstall => None,
         }
     }
 }
 
-/// The `[hook]` table: whom the hook runs as and with what rights. B3 rewrites launch.rs and
-/// deletes this.
+/// The `[hook]` table: whom the hook runs as and with what rights. B26 deletes
+/// this.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hook {
@@ -101,7 +106,7 @@ pub struct Hook {
 }
 
 impl Hook {
-    /// The capabilities the hook holds in `step`. B3 rewrites launch.rs and deletes this.
+    /// The capabilities the hook holds in `step`. B26 deletes this.
     pub fn capabilities_for(&self, step: Step) -> &BTreeSet<Capability> {
         self.step_capabilities
             .get(step)
@@ -110,7 +115,7 @@ impl Hook {
 }
 
 /// What one step's unit is built from. The top-level keys come first in the file: in TOML a key
-/// after a table header belongs to that table. B3 rewrites launch.rs and deletes this.
+/// after a table header belongs to that table. B26 deletes this.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Declaration {
@@ -125,7 +130,7 @@ pub struct Declaration {
     pub hook: Hook,
 }
 
-/// Why a declaration was refused, or a launch from one. B3 rewrites launch.rs and deletes this.
+/// Why a declaration was refused, or its targets on a recheck. B26 deletes this.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
     #[error("not a declaration: {0}")]
@@ -195,8 +200,7 @@ fn path(field: &'static str, entry: &str) -> Result<(), Refusal> {
 }
 
 impl Declaration {
-    /// Reads the text of a declaration and applies [`Declaration::check`]. B3 rewrites launch.rs
-    /// and deletes this.
+    /// Reads the text of a declaration and applies [`Declaration::check`]. B26 deletes this.
     pub fn parse(text: &str) -> Result<Declaration, Refusal> {
         let declaration: Declaration =
             toml::from_str(text).map_err(|e| Refusal::Syntax(e.message().to_owned()))?;
@@ -206,12 +210,28 @@ impl Declaration {
 
     /// The rules on the values that reach a unit property: the grammars of the name, the
     /// binary, the arguments, the accounts, the paths and the environment, and a bound from 1 s
-    /// to a day for each step. B3 rewrites launch.rs and deletes this.
+    /// to a day for each step. B26 deletes this.
     pub fn check(&self) -> Result<(), Refusal> {
         if !is_service_name(&self.name) {
             return Err(value(
                 "name",
                 format!("{:?} is not a service name", self.name),
+            ));
+        }
+        let longest_unit = Step::ALL
+            .iter()
+            .map(|step| format!("updater-{}-{step}-{}", self.name, u64::MAX).len())
+            .max()
+            .unwrap_or_default()
+            + ".service".len();
+        if longest_unit > MAX_UNIT_NAME {
+            return Err(value(
+                "name",
+                format!(
+                    "{:?} is too long for the units its steps run in: \
+                     `updater-<name>-<step>-<generation>.service` would pass {MAX_UNIT_NAME} bytes",
+                    self.name
+                ),
             ));
         }
         check_relative(&self.binary).map_err(|why| value("binary", format!("{why}")))?;

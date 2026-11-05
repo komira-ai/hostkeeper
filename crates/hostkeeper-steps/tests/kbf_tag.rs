@@ -13,6 +13,7 @@ use hostkeeper_steps::runner::{
     REASON_UPDATER_OLD, ROLLBACK_ATTEMPTS, UPDATER_PROTOCOL, WATCH_POLL_SECS,
 };
 use hostkeeper_steps::selfupdate::{Layout, START_LIMIT_BURST, fallback_unit, main_dropin};
+use hostkeeper_steps::systemd::unit_name;
 use hostkeeper_steps::{Loaded, Record, RecordStore, RunError, Stamp};
 use support::{Rig, Scratch};
 
@@ -52,6 +53,8 @@ fn expected(name: &str) -> Record {
         hook: HookSel::New,
         progress: Progress::default(),
         order_try: None,
+        forced: false,
+        force: None,
     };
     match name {
         "pending" => Record {
@@ -62,6 +65,7 @@ fn expected(name: &str) -> Record {
             state: State::Running {
                 started: stamp("boot-one", 4200),
                 deadline_secs: 1600,
+                unbounded: false,
             },
             progress: Progress {
                 verify_started: Some(stamp("boot-one", 4100)),
@@ -87,6 +91,7 @@ fn expected(name: &str) -> Record {
                 verify_started: None,
                 watching: None,
                 reason: Some("remote_down".to_owned()),
+                awaiting_restart: None,
             },
             ..base("api", "1.4.2", 12, Step::Rollback)
         },
@@ -296,8 +301,11 @@ fn kbf_ci_record() -> Record {
             verify_started: Some(stamp("b", 7)),
             watching: None,
             reason: Some("remote_down".to_owned()),
+            awaiting_restart: None,
         },
         order_try: None,
+        forced: false,
+        force: None,
     }
 }
 
@@ -363,6 +371,7 @@ fn the_state_and_verdict_forms_kbf_ci_pinned_at_the_tag() {
             State::Running {
                 started: stamp("b", 7),
                 deadline_secs: 9,
+                unbounded: false,
             },
             r#"{"state":"running","started":{"boot_id":"b","mono_secs":7},"deadline_secs":9}"#,
         ),
@@ -409,6 +418,16 @@ fn constants_match_kbf_at_the_tag() {
     record.generation = 7;
     assert_eq!(record.unit(Step::Cutover), "updater-svc-cutover-7");
     assert_eq!(record.unit(Step::Cleanup), "updater-svc-cleanup-7");
+    let expected = [
+        (Step::Prepare, "updater-tierstore-prepare-7"),
+        (Step::Cutover, "updater-tierstore-cutover-7"),
+        (Step::Verify, "updater-tierstore-verify-7"),
+        (Step::Rollback, "updater-tierstore-rollback-7"),
+        (Step::Cleanup, "updater-tierstore-cleanup-7"),
+    ];
+    for (step, name) in expected {
+        assert_eq!(unit_name("tierstore", step, 7), name);
+    }
 
     let layout = Layout::new(Path::new("/opt/updater"));
     assert_eq!(layout.current_path(), Path::new("/opt/updater/current"));
