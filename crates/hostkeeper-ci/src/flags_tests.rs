@@ -172,12 +172,55 @@ fn every_certificate_of_the_roots_file_is_read() {
     assert_eq!(settings.version, "1.2.3");
 }
 
-/// Catches the real ports being given a different pause or line than the flow asked for: they
-/// are the thread's sleep (of no seconds here) and stdout.
+/// A writer whose bytes the test reads back after the ports that own it wrote them.
+#[derive(Clone, Default)]
+struct Shared(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+impl std::io::Write for Shared {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Catches the real ports printing nothing, another line, or lines run together, and handing ctl
+/// another transport than the network one: each line the flow says comes out exactly, with its
+/// newline, in order; and the transport they give reads the call's CA file before it connects,
+/// so a missing one is refused with ctl's own read error and no connection.
 #[test]
 fn the_network_ports_pause_and_say() {
-    let mut ports = crate::ports::NetworkPorts::new(&[]);
+    let out = Shared::default();
+    let mut ports = crate::ports::NetworkPorts::writing_to(&[], Box::new(out.clone()));
     ports.pause(0);
-    ports.say("a line for the test log");
-    let _ = ports.connect();
+    ports.say("::add-mask::a-token");
+    ports.say("poll 1: in_progress, desired 1.2.3");
+    assert_eq!(
+        String::from_utf8(out.0.borrow().clone()).expect("UTF-8"),
+        "::add-mask::a-token\npoll 1: in_progress, desired 1.2.3\n"
+    );
+    let dir = scratch("network-ports");
+    let missing = dir.path().join("missing-ca.pem");
+    let target = hostkeeper_ctl::Target {
+        endpoint: hostkeeper_ctl::Endpoint::parse("https://coordinator.example")
+            .expect("an https endpoint"),
+        transport: hostkeeper_ctl::TransportKind::Grpc,
+        ca_file: missing.clone(),
+        client_identity: None,
+        timeout: std::time::Duration::from_secs(1),
+    };
+    let refused = hostkeeper_ctl::Connect::connect(ports.connect(), &target)
+        .err()
+        .map(|e| e.to_string());
+    let not_found = std::fs::read(&missing).expect_err("the CA file is missing");
+    assert_eq!(
+        refused,
+        Some(format!(
+            "cannot read the CA from {}: {not_found}",
+            missing.display()
+        ))
+    );
 }
