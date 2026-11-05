@@ -8,7 +8,7 @@
 //! itself in `agent` and announces its features in `agent_features`. Of a service, the name,
 //! version, health, running update, verdict and deferral go out; the observer's detail and the
 //! health detail have no field on this wire and do not. Of a verdict, the target, outcome,
-//! phase, class and reason go out; the order id, try, forced flag and detail have no field. A
+//! phase, class, reason, order id and try go out; the forced flag and detail have no field. A
 //! deferred verdict has no outcome on this wire: the service's `deferred` report says it (as
 //! kbf's agent does), so its `last_update` is left out. A service name or a version outside the
 //! wire's grammars cannot be sent, and the heartbeat is refused by name ([`Unsendable`]), never
@@ -29,7 +29,8 @@ use hostkeeper_hook::{Class, Phase};
 use hostkeeper_wire::Platform as WirePlatform;
 use hostkeeper_wire::version::Version as WireVersion;
 use hostkeeper_wire::wire::{
-    self, Agent, AgentName, Answer, ServiceBeat, ServiceReply, UpdateResult, is_service_name,
+    self, Agent, AgentName, Answer, OrderId, ServiceBeat, ServiceReply, UpdateResult,
+    is_service_name,
 };
 use hostkeeper_wire::wire_report::{
     Class as WireClass, DeferredReport as WireDeferred, Phase as WirePhase, Token,
@@ -118,6 +119,9 @@ fn verdict(result: &OrderResult) -> Result<Option<UpdateResult>, Unsendable> {
             .reason
             .as_ref()
             .and_then(|r| Token::parse(r.as_str())),
+        // A loop's order id is one of the wire's, whose grammar is wider.
+        order_id: OrderId::parse(result.order.id.as_str()),
+        order_try: Some(result.order.order_try),
     }))
 }
 

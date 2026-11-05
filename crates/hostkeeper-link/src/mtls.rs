@@ -14,10 +14,8 @@
 //! - **Who it is.** The client certificate and key of the heartbeat's [`ClientIdentity`], which
 //!   the certificate source read for this heartbeat.
 //! - **What it sends.** The loop's heartbeat as the wire's (the private module `wire_map`),
-//!   refused by name when the wire has no word for one of its facts. The wire's grammars bound
-//!   every fact, so the body is always under the wire's
-//!   [`MAX_HEARTBEAT_BYTES`](hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES), which the coordinator
-//!   reads no more of.
+//!   refused by name when the wire has no word for one of its facts, or when it is over the
+//!   wire's [`MAX_HEARTBEAT_BYTES`], which the coordinator reads no more of.
 //! - **What it takes back.** A 200 whose body is exactly an `Answer` of the wire: read strictly
 //!   (a key other than `reply`, `service`, `version`, `features` and `halts` is
 //!   [`ReplyFault::UnknownKey`]) and bounded (a body over [`REPLY_MAX`] or a head over
@@ -35,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::daemon::{DaemonConfig, HttpsUrl, Sha256Hex};
-use hostkeeper_wire::wire::{Answer, HEARTBEAT_PATH};
+use hostkeeper_wire::wire::{Answer, HEARTBEAT_PATH, MAX_HEARTBEAT_BYTES};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -46,7 +44,9 @@ use crate::beat::Heartbeat;
 use crate::names::Reason;
 use crate::order::Reply;
 use crate::pki::{CA, CURRENT};
-use crate::ports::{ClientIdentity, CoordinatorLink, LinkError, Log, ReplyFault, TrustFault};
+use crate::ports::{
+    ClientIdentity, CoordinatorLink, LinkError, Log, ReplyFault, TrustFault, Unsendable,
+};
 use crate::wire_map::{self, Update};
 
 /// The most bytes of a reply's body that are read: kbf's `REPLY_MAX`.
@@ -263,10 +263,11 @@ impl JsonMtlsLink {
 impl CoordinatorLink for JsonMtlsLink {
     fn heartbeat(&self, identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
         let wire = wire_map::heartbeat(beat).map_err(LinkError::Unsendable)?;
-        // A heartbeat is strings, numbers and enums: it serializes. It is under the wire's bound
-        // whatever its facts, because the wire's grammars bound every one of them
-        // (`the_largest_heartbeat_the_json_route_carries_is_under_its_bound`).
+        // A heartbeat is strings, numbers and enums: it serializes.
         let body = serde_json::to_vec(&wire).unwrap_or_default();
+        if body.len() > MAX_HEARTBEAT_BYTES {
+            return Err(LinkError::Unsendable(Unsendable::Bytes { len: body.len() }));
+        }
         let config = self.client_config(identity)?;
         let raw = self.exchange(config, &body)?;
         let mapped = wire_map::reply(answer_of(&raw)?);

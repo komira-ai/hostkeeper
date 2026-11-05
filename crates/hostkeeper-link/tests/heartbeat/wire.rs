@@ -154,6 +154,15 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
     assert_eq!(ours.agent_name(), "hostkeeper");
     ours.agent_features.clear();
     ours.agent = None;
+    // kbf's agent named no order; the order id and try are additive, as `agent` is.
+    for entry in ours.services.iter_mut().flatten() {
+        if let Some(last) = entry.last_update.as_mut() {
+            assert_eq!(last.order_id.as_ref().map(|id| id.as_str()), Some("o-1"));
+            assert_eq!(last.order_try, Some(1));
+            last.order_id = None;
+            last.order_try = None;
+        }
+    }
     let theirs: wire::Heartbeat = serde_json::from_str(&recorded).expect("a heartbeat");
     assert_eq!(ours, theirs);
 }
@@ -161,7 +170,7 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
 /// Catches a word of the loop mapped to another word of the wire, a fact the wire has no field
 /// for sent anyway, and a deferred verdict sent as an outcome: every platform, health, phase,
 /// class and outcome, a running update, a deferral, and the facts that stay home (the observer's
-/// detail, the health detail, the order id and try, the forced flag, the verdict's detail).
+/// detail, the health detail, the forced flag, the verdict's detail).
 #[test]
 fn every_word_of_a_heartbeat_is_the_wires() {
     use hostkeeper_hook::{Class, Phase};
@@ -227,6 +236,7 @@ fn every_word_of_a_heartbeat_is_the_wires() {
     let failed = |name: &str, health: &str, phase: &str, class: Option<&str>| {
         let mut last = json!({
             "target": "2.0", "outcome": "failed", "phase": phase, "reason": "probe_failed",
+            "order_id": "o-1", "order_try": 1,
         });
         if let Some(class) = class {
             last["class"] = json!(class);
@@ -247,7 +257,9 @@ fn every_word_of_a_heartbeat_is_the_wires() {
             "services": [
                 {
                     "name": "s-a", "version": "1.0", "health": "healthy",
-                    "last_update": { "target": "1.0", "outcome": "succeeded" },
+                    "last_update": {
+                        "target": "1.0", "outcome": "succeeded", "order_id": "o-1", "order_try": 1,
+                    },
                     "updating": "2.0",
                 },
                 failed("s-b", "unhealthy", "before_commit", Some("release")),
@@ -280,21 +292,20 @@ fn every_word_of_a_heartbeat_is_the_wires() {
     }
 }
 
-/// Catches a bound the link could cross: the largest heartbeat the wire's grammars allow (16
-/// services, every name, version and reason at its longest, every optional fact there, the
-/// longest words) is under the 16 KiB the coordinator reads, and the coordinator's reader keeps
-/// every service of it.
-#[test]
-fn the_largest_heartbeat_the_json_route_carries_is_under_its_bound() {
+/// The heartbeat of 16 services with every fact at the longest the wire's grammars allow,
+/// but for each service's order id and deferral reason, of `ids[n]` and `reasons[n]` bytes.
+fn largest(ids: &[usize; 16], reasons: &[usize; 16]) -> Heartbeat {
     let longest = "1".repeat(128);
-    let token = "r".repeat(64);
-    let services: Vec<ServiceFacts> = (0..wire::MAX_SERVICES)
+    let services = (0..16)
         .map(|n| {
             let name = format!("{n:02}{}", "a".repeat(62));
-            let mut done = result(&name, &longest, Outcome::Succeeded);
+            let mut done = verdict(
+                &update(&"o".repeat(ids[n]), u64::MAX, &name, &longest),
+                Outcome::Succeeded,
+            );
             done.phase = Some(hostkeeper_hook::Phase::GateEnvironment);
             done.class = Some(hostkeeper_hook::Class::Environment);
-            done.reason = Some(reason(&token));
+            done.reason = Some(reason(&"r".repeat(64)));
             ServiceFacts {
                 name: service(&name),
                 version: version(&longest),
@@ -303,7 +314,7 @@ fn the_largest_heartbeat_the_json_route_carries_is_under_its_bound() {
                 last_update: Some(done),
                 deferred: Some(DeferredReport {
                     target: version(&longest),
-                    reason: reason(&token),
+                    reason: reason(&"r".repeat(reasons[n])),
                     retry_after_secs: u64::MAX,
                 }),
                 health_detail: None,
@@ -311,19 +322,68 @@ fn the_largest_heartbeat_the_json_route_carries_is_under_its_bound() {
             }
         })
         .collect();
-    let request = sent(
-        "wire-largest",
-        &beat(Platform::LinuxX86_64, &longest, services),
+    beat(Platform::LinuxX86_64, &longest, services)
+}
+
+/// Catches a heartbeat sent over the bound the coordinator reads, or one at it refused: the
+/// largest heartbeat the wire's grammars allow is over 16 KiB and refused by its length with
+/// nothing dialed; one shortened to exactly 16 KiB is sent whole and the coordinator's reader
+/// keeps every service of it; one byte more is refused. (The loop never gives the link such a
+/// heartbeat: it keeps its own, longer JSON under the same bound.)
+#[test]
+fn a_heartbeat_over_the_bound_the_coordinator_reads_is_refused_and_one_at_it_is_sent() {
+    let farm = Farm::new();
+    let pki = Pki::with_bundle("wire-bound", &farm.ca.pem);
+    let transport = Arc::new(PipeTransport::default());
+    let log = Arc::new(RecordingLog::default());
+    let link = link(&farm, &pki, &transport, &log);
+    let length = |ids: &[usize; 16], reasons: &[usize; 16]| match link
+        .heartbeat(&farm.host.identity(), &largest(ids, reasons))
+    {
+        Err(LinkError::Unsendable(Unsendable::Bytes { len })) => len,
+        other => panic!("{other:?}"),
+    };
+    let (mut ids, mut reasons) = ([64; 16], [64; 16]);
+    let len = length(&ids, &reasons);
+    assert!(len > wire::MAX_HEARTBEAT_BYTES, "{len}");
+    assert_eq!(
+        LinkError::Unsendable(Unsendable::Bytes { len }).to_string(),
+        format!("the heartbeat is not sent: the JSON heartbeat is {len} bytes, more than 16384")
     );
-    assert!(
-        request.body.len() <= wire::MAX_HEARTBEAT_BYTES,
-        "{}",
-        request.body.len()
+    // Each byte taken from an order id or a reason is a byte of the JSON.
+    let mut excess = len - wire::MAX_HEARTBEAT_BYTES;
+    for lengths in [&mut ids, &mut reasons] {
+        for slot in lengths.iter_mut() {
+            let cut = excess.min(*slot - 1);
+            *slot -= cut;
+            excess -= cut;
+        }
+    }
+    assert_eq!(excess, 0, "the levers are long enough");
+    assert_eq!(transport.dialed(), Vec::<(String, u16)>::new());
+
+    let server = serve(&transport, farm.server(), Close::Notify, |_| {
+        http(200, r#"{"reply":"nothing"}"#)
+    });
+    let at_bound = largest(&ids, &reasons);
+    assert_eq!(
+        link.heartbeat(&farm.host.identity(), &at_bound),
+        Ok(Reply::default())
     );
+    let request = server.join().expect("the server").expect("a request");
+    assert_eq!(request.body.len(), wire::MAX_HEARTBEAT_BYTES);
     let read = wire::read_heartbeat(&request.body, None).expect("the coordinator reads it");
     assert_eq!(read.services_dropped, None);
     assert_eq!(read.extras_dropped, None);
     assert_eq!(read.beat.services.map(|list| list.len()), Some(16));
+
+    let longer = if ids[15] < 64 { &mut ids } else { &mut reasons };
+    let grown = longer
+        .iter_mut()
+        .find(|slot| **slot < 64)
+        .expect("a shortened one");
+    *grown += 1;
+    assert_eq!(length(&ids, &reasons), wire::MAX_HEARTBEAT_BYTES + 1);
 }
 
 /// Catches a heartbeat sent without a fact the wire cannot carry, or a refusal that does not

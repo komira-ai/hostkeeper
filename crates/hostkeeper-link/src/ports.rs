@@ -61,6 +61,15 @@ pub enum Unsendable {
         "the version {0:?} is not one the JSON heartbeat carries: a digit, then letters, digits and . + ~ -, at most 128 bytes"
     )]
     Version(String),
+    /// More bytes than the coordinator reads of a heartbeat. The loop keeps its heartbeat
+    /// under the same bound, measured on its own JSON, which is longer than the wire's for
+    /// any heartbeat this long: only a caller of the link that does not fit its heartbeat
+    /// meets it.
+    #[error(
+        "the JSON heartbeat is {len} bytes, more than {}",
+        hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES
+    )]
+    Bytes { len: usize },
 }
 
 /// What the TLS of the link refused.
