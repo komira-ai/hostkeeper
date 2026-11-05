@@ -143,6 +143,7 @@ pub fn request(key: &HostKey, machine_id: &str) -> NewRequest {
         claims: claims(machine_id),
         image: "hostkeeper-image-1".to_owned(),
         renewal_of: None,
+        mac_nonce_presented: false,
     }
 }
 

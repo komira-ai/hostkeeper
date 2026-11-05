@@ -1,7 +1,8 @@
 //! The operator's calls that mark or steer the rollout, as plain functions over the messages of
 //! `hostkeeper.operator.v1`: `Releases.MarkBad` and `Releases.Halt`, `Hosts.Abort` and
 //! `Hosts.Exclude` (with `abandon`), `Services.Hold`, `Services.Unhold` and `Services.List`, and
-//! `Audit.List`; `Releases.Force` is in [`crate::force`]. A transport (the gRPC services, or a
+//! `Audit.List`; `Releases.Force` is in [`crate::force`], and `Enrollment.List` and
+//! `Enrollment.Approve` in [`crate::operator_enrollment`]. A transport (the gRPC services, or a
 //! JSON gateway) authenticates the bearer ([`Coordinator::caller`]) and hands the call here.
 //!
 //! Every one of them takes the operator token only: a valid CI token is `forbidden` and no
@@ -78,7 +79,13 @@ macro_rules! refusals {
     )*};
 }
 
-refusals!(HostsRefusal, ReleasesRefusal, ServicesRefusal, AuditRefusal);
+refusals!(
+    HostsRefusal,
+    ReleasesRefusal,
+    ServicesRefusal,
+    EnrollmentRefusal,
+    AuditRefusal
+);
 
 /// The reason `text` trimmed, if it is one: 1 to 256 bytes with no control character.
 pub(crate) fn valid_reason(text: &str) -> Option<String> {

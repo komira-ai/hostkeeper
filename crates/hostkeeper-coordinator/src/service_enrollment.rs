@@ -51,9 +51,12 @@ impl Coordinator {
 
     /// The same coordinator with `enrollment`: it reads a client certificate its CA issued as
     /// the host it names, refuses a denied host's heartbeat, and orders a duplicate host
-    /// nothing.
+    /// nothing. Enrollment audits into this coordinator's ops store from now on, and an
+    /// approval it recorded whose audit entry is missing there is audited now
+    /// ([`Enrollment::audit_to`]).
     #[must_use]
     pub fn with_enrollment(mut self, enrollment: Arc<Enrollment>) -> Self {
+        enrollment.audit_to(Arc::clone(&self.ops));
         self.enrollment = Some(enrollment);
         self
     }
