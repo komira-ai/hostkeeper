@@ -1054,6 +1054,17 @@ fn an_artifact_digest_that_is_not_a_sha256_is_refused() {
     assert!(rig.fake.events().is_empty());
 }
 
+/// Catches a sha256 refused for its digits: a digest of 64 lower-case hex characters that has
+/// both digits and letters in it is accepted and the update runs.
+#[test]
+fn an_artifact_digest_of_digits_and_letters_is_accepted() {
+    let rig = Rig::new("run-digit-artifact-digest");
+    let mut order = rig.order();
+    order.artifact_digest = "0123456789abcdef".repeat(4);
+    assert_eq!(rig.runner().run(&order).unwrap(), ok());
+    assert_eq!(rig.fake.runs().len(), 4);
+}
+
 const HUGE_DEFER: Reply = Reply::Exit(75, Some(r#"{"retry_after_secs":1000000000}"#));
 const HUGE_PENDING: Reply = Reply::Exit(
     0,

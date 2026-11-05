@@ -339,6 +339,27 @@ fn the_exit_and_last_line_of_systemd_run_are_the_step_exit() {
     assert_eq!(logged[0].1.stdout.bytes(), out);
 }
 
+/// Catches a launcher built without a log losing the step's exit: with no log, the exit code and
+/// last line of `systemd-run` are still the step's exit.
+#[test]
+fn a_launcher_with_no_log_still_gives_the_step_exit() {
+    let (_scratch, hook) = hook_file("sd-no-log");
+    let unit = unit_name("svc", Step::Cleanup, 2);
+    let recorder =
+        Recorder::answering(vec![Ok(captured(Some(0), b"{\"reason\":\"tidy\"}\n", b""))]);
+    let launcher = SystemdLauncher::new(&recorder);
+    assert_eq!(
+        launcher
+            .run(&call(&hook, &unit, Step::Cleanup, secs(60)))
+            .unwrap(),
+        StepExit {
+            code: Some(0),
+            last_line: Some("{\"reason\":\"tidy\"}".to_owned()),
+        }
+    );
+    assert_eq!(recorder.calls().len(), 1);
+}
+
 /// Catches a stop that names another unit, waits on nothing, or reads a unit that is not loaded
 /// as a failure: `systemctl stop --system <unit>`, and exit `0` and `5` are both stopped.
 #[test]
