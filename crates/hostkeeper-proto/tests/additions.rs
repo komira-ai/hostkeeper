@@ -44,6 +44,20 @@ fn claims() -> Claims {
         addresses: vec!["192.0.2.10".to_owned(), "198.51.100.7".to_owned()],
         mac_serial: "C02X".to_owned(),
         platform_uuid: "platform-uuid-2".to_owned(),
+        bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+    }
+}
+
+fn record() -> op::InventoryRecord {
+    op::InventoryRecord {
+        host_id: "db-1".to_owned(),
+        role: "storage".to_owned(),
+        data_macs: vec!["0c:c4:7a:00:00:02".to_owned()],
+        bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+        serial: "SN-1".to_owned(),
+        notes: "rack 4, slot 2".to_owned(),
+        added_by: "alice".to_owned(),
+        added_unix: 1_800_000_000,
     }
 }
 
@@ -155,6 +169,10 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                     renewal_of: "db-1".to_owned(),
                     duplicate_claim: true,
                     mac_nonce_presented: true,
+                    inventory_match: op::InventoryMatch::Ambiguous.into(),
+                    record_host_id: "db-1".to_owned(),
+                    record_role: "storage".to_owned(),
+                    candidate_host_ids: vec!["db-1".to_owned(), "db-2".to_owned()],
                 }],
                 next_page_token: "p3".to_owned(),
             }),
@@ -184,6 +202,55 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::SkippedHost {
                 node_id: "db-2".to_owned(),
                 reason: "daemon_too_old".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.InventoryRecord",
+            round_trip(&record()),
+        ),
+        (
+            "hostkeeper.operator.v1.AddRecordRequest",
+            round_trip(&op::AddRecordRequest {
+                host_id: "db-1".to_owned(),
+                role: "storage".to_owned(),
+                data_macs: vec!["0C-C4-7A-00-00-02".to_owned()],
+                bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+                serial: "SN-1".to_owned(),
+                notes: "rack 4".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.AddRecordResponse",
+            round_trip(&op::AddRecordResponse {
+                record: Some(record()),
+                entry: Some(audit_entry("record_add")),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ListRecordsRequest",
+            round_trip(&op::ListRecordsRequest {
+                limit: 10,
+                page_token: "db-1".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ListRecordsResponse",
+            round_trip(&op::ListRecordsResponse {
+                records: vec![record()],
+                next_page_token: "db-1".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.RemoveRecordRequest",
+            round_trip(&op::RemoveRecordRequest {
+                host_id: "db-1".to_owned(),
+                reason: "returned to vendor".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.RemoveRecordResponse",
+            round_trip(&op::RemoveRecordResponse {
+                entry: Some(audit_entry("record_remove")),
             }),
         ),
     ]
@@ -240,7 +307,7 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 16);
+    assert_eq!(messages.len(), 23);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

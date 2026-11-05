@@ -34,6 +34,12 @@
 // approval names the SHA-256 of the pending request's key, so it cannot admit another key. Its
 // answers carry no CSR bytes and no nonce value; the certificate goes to the host at its next
 // `Poll`, never through this API. Its ids, names and `limit` follow the units above.
+// `Enrollment` also keeps the host inventory: one record per server, which the operator adds
+// when building it (host id, optional role, data MACs, BMC MAC, optional serial and notes).
+// `List` shows each pending request matched against the records; a match fills in a host id
+// and a role and approves nothing. A MAC is six octets of two hex digits, separated all by `:`
+// or all by `-`, or twelve hex digits, in either case, and is answered as lower-case
+// `aa:bb:cc:dd:ee:ff`.
 //
 // Audit: the changes the coordinator made, as `AuditEntry` rows numbered by `seq`, read with
 // `Audit.List` and paged by `since_seq`, newest last. `Audit` takes the operator token only; no
@@ -123,6 +129,14 @@ service Enrollment {
   // Approve a pending request: the host gets its certificate at its next `Poll`, with the host
   // id, role and services the approval names.
   rpc Approve(ApproveRequest) returns (ApproveResponse);
+  // Record a server the operator built, before it first boots: its host id, optional role, data
+  // MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
+  // holds, is refused; remove the record first.
+  rpc AddRecord(AddRecordRequest) returns (AddRecordResponse);
+  // The records, by host id, a page at a time.
+  rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
+  // Remove the record of a host id. An enrolled host keeps its certificate.
+  rpc RemoveRecord(RemoveRecordRequest) returns (RemoveRecordResponse);
 }
 
 // The coordinator's audit log.
@@ -252,6 +266,14 @@ enum EnrollmentRefusal {
   ENROLLMENT_REFUSAL_DENIED = 13;
   // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
   ENROLLMENT_REFUSAL_STORE_FAILED = 14;
+  // ALREADY_EXISTS: `AddRecord` for a host id that has a record.
+  ENROLLMENT_REFUSAL_RECORD_EXISTS = 15;
+  // ALREADY_EXISTS: `AddRecord` with a MAC or a serial that another host id's record holds.
+  ENROLLMENT_REFUSAL_RECORD_CONFLICT = 16;
+  // NOT_FOUND: `RemoveRecord` of a host id that has no record.
+  ENROLLMENT_REFUSAL_NO_RECORD = 17;
+  // RESOURCE_EXHAUSTED: `AddRecord` past the 10000 records the coordinator keeps.
+  ENROLLMENT_REFUSAL_CAPACITY = 18;
 }
 
 // Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.
@@ -276,8 +298,8 @@ message AuditEntry {
   // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
   // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
   // `set_min_version`, `hold`, `unhold`, `abort`, `exclude_abandon`, `enroll_approve`,
-  // `enroll_replace`, `enroll_approve_refused`, `mac_auto_approve_declined`). Open: a later
-  // coordinator adds actions.
+  // `enroll_replace`, `enroll_approve_refused`, `mac_auto_approve_declined`, `record_add`,
+  // `record_remove`). Open: a later coordinator adds actions.
   string action = 3;
   // The service, when the change is about one.
   optional string service = 4;
@@ -947,10 +969,54 @@ message PendingEnrollment {
   // The host id this request would return, for a host whose certificate expired; empty
   // otherwise.
   string renewal_of = 6;
-  // Another host presents the same machine id or key.
+  // Another host presents the same machine id or key, or the request claims a MAC bound to an
+  // enrolled host.
   bool duplicate_claim = 7;
   // The request carried a Mac nonce (its value is never listed).
   bool mac_nonce_presented = 8;
+  // How the request matches the host inventory. UNSPECIFIED from a coordinator that does not
+  // match.
+  InventoryMatch inventory_match = 9;
+  // The host id of the one matching record (MATCHED only).
+  string record_host_id = 10;
+  // The role of the one matching record; empty when it names none (MATCHED only).
+  string record_role = 11;
+  // The host ids of every matching record, sorted (AMBIGUOUS only); none is chosen.
+  repeated string candidate_host_ids = 12;
+}
+
+// How a pending request matches the host inventory. A record matches a Linux request when one of
+// its data MACs is among the claimed addresses, and the request claims no BMC MAC or the record's
+// BMC MAC; it matches a Mac request when its serial equals the claimed Mac serial, letters
+// compared without case.
+enum InventoryMatch {
+  INVENTORY_MATCH_UNSPECIFIED = 0;
+  // Exactly one record matches: its host id and role are filled in.
+  INVENTORY_MATCH_MATCHED = 1;
+  // No record matches.
+  INVENTORY_MATCH_UNMATCHED = 2;
+  // More than one record matches; none is chosen.
+  INVENTORY_MATCH_AMBIGUOUS = 3;
+}
+
+// One server the operator recorded when building it.
+message InventoryRecord {
+  string host_id = 1;
+  // The role the host is meant for; empty when the record names none.
+  string role = 2;
+  // The MACs of the host's data interfaces, lower-case, colon-separated, sorted; one to 16, or
+  // none for a record that holds a serial.
+  repeated string data_macs = 3;
+  // The MAC of the host's BMC; empty when the record names none (a Mac has no BMC).
+  string bmc_mac = 4;
+  // The serial number: a Mac's is what its request is matched by. 1 to 64 of `A-Za-z0-9._-`,
+  // or empty.
+  string serial = 5;
+  // Free text, 0 to 256 bytes once trimmed, with no control character.
+  string notes = 6;
+  // The name of the operator token that added it.
+  string added_by = 7;
+  uint64 added_unix = 8;
 }
 
 message ApproveRequest {
@@ -973,6 +1039,49 @@ message ApproveResponse {
   // Always true: the certificate goes to the host at its next `Poll`, never in this answer.
   bool certificate_issued_at_poll = 2;
   AuditEntry entry = 3;
+}
+
+message AddRecordRequest {
+  string host_id = 1;
+  // Empty for none.
+  string role = 2;
+  // At least one, or a `serial`.
+  repeated string data_macs = 3;
+  // Empty for none.
+  string bmc_mac = 4;
+  // Empty for none.
+  string serial = 5;
+  // Empty for none.
+  string notes = 6;
+}
+
+message AddRecordResponse {
+  // As kept: MACs in their one spelling.
+  InventoryRecord record = 1;
+  AuditEntry entry = 2;
+}
+
+message ListRecordsRequest {
+  // The most records to return; capped at 256, and 0 means the cap.
+  uint32 limit = 1;
+  // Where to go on, as `next_page_token` gave it; empty for the first page.
+  string page_token = 2;
+}
+
+message ListRecordsResponse {
+  // By host id.
+  repeated InventoryRecord records = 1;
+  // The token of the next page; empty on the last.
+  string next_page_token = 2;
+}
+
+message RemoveRecordRequest {
+  string host_id = 1;
+  string reason = 2;
+}
+
+message RemoveRecordResponse {
+  AuditEntry entry = 1;
 }
 
 message ListAuditRequest {
