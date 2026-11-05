@@ -28,6 +28,59 @@ pub struct StepCall<'a> {
     pub timeout_secs: u64,
 }
 
+/// One run of an additive step: a step of the hook that is not one of the five of an update, named
+/// by the package's manifest (the `[hook] boot` step, which the daemon runs from `current` at its
+/// start). The hook is run as `<executable> <hook_args...> <step> --params <params>`.
+#[derive(Clone, Debug)]
+pub struct AdditiveCall<'a> {
+    /// The service the step belongs to.
+    pub service: &'a str,
+    /// The step's name, as the manifest gives it: a token that is none of the five steps.
+    pub step: &'a str,
+    /// The arguments of the manifest's hook command after its program, given before the step
+    /// (`update-hook` in `["bin/tierstore", "update-hook"]`).
+    pub hook_args: &'a [String],
+    /// The params file of the run.
+    pub params: &'a Path,
+    /// The hook executable, a file of a verified release (see [`StepCall::executable`]).
+    pub executable: &'a Path,
+    /// The deterministic name of the transient unit: `updater-<service>-<step>-<generation>`.
+    pub unit: &'a str,
+    /// The bound of the run, in seconds.
+    pub timeout_secs: u64,
+}
+
+/// One run of a probe: a verb of a binary that is not a hook, run once with nothing but its
+/// arguments, bounded, its standard output kept (`<executable> <args...>`). The daemon asks a new
+/// hostkeeper binary for its self-update protocol this way before it stages it.
+#[derive(Clone, Debug)]
+pub struct ProbeCall<'a> {
+    /// The service the binary belongs to.
+    pub service: &'a str,
+    /// The binary: a file of a verified release (see [`StepCall::executable`]).
+    pub executable: &'a Path,
+    /// Its arguments.
+    pub args: &'a [&'a str],
+    /// The deterministic name of the transient unit it runs in.
+    pub unit: &'a str,
+    /// The bound of the run, in seconds: the launcher sets `RuntimeMaxSec=` to it.
+    pub timeout_secs: u64,
+    /// The most bytes of standard output the launcher keeps; what passes it is dropped and
+    /// reported ([`ProbeExit::truncated`]).
+    pub output_bytes: usize,
+}
+
+/// How a probe ended, as the launcher saw it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProbeExit {
+    /// The exit code; `None` when the probe was killed by its bound or by a signal.
+    pub code: Option<i32>,
+    /// Its standard output, at most [`ProbeCall::output_bytes`] of it.
+    pub output: Vec<u8>,
+    /// It wrote more than [`ProbeCall::output_bytes`].
+    pub truncated: bool,
+}
+
 /// How a step ended, as the launcher saw it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepExit {
@@ -93,4 +146,25 @@ pub trait StepLauncher: Send + Sync {
     /// returns while this is under way is not read until this has returned, so the time this
     /// takes is also the time the runner waits.
     fn stop(&self, unit: &str) -> Result<(), LaunchError>;
+
+    /// Runs an additive step and waits for it to end, under the same rules as [`Self::run`]. A
+    /// launcher that does not run additive steps keeps this default, which starts nothing and
+    /// answers [`LaunchError::NoStart`] naming the step: the caller reports that step as failed.
+    fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
+        Err(LaunchError::NoStart(format!(
+            "this launcher runs no additive step, so `{}` of {} did not start",
+            call.step, call.service
+        )))
+    }
+
+    /// Runs a probe and waits for it to end, bounded by [`ProbeCall::timeout_secs`], keeping at
+    /// most [`ProbeCall::output_bytes`] of its standard output. A launcher that does not run
+    /// probes keeps this default, which starts nothing and answers [`LaunchError::NoStart`]
+    /// naming the unit: the caller reads it as a probe that could not run.
+    fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {
+        Err(LaunchError::NoStart(format!(
+            "this launcher runs no probe, so `{}` of {} did not start",
+            call.unit, call.service
+        )))
+    }
 }

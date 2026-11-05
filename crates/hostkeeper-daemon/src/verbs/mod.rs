@@ -1,9 +1,9 @@
 //! One module per verb, each a function taking the shared [`crate::executor::Ctx`] and the verb's
 //! typed arguments and answering with a [`Reply`]. The executor only dispatches to them.
 //!
-//! `update` and `force_rollback` are built. The others answer `not_implemented` and change
-//! nothing: `install` and `uninstall`, `force`, `abort`, `clear_halt` and `clear_record` each fill
-//! their own file.
+//! `update`, `force_rollback`, `force`, `install` and `uninstall` are built. The others answer
+//! `not_implemented` and change nothing: `abort`, `clear_halt` and `clear_record` each fill their
+//! own file.
 
 pub mod abort;
 pub mod clear_halt;

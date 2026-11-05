@@ -47,6 +47,9 @@ fn succeeded_record() -> Record {
         },
         hook: HookSel::New,
         progress: Progress::default(),
+        order_try: None,
+        forced: false,
+        force: None,
     }
 }
 

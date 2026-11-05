@@ -1,0 +1,28 @@
+{
+ "from": "kbf-coordinator/src/converge.rs (v0.0.64), converge_kbf: a service converged only when at least min_up hosts of each role were up. This coordinator cut the rule; kbf's answer is in kbf_body (derived from the rules at the tag, not a kbf test)",
+ "steps": [
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":1,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":1,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "convergence",
+   "expect_status": 200,
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"converged\",\"roles\":[{\"role\":\"daemon\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}",
+   "kbf_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"in_progress\",\"roles\":[{\"role\":\"daemon\",\"at_desired\":1,\"updating\":0,\"failed\":0,\"down\":0}],\"commit\":\"{COMMIT}\"}"
+  }
+ ]
+}

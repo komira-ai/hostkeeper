@@ -65,7 +65,7 @@ pub fn write_atomic(
     crossed(stop, WriteStep::AfterRename)
 }
 
-fn crossed(stop: &dyn Fn(WriteStep) -> bool, step: WriteStep) -> io::Result<()> {
+pub fn crossed(stop: &dyn Fn(WriteStep) -> bool, step: WriteStep) -> io::Result<()> {
     match stop(step) {
         true => Err(io::Error::other(format!("stopped at {step:?}"))),
         false => Ok(()),

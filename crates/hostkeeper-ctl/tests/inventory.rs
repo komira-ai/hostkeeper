@@ -1,0 +1,317 @@
+//! The host inventory's generated commands, `hostkeeper ctl enrollment add-record`,
+//! `list-records` and `remove-record`, run as an operator types them: parsed from the generated
+//! command table, encoded, sent with the operator's token over the in-memory gRPC route to the
+//! generated `hostkeeper.operator.v1.Enrollment` server, and the answer printed. The server here
+//! keeps the records in memory; the coordinator's own calls behind it are tested in
+//! `hostkeeper-coordinator` (`inventory_tests`).
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use hostkeeper_ctl::transport::InMemory;
+use hostkeeper_ctl::{Io, PeerIdentity, exit};
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::{Enrollment, EnrollmentServer};
+use serde_json::{Value, json};
+use tonic::{Code, Request, Response, Status};
+
+/// The token the operator's file holds.
+const TOKEN: &str = "operator-token-1";
+
+/// What the server saw and keeps.
+#[derive(Default)]
+struct Seen {
+    records: BTreeMap<String, proto::InventoryRecord>,
+    adds: Vec<proto::AddRecordRequest>,
+    removes: Vec<proto::RemoveRecordRequest>,
+    bearers: Vec<String>,
+}
+
+/// An `Enrollment` server whose record calls keep records in memory, refusing as the coordinator
+/// does (`record_exists`, `no_record`), and which serves no pending request.
+#[derive(Clone, Default)]
+struct Records(Arc<Mutex<Seen>>);
+
+impl Records {
+    fn seen<T>(&self, read: impl FnOnce(&mut Seen) -> T) -> T {
+        read(&mut self.0.lock().expect("lock"))
+    }
+
+    fn bearer<T>(&self, request: &Request<T>) {
+        let bearer = request
+            .metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("none")
+            .to_owned();
+        self.seen(|s| s.bearers.push(bearer));
+    }
+}
+
+#[tonic::async_trait]
+impl Enrollment for Records {
+    async fn list(
+        &self,
+        request: Request<proto::ListPendingRequest>,
+    ) -> Result<Response<proto::ListPendingResponse>, Status> {
+        self.bearer(&request);
+        Ok(Response::new(proto::ListPendingResponse::default()))
+    }
+
+    async fn approve(
+        &self,
+        request: Request<proto::ApproveRequest>,
+    ) -> Result<Response<proto::ApproveResponse>, Status> {
+        self.bearer(&request);
+        Err(Status::new(Code::NotFound, "unknown_request"))
+    }
+
+    async fn add_record(
+        &self,
+        request: Request<proto::AddRecordRequest>,
+    ) -> Result<Response<proto::AddRecordResponse>, Status> {
+        self.bearer(&request);
+        let add = request.into_inner();
+        self.seen(|s| {
+            s.adds.push(add.clone());
+            if s.records.contains_key(&add.host_id) {
+                return Err(Status::new(Code::AlreadyExists, "record_exists"));
+            }
+            let record = proto::InventoryRecord {
+                host_id: add.host_id.clone(),
+                role: add.role.clone(),
+                data_macs: add.data_macs.clone(),
+                bmc_mac: add.bmc_mac.clone(),
+                serial: add.serial.clone(),
+                notes: add.notes.clone(),
+                added_by: "operator".to_owned(),
+                added_unix: 1_800_000_000,
+            };
+            s.records.insert(add.host_id, record.clone());
+            Ok(Response::new(proto::AddRecordResponse {
+                record: Some(record),
+                entry: None,
+            }))
+        })
+    }
+
+    async fn list_records(
+        &self,
+        request: Request<proto::ListRecordsRequest>,
+    ) -> Result<Response<proto::ListRecordsResponse>, Status> {
+        self.bearer(&request);
+        let records = self.seen(|s| s.records.values().cloned().collect());
+        Ok(Response::new(proto::ListRecordsResponse {
+            records,
+            next_page_token: String::new(),
+        }))
+    }
+
+    async fn remove_record(
+        &self,
+        request: Request<proto::RemoveRecordRequest>,
+    ) -> Result<Response<proto::RemoveRecordResponse>, Status> {
+        self.bearer(&request);
+        let remove = request.into_inner();
+        self.seen(|s| {
+            s.removes.push(remove.clone());
+            match s.records.remove(&remove.host_id) {
+                Some(_) => Ok(Response::new(proto::RemoveRecordResponse::default())),
+                None => Err(Status::new(Code::NotFound, "no_record")),
+            }
+        })
+    }
+}
+
+/// One run of `hostkeeper ctl`: its exit code and streams.
+struct Ran {
+    code: u8,
+    stdout: String,
+    stderr: String,
+}
+
+/// Runs `hostkeeper ctl <args>` with the operator's token file, against `memory`.
+fn ctl(memory: &InMemory, token_file: &str, args: &[&str]) -> Ran {
+    let mut stdin: &[u8] = b"";
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let globals = [
+        "--endpoint",
+        "https://coordinator.example",
+        "--ca-file",
+        "ca.pem",
+        "--token-file",
+        token_file,
+        "--output",
+        "json",
+    ];
+    let words = std::iter::once("hostkeeper-ctl")
+        .chain(args.iter().copied())
+        .chain(globals);
+    let code = hostkeeper_ctl::run(
+        words,
+        memory,
+        Io {
+            stdin: &mut stdin,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    );
+    Ran {
+        code,
+        stdout: String::from_utf8(stdout).expect("UTF-8"),
+        stderr: String::from_utf8(stderr).expect("UTF-8"),
+    }
+}
+
+fn json_of(ran: &Ran) -> Value {
+    assert_eq!(ran.code, exit::SUCCESS, "{}", ran.stderr);
+    serde_json::from_str(&ran.stdout).expect("JSON on stdout")
+}
+
+/// Catches: an inventory command missing from the generated table, a flag that does not reach
+/// its field (the repeated `--data-macs` above all), a call routed to another method or sent
+/// without the operator's token, a reply not printed, and a refusal not ending the run with its
+/// token on stderr. Add, list, a second add of the host id, remove and list again run in order
+/// against one server.
+#[test]
+fn the_inventory_commands_add_list_and_remove_a_record_through_the_grpc_route() {
+    let dir = hostkeeper_testkit::Scratch::under(
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
+        "ctl-inventory",
+    )
+    .expect("a scratch directory");
+    let token_file = dir.path().join("token");
+    std::fs::write(&token_file, format!("{TOKEN}\n")).expect("written");
+    let token_file = token_file.to_str().expect("UTF-8 path");
+    let records = Records::default();
+    let memory = InMemory::new(PeerIdentity::Operator("op".to_owned()))
+        .serve(EnrollmentServer::new(records.clone()));
+
+    let added = ctl(
+        &memory,
+        token_file,
+        &[
+            "enrollment",
+            "add-record",
+            "--host-id",
+            "db-1",
+            "--role",
+            "storage",
+            "--data-macs",
+            "0C-C4-7A-00-00-02",
+            "--data-macs",
+            "0c:c4:7a:00:00:03",
+            "--bmc-mac",
+            "0c:c4:7a:00:00:01",
+            "--serial",
+            "SN-1",
+            "--notes",
+            "rack 4",
+        ],
+    );
+    assert_eq!(
+        json_of(&added)["record"],
+        json!({"hostId": "db-1", "role": "storage",
+               "dataMacs": ["0C-C4-7A-00-00-02", "0c:c4:7a:00:00:03"],
+               "bmcMac": "0c:c4:7a:00:00:01", "serial": "SN-1", "notes": "rack 4",
+               "addedBy": "operator", "addedUnix": "1800000000"})
+    );
+    assert_eq!(
+        records.seen(|s| s.adds.clone()),
+        vec![proto::AddRecordRequest {
+            host_id: "db-1".to_owned(),
+            role: "storage".to_owned(),
+            data_macs: vec![
+                "0C-C4-7A-00-00-02".to_owned(),
+                "0c:c4:7a:00:00:03".to_owned()
+            ],
+            bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+            serial: "SN-1".to_owned(),
+            notes: "rack 4".to_owned(),
+        }]
+    );
+
+    let listed = json_of(&ctl(&memory, token_file, &["enrollment", "list-records"]));
+    let hosts: Vec<&str> = listed["records"]
+        .as_array()
+        .expect("records")
+        .iter()
+        .filter_map(|r| r["hostId"].as_str())
+        .collect();
+    assert_eq!(hosts, ["db-1"]);
+
+    let again = ctl(
+        &memory,
+        token_file,
+        &[
+            "enrollment",
+            "add-record",
+            "--host-id",
+            "db-1",
+            "--serial",
+            "SN-9",
+        ],
+    );
+    assert_eq!(again.code, exit::FAILURE);
+    assert!(again.stderr.contains("record_exists"), "{}", again.stderr);
+    assert_eq!(again.stdout, "");
+
+    let removed = ctl(
+        &memory,
+        token_file,
+        &[
+            "enrollment",
+            "remove-record",
+            "--host-id",
+            "db-1",
+            "--reason",
+            "rebuilt",
+        ],
+    );
+    assert_eq!(removed.code, exit::SUCCESS, "{}", removed.stderr);
+    assert_eq!(
+        records.seen(|s| s.removes.clone()),
+        vec![proto::RemoveRecordRequest {
+            host_id: "db-1".to_owned(),
+            reason: "rebuilt".to_owned(),
+        }]
+    );
+    let gone = ctl(
+        &memory,
+        token_file,
+        &[
+            "enrollment",
+            "remove-record",
+            "--host-id",
+            "db-1",
+            "--reason",
+            "again",
+        ],
+    );
+    assert_eq!(gone.code, exit::FAILURE);
+    assert!(gone.stderr.contains("no_record"), "{}", gone.stderr);
+    let empty = json_of(&ctl(&memory, token_file, &["enrollment", "list-records"]));
+    assert_eq!(empty["records"].as_array().map_or(0, Vec::len), 0);
+
+    // The pending view and approval are on the same service and route.
+    let pending = ctl(&memory, token_file, &["enrollment", "list"]);
+    assert_eq!(pending.code, exit::SUCCESS, "{}", pending.stderr);
+    let approve = ctl(
+        &memory,
+        token_file,
+        &["enrollment", "approve", "--request-id", "ab"],
+    );
+    assert!(
+        approve.stderr.contains("unknown_request"),
+        "{}",
+        approve.stderr
+    );
+
+    let bearers = records.seen(|s| s.bearers.clone());
+    assert_eq!(bearers.len(), 8);
+    assert!(
+        bearers.iter().all(|b| *b == format!("Bearer {TOKEN}")),
+        "{bearers:?}"
+    );
+}

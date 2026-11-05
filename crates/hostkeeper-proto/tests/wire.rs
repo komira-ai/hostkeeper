@@ -414,6 +414,9 @@ const RPCS: [(&str, &[&str]); 6] = [
         &[
             "List(ListPendingRequest) ListPendingResponse",
             "Approve(ApproveRequest) ApproveResponse",
+            "AddRecord(AddRecordRequest) AddRecordResponse",
+            "ListRecords(ListRecordsRequest) ListRecordsResponse",
+            "RemoveRecord(RemoveRecordRequest) RemoveRecordResponse",
         ],
     ),
     (
@@ -424,7 +427,31 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 19] = [
+const FIELDS: [(&str, &[(&str, u32)]); 25] = [
+    (
+        "hostkeeper.agent.v1.HeartbeatResponse",
+        &[
+            ("order", 1),
+            ("features", 2),
+            ("halt_generations", 3),
+            ("acks", 4),
+        ],
+    ),
+    (
+        "hostkeeper.agent.v1.VerdictAck",
+        &[("service", 1), ("order_id", 2), ("order_try", 3)],
+    ),
+    (
+        "hostkeeper.local.v1.ServiceRecord",
+        &[
+            ("service", 1),
+            ("current", 2),
+            ("last", 3),
+            ("state", 4),
+            ("record_problem", 5),
+            ("lifecycle", 6),
+        ],
+    ),
     (
         "hostkeeper.agent.v1.EnrollRequest",
         &[
@@ -444,6 +471,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 19] = [
             ("addresses", 4),
             ("mac_serial", 5),
             ("platform_uuid", 6),
+            ("bmc_mac", 7),
         ],
     ),
     (
@@ -520,7 +548,39 @@ const FIELDS: [(&str, &[(&str, u32)]); 19] = [
             ("renewal_of", 6),
             ("duplicate_claim", 7),
             ("mac_nonce_presented", 8),
+            ("inventory_match", 9),
+            ("record_host_id", 10),
+            ("record_role", 11),
+            ("candidate_host_ids", 12),
         ],
+    ),
+    (
+        "hostkeeper.operator.v1.InventoryRecord",
+        &[
+            ("host_id", 1),
+            ("role", 2),
+            ("data_macs", 3),
+            ("bmc_mac", 4),
+            ("serial", 5),
+            ("notes", 6),
+            ("added_by", 7),
+            ("added_unix", 8),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.AddRecordRequest",
+        &[
+            ("host_id", 1),
+            ("role", 2),
+            ("data_macs", 3),
+            ("bmc_mac", 4),
+            ("serial", 5),
+            ("notes", 6),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.RemoveRecordRequest",
+        &[("host_id", 1), ("reason", 2)],
     ),
     (
         "hostkeeper.operator.v1.ApproveRequest",
@@ -561,7 +621,13 @@ const FIELDS: [(&str, &[(&str, u32)]); 19] = [
 fn wire_names_are_pinned() {
     assert_eq!(
         feature_names(),
-        ["deferred-v1", "forced-v1", "halt-v1", "heartbeat-v2"]
+        [
+            "deferred-v1",
+            "forced-v1",
+            "halt-v1",
+            "heartbeat-v2",
+            "verdict-acks-v1"
+        ]
     );
 
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
@@ -585,7 +651,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 9] = [
+    let cases: [(&str, &str, &[&str]); 11] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -679,7 +745,16 @@ fn wire_names_are_pinned() {
                 "not_pending",
                 "denied",
                 "store_failed",
+                "record_exists",
+                "record_conflict",
+                "no_record",
+                "capacity",
             ],
+        ),
+        (
+            "hostkeeper.operator.v1.InventoryMatch",
+            "INVENTORY_MATCH_",
+            &["matched", "unmatched", "ambiguous"],
         ),
         (
             "hostkeeper.operator.v1.AuditRefusal",
@@ -701,6 +776,11 @@ fn wire_names_are_pinned() {
                 "record_reads",
                 "store_failed",
             ],
+        ),
+        (
+            "hostkeeper.local.v1.Lifecycle",
+            "LIFECYCLE_",
+            &["absent", "installing", "running", "removing"],
         ),
     ];
     for (name, prefix, want) in cases {

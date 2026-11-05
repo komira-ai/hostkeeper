@@ -12,7 +12,8 @@ use hostkeeper_config::manifest::{HostkeeperVersion, ManifestRefusal};
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_steps::tree_digest;
 use hostkeeper_unpack::{
-    HostFs, Owner, PackageFs, Rule, SEAL_SCHEMA, Seal, SealError, UnpackError, unpack,
+    HostFs, Owner, PackageFs, Platform, Rule, SEAL_SCHEMA, Seal, SealError, UnpackError,
+    VerifyIoError, unpack,
 };
 use support::{Rig, VERSION, limits, me, valid_tar, zstd};
 
@@ -23,7 +24,7 @@ const GOLDEN_TREE_DIGEST: &str = "18479648f09d5bd43998825db7c2339a2922600de221d2
 fn unpack_valid(name: &str) -> (Rig, hostkeeper_unpack::Unpacked) {
     let rig = Rig::new(name);
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
-    let unpacked = unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    let unpacked = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
     (rig, unpacked)
 }
 
@@ -57,7 +58,7 @@ fn the_seal_and_tree_digest_formats_are_additive_only() {
     fs::write(&seal, &newer).unwrap();
     let archive = rig.scratch.path().join("a.tar.zst");
     let order = support::order(VERSION, unpacked.seal.package_digest());
-    let again = unpack(&archive, &order, &limits(), &rig.host()).unwrap();
+    let again = unpack(&archive, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
     assert!(!again.fresh);
     assert_eq!(again.seal, unpacked.seal);
 }
@@ -81,7 +82,7 @@ fn the_seal_is_read_additively() {
     for bad in [&json.as_bytes()[..json.len() - 2], &[0xc3, 0x28, 0xff][..]] {
         assert!(matches!(Seal::parse(bad), Err(SealError::Unreadable(_))));
         fs::write(&seal, bad).unwrap();
-        let err = unpack(&archive, &order, &limits(), &rig.host()).unwrap_err();
+        let err = unpack(&archive, &order, &limits(), &rig.host(), Platform::Linux).unwrap_err();
         assert!(matches!(err, UnpackError::SealUnreadable { .. }), "{err:?}");
         assert_eq!(
             err.outcome(),
@@ -106,6 +107,8 @@ fn row(error: &UnpackError) -> (Outcome, Class, &'static str) {
         UnpackError::SealUnreadable { .. } => deferred("io_error"),
         UnpackError::SealSchema { .. } => deferred("daemon_too_old"),
         UnpackError::ReservedVersion { .. } => failed("reserved_version"),
+        UnpackError::VersionTooLong { .. } => failed("version_too_long"),
+        UnpackError::VerifyUnavailable { .. } => deferred("verify_unavailable"),
         UnpackError::Io { .. } => deferred("io_error"),
     }
 }
@@ -179,6 +182,22 @@ fn every_unpack_error_maps_to_one_class_and_reason() {
             "the version \"current\" is a name the package directory holds for itself",
         ),
         (
+            UnpackError::VersionTooLong {
+                version: "1.0".into(),
+            },
+            "the version \"1.0\" is too long for the names the package directory derives from it",
+        ),
+        (
+            UnpackError::VerifyUnavailable {
+                entry: "bin/x".into(),
+                source: VerifyIoError::Unfinished {
+                    tool: "codesign",
+                    why: "timed out".into(),
+                },
+            },
+            "cannot verify bin/x on macOS: codesign did not finish: timed out",
+        ),
+        (
             UnpackError::Io {
                 what: "cannot open the archive",
                 source: io::Error::other("gone"),
@@ -195,6 +214,8 @@ fn every_unpack_error_maps_to_one_class_and_reason() {
         hostkeeper_unpack::REASON_ARTIFACT_CHANGED,
         hostkeeper_unpack::REASON_IO_ERROR,
         hostkeeper_unpack::REASON_RESERVED_VERSION,
+        hostkeeper_unpack::REASON_VERSION_TOO_LONG,
+        hostkeeper_unpack::REASON_VERIFY_UNAVAILABLE,
     ];
     for (error, text) in &errors {
         assert_eq!(error.outcome(), row(error), "{error:?}");
@@ -230,6 +251,9 @@ fn every_rule_says_what_it_refuses() {
         (Rule::Window { requested: 9 }, "window of 9 bytes"),
         (Rule::Decoder("bad".into()), "invalid: bad"),
         (Rule::NotAsWritten, "reads back"),
+        (Rule::Quarantined, "quarantine"),
+        (Rule::Unsigned, "unsigned"),
+        (Rule::InvalidSignature("x".into()), "invalid_signature"),
     ];
     for (rule, words) in rules {
         assert!(rule.to_string().contains(words), "{rule:?}: {rule}");
@@ -334,7 +358,7 @@ fn the_tree_digest_orders_full_names_and_not_the_archive() {
     {
         let rig = Rig::new("fmt-prefix");
         let (path, order_of) = rig.archive("p.tar.zst", &prefix_tree(order));
-        let unpacked = unpack(&path, &order_of, &limits(), &rig.host()).unwrap();
+        let unpacked = unpack(&path, &order_of, &limits(), &rig.host(), Platform::Linux).unwrap();
         assert_eq!(
             unpacked.seal.tree_digest(),
             GOLDEN_PREFIX_TREE_DIGEST,

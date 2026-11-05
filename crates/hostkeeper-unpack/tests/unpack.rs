@@ -10,7 +10,7 @@ use std::path::Path;
 use hostkeeper_config::manifest::ManifestRefusal;
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_steps::{Layout, tree_digest};
-use hostkeeper_unpack::{Rule, Seal, UnpackError, unpack};
+use hostkeeper_unpack::{Platform, Rule, Seal, UnpackError, unpack};
 use support::{
     Call, Faulty, MANIFEST, Rig, SERVICE, Tar, VERSION, limits, me, order, owner_of, sha256_hex,
     valid_tar, zstd,
@@ -28,7 +28,7 @@ fn a_valid_package_unpacks_to_a_sealed_version_directory() {
     let rig = Rig::new("u-valid");
     let archive = zstd(&valid_tar().end().bytes());
     let (path, order) = rig.archive("a.tar.zst", &archive);
-    let unpacked = unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    let unpacked = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
     let dir = rig.service().join(VERSION);
     assert_eq!(unpacked.dir, dir);
     assert!(unpacked.fresh);
@@ -80,7 +80,7 @@ fn modes_are_normalised_and_owner_and_mtime_ignored() {
     let rig = Rig::new("u-modes");
     let (path, order) = rig.archive("odd.tar.zst", &build(true));
     let fake = Faulty::new(rig.host());
-    let odd = unpack(&path, &order, &limits(), &fake).unwrap();
+    let odd = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap();
     let dir = rig.service().join(VERSION);
     let want = [0o555, 0o555, 0o444, 0o444, 0o444];
     for (i, w) in want.iter().enumerate() {
@@ -96,7 +96,7 @@ fn modes_are_normalised_and_owner_and_mtime_ignored() {
     }
     let plain = Rig::new("u-modes-plain");
     let (path, order) = plain.archive("plain.tar.zst", &build(false));
-    let same = unpack(&path, &order, &limits(), &plain.host()).unwrap();
+    let same = unpack(&path, &order, &limits(), &plain.host(), Platform::Linux).unwrap();
     assert_eq!(odd.seal.tree_digest(), same.seal.tree_digest());
     assert_ne!(odd.seal.package_digest(), same.seal.package_digest());
 }
@@ -109,7 +109,7 @@ fn an_archive_with_another_digest_is_digest_mismatch() {
     let archive = zstd(&valid_tar().end().bytes());
     let (path, _) = rig.archive("a.tar.zst", &archive);
     let order = order(VERSION, &"ab".repeat(32));
-    let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap_err();
     assert!(
         matches!(&err, UnpackError::DigestMismatch { expected, found }
             if expected == &"ab".repeat(32) && found == &sha256_hex(&archive)),
@@ -137,7 +137,7 @@ fn manifest_tar(manifest: &str) -> Vec<u8> {
 fn refused_manifest(name: &str, manifest: &str) -> UnpackError {
     let rig = Rig::new(name);
     let (path, order) = rig.archive("m.tar.zst", &manifest_tar(manifest));
-    let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap_err();
     assert!(rig.listing().is_empty(), "{name}: {:?}", rig.listing());
     err
 }
@@ -225,7 +225,7 @@ fn a_package_needing_a_newer_hostkeeper_is_deferred() {
 fn unpacked(name: &str) -> (Rig, std::path::PathBuf, hostkeeper_unpack::UnpackOrder) {
     let rig = Rig::new(name);
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
-    unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
     (rig, path, order)
 }
 
@@ -236,7 +236,7 @@ fn unpacked(name: &str) -> (Rig, std::path::PathBuf, hostkeeper_unpack::UnpackOr
 fn an_existing_sealed_version_is_not_unpacked_again() {
     let (rig, path, order) = unpacked("u-again");
     let fake = Faulty::new(rig.host());
-    let again = unpack(&path, &order, &limits(), &fake).unwrap();
+    let again = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap();
     assert!(!again.fresh);
     assert!(
         fake.calls().iter().all(|c| !c.writes()),
@@ -252,7 +252,7 @@ fn an_existing_sealed_version_is_not_unpacked_again() {
     fs::set_permissions(&x, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(&x, "#!y\n").unwrap();
     let fake = Faulty::new(rig.host());
-    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
     assert!(
         matches!(&err, UnpackError::ArtifactChanged { .. }),
         "{err:?}"
@@ -280,7 +280,7 @@ fn a_version_on_the_host_that_is_not_the_orders_is_refused_untouched() {
     let sealed = fs::read(&seal).unwrap();
     let run = |want: (Outcome, Class, &str)| {
         let fake = Faulty::new(rig.host());
-        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
         assert_eq!(err.outcome(), want, "{err:?}");
         assert!(
             fake.calls().iter().all(|c| !c.writes()),
@@ -294,7 +294,7 @@ fn a_version_on_the_host_that_is_not_the_orders_is_refused_untouched() {
 
     let other = order_for_other_archive(&order);
     let fake = Faulty::new(rig.host());
-    let err = unpack(&path, &other, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &other, &limits(), &fake, Platform::Linux).unwrap_err();
     assert_eq!(err.outcome(), changed);
     assert!(
         err.to_string().contains("was sealed for the archive"),
@@ -321,7 +321,7 @@ fn a_version_on_the_host_that_is_not_the_orders_is_refused_untouched() {
     fs::set_permissions(&bin, fs::Permissions::from_mode(0o000)).unwrap();
     assert!(matches!(run(again), UnpackError::Io { .. }));
     fs::set_permissions(&bin, fs::Permissions::from_mode(0o555)).unwrap();
-    unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
 
     fs::remove_file(&seal).unwrap();
     // A version with no seal: remove_orphans keeps the version, the unpack refuses it.
@@ -348,7 +348,7 @@ fn an_archive_that_cannot_be_read_is_tried_again() {
         rig.scratch.path().join("absent"),
         rig.scratch.path().to_path_buf(),
     ] {
-        let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap_err();
         assert!(matches!(err, UnpackError::Io { .. }), "{err:?}");
         assert_eq!(
             err.outcome(),
@@ -366,7 +366,7 @@ fn a_staged_tree_that_reads_back_otherwise_is_refused() {
     let rig = Rig::new("u-readback");
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
     let fake = Faulty::new(rig.host()).corrupt("bin/x");
-    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
     assert!(
         matches!(&err, UnpackError::BadArchive { rule: Rule::NotAsWritten, entry, .. }
             if entry == "the staged tree"),
@@ -381,7 +381,7 @@ fn a_staged_tree_that_reads_back_otherwise_is_refused() {
     let rig = Rig::new("u-readback-io");
     let (path, order) = rig.archive("c.tar.zst", &zstd(&valid_tar().end().bytes()));
     let fake = Faulty::new(rig.host()).dir_mode("/bin", 0o300);
-    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
     assert!(matches!(err, UnpackError::Io { .. }), "{err:?}");
     assert_eq!(
         err.outcome(),
@@ -416,7 +416,7 @@ fn the_limits_are_the_daemon_configs_bounds() {
     let host = rig.host();
     assert!(format!("{host:?}").contains("HostFs"));
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
-    let again = unpack(&path, &order, &support::limits(), &host).unwrap();
+    let again = unpack(&path, &order, &support::limits(), &host, Platform::Linux).unwrap();
     assert_eq!(again.clone(), again);
     assert!(format!("{again:?}").contains("1.5.0"));
     assert_eq!(order.clone(), order);
@@ -431,7 +431,7 @@ fn a_staged_file_that_cannot_be_read_back_is_tried_again() {
     let rig = Rig::new("u-readback-file");
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
     let fake = Faulty::new(rig.host()).dir_mode("bin/x", 0o000);
-    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
     assert!(
         matches!(&err, UnpackError::Io { what, .. } if *what == "cannot read back the staged tree"),
         "{err:?}"
@@ -451,7 +451,7 @@ fn an_orphan_that_cannot_be_removed_stops_the_unpack() {
     fs::create_dir_all(rig.service().join(".stage-old")).unwrap();
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
     let fake = Faulty::new(rig.host()).fail(Box::new(|c| matches!(c, Call::RemoveTree(_))), 0, 5);
-    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
     assert!(
         matches!(&err, UnpackError::Io { what, .. } if *what == "cannot remove an orphan"),
         "{err:?}"
@@ -481,6 +481,7 @@ fn installed(name: &str) -> (Rig, Vec<(String, Option<String>)>) {
         &order("1.4.2", &sha256_hex(&archive)),
         &limits(),
         &rig.host(),
+        Platform::Linux,
     )
     .unwrap();
     Layout::package(&rig.service()).switch("1.4.2").unwrap();
@@ -501,6 +502,68 @@ fn state_of(rig: &Rig) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// Catches a version bound that refuses a version which fits, or a temporary seal of the longest
+/// version that cannot be written: a 245-byte version, whose `.<version>.seal.tmp` is exactly 255
+/// bytes, unpacks through the host port to a sealed version directory, its seal is readable
+/// and names the archive, no temporary seal stays, and a second unpack of the same order writes
+/// nothing and returns the version.
+#[test]
+fn the_longest_version_unpacks_and_is_found_again() {
+    let rig = Rig::new("u-longest");
+    let version = "1".repeat(245);
+    assert_eq!(format!(".{version}.seal.tmp").len(), 255);
+    let archive = manifest_tar(&MANIFEST.replace("1.5.0", &version));
+    let (path, _) = rig.archive("r.tar.zst", &archive);
+    let order = order(&version, &sha256_hex(&archive));
+    let unpacked = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
+    assert!(unpacked.fresh);
+    assert_eq!(unpacked.dir, rig.service().join(&version));
+    assert_eq!(rig.listing(), [version.clone(), format!("{version}.seal")]);
+    let seal =
+        Seal::parse(&fs::read(rig.service().join(format!("{version}.seal"))).unwrap()).unwrap();
+    assert_eq!(seal, unpacked.seal);
+    assert_eq!(seal.package_digest(), sha256_hex(&archive));
+    Layout::package(&rig.service())
+        .check_tree(&version)
+        .unwrap();
+    let fake = Faulty::new(rig.host());
+    let again = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap();
+    assert!(!again.fresh);
+    assert_eq!(again.seal, unpacked.seal);
+    assert!(
+        fake.calls().iter().all(|c| !c.writes()),
+        "{:?}",
+        fake.calls()
+    );
+    assert_eq!(rig.listing(), [version.clone(), format!("{version}.seal")]);
+}
+
+/// Catches an order whose version keeps its rule but is too long for the names the package
+/// directory derives from it (`.<version>.seal.tmp` past 255 bytes) reaching the disk: 246 and
+/// 255 bytes are `VersionTooLong`, `Failed`, release, `version_too_long`, before any call of the
+/// port, and the installed version is as it was.
+#[test]
+fn a_version_too_long_for_the_package_directory_is_refused() {
+    let (rig, before) = installed("u-long");
+    for version in ["1".repeat(246), "1".repeat(255)] {
+        let archive = manifest_tar(&MANIFEST.replace("1.5.0", &version));
+        let (path, _) = rig.archive("r.tar.zst", &archive);
+        let fake = Faulty::new(rig.host());
+        let order = order(&version, &sha256_hex(&archive));
+        let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
+        assert!(
+            matches!(&err, UnpackError::VersionTooLong { version: v } if *v == version),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.outcome(),
+            (Outcome::Failure, Class::Release, "version_too_long")
+        );
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+        assert_eq!(state_of(&rig), before);
+    }
+}
+
 /// Catches an order whose version is one of the package directory's own names reaching the
 /// disk: `current`, `previous`, `1.4.2.seal` and `x.tmp` are refused, `Failed`, release,
 /// `reserved_version`, before any call of the port, and the installed version, its seal and
@@ -513,7 +576,7 @@ fn a_version_named_like_the_package_directorys_own_files_is_refused() {
         let (path, _) = rig.archive("r.tar.zst", &archive);
         let fake = Faulty::new(rig.host());
         let order = order(version, &sha256_hex(&archive));
-        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
         assert!(
             matches!(&err, UnpackError::ReservedVersion { version: v } if v == version),
             "{version}: {err:?}"
@@ -535,7 +598,7 @@ fn a_version_named_like_the_package_directorys_own_files_is_refused() {
 fn a_service_user_can_reach_every_file_of_a_version() {
     let rig = Rig::new("u-reach");
     let (path, order) = rig.archive("a.tar.zst", &zstd(&valid_tar().end().bytes()));
-    unpack(&path, &order, &limits(), &rig.host()).unwrap();
+    unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap();
     assert_eq!(mode(&rig.service()), 0o755);
     let mut stack = vec![rig.service().join(VERSION)];
     while let Some(dir) = stack.pop() {
@@ -575,7 +638,7 @@ fn a_package_whose_staged_files_the_loader_refuses_is_a_release_failure() {
         ("a source not in the archive", without_source),
     ] {
         let (path, order) = rig.archive("s.tar.zst", &archive);
-        let err = unpack(&path, &order, &limits(), &rig.host()).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &rig.host(), Platform::Linux).unwrap_err();
         let UnpackError::Manifest(refusal) = &err else {
             panic!("{name}: {err:?}")
         };
@@ -634,7 +697,7 @@ fn a_seal_that_is_a_link_a_fifo_or_too_large_is_unreadable() {
         fs::remove_file(&seal).unwrap();
         make(&seal);
         let fake = Faulty::new(rig.host());
-        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
         assert!(
             matches!(err, UnpackError::SealUnreadable { .. }),
             "{what}: {err:?}"
@@ -647,7 +710,11 @@ fn a_seal_that_is_a_link_a_fifo_or_too_large_is_unreadable() {
     }
     fs::remove_file(&seal).unwrap();
     fs::write(&seal, &sealed).unwrap();
-    assert!(!unpack(&path, &order, &limits(), &rig.host()).unwrap().fresh);
+    assert!(
+        !unpack(&path, &order, &limits(), &rig.host(), Platform::Linux)
+            .unwrap()
+            .fresh
+    );
 }
 
 /// Catches a file that became a link or a special file before the read-back being taken for a
@@ -684,7 +751,7 @@ fn a_staged_file_replaced_by_a_link_or_a_fifo_is_not_as_written() {
                 fs::set_permissions(&bin, fs::Permissions::from_mode(0o555)).unwrap();
             },
         );
-        let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+        let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
         assert!(
             matches!(
                 &err,
@@ -706,7 +773,7 @@ fn a_version_that_cannot_be_looked_at_is_tried_again_and_left_alone() {
     let (rig, path, order) = unpacked("u-lookup");
     let before = state_of(&rig);
     let fake = Faulty::new(rig.host()).fail(Box::new(|c| matches!(c, Call::Exists(_))), 0, 5);
-    let err = unpack(&path, &order, &limits(), &fake).unwrap_err();
+    let err = unpack(&path, &order, &limits(), &fake, Platform::Linux).unwrap_err();
     assert!(
         matches!(&err, UnpackError::Io { what, .. } if *what == "cannot look at the version"),
         "{err:?}"

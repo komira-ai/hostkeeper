@@ -111,6 +111,7 @@ fn claims_under(root: &Path) -> Claims {
         &root.join("net"),
     )
     .claims()
+    .expect("Linux claims are never an error")
 }
 
 /// Catches claims read untrimmed, a loopback or duplicate address claimed, or addresses in the
@@ -142,6 +143,9 @@ fn linux_claims_are_trimmed_sorted_and_without_loopback() {
             product_serial: Some("SN-42".into()),
             product_uuid: Some("4c4c4544-0000-1000-8000-000000000001".into()),
             network_addresses: vec!["02:00:00:00:00:01".into(), "02:00:00:00:00:02".into()],
+            mac_serial: None,
+            platform_uuid: None,
+            bmc_mac: None,
         }
     );
 }

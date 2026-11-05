@@ -17,14 +17,16 @@
 //!
 //! Its own types are in [`beat`] (what is sent, and the bound it keeps), [`order`] (the order,
 //! the verdict and the reply) and [`names`] (the typed words of an order). The one file it
-//! writes is the deferral of [`deferral`]. The fakes of every port are in `testing`, behind the
-//! feature `testing`.
+//! writes is the deferral of [`deferral`]. [`PkiCertSource`] is the file-based [`CertSource`]:
+//! the pair under the `current` link of the pki directory, read at every heartbeat. The fakes of
+//! every port are in `testing`, behind the feature `testing`.
 
 pub mod beat;
 pub mod deferral;
 pub mod heartbeater;
 pub mod names;
 pub mod order;
+pub mod pki;
 pub mod ports;
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -38,7 +40,10 @@ pub use heartbeater::{
     ACKED_KEPT, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
 };
 pub use names::{OrderId, PackageDigest, Reason, WordError};
-pub use order::{DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb};
+pub use order::{
+    Acknowledged, DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
+};
+pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, HeldHalts, Job,
     LinkError, Log, Observation, OrderSink, RecordedService, ReplyFault, ServiceObserver,

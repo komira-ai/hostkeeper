@@ -1,0 +1,31 @@
+# kbf's own service as an entry of a rollout file (the coordinator's --rollout-file). It was
+# built in to the coordinator that kbf shipped; here it is plain data like any other service.
+#
+# kbf's four roles. What kbf's definition also said, that a frontend is never the last one up
+# and waits for every other role, and that a desired state names its `min_up` keys, is not a
+# rollout setting any more: the coordinator decides on no order of roles and no number of hosts
+# up.
+
+[[service]]
+name = "kbf"
+roles = ["frontend", "storage", "daemon", "mac-daemon"]
+
+# tierstore as a service of the coordinator. An entry of a rollout file: appended to the file
+# named by --rollout-file (after kbf's own entry), it makes tierstore a service the coordinator
+# rolls to the hosts of the storage role.
+#
+# The first host goes alone, and no other starts until it has beaten healthy three times at the
+# new version; one host updates at a time. A release that fails after its commit on two hosts is
+# rolled back by the coordinator to the last version that converged and baked.
+
+[[service]]
+name = "tierstore"
+roles = ["storage"]
+bake_beats = 3
+canary = { count = 1 }
+rollback = "automatic"
+rollback_after_failed = { percent = 25, min_hosts = 2 }
+install_when_absent = false
+
+[service.selector]
+roles = ["storage"]

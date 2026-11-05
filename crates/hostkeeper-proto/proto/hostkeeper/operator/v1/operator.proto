@@ -21,19 +21,26 @@
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
 // request changes nothing.
 //
-// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
-// A version is the release's version string: 1 to 128 bytes, a digit first, then letters,
-// digits and `.+~-`. A service name is 1 to 64 bytes of `[a-z0-9-]`; a node id 1 to 63 bytes of
-// `[a-z0-9-]`, not starting or ending with `-`; a role name 1 to 32 bytes of `[a-z0-9-]`, a
-// letter first. A reason is 1 to 256 bytes once trimmed, with no control character. A count of
-// hosts per role is 0 to 10000. A host id is a node id. A request id and a key hash are SHA-256
+// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`). A
+// service name is 1 to 255 bytes of the POSIX portable filename characters (`A-Za-z0-9._-`), not
+// beginning with `-` or `.`; a version the same with `+` added. A node id is 1 to 63 bytes of
+// `[a-z0-9-]`, not starting or ending with `-`; a role name 1 to 32 bytes of `[a-z0-9-]`, a letter
+// first. A reason is 1 to 256 bytes once trimmed, with no control character. A count of hosts per
+// role is 0 to 10000. A host id is a node id. A request id and a key hash are SHA-256
 // as 64 lower-case hex characters. A `limit` is capped at 256, and 0 means the cap.
 //
 // Enrollment: the hosts that asked for a certificate (`Enroll` of `hostkeeper.agent.v1`) and
-// wait for an operator. `Enrollment` takes the operator token only; no CI token reaches it. An
+// wait for an operator. The `Enrollment` service, `EnrollmentRefusal` and their messages are in
+// enrollment.proto, in this package. `Enrollment` takes the operator token only; no CI token reaches it. An
 // approval names the SHA-256 of the pending request's key, so it cannot admit another key. Its
 // answers carry no CSR bytes and no nonce value; the certificate goes to the host at its next
 // `Poll`, never through this API. Its ids, names and `limit` follow the units above.
+// `Enrollment` also keeps the host inventory: one record per server, which the operator adds
+// when building it (host id, optional role, data MACs, BMC MAC, optional serial and notes).
+// `List` shows each pending request matched against the records; a match fills in a host id
+// and a role and approves nothing. A MAC is six octets of two hex digits, separated all by `:`
+// or all by `-`, or twelve hex digits, in either case, and is answered as lower-case
+// `aa:bb:cc:dd:ee:ff`.
 //
 // Audit: the changes the coordinator made, as `AuditEntry` rows numbered by `seq`, read with
 // `Audit.List` and paged by `since_seq`, newest last. `Audit` takes the operator token only; no
@@ -114,15 +121,6 @@ service Services {
   // Release a hold: the pairs it held are ordered to the then-desired version at their next
   // heartbeat.
   rpc Unhold(UnholdRequest) returns (UnholdResponse);
-}
-
-// The hosts waiting for an operator to approve their enrollment.
-service Enrollment {
-  // The pending requests, oldest first, a page at a time.
-  rpc List(ListPendingRequest) returns (ListPendingResponse);
-  // Approve a pending request: the host gets its certificate at its next `Poll`, with the host
-  // id, role and services the approval names.
-  rpc Approve(ApproveRequest) returns (ApproveResponse);
 }
 
 // The coordinator's audit log.
@@ -217,43 +215,6 @@ enum ServicesRefusal {
   SERVICES_REFUSAL_STORE_FAILED = 8;
 }
 
-// Why `Enrollment` refused a request. The token is the value's name without the prefix, in lower
-// case.
-enum EnrollmentRefusal {
-  ENROLLMENT_REFUSAL_UNSPECIFIED = 0;
-  // UNAUTHENTICATED: no bearer, or not the operator token.
-  ENROLLMENT_REFUSAL_UNAUTHORIZED = 1;
-  // PERMISSION_DENIED: the bearer is a valid CI token, which `Enrollment` does not take.
-  ENROLLMENT_REFUSAL_FORBIDDEN = 2;
-  // NOT_FOUND: the coordinator holds no request with the id.
-  ENROLLMENT_REFUSAL_UNKNOWN_REQUEST = 3;
-  // FAILED_PRECONDITION: `key_sha256` is not the SHA-256 of the pending request's key.
-  ENROLLMENT_REFUSAL_KEY_MISMATCH = 4;
-  // ALREADY_EXISTS: another host holds the host id, and `replace` is not set.
-  ENROLLMENT_REFUSAL_HOST_ID_TAKEN = 5;
-  // RESOURCE_EXHAUSTED: the pending queue is full. `Enroll` returns it, as `pending_full` of
-  // `CoordinatorRefusal`; it is listed here so that this enum names every enrollment refusal.
-  ENROLLMENT_REFUSAL_PENDING_FULL = 6;
-  // FAILED_PRECONDITION: the request is flagged `duplicate_claim`, and `replace` is not set.
-  ENROLLMENT_REFUSAL_DUPLICATE_CLAIM = 7;
-  // INVALID_ARGUMENT: the host id breaks its rule.
-  ENROLLMENT_REFUSAL_INVALID_HOST_ID = 8;
-  // INVALID_ARGUMENT: the role breaks its rule.
-  ENROLLMENT_REFUSAL_INVALID_ROLE = 9;
-  // INVALID_ARGUMENT: a service name breaks its rule, or names no service the coordinator
-  // manages.
-  ENROLLMENT_REFUSAL_INVALID_SERVICE = 10;
-  // INVALID_ARGUMENT: another field breaks its rule (a request id, a key hash, a reason, a page
-  // token).
-  ENROLLMENT_REFUSAL_INVALID_REQUEST = 11;
-  // FAILED_PRECONDITION: the request is no longer pending: it was approved, issued or denied.
-  ENROLLMENT_REFUSAL_NOT_PENDING = 12;
-  // FAILED_PRECONDITION: an operator denied the host id, and `replace` is not set.
-  ENROLLMENT_REFUSAL_DENIED = 13;
-  // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
-  ENROLLMENT_REFUSAL_STORE_FAILED = 14;
-}
-
 // Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.
 enum AuditRefusal {
   AUDIT_REFUSAL_UNSPECIFIED = 0;
@@ -276,8 +237,8 @@ message AuditEntry {
   // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
   // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
   // `set_min_version`, `hold`, `unhold`, `abort`, `exclude_abandon`, `enroll_approve`,
-  // `enroll_replace`, `enroll_approve_refused`, `mac_auto_approve_declined`). Open: a later
-  // coordinator adds actions.
+  // `enroll_replace`, `enroll_approve_refused`, `mac_auto_approve_declined`, `record_add`,
+  // `record_remove`). Open: a later coordinator adds actions.
   string action = 3;
   // The service, when the change is about one.
   optional string service = 4;
@@ -917,62 +878,6 @@ message UnholdRequest {
 
 message UnholdResponse {
   AuditEntry entry = 1;
-}
-
-message ListPendingRequest {
-  // The most requests to return; capped at 256, and 0 means the cap.
-  uint32 limit = 1;
-  // Where to go on, as `next_page_token` gave it; empty for the first page.
-  string page_token = 2;
-}
-
-message ListPendingResponse {
-  // Oldest first.
-  repeated PendingEnrollment requests = 1;
-  // The token of the next page; empty on the last.
-  string next_page_token = 2;
-}
-
-// One pending enrollment request. It never carries the CSR bytes or a nonce value.
-message PendingEnrollment {
-  string request_id = 1;
-  // The SHA-256 of the request's key, which an approval must name.
-  string key_sha256 = 2;
-  // What the host says it is; claims authorise nothing.
-  hostkeeper.agent.v1.Claims claims = 3;
-  // The image the host's daemon came from, as it named it.
-  string image = 4;
-  // When the coordinator first received the request.
-  uint64 first_seen_unix = 5;
-  // The host id this request would return, for a host whose certificate expired; empty
-  // otherwise.
-  string renewal_of = 6;
-  // Another host presents the same machine id or key.
-  bool duplicate_claim = 7;
-  // The request carried a Mac nonce (its value is never listed).
-  bool mac_nonce_presented = 8;
-}
-
-message ApproveRequest {
-  string request_id = 1;
-  // The SHA-256 of the pending request's key, as `PendingEnrollment.key_sha256` lists it.
-  string key_sha256 = 2;
-  // The host id the certificate names.
-  string host_id = 3;
-  string role = 4;
-  // Services to assign to the host; may be empty.
-  repeated string services = 5;
-  // Take the host id from the host that holds it, revoking that host's certificate; also needed
-  // to approve a `duplicate_claim` request or a denied host id.
-  bool replace = 6;
-  string reason = 7;
-}
-
-message ApproveResponse {
-  string host_id = 1;
-  // Always true: the certificate goes to the host at its next `Poll`, never in this answer.
-  bool certificate_issued_at_poll = 2;
-  AuditEntry entry = 3;
 }
 
 message ListAuditRequest {

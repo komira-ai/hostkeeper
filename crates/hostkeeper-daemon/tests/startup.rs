@@ -10,14 +10,13 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
-use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::cli::{
     self, Cli, Command, DEFAULT_ADMIN_SOCKET, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR,
     DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED, Unwired,
 };
-use hostkeeper_daemon::packages::{PackageError, Packages};
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
-use hostkeeper_daemon::verb::PackageDigest;
+use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
+use hostkeeper_placed::{UnitControl, UnitControlError};
 use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::{LaunchError, StepLauncher};
@@ -154,7 +153,7 @@ fn what_is_in_the_way_of_the_socket_stops_start_up_and_is_left_alone() {
 async fn a_real_connection_from_a_non_root_uid_is_closed() {
     let rig = Rig::new("real-sock");
     let started = start(&rig).expect("started");
-    let served = tokio::spawn(start::serve(started));
+    let served = tokio::spawn(start::serve(started, support::idle_links()));
     let path = rig.socket.clone();
     let connector = tower::service_fn(move |_: Uri| {
         let path = path.clone();
@@ -198,11 +197,13 @@ fn the_command_line_exits_with_the_config_errors_status() {
 }
 
 /// Catches a default that drifts from the documented one, or a flag read from somewhere else:
-/// `hostkeeper daemon` alone has the four defaults, the daemon config is trusted when root owns
-/// it, and the README states each default and each exit status.
+/// `hostkeeper daemon` alone has the four defaults and no readiness notice, the daemon config is
+/// trusted when root owns it, and the README states each default and each exit status.
 #[test]
 fn daemon_flag_defaults_are_the_documented_ones() {
-    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
+        panic!("`hostkeeper daemon` parses as the daemon command");
+    };
     assert_eq!(
         flags,
         DaemonFlags {
@@ -210,6 +211,10 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             state_dir: DEFAULT_STATE_DIR.into(),
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
             admin_socket: DEFAULT_ADMIN_SOCKET.into(),
+            notify_systemd: false,
+            link: LoopFlags {
+                heartbeat_secs: DEFAULT_HEARTBEAT_SECS,
+            },
         }
     );
     assert_eq!(flags.settings().trusted_uid, 0);
@@ -220,6 +225,8 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--state-dir` | `{DEFAULT_STATE_DIR}`"),
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
         format!("`--admin-socket` | `{DEFAULT_ADMIN_SOCKET}`"),
+        "`--notify-systemd` | off".to_owned(),
+        format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
         format!("| {EXIT_CONFIG} |"),
@@ -254,17 +261,19 @@ fn the_locked_and_config_errors_exit_with_distinct_codes() {
     );
 }
 
-/// Catches a build without a launcher or package store running something: each port refuses,
-/// and an order on them ends without running a step.
+/// Catches a build without a launcher or service manager running something: each
+/// port refuses, naming what it was asked, and an order on them ends without running a step.
 #[test]
 fn the_unwired_ports_refuse_everything() {
     assert!(matches!(Unwired.stop("u"), Err(LaunchError::Launcher(why)) if why == UNWIRED));
-    let refused = Unwired.version_dir(
-        &ServiceName::new("web").expect("name"),
-        &Version::new("1.0.0").expect("version"),
-        &PackageDigest::new(&"ab".repeat(32)).expect("digest"),
-    );
-    assert_eq!(refused, Err(PackageError::Other(UNWIRED.to_owned())));
+    let unwired = |action: &str| UnitControlError {
+        action: action.to_owned(),
+        why: UNWIRED.to_owned(),
+    };
+    assert_eq!(Unwired.daemon_reload(), Err(unwired("daemon-reload")));
+    assert_eq!(Unwired.stop_unit("u"), Err(unwired("stop u")));
+    assert_eq!(Unwired.start_unit("u"), Err(unwired("start u")));
+    assert_eq!(Unwired.is_active("u"), Err(unwired("is-active u")));
     let rig = Rig::new("unwired");
     rig.add("web", "2.0.0");
     let mut ports = rig.ports();
@@ -276,4 +285,37 @@ fn the_unwired_ports_refuse_everything() {
         "{reply:?}"
     );
     assert!(rig.launcher.runs().is_empty());
+}
+
+/// Catches `hostkeeper ci` missing from the binary, or run as the daemon: the CI client's
+/// subcommand parses and runs the client, which refuses a malformed service name with a usage
+/// error (exit 2) before it requests any token or reads any file.
+#[test]
+fn hostkeeper_ci_runs_the_ci_client() {
+    let digest = "0".repeat(64);
+    let args = [
+        "hostkeeper",
+        "ci",
+        "set-desired",
+        "--service",
+        "not a service",
+        "--version",
+        "1.0.0",
+        "--package-digest",
+        &digest,
+        "--endpoint",
+        "https://coordinator.example",
+        "--ca-file",
+        "ca.pem",
+        "--audience",
+        "my-service-release",
+        "--work-dir",
+        "work",
+        "--web-roots",
+        "roots.pem",
+    ];
+    let cli = Cli::try_parse_from(args).expect("`hostkeeper ci set-desired` parses");
+    assert!(matches!(cli.command, Command::Ci(_)), "{cli:?}");
+    let code = cli::run(cli);
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(2)));
 }

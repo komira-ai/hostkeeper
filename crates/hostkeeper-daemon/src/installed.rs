@@ -39,3 +39,31 @@ pub fn service_dirs(dir: &Path) -> io::Result<BTreeMap<String, ServiceName>> {
     }
     Ok(out)
 }
+
+/// Where a service is in its life on the host (design section 6.1), as the daemon knows it from
+/// its own files: its tombstone in `placed.json`, `current`, its lock and its step record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lifecycle {
+    /// No release is installed: `current` names none.
+    Absent,
+    /// Its first install is under way: no release is installed, and an order holds the service
+    /// or the step record holds an unfinished order.
+    Installing,
+    /// A release is installed: `current` names it.
+    Running,
+    /// Its uninstall is unfinished: its tombstone stands.
+    Removing,
+}
+
+impl Lifecycle {
+    /// The lifecycle of a service that is `tombstoned`, has a release `installed`, and is `busy`
+    /// (an order holds its lock, or its record holds an unfinished order).
+    pub fn of(tombstoned: bool, installed: bool, busy: bool) -> Lifecycle {
+        match (tombstoned, installed, busy) {
+            (true, _, _) => Lifecycle::Removing,
+            (false, true, _) => Lifecycle::Running,
+            (false, false, true) => Lifecycle::Installing,
+            (false, false, false) => Lifecycle::Absent,
+        }
+    }
+}

@@ -766,14 +766,15 @@ fn every_new_refusal_enum_has_the_zero_value_unspecified_and_a_code_comment_per_
             codes.insert((refusal, token), code);
         }
     }
-    let operator = ours(&built)
+    // The package is two files (operator.proto and enrollment.proto); each enum is in one.
+    let operator: Vec<_> = ours(&built)
         .into_iter()
-        .find(|f| f.package() == "hostkeeper.operator.v1")
-        .expect("the operator file");
+        .filter(|f| f.package() == "hostkeeper.operator.v1")
+        .collect();
     for name in ["AuditRefusal", "EnrollmentRefusal"] {
         let refusal = operator
-            .enum_type
             .iter()
+            .flat_map(|f| f.enum_type.iter())
             .find(|e| e.name() == name)
             .expect("the refusal enum");
         assert_eq!(zero_problem(refusal), None);

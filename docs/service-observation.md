@@ -92,5 +92,7 @@ Everything above is pure logic over four ports (`ServiceManager`, `ProcessProbe`
 
 kbf's agent took liveness from services on a registration socket, `/run/updater/register.sock`.
 hostkeeper does not carry it. At start, before any unit is touched, the daemon calls
-`unlink_stale_registration_socket` with its run directory: a `register.sock` left there is
-removed (whatever its file kind), a missing one is fine, and any other error stops the start.
+`unlink_stale_registration_socket` with its run directory (`updater` beside the admin
+socket's directory, `/run/updater` by default), right after it takes the lock on the state
+directory: a `register.sock` left there is removed (whatever its file kind), a missing one is
+fine, and any other error stops the start.

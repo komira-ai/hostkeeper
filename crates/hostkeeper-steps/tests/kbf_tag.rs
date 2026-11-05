@@ -52,6 +52,8 @@ fn expected(name: &str) -> Record {
         hook: HookSel::New,
         progress: Progress::default(),
         order_try: None,
+        forced: false,
+        force: None,
     };
     match name {
         "pending" => Record {
@@ -87,6 +89,7 @@ fn expected(name: &str) -> Record {
                 verify_started: None,
                 watching: None,
                 reason: Some("remote_down".to_owned()),
+                awaiting_restart: None,
             },
             ..base("api", "1.4.2", 12, Step::Rollback)
         },
@@ -296,8 +299,11 @@ fn kbf_ci_record() -> Record {
             verify_started: Some(stamp("b", 7)),
             watching: None,
             reason: Some("remote_down".to_owned()),
+            awaiting_restart: None,
         },
         order_try: None,
+        forced: false,
+        force: None,
     }
 }
 

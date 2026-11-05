@@ -71,6 +71,7 @@ fn only_an_update_below_the_running_version_is_refused() {
         );
     }
     assert_eq!(HookedVerb::ForceRollback.name(), "force_rollback");
+    assert_eq!(HookedVerb::Install.name(), "install");
 }
 
 /// Catches a token outside the protobuf files' grammar, or two refusals sharing a token.
@@ -139,6 +140,8 @@ fn record(version: &str, order_try: Option<u64>, state: State) -> Record {
         hook: HookSel::New,
         progress: Progress::default(),
         order_try,
+        forced: false,
+        force: None,
     }
 }
 
@@ -266,7 +269,17 @@ fn each_way_the_runner_stops_has_its_token() {
         ),
         (RunError::RecordNewer(2), Refusal::RecordNewer),
         (
+            RunError::Switch("cannot link /x".to_owned()),
+            Refusal::LinkFailed,
+        ),
+        (
             RunError::BadOrder("the service name"),
+            Refusal::InvalidOrder,
+        ),
+        (
+            RunError::UnitNameTooLong {
+                service: "a".repeat(210),
+            },
             Refusal::InvalidOrder,
         ),
     ];

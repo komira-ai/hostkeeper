@@ -23,8 +23,12 @@ thiserror.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
-# The manifest loader the package test loads the produced `manifest.toml` with.
+# The packaging test (tests/packaging) loads the config template with the daemon config's loader,
+# and the package test loads the produced `manifest.toml` with the manifest loader.
 hostkeeper-config = { path = "../hostkeeper-config" }
+# The packaging test (tests/packaging/daemon_flags.rs) parses the unit's command lines with the
+# binary's own flag parser and reads its default paths.
+hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 # The daemon's unpacker (design 5.5), which the package test unpacks the produced archive with.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 saphyr-parser.workspace = true
