@@ -70,15 +70,78 @@ claims (machine id, DMI serial and product uuid, network addresses) are left emp
 Linux claim, which is absent when it cannot be read, a missing or malformed Mac value is an error
 that stops enrollment before any request is posted. No placeholder is ever sent.
 
+### launchd adapters, behind ports
+
+The crate [`hostkeeper-launchd`](../crates/hostkeeper-launchd) holds the launchd side of the
+ports the daemon already has: labels, the plists of the daemon and of a step job, the
+`launchctl` port and its reader of `launchctl print`, the observer's service manager and
+process probe, and the unit control of the linking side. It is tested against fakes on Linux
+and is not wired into the daemon yet; nothing of it has run on a Mac.
+
+#### One daemon, run by launchd
+
+On macOS the daemon is one launchd daemon run as root, the same `hostkeeper daemon` as on Linux.
+Its label is `<REVERSE_DNS_PREFIX>.hostkeeper`, with `REVERSE_DNS_PREFIX` = `dev.hostkeeper`. The
+maintainers must confirm the prefix before any Mac enrolls, since a label is the identity of a job.
+
+| what | where |
+|---|---|
+| config | `/etc/hostkeeper/hostkeeper.toml` |
+| state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
+| admin socket | `/var/run/hostkeeper/admin.sock` (macOS has a read-only root and no `/run`) |
+| units linked from a package | `/Library/LaunchDaemons/<label>.plist` (the linking is not built yet) |
+| the daemon's plist program | `/usr/local/bin/hostkeeper` |
+| the daemon's logs | `/var/log/hostkeeper` |
+
+The daemon's plist runs `hostkeeper daemon` at load and keeps it alive. It names no user, no
+sandbox profile and no environment.
+
+#### A hook step is one launchd job
+
+Each hook step is meant to run as one launchd job with the label
+`<prefix>.hostkeeper.step.<service>.<step>.<generation>`. The job would run as root, for the timeout,
+the kill and the capture of the step's output only. Its plist has no sandbox profile and no `UserName`, and it has no rights, because a hook runs as root from a
+verified release (design 5.3 and 5.9). A step that is tried again keeps its label, so a resumed run finds and stops the same job.
+
+#### Service state
+
+The state of a service is read from `launchctl print system/<label>`:
+
+| launchd | state |
+|---|---|
+| running | active |
+| spawn scheduled | activating |
+| waiting or not running, last exit 0 or none | inactive |
+| waiting or not running, non-zero last exit or a terminating signal | failed |
+| the label is not loaded | not found |
+
+A `launchctl` that fails, times out, or prints text the reader does not understand is unobserved:
+the observer reports an error and never a state. The output of `launchctl print` is not a stable
+interface; the reader is written against hand-made samples and is to be checked against output
+captured on a device.
+
+#### Process identity
+
+The process behind a unit is identified by its pid and start time, and the file it runs is found
+with `proc_pidpath`. Its digest is taken from the file opened by that path, and the device and
+inode of the path before and after the read must be the same, so a file replaced while it is hashed
+is refused.
+
+#### Units in a package
+
+A package's `units/` may hold `<label>.plist` files. A label is the service name or starts with
+`<service>.`. The manifest's `[units] run` then names labels instead of systemd unit names.
+
 ## Specified, not built yet
 
-- The launchd daemon `com.<reverse-dns>.hostkeeper`, the launchd job per hook step (timeout,
-  kill and log capture only), the macOS paths and the placed plists in `/Library/LaunchDaemons`.
+- The daemon run under launchd with the adapters above wired in, the launcher that runs a hook
+  step as a launchd job (timeout, kill and log capture only), and the placed plists in
+  `/Library/LaunchDaemons`.
 - The real adapters behind the ports above: the quarantine read (`listxattr`/`getxattr`),
   `codesign` run with a fixed argument list, and `ioreg`.
 - The self-update verb's decision on a Mac: whether the new binary failed its burst of starts
   within the window, from the starts the daemon recorded.
-- Process identity by `proc_pidpath` plus a device and inode check, and what the observer reports
-  when the path was replaced while the process runs.
+- Whether `proc_pidpath` of a binary replaced while it runs tells the truth on a device (the
+  probe above refuses a path whose device and inode changed while it was read).
 - The device run: the daemon under launchd on a GitHub-hosted macOS runner, in the workflow that
   runs on pushes to `main` and on dispatch, never on a pull request.

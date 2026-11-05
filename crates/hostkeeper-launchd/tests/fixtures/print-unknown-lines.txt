@@ -1,0 +1,29 @@
+# A hand-written sample of the `launchctl print` format, to be replaced by output captured on a
+# device.
+system/dev.hostkeeper.hostkeeper = {
+
+
+    active count = 1
+    a line without an equals sign
+    path = /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist
+    endpoints = {
+        "dev.hostkeeper.socket" = {
+            port = 0
+            state = active
+        }
+    }
+    future key = some future value
+    state = running
+
+      properties = keepalive | runatload
+    event triggers = {
+        example.trigger => {
+            state = active
+        }
+    }
+
+    pid = 4242
+
+    last exit code = (never exited)
+}
+this line follows the closing brace and is ignored
