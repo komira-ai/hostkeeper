@@ -29,7 +29,7 @@ fn loaded(info: &JobInfo) -> Result<UnitState, String> {
         info.last_terminating_signal.is_some() | info.last_exit_status.is_some_and(|c| c != 0);
     let (active, main_pid) = match &info.state {
         JobState::Running => (ActiveState::Active, info.pid),
-        JobState::SpawnScheduled => (ActiveState::Activating, None),
+        JobState::SpawnScheduled | JobState::Spawning => (ActiveState::Activating, None),
         // One arm and one `if`: a guard on an or-pattern is a branch per alternative.
         JobState::Waiting | JobState::NotRunning => {
             let active = if failed {

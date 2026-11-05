@@ -3,7 +3,7 @@
 The macOS side of the host daemon: the same daemon, flow, config and package paths as on Linux, with
 the ports that differ implemented over launchd. How it is meant to run:
 [docs/macos.md](../../docs/macos.md). This page states what the code holds. It is tested against
-fakes on Linux and has not been run on a Mac.
+fakes on Linux, and on a Mac in `.github/workflows/privileged.yml`'s job `macos-device`.
 
 | module | what it holds |
 |---|---|
@@ -12,7 +12,7 @@ fakes on Linux and has not been run on a Mac.
 | `launchctl` | the `Launchctl` port (one command), its real adapter `LaunchctlProcess` with a deadline and bounded output, the reader of `launchctl print system/<label>`, and print and bootout by label |
 | `fake` | `FakeLaunchctl`: scripted answers per exact arguments, and the calls made |
 | `manager` | `LaunchdServiceManager`: the observer's `ServiceManager` over `launchctl print` |
-| `procid` | `LaunchdProcessProbe`: the observer's `ProcessProbe` over `proc_pidpath` and a device and inode check; the `PidInfo` and `FileIdentity` ports |
+| `procid` | `LaunchdProcessProbe`: the observer's `ProcessProbe` over `proc_pidpath` and a device and inode check, against the path and against the image the process has mapped (`PidInfo::image`), so a file renamed over the path is an error, not its digest; the `PidInfo` and `FileIdentity` ports |
 | `launcher` | `LaunchdLauncher`: the step runner's `StepLauncher`, each step a transient launchd job read until it ends, booted out at its bound (none for an unbounded `prepare`), its output kept in the same capture ring as on Linux; the `Pace` port for its clock. `LaunchdLauncher::system` is compiled on macOS only |
 | `unit_control` | `LaunchdUnitControl`: the linking side's `UnitControl` over `launchctl`, reloading the plists that were linked, changed or removed |
 | `platform` | `Platform`: the unit directory, unit suffix, admin socket and label prefix of Linux and of macOS |

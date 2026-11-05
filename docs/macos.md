@@ -23,6 +23,14 @@ is read or the tree is sealed:
   package's attestation (design section 5.5, step 2). Hook scripts and other files that are
   not Mach-O have no signature and are not checked.
 
+The daemon on a Mac gives the unpack its real check (`hostkeeper_daemon::mac::HostMacVerify`):
+the attribute is read with `getxattr` on the entry itself, never through a link, and the signature
+is judged by `/usr/bin/codesign --verify --strict <path>`, run with that fixed argument list, no
+shell, an empty environment, at most 64 KiB of each output stream kept, and killed after 30
+seconds. `codesign` exit 0 is a valid signature; exit 1 is `unsigned` when it says the file is
+`not signed at all` and `invalid_signature` with its words otherwise; any other end means the check
+was not made.
+
 A quarantined entry, an unsigned binary or an invalid signature fails the order: `Failed`, class
 `release`, reason `bad_archive`, with the relative path in the detail. A check that cannot be
 made (the tool could not run, was killed or did not finish) is `Deferred`, class
@@ -61,6 +69,29 @@ serve it:
   The plist is deterministic (keys sorted, fixed indentation) and every path and the label in
   it are XML-escaped.
 
+Since the timer runs the verb whether or not the new binary is failing, the verb decides the
+burst itself on a Mac (`hostkeeper_daemon::fallback::fallback_after_burst`). Each start of the
+daemon on a Mac first adds itself to the start log, `<state-dir>/hostkeeper/starts` (its version
+and a stamp of the monotonic clock; the last 16 starts are kept). The verb then flips `current`
+back, writes `Failed` after the commit and marks the version bad (the same code as the systemd
+fallback runs) only when all of these hold; otherwise it changes nothing and exits 0, and the next
+run of the timer looks again:
+
+- the step record of `hostkeeper` waits for the restart into a version;
+- no daemon holds the state directory's lock (a daemon that runs is not failing to start), and
+  the verb holds that lock while it falls back;
+- no other service's step record holds an unfinished update (the rule of the self-update order);
+- the start log holds 3 starts of that version within 300 seconds, the latest less than 300
+  seconds ago (`hostkeeper_steps::should_fall_back`, the rule of the systemd drop-in's
+  `StartLimitBurst=3` and `StartLimitIntervalSec=300`, the same two constants).
+
+A start is written by the daemon itself, first thing; a new binary the system kills before it
+runs any of its code (a refused signature, another architecture) writes none, so this rule does
+not fall back from it.
+
+On Linux the verb falls back at once, as before: systemd has already counted the starts, and
+nothing writes the start log.
+
 ### Enrollment claims
 
 A Mac's enrollment request claims its serial number (`IOPlatformSerialNumber`) and its platform
@@ -77,7 +108,14 @@ The crate [`hostkeeper-launchd`](../crates/hostkeeper-launchd) holds the launchd
 ports the daemon already has: labels, the plists of the daemon, of a step job and of a service package's job, the
 `launchctl` port and its reader of `launchctl print`, the observer's service manager and
 process probe, the unit control of the linking side, and the step launcher. It is tested against
-fakes on Linux and is not wired into the daemon yet; nothing of it has run on a Mac.
+fakes on Linux, and on a Mac in the device run below.
+
+The daemon picks its adapters by the platform it was built for
+(`hostkeeper_daemon::adapters::Adapters::for_platform`): on a Mac the step launcher, the
+observer's service manager and process probe, and the unit control over `launchctl` and
+`/Library/LaunchDaemons`, the package check above, and the Mac claims; on Linux what it ran
+before. The admin socket's default is the platform's (`/var/run/hostkeeper/admin.sock` on a Mac),
+in a directory the daemon makes mode 0700.
 
 #### One daemon, run by launchd
 
@@ -163,6 +201,7 @@ The state of a service is read from `launchctl print system/<label>`:
 |---|---|
 | running | active |
 | spawn scheduled | activating |
+| xpcproxy (launchd's spawn helper runs, before the job's program does) | activating |
 | waiting or not running, last exit 0 or none | inactive |
 | waiting or not running, non-zero last exit or a terminating signal | failed |
 | the label is not loaded | not found |
@@ -175,9 +214,25 @@ captured on a device.
 #### Process identity
 
 The process behind a unit is identified by its pid and start time, and the file it runs is found
-with `proc_pidpath`. Its digest is taken from the file opened by that path, and the device and
-inode of the path before and after the read must be the same, so a file replaced while it is hashed
-is refused.
+with `proc_pidpath`. A path names a file, and a new file can be renamed over that path while the
+process runs, so the probe also reads the device and inode of the executable the process has
+mapped (`proc_pidinfo` with `PROC_PIDREGIONPATHINFO`: the lowest region backed by a regular file,
+the main executable's text, read from the mapped vnode and not from a path). The path's device and
+inode must be the image's, and the same again on the file opened to hash it;
+otherwise the round is `unobserved` (`proc_error`), never a version confirmed from the new file.
+
+What the device run found on macOS 15 (arm64):
+
+| case | `proc_pidpath` | the image's (device, inode) | the probe |
+|---|---|---|---|
+| file unchanged | the path it was started from | the file's | its digest |
+| a new file renamed over the path | the same path, still | the old file's, not the path's | refused: the path is not the file the process runs |
+| file unlinked | fails (`ENOENT`) | the old file's, still | refused (no path) |
+| started through a symlink | the link's target | the target's | its digest |
+| a path longer than `PROC_PIDPATHINFO_MAXSIZE` | cannot be made: macOS refuses a path over 1024 bytes (`ENAMETOOLONG`), so no process runs from one | | |
+| run by another user | not started on the runner: the scratch directory is not open to `nobody` | | |
+
+So `proc_pidpath` alone is not enough: after a rename over the path it still names the path, whose file is then another. With the image's device and inode it is: a replaced or unlinked file is refused, and never read as the new version.
 
 #### Units in a package
 
@@ -220,16 +275,33 @@ hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
 pkg's plist.
 
+### The device run
+
+The job `macos-device` of `.github/workflows/privileged.yml` runs on a GitHub-hosted arm64 macOS
+runner (`macos-15`) after every merge to `main` and by hand, never on a pull request, as root.
+Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`) are not counted by the coverage
+gate; what they drive is measured against fakes on Linux. They:
+
+- start the daemon as a launchd job of the system domain, with a config and directories of their
+  own, and call `Status` on its admin socket;
+- run the fixture hook in mode `sleep` as a step job through `LaunchdLauncher` with a bound of 5
+  seconds: the job is booted out at the bound, the step has no exit code (a failed step), and
+  launchd no longer holds the job;
+- read a running job, an ended job and an unknown label through the observer's service manager:
+  active, inactive, not found;
+- check the process identity against real processes and print what `proc_pidpath` and the image
+  lookup give when the file is unchanged, renamed over, unlinked, started through a link, at a
+  path longer than `PROC_PIDPATHINFO_MAXSIZE`, and run by another user;
+- check the package check's verdicts on real files: an ad-hoc signed copy of `/usr/bin/true` is
+  valid, one without its signature is unsigned, one with a changed byte is invalid, and a file
+  given `com.apple.quarantine` with `xattr -w` is quarantined.
+
 ## Specified, not built yet
 
-- The daemon run under launchd with the adapters above, the step launcher among them, wired
-  in, and the placed plists in `/Library/LaunchDaemons`.
-- The step launcher run against the real `launchctl` as root on a device.
-- The real adapters behind the ports above: the quarantine read (`listxattr`/`getxattr`),
-  `codesign` run with a fixed argument list, and `ioreg`.
-- The self-update verb's decision on a Mac: whether the new binary failed its burst of starts
-  within the window, from the starts the daemon recorded.
-- Whether `proc_pidpath` of a binary replaced while it runs tells the truth on a device (the
-  probe above refuses a path whose device and inode changed while it was read).
-- The device run: the daemon under launchd on a GitHub-hosted macOS runner, in the workflow that
-  runs on pushes to `main` and on dispatch, never on a pull request.
+- The placed plists of a service package linked into `/Library/LaunchDaemons` by the daemon in a
+  real update (the unit control is wired; a device run of an update is not part of the run above).
+- The version of a running service confirmed by the digest of its executable on a Mac: the sealed
+  executable is found from a systemd unit's `ExecStart=` only, so on a Mac the recorded version is
+  reported unconfirmed.
+- The boot id of the monotonic clock on a Mac (the start log and the step records compare stamps
+  under it).

@@ -189,6 +189,9 @@ pub enum JobState {
     Waiting,
     /// `spawn scheduled`: launchd is about to start the job.
     SpawnScheduled,
+    /// `xpcproxy`: launchd's spawn helper runs for the job, before the job's own program
+    /// executes (seen on a device: the state a job is in for a moment after its bootstrap).
+    Spawning,
     /// `not running` or `exited`: loaded, with no process.
     NotRunning,
     /// Any other word, as printed.
@@ -201,6 +204,7 @@ impl JobState {
             "running" => JobState::Running,
             "waiting" => JobState::Waiting,
             "spawn scheduled" => JobState::SpawnScheduled,
+            "xpcproxy" => JobState::Spawning,
             "not running" | "exited" => JobState::NotRunning,
             other => JobState::Other(other.to_owned()),
         }
@@ -212,6 +216,7 @@ impl JobState {
             JobState::Running => "running",
             JobState::Waiting => "waiting",
             JobState::SpawnScheduled => "spawn scheduled",
+            JobState::Spawning => "xpcproxy",
             JobState::NotRunning => "not running",
             JobState::Other(word) => word,
         }

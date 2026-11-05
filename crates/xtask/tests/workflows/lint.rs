@@ -34,9 +34,10 @@
 //!   scope is not root; outside a pull request it is held to [`WRITE_ALLOWED`].)
 //! - it is [`PRIVILEGED_WORKFLOW`] and its `on` is not exactly `push` with `branches: [main]` and
 //!   nothing else, and `workflow_dispatch` with no inputs (no other trigger, no `tags`, `paths` or
-//!   other filter of `push`), or a job of it runs on a runner that is not in
-//!   [`PRIVILEGED_RUNNERS`]. Every other rule holds for it as for any file; [`WRITE_ALLOWED`] has
-//!   no entry for it, so no job of it holds a write scope.
+//!   other filter of `push`), or a job of it runs on a runner that is not in its list
+//!   ([`privileged_runners`]: [`MACOS_DEVICE_RUNNERS`] for [`MACOS_DEVICE_JOB`], the one macOS
+//!   job, and [`PRIVILEGED_RUNNERS`] for every other). Every other rule holds for it as for any
+//!   file; [`WRITE_ALLOWED`] has no entry for it, so no job of it holds a write scope.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
 //!   ([`release::release_rules`]).
@@ -105,9 +106,28 @@ pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired:
 /// tests, after a merge to main and by hand, never on a pull request.
 pub const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 
-/// The runners a job of [`PRIVILEGED_WORKFLOW`] may run on: GitHub-hosted Ubuntu with systemd as
-/// PID 1 and passwordless `sudo`. No macOS runner, and no `-latest` label that moves under us.
+/// The runners a job of [`PRIVILEGED_WORKFLOW`] may run on, but [`MACOS_DEVICE_JOB`]:
+/// GitHub-hosted Ubuntu with systemd as PID 1 and passwordless `sudo`. No macOS runner, and no
+/// `-latest` label that moves under us.
 pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
+
+/// The one job of [`PRIVILEGED_WORKFLOW`] that runs on macOS: the device run of the launchd
+/// adapters, the process probe and the package check (`crates/hostkeeper-privileged/tests/
+/// device_mac.rs`).
+pub const MACOS_DEVICE_JOB: &str = "macos-device";
+
+/// The runners [`MACOS_DEVICE_JOB`] may run on: GitHub's standard hosted arm64 macOS image of a
+/// named version (passwordless `sudo`, launchd), free for a public repository. No `-latest`
+/// label, and no larger or self-hosted runner.
+pub const MACOS_DEVICE_RUNNERS: &[&str] = &["macos-15"];
+
+/// The runners the job `name` of [`PRIVILEGED_WORKFLOW`] may run on.
+pub fn privileged_runners(name: &str) -> &'static [&'static str] {
+    match name {
+        MACOS_DEVICE_JOB => MACOS_DEVICE_RUNNERS,
+        _ => PRIVILEGED_RUNNERS,
+    }
+}
 
 /// What a [`PRIVILEGED_WORKFLOW`] whose `on` is anything else is refused with.
 pub const PRIVILEGED_ON: &str =
@@ -547,11 +567,12 @@ fn push_to_main_and_dispatch_only(on: Option<&Node>) -> bool {
     triggers.len() == 2 && has("push", &push_to_main) && has("workflow_dispatch", &no_inputs)
 }
 
-/// A job of [`PRIVILEGED_WORKFLOW`] on a runner that is not in [`PRIVILEGED_RUNNERS`]. Labels that
-/// cannot be read are refused by [`runner_problems`] already.
+/// A job of [`PRIVILEGED_WORKFLOW`] on a runner that is not in its list ([`privileged_runners`]).
+/// Labels that cannot be read are refused by [`runner_problems`] already.
 fn privileged_runner_problems(name: &str, job: &Node) -> Vec<String> {
+    let listed = privileged_runners(name);
     match runner_labels(name, job) {
-        Ok(labels) if labels.iter().any(|l| !PRIVILEGED_RUNNERS.contains(l)) => vec![format!(
+        Ok(labels) if labels.iter().any(|l| !listed.contains(l)) => vec![format!(
             "job {name}: privileged job on a runner outside the privileged list"
         )],
         Ok(_) | Err(_) => Vec::new(),

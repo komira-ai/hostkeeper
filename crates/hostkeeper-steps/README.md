@@ -23,6 +23,7 @@ params table, the next-step table) are those of `hostkeeper-hook`.
 | `capture` | `Ring`: the last `RING_BYTES` (1 MiB) of each output stream of a step; the last line of standard output is the report only when it is at most `LAST_LINE_MAX` (64 KiB) and whole, otherwise the report is `{}` and the exit code decides |
 | `deadman` | `Watch` and `DeadMan`: the bound of the running step, enforced on a thread of its own; a stop that did not work is reported to the runner; an unbounded `prepare` is not armed |
 | `selfupdate` | the updater's own update: stage beside (never over what `current` or `previous` names), switch the `current` link, restart; `previous` link and `flip_back` for the `OnFailure=` fallback; the two unit texts. `follow_on` takes the binary from a `Staged` through `Staged::check`. `Layout` is the directory of versions with `current` and `previous`: the updater's binaries (`Layout::new`, `versions/<v>`) or a package's sealed trees (`Layout::package`, `<v>/` with `<v>.seal`, checked by `check_tree`) |
+| `starts` | `StartLog` and `DaemonStart`: the start log of the daemon on macOS (`<state-dir>/hostkeeper/starts`, the last 16 starts, additive JSON), from which the fallback judges the burst with `selfupdate::should_fall_back`, the rule of systemd's `StartLimitBurst=` and `StartLimitIntervalSec=` |
 | `clock` | `Clock`, `Stamp`, `SystemClock`: time and the boot id as inputs |
 
 ## Rules the code keeps

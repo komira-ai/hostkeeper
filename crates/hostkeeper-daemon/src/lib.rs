@@ -22,7 +22,13 @@
 //!   service `hostkeeper` refused while another service's update is unfinished, its new binary's
 //!   protocol checked, its steps run under the step lock, then the follow-on that switches the
 //!   binary and asks the daemon to exit; at start, the update settled by the binary that runs.
-//!   [`fallback`] is the verb `self-update-fallback` the fallback unit runs.
+//!   [`fallback`] is the verb `self-update-fallback` the fallback unit runs (on macOS the
+//!   fallback timer job, and the verb then decides the burst from the start log itself).
+//! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
+//!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
+//!   launchd on macOS), and the claims of its enrollment.
+//! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
+//!   (`ioreg`), over the process port of the launchd adapters.
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
 //!   `current`), the service's version directories but `current` and `previous` are deleted,
 //!   under the lock the order already holds.
@@ -52,6 +58,7 @@
 //! (`hostkeeper_placed::Fs`) and the service observer (`hostkeeper_observe::Observer`). Time is the
 //! `hostkeeper_steps::Clock`; nothing here reads the wall clock.
 
+pub mod adapters;
 pub mod admin;
 pub mod boot;
 pub mod checks;
@@ -65,6 +72,7 @@ pub mod installed;
 pub mod link_adapters;
 pub mod links;
 pub mod locks;
+pub mod mac;
 pub mod notify;
 pub mod observer;
 pub mod packages;

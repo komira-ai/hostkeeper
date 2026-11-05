@@ -22,7 +22,8 @@ use hostkeeper_config::names::{ServiceName, UnitName, Version};
 use hostkeeper_observe::proc::digest_open_file;
 use hostkeeper_observe::{
     Current, Deadline, ExpectedExe, HttpHealthClient, Observation, ObserveOptions, Observer,
-    ProcProbe, ProcessRunner, ServiceInput, SystemdManager, TcpConnect, beat_health,
+    ProcProbe, ProcessProbe, ProcessRunner, ServiceInput, ServiceManager, SystemdManager,
+    TcpConnect, beat_health,
 };
 use hostkeeper_placed::lint::COMMAND_PREFIXES;
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
@@ -164,21 +165,44 @@ impl ExpectedExe for SealedExe {
     }
 }
 
-/// The observer of a host: `systemctl show` for the units, `/proc` for the processes, TCP to
-/// the loopback for health, and the executables sealed under `packages_dir` ([`SealedExe`], the
-/// unit files spelling that directory as it is) to confirm the version, for a daemon of version
-/// `own`. Making it reads nothing.
+/// The observer of a Linux host: `systemctl show` for the units, `/proc` for the processes, TCP
+/// to the loopback for health, and the executables sealed under `packages_dir` ([`SealedExe`],
+/// the unit files spelling that directory as it is) to confirm the version, for a daemon of
+/// version `own`. Making it reads nothing.
 pub fn host_observer(packages_dir: &Path, own: HostkeeperVersion) -> Observer {
+    observer_with(
+        Box::new(systemd_manager()),
+        Box::new(proc_probe()),
+        packages_dir,
+        own,
+    )
+}
+
+/// The observer of a host whose units `manager` reads and whose processes `process` reads:
+/// otherwise as [`host_observer`]. Making it reads nothing.
+pub fn observer_with(
+    manager: Box<dyn ServiceManager>,
+    process: Box<dyn ProcessProbe>,
+    packages_dir: &Path,
+    own: HostkeeperVersion,
+) -> Observer {
     Observer::new(
         hostkeeper_observe::Ports {
-            manager: Box::new(SystemdManager::new(
-                ProcessRunner::new(SYSTEMCTL_OUTPUT_CAP),
-                SYSTEMCTL_DEADLINE,
-            )),
-            process: Box::new(ProcProbe::new(Path::new(PROC))),
+            manager,
+            process,
             health: Box::new(HttpHealthClient::new(TcpConnect)),
             expected: Box::new(SealedExe::new(packages_dir, packages_dir, own)),
         },
         ObserveOptions::default(),
     )
+}
+
+/// The host's systemd: `systemctl show`, bounded in time and output.
+pub fn systemd_manager() -> SystemdManager<ProcessRunner> {
+    SystemdManager::new(ProcessRunner::new(SYSTEMCTL_OUTPUT_CAP), SYSTEMCTL_DEADLINE)
+}
+
+/// The host's `/proc`.
+pub fn proc_probe() -> ProcProbe {
+    ProcProbe::new(Path::new(PROC))
 }

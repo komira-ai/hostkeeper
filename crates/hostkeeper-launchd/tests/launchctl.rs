@@ -294,6 +294,7 @@ fn state_words_round_trip() {
             JobState::SpawnScheduled,
             "spawn scheduled",
         ),
+        ("xpcproxy", JobState::Spawning, "xpcproxy"),
         ("not running", JobState::NotRunning, "not running"),
         ("exited", JobState::NotRunning, "not running"),
         ("odd", JobState::Other("odd".to_owned()), "odd"),

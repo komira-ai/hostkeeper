@@ -3,7 +3,8 @@
 //! CI client a service's release job runs once it has verified this binary (`hostkeeper_ci`,
 //! docs/deploy/ci-client.md), and the two plumbing verbs of hostkeeper's own update (design
 //! section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the
-//! generated fallback unit runs ([`crate::fallback`]), and `hostkeeper self-update-protocol`,
+//! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]), and
+//! `hostkeeper self-update-protocol`,
 //! which prints this binary's self-update protocol and does nothing else
 //! ([`crate::selfupdate::protocol_line`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
@@ -33,28 +34,27 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_ctl::transport::Network;
 use hostkeeper_ctl::{Connect, Io};
 use hostkeeper_enroll::{
-    Enroller, GrpcEnroll, LinuxClaims, OsEntropy, PkiDir, Settings as EnrollSettings,
-    SystemWallClock,
+    Enroller, GrpcEnroll, OsEntropy, PkiDir, Settings as EnrollSettings, SystemWallClock,
 };
+use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
 use hostkeeper_package::gh::{GhVerifier, OwnedBy, SystemRunner};
 use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_package::ports::{Attest, Attested, Verifier, VerifyError};
-use hostkeeper_placed::roots::{STATE_DIR, SYSTEMD_UNIT_DIR};
+use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
-use hostkeeper_steps::{
-    Clock, LaunchError, StepCall, StepExit, StepLauncher, SystemClock, SystemdLauncher,
-};
+use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher, SystemClock};
 use hostkeeper_unpack::Owner;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
+use crate::adapters::{Adapters, host_claims};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
-use crate::hook_log::log_hook_output;
 use crate::links::{DaemonLog, Links, NoLink};
+use crate::mac::HostIoreg;
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
-use crate::observer::host_observer;
+use crate::observer::observer_with;
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::start::{self, Settings, StartError};
@@ -70,8 +70,13 @@ pub const DEFAULT_CONFIG: &str = "/etc/hostkeeper/hostkeeper.toml";
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 /// The default of `--packages-dir`.
 pub const DEFAULT_PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
-/// The default of `--admin-socket`.
-pub const DEFAULT_ADMIN_SOCKET: &str = "/run/hostkeeper/admin.sock";
+/// The default of `--admin-socket`: the host platform's (`hostkeeper_launchd::Platform`'s
+/// `admin_socket`), `/var/run/hostkeeper/admin.sock` on macOS.
+pub const DEFAULT_ADMIN_SOCKET: &str = if cfg!(target_os = "macos") {
+    "/var/run/hostkeeper/admin.sock"
+} else {
+    "/run/hostkeeper/admin.sock"
+};
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
 /// The host's CA bundle (PEM): the roots the package fetch's HTTPS client trusts.
@@ -259,11 +264,27 @@ fn daemon(
     notifier: &dyn ReadyNotifier,
 ) -> Result<(), StartError> {
     let own_version = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION"))?;
+    note_start(settings, Platform::host().kind, own_version, &SystemClock);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build();
     let runtime = runtime.map_err(StartError::Runtime)?;
     runtime.block_on(start_and_serve(settings, period, own_version, notifier))
+}
+
+/// Adds this start to the start log the fallback on macOS judges the burst by
+/// ([`crate::fallback::record_start`]), before anything that can fail; a log that cannot be
+/// written is said on standard error and does not stop the start.
+pub fn note_start(
+    settings: &Settings,
+    kind: PlatformKind,
+    own_version: HostkeeperVersion,
+    clock: &dyn Clock,
+) {
+    let own = own_version.to_string();
+    if let Err(error) = crate::fallback::record_start(&settings.state_dir, kind, &own, clock) {
+        eprintln!("hostkeeper daemon: this start is not in the start log: {error}");
+    }
 }
 
 async fn start_and_serve(
@@ -273,8 +294,9 @@ async fn start_and_serve(
     notifier: &dyn ReadyNotifier,
 ) -> Result<(), StartError> {
     let files = HostFiles::host();
-    let started = start_with(settings, &files, own_version, notifier)?;
-    let links = host_links(started.daemon(), &files, period);
+    let platform = Platform::host();
+    let started = start_with(settings, &files, own_version, notifier, &platform)?;
+    let links = host_links(started.daemon(), &files, period, platform.kind);
     start::serve(started, links).await
 }
 
@@ -282,13 +304,19 @@ async fn start_and_serve(
 ///
 /// - the enrollment loop's enroller is made on its own worker ([`host_enroller`]): gRPC with TLS
 ///   to the daemon config's `coordinator`, pinned to its `ca_sha256`, the key and the
-///   certificate generations in the pki directory, the host's Linux claims;
+///   certificate generations in the pki directory, the claims of a host of `kind`
+///   ([`host_claims`]);
 /// - the heartbeat loop reads the certificate and key of the pki directory's `current` link at
 ///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock;
 ///   this build has no coordinator link yet ([`NoLink`]), so every heartbeat ends unsent;
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
 /// - both loops log through the daemon's alert sink ([`DaemonLog`]).
-pub fn host_links(daemon: &Arc<Daemon>, files: &HostFiles, period: NonZeroU64) -> Links {
+pub fn host_links(
+    daemon: &Arc<Daemon>,
+    files: &HostFiles,
+    period: NonZeroU64,
+    kind: PlatformKind,
+) -> Links {
     let ctx = daemon.ctx();
     let log = Arc::new(DaemonLog::new(Arc::clone(daemon)));
     let stop = StopFlag::default();
@@ -299,7 +327,7 @@ pub fn host_links(daemon: &Arc<Daemon>, files: &HostFiles, period: NonZeroU64) -
     };
     let pki = files.pki.clone();
     Links {
-        enroller: Box::new(move || host_enroller(&endpoint, &pki, settings)),
+        enroller: Box::new(move || host_enroller(&endpoint, &pki, settings, kind)),
         link: Arc::new(NoLink),
         certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
         clock: Arc::new(SystemUnixClock),
@@ -316,8 +344,9 @@ pub fn image_of(own_version: HostkeeperVersion) -> String {
     format!("hostkeeper-{own_version}")
 }
 
-/// The enroller of a host: [`GrpcEnroll`] to `endpoint`, the pki directory at `pki` (its
-/// `current` generation is what a renewal presents), [`LinuxClaims::host`], the operating
+/// The enroller of a host of `kind`: [`GrpcEnroll`] to `endpoint`, the pki directory at `pki`
+/// (its `current` generation is what a renewal presents), the claims of [`host_claims`] (on a
+/// Mac through the host's `ioreg`, [`HostIoreg::system`]), the operating
 /// system's entropy, the wall clock for the certificates' validity alone, and the monotonic
 /// clock for the retries. Opening it takes the pki directory's lock and finishes what a crash
 /// left there. `Err` names what refused: the endpoint, the runtime or the pki directory.
@@ -325,6 +354,7 @@ pub fn host_enroller(
     endpoint: &str,
     pki: &Path,
     settings: EnrollSettings,
+    kind: PlatformKind,
 ) -> Result<Enroller, String> {
     let store = PkiDir::new(pki);
     let coordinator = GrpcEnroll::new(endpoint, store.current_paths(), ENROLL_TIMEOUT)
@@ -332,7 +362,7 @@ pub fn host_enroller(
     let ports = hostkeeper_enroll::Ports {
         coordinator: Box::new(coordinator),
         store: Box::new(store),
-        claims: Box::new(LinuxClaims::host()),
+        claims: host_claims(kind, Box::new(HostIoreg::system())),
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(SystemClock),
@@ -340,17 +370,20 @@ pub fn host_enroller(
     Enroller::open(settings, ports).map_err(|error| error.to_string())
 }
 
-/// Starts the daemon on the ports of the host's build, reading the host's own files from
-/// `files`, and returns it without serving: the config of `settings` is loaded, the ports are
-/// built ([`host_ports`]) and the start runs ([`start::startup_notifying`]).
+/// Starts the daemon on the ports of the host's build for `platform`, reading the host's own
+/// files from `files`, and returns it without serving: the config of `settings` is loaded, the
+/// platform's adapters are chosen ([`Adapters::for_platform`]), the ports are built
+/// ([`host_ports`]) and the start runs ([`start::startup_notifying`]).
 pub fn start_with(
     settings: &Settings,
     files: &HostFiles,
     own_version: HostkeeperVersion,
     notifier: &dyn ReadyNotifier,
+    platform: &Platform,
 ) -> Result<start::Started, StartError> {
     let config = start::load_config(settings)?;
-    host_ports(&config, settings, files, own_version)
+    Adapters::for_platform(platform)
+        .and_then(|adapters| host_ports(&config, settings, files, own_version, adapters))
         .and_then(|ports| start::startup_notifying(settings, ports, own_version, notifier))
 }
 
@@ -435,21 +468,23 @@ impl Verifier for HostVerifier {
     }
 }
 
-/// The ports of this build. The package store is the real one ([`RealPackages`]: HTTPS over the
-/// CA bundle of `files`, `gh` for the attestation, unpacked into `--packages-dir` as root); the
-/// observer looks through `systemctl`, `/proc` and TCP ([`host_observer`]). Steps run through the
-/// host's step launcher, one transient systemd unit per step ([`SystemdLauncher::system`]), whose
-/// hook standard error is logged under the step's unit ([`log_hook_output`]). The host's service
-/// manager is not part of this build yet ([`Unwired`]): an order that reached it is refused
-/// there. Placed paths are linked under the
-/// host's own directories, `--packages-dir` being the packages directory; the prune of step 18
-/// of a force deletes nothing yet. The directory `gh` runs in (`<state-dir>/.gh`) is made mode 0700
-/// here. `Err` when that directory cannot be made or the packages directory cannot be opened.
+/// The ports of this build over the platform's `adapters` ([`Adapters`]: the step launcher, the
+/// service manager, the unit directory, the observer's service manager and process probe, and
+/// the package check). The package store is the real one ([`RealPackages`]: HTTPS over the CA
+/// bundle of `files`, `gh` for the attestation, unpacked into `--packages-dir` as root, each
+/// staged tree judged by the adapters' package check); the observer looks through the adapters
+/// and TCP ([`observer_with`]). On Linux the service manager is not part of this build yet
+/// ([`Unwired`]): an order that reached it is refused there. Placed paths are linked under the
+/// host's own directories and the adapters' unit directory, `--packages-dir` being the packages
+/// directory; the prune of step 18 of a force deletes nothing yet. The directory `gh` runs in
+/// (`<state-dir>/.gh`) is made mode 0700 here. `Err` when that directory cannot be made or the
+/// packages directory cannot be opened.
 pub fn host_ports(
     config: &DaemonConfig,
     settings: &Settings,
     files: &HostFiles,
     own_version: HostkeeperVersion,
+    adapters: Adapters,
 ) -> Result<Ports, StartError> {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let fetcher = NetFetcher::new(
@@ -478,30 +513,36 @@ pub fn host_ports(
     .map_err(|source| StartError::Io {
         path: settings.packages_dir.clone(),
         source,
-    })?;
+    })?
+    .with_package_check(adapters.package_check);
     Ok(Ports {
-        launcher: Arc::new(SystemdLauncher::system().with_log(Arc::new(log_hook_output))),
+        launcher: adapters.launcher,
         packages: Arc::new(packages),
         clock,
         deadman_poll_secs: Some(DEADMAN_POLL_SECS),
-        units: Arc::new(Unwired),
+        units: adapters.units,
         placement: Placement {
             roots: Roots::new(
                 Path::new(STATE_DIR),
-                Path::new(SYSTEMD_UNIT_DIR),
+                &adapters.unit_dir,
                 &settings.packages_dir,
             ),
             fs: Arc::new(RealFs::new(Path::new("/"))),
         },
         prune: Arc::new(LayoutPrune),
         force_lock_point: Arc::new(NoLockPoint),
-        observer: Arc::new(host_observer(&settings.packages_dir, own_version)),
+        observer: Arc::new(observer_with(
+            adapters.manager,
+            adapters.process,
+            &settings.packages_dir,
+            own_version,
+        )),
     })
 }
 
 /// The service manager of a build that has none, and a step launcher that starts nothing: each
-/// refuses. The host's ports use it as their service manager ([`host_ports`]); the tests use it as
-/// a launcher that refuses every step.
+/// refuses. A Linux host's adapters use it as their service manager ([`Adapters::linux`]); the
+/// tests use it as a launcher that refuses every step.
 #[derive(Debug)]
 pub struct Unwired;
 

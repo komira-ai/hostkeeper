@@ -96,7 +96,8 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
 - **Operator surfaces.** Built: B1 (the protobuf services), B10 (generated `hostkeeper ctl`,
   gRPC beside the gateway), B24 (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
-  B18 (macOS: `hostkeeper-launchd` and the Mac enrollment claims, but no launchd daemon run on a
+  B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
+  device run of the daemon under launchd after each merge; no update has run through it on a
   device).
 - **Release.** Partly built: B14 (the release workflows and the release verbs of `xtask`; no
   release is published). Planned: B12 (the privileged workflow with real systemd), B15 (the

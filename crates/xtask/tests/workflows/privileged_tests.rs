@@ -1,16 +1,18 @@
 //! The rules of `privileged.yml` ([`super::lint`]): a job that runs as root is allowed in that
-//! file only, and there only on a push to main and by hand, on the runner the lint lists, under
-//! every other rule; and the committed file holds exactly one `sudo`, the cargo runner of the run
-//! of the privileged tests, with their build before it as the runner's user. Each rule is shown
+//! file only, and there only on a push to main and by hand, on the runner the lint lists for the
+//! job (the one macOS job, `macos-device`, on its own list), under every other rule; and each job
+//! of the committed file holds exactly one `sudo`, the cargo runner of the run of its privileged
+//! tests, with their build before it as the runner's user. Each rule is shown
 //! to refuse its defect by putting it into an otherwise clean workflow and reading the exact
 //! problems it reports.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use super::lint::{
-    HOSTED_RUNNERS, ID_TOKEN_ALLOWED, PRIVILEGED_ON, PRIVILEGED_RUNNERS, PRIVILEGED_WORKFLOW,
-    WRITE_ALLOWED, entries, entry, lint, root_line, scalars,
+    HOSTED_RUNNERS, ID_TOKEN_ALLOWED, MACOS_DEVICE_JOB, MACOS_DEVICE_RUNNERS, PRIVILEGED_ON,
+    PRIVILEGED_RUNNERS, PRIVILEGED_WORKFLOW, WRITE_ALLOWED, entries, entry, lint,
+    privileged_runners, root_line, scalars,
 };
 use super::release::{REQUIRED_WORKFLOWS, publish_problems};
 use super::yaml::{self, Node, Value};
@@ -324,14 +326,14 @@ fn word_count(text: &str, word: &str) -> usize {
         .count()
 }
 
-/// The `run:` values of every step of every job of `doc`, in order.
-fn runs(doc: &Node) -> Vec<&str> {
-    let jobs = entry(doc, "jobs").map_or(&[][..], entries);
-    jobs.iter()
-        .flat_map(|(_, job)| match entry(job, "steps").map(|s| &s.value) {
-            Some(Value::Seq(steps)) => steps.as_slice(),
-            _ => &[],
-        })
+/// The `run:` values of every step of `job`, in order.
+fn runs(job: &Node) -> Vec<&str> {
+    let steps = match entry(job, "steps").map(|s| &s.value) {
+        Some(Value::Seq(steps)) => steps.as_slice(),
+        _ => &[],
+    };
+    steps
+        .iter()
         .filter_map(|step| entry(step, "run").and_then(Node::as_str))
         .collect()
 }
@@ -349,24 +351,59 @@ fn test_targets(run: &str) -> BTreeSet<String> {
 const BUILD: &str = "cargo test -p hostkeeper-privileged --features privileged --locked --no-run";
 const RUN: &str = "cargo test -p hostkeeper-privileged --features privileged --locked --config \"target.'cfg(unix)'.runner = 'sudo'\"";
 
-/// What is wrong with the shape of privileged.yml's `text`, whose privileged test targets are
-/// `targets`: `sudo` named other than once in its values (a comment is not a value); other than
-/// one build step and one step as root; the build as root or after the run; a step that builds
-/// or runs another set of test targets; a step that runs more than one command (`;`, `&&`, `||`,
-/// a pipe or more than one line), whose logic belongs in a Rust tool.
-fn shape_problems(text: &str, targets: &BTreeSet<String>) -> Vec<String> {
+/// How many times `sudo` stands as a word among the values of `node` (a comment is not a value).
+fn sudo_count(node: &Node) -> usize {
+    let mut values = Vec::new();
+    scalars(node, &mut values);
+    values.iter().map(|v| word_count(v, "sudo")).sum()
+}
+
+/// What is wrong with the shape of privileged.yml's `text`, whose jobs and the privileged test
+/// targets of each are `targets` (job name to targets): a job that is not one of them, or one of
+/// them missing; per job, `sudo` named other than once in its values, and none outside the jobs;
+/// other than one build step and one step as root; the build as root or after the run; a step
+/// that builds or runs another set of test targets than the job's; a step that runs more than
+/// one command (`;`, `&&`, `||`, a pipe or more than one line), whose logic belongs in a Rust
+/// tool. Each problem of a job names it.
+fn shape_problems(text: &str, targets: &BTreeMap<&str, BTreeSet<String>>) -> Vec<String> {
     let doc = match yaml::load(text) {
         Ok(doc) => doc,
         Err(e) => return vec![e],
     };
     let mut problems = Vec::new();
-    let mut values = Vec::new();
-    scalars(&doc, &mut values);
-    let sudo: usize = values.iter().map(|v| word_count(v, "sudo")).sum();
+    let jobs = entry(&doc, "jobs").map_or(&[][..], entries);
+    let named: BTreeSet<&str> = jobs.iter().filter_map(|(name, _)| name.as_str()).collect();
+    for wanted in targets.keys().filter(|name| !named.contains(*name)) {
+        problems.push(format!("no job {wanted}"));
+    }
+    let outside: usize =
+        sudo_count(&doc) - jobs.iter().map(|(_, job)| sudo_count(job)).sum::<usize>();
+    if outside != 0 {
+        problems.push(format!("sudo is named {outside} times outside the jobs"));
+    }
+    for (name, job) in jobs {
+        let name = name.as_str().unwrap_or_default();
+        let Some(targets) = targets.get(name) else {
+            problems.push(format!("job {name} is not a job of privileged.yml"));
+            continue;
+        };
+        problems.extend(
+            job_shape_problems(job, targets)
+                .into_iter()
+                .map(|problem| format!("job {name}: {problem}")),
+        );
+    }
+    problems
+}
+
+/// [`shape_problems`] of one job, whose privileged test targets are `targets`.
+fn job_shape_problems(job: &Node, targets: &BTreeSet<String>) -> Vec<String> {
+    let mut problems = Vec::new();
+    let sudo = sudo_count(job);
     if sudo != 1 {
         problems.push(format!("sudo is named {sudo} times, not once"));
     }
-    let runs = runs(&doc);
+    let runs = runs(job);
     for run in &runs {
         let chained = [";", "&&", "||", "|", "\n"]
             .iter()
@@ -407,9 +444,14 @@ fn shape_problems(text: &str, targets: &BTreeSet<String>) -> Vec<String> {
     problems
 }
 
-/// The privileged test targets of crates/hostkeeper-privileged: the files of its `tests/` whose
-/// first line is `#![cfg(feature = "privileged")]`, by name without `.rs`.
-fn privileged_targets() -> BTreeSet<String> {
+/// The first line of a privileged test file of the Linux job: the tests against systemd.
+const LINUX_FIRST_LINE: &str = "#![cfg(feature = \"privileged\")]";
+/// The first line of a privileged test file of [`MACOS_DEVICE_JOB`]: the tests against launchd.
+const MACOS_FIRST_LINE: &str = "#![cfg(all(target_os = \"macos\", feature = \"privileged\"))]";
+
+/// The privileged test targets of crates/hostkeeper-privileged whose first line is `first`: the
+/// files of its `tests/` that start with it, by name without `.rs`.
+fn privileged_targets(first: &str) -> BTreeSet<String> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hostkeeper-privileged/tests");
     let mut found = BTreeSet::new();
     for entry in std::fs::read_dir(&dir).expect("list the privileged crate's tests") {
@@ -421,11 +463,19 @@ fn privileged_targets() -> BTreeSet<String> {
             continue;
         };
         let text = std::fs::read_to_string(&path).expect("read a test file");
-        if text.lines().next() == Some("#![cfg(feature = \"privileged\")]") {
+        if text.lines().next() == Some(first) {
             found.insert(target.to_owned());
         }
     }
     found
+}
+
+/// The jobs of privileged.yml and the targets of each: the Linux job's and the macOS job's.
+fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
+    BTreeMap::from([
+        ("privileged", privileged_targets(LINUX_FIRST_LINE)),
+        (MACOS_DEVICE_JOB, privileged_targets(MACOS_FIRST_LINE)),
+    ])
 }
 
 #[test]
@@ -451,10 +501,14 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         REQUIRED_WORKFLOWS.contains(&"privileged"),
         "a release waits for it"
     );
-    let targets = privileged_targets();
+    let targets = committed_targets();
     assert_eq!(
-        targets,
+        targets["privileged"],
         BTreeSet::from(["observer".to_owned(), "transient_unit".to_owned()])
+    );
+    assert_eq!(
+        targets[MACOS_DEVICE_JOB],
+        BTreeSet::from(["device_mac".to_owned()])
     );
     assert_eq!(shape_problems(text, &targets), Vec::<String>::new());
     for (file, other) in all.iter().filter(|(file, _)| file != PRIVILEGED_WORKFLOW) {
@@ -470,7 +524,10 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
     // Catches: a shape check that passes a second step as root, a build moved under root or after
     // the run, a step that leaves out a test target, or a missing build; and one that counts a
     // `sudo` in a comment, which runs nothing.
-    let targets = BTreeSet::from(["observer".to_owned(), "transient_unit".to_owned()]);
+    let targets = BTreeMap::from([(
+        "privileged",
+        BTreeSet::from(["observer".to_owned(), "transient_unit".to_owned()]),
+    )]);
     let clean = format!(
         "{}{}",
         PRIVILEGED_CLEAN
@@ -490,16 +547,16 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
     assert_eq!(
         shape_problems(&with_in(&clean, build, &second), &targets),
         [
-            "sudo is named 2 times, not once",
-            "2 run as root steps, not one"
+            "job privileged: sudo is named 2 times, not once",
+            "job privileged: 2 run as root steps, not one"
         ]
     );
     let rooted_build = "      - run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --config \"target.'cfg(unix)'.runner = 'sudo'\" --test observer --test transient_unit\n";
     assert_eq!(
         shape_problems(&with_in(&clean, build, rooted_build), &targets),
         [
-            "sudo is named 2 times, not once",
-            "2 run as root steps, not one",
+            "job privileged: sudo is named 2 times, not once",
+            "job privileged: 2 run as root steps, not one",
         ]
     );
     // The run as root folded into the build: one step as root, and it is the build.
@@ -512,8 +569,8 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
     assert_eq!(
         shape_problems(&folded, &targets),
         [
-            format!("the run as root step is not `{RUN} ...`"),
-            "the build step runs as root".to_owned(),
+            format!("job privileged: the run as root step is not `{RUN} ...`"),
+            "job privileged: the build step runs as root".to_owned(),
         ]
     );
     let run_line = clean
@@ -525,13 +582,13 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
     let after = with_in(&after, build, &format!("{run_line}\n{build}"));
     assert_eq!(
         shape_problems(&after, &targets),
-        ["the build step comes after the run as root"]
+        ["job privileged: the build step comes after the run as root"]
     );
     let missing = with_in(&clean, build, &build.replace(" --test observer", ""));
     assert_eq!(
         shape_problems(&missing, &targets),
         [
-            "the build step names the test targets {\"transient_unit\"}, not {\"observer\", \"transient_unit\"}"
+            "job privileged: the build step names the test targets {\"transient_unit\"}, not {\"observer\", \"transient_unit\"}"
         ]
     );
     for chained in [
@@ -552,11 +609,186 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
     let no_build = with_in(&clean, build, "");
     assert_eq!(
         shape_problems(&no_build, &targets),
-        ["0 build steps, not one"]
+        ["job privileged: 0 build steps, not one"]
     );
     assert_eq!(
         shape_problems("on: [unclosed\n", &targets).len(),
         1,
         "a text that does not parse is one problem"
+    );
+}
+
+/// The macOS job of privileged.yml: the device tests, built as the runner's user and run as root.
+// No `\` after the opening quote: it would drop the job's leading spaces and lift it out of
+// `jobs`.
+const MACOS_JOB: &str = "  macos-device:
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac
+      - run: cargo test -p hostkeeper-privileged --features privileged --locked --config \"target.'cfg(unix)'.runner = 'sudo'\" --test device_mac -- --test-threads=1
+";
+
+/// The run as root of [`MACOS_JOB`].
+const MACOS_RUN_AS_ROOT: &str = "cargo test -p hostkeeper-privileged --features privileged --locked --config \"target.'cfg(unix)'.runner = 'sudo'\" --test device_mac -- --test-threads=1";
+
+/// What the macOS job on another runner than its list is refused with.
+const MACOS_OUTSIDE_LIST: &str =
+    "job macos-device: privileged job on a runner outside the privileged list";
+
+/// [`PRIVILEGED_CLEAN`] with the macOS job after the Linux one.
+fn with_macos() -> String {
+    format!("{PRIVILEGED_CLEAN}{MACOS_JOB}")
+}
+
+#[test]
+fn the_macos_device_job_on_push_to_main_and_dispatch_only_is_accepted() {
+    // Catches: a lint that refuses the macOS device job where it belongs (privileged.yml, run
+    // after a merge to main and by hand, on its listed runner), or that lets the Linux job onto
+    // the macOS list; and a list that names a runner that is not a standard hosted macOS label
+    // of a fixed version.
+    assert_eq!(privileged(&with_macos()), Vec::<String>::new());
+    assert_eq!(privileged_runners(MACOS_DEVICE_JOB), MACOS_DEVICE_RUNNERS);
+    assert_eq!(privileged_runners("privileged"), PRIVILEGED_RUNNERS);
+    assert_eq!(privileged_runners("another"), PRIVILEGED_RUNNERS);
+    for label in MACOS_DEVICE_RUNNERS {
+        assert!(HOSTED_RUNNERS.contains(label), "{label}");
+        assert!(
+            label.starts_with("macos-") && !label.contains("latest"),
+            "{label}"
+        );
+    }
+    let linux_on_mac = with_in(
+        &with_macos(),
+        "    runs-on: ubuntu-24.04\n",
+        "    runs-on: macos-15\n",
+    );
+    assert_eq!(privileged(&linux_on_mac), [OUTSIDE_LIST]);
+}
+
+#[test]
+fn a_macos_job_with_a_pull_request_trigger_is_refused() {
+    // Catches: the macOS job allowed in privileged.yml whatever its trigger: run for a pull
+    // request, the file is refused for its trigger, each job for running as root, and the macOS
+    // job for being macOS.
+    let on = "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n  pull_request:\n";
+    let macos_root =
+        format!("job macos-device: privileged on pull_request (`{MACOS_RUN_AS_ROOT}`)");
+    let linux_root = on_pull_request();
+    assert_eq!(
+        privileged(&with_in(&with_macos(), ON, on)),
+        [
+            PRIVILEGED_ON,
+            linux_root.as_str(),
+            macos_root.as_str(),
+            "job macos-device: macOS on pull_request (`macos-15`)",
+        ]
+    );
+}
+
+#[test]
+fn a_macos_job_in_a_pull_request_workflow_is_refused() {
+    // Catches: the macOS device job let into a workflow that runs for pull requests under any
+    // other name: it is refused for running as root and for being macOS, by the pull-request rule.
+    let workflow =
+        format!("name: device\non:\n  pull_request:\npermissions: {{}}\njobs:\n{MACOS_JOB}");
+    let macos_root =
+        format!("job macos-device: privileged on pull_request (`{MACOS_RUN_AS_ROOT}`)");
+    for file in ["ci.yml", "device.yml"] {
+        assert_eq!(
+            lint(file, &workflow),
+            [
+                macos_root.as_str(),
+                "job macos-device: macOS on pull_request (`macos-15`)",
+            ],
+            "{file}"
+        );
+    }
+}
+
+#[test]
+fn a_self_hosted_or_larger_runner_label_is_refused() {
+    // Catches: the macOS job on a self-hosted runner, a paid larger runner, a moving `-latest`
+    // label, another macOS version than the listed one, or Linux.
+    let runner = "    runs-on: macos-15\n";
+    let not_hosted =
+        |label: &str| format!("job macos-device: runner `{label}` is not a GitHub-hosted runner");
+    let cases: Vec<(&str, Vec<String>)> = vec![
+        (
+            "self-hosted",
+            vec![
+                "the document names self-hosted".to_owned(),
+                not_hosted("self-hosted"),
+                MACOS_OUTSIDE_LIST.to_owned(),
+            ],
+        ),
+        (
+            "macos-15-xlarge",
+            vec![not_hosted("macos-15-xlarge"), MACOS_OUTSIDE_LIST.to_owned()],
+        ),
+        (
+            "macos-latest-large",
+            vec![
+                not_hosted("macos-latest-large"),
+                MACOS_OUTSIDE_LIST.to_owned(),
+            ],
+        ),
+        ("macos-latest", vec![MACOS_OUTSIDE_LIST.to_owned()]),
+        ("macos-14", vec![MACOS_OUTSIDE_LIST.to_owned()]),
+        ("ubuntu-24.04", vec![MACOS_OUTSIDE_LIST.to_owned()]),
+    ];
+    for (label, want) in cases {
+        let text = with_in(
+            &with_macos(),
+            MACOS_JOB,
+            &MACOS_JOB.replace(runner, &format!("    runs-on: {label}\n")),
+        );
+        assert_eq!(privileged(&text), want, "{label}");
+    }
+}
+
+#[test]
+fn the_shape_check_holds_each_job_to_its_own_targets() {
+    // Catches: a shape check that lets the macOS job run the Linux targets (or none), that lets a
+    // job it does not know into the file, that misses a job it expects, or that misses `sudo`
+    // outside the jobs.
+    let linux = BTreeSet::from(["observer".to_owned()]);
+    let macos = BTreeSet::from(["device_mac".to_owned()]);
+    let targets = BTreeMap::from([("privileged", linux), (MACOS_DEVICE_JOB, macos)]);
+    let clean = with_macos().replace(" --no-run\n", " --no-run --test observer\n");
+    let clean = clean.replacen(
+        "runner = 'sudo'\" --",
+        "runner = 'sudo'\" --test observer --",
+        1,
+    );
+    assert_eq!(shape_problems(&clean, &targets), Vec::<String>::new());
+
+    let wrong = clean.replace("--test device_mac", "--test observer");
+    assert_eq!(
+        shape_problems(&wrong, &targets),
+        [
+            "job macos-device: the build step names the test targets {\"observer\"}, not {\"device_mac\"}",
+            "job macos-device: the run as root step names the test targets {\"observer\"}, not {\"device_mac\"}",
+        ]
+    );
+    let extra = format!("{clean}{}", MACOS_JOB.replace("macos-device:", "another:"));
+    assert_eq!(
+        shape_problems(&extra, &targets),
+        ["job another is not a job of privileged.yml"]
+    );
+    let missing = with_in(&clean, MACOS_JOB, "");
+    assert_eq!(shape_problems(&missing, &targets), ["no job macos-device"]);
+    let env = with_in(
+        &clean,
+        "permissions: {}\n",
+        "permissions: {}\nenv:\n  ROOT: sudo\n",
+    );
+    assert_eq!(
+        shape_problems(&env, &targets),
+        ["sudo is named 1 times outside the jobs"]
     );
 }

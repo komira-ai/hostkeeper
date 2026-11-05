@@ -22,6 +22,7 @@ use hostkeeper_enroll::{
     PollAnswer, RenewAnswer, RenewRequest, Settings as EnrollSettings, SystemWallClock,
     TransportError,
 };
+use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::{FakeLink, RecordingLog, ScriptedSleeper, identity};
 use hostkeeper_link::{
     ANNOUNCED, CertSource, CertState, CoordinatorLink, DEFAULT_HEARTBEAT_SECS, Dispatch, Heartbeat,
@@ -235,21 +236,31 @@ fn the_host_enroller_is_made_from_the_config_and_the_pki_directory() {
         image: image_of(OWN),
     };
     let pki = rig.scratch.path().join("pki");
-    let enroller = host_enroller("https://coordinator.example:8443", &pki, settings());
+    let enroller = host_enroller(
+        "https://coordinator.example:8443",
+        &pki,
+        settings(),
+        PlatformKind::Linux,
+    );
     assert!(enroller.is_ok(), "{:?}", enroller.err());
     assert!(pki.join("SCHEMA").is_file(), "the pki directory was opened");
     drop(enroller);
 
-    let refused = host_enroller(NO_ENDPOINT, &pki, settings())
+    let refused = host_enroller(NO_ENDPOINT, &pki, settings(), PlatformKind::Linux)
         .err()
         .expect("an address with a path");
     assert!(refused.contains(NO_ENDPOINT), "{refused}");
 
     let file = rig.scratch.path().join("a-file");
     std::fs::write(&file, "x").expect("a file");
-    let refused = host_enroller("https://coordinator.example", &file.join("pki"), settings())
-        .err()
-        .expect("a pki directory under a file");
+    let refused = host_enroller(
+        "https://coordinator.example",
+        &file.join("pki"),
+        settings(),
+        PlatformKind::Macos,
+    )
+    .err()
+    .expect("a pki directory under a file");
     assert!(!refused.is_empty());
     assert_eq!(image_of(OWN), "hostkeeper-0.1.0");
 }
@@ -275,7 +286,7 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
     let daemon = Arc::new(daemon);
     let files = files_under(rig.scratch.path());
     let period = NonZeroU64::new(7).expect("not zero");
-    let links = host_links(&daemon, &files, period);
+    let links = host_links(&daemon, &files, period, PlatformKind::Linux);
     assert_eq!(links.period, period);
     assert_eq!(
         links.certs.current(),

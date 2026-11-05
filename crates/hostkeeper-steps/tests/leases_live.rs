@@ -90,3 +90,65 @@ fn a_leases_live_retry_is_recorded_as_the_hook_gave_it() {
     assert!(rig.clock.slept().is_empty());
     assert_eq!(recorded(&rig), want);
 }
+
+/// The keys of a JSON object, sorted.
+fn keys(value: &serde_json::Value) -> Vec<String> {
+    let mut keys: Vec<String> = value
+        .as_object()
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+/// Catches a field added to or renamed in the step record by the macOS work (the `leases_live`
+/// token, the quarantine and signature checks, the start log beside the record): the record a
+/// release wrote before (the committed `before-order-try` fixture) is read and written back byte
+/// for byte, and the record this release writes for a `leases_live` deferral has the same keys,
+/// at the top and in `progress`, as that record (plus `order_try`, which a release since added),
+/// the token being a value of the existing `reason` field.
+#[test]
+fn new_reason_tokens_and_verification_leave_every_written_format_unchanged() {
+    let fixture = include_str!("fixtures/before-order-try/finished.json");
+    let scratch = support::Scratch::new("formats-unchanged");
+    std::fs::write(
+        scratch.path().join(hostkeeper_steps::record::RECORD_FILE),
+        fixture,
+    )
+    .expect("the fixture");
+    let store = hostkeeper_steps::RecordStore::new(scratch.path());
+    let Loaded::Current(rec) = store.load().expect("it loads") else {
+        panic!("the fixture is a current record");
+    };
+    store.save(&rec).expect("written back");
+    let written =
+        std::fs::read_to_string(scratch.path().join(hostkeeper_steps::record::RECORD_FILE))
+            .expect("read back");
+    assert_eq!(written, fixture.trim_end_matches('\n'));
+
+    let rig = Rig::new("formats-leases-live");
+    let mode = HookMode::DeferLeasesLive;
+    rig.fake.say(
+        Step::Prepare,
+        &[Reply::Exit(mode.exit_code(), Some(mode.last_line()))],
+    );
+    rig.runner().run(&rig.order()).expect("the order runs");
+    let path = rig
+        .store()
+        .dir()
+        .join(hostkeeper_steps::record::RECORD_FILE);
+    let now: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("the record")).expect("JSON");
+    let before: serde_json::Value = serde_json::from_str(fixture).expect("JSON");
+    let mut allowed = keys(&before);
+    allowed.push("order_try".to_owned());
+    allowed.sort();
+    let top = keys(&now);
+    assert!(
+        top.iter().all(|key| allowed.contains(key)),
+        "{top:?} is not within {allowed:?}"
+    );
+    assert_eq!(keys(&now["progress"]), keys(&before["progress"]));
+    assert_eq!(keys(&now["state"]), keys(&before["state"]));
+    assert_eq!(now["state"]["reason"], serde_json::json!("leases_live"));
+}

@@ -69,6 +69,10 @@ fn print_output_maps_to_the_unit_states() {
             state(ActiveState::Activating, "spawn scheduled", None),
         ),
         (
+            LaunchctlOutput::success(&printed(UNIT, &["state = xpcproxy"])),
+            state(ActiveState::Activating, "xpcproxy", None),
+        ),
+        (
             LaunchctlOutput::success(&printed(UNIT, &["state = waiting", "last exit code = 0"])),
             state(ActiveState::Inactive, "waiting", None),
         ),
@@ -225,6 +229,72 @@ fn a_launchd_error_makes_the_observer_round_unobserved() {
     assert_eq!(observation.state.token(), "unobserved");
     assert_eq!(observation.version, VersionView::NotLive);
     assert_eq!(observation.health, HealthView::NotProbed);
+}
+
+/// Catches a launchd state that cannot be read being reported as stopped or absent (design 8.10,
+/// last row): for each way `launchctl print` can fail (it cannot be run, it is killed at its
+/// deadline, it exits with another code than "not loaded", it prints what is not UTF-8, a cut
+/// print, a state launchd never documented) the observer's round is `unobserved` with the
+/// manager-error reason, and its detail names the label.
+#[test]
+fn unobserved_launchd_state_is_never_read_as_stopped() {
+    let args = format!("print system/{UNIT}");
+    let failures: Vec<(Result<LaunchctlOutput, LaunchctlError>, String)> = vec![
+        (
+            Err(LaunchctlError::Spawn {
+                args: args.clone(),
+                why: "no such file".to_owned(),
+            }),
+            format!("cannot run launchctl {args}: no such file"),
+        ),
+        (
+            Err(LaunchctlError::TimedOut { args: args.clone() }),
+            format!("launchctl {args} did not finish within its deadline and was killed"),
+        ),
+        (
+            Ok(LaunchctlOutput::exit(5, "Input/output error")),
+            "launchctl print exited with Some(5): Input/output error".to_owned(),
+        ),
+        (
+            Ok(LaunchctlOutput {
+                code: Some(0),
+                stdout: vec![0xff, 0xfe],
+                stderr: Vec::new(),
+            }),
+            "launchctl print wrote output that is not UTF-8".to_owned(),
+        ),
+        (
+            Ok(LaunchctlOutput::success(&format!(
+                "system/{UNIT} = {{\n\tstate = running\n"
+            ))),
+            String::new(),
+        ),
+        (
+            Ok(LaunchctlOutput::success(&printed(
+                UNIT,
+                &["state = frobnicating"],
+            ))),
+            "the job state \"frobnicating\" is not known".to_owned(),
+        ),
+    ];
+    for (answer, why) in failures {
+        let fake = FakeLaunchctl::new();
+        fake.always(&print_args(&label(UNIT)), answer.clone());
+        let observer = observer_over(LaunchdServiceManager::new(fake));
+
+        let observation = observer.observe(&web(&[UNIT]), DEADLINE);
+
+        let ServiceState::Unobserved { reason, detail } = &observation.state else {
+            panic!("for {answer:?}: {:?} is not unobserved", observation.state);
+        };
+        assert_eq!(*reason, UnobservedReason::ManagerError, "for {answer:?}");
+        assert!(detail.contains(UNIT), "for {answer:?}: {detail}");
+        assert!(detail.contains(&why), "for {answer:?}: {detail}");
+        assert_ne!(observation.state, ServiceState::Stopped, "for {answer:?}");
+        assert_ne!(observation.state, ServiceState::Absent, "for {answer:?}");
+        assert_eq!(observation.state.token(), "unobserved", "for {answer:?}");
+        assert_eq!(observation.version, VersionView::NotLive, "for {answer:?}");
+    }
 }
 
 /// Catches a run set judged by its last label: one running job and one waiting after a clean exit

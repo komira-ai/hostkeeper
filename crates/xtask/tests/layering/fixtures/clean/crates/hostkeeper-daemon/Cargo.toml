@@ -9,6 +9,7 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-link = { path = "../hostkeeper-link" }
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 hostkeeper-package = { path = "../hostkeeper-package" }

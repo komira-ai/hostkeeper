@@ -7,7 +7,8 @@ mod support_archive;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::manifest::{HostkeeperVersion, ManifestRefusal};
 use hostkeeper_config::names::{ServiceName, Version};
@@ -21,7 +22,7 @@ use hostkeeper_package::{
     ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_INVALID, NO_PACKAGE_FOR_PLATFORM, NO_SPACE,
     NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure, REASONS,
 };
-use hostkeeper_unpack::{Rule, UnpackError, VerifyIoError};
+use hostkeeper_unpack::{MacVerify, Rule, SignatureVerdict, UnpackError, VerifyIoError};
 use support_archive::{Answer, Rig, SERVICE, VERSION, sha256_hex, valid_archive};
 
 const RELEASE: (Outcome, Class) = (Outcome::Failure, Class::Release);
@@ -521,6 +522,103 @@ fn a_version_directory_that_cannot_be_sealed_defers_the_order() {
         .version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive))
         .expect_err("the path cannot be sealed");
     assert_refused(&error, Refusal::PackageIoError, DEFERRED);
+}
+
+/// A package check that says every entry is (or is not) quarantined, or cannot be made, and
+/// keeps the paths it was asked about.
+struct Judge {
+    answer: Option<bool>,
+    asked: Mutex<Vec<PathBuf>>,
+}
+
+impl Judge {
+    fn new(answer: Option<bool>) -> Arc<Judge> {
+        Arc::new(Judge {
+            answer,
+            asked: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn asked(&self) -> Vec<PathBuf> {
+        self.asked.lock().expect("the log").clone()
+    }
+}
+
+impl MacVerify for Judge {
+    fn quarantine(&self, path: &Path) -> Result<bool, VerifyIoError> {
+        self.asked.lock().expect("the log").push(path.to_path_buf());
+        self.answer.ok_or_else(|| VerifyIoError::Unfinished {
+            tool: "getxattr",
+            why: "the test says so".to_owned(),
+        })
+    }
+
+    fn signature(&self, _binary: &Path) -> Result<SignatureVerdict, VerifyIoError> {
+        Ok(SignatureVerdict::Valid)
+    }
+}
+
+/// Catches a store that never hands its package check to the unpack (a Mac sealing a quarantined
+/// package) or that hands it on Linux: with a check that finds every entry quarantined the
+/// package is `bad_archive`, a bad release, and nothing is sealed; with a check that cannot be
+/// made it is deferred as `verify_unavailable`; with a check that finds nothing it seals as on
+/// Linux, every staged entry having been asked about; with no check (Linux) none is asked.
+#[test]
+fn the_package_check_of_the_platform_judges_every_staged_tree_before_it_is_sealed() {
+    let archive = valid_archive();
+    let order = |store: &RealPackages| {
+        store.version_dir(&Rig::service(), &Rig::version(), &digest_of(&archive))
+    };
+
+    let rig = Rig::new("check-quarantined");
+    let judge = Judge::new(Some(true));
+    let store = rig
+        .store(&archive, Answer::Confirms)
+        .with_package_check(Some(judge.clone()));
+    let error = order(&store).expect_err("a quarantined package");
+    assert_refused(&error, Refusal::BadArchive, RELEASE);
+    assert!(error.to_string().contains("quarantine"), "{error}");
+    assert_eq!(
+        judge.asked().len(),
+        1,
+        "the first quarantined entry ends the check"
+    );
+    assert_eq!(names(&rig.packages.join(SERVICE)), Vec::<String>::new());
+
+    let rig = Rig::new("check-unavailable");
+    let judge = Judge::new(None);
+    let store = rig
+        .store(&archive, Answer::Confirms)
+        .with_package_check(Some(judge.clone()));
+    let error = order(&store).expect_err("no verdict");
+    assert_refused(&error, Refusal::VerifyUnavailable, DEFERRED);
+    assert_eq!(names(&rig.packages.join(SERVICE)), Vec::<String>::new());
+
+    let rig = Rig::new("check-clean");
+    let judge = Judge::new(Some(false));
+    let store = rig
+        .store(&archive, Answer::Confirms)
+        .with_package_check(Some(judge.clone()));
+    let dir = order(&store).expect("a clean package seals");
+    assert_eq!(dir.dir(), rig.packages.join(SERVICE).join(VERSION));
+    assert!(rig.packages.join(SERVICE).join("1.5.0.seal").is_file());
+    let asked = judge.asked();
+    assert!(
+        asked.len() >= 7,
+        "every entry of the tree is asked about: {asked:?}"
+    );
+    assert!(
+        asked.iter().any(|path| path.ends_with("bin/x")),
+        "{asked:?}"
+    );
+
+    let rig = Rig::new("check-none");
+    let judge = Judge::new(Some(true));
+    let store = rig
+        .store(&archive, Answer::Confirms)
+        .with_package_check(None);
+    order(&store).expect("Linux has no check");
+    assert!(judge.asked().is_empty());
 }
 
 /// The store is what the daemon holds across threads.

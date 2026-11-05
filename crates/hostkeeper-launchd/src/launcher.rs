@@ -205,7 +205,10 @@ fn poll(status: &JobStatus, bound: Bound, ran: Duration) -> Poll {
 
 /// Whether a loaded job has run and ended: no process, and an exit code or a signal.
 fn ended(info: &JobInfo) -> bool {
-    let busy = matches!(info.state, JobState::Running | JobState::SpawnScheduled);
+    let busy = matches!(
+        info.state,
+        JobState::Running | JobState::SpawnScheduled | JobState::Spawning
+    );
     let done = info.last_exit_status.is_some() | info.last_terminating_signal.is_some();
     !busy & done
 }

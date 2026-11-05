@@ -33,6 +33,7 @@ use hostkeeper_unpack::{
     REASON_VERSION_TOO_LONG, UnpackError, UnpackOrder,
 };
 
+use crate::adapters::PackageCheck;
 use crate::packages::{PackageError, PackageRefusal, Packages, VersionDir};
 use crate::refusal::Refusal;
 use crate::verb::PackageDigest;
@@ -139,6 +140,7 @@ pub struct RealPackages {
     root: PathBuf,
     platform: Platform,
     fs: Arc<dyn PackageFs + Send + Sync>,
+    check: PackageCheck,
 }
 
 impl RealPackages {
@@ -164,7 +166,14 @@ impl RealPackages {
             root: root.to_path_buf(),
             platform: Platform::current(),
             fs: Arc::new(fs),
+            check: None,
         })
+    }
+
+    /// The same store, with `check` judging every staged tree before it is sealed: on macOS the
+    /// quarantine and code-signature check ([`crate::adapters::Adapters`]), none on Linux.
+    pub fn with_package_check(self, check: PackageCheck) -> RealPackages {
+        RealPackages { check, ..self }
     }
 }
 
@@ -216,8 +225,10 @@ impl Packages for RealPackages {
             &unpack_order,
             &Limits::from(&self.bounds),
             &*self.fs,
-            // This store runs on Linux; the macOS checks come with the macOS store.
-            UnpackPlatform::Linux,
+            match &self.check {
+                Some(mac) => UnpackPlatform::MacOs(mac.as_ref()),
+                None => UnpackPlatform::Linux,
+            },
         )
         .map_err(|error| refused(refusal_of(Failure::Unpack(&error))))?;
         let staged =

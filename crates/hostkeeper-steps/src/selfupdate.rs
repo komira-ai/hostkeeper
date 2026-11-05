@@ -22,7 +22,11 @@
 //! `Restart=always`, so the clean exit that [`follow_on`] asks for starts the new binary), and
 //! the fallback is a timer job ([`launchd_fallback_job`]) that runs the previous binary's
 //! `self-update-fallback` verb every interval, since launchd has neither a start limit nor
-//! `OnFailure=`.
+//! `OnFailure=`. There the verb decides the burst itself: each start of the daemon is written to
+//! the start log ([`crate::starts`]), and the verb falls back only once the version the record
+//! waits for has started [`START_LIMIT_BURST`] times within [`START_LIMIT_WINDOW_SECS`]
+//! ([`should_fall_back`], the rule `StartLimitBurst=` and `StartLimitIntervalSec=` give systemd
+//! in [`main_dropin`]).
 //!
 //! Two kinds of [`Layout`] share the switch:
 //!
@@ -59,6 +63,7 @@ use hostkeeper_hook::Verdict;
 
 use crate::artifact::{ArtifactError, Staged, host_owner, trusted_owners, walk};
 use crate::bad::{BadVersions, BadVersionsError};
+use crate::clock::Stamp;
 pub use crate::record::{AwaitingRestart, REASON_SELF_UPDATE_FALLBACK};
 use crate::record::{Loaded, Record, RecordError, RecordStore, Settlement, State};
 use crate::runner::Finished;
@@ -66,6 +71,28 @@ use crate::seal::{Seal, read_seal};
 
 /// The failed starts after which the fallback runs.
 pub const START_LIMIT_BURST: u32 = 3;
+
+/// The window, in seconds, within which [`START_LIMIT_BURST`] starts make the fallback run
+/// (systemd's `StartLimitIntervalSec=`).
+pub const START_LIMIT_WINDOW_SECS: u64 = 300;
+
+/// Whether `starts`, the starts of one binary in the order they were made, are `burst` starts
+/// within `window_secs`: the one decision of the burst, systemd's start limit
+/// (`StartLimitBurst=`, `StartLimitIntervalSec=`) as a function. A start counts when it was made
+/// in the boot of the latest start, not after it, and less than `window_secs` before it; a
+/// `burst` of 0 never falls back.
+pub fn should_fall_back(starts: &[Stamp], burst: u32, window_secs: u64) -> bool {
+    let Some(latest) = starts.last() else {
+        return false;
+    };
+    let within = starts
+        .iter()
+        .filter(|start| start.boot_id == latest.boot_id)
+        .filter(|start| start.mono_secs <= latest.mono_secs)
+        .filter(|start| latest.mono_secs - start.mono_secs < window_secs)
+        .count();
+    (burst > 0) & (within >= burst as usize)
+}
 
 /// A directory of versions with a `current` and a `previous` link: the updater's own binaries
 /// ([`Layout::new`]) or the unpacked versions of one package ([`Layout::package`]).
@@ -673,10 +700,10 @@ pub fn settle_with(
 }
 
 /// The drop-in for the updater's own unit: restart when it exits, and run the fallback unit
-/// once it has failed `burst` starts.
+/// once it has failed `burst` starts within [`START_LIMIT_WINDOW_SECS`].
 pub fn main_dropin(fallback_unit: &str, burst: u32) -> String {
     format!(
-        "[Unit]\nOnFailure={fallback_unit}\nStartLimitIntervalSec=300\nStartLimitBurst={burst}\n\n[Service]\nRestart=always\nRestartSec=1\n"
+        "[Unit]\nOnFailure={fallback_unit}\nStartLimitIntervalSec={START_LIMIT_WINDOW_SECS}\nStartLimitBurst={burst}\n\n[Service]\nRestart=always\nRestartSec=1\n"
     )
 }
 
@@ -693,9 +720,10 @@ pub fn fallback_unit(layout: &Layout, main_unit: &str) -> String {
 /// [`fallback_unit`] runs, so the verb is the same code on both systems.
 ///
 /// launchd has no start limit and no `OnFailure=` to run the job when the daemon fails its
-/// burst, so the job runs on a timer. What the verb does when it runs, such as flipping
-/// `current` back ([`Layout::flip_back`]), is the verb's; this function only produces the text.
-/// The job does not run at load.
+/// burst, so the job runs on a timer, and on macOS the verb falls back only after the burst
+/// ([`should_fall_back`] over the start log); otherwise it changes nothing. What the verb does
+/// when it runs, such as flipping `current` back ([`Layout::flip_back`]), is the verb's; this
+/// function only produces the text. The job does not run at load.
 pub fn launchd_fallback_job(layout: &Layout, label: &str, interval_secs: u32) -> String {
     let dir = xml_escape(&layout.dir().display().to_string());
     let label = xml_escape(label);
