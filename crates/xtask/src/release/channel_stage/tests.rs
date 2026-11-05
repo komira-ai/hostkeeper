@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::os::unix::fs::MetadataExt;
 
-use base64::Engine as _;
 use clap::Parser;
 use hostkeeper_config::daemon::{DaemonConfig, Sha256Hex};
 use hostkeeper_package::fetch::{FetchEnv, PackageOrder, fetch_package};
