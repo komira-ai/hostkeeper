@@ -208,6 +208,15 @@ fn source(request: &Request) -> Result<(Package, Source<'_>), Error> {
 
 /// Builds the package of `request` and its digest file; the lines to print.
 pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<String>, Error> {
+    package_dated(request, || Ok(git.commit_time(&request.commit)?))
+}
+
+/// [`package`], with the archive's times from `mtime` (asked for after the binary and the units
+/// are read and checked) in place of the commit's time in git.
+pub(crate) fn package_dated(
+    request: &Request,
+    mtime: impl FnOnce() -> Result<u64, Error>,
+) -> Result<Vec<String>, Error> {
     let (kind, source) = source(request)?;
     let name = request.service.name();
     let binary = read(&request.binary)?;
@@ -239,7 +248,7 @@ pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<Str
     }
     let entries = entries(name, binary, contents);
     check_entries(&entries)?;
-    let mtime = git.commit_time(&request.commit)?;
+    let mtime = mtime()?;
     let bytes = compress(&archive(&entries, mtime)?);
     let name = kind.package_name(&request.version, request.platform);
     let hex = hex::encode(Sha256::digest(&bytes));

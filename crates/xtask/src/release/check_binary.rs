@@ -1,12 +1,14 @@
 //! `release check-binary <binary> <version> <commit>`: runs a built binary with `--version` and
-//! refuses it unless it prints exactly the stamp of that version and commit
-//! ([`stamp_string`]). The binary is run through [`VersionOf`], the adapter of the
-//! [`RunVersion`] port.
+//! refuses it unless it prints exactly the stamp of that version and commit ([`stamp_of`]). The
+//! binary's file name says which shipped binary it is (one of [`PROGRAMS`]), and so the program
+//! name the stamp starts with; any other file name is refused before anything runs. The binary
+//! is run through [`VersionOf`], the adapter of the [`RunVersion`] port.
 
+use std::ffi::OsStr;
 use std::path::Path;
 
 use super::Error;
-use super::contract::{Commit, Version, stamp_string};
+use super::contract::{Commit, PROGRAMS, Version, stamp_of};
 use super::ports::{Exec, PortError, RunVersion, Said};
 
 /// Runs a binary with `--version` through an [`Exec`].
@@ -41,14 +43,25 @@ impl<E: Exec> RunVersion for VersionOf<E> {
     }
 }
 
-/// Runs `binary` with `--version` and checks that it exited successfully and printed the stamp
-/// of `version` and `commit`, followed by at most one line break.
+/// Runs `binary`, whose file name is one of [`PROGRAMS`], with `--version` and checks that it
+/// exited successfully and printed that program's stamp of `version` and `commit`, followed by
+/// at most one line break.
 pub(crate) fn check_binary(
     run: &dyn RunVersion,
     binary: &Path,
     version: &Version,
     commit: &Commit,
 ) -> Result<Vec<String>, Error> {
+    let program = binary
+        .file_name()
+        .and_then(OsStr::to_str)
+        .filter(|name| PROGRAMS.contains(name))
+        .ok_or_else(|| {
+            Error::Failed(format!(
+                "{} is not a shipped binary: its file name is none of {PROGRAMS:?}",
+                binary.display()
+            ))
+        })?;
     let said = run.version_of(binary)?;
     if !said.success {
         return Err(Error::Failed(format!(
@@ -57,7 +70,7 @@ pub(crate) fn check_binary(
             said.stderr.trim()
         )));
     }
-    let expected = stamp_string(version, commit);
+    let expected = stamp_of(program, version, commit);
     let printed = said.stdout.strip_suffix('\n').unwrap_or(&said.stdout);
     if printed != expected {
         return Err(Error::Failed(format!(

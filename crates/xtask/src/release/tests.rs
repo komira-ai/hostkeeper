@@ -888,7 +888,7 @@ fn the_wired_adapters_route_each_port_to_its_program() {
     assert_eq!(
         ports
             .verifier
-            .verify(Path::new("a.deb"), None)
+            .verify(Path::new("a.deb"), None, &c)
             .map_err(|e| e.why),
         Err(why("gh"))
     );

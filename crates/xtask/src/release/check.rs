@@ -223,7 +223,7 @@ fn check_attestations(
         let label = format!("{name} ({form})");
         judge(
             &label,
-            verifier.verify(&file, bundle),
+            verifier.verify(&file, bundle, commit),
             &digest,
             commit,
             problems,

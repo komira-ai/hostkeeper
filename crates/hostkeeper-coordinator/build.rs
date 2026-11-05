@@ -3,9 +3,10 @@
 //! which build gave them.
 //!
 //! The commit is `git rev-parse --short=12 HEAD` in the checkout being built, or `unknown`
-//! where that fails (a source archive, no `git`). Uncommitted changes are not marked. There
-//! is no override: a build names the commit it was built from. Cargo runs this again when
-//! `HEAD` moves or the branch it names gets a new commit.
+//! where that fails (a source archive, no `git`). Uncommitted changes are not marked. A release
+//! build also gives the compiler `RELEASE_COMMIT`, which `src/stamp.rs` prints in place of this
+//! one; this script does not read it. Cargo runs this again when `HEAD` moves or the branch it
+//! names gets a new commit.
 
 use std::path::PathBuf;
 use std::process::Command;
