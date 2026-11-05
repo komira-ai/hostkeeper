@@ -189,6 +189,119 @@ fn index_writes_the_release_index_without_asking_for_adapters() {
 }
 
 #[test]
+fn index_for_hello_writes_hello_index_json_from_the_hello_packages_only() {
+    // Catches: `--service` not reaching the index verb, so that the hello packages are listed in
+    // `index.json` (or the hostkeeper ones in `hello-index.json`), or a hello index that names
+    // another service.
+    let d = scratch("release-index-hello");
+    std::fs::write(d.join("hello-0.1.9-linux-arm64.tar.zst"), b"hello arm").expect("write");
+    std::fs::write(d.join("hello-0.1.9-macos-arm64.tar.zst"), b"hello mac").expect("write");
+    std::fs::write(d.join("hostkeeper-0.1.9-linux-x86_64.tar.zst"), b"hk x86").expect("write");
+    let (out, connected) = connects(verb(&[
+        "index",
+        "--service",
+        "hello",
+        "--version",
+        "0.1.9",
+        "--dir",
+        text(&d),
+    ]));
+    assert_eq!(
+        out,
+        Ok(vec![format!(
+            "{}: the packages of hello 0.1.9 for linux-arm64, macos-arm64",
+            d.join("hello-index.json").display()
+        )])
+    );
+    assert!(!connected);
+    assert!(!d.join("index.json").exists());
+    let written = std::fs::read_to_string(d.join("hello-index.json")).expect("the index");
+    let digest = |name: &str| file_sha256(&d.join(name)).expect("hash");
+    assert_eq!(
+        written,
+        format!(
+            "{{\"packages\":[\
+             {{\"bytes\":9,\"file\":\"hello-0.1.9-linux-arm64.tar.zst\",\"platform\":\"linux-arm64\",\"sha256\":\"{}\"}},\
+             {{\"bytes\":9,\"file\":\"hello-0.1.9-macos-arm64.tar.zst\",\"platform\":\"macos-arm64\",\"sha256\":\"{}\"}}\
+             ],\"schema\":1,\"service\":\"hello\",\"version\":\"0.1.9\"}}",
+            digest("hello-0.1.9-linux-arm64.tar.zst"),
+            digest("hello-0.1.9-macos-arm64.tar.zst"),
+        )
+    );
+    // The same directory, with no `--service`, indexes the hostkeeper package alone.
+    let (out, _) = connects(verb(&["index", "--version", "0.1.9", "--dir", text(&d)]));
+    assert_eq!(
+        out,
+        Ok(vec![format!(
+            "{}: the packages of hostkeeper 0.1.9 for linux-x86_64",
+            d.join("index.json").display()
+        )])
+    );
+}
+
+#[test]
+fn package_builds_the_package_of_the_service_asked_for_and_hostkeeper_by_default() {
+    // Catches: `--service`, `--fail-ready` or an absent `--unit` not reaching the package verb:
+    // a hello package built as hostkeeper's (or refused for want of a unit), `--fail-ready`
+    // ignored, a default other than hostkeeper, or a refusal that is not reported.
+    let (h, c) = one_commit();
+    let d = scratch("release-package-hello");
+    let binary = d.join("hello");
+    let out_dir = d.join("out");
+    std::fs::write(&binary, b"the hello binary").expect("write");
+    let parse = |extra: &[&str]| {
+        let mut args = vec![
+            "package",
+            "--platform",
+            "macos-arm64",
+            "--version",
+            "0.1.2",
+            "--commit",
+            c.as_str(),
+            "--binary",
+            text(&binary),
+            "--out",
+            text(&out_dir),
+        ];
+        args.extend_from_slice(extra);
+        verb(&args)
+    };
+    let out = run(parse(&["--service", "hello", "--fail-ready"]), || {
+        Fakes::over(h)
+    });
+    let lines = out.expect("the hello package");
+    let name = "hello-0.1.2-macos-arm64.tar.zst";
+    let hex = file_sha256(&out_dir.join(name)).expect("hash");
+    assert_eq!(
+        lines,
+        [format!("{name}: sha256 {hex}"), format!("sha256={hex}")]
+    );
+    assert!(
+        !d.join("out")
+            .join("hostkeeper-0.1.2-macos-arm64.tar.zst")
+            .exists()
+    );
+
+    // Without `--service` the package is hostkeeper's: it needs a unit, and not for macOS.
+    let (h, _) = one_commit();
+    let out = run(parse(&[]), || Fakes::over(h));
+    assert!(
+        matches!(&out, Err(Error::Failed(why)) if why.contains("macos-arm64 package waits")),
+        "{out:?}"
+    );
+    let (h, _) = one_commit();
+    let unit = d.join("hostkeeper.service");
+    let out = run(
+        parse(&["--service", "hello", "--unit", text(&unit)]),
+        || Fakes::over(h),
+    );
+    assert!(
+        matches!(&out, Err(Error::Failed(why)) if why.contains("takes no --unit")),
+        "{out:?}"
+    );
+}
+
+#[test]
 fn version_of_a_shallow_clone_is_refused() {
     // Catches: the version counted on a shallow clone, which holds only part of the history.
     let (mut h, c) = one_commit();

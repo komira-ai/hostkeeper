@@ -11,9 +11,11 @@
 //!   committed baseline `crates/xtask/tests/release/asset_names.baseline` holds them).
 //!
 //! There are exactly three platforms, linux-x86_64, linux-arm64 and macos-arm64
-//! ([`Platform::ALL`]): one package per OS and CPU family, listed in the release index
-//! (`index.json`, see `index`). A release ships the platforms of [`Platform::RELEASED`], the two
-//! Linux ones until the macOS daemon exists.
+//! ([`Platform::ALL`]): one package per OS and CPU family, listed in the release index of its
+//! service (`index.json` for hostkeeper, `hello-index.json` for hello, see `index`). A release
+//! ships the platforms of [`Platform::RELEASED`], the two Linux ones until the macOS daemon
+//! exists. A release carries the packages of two services ([`Service`]): hostkeeper's own and
+//! `hello`, the example service of `examples/hello`.
 
 use std::fmt;
 use std::str::FromStr;
@@ -50,6 +52,10 @@ pub(crate) const RELEASE_COMMIT: &str = "RELEASE_COMMIT";
 /// The program name a shipped binary prints first for `--version`.
 pub(crate) const PROGRAM: &str = "hostkeeper";
 
+/// The name of the example service, `examples/hello`: its package name, binary and release index
+/// stem.
+pub(crate) const HELLO: &str = "hello";
+
 /// The coordinator's asset stem.
 pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 
@@ -58,6 +64,9 @@ pub(crate) const SUMS: &str = "SHA256SUMS";
 
 /// The release index: which package file serves each platform (see `index`).
 pub(crate) const INDEX: &str = "index.json";
+
+/// The release index of the hello packages: the same schema as [`INDEX`], `service` `hello`.
+pub(crate) const HELLO_INDEX: &str = "hello-index.json";
 
 /// What a provenance bundle's file name adds to its asset's.
 pub(crate) const BUNDLE_SUFFIX: &str = ".sigstore.json";
@@ -292,9 +301,48 @@ impl Platform {
     }
 }
 
-/// The file name of the hostkeeper package of `version` for `platform`.
-pub(crate) fn package_name(version: &Version, platform: Platform) -> String {
-    format!("{PROGRAM}-{version}-{}{PACKAGE_SUFFIX}", platform.name())
+/// A service whose packages a release carries: each has a package per platform and a release
+/// index of its own. Hostkeeper is the default of every verb that takes one, so a verb given no
+/// service does what it did before there were two.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum Service {
+    /// The daemon's own package, for its self-update.
+    #[default]
+    #[value(name = "hostkeeper")]
+    Hostkeeper,
+    /// The example service of `examples/hello`.
+    #[value(name = "hello")]
+    Hello,
+}
+
+impl Service {
+    /// Every service, hostkeeper first.
+    pub(crate) const ALL: [Service; 2] = [Service::Hostkeeper, Service::Hello];
+
+    /// The service's name: its package name, its binary and the `service` of its release index.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Service::Hostkeeper => PROGRAM,
+            Service::Hello => HELLO,
+        }
+    }
+
+    /// The file name of the service's release index.
+    pub(crate) fn index_name(self) -> &'static str {
+        match self {
+            Service::Hostkeeper => INDEX,
+            Service::Hello => HELLO_INDEX,
+        }
+    }
+
+    /// The file name of the service's package of `version` for `platform`.
+    pub(crate) fn package_name(self, version: &Version, platform: Platform) -> String {
+        format!(
+            "{}-{version}-{}{PACKAGE_SUFFIX}",
+            self.name(),
+            platform.name()
+        )
+    }
 }
 
 /// The file name of the bundle of the asset `name`.
@@ -313,6 +361,7 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 ///
 /// - `hostkeeper-<v>-<p>.tar.gz`, the binary;
 /// - `hostkeeper-<v>-<p>.tar.zst`, the hostkeeper package, and its `.sha256`;
+/// - `hello-<v>-<p>.tar.zst`, the hello package, and its `.sha256`;
 /// - `hostkeeper-<v>-<p>.cdx.json`, the SBOM;
 ///
 /// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:
@@ -322,15 +371,20 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
 ///
-/// the bundle of each binary tarball, Linux package, hostkeeper package and image; and once,
-/// [`INDEX`] (the release index of the hostkeeper packages) and `SHA256SUMS`.
+/// the bundle of each binary tarball, Linux package, hostkeeper package, hello package and image;
+/// and once, [`INDEX`] (the release index of the hostkeeper packages), [`HELLO_INDEX`] (that of
+/// the hello packages) and `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
-    let mut names = vec![SUMS.to_owned(), INDEX.to_owned()];
+    let mut names = vec![SUMS.to_owned()];
+    names.extend(Service::ALL.map(|s| s.index_name().to_owned()));
     for &platform in platforms {
         let p = platform.name();
-        let package = package_name(version, platform);
-        let mut attested = vec![format!("{PROGRAM}-{version}-{p}.tar.gz"), package.clone()];
-        names.push(format!("{package}{DIGEST_SUFFIX}"));
+        let mut attested = vec![format!("{PROGRAM}-{version}-{p}.tar.gz")];
+        for service in Service::ALL {
+            let package = service.package_name(version, platform);
+            names.push(format!("{package}{DIGEST_SUFFIX}"));
+            attested.push(package);
+        }
         names.push(format!("{PROGRAM}-{version}-{p}.cdx.json"));
         if let Some((deb, rpm)) = platform.linux_arches() {
             attested.extend([

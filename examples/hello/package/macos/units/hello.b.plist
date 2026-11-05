@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>hello.b</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/var/lib/hostkeeper/packages/hello/current/bin/hello</string>
+		<string>--port</string>
+		<string>9310</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>PathState</key>
+		<dict>
+			<key>/var/lib/updater/hooks/hello/slots/b</key>
+			<true/>
+		</dict>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/var/log/hello.b.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/hello.b.err.log</string>
+</dict>
+</plist>

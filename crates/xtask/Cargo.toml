@@ -12,6 +12,9 @@ description = "The CI steps of this repository (cargo xtask <verb>)."
 clap.workspace = true
 flate2.workspace = true
 hex.workspace = true
+# The launchd plists of a macOS service package (`release package --service hello`), rendered
+# with the renderer the daemon's own plists use.
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 # The zstd compression of the hostkeeper package (`release package`).
 ruzstd.workspace = true
 # The JSON `gh` prints: workflow runs, issues, releases and verified attestations.

@@ -1,7 +1,9 @@
-//! The release index, `index.json`: which package file serves each platform of one version of a
-//! service. It sits beside the packages in the channel (`{channel}/{S}/{V}/index.json`, with
+//! The release index: which package file serves each platform of one version of a service. It
+//! sits beside the packages in the channel (`{channel}/{S}/{V}/index.json`, with
 //! `{S}-{V}-{platform}.tar.zst` and its `.sigstore.json` bundle) and is a release asset of
-//! hostkeeper itself:
+//! hostkeeper itself. A release holds two: `index.json` of the hostkeeper packages and
+//! `hello-index.json` of the hello packages ([`Service::index_name`]), the same schema with
+//! `service` `hostkeeper` or `hello`:
 //!
 //! ```json
 //! {"packages":[{"bytes":N,"file":"S-V-linux-x86_64.tar.zst","platform":"linux-x86_64","sha256":"<64 hex>"}],
@@ -22,7 +24,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::contract::{PACKAGE_SUFFIX, Platform, Version};
+use super::contract::{PACKAGE_SUFFIX, Platform, Service, Version};
 use super::{Error, file_sha256};
 
 /// The one schema of the index.
@@ -252,17 +254,23 @@ impl ReleaseIndex {
     }
 }
 
-/// The `release index --version V --dir D` verb: writes `D/index.json`, the index of the
-/// hostkeeper packages of `version` in `dir`, for every platform whose package is there.
-pub(crate) fn write_index(dir: &Path, version: &Version) -> Result<Vec<String>, Error> {
-    let index = ReleaseIndex::of_dir(dir, super::contract::PROGRAM, version, &Platform::ALL)?;
-    let path = dir.join(super::contract::INDEX);
+/// The `release index --service S --version V --dir D` verb: writes `D/<index name of S>`, the
+/// index of the packages of `service` at `version` in `dir`, for every platform whose package is
+/// there.
+pub(crate) fn write_index(
+    dir: &Path,
+    service: Service,
+    version: &Version,
+) -> Result<Vec<String>, Error> {
+    let index = ReleaseIndex::of_dir(dir, service.name(), version, &Platform::ALL)?;
+    let path = dir.join(service.index_name());
     std::fs::write(&path, index.to_json())
         .map_err(Error::io(format!("write {}", path.display())))?;
     let platforms: Vec<&str> = index.packages.iter().map(|e| e.platform.name()).collect();
     Ok(vec![format!(
-        "{}: the packages of hostkeeper {version} for {}",
+        "{}: the packages of {} {version} for {}",
         path.display(),
+        service.name(),
         platforms.join(", ")
     )])
 }

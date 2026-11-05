@@ -39,7 +39,7 @@ fn asset_names_are_the_documented_contract() {
     // changing with it, or a platform added or dropped.
     let v = version("7.8.9");
     assert_eq!(asset_names(&v, &Platform::RELEASED), baseline_for(&v));
-    assert_eq!(asset_names(&v, &Platform::RELEASED).len(), 32);
+    assert_eq!(asset_names(&v, &Platform::RELEASED).len(), 39);
 }
 
 #[test]
@@ -195,14 +195,18 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 12);
-    assert_eq!(summed.len(), 19);
-    assert!(summed.contains(&INDEX.to_owned()) & !attested.contains(&INDEX.to_owned()));
+    assert_eq!(attested.len(), 14);
+    assert_eq!(summed.len(), 24);
+    for index in [INDEX, HELLO_INDEX] {
+        assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
+    }
     assert!(attested.iter().all(|a| summed.contains(a)));
     assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
-    assert!(attested.contains(&package_name(&v, Platform::LinuxArm64)));
+    assert!(attested.contains(&Service::Hostkeeper.package_name(&v, Platform::LinuxArm64)));
+    assert!(attested.contains(&Service::Hello.package_name(&v, Platform::LinuxArm64)));
+    assert!(attested.contains(&Service::Hello.package_name(&v, Platform::LinuxX86_64)));
     assert_eq!(
-        package_name(&v, Platform::LinuxX86_64),
+        Service::Hostkeeper.package_name(&v, Platform::LinuxX86_64),
         "hostkeeper-0.1.3-linux-x86_64.tar.zst"
     );
     assert_eq!(bundle_of("a.deb"), "a.deb.sigstore.json");
@@ -235,13 +239,17 @@ fn there_are_exactly_three_platforms_and_a_release_ships_the_linux_ones() {
 
 #[test]
 fn a_macos_platform_has_a_binary_a_package_and_an_sbom_but_no_linux_assets() {
-    // Catches: a deb, an rpm, a coordinator or an image named for macOS, or its package without
-    // a bundle or digest file.
+    // Catches: a deb, an rpm, a coordinator or an image named for macOS, or its packages (the
+    // hostkeeper one and the hello one) without a bundle or digest file.
     let v = version("0.2.1");
     assert_eq!(
         asset_names(&v, &[Platform::MacosArm64]),
         [
             "SHA256SUMS",
+            "hello-0.2.1-macos-arm64.tar.zst",
+            "hello-0.2.1-macos-arm64.tar.zst.sha256",
+            "hello-0.2.1-macos-arm64.tar.zst.sigstore.json",
+            "hello-index.json",
             "hostkeeper-0.2.1-macos-arm64.cdx.json",
             "hostkeeper-0.2.1-macos-arm64.tar.gz",
             "hostkeeper-0.2.1-macos-arm64.tar.gz.sigstore.json",
@@ -250,5 +258,27 @@ fn a_macos_platform_has_a_binary_a_package_and_an_sbom_but_no_linux_assets() {
             "hostkeeper-0.2.1-macos-arm64.tar.zst.sigstore.json",
             "index.json",
         ]
+    );
+}
+
+#[test]
+fn the_services_name_their_packages_and_indexes() {
+    // Catches: a hello package named as a hostkeeper one, a service's index under the other's
+    // name, or a default service other than hostkeeper (which every existing invocation relies on).
+    let v = version("1.2.3");
+    assert_eq!(Service::default(), Service::Hostkeeper);
+    assert_eq!(Service::ALL, [Service::Hostkeeper, Service::Hello]);
+    assert_eq!(Service::ALL.map(Service::name), ["hostkeeper", "hello"]);
+    assert_eq!(
+        Service::ALL.map(Service::index_name),
+        ["index.json", "hello-index.json"]
+    );
+    assert_eq!(
+        Service::Hello.package_name(&v, Platform::MacosArm64),
+        "hello-1.2.3-macos-arm64.tar.zst"
+    );
+    assert_eq!(
+        Service::Hostkeeper.package_name(&v, Platform::LinuxArm64),
+        "hostkeeper-1.2.3-linux-arm64.tar.zst"
     );
 }

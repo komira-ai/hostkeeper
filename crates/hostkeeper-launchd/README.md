@@ -8,7 +8,7 @@ fakes on Linux and has not been run on a Mac.
 | module | what it holds |
 |---|---|
 | `label` | `REVERSE_DNS_PREFIX`, `Label` (1 to 255 bytes of letters, digits, `.`, `_`, `-`): the daemon's label, a step job's label, and the label of the job for a step unit name as the step record names it |
-| `plist` | the XML property lists of the daemon job and of a step job (`daemon_plist`, `step_plist`); control characters are refused |
+| `plist` | the XML property lists of the daemon job, of a step job and of a service package's job (`daemon_plist`, `step_plist`, `service_plist`: kept alive while a path exists, not started at load); control characters are refused |
 | `launchctl` | the `Launchctl` port (one command), its real adapter `LaunchctlProcess` with a deadline and bounded output, the reader of `launchctl print system/<label>`, and print and bootout by label |
 | `fake` | `FakeLaunchctl`: scripted answers per exact arguments, and the calls made |
 | `manager` | `LaunchdServiceManager`: the observer's `ServiceManager` over `launchctl print` |

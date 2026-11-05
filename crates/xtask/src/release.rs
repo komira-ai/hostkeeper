@@ -8,14 +8,17 @@
 //!   file before a build.
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
 //!   ([`contract::stamp_string`]) and the check that a built binary prints exactly it.
-//! - `package` ([`package`]): the deterministic hostkeeper package, `.tar.zst`, and its SHA-256.
-//! - `index` ([`index`]): the release index, `index.json`: which package serves each platform.
+//! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
+//!   unless it says `hello`), `.tar.zst`, and its SHA-256.
+//! - `index` ([`index`]): the release index of a service, `index.json` for hostkeeper and
+//!   `hello-index.json` for hello: which package serves each platform.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `plan` ([`plan`]): whether a commit (or, on the scheduled path, each missed commit) is
 //!   released, and under which version.
 //! - `locate` ([`locate`]): the commit is on `main` and its runs exist; the id of its build run.
-//! - `check` ([`check`]): every asset against `SHA256SUMS`, every attestation and bundle against
-//!   the signer identity of [`contract`] and the commit.
+//! - `check` ([`check`]): every asset against `SHA256SUMS`, both release indexes against the
+//!   packages, every attestation and bundle against the signer identity of [`contract`] and the
+//!   commit.
 //! - `publish` ([`publish`]): the GitHub release of a checked directory, idempotent.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`
@@ -47,7 +50,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use check_binary::VersionOf;
-use contract::{Commit, Platform, Repo, Version};
+use contract::{Commit, Platform, Repo, Service, Version};
 use git::GitCli;
 use github::Gh;
 use ports::{Adapters, Exec, PortError, Ports, Run};
@@ -123,8 +126,13 @@ pub(crate) enum Verb {
         /// The commit, 40 lowercase hex digits.
         commit: Commit,
     },
-    /// Build the hostkeeper package of one platform, and its `.sha256`.
+    /// Build the package of a service for one platform, and its `.sha256`.
     Package {
+        /// The service: hostkeeper (the default) or hello. Hello's manifest and units are
+        /// rendered for the platform, and it builds for every platform; hostkeeper's package is
+        /// not built for macOS yet.
+        #[arg(long, value_enum, default_value_t)]
+        service: Service,
         #[arg(long, value_enum)]
         platform: Platform,
         #[arg(long)]
@@ -132,19 +140,27 @@ pub(crate) enum Verb {
         /// The commit built; the archive's times are its committer time.
         #[arg(long)]
         commit: Commit,
-        /// The hostkeeper binary of that platform: `bin/hostkeeper` in the package.
+        /// The service's binary for that platform: `bin/<service>` in the package.
         #[arg(long)]
         binary: PathBuf,
-        /// The systemd unit: `units/hostkeeper.service` in the package.
+        /// The systemd unit: `units/hostkeeper.service` in the package. Required for hostkeeper,
+        /// refused for hello.
         #[arg(long)]
-        unit: PathBuf,
+        unit: Option<PathBuf>,
+        /// Start hello with `--fail-ready`, so it never reports ready. Refused for hostkeeper.
+        #[arg(long)]
+        fail_ready: bool,
         /// The directory the package and its `.sha256` are written to.
         #[arg(long)]
         out: PathBuf,
     },
-    /// Write `index.json`, the release index of the hostkeeper packages of a version in a
-    /// directory: one entry per platform whose package is there.
+    /// Write the release index of a service's packages of a version in a directory, one entry
+    /// per platform whose package is there: `index.json` for hostkeeper, `hello-index.json` for
+    /// hello.
     Index {
+        /// The service: hostkeeper (the default) or hello.
+        #[arg(long, value_enum, default_value_t)]
+        service: Service,
         #[arg(long)]
         version: Version,
         /// The directory holding the packages; the index is written there.
@@ -212,7 +228,11 @@ pub(crate) fn run<A: Adapters>(
         Verb::SetVersion { version, root } => set_version::set_version(&root, &version),
         Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
-        Verb::Index { version, dir } => index::write_index(&dir, &version),
+        Verb::Index {
+            service,
+            version,
+            dir,
+        } => index::write_index(&dir, service, &version),
         verb => run_with(verb, &connect().ports()),
     }
 }
@@ -234,20 +254,24 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             commit,
         } => check_binary::check_binary(ports.run_version, &binary, &version, &commit),
         Verb::Package {
+            service,
             platform,
             version,
             commit,
             binary,
             unit,
+            fail_ready,
             out,
         } => package::package(
             ports.git,
             &package::Request {
+                service,
                 platform,
                 version,
                 commit,
                 binary,
                 unit,
+                fail_ready,
                 out,
             },
         ),

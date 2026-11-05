@@ -258,7 +258,7 @@ fn a_directory_without_a_package_has_no_index() {
         )))
     );
     assert_eq!(
-        write_index(&dir, &version()),
+        write_index(&dir, Service::Hostkeeper, &version()),
         Err(Error::Failed(format!(
             "{} holds no package of hostkeeper 1.5.0",
             dir.display()
@@ -275,7 +275,7 @@ fn the_index_verb_writes_the_canonical_index_beside_the_packages() {
     std::fs::write(dir.join("hostkeeper-1.5.0-linux-arm64.tar.zst"), b"arm").expect("write");
     let path = dir.join("index.json");
     assert_eq!(
-        write_index(&dir, &version()),
+        write_index(&dir, Service::Hostkeeper, &version()),
         Ok(vec![format!(
             "{}: the packages of hostkeeper 1.5.0 for linux-arm64",
             path.display()
@@ -294,7 +294,7 @@ fn an_index_that_cannot_be_written_is_an_io_error() {
     std::fs::write(dir.join("hostkeeper-1.5.0-linux-arm64.tar.zst"), b"arm").expect("write");
     std::fs::create_dir(dir.join("index.json")).expect("a directory in the way");
     assert!(matches!(
-        write_index(&dir, &version()),
+        write_index(&dir, Service::Hostkeeper, &version()),
         Err(Error::Io { what, .. }) if what == format!("write {}", dir.join("index.json").display())
     ));
 }
@@ -310,4 +310,55 @@ fn an_invalid_index_names_the_refusal_token() {
         package_file("tierstore", &version(), Platform::MacosArm64),
         "tierstore-1.5.0-macos-arm64.tar.zst"
     );
+}
+
+#[test]
+fn each_service_indexes_its_own_packages_under_its_own_file_name() {
+    // Catches: an index of one service that lists the packages of the other, written to the
+    // other's file name, or whose refusal for want of a package names the wrong service.
+    let dir = scratch("index-per-service");
+    std::fs::write(dir.join("hello-1.5.0-linux-arm64.tar.zst"), b"hello arm").expect("write");
+    std::fs::write(dir.join("hostkeeper-1.5.0-linux-x86_64.tar.zst"), b"hk x86").expect("write");
+    let hello = dir.join("hello-index.json");
+    assert_eq!(
+        write_index(&dir, Service::Hello, &version()),
+        Ok(vec![format!(
+            "{}: the packages of hello 1.5.0 for linux-arm64",
+            hello.display()
+        )])
+    );
+    assert!(!dir.join("index.json").exists());
+    let written = std::fs::read_to_string(&hello).expect("read the index");
+    let parsed = ReleaseIndex::parse(&written, "hello", &version()).expect("a hello index");
+    assert_eq!(parsed.service, "hello");
+    assert_eq!(
+        parsed
+            .packages
+            .iter()
+            .map(|e| e.file.as_str())
+            .collect::<Vec<_>>(),
+        ["hello-1.5.0-linux-arm64.tar.zst"]
+    );
+    assert_eq!(
+        ReleaseIndex::parse(&written, "hostkeeper", &version()),
+        invalid("the index is of hello 1.5.0, not hostkeeper 1.5.0")
+    );
+    assert_eq!(
+        write_index(&dir, Service::Hostkeeper, &version()),
+        Ok(vec![format!(
+            "{}: the packages of hostkeeper 1.5.0 for linux-x86_64",
+            dir.join("index.json").display()
+        )])
+    );
+
+    let empty = scratch("index-hello-none");
+    std::fs::write(empty.join("hostkeeper-1.5.0-linux-arm64.tar.zst"), b"hk").expect("write");
+    assert_eq!(
+        write_index(&empty, Service::Hello, &version()),
+        Err(Error::Failed(format!(
+            "{} holds no package of hello 1.5.0",
+            empty.display()
+        )))
+    );
+    assert!(!empty.join("hello-index.json").exists());
 }

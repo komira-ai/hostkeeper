@@ -7,6 +7,8 @@ use crate::testdir::TestDir;
 const LOCAL_TAR: &str = "hostkeeper-0.1.5-linux-x86_64.tar.gz";
 const CDX: &str = "hostkeeper-coordinator-0.1.5-linux-arm64.cdx.json";
 const PACKAGE: &str = "hostkeeper-0.1.5-linux-x86_64.tar.zst";
+const HELLO_PACKAGE: &str = "hello-0.1.5-linux-x86_64.tar.zst";
+const HELLO_INDEX: &str = "hello-index.json";
 
 fn version() -> Version {
     "0.1.5".parse().expect("a version")
@@ -56,12 +58,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 32 assets of v0.1.5 match SHA256SUMS, and 24 attestations of \
+            "release check: the 39 assets of v0.1.5 match SHA256SUMS, and 28 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 24);
+    assert_eq!(calls.len(), 28);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -241,7 +243,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 24);
+    assert_eq!(everything.len(), 28);
 }
 
 #[test]
@@ -302,7 +304,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 24);
+    assert_eq!(lines.len(), 28);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
@@ -313,10 +315,10 @@ fn a_verifier_error_is_listed_for_every_file() {
     );
 }
 
-/// Writes `text` as `index.json` in `dir` and rewrites `SHA256SUMS` to match, so only the index
-/// check can object.
-fn replace_index(dir: &Path, text: &str) {
-    std::fs::write(dir.join(INDEX), text).expect("write the index");
+/// Writes `text` as the release index of `service` in `dir` and rewrites `SHA256SUMS` to match,
+/// so only the index check can object.
+fn replace_index_of(dir: &Path, service: Service, text: &str) {
+    std::fs::write(dir.join(service.index_name()), text).expect("write the index");
     let mut sums = String::new();
     for name in summed_names(&version()) {
         let digest = file_sha256(&dir.join(&name)).expect("hash");
@@ -325,9 +327,19 @@ fn replace_index(dir: &Path, text: &str) {
     std::fs::write(dir.join(SUMS), sums).expect("write the sums");
 }
 
-/// The index `write_assets` wrote.
+/// Writes `text` as `index.json` (see [`replace_index_of`]).
+fn replace_index(dir: &Path, text: &str) {
+    replace_index_of(dir, Service::Hostkeeper, text);
+}
+
+/// The index of `service` `write_assets` wrote.
+fn good_index_of(dir: &Path, service: Service) -> ReleaseIndex {
+    ReleaseIndex::of_dir(dir, service.name(), &version(), &Platform::RELEASED).expect("index")
+}
+
+/// The hostkeeper index `write_assets` wrote.
 fn good_index(dir: &Path) -> ReleaseIndex {
-    ReleaseIndex::of_dir(dir, PROGRAM, &version(), &Platform::RELEASED).expect("index")
+    good_index_of(dir, Service::Hostkeeper)
 }
 
 #[test]
@@ -389,9 +401,129 @@ fn a_missing_index_is_listed_once_and_not_read() {
     // Catches: a check that reads an index that is not there, or that does not report it.
     let (dir, commit) = assets("check-index-missing");
     let verifier = FakeVerifier::good(&commit);
-    std::fs::remove_file(dir.join(INDEX)).expect("remove");
+    std::fs::remove_file(dir.join("index.json")).expect("remove");
     assert_eq!(
         refused(run(&verifier, &dir, &commit)),
         vec!["missing index.json".to_owned()]
+    );
+}
+
+#[test]
+fn a_missing_hello_package_digest_file_or_bundle_is_listed_and_later_steps_skip_it() {
+    // Catches: a check that does not hold the hello packages to the release's asset list, or
+    // reads a hello package it already reported missing.
+    let (dir, commit) = assets("check-hello-missing");
+    std::fs::remove_file(dir.join(HELLO_PACKAGE)).expect("remove");
+    std::fs::remove_file(dir.join(format!("{HELLO_PACKAGE}.sha256"))).expect("remove");
+    assert_eq!(
+        refused(run(&FakeVerifier::good(&commit), &dir, &commit)),
+        vec![
+            format!("missing {HELLO_PACKAGE}"),
+            format!("missing {HELLO_PACKAGE}.sha256")
+        ]
+    );
+    let (dir, commit) = assets("check-hello-no-bundle");
+    let bundle = bundle_of("hello-0.1.5-linux-arm64.tar.zst");
+    std::fs::remove_file(dir.join(&bundle)).expect("remove");
+    assert_eq!(
+        refused(run(&FakeVerifier::good(&commit), &dir, &commit)),
+        vec![format!("missing {bundle}")]
+    );
+}
+
+#[test]
+fn the_hello_packages_are_verified_online_and_from_their_bundles() {
+    // Catches: a check that leaves the hello packages out of the attestations it verifies, or
+    // accepts a hello package attested for another commit.
+    let (dir, commit) = assets("check-hello-attested");
+    let verifier = FakeVerifier::good(&commit);
+    run(&verifier, &dir, &commit).expect("a good directory");
+    let calls = verifier.calls.borrow();
+    for platform in ["linux-x86_64", "linux-arm64"] {
+        let name = format!("hello-0.1.5-{platform}.tar.zst");
+        assert!(calls.contains(&format!("online {name}")), "{name}");
+        assert!(
+            calls.contains(&format!("offline {name} {name}.sigstore.json")),
+            "{name}"
+        );
+    }
+    let other = nth_commit(8);
+    let verifier = changing(HELLO_PACKAGE, &commit, |mut a| {
+        a.source_commit = nth_commit(8).to_string();
+        vec![a]
+    });
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![
+            format!("{HELLO_PACKAGE} (online): attests the commit {other}, not the pin {commit}"),
+            format!("{HELLO_PACKAGE} (offline): attests the commit {other}, not the pin {commit}"),
+        ]
+    );
+}
+
+#[test]
+fn the_hello_index_is_checked_as_the_index_of_hello_and_named_in_its_problems() {
+    // Catches: a hello index that is the hostkeeper one under another name, one that is of
+    // another version, lists a package with another digest, or is not written canonically.
+    let hello = |dir: &Path| good_index_of(dir, Service::Hello);
+    let (dir, commit) = assets("check-hello-index-other-service");
+    let verifier = FakeVerifier::good(&commit);
+    replace_index_of(&dir, Service::Hello, &good_index(&dir).to_json());
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![format!(
+            "{HELLO_INDEX}: index_invalid: the index is of hostkeeper 0.1.5, not hello 0.1.5"
+        )]
+    );
+
+    let (dir, commit) = assets("check-hello-index-other-digest");
+    let verifier = FakeVerifier::good(&commit);
+    let mut index = hello(&dir);
+    index.packages[1].bytes += 1;
+    replace_index_of(&dir, Service::Hello, &index.to_json());
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![format!(
+            "{HELLO_INDEX} does not list exactly the packages of the directory with their sizes \
+             and SHA-256 digests"
+        )]
+    );
+
+    let (dir, commit) = assets("check-hello-index-spaced");
+    let verifier = FakeVerifier::good(&commit);
+    let spaced = hello(&dir).to_json().replace(",\"schema\"", ", \"schema\"");
+    replace_index_of(&dir, Service::Hello, &spaced);
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![format!("{HELLO_INDEX} is not written canonically")]
+    );
+
+    let (dir, commit) = assets("check-hello-index-missing");
+    std::fs::remove_file(dir.join(HELLO_INDEX)).expect("remove");
+    assert_eq!(
+        refused(run(&FakeVerifier::good(&commit), &dir, &commit)),
+        vec![format!("missing {HELLO_INDEX}")]
+    );
+}
+
+#[test]
+fn the_hostkeeper_index_does_not_stand_for_the_hello_index() {
+    // Catches: each index checked against the other service's packages, so that a good release
+    // fails or a swapped pair passes.
+    let (dir, commit) = assets("check-index-swapped");
+    let verifier = FakeVerifier::good(&commit);
+    let hello = good_index_of(&dir, Service::Hello).to_json();
+    let hostkeeper = good_index(&dir).to_json();
+    replace_index_of(&dir, Service::Hello, &hostkeeper);
+    replace_index_of(&dir, Service::Hostkeeper, &hello);
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![
+            "index.json: index_invalid: the index is of hello 0.1.5, not hostkeeper 0.1.5"
+                .to_owned(),
+            format!(
+                "{HELLO_INDEX}: index_invalid: the index is of hostkeeper 0.1.5, not hello 0.1.5"
+            ),
+        ]
     );
 }

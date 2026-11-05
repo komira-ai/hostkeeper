@@ -1,17 +1,24 @@
-//! `release package`: hostkeeper's own package, the archive of design sections 4.7 and 5.5,
-//! built the same bytes every time for one commit and version.
+//! `release package`: the package of one service, the archive of design sections 4.7 and 5.5,
+//! built the same bytes every time for one commit and version. There are two services
+//! ([`Service`]): hostkeeper's own package, from a unit file given with `--unit`, and `hello`, the
+//! example service of `examples/hello`, whose manifest and units this module's [`hello`] child
+//! renders from one description for each platform's kind of unit.
 //!
 //! The archive is a ustar tar, compressed by [`compress`], holding exactly these entries in this
-//! order: the directory `bin/`, the file `bin/hostkeeper` (mode 0555), the file `manifest.toml`
-//! (0444), the directory `units/` and the file `units/hostkeeper.service` (0444). Directories are
-//! 0555. Every header has uid and gid 0, empty user and group names and, as its time, the
-//! committer time of the commit built, so the bytes depend on the inputs alone. The archive is
-//! written to the name [`package_name`] gives, with beside it a file of the same name plus
-//! [`DIGEST_SUFFIX`] holding `<sha256>  <package name>` and a line break.
+//! order. Hostkeeper: the directory `bin/`, the file `bin/hostkeeper` (mode 0555), the file
+//! `manifest.toml` (0444), the directory `units/` and the file `units/hostkeeper.service` (0444).
+//! Hello has `bin/hello`, and under `units/` on Linux `hello@.service`, on macOS `hello.a.plist`
+//! and `hello.b.plist` (a package holds one kind of unit). Directories are 0555. Every header has
+//! uid and gid 0, empty user and group names and, as its time, the committer time of the commit
+//! built, so the bytes depend on the inputs alone. The archive is written to the name
+//! [`Service::package_name`] gives, with beside it a file of the same name plus [`DIGEST_SUFFIX`]
+//! holding `<sha256>  <package name>` and a line break.
 //!
-//! Before the archive is built, the unit is checked (design section 4.7: a unit names package
-//! files only through `current`) and the entry list is checked against the rules of section 5.5
-//! that apply to a list this module builds ([`check_entries`]).
+//! Hostkeeper's package refuses `macos-arm64` (its units there are not defined yet), `--fail-ready`
+//! and a missing `--unit`; hello's refuses `--unit`, and builds for every platform. Before the
+//! archive is built, every systemd unit is checked (design section 4.7: a unit names package files
+//! only through the service's own `current`) and the entry list is checked against the rules of
+//! section 5.5 that apply to a list this module builds ([`check_entries`]).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -19,22 +26,39 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::Error;
-use super::contract::{Commit, DIGEST_SUFFIX, Platform, Version, package_name};
+use super::contract::{Commit, DIGEST_SUFFIX, Platform, Service, Version};
 use super::ports::GitHistory;
+
+mod hello;
 
 /// Why there is no macos-arm64 package yet: its units are launchd plists, which the macOS
 /// daemon (design build item B18) defines.
 const MACOS_LATER: &str = "the macos-arm64 package waits for the macOS daemon: its units are launchd plists, not the systemd unit this verb packages";
 
+/// Why hostkeeper's package takes no `--fail-ready`: only hello has that flag to give its units.
+const FAIL_READY_ONLY_HELLO: &str =
+    "--fail-ready is an option of the hello package; hostkeeper has no such flag";
+
+/// Why hostkeeper's package needs `--unit`.
+const UNIT_REQUIRED: &str = "the hostkeeper package needs --unit, the systemd unit it holds";
+
+/// Why hello's package takes no `--unit`.
+const UNIT_REFUSED: &str =
+    "the hello package takes no --unit: its units are rendered for each platform";
+
 /// What `release package` builds a package from.
 pub(crate) struct Request {
+    pub(crate) service: Service,
     pub(crate) platform: Platform,
     pub(crate) version: Version,
     pub(crate) commit: Commit,
-    /// The hostkeeper binary of the platform.
+    /// The service's binary for the platform.
     pub(crate) binary: PathBuf,
-    /// The systemd unit.
-    pub(crate) unit: PathBuf,
+    /// The systemd unit of the hostkeeper package; hello's units are rendered, so it has none.
+    pub(crate) unit: Option<PathBuf>,
+    /// Hello's units start it with `--fail-ready`, so its `/readyz` answers 503 (a build that
+    /// fails verify, for the farm's rollback test).
+    pub(crate) fail_ready: bool,
     /// The directory the package and its digest file are written to.
     pub(crate) out: PathBuf,
 }
@@ -57,17 +81,21 @@ rollback = 300
 cleanup = 300
 "#;
 
-/// The unit file the package holds, under `units/`.
+/// The unit file the hostkeeper package holds, under `units/`.
 const UNIT_FILE: &str = "hostkeeper.service";
 
 /// Where the host links the package: every unit names package files through `current`.
 const PACKAGES: &str = "/var/lib/hostkeeper/packages/";
 
-/// What must follow [`PACKAGES`] wherever a unit names it.
-const CURRENT: &str = "hostkeeper/current/";
+/// What [`PACKAGES`] must be followed by wherever a unit of `service` names it.
+fn current(service: &str) -> String {
+    format!("{service}/current/")
+}
 
-/// The binary the unit must start.
-const BINARY_PATH: &str = "/var/lib/hostkeeper/packages/hostkeeper/current/bin/hostkeeper";
+/// The binary the unit of `service` must start.
+fn binary_path(service: &str) -> String {
+    format!("{PACKAGES}{}bin/{service}", current(service))
+}
 
 /// The top-level names a package may hold (design section 5.5).
 const TOP_LEVEL: [&str; 4] = ["manifest.toml", "bin", "units", "files"];
@@ -104,6 +132,21 @@ impl Entry {
     }
 }
 
+/// A unit file of the package, with where its bytes came from.
+struct Unit {
+    /// The file name under `units/`.
+    file: String,
+    /// What an error names the unit by: the path given with `--unit`, or the entry's path.
+    origin: String,
+    data: Vec<u8>,
+}
+
+/// What a service's package holds besides its binary.
+struct Contents {
+    manifest: String,
+    units: Vec<Unit>,
+}
+
 /// The manifest of hostkeeper's package for `version`: it needs a daemon of its own version.
 fn manifest(version: &Version) -> String {
     format!(
@@ -117,19 +160,62 @@ pub(crate) fn compress(tar: &[u8]) -> Vec<u8> {
     ruzstd::encoding::compress_to_vec(tar, ruzstd::encoding::CompressionLevel::Fastest)
 }
 
+/// Where the units of a package come from.
+enum Source<'a> {
+    /// The file given with `--unit`.
+    File(&'a Path),
+    /// Rendered for the platform, with `--fail-ready` or without.
+    Rendered { fail_ready: bool },
+}
+
+/// What the request asks the units to come from, or why it asks for something the service's
+/// package does not take.
+fn source(request: &Request) -> Result<Source<'_>, Error> {
+    let refuse = |why: &str| Err(Error::Failed(why.to_owned()));
+    match (request.service, request.unit.as_deref()) {
+        (Service::Hostkeeper, _) if request.platform == Platform::MacosArm64 => refuse(MACOS_LATER),
+        (Service::Hostkeeper, _) if request.fail_ready => refuse(FAIL_READY_ONLY_HELLO),
+        (Service::Hostkeeper, None) => refuse(UNIT_REQUIRED),
+        (Service::Hostkeeper, Some(unit)) => Ok(Source::File(unit)),
+        (Service::Hello, Some(_)) => refuse(UNIT_REFUSED),
+        (Service::Hello, None) => Ok(Source::Rendered {
+            fail_ready: request.fail_ready,
+        }),
+    }
+}
+
 /// Builds the package of `request` and its digest file; the lines to print.
 pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<String>, Error> {
-    if request.platform == Platform::MacosArm64 {
-        return Err(Error::Failed(MACOS_LATER.to_owned()));
-    }
+    let source = source(request)?;
+    let name = request.service.name();
     let binary = read(&request.binary)?;
-    let unit = read(&request.unit)?;
-    check_unit(&request.unit, &unit)?;
-    let entries = entries(&request.version, binary, unit);
+    let contents = match source {
+        Source::File(path) => Contents {
+            manifest: manifest(&request.version),
+            units: vec![Unit {
+                file: UNIT_FILE.to_owned(),
+                origin: path.display().to_string(),
+                data: read(path)?,
+            }],
+        },
+        Source::Rendered { fail_ready } => {
+            hello::contents(request.platform, &request.version, fail_ready)?
+        }
+    };
+    for unit in contents
+        .units
+        .iter()
+        .filter(|u| u.file.ends_with(".service"))
+    {
+        check_unit(name, &unit.origin, &unit.data)?;
+    }
+    let entries = entries(name, binary, contents);
     check_entries(&entries)?;
     let mtime = git.commit_time(&request.commit)?;
     let bytes = compress(&archive(&entries, mtime)?);
-    let name = package_name(&request.version, request.platform);
+    let name = request
+        .service
+        .package_name(&request.version, request.platform);
     let hex = hex::encode(Sha256::digest(&bytes));
     std::fs::create_dir_all(&request.out)
         .map_err(Error::io(format!("create {}", request.out.display())))?;
@@ -153,42 +239,48 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     std::fs::write(path, bytes).map_err(Error::io(format!("write {}", path.display())))
 }
 
-/// Refuses a unit that is not UTF-8 text, does not start the package's binary through
-/// `current`, or names a package file by any other path (design section 4.7).
-fn check_unit(path: &Path, unit: &[u8]) -> Result<(), Error> {
+/// Refuses a unit of `service` that is not UTF-8 text, does not start the service's binary
+/// through its `current`, or names a package file by any other path (design section 4.7). `origin`
+/// names the unit in the refusal.
+fn check_unit(service: &str, origin: &str, unit: &[u8]) -> Result<(), Error> {
     let text = std::str::from_utf8(unit)
-        .map_err(|_| Error::Failed(format!("{} is not UTF-8 text", path.display())))?;
+        .map_err(|_| Error::Failed(format!("{origin} is not UTF-8 text")))?;
+    let binary = binary_path(service);
     let starts_it = text
         .lines()
-        .any(|l| l.starts_with("ExecStart") & l.contains(BINARY_PATH));
+        .any(|l| l.starts_with("ExecStart") & l.contains(&binary));
     if !starts_it {
         return Err(Error::Failed(format!(
-            "{} has no ExecStart line naming {BINARY_PATH}",
-            path.display()
+            "{origin} has no ExecStart line naming {binary}"
         )));
     }
+    let current = current(service);
     if text
         .split(PACKAGES)
         .skip(1)
-        .any(|rest| !rest.starts_with(CURRENT))
+        .any(|rest| !rest.starts_with(&current))
     {
         return Err(Error::Failed(format!(
-            "{} names a package file by a path other than {PACKAGES}{CURRENT}",
-            path.display()
+            "{origin} names a package file by a path other than {PACKAGES}{current}"
         )));
     }
     Ok(())
 }
 
-/// The entries of the package, sorted by name.
-fn entries(version: &Version, binary: Vec<u8>, unit: Vec<u8>) -> Vec<Entry> {
+/// The entries of the package of `service`, sorted by name.
+fn entries(service: &str, binary: Vec<u8>, contents: Contents) -> Vec<Entry> {
     let mut entries = vec![
         Entry::dir("bin/"),
-        Entry::file("bin/hostkeeper", 0o555, binary),
-        Entry::file("manifest.toml", 0o444, manifest(version).into_bytes()),
+        Entry::file(&format!("bin/{service}"), 0o555, binary),
+        Entry::file("manifest.toml", 0o444, contents.manifest.into_bytes()),
         Entry::dir("units/"),
-        Entry::file(&format!("units/{UNIT_FILE}"), 0o444, unit),
     ];
+    entries.extend(
+        contents
+            .units
+            .into_iter()
+            .map(|u| Entry::file(&format!("units/{}", u.file), 0o444, u.data)),
+    );
     entries.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
     entries
 }

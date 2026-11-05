@@ -3,7 +3,8 @@
 //! ports that already exist, and this crate implements them over launchd:
 //!
 //! - [`label`]: the reverse-DNS prefix and the labels of the daemon and of each step job.
-//! - [`plist`]: the XML property lists of the daemon and of a step job.
+//! - [`plist`]: the XML property lists of the daemon, of a step job and of a service package's
+//!   job.
 //! - [`launchctl`]: the [`Launchctl`] port (one `launchctl` command), its real adapter
 //!   [`LaunchctlProcess`], and the reading of `launchctl print system/<label>`.
 //! - [`manager`]: [`LaunchdServiceManager`], the observer's
@@ -37,6 +38,8 @@ pub use launchctl::{
 };
 pub use manager::LaunchdServiceManager;
 pub use platform::{Platform, PlatformKind};
-pub use plist::{DaemonJob, PlistError, StepJob, daemon_plist, step_plist};
+pub use plist::{
+    DaemonJob, PlistError, ServiceJob, StepJob, daemon_plist, service_plist, step_plist,
+};
 pub use procid::{FileIdentity, LaunchdProcessProbe, PidInfo, PidInfoError, StdFileIdentity};
 pub use unit_control::LaunchdUnitControl;

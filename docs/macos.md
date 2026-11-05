@@ -73,7 +73,7 @@ that stops enrollment before any request is posted. No placeholder is ever sent.
 ### launchd adapters, behind ports
 
 The crate [`hostkeeper-launchd`](../crates/hostkeeper-launchd) holds the launchd side of the
-ports the daemon already has: labels, the plists of the daemon and of a step job, the
+ports the daemon already has: labels, the plists of the daemon, of a step job and of a service package's job, the
 `launchctl` port and its reader of `launchctl print`, the observer's service manager and
 process probe, and the unit control of the linking side. It is tested against fakes on Linux
 and is not wired into the daemon yet; nothing of it has run on a Mac.
@@ -131,6 +131,9 @@ is refused.
 
 A package's `units/` may hold `<label>.plist` files. A label is the service name or starts with
 `<service>.`. The manifest's `[units] run` then names labels instead of systemd unit names.
+The plists of a service package are rendered by `hostkeeper_launchd::service_plist`: the program and
+its arguments, `RunAtLoad` false, and a `KeepAlive` that holds the job alive only while a given path
+exists, so a slot without its marker file never starts.
 
 ## Specified, not built yet
 
