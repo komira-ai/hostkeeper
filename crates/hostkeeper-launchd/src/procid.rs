@@ -246,10 +246,6 @@ pub mod darwin {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
-    #[expect(
-        dead_code,
-        reason = "the kernel's layout: each field holds its place, and only some are read"
-    )]
     struct RegionInfo {
         protection: u32,
         max_protection: u32,
@@ -276,10 +272,6 @@ pub mod darwin {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
-    #[expect(
-        dead_code,
-        reason = "the kernel's layout: each field holds its place, and only some are read"
-    )]
     struct VinfoStat {
         dev: u32,
         mode: u16,
@@ -306,10 +298,6 @@ pub mod darwin {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
-    #[expect(
-        dead_code,
-        reason = "the kernel's layout: each field holds its place, and only some are read"
-    )]
     struct VnodeInfo {
         stat: VinfoStat,
         kind: i32,
@@ -319,10 +307,6 @@ pub mod darwin {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
-    #[expect(
-        dead_code,
-        reason = "the kernel's layout: each field holds its place, and only some are read"
-    )]
     struct VnodeInfoPath {
         info: VnodeInfo,
         // `char vip_path[MAXPATHLEN]`, read as bytes.

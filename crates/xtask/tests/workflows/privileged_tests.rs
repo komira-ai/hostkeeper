@@ -619,8 +619,9 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
 }
 
 /// The macOS job of privileged.yml: the device tests, built as the runner's user and run as root.
-const MACOS_JOB: &str = "\
-  macos-device:
+// No `\` after the opening quote: it would drop the job's leading spaces and lift it out of
+// `jobs`.
+const MACOS_JOB: &str = "  macos-device:
     runs-on: macos-15
     permissions:
       contents: read
