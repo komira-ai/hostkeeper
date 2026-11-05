@@ -32,10 +32,14 @@
 //!   [`refusal`]), and [`installed`] what the host runs.
 //! - [`observer`]: what the admin `Status` reports of a running service.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
-//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ci`, and the plumbing verbs
-//!   `self-update-fallback` and `self-update-protocol`; the binary only forwards to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ctl`, which it hands to
+//!   `hostkeeper-ctl`, `hostkeeper ci`, and the plumbing verbs `self-update-fallback` and
+//!   `self-update-protocol`; the binary only forwards to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
+//! - [`link_adapters`]: the daemon as the executor and the held halts of the heartbeat loop
+//!   (`hostkeeper_link`): its order becomes a protobuf `Order` for [`Daemon::order`], and the
+//!   daemon's reply the verdict the loop reports.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
 //! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
@@ -52,6 +56,7 @@ pub mod fallback;
 mod files;
 pub mod halt;
 pub mod installed;
+pub mod link_adapters;
 pub mod locks;
 pub mod notify;
 pub mod observer;

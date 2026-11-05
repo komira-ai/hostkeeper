@@ -12,8 +12,8 @@
 //! - `Renew` carries a new request for the same key, sent by a host whose certificate is still
 //!   valid; its self-signature is the proof that the host holds the key.
 //!
-//! This crate has no transport: the daemon's gRPC client implements the port in its own change,
-//! and the tests use an in-memory coordinator.
+//! [`GrpcEnroll`](crate::GrpcEnroll) implements the port over gRPC with TLS (`grpc.rs`); the
+//! tests of the enroller use an in-memory coordinator.
 
 use std::fmt;
 

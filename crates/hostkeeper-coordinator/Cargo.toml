@@ -27,6 +27,9 @@ path = "src/main.rs"
 
 [dependencies]
 hostkeeper-oidc = { path = "../hostkeeper-oidc" }
+# The messages and refusals of the operator's calls, and the orders a typed heartbeat answer
+# carries.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
 bytes.workspace = true

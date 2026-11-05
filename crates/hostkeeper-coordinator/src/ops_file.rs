@@ -5,8 +5,8 @@
 //! reader refuses a key it does not know: a halt is its host, check and target, an
 //! acknowledgement its host and target. What the halt release adds to them lives beside it in
 //! the halts file (`<ops-file>.halts`): the whole report a halt and each acknowledgement were
-//! made from, who raised the halt (`origin`, written only for the updater: a record without it
-//! is a hook's halt), the reports received while a halt stood (`halt_seen`) and the clear
+//! made from, who raised the halt (`origin`, written only for the updater and an operator: a
+//! record without it is a hook's halt, and a release that does not know an origin reads a hook's), the reports received while a halt stood (`halt_seen`) and the clear
 //! generation of each service (`halt_generation`).
 //!
 //! The reader of the halts file skips a key it does not know. A record whose report it cannot

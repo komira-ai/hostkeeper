@@ -56,9 +56,9 @@ prost-reflect = "0.16.5"
 # hostkeeper-enrollment's build scripts, and tests.
 protox = "0.10.0"
 # Certificates: the CA module of hostkeeper-enrollment signs with it (members add `x509-parser`,
-# which reads a public key back for signing), and the TLS tests of hostkeeper-ctl and the
-# coordinator crates make their test certificates with it at run time, so that no key is
-# committed. The ring backend.
+# which reads a public key back for signing), and the TLS tests of hostkeeper-ctl,
+# hostkeeper-enroll and the coordinator crates make their test certificates with it at run time,
+# so that no key is committed. The ring backend.
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
 # ECDSA P-256 / SHA-256 signature checks and SHA-256 digests (hostkeeper-enrollment: a CSR's
 # self-signature, a poll's signed nonce, the request id); the RS256 signature of a CI token
@@ -73,6 +73,8 @@ regex = "1.13.1"
 # hostkeeper-package's tests: a TLS server on loopback for its HTTPS client, with the ring
 # provider ureq already brings; and reading the test certificates. Also the TLS of
 # `hostkeeper ctl`'s gateway client (hostkeeper-ctl), with the ring provider of tonic's `tls-ring`.
+# The coordinator client of hostkeeper-enroll reads the certificate chain the coordinator presents
+# with it, and builds the trust anchors of its calls.
 # hostkeeper-enrollment's tests (dev only): verify the certificates its CA issues as TLS would.
 # The coordinator crates' TLS (hostkeeper-tls, hostkeeper-oidc, hostkeeper-coordinator), which
 # add `tls12`.
@@ -97,18 +99,19 @@ time = { version = "0.3.45", default-features = false }
 # files are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
 # The daemon's runtime: the admin socket's server (hostkeeper-daemon); the runtime of one
-# gRPC call of `hostkeeper ctl` (hostkeeper-ctl); the coordinator's server and the OIDC key
-# fetch (hostkeeper-coordinator, hostkeeper-oidc, hostkeeper-tls). Members add the features
-# they use.
+# gRPC call of `hostkeeper ctl` (hostkeeper-ctl) and of each call of the coordinator client of
+# hostkeeper-enroll; the coordinator's server and the OIDC key fetch (hostkeeper-coordinator,
+# hostkeeper-oidc, hostkeeper-tls). Members add the features they use.
 tokio = { version = "1.54.1", default-features = false }
 # The TLS of the coordinator's listeners and of the OIDC key fetch, on rustls with ring.
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 # The admin socket's listener as a stream of connections (hostkeeper-daemon), and the loopback
-# listener of hostkeeper-ctl's gRPC transport tests.
+# listener of the gRPC tests of hostkeeper-ctl and hostkeeper-enroll.
 tokio-stream = { version = "0.1.19", default-features = false }
 # gRPC: the service traits and clients hostkeeper-proto generates. Code generation only here: no
 # transport and no TLS. hostkeeper-daemon adds `server` for its admin socket (and `channel` in its
-# tests, for a client).
+# tests, for a client). hostkeeper-ctl and hostkeeper-enroll add `channel` and `tls-ring` for their
+# clients (and `server` in their tests, for a loopback server).
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"

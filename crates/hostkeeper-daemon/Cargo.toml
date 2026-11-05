@@ -26,7 +26,11 @@ clap.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 # `hostkeeper ci`: the CI client, a subcommand of the one binary (docs/deploy/ci-client.md).
 hostkeeper-ci = { path = "../hostkeeper-ci" }
+# `hostkeeper ctl`, which the binary reaches through `cli`.
+hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The heartbeat loop's ports, which `link_adapters` implements over the daemon.
+hostkeeper-link = { path = "../hostkeeper-link" }
 # The service observer whose `Observation` the admin `Status` reports, and its real adapters.
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 # Steps 1 and 2 of design section 5.5 (download, prove), which the real package store composes.
