@@ -23,6 +23,8 @@ testing = []
 [dependencies]
 clap.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
+# `hostkeeper ci`: the CI client, a subcommand of the one binary (docs/deploy/ci-client.md).
+hostkeeper-ci = { path = "../hostkeeper-ci" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The placed-path linker a `force` and a first install link, unlink and switch through, an
 # uninstall removes a service's paths through, and the service-manager port it stops, starts and

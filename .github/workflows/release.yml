@@ -1,0 +1,216 @@
+# A GitHub release of the exact files a push to main built and signed for one commit
+# (artifacts.yml), at the tag v<X.Y.Z> of that commit's version. Nothing is built or signed here:
+# the files are the ones that run left, checked again, so a consumer can pin a release asset,
+# which outlives the run's 90-day workflow artifacts.
+#
+# Every push to main that changes code becomes a release by itself, with no tag step and no
+# manual gate, once each of `ci`, `privileged` and `artifacts` has a successful push run on main
+# for that exact commit. The triggers:
+#
+# - `workflow_run`: the completion of a push run of `ci`, `privileged` or `artifacts` on main.
+#   The three run side by side for every push, so this starts once for each; the plan looks up
+#   all three for the commit, whatever the run that started it concluded, so the run that
+#   finishes last releases and the others end green with nothing to do.
+# - `schedule`, daily: commits a missed or replaced run left behind. The plan walks the
+#   first-parent history from the last release to the tip, oldest first, and releases each
+#   commit that qualifies under the number that commit has.
+# - `workflow_dispatch`, from main: the same walk as the schedule, by hand.
+#
+# For now the file has `workflow_dispatch` alone: the `cargo xtask release` verbs it runs, and
+# the coordinator's files the release's asset list holds, land separately, and `workflow_run`
+# and `schedule` come with them, so that no push to main starts a run that cannot succeed. The
+# workflow lint (crates/xtask/tests/workflows) holds the triggers to these three and nothing
+# else, and to no pull-request trigger.
+#
+# plan     decides which commits are released and as which version (cargo xtask release plan),
+#          and prints them as a matrix, oldest first. No release while the repository variable
+#          RELEASE_FREEZE is set to anything but empty or `false`; while a required run is
+#          pending or missing; for a commit already released; or for a commit that changes
+#          documentation only (it still has its number). A failed `privileged` run for any
+#          commit after the last release holds every later release, and the plan opens (or
+#          brings up to date) the one issue that tracks the hold: so `plan` holds
+#          `issues: write`, and nothing else that writes.
+# verify   read-only, per release: refuses a commit that is not on main or lacks a successful
+#          push run of each required workflow (cargo xtask release locate), downloads the files
+#          of its artifacts run, checks them against SHA256SUMS, verifies every attestation
+#          online as a deployment does and every bundle offline as a host does
+#          (cargo xtask release check), and runs the downloaded linux-x86_64 binary, which must
+#          print exactly `hostkeeper X.Y.Z+<12 hex>` (cargo xtask release check-binary).
+# publish  the one job that holds `contents: write`, per release: creates a draft release at the
+#          commit with the tag v<X.Y.Z>, uploads the checked files, reads the draft back, then
+#          publishes it (cargo xtask release publish). A release that holds exactly these files
+#          is success with nothing written; one that differs in any file fails naming it; a
+#          draft left by an earlier run with the same files is completed. Never rebuilds.
+#
+# One release action at a time, never cancelled: runs of main of this repository share the
+# group `release-main`; any other run (a pull request's `workflow_run` from a fork's branch named
+# main, a dispatch from another branch) takes a group of its own, so that it cannot replace the
+# release that is waiting. artifacts.yml is outside this group: it builds and attests, never
+# tags or publishes, and has a group per commit.
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ (github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository))) && 'main' || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    # A run of main: by hand, on the schedule, or the completion of a push run on main of this
+    # repository (never a pull request, never a fork's branch named main).
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    outputs:
+      release: ${{ steps.push.outputs.release || steps.walk.outputs.release }}
+      matrix: ${{ steps.push.outputs.matrix || steps.walk.outputs.matrix }}
+    steps:
+      # The commit the run built (for a `workflow_run`, not `github.sha`, which is the newest
+      # commit of main), with the whole history the version is counted on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      # xtask is compiled before any step holds the token.
+      - name: Compile xtask
+        run: cargo xtask --help
+      - name: Whether this commit is released, and as which version
+        id: push
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.event.workflow_run.head_sha }}
+          FREEZE: ${{ vars.RELEASE_FREEZE }}
+        run: cargo xtask release plan --repo "$GITHUB_REPOSITORY" --commit "$COMMIT" --version-file VERSION --freeze "$FREEZE" --output "$GITHUB_OUTPUT"
+      - name: Which commits since the last release are released, oldest first
+        id: walk
+        if: ${{ github.event_name != 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FREEZE: ${{ vars.RELEASE_FREEZE }}
+        run: cargo xtask release plan --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version-file VERSION --freeze "$FREEZE" --scheduled --output "$GITHUB_OUTPUT"
+
+  verify:
+    needs: [plan]
+    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    strategy:
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      COMMIT: ${{ matrix.commit }}
+      RELEASE_VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.commit }}
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Compile xtask
+        run: cargo xtask --help
+      - name: Refuse a commit not on main, or without a successful push run of each workflow
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release locate --repo "$GITHUB_REPOSITORY" --commit "$COMMIT" --output "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: assets-*
+          path: dist
+          merge-multiple: true
+          run-id: ${{ steps.locate.outputs.run-id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sha256sums
+          path: dist
+          run-id: ${{ steps.locate.outputs.run-id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundles
+          path: dist
+          run-id: ${{ steps.locate.outputs.run-id }}
+          github-token: ${{ github.token }}
+      - name: Check the files against SHA256SUMS
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Verify every file and attestation as a consumer does
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release check dist --version "$RELEASE_VERSION" --commit "$COMMIT"
+      # The runner is linux-x86_64: the binary of that tarball runs here, unpacked outside dist.
+      # The linux-arm64 binary was run and checked the same way by its own build job.
+      - run: mkdir "$RUNNER_TEMP/binary"
+      - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper
+      - name: The binary says the version and the commit it is released under
+        run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper" "$RELEASE_VERSION" "$COMMIT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.tag }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, verify]
+    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      attestations: read
+    strategy:
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      COMMIT: ${{ matrix.commit }}
+      RELEASE_VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.commit }}
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Compile xtask
+        run: cargo xtask --help
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ matrix.tag }}
+          path: dist
+      # The same checks as verify, on the files this job downloaded: they crossed the run's
+      # artifact store.
+      - name: Check the files against SHA256SUMS
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Verify every file and attestation again
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release check dist --version "$RELEASE_VERSION" --commit "$COMMIT"
+      - name: Create the release and publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask release publish dist --repo "$GITHUB_REPOSITORY" --version "$RELEASE_VERSION" --commit "$COMMIT"

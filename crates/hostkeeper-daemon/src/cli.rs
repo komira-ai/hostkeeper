@@ -1,10 +1,11 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and the two
-//! plumbing verbs of hostkeeper's own update (design section 6.6), which no operator runs:
-//! `hostkeeper self-update-fallback --dir <dir>`, what the generated fallback unit runs
-//! ([`crate::fallback`]), and `hostkeeper self-update-protocol`, which prints this binary's
-//! self-update protocol and does nothing else ([`crate::selfupdate::protocol_line`]).
-//! Configuration comes in as flags only, never from the environment (AGENTS.md S2); every default
-//! is a constant here.
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
+//! `hostkeeper ci`, the CI client a service's release job runs once it has verified this binary
+//! (`hostkeeper_ci`, docs/deploy/ci-client.md), and the two plumbing verbs of hostkeeper's own
+//! update (design section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir
+//! <dir>`, what the generated fallback unit runs ([`crate::fallback`]), and
+//! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
+//! nothing else ([`crate::selfupdate::protocol_line`]). Configuration comes in as flags only,
+//! never from the environment (AGENTS.md S2); every default is a constant here.
 //!
 //! The one value read from the environment is the address of systemd's notify socket, a
 //! platform-set marker, and only `--notify-systemd` makes the daemon use it.
@@ -12,6 +13,9 @@
 //! Exit status: [`EXIT_FAILED`] when the daemon could not start or serve, `2` for a usage error
 //! (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not load, [`EXIT_LOCKED`]
 //! when another daemon holds the state directory.
+//!
+//! `--version` prints `hostkeeper X.Y.Z+<12 hex digits of the commit>` for a release build and
+//! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -28,7 +32,7 @@ use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, SystemCloc
 use crate::executor::{Placement, Ports};
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::packages::{PackageError, Packages, VersionDir};
-use crate::prune::NoPrune;
+use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::start::{self, Settings, StartError};
 use crate::verb::PackageDigest;
 
@@ -49,7 +53,7 @@ pub const DEADMAN_POLL_SECS: u64 = 1;
 
 /// hostkeeper: keeps a host's services on the versions its coordinator orders.
 #[derive(Debug, Parser)]
-#[command(name = "hostkeeper", version)]
+#[command(name = "hostkeeper", version = crate::stamp::version())]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -59,6 +63,10 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
+    /// The CI client: set a service's desired version from its release job and wait for the
+    /// fleet (docs/deploy/ci-client.md).
+    #[command(subcommand)]
+    Ci(hostkeeper_ci::CiCommand),
     /// Put the previous hostkeeper binary back after the new one failed to start, and record the
     /// update failed and its version bad (run by the generated fallback unit).
     SelfUpdateFallback(FallbackFlags),
@@ -140,6 +148,7 @@ pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
             print!("{}", crate::selfupdate::protocol_line());
             return ExitCode::SUCCESS;
         }
+        Command::Ci(command) => return hostkeeper_ci::run(command),
     };
     let started = notifier(&flags, notify_socket)
         .and_then(|notifier| daemon(&flags.settings(), notifier.as_ref()));
@@ -187,8 +196,8 @@ async fn start_and_serve(
 /// The ports of this build. The host's step launcher, package store and service manager are not
 /// part of it yet, and no order reaches the daemon yet (the heartbeat loop that brings them comes
 /// later): until they are wired in, an order that did come would be refused, never run. Placed
-/// paths are linked under the host's own directories, `packages_dir` being `--packages-dir`; the
-/// prune of step 18 of a force deletes nothing yet.
+/// paths are linked under the host's own directories, `packages_dir` being `--packages-dir`, and
+/// a confirmed switch prunes the service's package directory to `current` and `previous`.
 fn host_ports(packages_dir: &Path) -> Ports {
     Ports {
         launcher: Arc::new(Unwired),
@@ -204,7 +213,8 @@ fn host_ports(packages_dir: &Path) -> Ports {
             ),
             fs: Arc::new(RealFs::new(Path::new("/"))),
         },
-        prune: Arc::new(NoPrune),
+        prune: Arc::new(LayoutPrune),
+        force_lock_point: Arc::new(NoLockPoint),
     }
 }
 

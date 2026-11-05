@@ -22,6 +22,7 @@ use hostkeeper_coordinator::config::{Bound, Cli, Command, Serve, StartError, bui
 use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::service::Unauthorized;
 use hostkeeper_coordinator::tokens::Reload;
+use hostkeeper_coordinator::ui::UiDirError;
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_testkit::Scratch;
@@ -826,4 +827,74 @@ fn a_wildcard_private_listen_is_refused_at_start() {
     }
     build_given(&flags_of(with(&args, "--heartbeat-listen", "0.0.0.0:1")))
         .expect("a wildcard heartbeat listener is accepted");
+}
+
+/// `args` with `--ui-dir path` added.
+fn with_ui_dir(args: &[OsString], path: &std::path::Path) -> Vec<OsString> {
+    let mut args = args.to_vec();
+    args.extend([OsString::from("--ui-dir"), path.as_os_str().to_owned()]);
+    args
+}
+
+/// A `--ui-dir` that names a file, or nothing, stops the start with the text naming the flag
+/// and the path, and exit 1; a directory is accepted and is what the private surface serves
+/// (its real path); without the flag nothing is served.
+///
+/// Catches: the coordinator starting with a UI directory it cannot serve, or with one when the
+/// flag is absent.
+#[test]
+fn ui_dir_that_is_not_a_directory_stops_the_coordinator_naming_the_flag() {
+    let files = Files::new("config-ui-dir");
+    files.put("index.html", "<!doctype html>", 0o644);
+    let file = files.path("index.html");
+    let given = with_ui_dir(&files.args(), &file);
+    let why = refusal(given.clone());
+    assert!(
+        matches!(&why, StartError::UiDir(UiDirError::NotADirectory(p)) if *p == file),
+        "{why}"
+    );
+    assert_eq!(
+        why.to_string(),
+        format!("--ui-dir: {} is not a directory", file.display())
+    );
+    assert_eq!(exit_code(given), ExitCode::from(1));
+    let missing = files.path("missing");
+    let given = with_ui_dir(&files.args(), &missing);
+    let why = refusal(given.clone());
+    assert!(
+        matches!(&why, StartError::UiDir(UiDirError::Unreadable { path, .. }) if *path == missing),
+        "{why}"
+    );
+    let prefix = format!("--ui-dir: {}: ", missing.display());
+    assert!(why.to_string().starts_with(&prefix), "{why}");
+    assert_eq!(exit_code(given), ExitCode::from(1));
+    let ui = files.path("ui");
+    std::fs::create_dir(&ui).expect("the directory");
+    let parts = build_given(&flags_of(with_ui_dir(&files.args(), &ui))).expect("a directory");
+    let root = parts.coordinator.ui().map(|dir| dir.root().to_owned());
+    assert_eq!(
+        root,
+        Some(std::fs::canonicalize(&ui).expect("the directory"))
+    );
+    let parts = build_given(&flags_of(files.args())).expect("no flag");
+    assert!(parts.coordinator.ui().is_none());
+}
+
+/// `serve --help` documents `--ui-dir` and names no environment variable for it (clap prints
+/// `[env: ...]` beside a flag that has one), and the flags parsed without it have none, so
+/// nothing but the flag sets it.
+///
+/// Catches: an environment variable added as a fallback for the flag.
+#[test]
+fn the_flag_is_documented_and_not_an_environment_variable() {
+    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    assert!(help.contains("--ui-dir <UI_DIR>"), "{help}");
+    assert!(help.contains("/ui/"), "{help}");
+    assert!(!help.contains("[env:"), "{help}");
+    let files = Files::new("config-ui-dir-env");
+    assert_eq!(flags_of(files.args()).ui_dir, None);
+    let ui = files.path("ui");
+    assert_eq!(flags_of(with_ui_dir(&files.args(), &ui)).ui_dir, Some(ui));
 }

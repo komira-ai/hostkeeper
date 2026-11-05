@@ -16,9 +16,11 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
-use hostkeeper_daemon::prune::NoPrune;
+use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
-use hostkeeper_daemon::testing::{FakeClock, FakePackages, Log, ScriptedLauncher, manifest};
+use hostkeeper_daemon::testing::{
+    FakeClock, FakePackages, Log, NoPrune, ScriptedLauncher, manifest,
+};
 use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
 use hostkeeper_hook::Verdict;
 use hostkeeper_placed::Roots;
@@ -246,6 +248,7 @@ impl Rig {
                 fs: self.placed_fs.clone(),
             },
             prune: Arc::new(NoPrune),
+            force_lock_point: Arc::new(NoLockPoint),
         }
     }
 

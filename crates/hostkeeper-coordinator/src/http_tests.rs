@@ -24,6 +24,7 @@ mod operator;
 mod rollback;
 mod services;
 mod status;
+mod ui;
 
 /// How long a body has in the tests that are not about patience.
 const PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);

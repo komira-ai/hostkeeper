@@ -12,7 +12,8 @@
 //!
 //! - [`CoordinatorEnroll`]: the coordinator's enrollment API (`wire.rs`);
 //! - [`Store`]: the pki directory ([`PkiDir`] on disk, `store.rs`);
-//! - [`ClaimsSource`]: what the host says about itself ([`LinuxClaims`], `claims.rs`);
+//! - [`ClaimsSource`]: what the host says about itself ([`LinuxClaims`], [`MacClaims`] over the
+//!   [`Ioreg`] port, `claims.rs`);
 //! - [`Entropy`]: random bytes for the key ([`OsEntropy`], `key.rs`);
 //! - [`WallClock`]: the wall clock, read only for certificate validity ([`SystemWallClock`],
 //!   `validity.rs`, the one file the wall-clock lint allows here);
@@ -28,7 +29,7 @@ mod validity;
 mod verify;
 mod wire;
 
-pub use claims::{ClaimsSource, LinuxClaims};
+pub use claims::{ClaimsError, ClaimsSource, Ioreg, LinuxClaims, MacClaims, MacIds, parse_ioreg};
 pub use enroller::{
     Enroller, Error, Identity, NOT_ENROLLED, Outcome, Ports, ProtocolError, RETRY_SECS, Settings,
 };

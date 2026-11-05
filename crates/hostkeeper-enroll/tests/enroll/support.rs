@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use hostkeeper_config::daemon::{DaemonConfig, Sha256Hex};
 use hostkeeper_enroll::{
-    Claims, ClaimsSource, CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState, Enroller,
-    Entropy, EntropyError, Error, FaultGate, HostId, Issued, KeyFrom, PkiDir, Poll, PollAnswer,
-    Ports, Reason, RenewAnswer, RenewRequest, RequestId, Settings, Site, Store, StoreError,
-    StoreLock, Stored, TransportError, WallClock,
+    Claims, ClaimsError, ClaimsSource, CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState,
+    Enroller, Entropy, EntropyError, Error, FaultGate, HostId, Issued, KeyFrom, PkiDir, Poll,
+    PollAnswer, Ports, Reason, RenewAnswer, RenewRequest, RequestId, Settings, Site, Store,
+    StoreError, StoreLock, Stored, TransportError, WallClock,
 };
 use hostkeeper_steps::Clock;
 use hostkeeper_testkit::Scratch;
@@ -612,8 +612,8 @@ impl Entropy for ScriptedEntropy {
 pub struct SharedClaims(Arc<Mutex<Claims>>);
 
 impl ClaimsSource for SharedClaims {
-    fn claims(&self) -> Claims {
-        self.0.lock().expect("claims").clone()
+    fn claims(&self) -> Result<Claims, ClaimsError> {
+        Ok(self.0.lock().expect("claims").clone())
     }
 }
 
@@ -624,6 +624,8 @@ pub fn claims() -> Claims {
         product_serial: None,
         product_uuid: Some("4c4c4544-0000-1000-8000-000000000001".into()),
         network_addresses: vec!["02:00:00:00:00:01".into()],
+        mac_serial: None,
+        platform_uuid: None,
     }
 }
 

@@ -3,6 +3,9 @@
 //! - [`Scratch`]: a directory a test owns, under a base the test names (its
 //!   `CARGO_TARGET_TMPDIR`), removed when it is dropped.
 //!
+//! - [`HookMode`]: the exit code and last line a fixture hook ends with, for each behaviour a
+//!   test can pick.
+//!
 //! No moved test opens a port, so there is no port helper.
 
 use std::io;
@@ -10,6 +13,31 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// The fixture hook's behaviours a test can pick.
+pub enum HookMode {
+    /// `prepare` defers because the host holds live leases it will not cut: exit `75`, class
+    /// `environment`, reason `leases_live`, a retry in a minute.
+    DeferLeasesLive,
+}
+
+impl HookMode {
+    /// The exit code the hook ends with.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            HookMode::DeferLeasesLive => 75,
+        }
+    }
+
+    /// The last line the hook writes to standard output.
+    pub fn last_line(&self) -> &'static str {
+        match self {
+            HookMode::DeferLeasesLive => {
+                r#"{"class":"environment","reason":"leases_live","retry_after_secs":60}"#
+            }
+        }
+    }
+}
 
 /// A new, empty directory that one test owns, removed when it is dropped.
 ///
@@ -82,6 +110,18 @@ mod tests {
     fn base(name: &str) -> PathBuf {
         let exe = std::env::current_exe().expect("the test binary");
         exe.parent().expect("its directory").join(name)
+    }
+
+    /// Catches a fixture hook mode that exits or reports otherwise than a deferral for live
+    /// leases: exit `75` and the exact last line, class, reason and retry time.
+    #[test]
+    fn the_leases_live_mode_defers_with_its_exit_code_and_last_line() {
+        let mode = HookMode::DeferLeasesLive;
+        assert_eq!(mode.exit_code(), 75);
+        assert_eq!(
+            mode.last_line(),
+            r#"{"class":"environment","reason":"leases_live","retry_after_secs":60}"#
+        );
     }
 
     /// Catches two scratch directories of one name sharing a directory, so that one dropping
