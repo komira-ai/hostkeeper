@@ -432,9 +432,9 @@ fn the_reboot_cells_reach_their_verdict_through_the_runner() {
         .filter_map(|e| match e {
             support::Event::Run {
                 step: Step::Verify,
-                timeout_secs,
+                bound,
                 ..
-            } => Some(*timeout_secs),
+            } => Some(support::secs_of(*bound)),
             _ => None,
         })
         .collect();
