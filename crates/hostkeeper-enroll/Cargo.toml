@@ -1,0 +1,46 @@
+[package]
+name = "hostkeeper-enroll"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "How a hostkeeper daemon gets and keeps its host certificate: the P-256 key, the enrollment request, the signed poll, renewal at half life and the return through renewal_of."
+
+# The daemon side of enrollment (docs/design/hostkeeper-design.md, section 5.7, steps 1 to 4). It
+# talks to the coordinator through the `CoordinatorEnroll` port and keeps the key and certificates
+# in the pki directory through the `Store` port; the wall clock is read only in `validity.rs`.
+# It depends on `hostkeeper-config` (the pinned `ca_sha256`) and `hostkeeper-steps` (the monotonic
+# `Clock` the retry pacing sleeps on). `GrpcEnroll` (`grpc.rs`) is the production implementation of
+# the `CoordinatorEnroll` port: the generated client of `hostkeeper-proto` over tonic with rustls.
+[dependencies]
+getrandom.workspace = true
+hex.workspace = true
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+p256.workspace = true
+# `flock` for the store lock; the effective uid that owns the pki directory.
+rustix = { workspace = true, features = ["fs", "process"] }
+# The probe of the coordinator's certificate chain, and the trust anchors of the later calls.
+rustls.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+# The runtime `GrpcEnroll` blocks on for each call.
+tokio = { workspace = true, features = ["net", "rt", "time"] }
+# The gRPC client over rustls (ring); client side only.
+tonic = { workspace = true, features = ["channel", "tls-ring"] }
+x509-cert.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The test PKI of `GrpcEnroll`'s tests, made at run time.
+rcgen.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "rt-multi-thread", "time"] }
+tokio-stream = { workspace = true, features = ["net"] }
+# A loopback gRPC server with TLS for those tests.
+tonic = { workspace = true, features = ["server", "tls-ring"] }
+
+[lints]
+workspace = true

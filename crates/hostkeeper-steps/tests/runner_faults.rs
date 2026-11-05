@@ -75,7 +75,7 @@ fn a_release_that_cannot_be_read_is_tried_again_and_never_halts() {
 }
 
 /// Catches a retry that is too wide: a tree that changed, that sits in a place others can write,
-/// or that holds what is neither a file, a directory nor a link still halts with
+/// or that holds what is neither a regular file nor a directory still halts with
 /// `artifact_changed` and runs nothing.
 #[test]
 fn a_changed_untrusted_or_unsupported_release_still_halts() {

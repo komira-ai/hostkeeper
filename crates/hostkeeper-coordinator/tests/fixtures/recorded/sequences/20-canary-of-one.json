@@ -1,0 +1,139 @@
+{
+ "from": "kbf-coordinator/src/bake_canary_tests.rs::with_a_canary_of_one_nobody_else_is_ordered_until_it_has_baked (kbf's definition replaced as the test does; heartbeats that keep a host live have no expect_body)",
+ "services_text": "[[service]]\nname = \"kbf\"\nbake_beats = 2\ncanary = { count = 1 }\nroles = [\"daemon\"]\n",
+ "steps": [
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "a",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "b",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "c",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "a",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "b",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "c",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "a",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"updating\":\"2.0\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "c",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2015,
+   "call": "heartbeat",
+   "host": "b",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "a",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "c",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2030,
+   "call": "heartbeat",
+   "host": "b",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2045,
+   "call": "heartbeat",
+   "host": "a",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2045,
+   "call": "heartbeat",
+   "host": "b",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  }
+ ]
+}

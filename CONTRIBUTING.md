@@ -65,13 +65,25 @@ cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 Nothing privileged and nothing for macOS runs on a pull request. The workflow lint refuses such a
 job in any workflow that runs on `pull_request`, and it also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
-`permissions: {}`, and `pull_request_target`.
+`permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
+`set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
+to the order of its steps: the release is verified before any step can request an OIDC token or
+run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, that job is the only
+one that may hold `id-token: write`.
 
 ## Tests
 
 Tests assert behaviour, cover failure and boundary cases, and are hermetic. A bug fix ships with
 a test that failed before the fix. A new lint or check comes with a case it refuses. The rules
 are T1 to T19 in [AGENTS.md](AGENTS.md).
+
+Nothing the updater decides reads the wall clock: decisions read `hostkeeper_steps::Clock`
+(monotonic seconds and the boot id). `cargo test -p xtask --test wallclock` refuses a wall-clock
+read (`SystemTime::now()` and its equivalents, a realtime clock id) in any non-test source under
+`crates/*/src/`, and a rename of a wall-clock name (`use .. as ..`, `type .. = ..;`), except in a
+path listed, with its reason, in `crates/xtask/tests/wallclock/allowed.txt`: certificate, OIDC or
+enrollment-nonce validity, and the time stamp of the coordinator's audit file, which no decision
+reads.
 
 ## Small pull requests
 

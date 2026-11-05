@@ -1,5 +1,6 @@
 // hostkeeper.operator.v1: what an operator, and CI, ask of the coordinator: the hosts it knows,
-// the releases it rolls, and the services each host runs.
+// the releases it rolls, the services each host runs, the hosts waiting to enroll, and the audit
+// log of every change.
 //
 // Served by: the coordinator, on its control listener (gRPC over TCP with TLS, on loopback or
 // behind a tunnel). It replaces the JSON routes `/v1/desired`, `/v1/convergence`, `/v1/status`
@@ -14,23 +15,42 @@
 // takes the operator token only. The token is checked before the request is read.
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
-// (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`), written as the value's name without the prefix, in lower
-// case (for example `below_min_version`); the status code is the one each value names. Nothing
+// (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`),
+// written as the value's name without the prefix, in lower case (for example
+// `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
 // request changes nothing.
 //
-// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`).
-// A version is the release's version string: 1 to 128 bytes, a digit first, then letters,
-// digits and `.+~-`. A service name is 1 to 64 bytes of `[a-z0-9-]`; a node id 1 to 63 bytes of
-// `[a-z0-9-]`, not starting or ending with `-`; a role name 1 to 32 bytes of `[a-z0-9-]`, a
-// letter first. A reason is 1 to 256 bytes once trimmed, with no control character. A count of
-// hosts per role is 0 to 10000.
+// Units: times are unix seconds and durations whole seconds (fields end in `_unix` and `_secs`). A
+// service name is 1 to 255 bytes of the POSIX portable filename characters (`A-Za-z0-9._-`), not
+// beginning with `-` or `.`; a version the same with `+` added. A node id is 1 to 63 bytes of
+// `[a-z0-9-]`, not starting or ending with `-`; a role name 1 to 32 bytes of `[a-z0-9-]`, a letter
+// first. A reason is 1 to 256 bytes once trimmed, with no control character. A count of hosts per
+// role is 0 to 10000. A host id is a node id. A request id and a key hash are SHA-256
+// as 64 lower-case hex characters. A `limit` is capped at 256, and 0 means the cap.
+//
+// Enrollment: the hosts that asked for a certificate (`Enroll` of `hostkeeper.agent.v1`) and
+// wait for an operator. The `Enrollment` service, `EnrollmentRefusal` and their messages are in
+// enrollment.proto, in this package. `Enrollment` takes the operator token only; no CI token reaches it. An
+// approval names the SHA-256 of the pending request's key, so it cannot admit another key. Its
+// answers carry no CSR bytes and no nonce value; the certificate goes to the host at its next
+// `Poll`, never through this API. Its ids, names and `limit` follow the units above.
+// `Enrollment` also keeps the host inventory: one record per server, which the operator adds
+// when building it (host id, optional role, data MACs, BMC MAC, optional serial and notes).
+// `List` shows each pending request matched against the records; a match fills in a host id
+// and a role and approves nothing. A MAC is six octets of two hex digits, separated all by `:`
+// or all by `-`, or twelve hex digits, in either case, and is answered as lower-case
+// `aa:bb:cc:dd:ee:ff`.
+//
+// Audit: the changes the coordinator made, as `AuditEntry` rows numbered by `seq`, read with
+// `Audit.List` and paged by `since_seq`, newest last. `Audit` takes the operator token only; no
+// CI token reaches it. Its `limit` follows the units above. Reading changes nothing.
 //
 // Extending: add fields, messages, enum values, RPCs and services; never renumber, rename,
 // retype or remove one, and never reuse a number (the compatibility test in this crate refuses
 // each). A reader treats an enum value it does not know as UNSPECIFIED; none of the enums here is
-// closed. `Hosts.Abort`, abandoning an excluded host, `Audit` and `Enrollment` are added by their
-// own changes.
+// closed. A token in an open string field (`AuditEntry.action`, `SkippedHost.reason`) is added,
+// never respelled. `Enrollment` and `Audit` grow by the same rule.
 syntax = "proto3";
 
 package hostkeeper.operator.v1;
@@ -51,6 +71,9 @@ service Hosts {
   rpc Include(IncludeRequest) returns (IncludeResponse);
   // Replace a host's labels, which service selectors match. An empty set removes them.
   rpc SetLabels(SetLabelsRequest) returns (SetLabelsResponse);
+  // Queue an `abort` order of a service for the host's next heartbeat; it takes no slot. An
+  // abort of a host that runs nothing of the service is accepted and changes nothing.
+  rpc Abort(AbortRequest) returns (AbortResponse);
 }
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
@@ -98,6 +121,12 @@ service Services {
   // Release a hold: the pairs it held are ordered to the then-desired version at their next
   // heartbeat.
   rpc Unhold(UnholdRequest) returns (UnholdResponse);
+}
+
+// The coordinator's audit log.
+service Audit {
+  // The entries after `since_seq` that match every filter set, newest last. Changes nothing.
+  rpc List(ListAuditRequest) returns (ListAuditResponse);
 }
 
 // Why `Hosts` refused a request. The token is the value's name without the prefix, in lower
@@ -159,6 +188,8 @@ enum ReleasesRefusal {
   RELEASES_REFUSAL_ALREADY_BAD = 15;
   // FAILED_PRECONDITION: `Halt` of a service that is halted already.
   RELEASES_REFUSAL_ALREADY_HALTED = 16;
+  // INVALID_ARGUMENT: a force target role or host the coordinator does not know.
+  RELEASES_REFUSAL_UNKNOWN_TARGET = 17;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower
@@ -184,6 +215,19 @@ enum ServicesRefusal {
   SERVICES_REFUSAL_STORE_FAILED = 8;
 }
 
+// Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.
+enum AuditRefusal {
+  AUDIT_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no bearer, or not the operator token.
+  AUDIT_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Audit` does not take.
+  AUDIT_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a filter breaks its rule (an actor, an action, a service, a node id).
+  AUDIT_REFUSAL_INVALID_REQUEST = 3;
+  // INTERNAL: the log could not be read; nothing changed, and asking again is safe.
+  AUDIT_REFUSAL_STORE_FAILED = 4;
+}
+
 // One change the coordinator made, as its audit ring keeps it (the last 64).
 message AuditEntry {
   // Its number: one more than the entry before it, for the life of the coordinator's store.
@@ -192,8 +236,9 @@ message AuditEntry {
   Actor by = 2;
   // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
   // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
-  // `set_min_version`, `hold`, `unhold`). Open: a later coordinator
-  // adds actions.
+  // `set_min_version`, `hold`, `unhold`, `abort`, `exclude_abandon`, `enroll_approve`,
+  // `enroll_replace`, `enroll_approve_refused`, `mac_auto_approve_declined`, `record_add`,
+  // `record_remove`). Open: a later coordinator adds actions.
   string action = 3;
   // The service, when the change is about one.
   optional string service = 4;
@@ -355,6 +400,9 @@ message ExcludeRequest {
   string service = 1;
   string node_id = 2;
   string reason = 3;
+  // Also free the one live update slot the host holds for the service mid-update, for a host
+  // that is gone and will not report its update final. False (the default) keeps the slot.
+  bool abandon = 4;
 }
 
 message ExcludeResponse {
@@ -379,6 +427,18 @@ message SetLabelsRequest {
 
 message SetLabelsResponse {
   AuditEntry entry = 1;
+}
+
+message AbortRequest {
+  string node_id = 1;
+  string service = 2;
+  string reason = 3;
+}
+
+message AbortResponse {
+  // The `abort` order waits for the host's next heartbeat.
+  bool queued = 1;
+  AuditEntry entry = 2;
 }
 
 // What a service's hosts should run, and how fast they get there.
@@ -566,6 +626,16 @@ message ForceResponse {
   repeated string held = 2;
   // How many hosts the force orders.
   uint32 targeted = 3;
+  // The targeted hosts the force does not order, other than `held`, each with why.
+  repeated SkippedHost skipped = 4;
+}
+
+// A targeted host a force does not order.
+message SkippedHost {
+  string node_id = 1;
+  // Why, as a token: `daemon_too_old` (its daemon did not announce `forced-v1`), `held`,
+  // `unknown_target`. Open: a later coordinator adds reasons.
+  string reason = 2;
 }
 
 // A force, as the coordinator records it.
@@ -808,4 +878,25 @@ message UnholdRequest {
 
 message UnholdResponse {
   AuditEntry entry = 1;
+}
+
+message ListAuditRequest {
+  // Only entries with a greater `seq`; 0 for the oldest the log keeps.
+  uint64 since_seq = 1;
+  // The most entries to return; capped at 256, and 0 means the cap.
+  uint32 limit = 2;
+  // Only entries by this actor, by the token of `Actor` (`operator`, `ci`, `coordinator`).
+  optional string actor = 3;
+  // Only entries of this action (`AuditEntry.action`).
+  optional string action = 4;
+  optional string service = 5;
+  optional string node_id = 6;
+}
+
+message ListAuditResponse {
+  // Newest last.
+  repeated AuditEntry entries = 1;
+  // The `since_seq` of the next page: the `seq` of the last entry returned, or the request's
+  // `since_seq` when none was.
+  uint64 next_seq = 2;
 }

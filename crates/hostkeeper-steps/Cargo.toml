@@ -14,8 +14,10 @@ description = "The step runner of the host updater: the step record and its resu
 # artifact before any run, and the updater's own update with its fallback. It runs a step through
 # a `StepLauncher` it is given and knows no service and no declaration; `systemd.rs` is the
 # launcher of the host (one transient unit per step, `RuntimeMaxSec=` and nothing else).
-# Synchronous, threads and blocking files. It depends on `hostkeeper-hook` alone (crates/xtask/tests/layering keeps it so).
+# Synchronous, threads and blocking files. It depends on `hostkeeper-hook` and, for the one rule
+# of service names and versions, `hostkeeper-config` (crates/xtask/tests/layering keeps it so).
 [dependencies]
+hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The effective uid (the owner checks) and the monotonic clock; `fs` for the tests' special files.
 rustix = { workspace = true, features = ["fs", "process", "time"] }
@@ -42,6 +44,8 @@ test-support = []
 # Its own tests turn on `test-support`.
 hostkeeper-steps = { path = ".", features = ["test-support"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# Decodes the launchd plists of `selfupdate` in their tests.
+plist.workspace = true
 
 [lints]
 workspace = true

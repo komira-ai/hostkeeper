@@ -1,0 +1,180 @@
+/* The operator app's one stylesheet: system fonts, no image, nothing loaded from elsewhere. */
+
+:root {
+  --ink: #1d232a;
+  --muted: #5b6672;
+  --line: #d5dbe1;
+  --paper: #ffffff;
+  --panel: #f4f6f8;
+  --accent: #1f5fae;
+  --alert: #a3261b;
+  --alert-panel: #fbecea;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+header h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+nav button.current {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+main {
+  padding: 0 16px 32px;
+}
+
+.status {
+  min-height: 1.4em;
+  margin: 8px 16px;
+  color: var(--muted);
+}
+
+.page h2 {
+  margin: 16px 0 8px;
+}
+
+section.service,
+section.force {
+  margin: 16px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+table {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+fieldset {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+label {
+  display: block;
+  margin: 4px 0;
+}
+
+label input,
+label select {
+  margin-left: 8px;
+}
+
+label.check input {
+  margin: 0 8px 0 0;
+}
+
+button {
+  font: inherit;
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+button.linklike {
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  background: none;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+ul.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.marks,
+.note {
+  color: var(--muted);
+}
+
+.alerts {
+  padding: 4px 12px;
+  border-left: 4px solid var(--alert);
+  background: var(--alert-panel);
+}
+
+.error,
+.warning,
+.alert strong {
+  color: var(--alert);
+}
+
+.confirm {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 2px solid var(--alert);
+  border-radius: 4px;
+}
+
+pre.log {
+  max-height: 20em;
+  overflow: auto;
+  padding: 8px;
+  background: var(--panel);
+  white-space: pre-wrap;
+}
+
+form.sign-in {
+  max-width: 32em;
+  margin: 48px auto;
+  padding: 16px;
+}

@@ -321,6 +321,7 @@ impl Rig {
             bounds: Rig::bounds(),
             declared_params: declared,
             min_updater_protocol: None,
+            order_try: None,
         }
     }
 

@@ -1,0 +1,59 @@
+[package]
+name = "hostkeeper-link"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The daemon's heartbeat loop: the facts of the installed services out, the coordinator's order in, the verdict resent until it is acknowledged."
+
+# The heartbeat loop of the hostkeeper daemon (docs/design/hostkeeper-design.md, sections 5.2,
+# 8.2 to 8.4 and 11). A library over ports: the coordinator link, the certificate source, the
+# step records, the service observer, the executor, the held halts, the unix clock, the log and
+# the sleeper. It implements the certificate source itself, over the files of the pki directory
+# (`PkiCertSource`). It opens no socket and reads no wall clock itself; the daemon passes the real
+# ports in. The fakes of every port are in `hostkeeper_link::testing`, behind the feature
+# `testing`.
+[dependencies]
+# The `--heartbeat-secs` flag the daemon flattens into its command line.
+clap.workspace = true
+# Service names and versions, with their grammars (design 11.8).
+hostkeeper-config = { path = "../hostkeeper-config" }
+# The failure phase and class of a verdict.
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The one service limit of a heartbeat.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The pair check of `PkiCertSource`: the host's P-256 key (PKCS#8 DER in the pki directory, PEM
+# in the pair it gives) and the public key of its certificate, with the same crates
+# `hostkeeper-enroll` uses for them. Pure Rust: no OpenSSL, no C.
+p256.workspace = true
+x509-cert.workspace = true
+# The monotonic clock the production sleeper waits on.
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+# The deferral file under a handle on its directory: `openat` without following a link or
+# waiting on a special file, `renameat`, `unlinkat`, `fsync`, and the owner check (`geteuid`).
+rustix = { workspace = true, features = ["fs", "process"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[features]
+# The fakes of every port (`hostkeeper_link::testing`), for this crate's tests and for the
+# crates that wire the loop, in their dev-dependencies.
+testing = []
+
+[dev-dependencies]
+# Its own tests turn on `testing`.
+hostkeeper-link = { path = ".", features = ["testing"] }
+# The writer of the pki directory, so that `PkiCertSource` is tested on the layout enrollment
+# writes.
+hostkeeper-enroll = { path = "../hostkeeper-enroll" }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The test PKI of the certificate source's tests, made at run time so that no key is committed.
+rcgen.workspace = true
+# Reads this crate's manifest in the test that the loop dials nothing but its link.
+toml.workspace = true
+
+[lints]
+workspace = true

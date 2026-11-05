@@ -1,0 +1,44 @@
+{
+ "from": "kbf-coordinator/src/decide.rs (v0.0.64), first_hold: a service waited for the services in its after until their live hosts ran their desired versions (the file this was run with in kbf said after = [first] for second). This coordinator cut the rule, so the order is given; kbf's answer is in kbf_body (derived from the rules at the tag, not a kbf test)",
+ "services_fixture": "kbf.services.toml",
+ "services_text": "[[service]]\nname = \"first\"\nroles = [\"daemon\"]\n\n[[service]]\nname = \"second\"\nroles = [\"daemon\"]\n",
+ "oidc_services": [
+  "first",
+  "second"
+ ],
+ "steps": [
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "h2",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"services\":[{\"name\":\"first\",\"version\":\"1.0\",\"health\":\"healthy\"}]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"service\":\"first\",\"version\":\"3.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"3.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"service\":\"second\",\"version\":\"3.0\",\"min_up\":{\"storage\":0,\"frontend\":0}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"3.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":0}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "h1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\",\"services\":[{\"name\":\"second\",\"version\":\"1.0\",\"health\":\"healthy\"}]}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"service\":\"second\",\"version\":\"3.0\"}",
+   "kbf_body": "{\"reply\":\"nothing\"}"
+  }
+ ]
+}

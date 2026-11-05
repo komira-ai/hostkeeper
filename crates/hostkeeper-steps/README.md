@@ -12,20 +12,22 @@ params table, the next-step table) are those of `hostkeeper-hook`.
 | module | what it holds |
 |---|---|
 | `runner` | `StepRunner::run`: one update from `prepare` to its verdict. Writes the step record before and after each step, asks `hostkeeper_hook::next` what follows, resumes from the record, runs the post-success watcher for `promotion_pending` |
-| `record` | the step record (`schema`, service, target version, artifact digest, generation, step, attempt, state `pending`/`running`/`done`/`finished`, what the runner remembers between steps), written by temporary file, fsync, rename, directory fsync; a record of a newer schema is never changed |
-| `artifact` | `Staged` and `tree_digest`: the staged tree and its sha256 at verification, made only by `Staged::seal`; checked before every step, resumed ones included |
+| `record` | the step record (`schema`, service, target version, artifact digest, generation, step, attempt, state `pending`/`running`/`done`/`finished`, what the runner remembers between steps), written by temporary file, fsync, rename, directory fsync; a record of a newer schema is never changed. Two optional fields, written only when set: `forced`, set by a `force` that stops the update (the runner then closes it `Failed`, `forced_over`, and launches nothing more), and `force`, the journal of a `force` |
+| `force` | `ForceRecord`: the journal of a hookless `force` (target, digest, the version left, the phase reached, the order's try and halt generation, the verdict), whose phase and verdict strings are fixed |
+| `artifact` | `Staged`, `tree_digest` and `read_tree`: the staged tree and its digest at verification (the public format of docs/package-format.md: kind, name, mode, size and bytes of every entry; no owner, no times, no links), made only by `Staged::seal`; checked before every step, resumed ones included |
+| `seal` | `Seal`: the seal file `<version>.seal` of an unpacked package version (`schema`, `tree_digest`, `package_digest`), read additively |
 | `launcher` | `StepLauncher`, `StepCall` and `Bound`: what the runner needs to run one step and to stop its unit by name, a step's bound (seconds, or `Unbounded` for a `prepare` of 0), and what the launcher must do that the runner cannot check |
 | `systemd` | `SystemdLauncher`: each step as `systemd-run --system --quiet --wait --collect --pipe --unit=updater-<service>-<step>-<generation> --property=RuntimeMaxSec=<secs\|infinity> -- <hook> <args>`, run as root with no other property (no user, capability, sandbox or path property); `stop` is `systemctl stop --system <unit>`, a unit that is not loaded being stopped. The command lines are pure functions (`command`, `stop_command`, `unit_name`); `SystemdRunProcess`, the one place that starts a process, runs the programs with an empty environment and no input and reads both output streams at once |
 | `capture` | `Ring`: the last `RING_BYTES` (1 MiB) of each output stream of a step; the last line of standard output is the report only when it is at most `LAST_LINE_MAX` (64 KiB) and whole, otherwise the report is `{}` and the exit code decides |
 | `deadman` | `Watch` and `DeadMan`: the bound of the running step, enforced on a thread of its own; a stop that did not work is reported to the runner; an unbounded `prepare` is not armed |
-| `selfupdate` | the updater's own update: stage beside (never over what `current` or `previous` names), switch the `current` link, restart; `previous` link and `flip_back` for the `OnFailure=` fallback; the two unit texts. `follow_on` takes the binary from a `Staged` through `Staged::check` |
+| `selfupdate` | the updater's own update: stage beside (never over what `current` or `previous` names), switch the `current` link, restart; `previous` link and `flip_back` for the `OnFailure=` fallback; the two unit texts. `follow_on` takes the binary from a `Staged` through `Staged::check`. `Layout` is the directory of versions with `current` and `previous`: the updater's binaries (`Layout::new`, `versions/<v>`) or a package's sealed trees (`Layout::package`, `<v>/` with `<v>.seal`, checked by `check_tree`) |
 | `clock` | `Clock`, `Stamp`, `SystemClock`: time and the boot id as inputs |
 
 ## Rules the code keeps
 
 - Nothing from a release runs unless its tree still has the digest the updater verified. A mismatch
-  at any step, a tree in a place others can write, or a tree that holds what is neither a file, a
-  directory nor a link is a `halt` with the reason `artifact_changed`, and nothing from the tree
+  at any step, a tree in a place others can write, or a tree that holds what is neither a regular file nor
+  a directory (a link included) is a `halt` with the reason `artifact_changed`, and nothing from the tree
   runs. A tree that cannot be read for a moment (an I/O error, out of descriptors) is no halt:
   the runner stops with `RunError::Unreadable`, the step stays `pending`, and the next run checks
   again.

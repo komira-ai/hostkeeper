@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1100" width="1200" height="1100" role="img" aria-label="Update sequence with drain: CI sets the desired version, the coordinator orders the update at a heartbeat, the daemon checks the order, fetches, verifies and unpacks the package, and runs prepare, cutover, verify and cleanup in the hook as root while the service drains.">
+<title>Update sequence with drain</title>
+<desc>Time runs down the page across CI, coordinator, the root daemon, the hook and the service. The daemon records each step before and after it runs, and a failed verify rolls back before the failure is reported.</desc>
+<defs><marker id="update-sequence-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="update-sequence-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="1100" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">One update: from the desired version to a committed release</text>
+<path d="M120,76 L120,1020" class="life"/>
+<path d="M380,76 L380,1020" class="life"/>
+<path d="M680,76 L680,1020" class="life"/>
+<path d="M940,76 L940,1020" class="life"/>
+<path d="M1120,76 L1120,1020" class="life"/>
+<rect x="65" y="44" width="110" height="32" rx="5" class="box"/>
+<text x="120" y="65" class="b" text-anchor="middle">CI</text>
+<rect x="315" y="44" width="130" height="32" rx="5" class="box-b"/>
+<text x="380" y="65" class="b" text-anchor="middle">Coordinator</text>
+<rect x="605" y="44" width="150" height="32" rx="5" class="box-o"/>
+<text x="680" y="65" class="b" text-anchor="middle">Daemon (root)</text>
+<rect x="880" y="44" width="120" height="32" rx="5" class="box-o"/>
+<text x="940" y="65" class="b" text-anchor="middle">Hook (root)</text>
+<rect x="1070" y="44" width="100" height="32" rx="5" class="box"/>
+<text x="1120" y="65" class="b" text-anchor="middle">Service</text>
+<rect x="678" y="300" width="4" height="700" rx="1" class="box-o"/>
+<path d="M120,130 L380,130" class="ln" marker-end="url(#update-sequence-ak)"/>
+<circle cx="134" cy="116" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="134" y="120" class="b" font-size="12" text-anchor="middle">1</text>
+<text x="152" y="124" class="t-m lbl" text-anchor="start">set desired V, digest D</text>
+<path d="M680,190 L380,190" class="ln" marker-end="url(#update-sequence-ak)"/>
+<circle cx="394" cy="176" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="394" y="180" class="b" font-size="12" text-anchor="middle">2</text>
+<text x="412" y="184" class="t-m lbl" text-anchor="start">heartbeat</text>
+<path d="M380,222 L680,222" class="ln-d" marker-end="url(#update-sequence-ak)"/>
+<text x="530" y="216" class="t-m lbl" text-anchor="middle">order: update S V D, try n</text>
+<rect x="300" y="236" width="170" height="28" rx="5" class="box-b"/>
+<text x="385" y="254" class="t-m" text-anchor="middle">rollout gate: one live update</text>
+<circle cx="590" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="590" y="254" class="b" font-size="12" text-anchor="middle">3</text>
+<rect x="600" y="236" width="160" height="28" rx="5" class="box-o"/>
+<text x="680" y="254" class="t-m" text-anchor="middle">checks the order itself</text>
+<text x="770" y="254" class="t-m lbl" text-anchor="start">well formed, busy,</text>
+<text x="770" y="269" class="t-m lbl" text-anchor="start">halt, no path conflict</text>
+<path d="M680,330 L720,330 L720,350 L680,350" class="ln" marker-end="url(#update-sequence-ak)"/>
+<circle cx="664" cy="340" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="664" y="344" class="b" font-size="12" text-anchor="middle">4</text>
+<text x="730" y="337" class="t-m lbl" text-anchor="start">fetch, verify, unpack, read</text>
+<text x="730" y="352" class="t-m lbl" text-anchor="start">manifest.toml (fetch diagram)</text>
+<text x="640" y="337" class="t-m lbl" text-anchor="end">digest + attestation</text>
+<text x="640" y="352" class="t-m lbl" text-anchor="end">vs the trusted signers</text>
+<rect x="934" y="420" width="12" height="500" rx="2" class="box-o"/>
+<path d="M680,435 L940,435" class="ln" marker-end="url(#update-sequence-ak)"/>
+<circle cx="694" cy="421" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="694" y="425" class="b" font-size="12" text-anchor="middle">5</text>
+<text x="712" y="429" class="t-m lbl" text-anchor="start">prepare &lt;version dir&gt;</text>
+<path d="M946,475 L1120,475" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="1033" y="469" class="t-m lbl" text-anchor="middle">drain</text>
+<path d="M1120,515 L946,515" class="ln-d" marker-end="url(#update-sequence-ak)"/>
+<text x="1033" y="509" class="t-m lbl" text-anchor="middle">work ends</text>
+<path d="M920,475 L914,475 L914,515 L920,515" class="ln"/>
+<text x="906" y="491" class="t-m lbl" text-anchor="end">drain: no deadline</text>
+<text x="906" y="506" class="t-m lbl" text-anchor="end">from the daemon</text>
+<rect x="470" y="531" width="450" height="76" rx="3" class="box-p"/>
+<text x="484" y="546" class="b" text-anchor="start">alt</text>
+<text x="510" y="546" class="t-m" text-anchor="start">[bound passes with work running]</text>
+<path d="M940,579 L680,579" class="ln-d" marker-end="url(#update-sequence-ak)"/>
+<text x="810" y="573" class="t-m lbl" text-anchor="middle">exit 75 drain_bound</text>
+<text x="700" y="597" class="t-m lbl" text-anchor="start">Deferred: slot freed</text>
+<rect x="656" y="417" width="14" height="16" rx="3" class="box-o"/>
+<text x="652" y="429" class="t-m" text-anchor="end">record</text>
+<rect x="656" y="611" width="14" height="16" rx="3" class="box-o"/>
+<text x="652" y="623" class="t-m" text-anchor="end">record</text>
+<path d="M680,660 L940,660" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="712" y="654" class="t-m lbl" text-anchor="start">cutover</text>
+<text x="952" y="640" class="t-m lbl" text-anchor="start">daemon first switches</text>
+<text x="952" y="654" class="t-m lbl" text-anchor="start">current, links units</text>
+<path d="M946,690 L1120,690" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="1033" y="684" class="t-m lbl" text-anchor="middle">swap, start new</text>
+<rect x="640" y="716" width="520" height="126" rx="4" class="box-p"/>
+<text x="654" y="732" class="b" text-anchor="start">loop</text>
+<text x="690" y="732" class="t-m" text-anchor="start">[while exit 75]</text>
+<path d="M680,759 L940,759" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="712" y="753" class="t-m lbl" text-anchor="start">verify</text>
+<path d="M680,779 L940,779" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="810" y="773" class="t-m lbl" text-anchor="middle">again</text>
+<path d="M946,802 L1120,802" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="1033" y="796" class="t-m lbl" text-anchor="middle">probe</text>
+<circle cx="664" cy="822" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="664" y="826" class="b" font-size="12" text-anchor="middle">6</text>
+<text x="682" y="826" class="t-m lbl" text-anchor="start">after each step next() decides: verify fails -&gt; rollback, then Failed(phase)</text>
+<path d="M680,880 L940,880" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="712" y="874" class="t-m lbl" text-anchor="start">cleanup</text>
+<path d="M946,905 L1120,905" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="1033" y="899" class="t-m lbl" text-anchor="middle">stop old release</text>
+<path d="M680,975 L380,975" class="ln" marker-end="url(#update-sequence-ak)"/>
+<circle cx="394" cy="961" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="394" y="965" class="b" font-size="12" text-anchor="middle">7</text>
+<text x="412" y="969" class="t-m lbl" text-anchor="start">heartbeat: last_update, Succeeded (promotion_pending)</text>
+<rect x="300" y="985" width="170" height="28" rx="5" class="box-b"/>
+<text x="385" y="1003" class="t-m" text-anchor="middle">slot held through bake</text>
+<text x="680" y="1040" class="t-m" text-anchor="middle">thin bar on the daemon line: step record, written before and after each step. No second process, no rights gate.</text>
+<rect x="30" y="1066" width="22" height="14" rx="3" class="box-o"/>
+<text x="60" y="1078" class="t-m" text-anchor="start">runs as root</text>
+<rect x="160" y="1066" width="22" height="14" rx="3" class="box-b"/>
+<text x="190" y="1078" class="t-m" text-anchor="start">parses network input</text>
+<rect x="340" y="1066" width="22" height="14" rx="3" class="box"/>
+<text x="370" y="1078" class="t-m" text-anchor="start">passive or external</text>
+<rect x="530" y="1066" width="22" height="14" rx="3" class="box-p"/>
+<text x="560" y="1078" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
+<path d="M800,1074 L830,1074" class="ln" marker-end="url(#update-sequence-ak)"/>
+<text x="838" y="1078" class="t-m" text-anchor="start">request</text>
+<path d="M900,1074 L930,1074" class="ln-d" marker-end="url(#update-sequence-ak)"/>
+<text x="938" y="1078" class="t-m" text-anchor="start">reply or report</text>
+</svg>

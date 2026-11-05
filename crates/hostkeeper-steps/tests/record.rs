@@ -41,7 +41,11 @@ fn record() -> Record {
             verify_started: Some(Stamp::now(&*clock)),
             watching: None,
             reason: Some("remote_down".to_owned()),
+            awaiting_restart: None,
         },
+        order_try: None,
+        forced: false,
+        force: None,
     }
 }
 
@@ -310,7 +314,11 @@ fn the_record_on_disk_has_this_shape() {
             verify_started: Some(stamp()),
             watching: None,
             reason: Some("remote_down".to_owned()),
+            awaiting_restart: None,
         },
+        order_try: None,
+        forced: false,
+        force: None,
     };
     let json = r#"{"schema":1,"service":"svc","target_version":"2.0.0","artifact_digest":"abc","tarball_digest":"0123","previous_digest":"def","generation":7,"params":"/state/params.toml","step":"verify","attempt":2,"state":{"state":"pending"},"hook":"previous","progress":{"committed":true,"promotion_pending":false,"then":{"Deferred":{"retry_after_secs":null}},"retry":2,"verify_started":{"boot_id":"b","mono_secs":7},"watching":null,"reason":"remote_down"}}"#;
     assert_eq!(serde_json::to_string(&rec).unwrap(), json);
@@ -384,4 +392,68 @@ fn an_old_running_record_without_the_unbounded_field_reads_as_bounded() {
     let json = r#"{"state":"running","started":{"boot_id":"b","mono_secs":7},"deadline_secs":7,"unbounded":true}"#;
     assert_eq!(serde_json::to_string(&unbounded).unwrap(), json);
     assert_eq!(serde_json::from_str::<State>(json).unwrap(), unbounded);
+}
+
+/// The record a fixture of `tests/fixtures/before-order-try` holds.
+fn before_order_try() -> String {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/before-order-try/finished.json"
+    );
+    fs::read_to_string(path).unwrap()
+}
+
+/// Catches `order_try` made a required field: a record of schema 1 written before the field
+/// existed (a committed fixture, never regenerated) must still load, with no try, and must be
+/// written back byte for byte as the older binary wrote it, so that an older daemon reads it too.
+#[test]
+fn a_step_record_written_before_order_try_existed_still_loads() {
+    let scratch = Scratch::new("record-before-try");
+    let text = before_order_try();
+    fs::write(scratch.path().join(RECORD_FILE), &text).unwrap();
+    let Loaded::Current(rec) = RecordStore::new(scratch.path()).load().unwrap() else {
+        panic!("the fixture did not load as a current record");
+    };
+    assert_eq!(rec.order_try, None);
+    assert_eq!(rec.target_version, "2.0.0");
+    assert_eq!(
+        rec.state,
+        State::Finished {
+            verdict: Verdict::Succeeded {
+                promotion_pending: false
+            },
+            reason: None,
+        }
+    );
+    let written: serde_json::Value = serde_json::to_value(&*rec).unwrap();
+    let older: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(written, older);
+}
+
+/// Catches a try that is lost on the disk, or an older reader that a record with a try (and a key
+/// it does not know besides) breaks: the try is written as `order_try` and read back, and a
+/// record that also holds a key no release writes still loads.
+#[test]
+fn the_order_try_is_kept_and_an_unknown_key_does_not_break_loading() {
+    let scratch = Scratch::new("record-try");
+    let store = RecordStore::new(scratch.path());
+    let rec = Record {
+        order_try: Some(7),
+        ..record()
+    };
+    store.save(&rec).unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(scratch.path().join(RECORD_FILE)).unwrap()).unwrap();
+    assert_eq!(value["order_try"], 7);
+    assert_eq!(
+        store.load().unwrap(),
+        Loaded::Current(Box::new(rec.clone()))
+    );
+    value["written_by_a_later_release"] = serde_json::Value::from("x");
+    fs::write(
+        scratch.path().join(RECORD_FILE),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(store.load().unwrap(), Loaded::Current(Box::new(rec)));
 }

@@ -1,0 +1,30 @@
+{
+  "services": {
+    "kbf": {
+      "version": "2.0",
+      "max_updating": {
+        "frontend": 1,
+        "storage": 1,
+        "daemon": 1,
+        "mac-daemon": 2
+      },
+      "min_up": {
+        "storage": 1,
+        "frontend": 1
+      }
+    },
+    "tierstore": {
+      "version": "7.1",
+      "max_updating": {
+        "frontend": 1,
+        "storage": 1,
+        "daemon": 2,
+        "mac-daemon": 2
+      },
+      "min_up": {
+        "storage": 4,
+        "frontend": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,77 @@
+[package]
+name = "hostkeeper-coordinator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The update coordinator: tells each host's updater which version to run, one live update at a time across the fleet."
+
+# The update coordinator (docs/design/host-updates.md): a deployable of its own that tells each
+# host's updater which version to run, one live update at a time across every service and role
+# (the limits and minimums a desired state carries are kept and printed; no decision reads
+# them). Updaters dial it over mutual TLS; CI sets the desired state of a service with a GitHub
+# Actions OIDC token (hostkeeper-oidc); an operator reads the status with a named token. The
+# decision is a pure function (`decide`) over the heartbeats the coordinator has seen. On disk it
+# keeps three files: the desired state of each service (with the package digest of every version
+# CI has set), the operations file (operator actions, version marks, the audit ring, with every
+# change also a line of the audit file beside it) and the halts file beside it (halt reports, who
+# raised each halt, clear generations); beside the state file, the spent ids of CI's tokens and
+# the lock that keeps a second coordinator off these files.
+# With `--enrollment-dir` it is also the hosts' certificate authority (hostkeeper-enrollment): it
+# keeps the enrollment store and the CA key file, answers Enroll, Poll and Renew, and makes its
+# own server certificate.
+# The services it manages are data: the rollout file named by `--rollout-file`. An operator is
+# one of the named tokens of `--tokens-file`.
+[[bin]]
+name = "hostkeeper-coordinator"
+path = "src/main.rs"
+
+[dependencies]
+# The CA and the enrollment store (`--enrollment-dir`, `--ca-key-file`).
+hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
+hostkeeper-oidc = { path = "../hostkeeper-oidc" }
+# The messages and refusals of the operator's calls, the orders a typed heartbeat answer
+# carries, and the messages of `Enroll`, `Poll` and `Renew`.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+hostkeeper-tls = { path = "../hostkeeper-tls" }
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The PEM of the CA bundle and of the server certificate file.
+base64.workspace = true
+bytes.workspace = true
+clap.workspace = true
+futures.workspace = true
+# The poll nonces.
+getrandom.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+prost.workspace = true
+# The key of the coordinator's server certificate.
+rcgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls.workspace = true
+# The gRPC status of a refusal (`Code`, `Status`); no transport.
+tonic.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# The validity of the server certificate file, for its renewal at start.
+x509-parser.workspace = true
+
+[dev-dependencies]
+hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The descriptors of the enrollment calls, read in their tests.
+prost-types.workspace = true
+rustls = { workspace = true, features = ["tls12"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "test-util", "time"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,31 @@
+[package]
+name = "hostkeeper-wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "What the update agent and the update coordinator say to each other: the heartbeat and the reply, versions, role, host and platform names, the identity a certificate names and the secret file rule."
+
+# The wire of the host updates (docs/design/host-updates.md): the heartbeat an agent sends and
+# the reply, the one rule for a version, the names a certificate and a heartbeat carry, who a
+# certificate says its holder is (read from its subjectAltNames under two URI prefixes the
+# coordinator is given), and the file rule of a secret. No async runtime and no TLS here: the
+# certificate is read, not verified.
+[dependencies]
+# The open flags of the secret file (`O_NOFOLLOW`, `O_NONBLOCK`): constants only.
+libc.workspace = true
+# The effective uid, which the secret file's owner is checked against.
+rustix = { workspace = true, features = ["process"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+rcgen.workspace = true
+
+[lints]
+workspace = true

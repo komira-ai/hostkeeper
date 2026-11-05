@@ -5,7 +5,8 @@
 //! with the newest fields taken out, read with `prost-reflect`.
 //!
 //! Also the names on the wire, pinned: the feature strings, the order's verbs and their numbers,
-//! every refusal token, and the kbf JSON keys and the fields that carry them.
+//! every refusal token, the RPCs of the coordinator's services, the fields of the enrollment,
+//! abort, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
 
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
@@ -344,14 +345,289 @@ fn feature_names() -> Vec<String> {
     out
 }
 
+/// Each RPC of a service, as `Name(Request) Response`, in the file's order.
+fn rpcs(pool: &DescriptorPool, service: &str) -> Vec<String> {
+    pool.get_service_by_name(service)
+        .expect("the service")
+        .methods()
+        .map(|m| format!("{}({}) {}", m.name(), m.input().name(), m.output().name()))
+        .collect()
+}
+
+/// Each field of a message, as its name and number, in the file's order.
+fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
+    pool.get_message_by_name(message)
+        .expect("the message")
+        .fields()
+        .map(|f| (f.name().to_owned(), f.number()))
+        .collect()
+}
+
+/// The RPCs of the coordinator's services, pinned.
+const RPCS: [(&str, &[&str]); 6] = [
+    (
+        "hostkeeper.agent.v1.Coordinator",
+        &[
+            "Heartbeat(HeartbeatRequest) HeartbeatResponse",
+            "Enroll(EnrollRequest) EnrollResponse",
+            "Poll(PollRequest) PollResponse",
+            "Renew(RenewRequest) RenewResponse",
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.Hosts",
+        &[
+            "List(ListHostsRequest) ListHostsResponse",
+            "Get(GetHostRequest) GetHostResponse",
+            "Exclude(ExcludeRequest) ExcludeResponse",
+            "Include(IncludeRequest) IncludeResponse",
+            "SetLabels(SetLabelsRequest) SetLabelsResponse",
+            "Abort(AbortRequest) AbortResponse",
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.Releases",
+        &[
+            "SetDesired(SetDesiredRequest) SetDesiredResponse",
+            "Converge(ConvergeRequest) ConvergeResponse",
+            "Force(ForceRequest) ForceResponse",
+            "UnmarkBad(UnmarkBadRequest) UnmarkBadResponse",
+            "ClearHalt(ClearHaltRequest) ClearHaltResponse",
+            "Status(StatusRequest) StatusResponse",
+            "MarkBad(MarkBadRequest) MarkBadResponse",
+            "Halt(HaltRequest) HaltResponse",
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.Services",
+        &[
+            "List(ListServicesRequest) ListServicesResponse",
+            "Assign(AssignRequest) AssignResponse",
+            "Unassign(UnassignRequest) UnassignResponse",
+            "SetMinVersion(SetMinVersionRequest) SetMinVersionResponse",
+            "Hold(HoldRequest) HoldResponse",
+            "Unhold(UnholdRequest) UnholdResponse",
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.Enrollment",
+        &[
+            "List(ListPendingRequest) ListPendingResponse",
+            "Approve(ApproveRequest) ApproveResponse",
+            "AddRecord(AddRecordRequest) AddRecordResponse",
+            "ListRecords(ListRecordsRequest) ListRecordsResponse",
+            "RemoveRecord(RemoveRecordRequest) RemoveRecordResponse",
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.Audit",
+        &["List(ListAuditRequest) ListAuditResponse"],
+    ),
+];
+
+/// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
+/// number.
+const FIELDS: [(&str, &[(&str, u32)]); 25] = [
+    (
+        "hostkeeper.agent.v1.HeartbeatResponse",
+        &[
+            ("order", 1),
+            ("features", 2),
+            ("halt_generations", 3),
+            ("acks", 4),
+        ],
+    ),
+    (
+        "hostkeeper.agent.v1.VerdictAck",
+        &[("service", 1), ("order_id", 2), ("order_try", 3)],
+    ),
+    (
+        "hostkeeper.local.v1.ServiceRecord",
+        &[
+            ("service", 1),
+            ("current", 2),
+            ("last", 3),
+            ("state", 4),
+            ("record_problem", 5),
+            ("lifecycle", 6),
+        ],
+    ),
+    (
+        "hostkeeper.agent.v1.EnrollRequest",
+        &[
+            ("csr_der", 1),
+            ("claims", 2),
+            ("image", 3),
+            ("renewal_of", 4),
+            ("mac_nonce", 5),
+        ],
+    ),
+    (
+        "hostkeeper.agent.v1.Claims",
+        &[
+            ("machine_id", 1),
+            ("dmi_serial", 2),
+            ("product_uuid", 3),
+            ("addresses", 4),
+            ("mac_serial", 5),
+            ("platform_uuid", 6),
+            ("bmc_mac", 7),
+        ],
+    ),
+    (
+        "hostkeeper.agent.v1.EnrollResponse",
+        &[("request_id", 1), ("state", 2)],
+    ),
+    (
+        "hostkeeper.agent.v1.PollRequest",
+        &[("request_id", 1), ("nonce", 2), ("signature", 3)],
+    ),
+    (
+        "hostkeeper.agent.v1.PollResponse",
+        &[
+            ("state", 1),
+            ("certificate_der", 2),
+            ("host_id", 3),
+            ("ca_bundle_pem", 4),
+            ("nonce", 5),
+        ],
+    ),
+    ("hostkeeper.agent.v1.RenewRequest", &[("csr_der", 1)]),
+    (
+        "hostkeeper.agent.v1.RenewResponse",
+        &[("certificate_der", 1), ("ca_bundle_pem", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ExcludeRequest",
+        &[
+            ("service", 1),
+            ("node_id", 2),
+            ("reason", 3),
+            ("abandon", 4),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.AbortRequest",
+        &[("node_id", 1), ("service", 2), ("reason", 3)],
+    ),
+    (
+        "hostkeeper.operator.v1.AbortResponse",
+        &[("queued", 1), ("entry", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ListAuditRequest",
+        &[
+            ("since_seq", 1),
+            ("limit", 2),
+            ("actor", 3),
+            ("action", 4),
+            ("service", 5),
+            ("node_id", 6),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ListAuditResponse",
+        &[("entries", 1), ("next_seq", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ListPendingRequest",
+        &[("limit", 1), ("page_token", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ListPendingResponse",
+        &[("requests", 1), ("next_page_token", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.PendingEnrollment",
+        &[
+            ("request_id", 1),
+            ("key_sha256", 2),
+            ("claims", 3),
+            ("image", 4),
+            ("first_seen_unix", 5),
+            ("renewal_of", 6),
+            ("duplicate_claim", 7),
+            ("mac_nonce_presented", 8),
+            ("inventory_match", 9),
+            ("record_host_id", 10),
+            ("record_role", 11),
+            ("candidate_host_ids", 12),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.InventoryRecord",
+        &[
+            ("host_id", 1),
+            ("role", 2),
+            ("data_macs", 3),
+            ("bmc_mac", 4),
+            ("serial", 5),
+            ("notes", 6),
+            ("added_by", 7),
+            ("added_unix", 8),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.AddRecordRequest",
+        &[
+            ("host_id", 1),
+            ("role", 2),
+            ("data_macs", 3),
+            ("bmc_mac", 4),
+            ("serial", 5),
+            ("notes", 6),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.RemoveRecordRequest",
+        &[("host_id", 1), ("reason", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ApproveRequest",
+        &[
+            ("request_id", 1),
+            ("key_sha256", 2),
+            ("host_id", 3),
+            ("role", 4),
+            ("services", 5),
+            ("replace", 6),
+            ("reason", 7),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ApproveResponse",
+        &[
+            ("host_id", 1),
+            ("certificate_issued_at_poll", 2),
+            ("entry", 3),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ForceResponse",
+        &[("entries", 1), ("held", 2), ("targeted", 3), ("skipped", 4)],
+    ),
+    (
+        "hostkeeper.operator.v1.SkippedHost",
+        &[("node_id", 1), ("reason", 2)],
+    ),
+];
+
 /// Catches: a name on the wire renamed or renumbered without this test changing with it: the
-/// features daemons announce, the order's verbs, every refusal token, and the kbf JSON keys and
-/// the fields that carry them. Callers branch on each.
+/// features daemons announce, the order's verbs, every refusal token, the enrollment and poll
+/// states, the coordinator's RPCs with their messages, the fields of the enrollment, abort,
+/// audit and force-report messages, and the kbf JSON keys and the fields that carry them.
+/// Callers branch on each, and the daemon and the coordinator are built against them apart.
 #[test]
 fn wire_names_are_pinned() {
     assert_eq!(
         feature_names(),
-        ["deferred-v1", "forced-v1", "halt-v1", "heartbeat-v2"]
+        [
+            "deferred-v1",
+            "forced-v1",
+            "halt-v1",
+            "heartbeat-v2",
+            "verdict-acks-v1"
+        ]
     );
 
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
@@ -375,11 +651,31 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 5] = [
+    let cases: [(&str, &str, &[&str]); 11] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
-            &["forbidden", "invalid_heartbeat"],
+            &[
+                "forbidden",
+                "invalid_heartbeat",
+                "pending_full",
+                "key_not_p256",
+                "bad_csr",
+                "denied",
+                "unknown_request",
+                "bad_signature",
+                "renewal_not_allowed",
+            ],
+        ),
+        (
+            "hostkeeper.agent.v1.EnrollState",
+            "ENROLL_STATE_",
+            &["pending", "duplicate_claim"],
+        ),
+        (
+            "hostkeeper.agent.v1.PollState",
+            "POLL_STATE_",
+            &["pending", "issued", "denied"],
         ),
         (
             "hostkeeper.operator.v1.HostsRefusal",
@@ -414,6 +710,7 @@ fn wire_names_are_pinned() {
                 "confirm_mismatch",
                 "already_bad",
                 "already_halted",
+                "unknown_target",
             ],
         ),
         (
@@ -431,6 +728,45 @@ fn wire_names_are_pinned() {
             ],
         ),
         (
+            "hostkeeper.operator.v1.EnrollmentRefusal",
+            "ENROLLMENT_REFUSAL_",
+            &[
+                "unauthorized",
+                "forbidden",
+                "unknown_request",
+                "key_mismatch",
+                "host_id_taken",
+                "pending_full",
+                "duplicate_claim",
+                "invalid_host_id",
+                "invalid_role",
+                "invalid_service",
+                "invalid_request",
+                "not_pending",
+                "denied",
+                "store_failed",
+                "record_exists",
+                "record_conflict",
+                "no_record",
+                "capacity",
+            ],
+        ),
+        (
+            "hostkeeper.operator.v1.InventoryMatch",
+            "INVENTORY_MATCH_",
+            &["matched", "unmatched", "ambiguous"],
+        ),
+        (
+            "hostkeeper.operator.v1.AuditRefusal",
+            "AUDIT_REFUSAL_",
+            &[
+                "unauthorized",
+                "forbidden",
+                "invalid_request",
+                "store_failed",
+            ],
+        ),
+        (
             "hostkeeper.local.v1.AdminRefusal",
             "ADMIN_REFUSAL_",
             &[
@@ -441,9 +777,22 @@ fn wire_names_are_pinned() {
                 "store_failed",
             ],
         ),
+        (
+            "hostkeeper.local.v1.Lifecycle",
+            "LIFECYCLE_",
+            &["absent", "installing", "running", "removing"],
+        ),
     ];
     for (name, prefix, want) in cases {
         assert_eq!(tokens(&pool, name, prefix), want, "{name}");
+    }
+
+    for (service, want) in RPCS {
+        assert_eq!(rpcs(&pool, service), want, "{service}");
+    }
+    for (message, want) in FIELDS {
+        let want: Vec<(String, u32)> = want.iter().map(|(n, k)| ((*n).to_owned(), *k)).collect();
+        assert_eq!(fields_of(&pool, message), want, "{message}");
     }
 
     assert_eq!(

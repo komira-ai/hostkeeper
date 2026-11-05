@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="Package fetch, verify and unpack: order with version and digest only, fetch by the daemon, download, size and digest check and attestation, bounds and shape checks while unpacking in one pass, manifest read, seal and rename into the version directory, with what is root-written at each step.">
+<title>Package fetch, verify and unpack</title>
+<desc>The daemon turns an order that names only a service, a version and a digest into a sealed, read-only version directory in four steps, and a failure in the checks leaves nothing behind. Linking units and files happens later, at cutover. The seal is checked again before every later step, so a changed tree halts the service instead of running.</desc>
+<defs><marker id="release-fetch-verify-stage-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="release-fetch-verify-stage-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="720" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Fetch, verify and unpack: four steps (1 to 4) from an order to a sealed package version</text>
+<rect x="30" y="80" width="220" height="100" rx="5" class="box-b"/>
+<text x="140" y="104" class="b" text-anchor="middle">Order</text>
+<text x="140" y="122" class="t-m" text-anchor="middle">service, version, digest</text>
+<text x="140" y="138" class="t-m" text-anchor="middle">no URL, no path</text>
+
+<rect x="320" y="80" width="220" height="100" rx="5" class="box"/>
+<text x="430" y="104" class="b" text-anchor="middle">Resolve location</text>
+<text x="430" y="122" class="t-m" text-anchor="middle">release channel from the</text>
+<text x="430" y="138" class="t-m" text-anchor="middle">daemon config</text>
+<rect x="306" y="70" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="320" y="84" class="b" font-size="11" text-anchor="middle">1a</text>
+<rect x="610" y="80" width="220" height="100" rx="5" class="box dash"/>
+<text x="720" y="104" class="b" text-anchor="middle">Fetch by the daemon</text>
+<text x="720" y="122" class="t-m" text-anchor="middle">bytes to a staging file</text>
+<text x="720" y="138" class="t-m" text-anchor="middle">as root, counted</text>
+<rect x="596" y="70" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="610" y="84" class="b" font-size="11" text-anchor="middle">1b</text>
+<rect x="900" y="80" width="220" height="100" rx="5" class="box-o"/>
+<text x="1010" y="104" class="b" text-anchor="middle">Size cap and SHA-256</text>
+<text x="1010" y="122" class="t-m" text-anchor="middle">SHA-256 equals the order</text>
+<text x="1010" y="138" class="t-m" text-anchor="middle">and the byte count</text>
+<rect x="886" y="70" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="900" y="84" class="b" font-size="11" text-anchor="middle">2a</text>
+<rect x="900" y="250" width="220" height="100" rx="5" class="box-o"/>
+<text x="1010" y="274" class="b" text-anchor="middle">Attestation</text>
+<text x="1010" y="292" class="t-m" text-anchor="middle">trusted signer: org, workflow,</text>
+<text x="1010" y="308" class="t-m" text-anchor="middle">ref, commit; lists SHA-256</text>
+<rect x="886" y="240" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="900" y="254" class="b" font-size="11" text-anchor="middle">2b</text>
+<rect x="610" y="250" width="220" height="100" rx="5" class="box-o"/>
+<text x="720" y="274" class="b" text-anchor="middle">Bounds and shape</text>
+<text x="720" y="292" class="t-m" text-anchor="middle">checked on each entry as it</text>
+<text x="720" y="308" class="t-m" text-anchor="middle">streams: size, count, names,</text>
+<text x="720" y="324" class="t-m" text-anchor="middle">no links, no .. paths</text>
+<rect x="596" y="240" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="610" y="254" class="b" font-size="11" text-anchor="middle">3a</text>
+<rect x="320" y="250" width="220" height="100" rx="5" class="box-o"/>
+<text x="430" y="274" class="b" text-anchor="middle">Unpack and hash</text>
+<text x="430" y="292" class="t-m" text-anchor="middle">the same single pass, into</text>
+<text x="430" y="308" class="t-m" text-anchor="middle">.stage-*, writes only inside</text>
+<rect x="306" y="240" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="320" y="254" class="b" font-size="11" text-anchor="middle">3b</text>
+<rect x="30" y="250" width="220" height="100" rx="5" class="box-o"/>
+<text x="140" y="274" class="b" text-anchor="middle">Manifest and seal</text>
+<text x="140" y="292" class="t-m" text-anchor="middle">read manifest.toml, name and</text>
+<text x="140" y="308" class="t-m" text-anchor="middle">version match; path claims;</text>
+<text x="140" y="324" class="t-m" text-anchor="middle">0555, rename, write .seal</text>
+<rect x="16" y="240" width="28" height="20" rx="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="30" y="254" class="b" font-size="11" text-anchor="middle">4</text>
+<text x="320" y="66" class="b lbl" text-anchor="start">1 Download</text>
+<text x="900" y="66" class="b lbl" text-anchor="start">2 Prove</text>
+<text x="320" y="236" class="b lbl" text-anchor="start">3 Unpack</text>
+<text x="30" y="236" class="b lbl" text-anchor="start">4 Publish</text>
+<path d="M250,130 L320,130" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<path d="M540,130 L610,130" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<path d="M830,130 L900,130" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<path d="M1010,180 L1010,250" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<path d="M900,300 L830,300" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<path d="M610,300 L540,300" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<path d="M320,300 L250,300" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<path d="M500,350 L500,392" class="ln-o"/>
+<path d="M720,350 L720,392" class="ln-o"/>
+<path d="M1010,350 L1010,392" class="ln-o"/>
+<path d="M500,392 L1010,392" class="ln-o"/>
+<path d="M1120,130 L1172,130 L1172,392 L1010,392" class="ln-o"/>
+<path d="M760,392 L760,430" class="ln-o" marker-end="url(#release-fetch-verify-stage-ao)"/>
+<rect x="460" y="430" width="660" height="50" rx="5" class="box-o" style="stroke-width:2.2"/>
+<text x="790" y="452" class="b" text-anchor="middle">refused: nothing exists</text>
+<text x="790" y="468" class="t-m" text-anchor="middle">Failed before any hook</text>
+<text x="772" y="414" class="t-m lbl" text-anchor="start">steps 2 to 4 fail</text>
+<path d="M195,350 L195,380" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<path d="M90,389 v70 a105,9 0 0 0 210,0 v-70 a105,9 0 0 0 -210,0 z" class="box-b"/>
+<ellipse cx="195" cy="389" rx="105" ry="9" class="box-b"/>
+<text x="195" y="407" class="b" text-anchor="middle">sealed version dir</text>
+<text x="195" y="424" class="t-m" text-anchor="middle">packages/&lt;service&gt;/&lt;version&gt;/</text>
+<text x="195" y="439" class="t-m" text-anchor="middle">+ .seal (root-owned)</text>
+<rect x="30" y="520" width="400" height="50" rx="5" class="box-o"/>
+<text x="230" y="542" class="b" font-size="12" text-anchor="middle">ENOSPC: remove .stage, Deferred no_space</text>
+<text x="230" y="558" class="t-m" text-anchor="middle">a full disk is the host&#x27;s problem, not the release&#x27;s</text>
+<path d="M340,350 L340,520" class="ln-o" marker-end="url(#release-fetch-verify-stage-ao)"/>
+<path d="M60,350 L60,520" class="ln-o" marker-end="url(#release-fetch-verify-stage-ao)"/>
+<text x="352" y="500" class="t-m lbl" text-anchor="start">step 3</text>
+<text x="72" y="500" class="t-m lbl" text-anchor="start">step 4</text>
+<rect x="470" y="520" width="650" height="50" rx="5" class="box-b"/>
+<text x="795" y="542" class="b" text-anchor="middle">Not part of staging: linking</text>
+<text x="795" y="558" class="t-m" text-anchor="middle">at cutover the daemon switches current and links units/ and files/ into system paths</text>
+<rect x="30" y="610" width="1090" height="50" rx="5" class="box-b"/>
+<text x="575" y="632" class="b" text-anchor="middle">Before every step: re-seal and compare.</text>
+<text x="575" y="650" class="t-m" text-anchor="middle">Changed: Halt artifact_changed. Unreadable: retry, never halt.</text>
+<path d="M30,635 L14,635 L14,418 L90,418" class="ln-d" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<rect x="30" y="688" width="22" height="14" rx="3" class="box-o"/>
+<text x="60" y="700" class="t-m" text-anchor="start">runs as root</text>
+<rect x="162.862" y="688" width="22" height="14" rx="3" class="box-b"/>
+<text x="192.862" y="700" class="t-m" text-anchor="start">parses network input</text>
+<rect x="349.631" y="688" width="22" height="14" rx="3" class="box"/>
+<text x="379.631" y="700" class="t-m" text-anchor="start">local only</text>
+<rect x="522.923" y="688" width="22" height="14" rx="3" class="box-p"/>
+<text x="552.923" y="700" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
+<path d="M810.769,696 L840.769,696" class="ln" marker-end="url(#release-fetch-verify-stage-ak)"/>
+<text x="848.769" y="700" class="t-m" text-anchor="start">next step</text>
+</svg>

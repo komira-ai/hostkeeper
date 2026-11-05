@@ -54,6 +54,15 @@ fn the_example_reads_into_every_field() {
     assert_eq!(d.hook.timeout_secs.get(Step::Cleanup), 1300);
 }
 
+/// Catches a declaration that grew an `uninstall` step: it has neither a bound nor a capability
+/// entry for it, so the launcher of declarations never runs it.
+#[test]
+fn a_declaration_has_no_uninstall_step() {
+    let d = sample();
+    assert_eq!(d.hook.timeout_secs.get(Step::Uninstall), 0);
+    assert_eq!(d.hook.step_capabilities.get(Step::Uninstall), None);
+}
+
 /// Catches a default that is not the old one: `hook_args` is `["update-hook"]`, and every set
 /// starts empty.
 #[test]
@@ -196,6 +205,28 @@ fn names_and_words_follow_their_grammars() {
         assert_eq!(field_of(&refusal(&with(from, to))), field, "{to}");
     }
     assert!(Declaration::parse(&with("name = \"tierstore\"", "name = \"Tier_Store\"")).is_ok());
+}
+
+/// Catches a name that keeps its rule but is too long for the units its steps run in
+/// (`updater-<name>-<step>-<generation>.service` past 255 bytes): 209 bytes load, 210 and 255
+/// are refused on `name`, saying why.
+#[test]
+fn a_name_too_long_for_its_step_units_is_refused() {
+    let fits = "a".repeat(209);
+    assert!(
+        Declaration::parse(&with("name = \"tierstore\"", &format!("name = \"{fits}\""))).is_ok()
+    );
+    for name in ["a".repeat(210), "a".repeat(255)] {
+        let refused = refusal(&with("name = \"tierstore\"", &format!("name = \"{name}\"")));
+        assert_eq!(field_of(&refused), "name");
+        assert!(
+            refused.to_string().contains(
+                "is too long for the units its steps run in: \
+                 `updater-<name>-<step>-<generation>.service` would pass 255 bytes"
+            ),
+            "{refused}"
+        );
+    }
 }
 
 /// Catches a step bound outside 1 s to a day: 0 is a step with no time, and a day and a second

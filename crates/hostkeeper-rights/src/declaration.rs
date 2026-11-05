@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use hostkeeper_config::names::MAX_UNIT_NAME;
 use hostkeeper_hook::Step;
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +48,8 @@ impl Timeouts {
             Step::Verify => self.verify,
             Step::Rollback => self.rollback,
             Step::Cleanup => self.cleanup,
+            // A declaration has no `uninstall` step, so no bound for it.
+            Step::Uninstall => 0,
         }
     }
 }
@@ -72,6 +75,8 @@ impl StepCapabilities {
             Step::Verify => self.verify.as_ref(),
             Step::Rollback => self.rollback.as_ref(),
             Step::Cleanup => self.cleanup.as_ref(),
+            // A declaration has no `uninstall` step, so no entry for it.
+            Step::Uninstall => None,
         }
     }
 }
@@ -211,6 +216,22 @@ impl Declaration {
             return Err(value(
                 "name",
                 format!("{:?} is not a service name", self.name),
+            ));
+        }
+        let longest_unit = Step::ALL
+            .iter()
+            .map(|step| format!("updater-{}-{step}-{}", self.name, u64::MAX).len())
+            .max()
+            .unwrap_or_default()
+            + ".service".len();
+        if longest_unit > MAX_UNIT_NAME {
+            return Err(value(
+                "name",
+                format!(
+                    "{:?} is too long for the units its steps run in: \
+                     `updater-<name>-<step>-<generation>.service` would pass {MAX_UNIT_NAME} bytes",
+                    self.name
+                ),
             ));
         }
         check_relative(&self.binary).map_err(|why| value("binary", format!("{why}")))?;

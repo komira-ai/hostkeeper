@@ -1,0 +1,26 @@
+{
+  "calls": [
+    { "method": "hostkeeper.operator.v1.Audit/List", "pages": ["audit"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/AddRecord", "pages": ["inventory"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/Approve", "pages": ["enrollment"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/List", "pages": ["enrollment"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/ListRecords", "pages": ["inventory"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/RemoveRecord", "pages": ["inventory"] },
+    { "method": "hostkeeper.operator.v1.Hosts/Abort", "pages": ["host"] },
+    { "method": "hostkeeper.operator.v1.Hosts/Exclude", "pages": ["host"] },
+    { "method": "hostkeeper.operator.v1.Hosts/Get", "pages": ["host"] },
+    { "method": "hostkeeper.operator.v1.Hosts/Include", "pages": ["host"] },
+    { "method": "hostkeeper.operator.v1.Hosts/List", "pages": ["fleet", "rollout"] },
+    { "method": "hostkeeper.operator.v1.Hosts/SetLabels", "pages": ["host"] },
+    { "method": "hostkeeper.operator.v1.Releases/ClearHalt", "pages": ["rollout"] },
+    { "method": "hostkeeper.operator.v1.Releases/Converge", "pages": ["rollout"] },
+    { "method": "hostkeeper.operator.v1.Releases/Force", "pages": ["rollout"] },
+    { "method": "hostkeeper.operator.v1.Releases/Halt", "pages": ["rollout"] },
+    { "method": "hostkeeper.operator.v1.Releases/MarkBad", "pages": ["rollout"] },
+    { "method": "hostkeeper.operator.v1.Releases/Status", "pages": ["fleet", "rollout"] },
+    { "method": "hostkeeper.operator.v1.Releases/UnmarkBad", "pages": ["rollout"] },
+    { "method": "hostkeeper.operator.v1.Services/Hold", "pages": ["holds", "host"] },
+    { "method": "hostkeeper.operator.v1.Services/List", "pages": ["holds"] },
+    { "method": "hostkeeper.operator.v1.Services/Unhold", "pages": ["holds", "host"] }
+  ]
+}

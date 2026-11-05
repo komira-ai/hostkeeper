@@ -41,9 +41,9 @@ pub const SYSTEMCTL: &str = "/usr/bin/systemctl";
 /// What `systemctl stop` exits with for a unit that is not loaded: nothing to stop.
 pub const EXIT_NOT_LOADED: i32 = 5;
 
-/// The unit that runs `step` of `service` in the update numbered `generation`. The same name for
-/// every run of the step in that update, so that a resumed step finds the unit of the run it
-/// replaces.
+/// The unit that runs `step` of `service` in the update numbered `generation`, without the
+/// `.service` systemd adds. The same name for every run of the step in that update, so that a
+/// resumed step finds the unit of the run it replaces.
 pub fn unit_name(service: &str, step: Step, generation: u64) -> String {
     format!("updater-{service}-{step}-{generation}")
 }

@@ -93,7 +93,7 @@ fn word_or_prefixed_string(b: &[u8], mask: &mut [bool], start: usize) -> usize {
 
 /// The offset after what a quote at `at` opens: a character literal (skipped, it holds no host)
 /// or, when no closing quote follows the one character, a lifetime or label (just the quote).
-fn after_quote(text: &str, at: usize) -> usize {
+pub fn after_quote(text: &str, at: usize) -> usize {
     let b = text.as_bytes();
     let Some(&next) = b.get(at + 1) else {
         return at + 1;

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" width="1200" height="540" role="img" aria-label="A hold lives on the coordinator: a held host keeps the version it runs, the rollout gate orders nothing for it, and Force skips it unless the call sets include_held, which removes no hold.">
+<title>Hold on the coordinator</title>
+<desc>The operator holds a service on one host and on a role. The hold is a mark in the coordinator's ops file. The rollout gate orders nothing for a held pair, and a Force skips it unless the call sets include_held, and then removes no hold. A held host keeps the version it runs, is left out of canary, bake and converged counts, and does not know about the hold.</desc>
+<defs><marker id="hold-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="hold-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="540" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">A hold is a coordinator mark: held pairs get no orders, and the hosts never learn of it (designed, not built)</text>
+<rect x="30" y="110" width="200" height="80" rx="5" class="box"/>
+<text x="130" y="129" class="b" text-anchor="middle">Operator</text>
+<text x="130" y="147" class="t-m" text-anchor="middle">Services.Hold tierstore</text>
+<text x="130" y="165" class="t-m" text-anchor="middle">on host A, and on role edge</text>
+<rect x="30" y="310" width="200" height="80" rx="5" class="box"/>
+<text x="130" y="329" class="b" text-anchor="middle">Operator, later</text>
+<text x="130" y="347" class="t-m" text-anchor="middle">Releases.Force tierstore 1.4.2</text>
+<text x="130" y="365" class="t-m" text-anchor="middle">targets: the fleet</text>
+<rect x="300" y="60" width="440" height="400" rx="5" class="box-b"/>
+<text x="316" y="82" class="b" text-anchor="start">Coordinator</text>
+<rect x="330" y="100" width="380" height="90" rx="5" class="box-p"/>
+<text x="520" y="119" class="b" text-anchor="middle">Ops file: holds (durable)</text>
+<text x="520" y="137" class="t-m" text-anchor="middle">tierstore on host A: held, reason recorded</text>
+<text x="520" y="155" class="t-m" text-anchor="middle">tierstore on role edge: held, covers hosts that join later</text>
+<rect x="330" y="230" width="380" height="70" rx="5" class="box-b"/>
+<text x="520" y="249" class="b" text-anchor="middle">Rollout gate: decide()</text>
+<text x="520" y="267" class="t-m" text-anchor="middle">held pair: no update, install or rollback order</text>
+<text x="520" y="285" class="t-m" text-anchor="middle">not held: the usual rules (slot, canary, bake)</text>
+<path d="M520,190 L520,230" class="ln" marker-end="url(#hold-ak)"/>
+<rect x="330" y="340" width="380" height="90" rx="5" class="box-b"/>
+<text x="520" y="359" class="b" text-anchor="middle">Releases.Force</text>
+<text x="520" y="377" class="t-m" text-anchor="middle">held pair: skipped, listed in the reply as held</text>
+<text x="520" y="395" class="t-m" text-anchor="middle">unless the call sets include_held: then ordered</text>
+<text x="520" y="413" class="t-m" text-anchor="middle">for this call only; no hold is removed</text>
+<path d="M230,150 L330,145" class="ln" marker-end="url(#hold-ak)"/>
+<text x="280" y="128" class="t-m lbl" text-anchor="middle">Hold</text>
+<path d="M230,350 L330,385" class="ln" marker-end="url(#hold-ak)"/>
+<text x="285" y="347" class="t-m lbl" text-anchor="middle">Force</text>
+<line x1="775" y1="60" x2="775" y2="470" class="tb"/>
+<text x="775" y="52" class="b lbl" text-anchor="middle">heartbeat replies</text>
+<rect x="820" y="100" width="350" height="90" rx="5" class="box-o dash"/>
+<text x="995" y="119" class="b" text-anchor="middle">Host A (held)</text>
+<text x="995" y="137" class="t-m" text-anchor="middle">keeps the version it runs; no order</text>
+<text x="995" y="155" class="t-m" text-anchor="middle">left out of canary, bake and converged</text>
+<text x="995" y="173" class="t-m" text-anchor="middle">Force: skipped, unless the call sets include_held</text>
+<rect x="820" y="220" width="350" height="90" rx="5" class="box-o dash"/>
+<text x="995" y="239" class="b" text-anchor="middle">Host B (role edge, held)</text>
+<text x="995" y="257" class="t-m" text-anchor="middle">keeps the version it runs; no order</text>
+<text x="995" y="275" class="t-m" text-anchor="middle">left out of canary, bake and converged</text>
+<text x="995" y="293" class="t-m" text-anchor="middle">Force: skipped, unless the call sets include_held</text>
+<rect x="820" y="340" width="350" height="90" rx="5" class="box"/>
+<text x="995" y="359" class="b" text-anchor="middle">Host C (not held)</text>
+<text x="995" y="377" class="t-m" text-anchor="middle">gate: orders as usual</text>
+<text x="995" y="395" class="t-m" text-anchor="middle">counts toward canary, bake and converged</text>
+<text x="995" y="413" class="t-m" text-anchor="middle">Force: ordered</text>
+<path d="M710,255 L750,255 L750,145 L820,145" class="ln-d" marker-end="url(#hold-ak)"/>
+<path d="M710,265 L820,265" class="ln-d" marker-end="url(#hold-ak)"/>
+<path d="M710,285 L750,285 L750,385 L820,385" class="ln" marker-end="url(#hold-ak)"/>
+<text x="790" y="137" class="t-m lbl" text-anchor="middle">no order</text>
+<text x="790" y="257" class="t-m lbl" text-anchor="middle">no order</text>
+<text x="790" y="377" class="t-m lbl" text-anchor="middle">order</text>
+<text x="600" y="505" class="b" text-anchor="middle">The host never sees a hold, and its state does not change. Services.Unhold removes it; the host then goes to the desired version under the usual rules.</text>
+</svg>

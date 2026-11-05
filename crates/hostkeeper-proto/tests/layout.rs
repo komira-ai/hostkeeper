@@ -1,11 +1,12 @@
 //! The protos' layout and conventions: every file compiles from its text alone and is compiled by
 //! the build, sits where its package says, opens with the header every hostkeeper proto carries,
-//! gives every enum an UNSPECIFIED zero, and puts `(hostkeeper.secret)` only on text and bytes.
+//! gives every enum an UNSPECIFIED zero, documents the gRPC code of every refusal, and puts
+//! `(hostkeeper.secret)` only on text and bytes, and only where a secret is.
 //!
 //! Each check is a function that returns what is wrong, run on the real protos (nothing) and on
 //! a fixture made to break it (exactly that).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use prost::Message as _;
@@ -372,6 +373,8 @@ fn fixture_compiler(name: &'static str, text: &'static str) -> protox::Compiler 
     chain.add(IncludeFileResolver::new(proto_root()));
     chain.add(GoogleFileResolver::new());
     let mut compiler = protox::Compiler::with_file_resolver(chain);
+    // Comments too, which the refusal-code check reads.
+    compiler.include_source_info(true);
     compiler.open_file(name).expect("the fixture compiles");
     compiler
 }
@@ -597,4 +600,362 @@ message Extra { string url = 1; }
             "o.v1.Update.version is repeated string, not an order field",
         ]
     );
+}
+
+/// Every field marked `(hostkeeper.secret)`, by full name, sorted; none when the option is not
+/// declared.
+fn secret_fields(pool: &DescriptorPool) -> Vec<String> {
+    let Some(secret) = pool.get_extension_by_name("hostkeeper.secret") else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = pool
+        .all_messages()
+        .flat_map(|m| m.fields().collect::<Vec<_>>())
+        .filter(|f| f.options().get_extension(&secret).as_ref() == &Value::Bool(true))
+        .map(|f| f.full_name().to_owned())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Of `fields`, those of a message whose name ends in `Response`: an answer, which carries a
+/// certificate or a listing, never a secret.
+fn in_responses(fields: &[String]) -> Vec<&str> {
+    fields
+        .iter()
+        .map(String::as_str)
+        .filter(|f| {
+            f.rsplit_once('.')
+                .is_some_and(|(m, _)| m.ends_with("Response"))
+        })
+        .collect()
+}
+
+/// Catches: the Mac nonce sent as a flag or printed (it is not marked), and a certificate, a
+/// bundle or any other part of an answer marked as a secret, which the command line would then
+/// refuse to print.
+#[test]
+fn a_secret_field_is_marked_and_nothing_else_is() {
+    let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
+    assert_eq!(secret_problems(&pool), Ok(Vec::new()));
+    let marked = secret_fields(&pool);
+    assert_eq!(marked, ["hostkeeper.agent.v1.EnrollRequest.mac_nonce"]);
+    assert_eq!(in_responses(&marked), Vec::<&str>::new());
+    // The answers the check covers hold bytes and text it would see marked.
+    let poll = pool
+        .get_message_by_name("hostkeeper.agent.v1.PollResponse")
+        .expect("the poll answer");
+    assert!(poll.get_field_by_name("certificate_der").is_some());
+
+    let fixture = fixture_pool(
+        "s.proto",
+        r#"syntax = "proto3";
+package s.v1;
+import "hostkeeper/options.proto";
+message PollRequest {
+  bytes nonce = 1 [(hostkeeper.secret) = true];
+  string request_id = 2;
+}
+message PollResponse {
+  bytes certificate_der = 1 [(hostkeeper.secret) = true];
+  string host_id = 2 [(hostkeeper.secret) = false];
+}
+"#,
+    );
+    let marked = secret_fields(&fixture);
+    assert_eq!(
+        marked,
+        [
+            "s.v1.PollRequest.nonce",
+            "s.v1.PollResponse.certificate_der"
+        ]
+    );
+    assert_eq!(in_responses(&marked), ["s.v1.PollResponse.certificate_der"]);
+
+    let undeclared = fixture_pool(
+        "u.proto",
+        "syntax = \"proto3\";\npackage u.v1;\nmessage M { bytes b = 1; }\n",
+    );
+    assert_eq!(secret_fields(&undeclared), Vec::<String>::new());
+}
+
+/// The gRPC status codes a refusal may name: every code but `OK`.
+const GRPC_CODES: [&str; 16] = [
+    "CANCELLED",
+    "UNKNOWN",
+    "INVALID_ARGUMENT",
+    "DEADLINE_EXCEEDED",
+    "NOT_FOUND",
+    "ALREADY_EXISTS",
+    "PERMISSION_DENIED",
+    "RESOURCE_EXHAUSTED",
+    "FAILED_PRECONDITION",
+    "ABORTED",
+    "OUT_OF_RANGE",
+    "UNIMPLEMENTED",
+    "INTERNAL",
+    "UNAVAILABLE",
+    "DATA_LOSS",
+    "UNAUTHENTICATED",
+];
+
+/// The gRPC code a refusal value's comment opens with (`NOT_FOUND: the host ...`), or why it
+/// opens with none.
+fn code_of(comment: &str) -> Result<String, String> {
+    let (code, _) = comment
+        .trim_start()
+        .split_once(':')
+        .ok_or_else(|| "no code".to_owned())?;
+    GRPC_CODES
+        .contains(&code)
+        .then(|| code.to_owned())
+        .ok_or_else(|| format!("{code} is not a gRPC code"))
+}
+
+/// One value of a refusal enum and the code its comment names: `(enum, token, code)`.
+type RefusalCode = (String, String, Result<String, String>);
+
+/// The values of a file's refusal enums (its top-level enums named `*Refusal`) but the zero, each
+/// with the code its leading comment names. The token is the value's name without the enum's
+/// prefix, in lower case, as the wire spells it.
+fn refusal_codes(file: &FileDescriptorProto) -> Vec<RefusalCode> {
+    let comments: BTreeMap<&[i32], &str> = file
+        .source_code_info
+        .iter()
+        .flat_map(|s| &s.location)
+        .map(|l| (l.path.as_slice(), l.leading_comments()))
+        .collect();
+    let mut out = Vec::new();
+    for (e, refusal) in file.enum_type.iter().enumerate() {
+        if !refusal.name().ends_with("Refusal") {
+            continue;
+        }
+        let prefix = format!("{}_", screaming(refusal.name()));
+        for (v, value) in refusal.value.iter().enumerate() {
+            if value.number() == 0 {
+                continue;
+            }
+            // A top-level enum value's path: `enum_type` (5), the enum, `value` (2), the value.
+            let path = [
+                5,
+                i32::try_from(e).expect("an index"),
+                2,
+                i32::try_from(v).expect("an index"),
+            ];
+            let comment = comments.get(&path[..]).copied().unwrap_or_default();
+            let token = value
+                .name()
+                .trim_start_matches(&prefix)
+                .to_ascii_lowercase();
+            out.push((refusal.name().to_owned(), token, code_of(comment)));
+        }
+    }
+    out
+}
+
+/// Catches: a refusal value with no documented gRPC code, or one that names no gRPC code, which
+/// leaves a server free to pick any; a refusal enum whose zero is a real refusal; and a token that
+/// `Audit` or `Enrollment` shares with `Hosts` under another code.
+#[test]
+fn every_new_refusal_enum_has_the_zero_value_unspecified_and_a_code_comment_per_value() {
+    let built = compiled();
+    let mut codes = BTreeMap::new();
+    for f in ours(&built) {
+        for (refusal, token, code) in refusal_codes(f) {
+            let code = code.unwrap_or_else(|why| panic!("{refusal} {token}: {why}"));
+            codes.insert((refusal, token), code);
+        }
+    }
+    // The package is two files (operator.proto and enrollment.proto); each enum is in one.
+    let operator: Vec<_> = ours(&built)
+        .into_iter()
+        .filter(|f| f.package() == "hostkeeper.operator.v1")
+        .collect();
+    for name in ["AuditRefusal", "EnrollmentRefusal"] {
+        let refusal = operator
+            .iter()
+            .flat_map(|f| f.enum_type.iter())
+            .find(|e| e.name() == name)
+            .expect("the refusal enum");
+        assert_eq!(zero_problem(refusal), None);
+        assert!(refusal.value.len() > 4, "{name} has its values");
+    }
+    let shared: Vec<(&str, &str, &str)> = codes
+        .iter()
+        .filter(|((refusal, _), _)| refusal == "AuditRefusal" || refusal == "EnrollmentRefusal")
+        .filter_map(|((refusal, token), code)| {
+            let hosts = codes.get(&("HostsRefusal".to_owned(), token.clone()))?;
+            (hosts != code).then_some((refusal.as_str(), token.as_str(), hosts.as_str()))
+        })
+        .collect();
+    assert_eq!(shared, Vec::<(&str, &str, &str)>::new());
+    assert_eq!(
+        codes.get(&("AuditRefusal".to_owned(), "store_failed".to_owned())),
+        Some(&"INTERNAL".to_owned())
+    );
+
+    let fixture = fixture_set(
+        "r.proto",
+        r#"syntax = "proto3";
+package r.v1;
+enum ThingRefusal {
+  THING_REFUSAL_UNSPECIFIED = 0;
+  // NOT_FOUND: no such thing.
+  THING_REFUSAL_UNKNOWN_THING = 1;
+  THING_REFUSAL_BARE = 2;
+  // NOPE: a code gRPC does not have.
+  THING_REFUSAL_INVENTED = 3;
+  // A sentence that names no code.
+  THING_REFUSAL_PROSE = 4;
+}
+enum Mood {
+  MOOD_UNSPECIFIED = 0;
+  MOOD_CALM = 1;
+}
+"#,
+    );
+    let err = |why: &str| Err(why.to_owned());
+    assert_eq!(
+        refusal_codes(&fixture.file[0]),
+        [
+            (s("ThingRefusal"), s("unknown_thing"), Ok(s("NOT_FOUND"))),
+            (s("ThingRefusal"), s("bare"), err("no code")),
+            (
+                s("ThingRefusal"),
+                s("invented"),
+                err("NOPE is not a gRPC code")
+            ),
+            (s("ThingRefusal"), s("prose"), err("no code")),
+        ]
+    );
+}
+
+fn s(text: &str) -> String {
+    text.to_owned()
+}
+
+/// The header of a proto file: its opening comment lines, without the slashes, joined by spaces.
+fn header_text(text: &str) -> String {
+    text.lines()
+        .take_while(|l| l.starts_with("//"))
+        .map(|l| l.trim_start_matches('/').trim())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The bytes a header says a `Poll` signs: the text after "exactly these bytes: " up to the end
+/// of its sentence.
+fn signed_message(header: &str) -> Option<&str> {
+    let (_, rest) = header.split_once("exactly these bytes: ")?;
+    rest.split_once(". ").map(|(message, _)| message)
+}
+
+/// Whether `words` appear in `text` in this order.
+fn in_order(text: &str, words: &[&str]) -> bool {
+    let mut rest = text;
+    for word in words {
+        let Some((_, after)) = rest.split_once(word) else {
+            return false;
+        };
+        rest = after;
+    }
+    true
+}
+
+/// Catches: a header that lags the challenge the daemon signs and the coordinator verifies, each
+/// in a change of its own: the domain string, the separators, the order of the parts, and the
+/// bounds of the nonce.
+#[test]
+fn the_poll_signature_message_is_documented_exactly() {
+    let text = std::fs::read_to_string(proto_root().join("hostkeeper/agent/v1/agent.proto"))
+        .expect("read the file");
+    let header = header_text(&text);
+    let message = signed_message(&header).expect("the header says what is signed");
+    assert_eq!(
+        message,
+        "the 25 ASCII bytes \"hostkeeper-enroll-poll-v1\", one 0x00 byte, the 64 ASCII \
+         characters of `request_id`, one 0x00 byte, and the `nonce`"
+    );
+    assert_eq!("hostkeeper-enroll-poll-v1".len(), 25);
+    let parts = [
+        "hostkeeper-enroll-poll-v1",
+        "0x00",
+        "request_id",
+        "0x00",
+        "nonce",
+    ];
+    assert!(in_order(message, &parts));
+    assert!(
+        header.contains("ECDSA P-256 with SHA-256, DER encoded, by the private key of the CSR")
+    );
+    assert!(header.contains("A nonce is 16 to 64 bytes"));
+
+    assert!(!in_order(
+        "`nonce`, one 0x00 byte, `request_id`",
+        &["request_id", "nonce"]
+    ));
+    assert!(!in_order("request_id", &["request_id", "0x00"]));
+    assert_eq!(signed_message("A Poll signs a nonce."), None);
+    assert_eq!(signed_message("exactly these bytes: the nonce"), None);
+    assert_eq!(
+        signed_message("over exactly these bytes: a, 0x00, b. Then"),
+        Some("a, 0x00, b")
+    );
+}
+
+/// The words of `want` a file's header does not use as words: a word is a run of letters, digits
+/// and `_`, so `Enrollment` does not name `Enroll`.
+fn header_lacks<'a>(text: &str, want: &[&'a str]) -> Vec<&'a str> {
+    let header = header_text(text);
+    let words: BTreeSet<&str> = header
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .collect();
+    want.iter()
+        .copied()
+        .filter(|w| !words.contains(w))
+        .collect()
+}
+
+/// Catches: a header that lags its file: the agent header not naming `Enroll`, `Poll` and
+/// `Renew`, the operator header not naming `Enrollment` and `Audit`, and a refusal enum missing
+/// from the list its file's header gives.
+#[test]
+fn the_headers_name_the_new_services_and_rpcs() {
+    let built = compiled();
+    for f in ours(&built) {
+        let text = std::fs::read_to_string(proto_root().join(f.name())).expect("read the file");
+        assert_eq!(header_gaps(&text, f.package()), Vec::<String>::new());
+        let refusals: Vec<&str> = f
+            .enum_type
+            .iter()
+            .map(|e| e.name())
+            .filter(|n| n.ends_with("Refusal"))
+            .collect();
+        assert_eq!(
+            header_lacks(&text, &refusals),
+            Vec::<&str>::new(),
+            "{}",
+            f.name()
+        );
+        let want: &[&str] = match f.package() {
+            "hostkeeper.agent.v1" => &["Heartbeat", "Enroll", "Poll", "Renew"],
+            "hostkeeper.operator.v1" => {
+                &["Enrollment", "Audit", "EnrollmentRefusal", "AuditRefusal"]
+            }
+            _ => &[],
+        };
+        assert_eq!(
+            header_lacks(&text, want),
+            Vec::<&str>::new(),
+            "{}",
+            f.name()
+        );
+    }
+
+    let text = "// a.v1: `Enrollment` and `Poll`.\nsyntax = \"proto3\";\n// Renew\n";
+    assert_eq!(
+        header_lacks(text, &["Enroll", "Poll", "Renew"]),
+        ["Enroll", "Renew"]
+    );
+    assert_eq!(header_lacks(text, &["Enrollment"]), Vec::<&str>::new());
 }

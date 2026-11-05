@@ -1,0 +1,438 @@
+# hostkeeper ctl
+
+<!-- Generated from the protos: `cargo test -p hostkeeper-ctl --test docs` fails when this file differs, and writes the current text beside its test binary. Do not edit by hand. -->
+
+`hostkeeper ctl` calls one RPC of the coordinator per command. Every command, flag and help text below is generated from the protobuf descriptors of `hostkeeper-proto`; the services of a host's admin socket (packages `hostkeeper.local.v<n>`) are not here.
+
+## Rules
+
+Every command is one RPC: `hostkeeper ctl <service> <rpc>`, both in kebab case as the protos name them (`Releases.SetDesired` is `releases set-desired`).
+
+A request field is a flag named after it (`node_id` is `--node-id`): a scalar takes one value; a bool takes `true` or `false`, so that an absent flag and `false` differ; an enum takes a value's name without its prefix, in lower case, never `unspecified`; a repeated field repeats its flag; a `map<string, string>` repeats `--<field> key=value`.
+
+A message, a oneof, `bytes` and any other map come only through `--request <file|->`: proto3 canonical JSON, `-` for stdin. A field named both by a flag and by the request file is a usage error.
+
+A secret field (`(hostkeeper.secret)`) is never a flag: it is read with `--<field>-file <path>` (one trailing newline dropped) or `--<field>-stdin`, and never printed. At most one input reads stdin.
+
+The response goes to stdout; diagnostics go to stderr. A refusal prints `refused: <token>`.
+
+## Global flags
+
+| flag | value | default | meaning |
+|---|---|---|---|
+| `--endpoint` | URL |  | The coordinator's listener, as https://<host>[:<port>]: the private listener for the operator services, the heartbeat listener for `coordinator`. Needed for a call. |
+| `--ca-file` | PATH |  | PEM certificates of the CA the server's certificate must chain to; no other root is trusted. Needed for a call. |
+| `--token-file` | PATH |  | Read the bearer token (an operator token, or CI's OIDC token) from this file; one trailing newline is dropped. The token is never a flag value nor an environment variable, and is never printed. |
+| `--token-stdin` |  |  | Read the bearer token from stdin instead. |
+| `--client-cert-file` | PATH |  | A PEM client certificate, for the heartbeat listener's mutual TLS; with --client-key-file. |
+| `--client-key-file` | PATH |  | The PEM private key of --client-cert-file. |
+| `--transport` | grpc\|gateway | grpc | gRPC, or the HTTP/JSON gateway of the private listener (POST /<package>.<Service>/<Method>). |
+| `--output` | json\|text | text | json: the response as proto3 canonical JSON. text: `field: value` lines, nested values as indented JSON. |
+| `--timeout-secs` | SECONDS | 30 | How long to wait to connect, and for the server; at least 1. |
+
+## Exit codes
+
+| code | meaning | gRPC codes |
+|---|---|---|
+| 0 | the call succeeded | OK |
+| 1 | anything else: the transport, INTERNAL, UNAVAILABLE, a malformed reply | CANCELLED, UNKNOWN, DEADLINE_EXCEEDED, NOT_FOUND, ALREADY_EXISTS, RESOURCE_EXHAUSTED, ABORTED, OUT_OF_RANGE, UNIMPLEMENTED, INTERNAL, UNAVAILABLE, DATA_LOSS |
+| 2 | a usage error, or the server refused the request: INVALID_ARGUMENT or FAILED_PRECONDITION | INVALID_ARGUMENT, FAILED_PRECONDITION |
+| 3 | the server refused the caller: UNAUTHENTICATED or PERMISSION_DENIED | PERMISSION_DENIED, UNAUTHENTICATED |
+
+## Commands
+
+### `audit`
+
+The service `Audit` of the package `hostkeeper.operator.v1`. The coordinator's audit log.
+
+#### `hostkeeper ctl audit list`
+
+`/hostkeeper.operator.v1.Audit/List`
+
+The entries after `since_seq` that match every filter set, newest last. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--since-seq` | UINT64 | Only entries with a greater `seq`; 0 for the oldest the log keeps. |
+| `--limit` | UINT32 | The most entries to return; capped at 256, and 0 means the cap. |
+| `--actor` | STRING | Only entries by this actor, by the token of `Actor` (`operator`, `ci`, `coordinator`). |
+| `--action` | STRING | Only entries of this action (`AuditEntry.action`). |
+| `--service` | STRING |  |
+| `--node-id` | STRING |  |
+
+### `coordinator`
+
+The service `Coordinator` of the package `hostkeeper.agent.v1`.
+
+#### `hostkeeper ctl coordinator heartbeat`
+
+`/hostkeeper.agent.v1.Coordinator/Heartbeat`
+
+What the host runs and how it is, and the coordinator's answer: at most one order.
+
+| flag | value | meaning |
+|---|---|---|
+| `--platform` | VALUE | The platform the host's releases are built for. |
+| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
+
+Through `--request` only: `agent` (hostkeeper.agent.v1.AgentInfo), `services` (repeated hostkeeper.agent.v1.ServiceBeat).
+
+#### `hostkeeper ctl coordinator enroll`
+
+`/hostkeeper.agent.v1.Coordinator/Enroll`
+
+Ask for a certificate: a CSR, the host's claims and its image. No client certificate. The
+request is pending until an operator approves it; nothing is installed meanwhile.
+
+| flag | value | meaning |
+|---|---|---|
+| `--image` | STRING | The boot image or installer the daemon came from, as the image names itself. |
+| `--renewal-of` | STRING | The host id of a host whose certificate expired while it was offline, posting again with the same key; empty for a first enrollment. |
+| `--mac-nonce-file` | PATH | secret `mac_nonce`, from a file. The one-time nonce MDM gave a Mac (one hour, one use); empty on any other host. |
+| `--mac-nonce-stdin` | | secret `mac_nonce`, from stdin |
+
+Through `--request` only: `csr_der` (bytes), `claims` (hostkeeper.agent.v1.Claims).
+
+#### `hostkeeper ctl coordinator poll`
+
+`/hostkeeper.agent.v1.Coordinator/Poll`
+
+Ask whether a request was approved, and take its certificate, by the challenge the header
+describes. No client certificate.
+
+| flag | value | meaning |
+|---|---|---|
+| `--request-id` | STRING | The request's id, as `EnrollResponse` gave it. |
+
+Through `--request` only: `nonce` (bytes), `signature` (bytes).
+
+#### `hostkeeper ctl coordinator renew`
+
+`/hostkeeper.agent.v1.Coordinator/Renew`
+
+Get a new certificate for the key the host holds, over mutual TLS with its current one.
+
+Through `--request` only: `csr_der` (bytes).
+
+### `enrollment`
+
+The service `Enrollment` of the package `hostkeeper.operator.v1`. The hosts waiting for an operator to approve their enrollment.
+
+#### `hostkeeper ctl enrollment list`
+
+`/hostkeeper.operator.v1.Enrollment/List`
+
+The pending requests, oldest first, a page at a time.
+
+| flag | value | meaning |
+|---|---|---|
+| `--limit` | UINT32 | The most requests to return; capped at 256, and 0 means the cap. |
+| `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
+
+#### `hostkeeper ctl enrollment approve`
+
+`/hostkeeper.operator.v1.Enrollment/Approve`
+
+Approve a pending request: the host gets its certificate at its next `Poll`, with the host
+id, role and services the approval names.
+
+| flag | value | meaning |
+|---|---|---|
+| `--request-id` | STRING |  |
+| `--key-sha256` | STRING | The SHA-256 of the pending request's key, as `PendingEnrollment.key_sha256` lists it. |
+| `--host-id` | STRING | The host id the certificate names. |
+| `--role` | STRING |  |
+| `--services` | STRING, repeated | Services to assign to the host; may be empty. |
+| `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. |
+| `--reason` | STRING |  |
+
+#### `hostkeeper ctl enrollment add-record`
+
+`/hostkeeper.operator.v1.Enrollment/AddRecord`
+
+Record a server the operator built, before it first boots: its host id, optional role, data
+MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
+holds, is refused; remove the record first.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING |  |
+| `--role` | STRING | Empty for none. |
+| `--data-macs` | STRING, repeated | At least one, or a `serial`. |
+| `--bmc-mac` | STRING | Empty for none. |
+| `--serial` | STRING | Empty for none. |
+| `--notes` | STRING | Empty for none. |
+
+#### `hostkeeper ctl enrollment list-records`
+
+`/hostkeeper.operator.v1.Enrollment/ListRecords`
+
+The records, by host id, a page at a time.
+
+| flag | value | meaning |
+|---|---|---|
+| `--limit` | UINT32 | The most records to return; capped at 256, and 0 means the cap. |
+| `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
+
+#### `hostkeeper ctl enrollment remove-record`
+
+`/hostkeeper.operator.v1.Enrollment/RemoveRecord`
+
+Remove the record of a host id. An enrolled host keeps its certificate.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING |  |
+| `--reason` | STRING |  |
+
+### `hosts`
+
+The service `Hosts` of the package `hostkeeper.operator.v1`. The hosts the coordinator has heard from, and what an operator decides about them.
+
+#### `hostkeeper ctl hosts list`
+
+`/hostkeeper.operator.v1.Hosts/List`
+
+Every host heard from since the coordinator started.
+
+#### `hostkeeper ctl hosts get`
+
+`/hostkeeper.operator.v1.Hosts/Get`
+
+One host.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING |  |
+
+#### `hostkeeper ctl hosts exclude`
+
+`/hostkeeper.operator.v1.Hosts/Exclude`
+
+Take a host out of a service: its heartbeats do not count for the service and it is not
+ordered. A second exclusion of the same host and service replaces the first.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--node-id` | STRING |  |
+| `--reason` | STRING |  |
+| `--abandon` | true\|false | Also free the one live update slot the host holds for the service mid-update, for a host that is gone and will not report its update final. False (the default) keeps the slot. |
+
+#### `hostkeeper ctl hosts include`
+
+`/hostkeeper.operator.v1.Hosts/Include`
+
+Put an excluded host back. Including a host that is not excluded changes nothing and is not
+an error.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--node-id` | STRING |  |
+
+#### `hostkeeper ctl hosts set-labels`
+
+`/hostkeeper.operator.v1.Hosts/SetLabels`
+
+Replace a host's labels, which service selectors match. An empty set removes them.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING |  |
+| `--labels` | KEY=VALUE, repeated | At most 8; each key and value 1 to 32 bytes of `[a-z0-9-]`. |
+
+#### `hostkeeper ctl hosts abort`
+
+`/hostkeeper.operator.v1.Hosts/Abort`
+
+Queue an `abort` order of a service for the host's next heartbeat; it takes no slot. An
+abort of a host that runs nothing of the service is accepted and changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING |  |
+| `--service` | STRING |  |
+| `--reason` | STRING |  |
+
+### `releases`
+
+The service `Releases` of the package `hostkeeper.operator.v1`. The desired version of each service, how far the hosts are, and the operator's overrides.
+
+#### `hostkeeper ctl releases set-desired`
+
+`/hostkeeper.operator.v1.Releases/SetDesired`
+
+Set a service's desired state. The coordinator moves its hosts there a role at a time.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--if-generation` | UINT64 | Write only if the service's generation is this one now; otherwise refused with `generation_conflict`, and nothing changes. Absent: write whatever the generation is. |
+| `--write-id` | STRING | The writer's own id for this write, kept with it and returned by `Converge`, so a writer that lost the answer can tell whether its write landed: 1 to 128 visible ASCII characters. Absent: none. |
+| `--package-digest` | STRING | The digest of the package CI registers for `desired.version` (64 lower-case hex characters). |
+
+Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState).
+
+#### `hostkeeper ctl releases converge`
+
+`/hostkeeper.operator.v1.Releases/Converge`
+
+How far a service's hosts are from its desired version. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+
+#### `hostkeeper ctl releases force`
+
+`/hostkeeper.operator.v1.Releases/Force`
+
+Switch a service to a version on the targeted hosts at once, with no hook (see
+`ForceRequest`).
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--version` | STRING |  |
+| `--reason` | STRING |  |
+| `--include-held` | true\|false | Order the held pairs among the targets too, for this call only. |
+
+Through `--request` only: `fleet` (hostkeeper.operator.v1.FleetTarget, in a oneof), `role` (string, in a oneof), `hosts` (hostkeeper.operator.v1.HostList, in a oneof).
+
+#### `hostkeeper ctl releases unmark-bad`
+
+`/hostkeeper.operator.v1.Releases/UnmarkBad`
+
+Lift a bad mark from a version, so that it may be ordered and CI may set it again.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--version` | STRING |  |
+| `--reason` | STRING |  |
+
+#### `hostkeeper ctl releases clear-halt`
+
+`/hostkeeper.operator.v1.Releases/ClearHalt`
+
+Lift a service's standing halt.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--reason` | STRING |  |
+
+#### `hostkeeper ctl releases status`
+
+`/hostkeeper.operator.v1.Releases/Status`
+
+Everything the coordinator holds about each service. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | One service; empty for every service the coordinator manages. |
+
+#### `hostkeeper ctl releases mark-bad`
+
+`/hostkeeper.operator.v1.Releases/MarkBad`
+
+Mark a version bad by hand: it is never ordered again until it is unmarked. A held pair is
+not reached.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--version` | STRING |  |
+| `--reason` | STRING |  |
+
+#### `hostkeeper ctl releases halt`
+
+`/hostkeeper.operator.v1.Releases/Halt`
+
+Halt a service by hand, as a host's halt report does: no host of it is ordered until the halt
+is cleared.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--reason` | STRING |  |
+
+### `services`
+
+The service `Services` of the package `hostkeeper.operator.v1`. The services the coordinator manages, which hosts run them, and the operator's holds.
+
+#### `hostkeeper ctl services list`
+
+`/hostkeeper.operator.v1.Services/List`
+
+Every service, with the hosts it is assigned to, its minimum versions and its holds.
+
+#### `hostkeeper ctl services assign`
+
+`/hostkeeper.operator.v1.Services/Assign`
+
+Assign a service to a host: the host is ordered to install it at its next heartbeat, unless a
+hold stands. Assigning a service already assigned changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING |  |
+| `--service` | STRING |  |
+
+#### `hostkeeper ctl services unassign`
+
+`/hostkeeper.operator.v1.Services/Unassign`
+
+Take a service off a host. With `uninstall`, the host is ordered to uninstall it; without,
+the coordinator stops managing it there and the host keeps running it.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING |  |
+| `--service` | STRING |  |
+| `--uninstall` | true\|false | Order the host to uninstall the service; false (the default) leaves it running there, unmanaged. |
+
+#### `hostkeeper ctl services set-min-version`
+
+`/hostkeeper.operator.v1.Services/SetMinVersion`
+
+Set the version below which no order (a force, an automatic rollback) takes the service, for
+a role or a host.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+
+Through `--request` only: `min_version` (hostkeeper.operator.v1.MinVersion).
+
+#### `hostkeeper ctl services hold`
+
+`/hostkeeper.operator.v1.Services/Hold`
+
+Hold a service on a host, a role or the whole fleet where it is: the coordinator orders the
+held pairs nothing (no update, install, rollback, uninstall or force) until the hold is
+released. A hold carries no version, takes no slot, survives a coordinator restart, covers
+hosts that later join a held role, and the host never learns of it. An update already
+running finishes. Holding a pair already held under the same scope replaces the reason.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--reason` | STRING |  |
+
+Through `--request` only: `scope` (hostkeeper.operator.v1.HoldScope).
+
+#### `hostkeeper ctl services unhold`
+
+`/hostkeeper.operator.v1.Services/Unhold`
+
+Release a hold: the pairs it held are ordered to the then-desired version at their next
+heartbeat.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING |  |
+| `--reason` | STRING |  |
+
+Through `--request` only: `scope` (hostkeeper.operator.v1.HoldScope).
