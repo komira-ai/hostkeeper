@@ -10,10 +10,11 @@
 //! only `Enroll` and `Poll` answer a caller without one); the private listener's asks for none. A
 //! handshake offers `h2` and `http/1.1`, whatever the source's own protocols are: a connection
 //! that negotiates `h2` speaks HTTP/2 (gRPC, and the JSON routes over HTTP/2), any other speaks
-//! HTTP/1.1 (the JSON routes). Either has a limit on its handshake, its request head, its
-//! request body and on any single write of a response that its peer does not read; an HTTP/2
-//! connection also has a limit on its streams and pings its peer; a listener has a limit on its
-//! connections.
+//! HTTP/1.1 (the JSON routes). Either has a limit on its handshake, its request body and on any
+//! single write of a response that its peer does not read; an HTTP/1.1 connection has a limit on
+//! its request head; an HTTP/2 connection has a limit on its streams, pings its peer, takes new
+//! calls for one patience only and is closed one patience after that; a listener has a limit on
+//! its connections.
 
 use std::convert::Infallible;
 use std::io;
@@ -54,8 +55,9 @@ const ALPN: [&[u8]; 2] = [H2, b"http/1.1"];
 pub const MAX_STREAMS: u32 = 16;
 
 /// The most connections one listener serves at once. A client with a handshake, a head, a
-/// body or an unread response in flight holds one for at most [`CLIENT_PATIENCE`] each, so the cap makes a flood
-/// wait in the kernel's backlog rather than take the process's descriptors and memory.
+/// body or an unread response in flight holds one for at most [`CLIENT_PATIENCE`] each, and an
+/// HTTP/2 connection is closed two patiences after its handshake, so the cap makes a flood wait
+/// in the kernel's backlog rather than take the process's descriptors and memory.
 pub const MAX_CONNECTIONS: usize = 1024;
 
 /// One listener: `accept` yields the next connection, as a function of no argument that
@@ -273,13 +275,25 @@ pub async fn connection<S>(
     });
     let io = TokioIo::new(WriteDeadline::new(tls, patience));
     let served = if speaks_h2 {
-        http2::Builder::new(TokioExecutor::new())
+        let serving = http2::Builder::new(TokioExecutor::new())
             .timer(TokioTimer::new())
             .max_concurrent_streams(MAX_STREAMS)
             .keep_alive_interval(patience)
             .keep_alive_timeout(patience)
-            .serve_connection(io, service)
-            .await
+            .serve_connection(io, service);
+        let mut serving = std::pin::pin!(serving);
+        // An HTTP/2 connection takes new calls for one patience: then it is told to go away
+        // (no new stream; the calls in flight finish), and dropped one patience later, so an
+        // idle client that answers pings cannot keep a slot of the listener.
+        match tokio::time::timeout(patience, serving.as_mut()).await {
+            Ok(ended) => ended,
+            Err(_) => {
+                serving.as_mut().graceful_shutdown();
+                tokio::time::timeout(patience, serving)
+                    .await
+                    .unwrap_or(Ok(()))
+            }
+        }
     } else {
         http1::Builder::new()
             .timer(TokioTimer::new())

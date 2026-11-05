@@ -7,9 +7,9 @@ certificate (`Poll`) and renews it while it is valid (`Renew`). Why it is shaped
 the store are the crate `hostkeeper-enrollment`; the coordinator's side is the module
 `crates/hostkeeper-coordinator/src/enrollment/`.
 
-The handlers of `Enroll`, `Poll` and `Renew` are built here, with an in-process caller
-(`enrollment::call`); the listener serves HTTP/1.1 routes only, so no transport carries the three
-calls on the wire yet. The coordinator's gRPC serving, a separate change, registers them.
+The handlers of `Enroll`, `Poll` and `Renew` are built here. The heartbeat listener serves them
+as gRPC calls of `hostkeeper.agent.v1.Coordinator` (`crates/hostkeeper-coordinator/src/grpc/`),
+with no client certificate asked of `Enroll` and `Poll`.
 
 ## Flags
 

@@ -9,7 +9,8 @@
 //! for the names of `--server-name`, lets a client without a certificate through the handshake,
 //! and admits a client certificate of its own CA as well as one of `--client-ca`. The handlers
 //! of `Enroll`, `Poll` and `Renew` are served as gRPC on the heartbeat listener
-//! ([`crate::grpc`]). The services it manages are the ones `--rollout-file` defines; `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
+//! ([`crate::grpc`]). The services it manages are the ones `--rollout-file` defines;
+//! `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static

@@ -345,9 +345,10 @@ impl CoordinatorLink for Shared {
 /// Catches a negotiated link that speaks gRPC before the coordinator said it serves it, or that
 /// stays on it after it stopped: the first call goes to the JSON link; after a reply that
 /// advertises `grpc-v1` calls go to the gRPC link and stay there across replies that advertise
-/// it again, a refusal and a bad reply (the coordinator answered); after a reply without it, or
-/// a transport error of the gRPC link, the next call is the JSON link's again. Every answer is
-/// the chosen link's, unchanged.
+/// it again, a refusal and a bad reply (the coordinator answered); a transport error of the gRPC
+/// link sends the same heartbeat over JSON at once, whose answer is the loop's; after a reply
+/// without it the next call is the JSON link's again. Every answer is the answering link's,
+/// unchanged.
 #[test]
 fn grpc_is_used_only_after_the_reply_advertised_grpc_v1() {
     let json = Arc::new(FakeLink::default());
@@ -362,50 +363,93 @@ fn grpc_is_used_only_after_the_reply_advertised_grpc_v1() {
     let malformed = LinkError::BadReply(hostkeeper_link::ReplyFault::Malformed);
     let over = LinkError::BadReply(hostkeeper_link::ReplyFault::OverBound);
 
-    // Each step: the link the call must reach, what it answers, and whether the next call goes
-    // over gRPC.
-    let steps: Vec<(bool, Result<Reply, LinkError>, bool)> = vec![
+    // Each step: what gRPC answers if the call reaches it, what JSON answers if the call reaches
+    // it, the answer the loop gets, and whether the next call goes over gRPC.
+    type Answer = Result<Reply, LinkError>;
+    let steps: Vec<(Option<Answer>, Option<Answer>, Answer, bool)> = vec![
         // JSON first, whatever the coordinator is; it advertises.
-        (false, Ok(advertising.clone()), true),
+        (
+            None,
+            Some(Ok(advertising.clone())),
+            Ok(advertising.clone()),
+            true,
+        ),
         // gRPC, advertising again.
-        (true, Ok(advertising.clone()), true),
-        // A refusal and a bad reply over gRPC change nothing.
-        (true, Err(refused.clone()), true),
-        (true, Err(malformed.clone()), true),
-        (true, Err(over.clone()), true),
-        // A transport error over gRPC: JSON next.
-        (true, Err(reset.clone()), false),
-        // JSON, a reply without it: JSON again.
-        (false, Ok(silent.clone()), false),
+        (
+            Some(Ok(advertising.clone())),
+            None,
+            Ok(advertising.clone()),
+            true,
+        ),
+        // A refusal and a bad reply over gRPC are the answer, and change nothing.
+        (Some(Err(refused.clone())), None, Err(refused.clone()), true),
+        (
+            Some(Err(malformed.clone())),
+            None,
+            Err(malformed.clone()),
+            true,
+        ),
+        (Some(Err(over.clone())), None, Err(over.clone()), true),
+        // A transport error over gRPC: the same heartbeat over JSON at once, whose reply
+        // without the feature keeps the next one on JSON.
+        (
+            Some(Err(reset.clone())),
+            Some(Ok(silent.clone())),
+            Ok(silent.clone()),
+            false,
+        ),
         // JSON errors that are not transport ones change nothing.
-        (false, Err(refused), false),
-        (false, Err(malformed), false),
+        (None, Some(Err(refused.clone())), Err(refused), false),
+        (None, Some(Err(malformed.clone())), Err(malformed), false),
         // JSON advertises, gRPC answers without it: JSON again.
-        (false, Ok(advertising), true),
-        (true, Ok(silent), false),
-        // JSON advertises; gRPC cannot be reached: JSON, and a transport error of JSON.
-        (false, Ok(reply(None, &[Feature::GrpcV1])), true),
-        (true, Err(reset.clone()), false),
-        (false, Err(reset), false),
+        (
+            None,
+            Some(Ok(advertising.clone())),
+            Ok(advertising.clone()),
+            true,
+        ),
+        (Some(Ok(silent.clone())), None, Ok(silent), false),
+        // JSON advertises; gRPC cannot be reached: JSON carries the heartbeat and advertises
+        // again, so the next one tries gRPC; then neither can be reached: JSON next.
+        (
+            None,
+            Some(Ok(advertising.clone())),
+            Ok(advertising.clone()),
+            true,
+        ),
+        (
+            Some(Err(reset.clone())),
+            Some(Ok(advertising.clone())),
+            Ok(advertising),
+            true,
+        ),
+        (
+            Some(Err(reset.clone())),
+            Some(Err(reset.clone())),
+            Err(reset.clone()),
+            false,
+        ),
+        (None, Some(Err(reset.clone())), Err(reset), false),
     ];
     assert!(
         !negotiated.uses_grpc(),
         "nothing is known of the coordinator"
     );
     let (mut json_calls, mut grpc_calls) = (0, 0);
-    for (n, (over_grpc, answer, next)) in steps.into_iter().enumerate() {
-        if over_grpc {
-            grpc.answer(answer.clone());
-            grpc_calls += 1;
-        } else {
-            json.answer(answer.clone());
-            json_calls += 1;
-        }
+    for (n, (over_grpc, over_json, answer, next)) in steps.into_iter().enumerate() {
         assert_eq!(
             negotiated.uses_grpc(),
-            over_grpc,
+            over_grpc.is_some(),
             "step {n}: the link chosen"
         );
+        if let Some(scripted) = over_grpc {
+            grpc.answer(scripted);
+            grpc_calls += 1;
+        }
+        if let Some(scripted) = over_json {
+            json.answer(scripted);
+            json_calls += 1;
+        }
         assert_eq!(
             negotiated.heartbeat(&who, &beat),
             answer,
@@ -414,7 +458,7 @@ fn grpc_is_used_only_after_the_reply_advertised_grpc_v1() {
         assert_eq!(
             (json.calls().len(), grpc.calls().len()),
             (json_calls, grpc_calls),
-            "step {n}: which link was called"
+            "step {n}: which links were called"
         );
         assert_eq!(negotiated.uses_grpc(), next, "step {n}: the link next");
     }

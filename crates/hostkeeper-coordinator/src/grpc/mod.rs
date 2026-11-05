@@ -308,7 +308,9 @@ where
 
 /// Answers the gRPC call `request` that came in on `surface` from `peer`: the caller is
 /// checked ([`admit`]) before the request is read, then the service of the path answers. A
-/// request that has not arrived whole after `patience` is `DEADLINE_EXCEEDED`.
+/// call that has not been answered after `patience` is `DEADLINE_EXCEEDED`: the bound covers the
+/// read of the request and the adapter, whose handlers do not await, so the bound cuts only a
+/// request that has not arrived.
 pub(crate) async fn grpc<B>(
     coordinator: &Arc<Coordinator>,
     surface: Surface,

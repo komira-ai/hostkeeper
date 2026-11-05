@@ -60,7 +60,9 @@ thiserror.workspace = true
 toml.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls.workspace = true
-# The gRPC status of a refusal (`Code`, `Status`); no transport.
+# The gRPC services: the generated servers, called in process by the listeners' router
+# (`src/grpc`), and the status of a refusal (`Code`, `Status`). No transport of tonic's: the
+# listeners are hyper's.
 tonic.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

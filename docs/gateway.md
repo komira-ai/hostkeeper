@@ -15,8 +15,9 @@ One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `R
 POST /<package>.<Service>/<Method>
 ```
 
-for example `POST /hostkeeper.operator.v1.Releases/Converge`. The request has `Content-Type:
-application/json`; the response has the same type. Only the private listener (`--private-listen`)
+for example `POST /hostkeeper.operator.v1.Releases/Converge`. A client sends `Content-Type:
+application/json` (the gateway reads the body as JSON whatever the header says); the response has
+that type. Only the private listener (`--private-listen`)
 serves the gateway; the heartbeat listener never does.
 
 ## Authentication

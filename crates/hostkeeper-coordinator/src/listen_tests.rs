@@ -388,3 +388,65 @@ async fn a_grpc_heartbeat_without_a_certificate_is_refused_on_the_heartbeat_list
         );
     }
 }
+
+/// A connection to a listener of the private surface that serves `coordinator`, in memory, as
+/// [`dial`] makes one, with the task that serves its server end.
+async fn dial_served(
+    coordinator: &Arc<Coordinator>,
+) -> (TlsStream<DuplexStream>, tokio::task::JoinHandle<()>) {
+    let (source, ca) = tls_material();
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let serving = tokio::spawn(connection(
+        server,
+        source,
+        Surface::Control,
+        Arc::clone(coordinator),
+        CLIENT_PATIENCE,
+    ));
+    let tls = connector(&ca, &[b"h2"])
+        .connect(ServerName::try_from("localhost").expect("a name"), client)
+        .await
+        .expect("a handshake");
+    (tls, serving)
+}
+
+/// Proves: an HTTP/2 client that keeps its connection open and answers the listener's pings is
+/// told to go away once the patience has passed, and its connection is served no longer than
+/// two patiences in all: the task that serves it ends (on the paused clock).
+///
+/// Catches: an HTTP/2 connection with no bound but its pings, which an idle client keeps
+/// forever, so that 1024 of them hold every slot of a listener.
+#[tokio::test(start_paused = true)]
+async fn an_idle_http2_connection_is_closed_after_the_patience() {
+    let (coordinator, _dir) = coordinator("listen-h2-idle");
+    let (tls, serving) = dial_served(&coordinator).await;
+    let mut send = http2(tls).await;
+    let answer = send
+        .send_request(status_request())
+        .await
+        .expect("an answer");
+    assert_eq!(answer.status(), 200);
+    drop(answer);
+    let ended = tokio::time::timeout(CLIENT_PATIENCE * 4, serving).await;
+    assert!(
+        matches!(ended, Ok(Ok(()))),
+        "the connection is still served"
+    );
+}
+
+/// Proves: an HTTP/2 connection whose client goes away is no longer served, before the
+/// patience has passed (on the paused clock).
+///
+/// Catches: a bound that holds every HTTP/2 connection for the whole patience, whatever its
+/// client does.
+#[tokio::test(start_paused = true)]
+async fn an_http2_connection_its_client_closes_ends_at_once() {
+    let (coordinator, _dir) = coordinator("listen-h2-closed");
+    let (tls, serving) = dial_served(&coordinator).await;
+    drop(tls);
+    let ended = tokio::time::timeout(CLIENT_PATIENCE / 2, serving).await;
+    assert!(
+        matches!(ended, Ok(Ok(()))),
+        "the connection is still served"
+    );
+}

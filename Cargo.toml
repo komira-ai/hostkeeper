@@ -30,7 +30,7 @@ futures = "0.3.34"
 # the tree through the P-256 crates below.
 getrandom = "0.4.3"
 hex = "0.4.3"
-# The coordinator's HTTP/1.1 server and the OIDC key fetch's client (hostkeeper-coordinator,
+# The coordinator's HTTP/1.1 and HTTP/2 server and the OIDC key fetch's client (hostkeeper-coordinator,
 # hostkeeper-oidc); members turn on the parts they use. hyper-util is also the connection the
 # tests of hostkeeper-daemon open to its admin server over an in-process pipe (`TokioIo`).
 http-body-util = "0.1.5"
@@ -109,7 +109,9 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring
 # listener of the gRPC tests of hostkeeper-ctl and hostkeeper-enroll.
 tokio-stream = { version = "0.1.19", default-features = false }
 # gRPC: the service traits and clients hostkeeper-proto generates. Code generation only here: no
-# transport and no TLS. hostkeeper-daemon adds `server` for its admin socket (and `channel` in its
+# transport and no TLS. hostkeeper-coordinator calls the generated servers in process under its
+# own hyper listeners. hostkeeper-link adds `channel` for the daemon's gRPC heartbeat, over a TLS
+# stream it makes itself. hostkeeper-daemon adds `server` for its admin socket (and `channel` in its
 # tests, for a client). hostkeeper-ctl and hostkeeper-enroll add `channel` and `tls-ring` for their
 # clients (and `server` in their tests, for a loopback server).
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }

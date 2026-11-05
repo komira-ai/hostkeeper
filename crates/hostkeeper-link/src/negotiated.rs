@@ -6,9 +6,10 @@
 //! [`Feature::GrpcV1`] sends the next heartbeat over gRPC, and so does every reply of gRPC that
 //! advertises it; a reply that does not, from either route, sends the next one over JSON. A gRPC
 //! heartbeat that fails with [`LinkError::Transport`] (the coordinator closed the connection, did
-//! not answer, or does not serve gRPC after all) sends the next one over JSON too, and the error
-//! is the loop's to log as for any link. A refusal or a bad reply changes nothing: the
-//! coordinator answered.
+//! not answer, or does not serve gRPC after all) is sent again at once over JSON, so no heartbeat
+//! is lost to a coordinator that advertises gRPC it cannot carry; the JSON answer then decides
+//! the next route as any reply does. A refusal or a bad reply is the answer: the coordinator
+//! answered.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -45,12 +46,14 @@ impl NegotiatedLink {
 
 impl CoordinatorLink for NegotiatedLink {
     fn heartbeat(&self, identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
-        let link = if self.uses_grpc() {
-            &self.grpc
+        let answer = if self.uses_grpc() {
+            match self.grpc.heartbeat(identity, beat) {
+                Err(LinkError::Transport(_)) => self.json.heartbeat(identity, beat),
+                answered => answered,
+            }
         } else {
-            &self.json
+            self.json.heartbeat(identity, beat)
         };
-        let answer = link.heartbeat(identity, beat);
         match &answer {
             Ok(reply) => self
                 .use_grpc
