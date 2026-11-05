@@ -51,7 +51,7 @@ fn a_build_input_is_absent_or_a_full_commit() {
 /// `version_text` of both, and the build's commit passed the check.
 #[test]
 fn the_binary_version_is_the_crate_version_and_the_build_commit() {
-    assert!(COMMIT_IS_VALID);
+    const { assert!(COMMIT_IS_VALID) };
     assert_eq!(
         version(),
         version_text(env!("CARGO_PKG_VERSION"), RELEASE_COMMIT)

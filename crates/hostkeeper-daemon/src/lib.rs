@@ -43,8 +43,8 @@ pub mod place;
 pub mod prune;
 pub mod refusal;
 pub mod socket;
-pub mod start;
 pub mod stamp;
+pub mod start;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod uninstall;
