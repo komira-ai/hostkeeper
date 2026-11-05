@@ -4,6 +4,7 @@
 #![allow(dead_code, reason = "each test binary uses part of the shared support")]
 
 pub mod force;
+pub mod selfupdate;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -15,19 +16,27 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
-use hostkeeper_daemon::prune::NoPrune;
+use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
-use hostkeeper_daemon::testing::{FakeClock, FakePackages, Log, ScriptedLauncher, manifest};
+use hostkeeper_daemon::testing::{
+    FakeClock, FakePackages, Log, NoPrune, ScriptedLauncher, manifest,
+};
 use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
-use hostkeeper_hook::Verdict;
+use hostkeeper_hook::{Step, Verdict};
+use hostkeeper_observe::fake::{
+    FakeExpectedExe, FakeHealthClient, FakeProcessProbe, FakeServiceManager,
+};
+use hostkeeper_observe::{ObserveOptions, Observer};
 use hostkeeper_placed::Roots;
-use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log as PlacedLog};
+use hostkeeper_placed::testing::{Event, FakeUnitControl, FaultFs, Log as PlacedLog};
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Force, ForceRollback, Install, Order, Uninstall, Update, order,
 };
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::record::{Loaded, Record, State};
-use hostkeeper_steps::{CrashPoint, Finished, RecordStore};
+use hostkeeper_steps::{
+    AdditiveCall, CrashPoint, Finished, LaunchError, RecordStore, StepCall, StepExit, StepLauncher,
+};
 use hyper_util::rt::TokioIo;
 use tokio::io::DuplexStream;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -206,6 +215,16 @@ pub struct Rig {
     pub placed_log: PlacedLog,
     /// The filesystem placed-path linking goes through: the scratch directory as `/`.
     pub placed_fs: Arc<FaultFs>,
+    /// The observer of the installed services, reading the four fakes below.
+    pub observer: Arc<Observer>,
+    /// What the service manager says of each unit.
+    pub manager: FakeServiceManager,
+    /// The processes the units run.
+    pub process: FakeProcessProbe,
+    /// What each health URL answers.
+    pub health: FakeHealthClient,
+    /// The digest each sealed version's executable has.
+    pub expected: FakeExpectedExe,
 }
 
 impl Rig {
@@ -218,6 +237,21 @@ impl Rig {
         let packages = root.join("packages");
         fs::create_dir(root.join("placed")).expect("the directory of placed.json");
         let placed_log = PlacedLog::new();
+        let (manager, process, health, expected) = (
+            FakeServiceManager::default(),
+            FakeProcessProbe::default(),
+            FakeHealthClient::default(),
+            FakeExpectedExe::default(),
+        );
+        let observer = Observer::new(
+            hostkeeper_observe::Ports {
+                manager: Box::new(manager.clone()),
+                process: Box::new(process.clone()),
+                health: Box::new(health.clone()),
+                expected: Box::new(expected.clone()),
+            },
+            ObserveOptions::default(),
+        );
         Rig {
             state: root.join("state"),
             store: FakePackages::new(&packages),
@@ -230,6 +264,11 @@ impl Rig {
             placed_fs: Arc::new(FaultFs::new(&root, placed_log.clone())),
             placed_log,
             scratch,
+            observer: Arc::new(observer),
+            manager,
+            process,
+            health,
+            expected,
         }
     }
 
@@ -245,6 +284,8 @@ impl Rig {
                 fs: self.placed_fs.clone(),
             },
             prune: Arc::new(NoPrune),
+            force_lock_point: Arc::new(NoLockPoint),
+            observer: Arc::clone(&self.observer),
         }
     }
 
@@ -587,4 +628,51 @@ pub fn client(io: DuplexStream) -> AdminClient<Channel> {
     let channel =
         Endpoint::from_static("http://admin.invalid").connect_with_connector_lazy(connector);
     AdminClient::new(channel)
+}
+
+/// A step launcher that puts a mark in the placed log for each step it runs (`run cutover`, and
+/// `additive restore` for a boot step), so that the writes and the calls of the service manager
+/// read in their place among the steps of the hook, and then runs `inner`. `before` is called
+/// with the step first.
+pub struct Tap {
+    inner: Arc<ScriptedLauncher>,
+    log: PlacedLog,
+    before: Box<dyn Fn(Step) + Send + Sync>,
+}
+
+impl Tap {
+    pub fn new(inner: Arc<ScriptedLauncher>, log: PlacedLog) -> Arc<Tap> {
+        Tap::before(inner, log, |_| {})
+    }
+
+    pub fn before(
+        inner: Arc<ScriptedLauncher>,
+        log: PlacedLog,
+        before: impl Fn(Step) + Send + Sync + 'static,
+    ) -> Arc<Tap> {
+        Arc::new(Tap {
+            inner,
+            log,
+            before: Box::new(before),
+        })
+    }
+}
+
+impl StepLauncher for Tap {
+    fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
+        let step = call.invocation.step;
+        self.log.push(Event::Mark(format!("run {step}")));
+        (self.before)(step);
+        self.inner.run(call)
+    }
+
+    fn stop(&self, unit: &str) -> Result<(), LaunchError> {
+        self.inner.stop(unit)
+    }
+
+    fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
+        self.log
+            .push(Event::Mark(format!("additive {}", call.step)));
+        self.inner.run_additive(call)
+    }
 }

@@ -20,9 +20,8 @@ use crate::identity::Identity;
 use crate::ops::{AuditEntry, Halt, OpsError, OpsState, OpsStore, ServiceOps, Write};
 use crate::ops_tests::temp_beside;
 use crate::reconcile::{Change, plan};
-use crate::service::SetError;
 use crate::services::{ServiceDef, Services};
-use crate::testutil::{LEGACY, OPERATOR, Rig, beat, ci_token, desired, id, ops_of, role, version};
+use crate::testutil::{LEGACY, OPERATOR, Rig, beat, desired, id, ops_of, role, version};
 
 pub(crate) const AUTO: &str = "rollback = \"automatic\"";
 pub(crate) const ONE: &str = r#"{"version":"1.0","min_up":{"storage":0,"frontend":0}}"#;
@@ -55,6 +54,8 @@ pub(crate) fn failure(phase: Option<Phase>, class: Option<Class>, target: &str) 
         phase,
         class,
         reason: None,
+        order_id: None,
+        order_try: None,
     });
     b
 }
@@ -70,7 +71,7 @@ pub(crate) fn good() -> ServiceOps {
 /// `n` daemons at 1.0 that heartbeated at 2000, the first `failed` of which failed an
 /// update to 2.0 as `phase` and `class` say.
 pub(crate) fn farm(n: usize, failed: usize, phase: Option<Phase>, class: Option<Class>) -> Fleet {
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for i in 0..n {
         let b = if i < failed {
             failure(phase, class, "2.0")
@@ -198,7 +199,7 @@ fn a_silent_host_is_neither_a_failure_nor_part_of_the_percentage() {
 #[test]
 fn only_failures_of_the_desired_version_count() {
     let (phase, class) = release();
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     fleet.record_in(
         LEGACY,
         id("d1"),
@@ -267,7 +268,7 @@ fn environment_before_commit_deferred_and_halt_outcomes_never_roll_back() {
             "{phase:?} {class:?}"
         );
     }
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for i in 0..6 {
         let mut b = beat("1.0");
         b.deferred = Some(DeferredReport {
@@ -319,6 +320,7 @@ fn a_halt_beats_a_rollback() {
             check: "tainted".to_owned(),
             target: version("2.0"),
             report: None,
+            origin: crate::ops::HaltOrigin::Hook,
         }),
         ..good()
     };
@@ -349,7 +351,7 @@ fn a_halt_beats_a_rollback() {
 #[test]
 fn nothing_is_planned_in_the_quiet_start() {
     let (phase, class) = release();
-    let mut fleet = Fleet::new(secs(1_990));
+    let mut fleet = Fleet::new(secs(1_990), crate::fleet::QUIET_START);
     for i in 0..6 {
         fleet.record_in(
             LEGACY,
@@ -370,7 +372,7 @@ fn nothing_is_planned_in_the_quiet_start() {
 fn a_bad_version_is_not_ordered_even_if_desired_names_it() {
     let services = Services::parse(&definition("")).expect("services");
     let all = BTreeMap::from([(LEGACY.to_owned(), desired("2.0", 0, 0))]);
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     fleet.record_in(LEGACY, id("d1"), role("daemon"), beat("1.0"), secs(2_000));
     let go = Decision::Update {
         version: version("2.0"),
@@ -420,7 +422,7 @@ fn a_plan_over_a_marked_desired_version_only_sets_the_desired_state() {
 // ---- last_good -------------------------------------------------------------------------
 
 pub(crate) fn converged(beats: &[(&str, Heartbeat)]) -> Fleet {
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for (name, b) in beats {
         fleet.record_in(LEGACY, id(name), role("daemon"), b.clone(), secs(2_000));
     }
@@ -474,7 +476,7 @@ fn last_good_is_recorded_only_when_converged_and_baked() {
     assert_eq!(plan_one(&plain, &none, &converged(&slot)), vec![]);
 
     // The quiet start.
-    let mut quiet = Fleet::new(secs(1_990));
+    let mut quiet = Fleet::new(secs(1_990), crate::fleet::QUIET_START);
     for (name, b) in all_at_one() {
         quiet.record_in(LEGACY, id(name), role("daemon"), b, secs(2_000));
     }
@@ -493,7 +495,7 @@ fn last_good_is_recorded_only_when_converged_and_baked() {
 #[test]
 fn last_good_waits_for_the_bake() {
     let baking = def(&format!("{AUTO}\nbake_beats = 2"));
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for round in 1..=2_u64 {
         for (name, b) in all_at_one() {
             fleet.record_in(LEGACY, id(name), role("daemon"), b, secs(2_000 + round));
@@ -690,71 +692,6 @@ async fn a_restart_after_the_mark_and_before_the_desired_write_finishes_the_roll
     assert_eq!(wanted(&rig), version("1.0"));
 }
 
-/// CI setting a version by hand removes its mark (design 5.3), in the file as well, and the
-/// version is ordered again, to one host at a time (the first asked); the coordinator does not
-/// roll it back. Setting another version leaves the mark where it is.
-#[tokio::test]
-async fn setting_a_bad_version_by_hand_clears_the_mark() {
-    let mut rig = rig("rb-by-hand", AUTO, TWO).await;
-    seed(&rig, |m| {
-        m.last_good = Some(version("1.0"));
-        m.bad = vec![version("2.0")];
-    });
-    restart(&mut rig, AUTO);
-    rig.set(THREE).await;
-    assert_eq!(marks(&rig).bad, vec![version("2.0")], "another version");
-
-    rig.set(TWO).await;
-    assert!(marks(&rig).bad.is_empty());
-    assert!(persisted(&rig).bad.is_empty());
-    assert_eq!(persisted(&rig).last_good, Some(version("1.0")));
-
-    let replies = round(&rig, 2_100, &[]);
-    assert_eq!(wanted(&rig), version("2.0"));
-    assert!(
-        matches!(&replies[0], ServiceReply::Update { version: v, .. } if *v == version("2.0")),
-        "{replies:?}"
-    );
-    assert!(
-        replies[1..].iter().all(|r| *r == ServiceReply::Nothing),
-        "one update at a time: {replies:?}"
-    );
-    let audit = status(&rig).ops.audit;
-    assert!(audit.iter().any(|e| e.action == "unmark_bad"), "{audit:?}");
-}
-
-/// A mark that cannot be removed from the file fails the set and leaves the desired state as
-/// it was: a version CI believes unmarked would otherwise still be refused after a restart.
-#[tokio::test]
-async fn a_mark_that_cannot_be_cleared_fails_the_set_and_leaves_the_desired_state() {
-    let rig = Rig::new("rb-unclearable");
-    let mut state = OpsState::default();
-    state.services.insert(
-        LEGACY.to_owned(),
-        ServiceOps {
-            bad: vec![version("2.0")],
-            ..ServiceOps::default()
-        },
-    );
-    let failing = OpsStore::with_writer(
-        state,
-        Box::new(|_| {
-            Err(OpsError::Io(StoreError::Io {
-                path: "ops".into(),
-                source: std::io::Error::other("disk full"),
-            }))
-        }),
-    );
-    let coordinator = Rig::start(&rig.dir, &rig.clock).with_ops(failing);
-    let set = coordinator
-        .set_desired(Some(&ci_token()), TWO.as_bytes())
-        .await;
-    assert!(matches!(set, Err(SetError::Ops(_))), "{set:?}");
-    let status = coordinator.status(Some(OPERATOR)).expect("status");
-    assert!(status.services.is_empty(), "desired was not set");
-    assert_eq!(status.ops.services[LEGACY].bad, vec![version("2.0")]);
-}
-
 /// A version marked bad, with desired naming it, is held at `bad` in the status and no host
 /// is ordered it; the same hosts without the mark are told to update.
 #[tokio::test]
@@ -821,6 +758,7 @@ async fn a_standing_halt_stops_the_rollback() {
             check: "tainted".to_owned(),
             target: version("2.0"),
             report: None,
+            origin: crate::ops::HaltOrigin::Hook,
         });
     });
     restart(&mut rig, AUTO);
@@ -851,18 +789,20 @@ async fn last_good_and_bad_survive_a_restart() {
 }
 
 /// Desired state set to `min_version` forgets the last good version, in the file too, and a
-/// failure at it is not rolled back.
+/// failure at it is not rolled back. The last good version is recorded before the floor is
+/// defined: CI cannot set a version below it.
 #[tokio::test]
 async fn min_version_clears_last_good_on_the_coordinator() {
     let extra = format!("{AUTO}\nmin_version = \"2.0\"");
-    let rig = rig("rb-min", &extra, ONE).await;
+    let mut rig = rig("rb-min", AUTO, ONE).await;
     round(&rig, 2_000, &[]);
     assert_eq!(marks(&rig).last_good, Some(version("1.0")));
+    restart(&mut rig, &extra);
     rig.set(TWO).await;
-    round(&rig, 2_015, &[]);
+    round(&rig, 2_045, &[]);
     assert_eq!(marks(&rig).last_good, None);
     assert_eq!(persisted(&rig).last_good, None);
-    round(&rig, 2_030, &two_failed());
+    round(&rig, 2_060, &two_failed());
     assert_eq!(wanted(&rig), version("2.0"));
     assert!(marks(&rig).bad.is_empty());
 }

@@ -11,7 +11,9 @@
 //! the target immediately before `cutover` and back immediately before `rollback` (design
 //! section 5.2, steps 5 and 6), come in through [`StepRunner::with_switch`]: the runner calls the
 //! [`Switch`] before every run of those two steps, resumed ones included, so the switch must be
-//! idempotent.
+//! idempotent. A third call, [`Toward::Confirmed`], comes once a `cleanup` has succeeded and
+//! before the verdict is written (and before the post-success watcher begins): if it fails the
+//! runner stops with the record still at `cleanup` done, so the next run calls it again.
 //! A `force` of the service may flag the record `forced` while an update runs (design section
 //! 5.6, steps 4 to 6). The runner reads the flag on disk, under the record lock, before it
 //! launches any step (a resumed one included) and in every write after a step returns: once it
@@ -65,12 +67,17 @@ pub enum Toward {
     Target,
     /// Back, immediately before `rollback`.
     Back,
+    /// After a `cleanup` that succeeded, before the verdict is written: the daemon commits the
+    /// placed paths and unlinks what the version no longer lists. It is called again by a run
+    /// that finds the `cleanup` done, so it must be idempotent.
+    Confirmed,
 }
 
 /// The daemon's switch of `current` and the placed links around the hook's steps
-/// ([`StepRunner::with_switch`]): called with [`Toward::Target`] before each run of `cutover` and
-/// [`Toward::Back`] before each run of `rollback`, with the order. `Err` says why it could not
-/// switch: the step does not run, and the runner stops with [`RunError::Switch`].
+/// ([`StepRunner::with_switch`]): called with [`Toward::Target`] before each run of `cutover`,
+/// [`Toward::Back`] before each run of `rollback` and [`Toward::Confirmed`] after a `cleanup`
+/// that succeeded, with the order. `Err` says why it could not switch: the step does not run (for
+/// `Confirmed`, the verdict is not written), and the runner stops with [`RunError::Switch`].
 pub type Switch = Arc<dyn Fn(Toward, &UpdateOrder) -> Result<(), String> + Send + Sync>;
 
 /// The bounds of the declaration the runner reads (and no other key of it).
@@ -208,6 +215,8 @@ pub struct StepRunner {
     watch: Arc<Watch>,
     fault: Option<CheckFault>,
     switch: Option<Switch>,
+    /// [`StepRunner::with_held_success`].
+    held_success: bool,
 }
 
 impl StepRunner {
@@ -223,7 +232,19 @@ impl StepRunner {
             watch: Watch::new(),
             fault: None,
             switch: None,
+            held_success: false,
         }
+    }
+
+    /// The same runner, the `Succeeded` of an update that replaces a release (one with a
+    /// previous release) returned and never written: the record stays at the step that reached
+    /// it (`done` at `cleanup`), unfinished, for the caller to finish. This is the updater's own
+    /// update (design section 6.6), which only its new binary may record as succeeded, once it
+    /// has run ([`crate::selfupdate::follow_on`], [`crate::selfupdate::settle`]). A run of the
+    /// same order again recomputes the same verdict from the record and launches nothing.
+    pub fn with_held_success(mut self) -> StepRunner {
+        self.held_success = true;
+        self
     }
 
     /// The same runner, `switch` called before every run of `cutover` and of `rollback`.
@@ -241,6 +262,14 @@ impl StepRunner {
         };
         match &self.switch {
             Some(switch) => switch(toward, order).map_err(RunError::Switch),
+            None => Ok(()),
+        }
+    }
+
+    /// The confirming call of the switch, if the runner has one.
+    fn confirm(&self, order: &UpdateOrder) -> Result<(), RunError> {
+        match &self.switch {
+            Some(switch) => switch(Toward::Confirmed, order).map_err(RunError::Switch),
             None => Ok(()),
         }
     }
@@ -611,6 +640,17 @@ impl StepRunner {
         if self.flagged(rec)? {
             rec.close_forced_over();
         }
+        let succeeded = matches!(
+            rec.state,
+            State::Finished {
+                verdict: Verdict::Succeeded { .. },
+                ..
+            }
+        );
+        // The updater's own update: its success is the new binary's to write.
+        if self.held_success & succeeded & rec.previous_digest.is_some() {
+            return Ok(());
+        }
         Ok(self.store.save(rec)?)
     }
 
@@ -710,6 +750,11 @@ impl StepRunner {
                 self.move_to(rec, Step::Rollback);
             }
             Next::Report(verdict) => {
+                // A `cleanup` succeeded: the switch is confirmed before the verdict is written
+                // or the watcher begins. On `Err` the record on disk is still `cleanup` done.
+                if matches!(verdict, Verdict::Succeeded { .. }) {
+                    self.confirm(order)?;
+                }
                 let reason = report.reason.or(rec.progress.reason.clone());
                 self.report(rec, verdict, reason);
             }

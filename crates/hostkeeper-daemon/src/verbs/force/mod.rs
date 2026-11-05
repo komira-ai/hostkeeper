@@ -59,7 +59,8 @@ use crate::refusal::Refusal;
 use crate::verb::{Forced, HookedVerb, PackageDigest};
 use crate::verbs::update::{last_record, while_held};
 
-pub use switch::{ALERT_FORCE_FAILED, ALERT_PRUNE};
+pub use crate::prune::ALERT_PRUNE;
+pub use switch::ALERT_FORCE_FAILED;
 
 /// The service a force is refused for: hostkeeper updates itself by its own path.
 pub const SELF_SERVICE: &str = "hostkeeper";
@@ -320,12 +321,11 @@ fn failed_before(class: ManifestClass, reason: &str) -> Reply {
     }
 }
 
-/// Whom a package error is blamed on: the package for one the channel does not have or whose
-/// bytes are not the digest, the host for the rest.
+/// Whom a package error is blamed on: the class it carries ([`PackageError::class`]).
 fn package_class(error: &PackageError) -> ManifestClass {
-    match error {
-        PackageError::NotFound(_) | PackageError::DigestMismatch(_) => ManifestClass::Release,
-        PackageError::NoSpace(_) | PackageError::Other(_) => ManifestClass::Environment,
+    match error.class() {
+        Class::Release => ManifestClass::Release,
+        Class::Environment => ManifestClass::Environment,
     }
 }
 

@@ -197,14 +197,20 @@ pub fn force_allowed(lifecycle: Lifecycle) -> Result<(), Refusal> {
     }
 }
 
+/// Whether `verb` may run for `service`: the service `hostkeeper` updates itself by its own path
+/// (design sections 5.1 and 6.6), so a `force` and a `force_rollback` of it are refused
+/// (`self_service`); every other verb, and every other service, passes.
+pub fn self_service(verb: HookedVerb, service: &ServiceName) -> Result<(), Refusal> {
+    let forced = matches!(verb, HookedVerb::Force | HookedVerb::ForceRollback);
+    match forced & (service.as_str() == crate::verbs::force::SELF_SERVICE) {
+        true => Err(Refusal::SelfService),
+        false => Ok(()),
+    }
+}
+
 /// The token of a package error.
 pub fn package_refusal(error: &PackageError) -> Refusal {
-    match error {
-        PackageError::NotFound(_) => Refusal::PackageNotFound,
-        PackageError::DigestMismatch(_) => Refusal::DigestMismatch,
-        PackageError::NoSpace(_) => Refusal::NoSpace,
-        PackageError::Other(_) => Refusal::PackageFailed,
-    }
+    error.refusal()
 }
 
 /// What a hooked order is, for the try rules: the verb, the package and the try.

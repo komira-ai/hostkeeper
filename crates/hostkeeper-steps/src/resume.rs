@@ -59,16 +59,21 @@ pub fn resume_action(rec: &Record, rebooted: bool) -> ResumeAction {
         WatcherRestart,
     };
     let watching = rec.progress.watching.is_some();
-    let running = match (&rec.state, watching) {
+    let awaiting = rec.progress.awaiting_restart.is_some();
+    let running = match (&rec.state, awaiting, watching) {
         // Not a row of the table: the update has its verdict.
-        (State::Finished { .. }, _) => return NothingFinished,
+        (State::Finished { .. }, _, _) => return NothingFinished,
+        // Not a row of the table either: an update of the updater itself waiting for its new
+        // binary has run every step, and is settled before the start pass, never resumed
+        // (`crate::selfupdate::settle`, design section 6.6).
+        (_, true, _) => return NothingFinished,
         // Not a row of the table either: the post-success watcher is outside it, and it never
         // runs `rollback` (section 6.4). "Then ... watchers restart."
-        (_, true) => return WatcherRestart,
+        (_, false, true) => return WatcherRestart,
         // | `done` | recompute the next step | recompute the next step |
-        (State::Done { .. }, false) => return RecomputeNext,
-        (State::Pending, false) => false,
-        (State::Running { .. }, false) => true,
+        (State::Done { .. }, false, false) => return RecomputeNext,
+        (State::Pending, false, false) => false,
+        (State::Running { .. }, false, false) => true,
     };
     // In the column "daemon died", a step found `running` has its unit stopped by name before it
     // runs again; one found `pending` never started a unit.

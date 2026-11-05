@@ -42,6 +42,7 @@ fn halted() -> ServiceOps {
             check: "tainted".to_owned(),
             target: version("2.0"),
             report: Some(halted_update("2.0")),
+            origin: crate::ops::HaltOrigin::Hook,
         }),
         halt_generation: 1,
         ..ServiceOps::default()

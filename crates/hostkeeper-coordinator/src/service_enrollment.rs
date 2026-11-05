@@ -1,12 +1,14 @@
 //! The calls of [`Coordinator`] that ask enrollment: who an enrolled host's certificate names,
 //! whether a host is denied, retiring or duplicate, and a retiring host's final report.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hostkeeper_wire::wire::Heartbeat;
+use hostkeeper_wire::wire::{Answer, Heartbeat};
 
-use super::Coordinator;
+use super::{Coordinator, HeartbeatRefused, sends};
 use crate::enrollment::{Admission, Enrollment};
+use crate::halt;
 use crate::identity::{Identity, IdentityError, identity_of};
 
 /// What a heartbeat's turn is, once it is heard.
@@ -21,6 +23,55 @@ pub(super) enum Turn {
 }
 
 impl Coordinator {
+    /// [`Self::heartbeat`] from the daemon on the machine `machine_id`, when the transport
+    /// carries one: with enrollment it is reported live ([`Enrollment::report_live`]), so two
+    /// machines speaking for one host id mark it duplicate. A duplicate host is heard and
+    /// ordered nothing ([`Self::host_is_duplicate`]).
+    ///
+    /// # Errors
+    /// As [`Self::heartbeat`].
+    pub fn heartbeat_from(
+        &self,
+        who: Identity,
+        beat: Heartbeat,
+        machine_id: Option<&str>,
+    ) -> Result<Answer, HeartbeatRefused> {
+        if self.legacy.is_none() && beat.services.is_none() {
+            return Err(HeartbeatRefused);
+        }
+        if let (Some(enrollment), Some(machine_id)) = (&self.enrollment, machine_id) {
+            enrollment.report_live(&who.host_id, machine_id);
+        }
+        let turn = if self.host_is_duplicate(&who.host_id) {
+            Turn::Hold
+        } else {
+            Turn::Order
+        };
+        let asked = beat.agent_features.clone();
+        let (reply, _) = self.reply_to(who, beat, turn);
+        // Only an agent that announced features gets `features`: an older agent reads the
+        // reply strictly and refuses a field it does not know.
+        let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
+            self.features
+                .iter()
+                .filter(|name| asked.contains(name))
+                .cloned()
+                .collect()
+        });
+        // The generations only to an agent that announced `halt-v1` and a coordinator that
+        // advertises it: an older agent's strict reader refuses the field.
+        let halts = if sends("halts", features.as_deref()) {
+            halt::generations(&self.ops, &self.services)
+        } else {
+            BTreeMap::new()
+        };
+        Ok(Answer {
+            reply,
+            features,
+            halts,
+        })
+    }
+
     /// The same coordinator with `enrollment`: it reads a client certificate its CA issued as
     /// the host it names, refuses a denied host's heartbeat, and orders a duplicate host
     /// nothing.

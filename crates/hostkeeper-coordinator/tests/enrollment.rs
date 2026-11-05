@@ -154,6 +154,8 @@ fn enrollment_flags_go_together_and_a_missing_ca_needs_ca_init() {
     for made in ["ca.key", "ca.key.cert", "server.pem"] {
         assert!(files.path(made).is_file(), "{made}");
     }
+    // The state files' lock is the running coordinator's: a restart takes it after it.
+    drop(parts);
     let again = start(&files, &enrollment_flags(false)).expect("started again");
     assert!(again.coordinator.enrollment().is_some());
 }

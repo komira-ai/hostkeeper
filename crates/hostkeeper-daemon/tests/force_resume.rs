@@ -5,15 +5,13 @@
 mod support;
 
 use std::fs;
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::admin::step_record;
 use hostkeeper_daemon::boot::{BootReport, Outcome};
-use hostkeeper_daemon::locks::ServiceGuard;
-use hostkeeper_daemon::prune::{NoPrune, Prune, PruneError};
+use hostkeeper_daemon::testing::{NoPrune, RecordingPrune};
 use hostkeeper_daemon::{Daemon, ForcedResult, Ports, Refusal, Reply, WriteStep};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log as PlacedLog};
@@ -254,52 +252,6 @@ fn force_reports_its_verdict_in_the_next_heartbeat_read() {
     assert_eq!(shown.step, "");
 }
 
-/// A prune as step 18 asks for: every version directory of the service, with its seal, but the
-/// ones `current` and `previous` name; or a prune that fails.
-struct Pruner {
-    packages: PathBuf,
-    fails: bool,
-    calls: Mutex<Vec<String>>,
-}
-
-impl Prune for Pruner {
-    fn prune(&self, service: &ServiceName, _held: &ServiceGuard<'_>) -> Result<(), PruneError> {
-        self.calls
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(service.to_string());
-        if self.fails {
-            return Err(PruneError {
-                service: service.to_string(),
-                why: "the disk refused".to_owned(),
-            });
-        }
-        let dir = self.packages.join(service.as_str());
-        let kept: Vec<String> = ["current", "previous"]
-            .iter()
-            .filter_map(|link| fs::read_link(dir.join(link)).ok())
-            .map(|target| target.to_string_lossy().into_owned())
-            .collect();
-        for entry in fs::read_dir(&dir).expect("the service's packages") {
-            let path = entry.expect("an entry").path();
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let version = name.strip_suffix(".seal").unwrap_or(&name).to_owned();
-            let link = fs::symlink_metadata(&path).expect("metadata").is_symlink();
-            if link | kept.contains(&version) {
-                continue;
-            }
-            match path.is_dir() {
-                true => fs::remove_dir_all(&path).expect("remove a version"),
-                false => fs::remove_file(&path).expect("remove a seal"),
-            }
-        }
-        Ok(())
-    }
-}
-
 fn versions(rig: &Rig) -> Vec<String> {
     let mut versions: Vec<String> = fs::read_dir(rig.packages.join(WEB))
         .expect("web's packages")
@@ -315,10 +267,10 @@ fn versions(rig: &Rig) -> Vec<String> {
 }
 
 /// Catches a prune that is skipped after a switch, run without one, or allowed to change the
-/// verdict (design section 4.7). The prune of this build deletes nothing, so the test gives the
-/// force one that deletes what the two-version rule deletes: a force that moves `current` from
-/// 2.0.0 to 3.0.0 leaves 2.0.0 and 3.0.0 of three; a force to the version `current` names prunes
-/// nothing; and a prune that fails leaves the force `Succeeded`, with an alert.
+/// verdict (design section 4.7). The test gives the force the host's prune behind a recorder: a
+/// force that moves `current` from 2.0.0 to 3.0.0 leaves 2.0.0 and 3.0.0 of three; a force to
+/// the version `current` names prunes nothing; and a prune that fails leaves the force
+/// `Succeeded`, with an alert.
 #[test]
 fn force_prunes_to_current_and_previous_only_when_current_moved() {
     let rig = Rig::new("force-prune");
@@ -329,28 +281,16 @@ fn force_prunes_to_current_and_previous_only_when_current_moved() {
     forced(&rig, &daemon, "1.0.0", 1);
     forced(&rig, &daemon, "2.0.0", 2);
     assert_eq!(versions(&rig), ["1.0.0", "2.0.0", "3.0.0"]);
-    let pruner = Arc::new(Pruner {
-        packages: rig.packages.clone(),
-        fails: false,
-        calls: Mutex::default(),
-    });
+    let pruner = RecordingPrune::new();
     let pruning = daemon_on(&rig, rig.placed_fs.clone(), pruner.clone());
     assert_eq!(pruning.order(&force(WEB, "3.0.0", &d(), 3, 0)), succeeded());
     assert_eq!(versions(&rig), ["2.0.0", "3.0.0"]);
     assert!(!rig.packages.join(WEB).join("1.0.0.seal").exists());
     assert_eq!(pruning.order(&force(WEB, "3.0.0", &d(), 4, 0)), succeeded());
-    let calls = pruner
-        .calls
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    assert_eq!(calls, [WEB]);
+    assert_eq!(pruner.calls(), [WEB]);
 
-    let failing = Arc::new(Pruner {
-        packages: rig.packages.clone(),
-        fails: true,
-        calls: Mutex::default(),
-    });
+    let failing = RecordingPrune::new();
+    failing.fail_next("the disk refused");
     let (pruning, alerts) =
         support::alerting(daemon_on(&rig, rig.placed_fs.clone(), failing.clone()));
     assert_eq!(pruning.order(&force(WEB, "2.0.0", &d(), 5, 0)), succeeded());
@@ -450,11 +390,7 @@ fn a_resumed_force_keeps_the_furthest_phase_it_reached() {
         .with_stores(seam)
         .order(&force(WEB, "2.0.0", &d(), 2, 0));
     assert_eq!(first.refusal(), Some(Refusal::StoreFailed), "{first:?}");
-    let pruner = Arc::new(Pruner {
-        packages: rig.packages.clone(),
-        fails: false,
-        calls: Mutex::default(),
-    });
+    let pruner = RecordingPrune::new();
     let ports = Ports {
         units: Arc::new(FakeUnitControl::failing(PlacedLog::new())),
         prune: pruner.clone(),
@@ -470,10 +406,5 @@ fn a_resumed_force_keeps_the_furthest_phase_it_reached() {
         .and_then(|record| record.force)
         .map(|force| force.phase);
     assert_eq!(phase, Some(ForcePhase::Verdicted));
-    let calls = pruner
-        .calls
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    assert_eq!(calls, [WEB]);
+    assert_eq!(pruner.calls(), [WEB]);
 }

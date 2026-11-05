@@ -1,0 +1,197 @@
+# The CI client of hostkeeper (design, section 4.5): the one step of a service's release job
+# that sets the desired version of the service on the coordinator and waits for the fleet to
+# converge. A service calls it from its own release job (docs/deploy/ci-client.md):
+#
+#   set-desired:
+#     permissions:
+#       contents: read
+#       id-token: write
+#     uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@<commit> # v<release>
+#     with: ...
+#
+# The order of the steps is the point of this file, and the workflow lint
+# (crates/xtask/tests/workflows, `set_desired.rs`) holds it. The hostkeeper release is
+# downloaded and proven first, by the commands of docs/deploy/verify-a-release.md, which the
+# workflow lint (`verify_doc.rs`) keeps equal to the steps here: its
+# SHA256SUMS, its attestation by `artifacts.yml` of komira-ai/hostkeeper on refs/heads/main for
+# the pinned `hostkeeper_commit`, the attested commit compared with the pin, and the binary's
+# `--version`. Nothing of ours runs before the attestation is verified, so those steps are `gh`,
+# `jq` and coreutils. Every step in the job can read the token request variables once the job
+# holds `id-token: write`, so no step before the verification uses an action, reads those
+# variables or runs the hostkeeper program. A verification that fails stops the job before any
+# token exists: the version is not set.
+#
+# Only then does the verified program run, as one command: `hostkeeper ci set-desired`
+# (crates/hostkeeper-ci). It requests one OIDC token per call to the coordinator (each is good
+# once), keeps it in a file only the runner user can read and removes it after the call, calls
+# `releases set-desired`, reads `releases converge` at most `max_polls` times, and writes the
+# job's outputs.
+#
+# The names of the release's assets are written once, in the job's `env`.
+name: set-desired
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: The service whose desired version is set, as the coordinator names it.
+        type: string
+        required: true
+      version:
+        description: The version of the service to set.
+        type: string
+        required: true
+      package_digest:
+        description: The SHA-256 of the service's package for this version, 64 lower-case hex digits.
+        type: string
+        required: true
+      hostkeeper_version:
+        description: The hostkeeper release whose program makes the calls, X.Y.Z, pinned by the caller.
+        type: string
+        required: true
+      hostkeeper_commit:
+        description: The commit of komira-ai/hostkeeper that release was built from, 40 lower-case hex digits, pinned by the caller.
+        type: string
+        required: true
+      coordinator_url:
+        description: The coordinator's private listener, https://<host>[:<port>].
+        type: string
+        required: true
+      coordinator_ca:
+        description: The PEM certificates of the CA the coordinator's certificate chains to.
+        type: string
+        required: true
+      audience:
+        description: The audience of the OIDC token, as the coordinator's allow-list entry for this repository names it.
+        type: string
+        required: true
+      wait:
+        description: Whether to wait for the fleet to converge on the version.
+        type: boolean
+        required: false
+        default: true
+      max_polls:
+        description: The most convergence reads before the job fails, from 1 to 1000; one read every 10 seconds.
+        type: number
+        required: false
+        default: 180
+    outputs:
+      desired_version:
+        description: The desired version the coordinator stored; empty when it stored none.
+        value: ${{ jobs.set-desired.outputs.desired_version }}
+      converged:
+        description: "`true` when the fleet converged on the version, `false` otherwise."
+        value: ${{ jobs.set-desired.outputs.converged }}
+      reason:
+        description: Why the job ended where it did, one token.
+        value: ${{ jobs.set-desired.outputs.reason }}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  set-desired:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      desired_version: ${{ steps.set-desired.outputs.desired_version }}
+      converged: ${{ steps.set-desired.outputs.converged || 'false' }}
+      reason: ${{ steps.set-desired.outputs.reason }}
+    env:
+      # The hostkeeper release (docs/deploy/verify-a-release.md): its tag and the binary tarball
+      # of this runner's platform, which holds the one file `hostkeeper`.
+      HOSTKEEPER_TAG: v${{ inputs.hostkeeper_version }}
+      HOSTKEEPER_ASSET: hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz
+    steps:
+      # The download proves nothing: the release channel is not trusted, the next three steps
+      # decide (docs/deploy/verify-a-release.md, step 1).
+      - name: Download the hostkeeper release
+        id: download
+        run: |
+          curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location \
+            --create-dirs --output-dir "$RUNNER_TEMP/hostkeeper-release" \
+            --remote-name "https://github.com/komira-ai/hostkeeper/releases/download/$HOSTKEEPER_TAG/$HOSTKEEPER_ASSET" \
+            --remote-name "https://github.com/komira-ai/hostkeeper/releases/download/$HOSTKEEPER_TAG/SHA256SUMS"
+
+      # Verification 1 of 3: the downloaded files have the bytes SHA256SUMS lists.
+      - name: Check the release against SHA256SUMS
+        id: checksum
+        working-directory: ${{ runner.temp }}/hostkeeper-release
+        run: sha256sum --check --strict --ignore-missing SHA256SUMS
+
+      # Verification 2 of 3: the tarball's attestation, signed by `artifacts.yml` of
+      # komira-ai/hostkeeper on a GitHub-hosted runner, for a build of refs/heads/main at the
+      # pinned commit.
+      - name: Verify the attestation of the tarball
+        id: attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
+        run: |
+          gh attestation verify "$RUNNER_TEMP/hostkeeper-release/$HOSTKEEPER_ASSET" \
+            --repo komira-ai/hostkeeper \
+            --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \
+            --source-ref refs/heads/main \
+            --source-digest "$HOSTKEEPER_COMMIT" \
+            --deny-self-hosted-runners \
+            --format json > "$RUNNER_TEMP/hostkeeper-release/attestation.json"
+
+      # Verification 3 of 3: every verified attestation names the pinned commit as its source,
+      # and no other (jq exits non-zero when the comparison is false).
+      - name: Compare the attested source commit with hostkeeper_commit
+        id: commit
+        env:
+          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
+        run: jq --exit-status '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique == [env.HOSTKEEPER_COMMIT]' "$RUNNER_TEMP/hostkeeper-release/attestation.json"
+
+      - name: Unpack the verified hostkeeper
+        id: unpack
+        run: tar --extract --gzip --no-same-owner --file "$RUNNER_TEMP/hostkeeper-release/$HOSTKEEPER_ASSET" --one-top-level="$RUNNER_TEMP/hostkeeper-bin" hostkeeper
+
+      # The binary says the release's version and the pinned commit, exactly.
+      - name: Check the version of the verified hostkeeper
+        id: version
+        env:
+          HOSTKEEPER_VERSION: ${{ inputs.hostkeeper_version }}
+          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
+        run: test "$("$RUNNER_TEMP/hostkeeper-bin/hostkeeper" --version)" = "hostkeeper $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}"
+
+      - name: Write the coordinator's CA
+        id: ca
+        env:
+          COORDINATOR_CA: ${{ inputs.coordinator_ca }}
+        run: printf '%s\n' "$COORDINATOR_CA" > "$RUNNER_TEMP/hostkeeper-coordinator-ca.pem"
+
+      # The first step that can hold an OIDC token: the verified program, as one command.
+      - name: Set the desired version and wait for the fleet
+        id: set-desired
+        env:
+          SERVICE: ${{ inputs.service }}
+          VERSION: ${{ inputs.version }}
+          PACKAGE_DIGEST: ${{ inputs.package_digest }}
+          COORDINATOR_URL: ${{ inputs.coordinator_url }}
+          AUDIENCE: ${{ inputs.audience }}
+          WAIT: ${{ inputs.wait }}
+          MAX_POLLS: ${{ inputs.max_polls }}
+        run: |
+          "$RUNNER_TEMP/hostkeeper-bin/hostkeeper" ci set-desired \
+            --service "$SERVICE" \
+            --version "$VERSION" \
+            --package-digest "$PACKAGE_DIGEST" \
+            --endpoint "$COORDINATOR_URL" \
+            --ca-file "$RUNNER_TEMP/hostkeeper-coordinator-ca.pem" \
+            --audience "$AUDIENCE" \
+            --wait "$WAIT" \
+            --max-polls "$MAX_POLLS" \
+            --work-dir "$RUNNER_TEMP" \
+            --web-roots /etc/ssl/certs/ca-certificates.crt \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Remove the token file
+        if: ${{ always() }}
+        run: rm -f -- "$RUNNER_TEMP/hostkeeper-oidc-token"

@@ -10,13 +10,13 @@
 use std::time::Duration;
 
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Class, Outcome, Phase};
+use hostkeeper_wire::wire::{Class, Heartbeat, Outcome, Phase};
 use serde::Deserialize;
 
-use crate::acks::{drop_ack, is_acked, stale_acks};
+use crate::acks::{drop_ack, stale_acks};
 use crate::converge::State;
 use crate::desired::{Desired, DesiredStore, StoreError};
-use crate::fleet::{Fleet, Host};
+use crate::fleet::Fleet;
 use crate::membership::{Standing, standing};
 use crate::ops::{AuditEntry, OpsError, OpsState, OpsStore, ServiceOps, Write};
 use crate::service::convergence_of;
@@ -25,7 +25,7 @@ use crate::services::ServiceDef;
 /// Who the coordinator's own changes are logged as.
 pub const COORDINATOR: &str = "coordinator";
 
-/// Who a change made because CI set a version by hand is logged as.
+/// Who CI's changes to the ops file (the lift of a halt the updater raised) are logged as.
 pub const CI: &str = "ci";
 
 /// Whether the coordinator may roll a service back by itself.
@@ -78,23 +78,33 @@ pub enum Change {
     LastGood(Version),
     /// Forgets the last good version.
     ClearLastGood,
-    /// Marks `version` bad: it is never ordered again until CI sets it by hand.
+    /// Marks `version` bad: it is never ordered again, and CI cannot set it again; only the
+    /// operator's unmark or a force lifts the mark.
     MarkBad(Version),
     /// Sets the desired version to `version`, the other desired fields as they are.
     RollBackTo(Version),
     /// Drops the failure ack of the host with this node id.
     DropAck(String),
+    /// The canary host with this node id failed the release of `version`: logged as an alert
+    /// (`alert = "canary_failed"`) with the rollback it starts.
+    CanaryFailed {
+        /// The canary's node id.
+        node_id: String,
+        /// The version it failed.
+        version: Version,
+    },
 }
 
-/// Whether `host`'s last update was a failure of `version` that is the release's fault: it
-/// failed after the commit or at the release gate, and the hook did not blame the
-/// environment. A failure that says nothing about where it happened (an updater without
-/// phases) is not counted, nor is one before the commit, at the environment gate, or a halt.
-pub(crate) fn is_release_failure(host: &Host, version: &Version) -> bool {
-    let Some(last) = host.beat.last_update.as_ref() else {
+/// Whether the last update the heartbeat `beat` reports was a failure of `version` that is the
+/// release's fault: it failed after the commit or at the release gate, and the hook did not
+/// blame the environment. A failure that says nothing about where it happened (an updater
+/// without phases) is not counted, nor is one before the commit, at the environment gate, or a
+/// halt.
+pub(crate) fn is_release_failure_beat(beat: &Heartbeat, version: &Version) -> bool {
+    let Some(last) = beat.last_update.as_ref() else {
         return false;
     };
-    if last.outcome != Outcome::Failed || last.target != *version || host.beat.version == *version {
+    if last.outcome != Outcome::Failed || last.target != *version || beat.version == *version {
         return false;
     }
     matches!(last.phase, Some(Phase::AfterCommit | Phase::GateRelease))
@@ -115,11 +125,16 @@ pub(crate) fn is_release_failure(host: &Host, version: &Version) -> bool {
 ///    it, since the version before the first release with hooks is no rollback target;
 /// 3. an older last good version is recorded, and the
 ///    desired version is marked bad or failed its release on [`FailThreshold::hosts`] live
-///    hosts: mark it bad (unless it already is), then set the desired version to the last
-///    good one (only if that is `min_version` or later, else it is only marked). The mark
-///    comes first, so a stop between the two leaves a marked desired version, which this
-///    finishes on the next beat. Failure reports acked by an override do not count
-///    ([`crate::acks`]).
+///    hosts, or on a canary: mark it bad (unless it already is), then set the desired version
+///    to the last good one (only if that is `min_version` or later, else it is only marked).
+///    The mark comes first, so a stop between the two leaves a marked desired version, which
+///    this finishes on the next beat. The failures are the verdicts the fleet has counted, each
+///    once per host, order id and try ([`crate::verdicts`]); failure reports acked by an
+///    override do not count ([`crate::acks`]). A canary's release failure meets the threshold
+///    on its own, whatever `min_hosts` says, and is logged as an alert: a canary is a live host
+///    of a service with a canary that failed while the canary gate was still closed (fewer
+///    than its `count` hosts had baked at the desired version), when only canaries are
+///    ordered.
 ///
 /// Acks that no longer match their host's report are dropped whatever else is planned.
 #[must_use]
@@ -179,15 +194,36 @@ fn decide(
     let Some(back) = older else {
         return Vec::new();
     };
-    let failed = live()
-        .filter(|(_, h)| is_release_failure(h, wanted))
-        .filter(|(id, h)| !is_acked(marks, id, h))
-        .count();
-    if !marked && failed < def.rollback_after_failed.hosts(live().count()) {
+    let counted: Vec<&hostkeeper_wire::HostId> = fleet
+        .verdicts_of(service, wanted)
+        .filter(|(id, _)| live().any(|(member, _)| member == *id))
+        .filter(|(id, report)| {
+            let node = id.to_string();
+            !marks
+                .failure_acked
+                .iter()
+                .any(|ack| ack.node_id == node && ack.report == **report)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    let canary = counted
+        .first()
+        .filter(|_| canary_open(def, want, fleet, now))
+        .map(|id| id.to_string());
+    if !marked
+        && canary.is_none()
+        && counted.len() < def.rollback_after_failed.hosts(live().count())
+    {
         return Vec::new();
     }
     let mut changes = Vec::new();
     if !marked {
+        if let Some(node_id) = canary {
+            changes.push(Change::CanaryFailed {
+                node_id,
+                version: wanted.clone(),
+            });
+        }
         changes.push(Change::MarkBad(wanted.clone()));
     }
     // The last good version is a target only at or above the floor.
@@ -199,6 +235,25 @@ fn decide(
         changes.push(Change::RollBackTo(back.clone()));
     }
     changes
+}
+
+/// Whether the canary gate of `def` is still closed for `want`: the service has a canary and
+/// fewer than its `count` member hosts have baked at the desired version. While it is, only
+/// canaries are ordered the desired version ([`crate::canary`]).
+fn canary_open(def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Duration) -> bool {
+    let Some(canary) = def.canary else {
+        return false;
+    };
+    let baked = fleet
+        .hosts_of(&def.name)
+        .filter(|(_, h)| def.roles.contains(h.role_name()))
+        .filter(|(id, h)| {
+            h.beat.version == want.version
+                && fleet.is_up(&def.name, id, h, now)
+                && fleet.bake_beats(&def.name, id, &want.version) >= def.bake_beats
+        })
+        .count();
+    baked < canary.count as usize
 }
 
 /// Why a change [`plan`] asked for was not made.
@@ -264,8 +319,19 @@ fn apply(
         Change::RollBackTo(version) => {
             tracing::warn!(%service, from = %want.version, to = %version, "rolling back");
             let mut back = want.clone();
+            // The digest of the version gone back to, as CI registered it, if it did.
+            back.release_digest = store.digests(service).get(&version).cloned();
             back.version = version;
             store.set(service, back)?;
+        }
+        Change::CanaryFailed { node_id, version } => {
+            tracing::error!(
+                alert = "canary_failed",
+                %service,
+                %node_id,
+                target = %version,
+                "the canary failed the release: it is marked bad and rolled back"
+            );
         }
         Change::DropAck(node) => {
             let why = format!("{node} reports something else now");

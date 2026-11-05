@@ -60,6 +60,7 @@ fn halt_of(node: &str) -> Halt {
         check: "disk_tainted".to_owned(),
         target: crate::testutil::version("2.0"),
         report: Some(halted_update("disk_tainted")),
+        origin: crate::ops::HaltOrigin::Hook,
     }
 }
 

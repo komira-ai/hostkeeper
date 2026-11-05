@@ -1,0 +1,38 @@
+[package]
+name = "hostkeeper-ci"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "`hostkeeper ci set-desired`: what a service's CI runs after its release is verified, to set the desired version on the coordinator with a GitHub Actions OIDC token and wait for the fleet to converge."
+
+# The CI client of the design (section 4.5), for everything after a service's release job has
+# verified the hostkeeper release: it requests a GitHub Actions OIDC token, calls
+# `hostkeeper ctl releases set-desired` in-process, polls `releases converge` within a bound and
+# writes the job's outputs. Library only: the hostkeeper binary embeds `CiCommand`. The ports it
+# works through (token source, ctl transport, pause, stdout) are a trait, so the tests drive the
+# whole flow with fakes through the real `hostkeeper ctl`.
+[dependencies]
+clap.workspace = true
+# `run` and `Connect`: the calls are made in-process, never as a child process.
+hostkeeper-ctl = { path = "../hostkeeper-ctl" }
+# The root certificates the OIDC token request trusts, parsed from PEM.
+rustls-pki-types.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+# The request and response messages the fake coordinator decodes and encodes.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+prost.workspace = true
+# A test root certificate, made at run time so that none is committed.
+rcgen.workspace = true
+tonic.workspace = true
+
+[lints]
+workspace = true

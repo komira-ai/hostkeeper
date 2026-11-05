@@ -18,10 +18,20 @@
 //!   service, and is a bad request when there is none); `POST /v1/operator` with an operator
 //!   token as the bearer and an action as JSON (`crate::ops`; CI's token is refused). An
 //!   operator token is one of the named tokens ([`crate::tokens`]); its name is the `by` of the
-//!   change.
+//!   change. With `--ui-dir` it also answers `GET` and `HEAD` for `/ui/` and every path below
+//!   from that directory ([`crate::ui`]), with no token read; without it those paths are not
+//!   found. The heartbeat surface never serves them.
 //!
-//! An answer is JSON, and an error is `{"error":"<code>"}` with a code from a closed set:
-//! never a claim value, a path or the text of an internal error. A heartbeat that lists no
+//! No answer, on either surface, carries an `Access-Control-*` header: the operator web app is
+//! served from the private listener itself, so its calls are same-origin, and a cross-origin
+//! `OPTIONS` is answered as any other method a path does not take.
+//!
+//! An answer of the API is JSON (a file under `/ui/` is the file's bytes), and an error is
+//! `{"error":"<code>"}` with a code from a closed set: never a claim value, a path or the text
+//! of an internal error. A desired state may name the digest of its version's package
+//! (`release_digest`, 64 lowercase hex characters); a version the coordinator refuses is
+//! answered with its reason as the code: `unparseable_version` (400), and
+//! `below_min_version`, `bad_version` and `digest_conflict` (409). A heartbeat that lists no
 //! services, at a coordinator with no legacy service, is a bad request.
 
 use std::sync::Arc;
@@ -138,6 +148,12 @@ where
 {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    if surface == Surface::Control
+        && let Some(ui) = coordinator.ui()
+        && let Some(rest) = path.strip_prefix(crate::ui::PREFIX)
+    {
+        return ui.answer(&method, rest).await;
+    }
     match (surface, method, path.as_str()) {
         (Surface::Heartbeat, Method::POST, HEARTBEAT_PATH) => {
             heartbeat(coordinator, peer, request, patience).await
@@ -268,6 +284,16 @@ where
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(SetError::Invalid(_)) => error(StatusCode::BAD_REQUEST, "bad_request"),
+        Err(why @ SetError::UnparseableVersion) => error(
+            StatusCode::BAD_REQUEST,
+            why.reason().unwrap_or("bad_request"),
+        ),
+        Err(
+            why @ (SetError::BelowMinVersion | SetError::BadVersion | SetError::DigestConflict),
+        ) => {
+            tracing::warn!(%why, "refused a desired state");
+            error(StatusCode::CONFLICT, why.reason().unwrap_or("conflict"))
+        }
         Err(why @ (SetError::Store(_) | SetError::Ops(_))) => {
             tracing::error!(%why, "the desired state could not be stored");
             error(StatusCode::INTERNAL_SERVER_ERROR, "internal")
