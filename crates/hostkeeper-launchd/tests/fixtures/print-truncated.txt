@@ -1,0 +1,8 @@
+# A hand-written sample of the `launchctl print` format, to be replaced by output captured on a
+# device.
+system/dev.hostkeeper.hostkeeper = {
+	state = running
+	pid = 4242
+	arguments = {
+		/usr/local/bin/hostkeeper
+	}
