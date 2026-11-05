@@ -12,8 +12,8 @@
 //! - `Renew` carries a new request for the same key, sent by a host whose certificate is still
 //!   valid; its self-signature is the proof that the host holds the key.
 //!
-//! This crate has no transport: the daemon's gRPC client implements the port in its own change,
-//! and the tests use an in-memory coordinator.
+//! [`GrpcEnroll`](crate::GrpcEnroll) implements the port over gRPC with TLS (`grpc.rs`); the
+//! tests of the enroller use an in-memory coordinator.
 
 use std::fmt;
 
@@ -138,6 +138,9 @@ pub struct Claims {
     pub mac_serial: Option<String>,
     /// A Mac's platform UUID (`IOPlatformUUID`).
     pub platform_uuid: Option<String>,
+    /// The MAC address of the host's BMC, lower-case `aa:bb:cc:dd:ee:ff` (LAN configuration
+    /// parameter 5); absent when it cannot be read, and on a Mac.
+    pub bmc_mac: Option<String>,
 }
 
 /// An `Enroll` request. It is a function of the key, the claims, the image and `renewal_of`

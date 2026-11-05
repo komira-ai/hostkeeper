@@ -243,6 +243,13 @@ impl Ctx {
         (self.alerts)(&alert_line(alert, detail));
     }
 
+    /// Logs a line of the enrollment or heartbeat loop ([`crate::links`]) through the same sink
+    /// as the alerts, as `hostkeeper daemon: <line>`: the loops say themselves which of their
+    /// lines are errors.
+    pub fn log(&self, line: &str) {
+        (self.alerts)(&format!("hostkeeper daemon: {line}"));
+    }
+
     /// The step runner of `service`, made with its dead-man on first use. A watcher of the
     /// service is stopped first, and waited for: whoever asks for the runner is about to run an
     /// order, and a new order replaces the watcher (design section 6.4). Its switch places every

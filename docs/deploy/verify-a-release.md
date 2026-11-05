@@ -24,26 +24,31 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 
 ## The assets
 
-`<version>` is X.Y.Z. `<platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or
-`arm64`; `<rpm-arch>` is `x86_64` or `aarch64`.
+`<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`; `<deb-arch>`
+is `amd64` or `arm64`; `<rpm-arch>` is `x86_64` or `aarch64`. The deb and the rpm are for the two
+Linux platforms; the installer pkg is for `macos-arm64`.
 
 | Asset | Content |
 |---|---|
 | `hostkeeper-<version>-<platform>.tar.gz` | the daemon binary |
 | `hostkeeper-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-<version>-<platform>.tar.zst` | the hostkeeper self-update package: `manifest.toml`, `bin/hostkeeper`, `units/hostkeeper.service` |
+| `hostkeeper-<version>-<platform>.tar.zst` | the hostkeeper self-update package: `manifest.toml`, `bin/hostkeeper` and, on Linux, `units/hostkeeper.service` (the macOS package has no unit) |
 | `hostkeeper-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package |
-| `index.json` | the release index: for each platform the package file, its SHA-256 and size |
+| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755) and `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), owned by root and wheel, no scripts; not signed, attested |
+| `index.json` | the release index: for each of the three platforms the package file, its SHA-256 and size |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb` and `.rpm` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm` and `.pkg` |
 
 `index.json` is a lookup, not a trust anchor: it has no bundle of its own, and a host trusts a
 package for its own attestation and manifest, never for its entry in the index. (`SHA256SUMS`
 lists `index.json`, so the provenance of a release covers its bytes too.)
 
-macOS assets (`macos-arm64`) are not released yet. The coordinator's assets
+A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
+lacks any of them, and `index.json` lists the package of each. The pkg carries no installer
+signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
+verify it by its attestation, steps 3 and 4, like any other asset. The coordinator's assets
 (`hostkeeper-coordinator-<version>-<platform>.tar.gz`, `.cdx.json` and `.image.tar`, each attested)
 are added when the coordinator lands. Names are only ever added, never renamed or removed, so a
 consumer ignores assets it does not know.
@@ -116,8 +121,8 @@ For a host without access to the GitHub API. Once, on a host that has it:
 gh attestation trusted-root > trusted_root.jsonl
 ```
 
-Then, for each `.tar.gz`, `.tar.zst`, `.deb` and `.rpm` you use, with the bundle released next
-to it (the other assets have no bundle and are verified online, step 3):
+Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm` and `.pkg` you use, with the bundle released
+next to it (the other assets have no bundle and are verified online, step 3):
 
 ```sh
 gh attestation verify release/<asset> \

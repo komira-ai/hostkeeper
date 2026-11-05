@@ -10,10 +10,11 @@
 //!
 //! Everything outside the crate is a port, so tests touch nothing of the host:
 //!
-//! - [`CoordinatorEnroll`]: the coordinator's enrollment API (`wire.rs`);
+//! - [`CoordinatorEnroll`]: the coordinator's enrollment API (`wire.rs`), over gRPC with TLS in
+//!   [`GrpcEnroll`] (`grpc.rs`);
 //! - [`Store`]: the pki directory ([`PkiDir`] on disk, `store.rs`);
-//! - [`ClaimsSource`]: what the host says about itself ([`LinuxClaims`], [`MacClaims`] over the
-//!   [`Ioreg`] port, `claims.rs`);
+//! - [`ClaimsSource`]: what the host says about itself ([`LinuxClaims`], with the BMC's MAC over
+//!   the [`Ipmi`] port; [`MacClaims`] over the [`Ioreg`] port; `claims.rs`);
 //! - [`Entropy`]: random bytes for the key ([`OsEntropy`], `key.rs`);
 //! - [`WallClock`]: the wall clock, read only for certificate validity ([`SystemWallClock`],
 //!   `validity.rs`, the one file the wall-clock lint allows here);
@@ -23,16 +24,21 @@
 
 mod claims;
 mod enroller;
+mod grpc;
 mod key;
 mod store;
 mod validity;
 mod verify;
 mod wire;
 
-pub use claims::{ClaimsError, ClaimsSource, Ioreg, LinuxClaims, MacClaims, MacIds, parse_ioreg};
+pub use claims::{
+    ClaimsError, ClaimsSource, Ioreg, Ipmi, LAN_CHANNELS, LAN_MAC_PARAMETER, LinuxClaims,
+    MacClaims, MacIds, parse_ioreg, parse_lan_mac,
+};
 pub use enroller::{
     Enroller, Error, Identity, NOT_ENROLLED, Outcome, Ports, ProtocolError, RETRY_SECS, Settings,
 };
+pub use grpc::{GrpcEnroll, GrpcError};
 pub use key::{Entropy, EntropyError, KEY_DRAWS, KeyError, OsEntropy};
 pub use store::{
     CurrentPaths, Fault, FaultGate, KeyFrom, PkiDir, SCHEMA, Store, StoreError, StoreLock, Stored,

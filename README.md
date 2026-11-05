@@ -1,47 +1,65 @@
 # hostkeeper
 
-hostkeeper keeps a fleet of Linux and macOS hosts on the software versions an operator wants.
-It is planned as:
+hostkeeper is the generic host lifecycle system: it installs, updates, rolls back,
+health-observes and retires the services that run on a host. It knows no service by name. Each
+service tells it what to do through a hook that ships in the service's own package.
 
-- a **coordinator** that holds the desired version of each service and moves hosts to it a group
-  at a time;
-- an **agent** on each host, with a separate root part, that updates each service through the
-  service's own update hook (`prepare`, `cutover`, `verify`, `cleanup`, `rollback`), within the
-  rights the service declares in `/etc/updater.d`;
-- **enrollment**: a new host asks to join, and an operator approves it;
-- **device management** of Macs through a self-hosted MDM server.
+It is made of two programs:
+
+- **one daemon per host**, `hostkeeper daemon`, a single root process. Its config,
+  `/etc/hostkeeper/hostkeeper.toml`, is the only trust root of the host: the coordinator, the
+  release channel, the signers it trusts and its bounds. A service ships as a package, an
+  attested archive holding `manifest.toml` (the hook command, its timeouts and its `[params]`),
+  `bin/`, `units/` and optional `files/`. The daemon unpacks each version read-only under
+  `/var/lib/hostkeeper/packages`, keeps `current` and `previous`, and links the units and files
+  itself ([package format](docs/package-format.md)). It runs the hook (`prepare`, `cutover`,
+  `verify`, `cleanup`, `rollback`) as root, each step in a transient systemd unit bounded by
+  `RuntimeMaxSec` only. That is safe because the hook came byte for byte from the package that a
+  trusted signer attested. The conformance suite runs in the service's own CI
+  ([docs/conformance.md](docs/conformance.md)); nothing confines a hook at runtime;
+- **one coordinator**, `hostkeeper-coordinator serve`, which assigns services to hosts and holds
+  the desired version of each, and moves hosts to it a group at a time. Operators use it through
+  the operator API, the generated `hostkeeper ctl` ([docs/ctl.md](docs/ctl.md)) and the web UI
+  (`ui/`). A new host asks the coordinator to enroll it, and an operator approves the request.
+  Macs are to be managed through a self-hosted MDM server; that part is not built
+  ([macOS](docs/macos.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
 **hostkeeper is pre-release.** There is no release yet. Two programs are built from source: the
 one host program, `hostkeeper daemon`, which serves its admin socket's `Status` and runs no order
 yet (see [Running the daemon](#running-the-daemon)), and the update coordinator,
-`hostkeeper-coordinator serve`. The parts listed above are being moved here from
-[kbf](https://github.com/komira-ai/kbf), where they are developed today. So far this repository
-holds the generic half of the host updater and its coordinator, moved from kbf
-([MIGRATION.md](MIGRATION.md)), the first part of the daemon, and the build, lint and coverage
-tooling:
+`hostkeeper-coordinator serve`. The parts are being moved here from
+[kbf](https://github.com/komira-ai/kbf), where they were developed first
+([MIGRATION.md](MIGRATION.md)).
+
+## What is built
 
 | crate | what it holds |
 |---|---|
-| [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the updater and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
-| [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of the host's daemon config (`/etc/hostkeeper/hostkeeper.toml`) and of the `manifest.toml` a package carries, the owner and mode check of a trusted file, and the name and path grammars |
-| [`hostkeeper-rights`](crates/hostkeeper-rights) | the transient unit that runs one step of a hook, and the part of the old declaration it is still built from |
-| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the layout of versions with `current` and `previous` and its prune to those two, the tree digest and the seal of a package version |
-| [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (the P-256 request profile, host and server certificates, the owner-only key file, the CA bundle) and its durable enrollment store (requests, approval, one certificate per request, duplicate claims, deny rows), as a library |
-| [`hostkeeper-unpack`](crates/hostkeeper-unpack) | the unpack of a verified `.tar.zst` package into a sealed version directory, in one streaming pass under the archive bounds ([package format](docs/package-format.md)) |
-| [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon, the one root process of a host: start-up and its lock, the executor of orders with the service and step locks, the daemon's own checks, the try rules and the held halts, and the root-only admin socket |
-| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, `hostkeeper ci`, the CI client of `hostkeeper-ci`, and the two plumbing verbs of its own update (`self-update-fallback`, `self-update-protocol`); it only forwards to `hostkeeper-daemon` |
-| [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), the command table of `hostkeeper ctl` generated from them, and the test that keeps them compatible |
-| [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, called over gRPC or the coordinator's HTTP/JSON gateway |
-| [`hostkeeper-ci`](crates/hostkeeper-ci) | `hostkeeper ci set-desired`, the CI client a service's release job runs once it has verified the hostkeeper release: one OIDC token per call, `releases set-desired`, then `releases converge` at most `max_polls` times ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)) |
-| [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and the agent exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity of an updater, the secret-file rule |
+| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, `hostkeeper ctl`, `hostkeeper ci`, and the two plumbing verbs of its own update; it only forwards to `hostkeeper-daemon` |
+| [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon: start-up and its lock, the order executor with its locks and try rules, the held halts, the root-only admin socket, and the enrollment and heartbeat loops |
+| [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of `hostkeeper.toml` and of a package's `manifest.toml`, the owner and mode check of a trusted file, and the name and path grammars |
+| [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the host and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
+| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the layout of versions with `current` and `previous`, the seal of a version, and the transient systemd unit of one step |
+| [`hostkeeper-package`](crates/hostkeeper-package) | fetching a package from the release channel within bounds, its size and digest check, and the offline check that a trusted signer attested it |
+| [`hostkeeper-unpack`](crates/hostkeeper-unpack) | the unpack of a verified `.tar.zst` package into a sealed version directory, in one streaming pass under the archive bounds |
+| [`hostkeeper-placed`](crates/hostkeeper-placed) | linking a package's units and files from `current` into their system paths, with `placed.json` written ahead |
+| [`hostkeeper-observe`](crates/hostkeeper-observe) | the service observer: liveness from the service manager, the version confirmed by the running executable, and the health URL |
+| [`hostkeeper-link`](crates/hostkeeper-link) | the daemon's heartbeat loop over ports: facts out, orders to the executor, verdicts resent until acknowledged; gRPC over mutual TLS |
+| [`hostkeeper-enroll`](crates/hostkeeper-enroll) | how a daemon gets and keeps its host certificate: the P-256 key, the request, the signed poll, and renewal at half life |
+| [`hostkeeper-launchd`](crates/hostkeeper-launchd) | the macOS side behind existing ports: launchd labels and plists, the `launchctl` port, service manager, unit control, process probe and the step launcher (`LaunchdLauncher`) ([macOS](docs/macos.md)) |
+| [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
+| [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the command table of `hostkeeper ctl`, and the compatibility test |
+| [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, over gRPC or the coordinator's HTTP/JSON gateway |
+| [`hostkeeper-ci`](crates/hostkeeper-ci) | `hostkeeper ci set-desired`, the CI client a service's release job runs once it has verified the hostkeeper release ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)) |
+| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, and the convergence of a fleet |
+| [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
-| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services it manages and the roles they run on (a rollout file), the desired version of each service, the heartbeat endpoint and the private endpoint of CI and the operator (named operator tokens), the convergence of a fleet; run as `hostkeeper-coordinator serve` |
+| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway; not shipped |
 | `hostkeeper-testkit` | helpers the tests share |
-| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui): every call it makes is a method of the protobuf descriptors, its sources keep no token and load nothing from another origin, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; not shipped |
-| `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
+| `coverage-gate`, `xtask` | the 99% coverage gate, and the CI steps and release verbs |
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
 no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
@@ -49,10 +67,40 @@ the coordinator's HTTP/JSON gateway with the operator's token, each button one m
 coordinator serves it under `/ui/` of its private listener when started with `--ui-dir`
 ([docs/ui-serving.md](docs/ui-serving.md)).
 
-The design is [docs/design/host-updates.md](docs/design/host-updates.md).
+The design is [docs/design/hostkeeper-design.md](docs/design/hostkeeper-design.md).
+[docs/design/host-updates.md](docs/design/host-updates.md) remains the long-form reference for
+the hook contract and the step record.
 
 Every command of `hostkeeper ctl`, with its flags and exit codes, is in [docs/ctl.md](docs/ctl.md),
 which a test regenerates from the protos and compares, so it cannot drift from them.
+
+## Build order
+
+The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the code is on `main`.
+
+- **Host daemon.** Built: B2 (the config and manifest loaders), B4 (the daemon and its admin
+  socket), B8 (the service observer), B9 (the heartbeat loop), B13 (pruning to two versions),
+  B22 (self-update of hostkeeper), B3 (`SystemdLauncher`, in `hostkeeper-steps`, which the daemon
+  runs each hook step through). Planned: B20 (the verbs `abort`, `clear_halt` and `clear_record`
+  answer `not_implemented`).
+- **Packages and placement.** Built: B5 (fetch, verify, unpack, seal), B27 (placed-path
+  linking), B28 (hookless force), B23's `install` and `uninstall` orders in the daemon. Partly
+  built: B23's assignment of services by the coordinator (roles in the rollout file; the
+  operator API declares `Services.Assign` and `Services.Unassign`, which answer `UNIMPLEMENTED`).
+- **Coordinator and rollout.** Built: B6 (the coordinator, its rollout file and operator tokens),
+  B7 (holds, halts, abort, exclude, force with targets, set-desired refusals).
+- **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
+  Planned: B21 (adopting hosts that run kbf's agent).
+- **Operator surfaces.** Built: B1 (the protobuf services), B10 (generated `hostkeeper ctl`,
+  gRPC beside the gateway), B24 (the CI client), B25 (the UI).
+- **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
+  B18 (macOS: `hostkeeper-launchd` and the Mac enrollment claims, but no launchd daemon run on a
+  device).
+- **Release.** Partly built: B14 (the release workflows and the release verbs of `xtask`; no
+  release is published). Planned: B12 (the privileged workflow with real systemd), B15 (the
+  privileged end-to-end proof).
+- **Clean-up.** Built: B19 (the wall-clock lint). B26 (the removal of the old per-service crate
+  and its vocabulary) is this change.
 
 ## Running the daemon
 
@@ -66,20 +114,29 @@ only, never from the environment:
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
 | `--admin-socket` | `/run/hostkeeper/admin.sock` | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
+| `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1 |
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
 (one daemon per state directory) and does its boot work. It removes the registration socket
-kbf's agent left (`updater/register.sock` beside the admin socket's directory, `/run/updater`
+kbf's updater served (`updater/register.sock` beside the admin socket's directory, `/run/updater`
 by default), removes what a crashed package fetch or unpack left, finishes or undoes each switch
 of `current` a step record says was begun, and relinks the placed paths that differ from `current`.
 It then reads every step record against the host's boot id (kept in `.boot-id` in the state
 directory), runs each update left unfinished by a crash or a reboot to its verdict, restarts the
 post-success watchers, runs each service's `[hook] boot` step from `current`, and only then tells
-systemd it is ready. It then serves the admin socket, until an update of hostkeeper itself asks
-it to exit so that its unit starts the new binary. This build fetches, verifies and unpacks
-packages, and observes each service for `Status`, but has no step launcher or service manager
-wired in and no order source yet, so it serves the admin socket's `Status` and runs no order.
+systemd it is ready. Only then does it start its two loops, the enrollment loop first: the
+enrollment loop gets the host's certificate from the coordinator (a P-256 key made on the host,
+a request an operator approves, renewal at half life) and keeps it under `/etc/updater/pki`; the
+heartbeat loop reads the certificate under that directory's `current` link at every heartbeat,
+and while there is none it says once what it waits for and sends nothing. It then serves the
+admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
+new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
+transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
+the unit's name), and observes each service for `Status`. It has no service manager wired in,
+its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
+protocol probe (each fails without starting), and it has no coordinator link for its heartbeats yet, so no order
+reaches it from the coordinator.
 
 | exit status | meaning |
 |---|---|

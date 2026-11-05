@@ -3,9 +3,10 @@
 //! is counted once per host, order id and try, however often it is resent; a new try of the same
 //! order is a new verdict.
 //!
-//! The set is kept in memory only, per service and per version the verdicts are about, and is
-//! rebuilt from the heartbeats after a restart (design section 8.2): a host that still reports
-//! its verdict is counted again. Only release failures are kept
+//! The set is kept per service and per version the verdicts are about, in memory and in the
+//! file of verdicts ([`crate::verdict_file`]), from which a restart reloads it (design section
+//! 8.2): a verdict acknowledged to a host that then stops sending it still counts, and a host
+//! that resends one already counted is counted once. Only release failures are kept
 //! ([`crate::reconcile::is_release_failure_beat`]): nothing else counts. A verdict from an
 //! updater that names no order (one that predates `order_id`) is keyed by its host alone, so
 //! such a host counts once, its latest report standing for it. The coordinator keeps, per
@@ -49,6 +50,29 @@ impl Verdicts {
             .entry(last.target.as_str().to_owned())
             .or_default()
             .insert(key, last.clone());
+    }
+
+    /// Counts `report`, a verdict about `service` from the host `id` that was counted before a
+    /// restart ([`crate::verdict_file::VerdictFile::counted`]).
+    pub(crate) fn restore(&mut self, service: &str, id: HostId, report: UpdateResult) {
+        let key = (id, report.order_id.clone(), report.order_try);
+        self.seen
+            .entry(service.to_owned())
+            .or_default()
+            .entry(report.target.as_str().to_owned())
+            .or_default()
+            .insert(key, report);
+    }
+
+    /// Every verdict of `service` counted, about any version: the host of each and its report.
+    pub(crate) fn all_of(&self, service: &str) -> Vec<(HostId, UpdateResult)> {
+        self.seen
+            .get(service)
+            .into_iter()
+            .flat_map(BTreeMap::values)
+            .flatten()
+            .map(|((id, _, _), report)| (id.clone(), report.clone()))
+            .collect()
     }
 
     /// Forgets the verdicts of `service` about every version but `version`, and those `acked`

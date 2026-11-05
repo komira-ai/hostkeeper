@@ -17,17 +17,15 @@ release replaces them there.
 | kbf | hostkeeper | what it holds |
 |---|---|---|
 | `update-hook` | `hostkeeper-hook` | the hook contract (steps, exit codes, the JSON last line, the params table, the next-step table) and, behind the feature `conformance`, the conformance harness |
-| `update-rights` | `hostkeeper-rights` | the declaration, its loader, the widening check, approvals, the gate and the transient unit of one step, as imported; since cut down to the transient unit (see "Since the import") |
-| `kbf-step-runner` | `hostkeeper-steps` | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update |
+| `update-rights` | split | split: loaders and grammar into `hostkeeper-config`, the launcher into `hostkeeper-steps`, the rest deleted by the redesign |
+| `kbf-step-runner` | `hostkeeper-steps` | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update; since the import also the transient unit of one step |
 | (the `Scratch` helpers of the three crates' tests) | `hostkeeper-testkit` | the scratch directory the tests share; a dev-dependency only |
 
 | kbf name | hostkeeper name |
 |---|---|
 | Rust path `update_hook` | `hostkeeper_hook` |
-| Rust path `update_rights` | `hostkeeper_rights` |
 | Rust path `kbf_step_runner` | `hostkeeper_steps` |
 | binary `update-hook-example` (test-only) | `hostkeeper-hook-example` (test-only) |
-| binary `update-rights-probe` (test-only) | `hostkeeper-rights-probe` (test-only) |
 | `docs/design/host-updates.md` | `docs/design/host-updates.md`, section numbers unchanged |
 
 ## What does not change
@@ -38,8 +36,9 @@ The names a host, a hook or a file on disk sees are the same bytes as in kbf at 
 - the reserved `updater.*` params keys;
 - `update-hook`, the default `hook_args`;
 - the conformance harness's environment variables and the line a parked step writes;
-- `/var/lib/updater/{state,hooks,releases}` (and, until the declaration was deleted,
-  `/etc/updater.d` and `/etc/updater.d/approved`);
+- `/var/lib/updater/{state,hooks}`; kbf's `releases` tree is not reused, the package tree
+  `/var/lib/hostkeeper/packages` replaces it (design `docs/design/hostkeeper-design.md`, 3.1 and
+  10);
 - the transient unit names `updater-<service>-<step>-<generation>`;
 - the step record: `SCHEMA` stays 1, and a record of a newer schema is read, never rewritten.
 
@@ -56,9 +55,13 @@ newer one as `Newer` and never rewrites it.
   (`tests/register.rs`, `tests/register_place.rs`, `tests/register_client.rs`), and with them the
   dev-dependency on `update-register`. The state of a service will be read from the service
   manager instead. `update-register` itself is not imported.
+- **The declaration and what hung on it**: the per-service declaration, its rights (the user,
+  capabilities, sandbox and path properties of the launch), the approval store, the `approve`
+  command, the widening check and the account checks were not carried into the redesign (design
+  `docs/design/hostkeeper-design.md`, 3.1, 5.3 and 12.2 B2 and B26).
 - **The root tests of `update-rights`**: `tests/rights_root.rs` and `tests/root_rig/`, which need
-  root and the real systemd. They come with the privileged workflow, which a pull request does not
-  run; the probe hook they run (`hostkeeper-rights-probe`) is imported now.
+  root and the real systemd, and the probe hook they ran. They were not kept: the redesign deletes
+  what they tested.
 - In `docs/design/host-updates.md`, the kbf hook (section 4.3) and the kbf-specific steps of the
   migration (section 8) are reduced to a pointer to kbf.
 
@@ -75,11 +78,9 @@ this repository's rules require it:
   `#[expect(clippy::disallowed_methods, reason = "...")]`.
 - **The harness is behind a feature.** `hostkeeper_hook::conformance` needs the feature
   `conformance`; the example hook is built only with it.
-- **Test programs are built only for tests.** `hostkeeper-rights-probe` needs the feature
-  `test-support`, which only the crate's own tests turn on, as `hostkeeper-hook-example` needs
-  `conformance`.
-- **Test fixtures name an example signer.** Declarations in the tests that named `komira-ai/kbf` as
-  their signer name `example-org/example`.
+- **Test programs are built only for tests.** `hostkeeper-hook-example` needs the feature
+  `conformance`; `hostkeeper-steps-spawn-fixture` needs the feature `test-support` of
+  `hostkeeper-steps`, which only that crate's own tests turn on.
 - **Scratch directories.** The tests' scratch directories come from `hostkeeper-testkit`, with a
   name of their own per process and per directory, so two runs never share one.
 - Crate names, paths in comments and READMEs, and the doc references to kbf's layering test.
@@ -89,16 +90,28 @@ this repository's rules require it:
 The daemon config (`/etc/hostkeeper/hostkeeper.toml`) and the package manifest (`manifest.toml`)
 replace the per-service declaration (design `docs/design/hostkeeper-design.md`, sections 4.1 and
 4.7). Their loaders are the new crate `hostkeeper-config`, which also took `trust.rs` and the
-service name and path grammars from `hostkeeper-rights`; a service name is now 1 to 255 bytes of
-`A-Za-z0-9._-`, not beginning with `-` or `.` (design 11.8), wider than the lowercase grammar
-imported from kbf.
+service name and path grammars from the crate that held the declaration; a service name is now 1
+to 255 bytes of `A-Za-z0-9._-`, not beginning with `-` or `.` (design 11.8), wider than the
+lowercase grammar imported from kbf.
 
-Deleted from `hostkeeper-rights`, with their tests: the declaration loader (`load_dir`,
-`DECLARATION_DIR`), the widening check, the gate (`FIRST_INSTALL`, `RIGHTS_CHANGE`), the approval
-store (`APPROVALS_FILE`) and its `approve` command, the account checks, the record-directory check,
-the per-service signer, the declaration digest, and the shipped declarations of
-`tests/fixtures/updater.d`. What is left is the transient unit of one step and the part of the
-declaration it reads (the crate's README lists each kept item and why); B3 rewrites it.
+The transient unit of one step moved from `update-rights` (`launch.rs`, with its tests and its
+spawn test program) to `hostkeeper-steps` (`systemd.rs`, with
+`capture.rs`), as the `StepLauncher` of the host (B3). It runs a hook as root with
+`RuntimeMaxSec=` as its one property (design 5.3), writes `RuntimeMaxSec=infinity` for
+`prepare = 0`, keeps the last 1 MiB of each output stream and reads a last line of at most 64 KiB.
+Its test program is `hostkeeper-steps-spawn-fixture`, built only with the feature `test-support`
+of `hostkeeper-steps`. A step record of a running unbounded `prepare` carries `"unbounded": true`;
+the field is written only when true and read as `false` when absent, so the records of the next
+section read and write as before.
+
+The crate that held the declaration was deleted by this change (B26). Its loaders, `trust.rs` and
+the service name and path grammars went to `hostkeeper-config` (B2), and the transient unit went
+to `hostkeeper-steps` (B3). What was left was deleted with the crate: the declaration parser, the
+reserved-path rules, and the account, environment, capability and family grammars. Nothing reads a
+declaration any more, because the hook runs as root with `RuntimeMaxSec=` only (design 5.3). The
+earlier deletions of the declaration loader (`load_dir`), the widening check, the gate, the approval
+store and its `approve` command, the account checks, the per-service signer and the declaration
+digest are recorded in the paragraphs above.
 
 The tree digest of `hostkeeper-steps` (`tree_digest`, which `Staged` and the step record hold)
 is now the package format of `docs/package-format.md`: kind, name, mode, size and bytes, no owner
@@ -109,10 +122,28 @@ update after its verdict), which `tests/digest_change.rs` holds.
 
 ## Tests that hold this file
 
-- `constants_match_kbf_at_the_tag` (in each of `hostkeeper-hook`, `hostkeeper-rights` and
-  `hostkeeper-steps`): the names under "What does not change" are the literals of the tag.
+- `constants_match_kbf_at_the_tag` in `hostkeeper-hook`: the exit codes, the `updater.*` keys, the
+  default `hook_args` of `update-hook`, the conformance environment variables and the parked line,
+  and the step names.
+- `constants_match_kbf_at_the_tag` in `hostkeeper-steps`: the unit names
+  `updater-<service>-<step>-<generation>`, the step record's file names and schema, and the
+  self-update layout.
+- `constants_match_kbf_at_the_tag` in xtask's packaging tests
+  (`crates/xtask/tests/packaging/directories.rs`): the hooks root `/var/lib/updater/hooks` in the
+  tmpfiles rules, which the deleted declaration crate pinned before.
 - `reads_step_record_written_by_kbf_tag` and `kbf_tag_reader_contract_documented`
   (`hostkeeper-steps`): the records under "Step records written by kbf".
+
+## Build order
+
+`docs/design/hostkeeper-design.md` section 12.2 lists the build order. Read from the subjects of
+`main` and the crates on disk when this was written, B26 being this change:
+
+- Built: B1, B2, B3, B4, B5, B6, B7, B8, B9, B10, B11, B13, B16, B17, B19, B22, B24, B25, B26,
+  B27, B28.
+- Partly: B14 (the release workflows and verbs, but no release is published), B18 (the launchd
+  crate, but no launchd daemon), B23 (`install` and `uninstall`, but no assignment of services).
+- Not yet: B12, B15, B20, B21.
 
 # The update coordinator
 

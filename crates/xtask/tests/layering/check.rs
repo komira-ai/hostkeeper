@@ -14,7 +14,6 @@ use std::process::Command;
 const HOOK: &str = "hostkeeper-hook";
 const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
-const RIGHTS: &str = "hostkeeper-rights";
 const TESTKIT: &str = "hostkeeper-testkit";
 const WIRE: &str = "hostkeeper-wire";
 const OIDC: &str = "hostkeeper-oidc";
@@ -22,26 +21,80 @@ const TLS: &str = "hostkeeper-tls";
 const COORDINATOR: &str = "hostkeeper-coordinator";
 const UNPACK: &str = "hostkeeper-unpack";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
+const OBSERVE: &str = "hostkeeper-observe";
+const LAUNCHD: &str = "hostkeeper-launchd";
 const PROTO: &str = "hostkeeper-proto";
+const CTL: &str = "hostkeeper-ctl";
+const CI: &str = "hostkeeper-ci";
+const DAEMON: &str = "hostkeeper-daemon";
+const ENROLL: &str = "hostkeeper-enroll";
+const LINK: &str = "hostkeeper-link";
+const PACKAGE: &str = "hostkeeper-package";
+const PLACED: &str = "hostkeeper-placed";
+const UI_TESTS: &str = "hostkeeper-ui-tests";
+const BINARY: &str = "hostkeeper";
 
-/// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
-const LAYERS: [(&str, &[&str]); 10] = [
-    (HOOK, &[]),
-    (CONFIG, &[]),
-    (STEPS, &[CONFIG, HOOK]),
-    (RIGHTS, &[CONFIG, HOOK]),
-    (WIRE, &[]),
-    (OIDC, &[]),
-    (TLS, &[]),
-    (COORDINATOR, &[WIRE, OIDC, TLS, PROTO]),
-    (UNPACK, &[CONFIG, HOOK, STEPS]),
-    (ENROLLMENT, &[]),
+/// One row of the layers: a crate, the workspace crates its normal and build dependencies must
+/// be exactly, and the workspace crates its dev-dependencies may hold besides itself and the
+/// testkit.
+pub type Layer = (
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+);
+
+/// Every crate of the workspace but those of [`NO_ROW`], in name order. The dev column is what
+/// each crate's tests use: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature
+/// (a fake issuer), which a dev-dependency can do and a normal dependency must not, and run
+/// `hostkeeper-ctl` against an in-process coordinator; the daemon's and the link's tests run a
+/// coordinator in process; the observer's tests run hooks through the step runner; the CLI
+/// crates' and the web app's tests read the protobuf descriptors.
+pub const LAYERS: [Layer; 21] = [
+    (BINARY, &[DAEMON], &[PROTO]),
+    (CI, &[CTL], &[PROTO]),
+    (CONFIG, &[], &[]),
+    (
+        COORDINATOR,
+        &[ENROLLMENT, OIDC, PROTO, TLS, WIRE],
+        &[CTL, OIDC],
+    ),
+    (CTL, &[PROTO], &[]),
+    (
+        DAEMON,
+        &[
+            CI, CONFIG, CTL, ENROLL, HOOK, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS, UNPACK,
+        ],
+        &[COORDINATOR, OIDC, WIRE],
+    ),
+    (ENROLL, &[CONFIG, PROTO, STEPS], &[]),
+    (ENROLLMENT, &[], &[]),
+    (HOOK, &[], &[]),
+    (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
+    (
+        LINK,
+        &[CONFIG, HOOK, PROTO, STEPS, WIRE],
+        &[COORDINATOR, ENROLL, OIDC, TLS],
+    ),
+    (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
+    (OIDC, &[], &[]),
+    (PACKAGE, &[CONFIG, HOOK, STEPS], &[]),
+    (PLACED, &[CONFIG], &[]),
+    (PROTO, &[], &[]),
+    (STEPS, &[CONFIG, HOOK], &[]),
+    (TLS, &[], &[]),
+    (UI_TESTS, &[], &[PROTO]),
+    (UNPACK, &[CONFIG, HOOK, STEPS], &[]),
+    (WIRE, &[], &[]),
 ];
 
-/// Dev-dependencies on another layer crate that are allowed besides the crate itself and the
-/// testkit: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature (a fake
-/// issuer), which a dev-dependency can do and a normal dependency must not.
-const DEV_ALLOWED: [(&str, &str); 1] = [(COORDINATOR, OIDC)];
+/// The crates of the workspace that have no row in [`LAYERS`]: the tooling, which no crate
+/// depends on, and the testkit, which has rules of its own.
+pub const NO_ROW: [&str; 3] = ["coverage-gate", "xtask", TESTKIT];
+
+/// Pairs (crate, crate it must not reach): the first never depends on the second through the
+/// rows of [`LAYERS`], directly or through any chain of rows. Each row is exact, so a crate
+/// reaches through its manifests what its rows reach.
+pub const NOT_ABOVE: [(&str, &str); 2] = [(STEPS, LAUNCHD), (OBSERVE, LAUNCHD)];
 
 /// A package name to the names of the packages it depends on.
 pub type Edges = BTreeMap<String, BTreeSet<String>>;
@@ -152,6 +205,11 @@ pub fn parse_lock(text: &str) -> Edges {
 fn parse_members(json: &str) -> Members {
     let value: serde_json::Value = serde_json::from_str(json)
         .unwrap_or_else(|e| panic!("cargo metadata printed no JSON: {e}"));
+    members_of(&value)
+}
+
+/// The packages of `cargo metadata --no-deps` JSON with their dependencies.
+fn members_of(value: &serde_json::Value) -> Members {
     let mut members = Members::new();
     for package in value["packages"]
         .as_array()
@@ -286,8 +344,14 @@ fn chain_to(edges: &Edges, members: &[&str], target: &str) -> Vec<String> {
     best.unwrap_or_else(|| vec![target.to_string()])
 }
 
+/// Whether `name` is the name of a crate of this product: `hostkeeper` or `hostkeeper-*`.
+fn is_ours(name: &str) -> bool {
+    name == BINARY || name.starts_with("hostkeeper-")
+}
+
 /// Every rule the workspace breaks, one line each: first the kbf names (all of `lock`), then
-/// the layer crates in the order of `LAYERS`, then the testkit.
+/// the crates of this product that are not members (all of `lock`), then the crates in the
+/// order of `LAYERS`, then the testkit.
 fn violations(members: &Members, lock: &Edges) -> Vec<String> {
     let mut out = Vec::new();
     let member_names: Vec<&str> = members.keys().map(String::as_str).collect();
@@ -298,7 +362,17 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
             chain.join(" -> ")
         ));
     }
-    for (name, exact) in LAYERS {
+    for name in lock
+        .keys()
+        .filter(|name| is_ours(name.as_str()) && !members.contains_key(name.as_str()))
+    {
+        let chain = chain_to(lock, &member_names, name);
+        out.push(format!(
+            "{name} is not a workspace member, reached through {}",
+            chain.join(" -> ")
+        ));
+    }
+    for (name, exact, dev_allowed) in LAYERS {
         if !members.contains_key(name) {
             out.push(format!("{name} is not a workspace member"));
             continue;
@@ -323,7 +397,7 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
             }
         }
         for dev in workspace_deps(members, name, |kind| kind == Kind::Dev) {
-            if dev != name && dev != TESTKIT && !DEV_ALLOWED.contains(&(name, dev)) {
+            if dev != name && dev != TESTKIT && !dev_allowed.contains(&dev) {
                 out.push(format!(
                     "{name} has a dev-dependency on the workspace crate {dev}, \
                      which is neither itself nor {TESTKIT}"
@@ -347,6 +421,67 @@ fn violations(members: &Members, lock: &Edges) -> Vec<String> {
         }
     }
     out
+}
+
+/// Checks that `table` has a row for exactly the crates of the workspace whose `cargo metadata
+/// --no-deps` JSON is `metadata`, other than those of [`NO_ROW`], and that the dev column of
+/// each row is the set of workspace crates its dev-dependencies name (itself and the testkit
+/// left out). `Err` holds one line per crate with no row, row with no crate, and row whose dev
+/// column is not what its crate has; [`check`] holds the normal and build column.
+pub fn rows_cover(table: &[Layer], metadata: &serde_json::Value) -> Result<(), String> {
+    let members = members_of(metadata);
+    let rows: BTreeSet<&str> = table.iter().map(|(name, _, _)| *name).collect();
+    let mut out = Vec::new();
+    for name in members
+        .keys()
+        .map(String::as_str)
+        .filter(|name| !NO_ROW.contains(name) && !rows.contains(name))
+    {
+        out.push(format!(
+            "{name} is a crate of the workspace with no row in LAYERS"
+        ));
+    }
+    for (name, _, dev_allowed) in table {
+        if !members.contains_key(*name) {
+            out.push(format!(
+                "LAYERS has a row for {name}, which is not a crate of the workspace"
+            ));
+            continue;
+        }
+        let actual: BTreeSet<&str> = workspace_deps(&members, name, |kind| kind == Kind::Dev)
+            .into_iter()
+            .filter(|dev| *dev != *name && *dev != TESTKIT)
+            .collect();
+        let allowed: BTreeSet<&str> = dev_allowed.iter().copied().collect();
+        if actual != allowed {
+            out.push(format!(
+                "{name} has dev-dependencies on the workspace crates {}, \
+                 but its row in LAYERS names {}",
+                set(&actual),
+                set(&allowed)
+            ));
+        }
+    }
+    if out.is_empty() {
+        Ok(())
+    } else {
+        Err(out.join("\n"))
+    }
+}
+
+/// The shortest chain of rows of `table` from `from` to `to` (normal and build column), both
+/// ends included; `None` when the rows never lead there. `from` and `to` differ.
+pub fn reaches_in(table: &[Layer], from: &str, to: &str) -> Option<Vec<String>> {
+    let edges: Edges = table
+        .iter()
+        .map(|(name, exact, _)| {
+            (
+                name.to_string(),
+                exact.iter().map(|dep| dep.to_string()).collect(),
+            )
+        })
+        .collect();
+    shortest(&edges, from, to)
 }
 
 /// The normal dependencies of `hostkeeper-hook` that are not optional.

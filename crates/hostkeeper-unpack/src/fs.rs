@@ -152,8 +152,14 @@ impl HostFs {
         rustix::fs::mkdirat(at, name, Mode::from_raw_mode(0o700))?;
         let fd = rustix::fs::openat(at, name, dir_flags(), Mode::empty())?;
         self.give(&fd)?;
-        Ok(rustix::fs::fchmod(&fd, Mode::from_raw_mode(mode))?)
+        set_mode_of(fd, mode)
     }
+}
+
+/// Sets the mode of the open `fd` to `mode`, as `fchmod` does. Through std, which converts the
+/// mode to the platform's `mode_t` (32 bits on Linux, 16 on macOS), so no cast is written here.
+fn set_mode_of(fd: OwnedFd, mode: u32) -> io::Result<()> {
+    File::from(fd).set_permissions(Permissions::from_mode(mode))
 }
 
 fn dir_flags() -> OFlags {
@@ -231,7 +237,7 @@ impl PackageFs for HostFs {
 
     fn set_mode(&self, path: &Path, mode: u32) -> io::Result<()> {
         let fd = self.open_at(path, false)?;
-        Ok(rustix::fs::fchmod(&fd, Mode::from_raw_mode(mode))?)
+        set_mode_of(fd, mode)
     }
 
     fn sync_dir(&self, path: &Path) -> io::Result<()> {

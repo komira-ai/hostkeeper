@@ -10,7 +10,7 @@ use hostkeeper_testkit::Scratch;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use hostkeeper_wire::wire::{Answer, Heartbeat, UpdateResult};
+use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, UpdateResult};
 use serde_json::json;
 
 use crate::desired::DesiredStore;
@@ -262,7 +262,11 @@ fn only_the_defined_services_generations_are_told_and_the_answer_reads() {
             .with(kbf_def()),
     );
     let mut announce = beat("1.0");
-    announce.agent_features = FEATURES.iter().map(|f| (*f).to_owned()).collect();
+    announce.agent_features = FEATURES
+        .iter()
+        .filter(|f| **f != ORDER_FEATURE)
+        .map(|f| (*f).to_owned())
+        .collect();
     let answer = rig
         .coordinator
         .heartbeat(storage("s1"), announce)

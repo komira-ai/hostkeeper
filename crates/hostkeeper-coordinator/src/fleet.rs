@@ -199,6 +199,12 @@ impl Fleet {
         }
     }
 
+    /// The same fleet ordering nothing for `quiet` after its start: what it holds (the verdicts
+    /// counted before a restart among it) is kept.
+    pub(crate) fn set_quiet(&mut self, quiet: Duration) {
+        self.quiet = quiet;
+    }
+
     /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the
     /// coordinator's start.
     #[must_use]
@@ -214,6 +220,16 @@ impl Fleet {
         version: &Version,
     ) -> impl Iterator<Item = (&HostId, &UpdateResult)> {
         self.verdicts.of(service, version)
+    }
+
+    /// Every verdict of `service` counted ([`crate::verdicts::Verdicts::all_of`]).
+    pub(crate) fn counted_of(&self, service: &str) -> Vec<(HostId, UpdateResult)> {
+        self.verdicts.all_of(service)
+    }
+
+    /// Counts again a verdict counted before a restart ([`crate::verdicts::Verdicts::restore`]).
+    pub(crate) fn restore_verdict(&mut self, service: &str, id: HostId, report: UpdateResult) {
+        self.verdicts.restore(service, id, report);
     }
 
     /// Forgets the verdicts of `service` about any version but `version`, its desired one, and
@@ -264,6 +280,34 @@ impl Fleet {
                 .or_default()
                 .insert(id.clone(), host);
         }
+    }
+
+    /// Forgets the host `id` everywhere, if its update record is final: no service it was
+    /// heard for (counted or not) shows it updating or waiting for its promotion, and no order
+    /// for it is outstanding at `now`. Its slot, its bake and its orders go with it, so a
+    /// retiring host frees the one live update slot once it has finished (design 6.1). Returns
+    /// whether it was forgotten.
+    pub fn release_if_final(&mut self, id: &HostId, now: Duration) -> bool {
+        let in_flight = self
+            .hosts
+            .values()
+            .chain(self.outside.values())
+            .filter_map(|hosts| hosts.get(id))
+            .any(|host| host.beat.updating.is_some() || host.beat.promotion_pending);
+        let ordered = self
+            .orders
+            .iter()
+            .any(|((o, _), order)| o == id && now.saturating_sub(order.at) < ORDER_AGE);
+        if in_flight || ordered {
+            return false;
+        }
+        for hosts in self.hosts.values_mut().chain(self.outside.values_mut()) {
+            hosts.remove(id);
+        }
+        self.orders.retain(|(o, _), _| o != id);
+        self.bake.retain(|(_, o), _| o != id);
+        self.nodes.remove(id);
+        true
     }
 
     /// Notes a heartbeat of `service`: the host's latest word about it replaces its earlier

@@ -1,10 +1,10 @@
 //! The step runner: one update of one service, from `prepare` to its verdict, through a
 //! [`StepLauncher`], with every move written to the step record first.
 //!
-//! The runner is the root part of the updater (docs/design/host-updates.md, 3.4 and 3.5). It
-//! asks [`hostkeeper_hook::next`] what follows each step, it runs nothing that is not in a staged
-//! release it has checked against the digest the updater verified, and a crash at any point
-//! leaves a record that [`StepRunner::run`] picks up: a step found `running` has its unit
+//! The runner runs inside the daemon, the one root process of the host
+//! (docs/design/hostkeeper-design.md, 6.2). It asks [`hostkeeper_hook::next`] what follows each
+//! step, it runs nothing that is not in a staged release it has checked against the digest the
+//! updater verified, and a crash at any point leaves a record that [`StepRunner::run`] picks up: a step found `running` has its unit
 //! stopped by name and is run again, a step found `done` is not.
 //!
 //! The daemon's own moves around the hook's steps, `current` and the placed links switched to
@@ -21,6 +21,7 @@
 //! params file is removed, and nothing more is launched, `rollback` and `cleanup` included.
 
 use std::io;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -34,12 +35,11 @@ use hostkeeper_hook::{
 use crate::artifact::{ArtifactError, Staged};
 use crate::clock::{Clock, Stamp};
 use crate::deadman::Watch;
-use crate::launcher::{LaunchError, StepCall, StepExit, StepLauncher};
-use crate::record::{
-    HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State, step_unit,
-};
+use crate::launcher::{Bound, LaunchError, StepCall, StepExit, StepLauncher};
+use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
+use crate::systemd::unit_name;
 
-/// The protocol version of this updater: a declaration's `min_updater_protocol` above it is
+/// The protocol version of this updater: an order's `min_updater_protocol` above it is
 /// `Deferred` with the reason `updater_old` until the updater has updated itself.
 pub const UPDATER_PROTOCOL: u32 = 1;
 /// How often a deferred `rollback` is run again before it is read as a failure.
@@ -57,7 +57,7 @@ pub const REASON_HALT_CLEARED: &str = "halt_cleared";
 /// The reason of a `Deferred` for a hook that needs a newer updater.
 pub const REASON_UPDATER_OLD: &str = "updater_old";
 /// The reason of a `rollback` that declines a first install: there is no previous release to go
-/// back to (design section 5.7, step 6; docs/design/host-updates.md, section 9, C3).
+/// back to (design section 5.7, step 6).
 pub const REASON_NO_PREVIOUS_RELEASE: &str = "no_previous_release";
 
 /// Which way the daemon switches a service around a step of the hook.
@@ -80,9 +80,11 @@ pub enum Toward {
 /// `Confirmed`, the verdict is not written), and the runner stops with [`RunError::Switch`].
 pub type Switch = Arc<dyn Fn(Toward, &UpdateOrder) -> Result<(), String> + Send + Sync>;
 
-/// The bounds of the declaration the runner reads (and no other key of it).
+/// The bounds of the manifest's `hook.timeout_secs` and the other hook keys the runner reads (and
+/// no other key of it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bounds {
+    /// `0` is no bound ([`Bound::Unbounded`]); `0` for any other step is a step not started.
     pub prepare_secs: u64,
     pub cutover_secs: u64,
     pub verify_secs: u64,
@@ -109,6 +111,17 @@ impl Bounds {
             Step::Uninstall => 0,
         }
     }
+
+    /// The bound of one step as it runs: [`Bound::Unbounded`] for a `prepare` of 0, the seconds
+    /// otherwise, and `None` for 0 of any other step (a step with nothing left of its bound is
+    /// not started).
+    pub fn bound(&self, step: Step) -> Option<Bound> {
+        match (step, NonZeroU64::new(self.timeout(step))) {
+            (_, Some(secs)) => Some(Bound::Secs(secs)),
+            (Step::Prepare, None) => Some(Bound::Unbounded),
+            (_, None) => None,
+        }
+    }
 }
 
 /// One update of one service.
@@ -132,12 +145,12 @@ pub struct UpdateOrder {
     /// The release being replaced, kept staged until `cleanup` has succeeded; `None` on the first
     /// install.
     pub previous: Option<Staged>,
-    /// The declaration's `binary`: the hook executable within a release.
+    /// The hook executable within a release: the program of the manifest's `[hook] command`.
     pub hook_binary: PathBuf,
     pub bounds: Bounds,
-    /// The declaration's `[hook.params]`.
+    /// The manifest's `[params]` table.
     pub declared_params: Params,
-    /// The declaration's `min_updater_protocol`.
+    /// The lowest updater protocol the release asks for; `None` asks for none.
     pub min_updater_protocol: Option<u32>,
     /// The coordinator's try of the order (`Order.try`), kept in the record as `order_try`;
     /// `None` for an update that came without one.
@@ -578,19 +591,25 @@ impl StepRunner {
         // pending, and nothing of it runs.
         self.switch_for(order, rec.step)?;
         let started = Stamp::now(&*self.clock);
-        let timeout = self.timeout(order, rec);
         // Nothing is left of the bound (the verify window has passed): the step is not started,
-        // and never with a bound of 0, which systemd reads as no limit. It ends as a failure.
-        if timeout == 0 {
+        // and never as unbounded, which only a `prepare` whose manifest timeout is 0
+        // is. It ends as a failure.
+        let Some(bound) = self.bound(order, rec) else {
             return Ok(Some(Ran::Exit(StepExit {
                 code: None,
                 last_line: None,
             })));
-        }
-        let deadline_secs = started.mono_secs.saturating_add(timeout);
+        };
+        let (deadline_secs, unbounded) = match bound {
+            Bound::Secs(secs) => (started.mono_secs.saturating_add(secs.get()), false),
+            Bound::Unbounded => (started.mono_secs, true),
+        };
+        // Recorded `running` before the launch either way, so that a crash is resumed by
+        // stopping the unit by name.
         rec.state = State::Running {
             started,
             deadline_secs,
+            unbounded,
         };
         self.write(rec)?;
         if rec.forced {
@@ -598,7 +617,10 @@ impl StepRunner {
         }
         let unit = rec.unit(rec.step);
         let artifact = (rec.step == Step::Prepare).then(|| order.staged.dir().to_path_buf());
-        self.watch.arm(&unit, deadline_secs);
+        // An unbounded step has no second to be stopped at: the dead-man is not armed for it.
+        if !unbounded {
+            self.watch.arm(&unit, deadline_secs);
+        }
         let result = self.launcher.run(&StepCall {
             service: &order.service,
             invocation: Invocation {
@@ -608,7 +630,7 @@ impl StepRunner {
             },
             executable,
             unit: &unit,
-            timeout_secs: timeout,
+            bound,
         });
         // A step the dead-man could not stop at its bound ran past it: what it reports is not
         // read. It stays `running` in the record, and the next run stops its unit by name first.
@@ -666,18 +688,18 @@ impl StepRunner {
     }
 
     /// The bound of the step about to run: its own, and for `verify` before the update has
-    /// succeeded no more than the time left of the verify window.
-    fn timeout(&self, order: &UpdateOrder, rec: &Record) -> u64 {
-        let own = order.bounds.timeout(rec.step);
-        match (&rec.progress.verify_started, rec.step) {
-            (Some(began), Step::Verify) => {
+    /// succeeded no more than the time left of the verify window. `None` when nothing is left.
+    fn bound(&self, order: &UpdateOrder, rec: &Record) -> Option<Bound> {
+        let own = order.bounds.bound(rec.step)?;
+        match (&rec.progress.verify_started, own) {
+            (Some(began), Bound::Secs(secs)) if rec.step == Step::Verify => {
                 let left = order
                     .bounds
                     .verify_deadline_secs
                     .saturating_sub(began.elapsed_secs(&*self.clock));
-                own.min(left)
+                NonZeroU64::new(secs.get().min(left)).map(Bound::Secs)
             }
-            _ => own,
+            _ => Some(own),
         }
     }
 
@@ -848,7 +870,7 @@ fn path_str(path: &Path) -> Result<&str, RunError> {
 fn longest_step_unit(service: &str) -> usize {
     Step::ALL
         .iter()
-        .map(|step| step_unit(service, *step, u64::MAX).len())
+        .map(|step| unit_name(service, *step, u64::MAX).len())
         .max()
         .unwrap_or_default()
         + ".service".len()

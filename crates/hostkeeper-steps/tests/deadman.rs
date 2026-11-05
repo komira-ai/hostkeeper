@@ -1,4 +1,4 @@
-//! The dead-man: a step past its bound is stopped by the root part itself.
+//! The dead-man: a step past its bound is stopped by the daemon itself.
 
 mod support;
 
@@ -114,7 +114,7 @@ fn the_thread_stops_the_step_on_its_own() {
     assert!(watch.last_error().unwrap().to_string().contains("refused"));
 }
 
-/// Catches a verify window that is not enforced by the root part: with `verify` allowed 1000 s
+/// Catches a verify window that is not enforced by the daemon: with `verify` allowed 1000 s
 /// by its own bound but only 300 s by the window, the dead-man stops it at 300; the stopped step
 /// ends with no code and the update rolls back.
 #[test]
@@ -151,7 +151,7 @@ fn a_verify_past_the_window_is_stopped_and_the_update_rolls_back() {
 }
 
 /// Catches a step bound that only the launcher knows: a `cutover` that passes its own bound is
-/// stopped by the dead-man, whatever the unprivileged part does.
+/// stopped by the dead-man, whatever the rest of the updater does.
 #[test]
 fn a_step_past_its_own_bound_is_stopped() {
     let rig = Rig::new("dm-bound");
@@ -165,7 +165,7 @@ fn a_step_past_its_own_bound_is_stopped() {
     let (clock, seen) = (rig.clock.clone(), man.clone());
     rig.fake.on_run(move |call| {
         if call.invocation.step == Step::Cutover {
-            clock.advance(call.timeout_secs);
+            clock.advance(support::secs_of(call.bound));
             assert!(seen.tick().unwrap());
         }
     });

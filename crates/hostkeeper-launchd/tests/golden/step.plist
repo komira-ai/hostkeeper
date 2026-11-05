@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.hostkeeper.hostkeeper.step.web.cutover.7</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/var/lib/hostkeeper/packages/web/current/bin/web</string>
+		<string>update-hook</string>
+		<string>cutover</string>
+		<string>--params</string>
+		<string>/var/lib/updater/state/web/params.toml</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>AbandonProcessGroup</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>/var/run/hostkeeper/steps/dev.hostkeeper.hostkeeper.step.web.cutover.7/stdout</string>
+	<key>StandardErrorPath</key>
+	<string>/var/run/hostkeeper/steps/dev.hostkeeper.hostkeeper.step.web.cutover.7/stderr</string>
+</dict>
+</plist>

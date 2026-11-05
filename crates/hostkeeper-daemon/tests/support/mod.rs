@@ -16,6 +16,7 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
+use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
 use hostkeeper_daemon::testing::{
@@ -23,6 +24,10 @@ use hostkeeper_daemon::testing::{
 };
 use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
 use hostkeeper_hook::{Step, Verdict};
+use hostkeeper_link::testing::{
+    FakeCerts, FakeLink, ManualDispatch, RecordingLog, ScriptedSleeper,
+};
+use hostkeeper_link::{CertState, DEFAULT_HEARTBEAT_SECS, StopFlag};
 use hostkeeper_observe::fake::{
     FakeExpectedExe, FakeHealthClient, FakeProcessProbe, FakeServiceManager,
 };
@@ -40,6 +45,24 @@ use hostkeeper_steps::{
 use hyper_util::rt::TokioIo;
 use tokio::io::DuplexStream;
 use tonic::transport::{Channel, Endpoint, Uri};
+
+/// Links whose loops never run: both are left unstarted on a dispatcher nobody runs, for a test
+/// that serves the daemon and is not about its loops.
+pub fn idle_links() -> Links {
+    Links {
+        enroller: Box::new(|| Err("idle".to_owned())),
+        link: Arc::new(FakeLink::default()),
+        certs: Arc::new(FakeCerts::new(CertState::NotEnrolled {
+            waiting_for: PathBuf::from("idle"),
+        })),
+        clock: Arc::new(hostkeeper_link::testing::FakeClock::new(0, 0)),
+        log: Arc::new(RecordingLog::default()),
+        sleeper: Box::new(ScriptedSleeper::new(0)),
+        period: DEFAULT_HEARTBEAT_SECS,
+        dispatch: Arc::new(ManualDispatch::default()),
+        stop: StopFlag::default(),
+    }
+}
 
 /// A directory under the target directory, unique to the test, removed when it is dropped.
 ///

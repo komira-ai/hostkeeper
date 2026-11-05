@@ -8,6 +8,8 @@
 
 use std::fmt;
 
+use crate::manifest::HostkeeperVersion;
+
 /// The most bytes of a service name or a version: 255, Linux's `NAME_MAX`, the longest single
 /// file name, since each becomes one path component (`packages/<service>/<version>/`).
 pub const MAX_NAME: usize = 255;
@@ -116,6 +118,14 @@ impl fmt::Display for Version {
     }
 }
 
+impl From<HostkeeperVersion> for Version {
+    /// A version of hostkeeper as a version: `major.minor.patch` is digits and dots, at most 62
+    /// bytes, which [`is_version`] keeps.
+    fn from(version: HostkeeperVersion) -> Version {
+        Version(version.to_string())
+    }
+}
+
 /// Why a path was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {
@@ -199,6 +209,53 @@ pub enum UnitError {
     BadInstance,
     #[error("is longer than {MAX_UNIT_NAME} bytes, the most systemd takes for a unit name")]
     TooLong,
+    #[error("is not a launchd label of the service: {0}")]
+    BadLabel(&'static str),
+    #[error("is a launchd plist, and units/ also holds systemd units")]
+    MixedKinds,
+}
+
+/// The suffix of a launchd plist file in `units/`; its stem is the job's label.
+pub const PLIST_SUFFIX: &str = ".plist";
+
+/// Checks that `label` is a launchd label of `service` and returns it: 1 to [`MAX_UNIT_NAME`]
+/// bytes of `A-Za-z0-9._-`, equal to the service name or the service name, a `.` and at least one
+/// more byte (`web.cache` for `web`). The one place this rule is written.
+pub fn launchd_label<'a>(service: &str, label: &'a str) -> Result<&'a str, UnitError> {
+    if label.len() > MAX_UNIT_NAME {
+        return Err(UnitError::BadLabel("it is longer than 255 bytes"));
+    }
+    if label.is_empty() {
+        return Err(UnitError::BadLabel("it is empty"));
+    }
+    if !label
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() | b"._-".contains(&b))
+    {
+        return Err(UnitError::BadLabel(
+            "it has a character outside `A-Za-z0-9._-`",
+        ));
+    }
+    let own = (label == service)
+        | label
+            .strip_prefix(service)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .is_some_and(|rest| !rest.is_empty());
+    if !own {
+        return Err(UnitError::BadLabel(
+            "it is neither the service name nor the service name, `.` and more",
+        ));
+    }
+    Ok(label)
+}
+
+/// Checks that `file` is `<label>.plist` for a label of `service` ([`launchd_label`]) and
+/// returns the label.
+pub fn plist_label<'a>(service: &str, file: &'a str) -> Result<&'a str, UnitError> {
+    let label = file
+        .strip_suffix(PLIST_SUFFIX)
+        .ok_or(UnitError::BadLabel("a plist file is named `<label>.plist`"))?;
+    launchd_label(service, label)
 }
 
 /// A unit name taken apart: `tierstore@9301.service` is the base `tierstore`, the instance

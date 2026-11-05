@@ -18,15 +18,23 @@ description = "The hostkeeper daemon: start-up, the order executor with its lock
 
 [features]
 # The test doubles in `hostkeeper_daemon::testing` (a scripted launcher, a fake clock, fake
-# packages, a counting connection), for this crate's tests and the tests of crates built on it.
-testing = []
+# packages, a counting connection), for this crate's tests and the tests of crates built on it;
+# it turns on the fakes of the heartbeat loop's ports (`hostkeeper_link::testing`) too.
+testing = ["hostkeeper-link/testing"]
 
 [dependencies]
 clap.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
 # `hostkeeper ci`: the CI client, a subcommand of the one binary (docs/deploy/ci-client.md).
 hostkeeper-ci = { path = "../hostkeeper-ci" }
+# `hostkeeper ctl`, which the binary reaches through `cli`.
+hostkeeper-ctl = { path = "../hostkeeper-ctl" }
+# The enrollment loop, over gRPC with TLS to the coordinator, the pki directory and the host's
+# claims.
+hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The heartbeat loop, and its ports, which `link_adapters` implements over the daemon.
+hostkeeper-link = { path = "../hostkeeper-link" }
 # The service observer whose `Observation` the admin `Status` reports, and its real adapters.
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 # Steps 1 and 2 of design section 5.5 (download, prove), which the real package store composes.
@@ -57,6 +65,15 @@ tonic = { workspace = true, features = ["server"] }
 base64.workspace = true
 hex.workspace = true
 sha2.workspace = true
+# The real coordinator of the end-to-end test, driven in process: its desired-state and
+# convergence handlers over HTTP requests built in the test, its heartbeat with an explicit host
+# identity. Its CI tokens come from the fake issuer of `hostkeeper-oidc`'s `testkit`.
+bytes.workspace = true
+hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
+hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+http-body-util.workspace = true
+hyper.workspace = true
 # Its own tests turn on `testing`.
 hostkeeper-daemon = { path = ".", features = ["testing"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }

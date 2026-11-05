@@ -16,6 +16,10 @@ in-toto.io
 # The Sigstore transparency log a captured attestation bundle's checkpoint names (rekor.sigstore.dev).
 sigstore.dev
 
+# The document type of an Apple property list, which every plist hostkeeper-launchd writes
+# declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
+apple.com
+
 # Licence texts.
 apache.org
 developercertificate.org

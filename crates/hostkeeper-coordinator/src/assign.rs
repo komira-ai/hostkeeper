@@ -16,9 +16,9 @@
 //! and is written to the ops file before it is in force.
 //!
 //! [`Coordinator::assign_host`] is the one way a service is assigned to one host: `Assign` of a
-//! host takes it, and the services an enrollment approval names are to take it once approvals
-//! reach the coordinator. No call but `Unassign`
-//! with `uninstall` orders an uninstall.
+//! host takes it, and so do the services an operator's enrollment approval names
+//! ([`crate::operator_enrollment`]). No call but `Unassign` with `uninstall` orders an
+//! uninstall.
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::{assignment, min_version};
@@ -187,12 +187,11 @@ impl Coordinator {
     }
 
     /// Assigns each of `services` to the host `host_id`: the one path by which a service is
-    /// assigned to one host, for `Services.Assign` of a host and, once approvals reach the
-    /// coordinator, for the services an enrollment approval names. `role` is the host's role, as
-    /// an approval names it, for a host the fleet has not heard from (one it has heard from is
-    /// read with the role it heartbeated with). Each
-    /// service is one audit entry `assign` by `by`, all in one write; an uninstall the host was
-    /// ordered of one of them is dropped. The host's own entry is written even when its role
+    /// assigned to one host, for `Services.Assign` of a host and for the services an operator's
+    /// enrollment approval names (`Enrollment.Approve`). `role` is the host's role, as an
+    /// approval names it, for a host the fleet has not heard from (one it has heard from is read
+    /// with the role it heartbeated with). Each service is one audit entry `assign` by `by`, all
+    /// in one write; an uninstall the host was ordered of one of them is dropped. The host's own entry is written even when its role
     /// assigns it the service already, so that it keeps the service when the role is taken off.
     ///
     /// # Errors

@@ -1,10 +1,16 @@
 //! `hostkeeper-coordinator serve`'s flags and start-up: read every file, bind both listeners,
 //! print the start line, then serve until SIGTERM or SIGINT.
 //!
-//! Everything is a flag; the coordinator reads no environment variable. It holds no CA key:
-//! its certificate and key are files the farm CA issued, and the CA certificate it checks
-//! updaters against is a file too. The services it manages are the ones `--rollout-file`
-//! defines; `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
+//! Everything is a flag; the coordinator reads no environment variable. Without
+//! `--enrollment-dir` it holds no CA key: its certificate and key are files the farm CA issued,
+//! and the CA certificate it checks updaters against is a file too. With it, it is also the
+//! hosts' CA ([`crate::enrollment`]): `--ca-key-file` is the CA's key (made with `--ca-init`),
+//! the heartbeat listener serves the server certificate the start keeps in `--server-cert-file`
+//! for the names of `--server-name`, lets a client without a certificate through the handshake,
+//! and admits a client certificate of its own CA as well as one of `--client-ca`. The handlers
+//! of `Enroll`, `Poll` and `Renew` are served as gRPC on the heartbeat listener
+//! ([`crate::grpc`]). The services it manages are the ones `--rollout-file` defines;
+//! `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
@@ -30,14 +36,20 @@ use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
 use futures::future::{Either, select};
+use hostkeeper_enrollment::enroll::DEFAULT_MAX_PENDING;
+use hostkeeper_enrollment::fs::RealFs;
+use hostkeeper_enrollment::validity::SystemClock;
 use hostkeeper_oidc::{AllowList, ConfigError, HttpsKeys, KeySourceError, Roots, Verifier};
-use hostkeeper_tls::{TlsError, TlsFiles, TlsSource};
+use hostkeeper_tls::{Alpn, ClientAuth, TlsError, TlsFiles, TlsSource};
 use hostkeeper_wire::identity::{
     DEFAULT_HOST_ROLE_URI_PREFIX, DEFAULT_ROLE_URI_PREFIX, PrefixError, SanPrefixes,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::desired::{DesiredStore, StoreError};
+use crate::enrollment::{
+    AllowlistError, MacAllowlist, MacPolicy, NoDeviceState, Setup, SetupError, os_random, setup,
+};
 use crate::fleet::QUIET_START;
 use crate::http::Surface;
 use crate::jti_file::{JtiError, JtiFile, jti_path};
@@ -48,6 +60,7 @@ use crate::service::{Clock, Coordinator};
 use crate::services::{Services, ServicesError};
 use crate::tokens::{OperatorTokens, TokensError};
 use crate::ui::{UiDir, UiDirError};
+use crate::verdict_file::{VerdictFile, VerdictsError, verdicts_path};
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -108,6 +121,15 @@ pub enum StartError {
     /// A TLS file is refused.
     #[error(transparent)]
     Tls(#[from] TlsError),
+    /// Enrollment did not start: its CA, its store or the server certificate.
+    #[error(transparent)]
+    Enrollment(#[from] SetupError),
+    /// The Mac serial allowlist is refused.
+    #[error(transparent)]
+    MacAllowlist(#[from] AllowlistError),
+    /// The Mac serial allowlist names a service the rollout file does not define.
+    #[error("--mac-serial-allowlist names service {0}, which --rollout-file does not define")]
+    MacService(String),
     /// `--ui-dir` does not name a directory.
     #[error("--ui-dir: {0}")]
     UiDir(#[from] UiDirError),
@@ -152,6 +174,9 @@ pub enum StartError {
     /// The file of spent token ids is refused.
     #[error(transparent)]
     Jti(#[from] JtiError),
+    /// The file of verdicts is refused.
+    #[error(transparent)]
+    Verdicts(#[from] VerdictsError),
 }
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
@@ -251,6 +276,42 @@ pub struct Serve {
     /// How often the TLS files and the tokens file are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
+    /// The enrollment store: a directory of the coordinator's own holding the pending
+    /// requests, the issued certificates, the approved hosts and the deny rows. With it the
+    /// coordinator is the hosts' CA: the heartbeat listener serves `--server-cert-file`, lets a
+    /// client without a certificate through the handshake (each route then decides; only
+    /// `Enroll` and `Poll` will answer one), and admits a host certificate of its CA.
+    /// Requires --ca-key-file, --server-cert-file and --server-name.
+    #[arg(long, requires_all = ["ca_key_file", "server_cert_file", "server_names"])]
+    pub enrollment_dir: Option<PathBuf>,
+    /// The CA's key: PKCS#8, mode 0600, owned by the coordinator's user (a file open to
+    /// group or others, or a symbolic link, is refused). Its certificate is beside it, the same
+    /// path with `.cert` added. Back both up once, sealed and offline.
+    #[arg(long, requires = "enrollment_dir")]
+    pub ca_key_file: Option<PathBuf>,
+    /// Make the CA when --ca-key-file does not exist; without it a missing CA stops the start.
+    /// The CA is made once: every daemon config pins its certificate's SHA-256.
+    #[arg(long, requires = "ca_key_file")]
+    pub ca_init: bool,
+    /// The coordinator's server certificate, the CA certificate and its key, one PEM file
+    /// (mode 0600) the coordinator writes: made at start when missing or within the last third
+    /// of its validity.
+    #[arg(long, requires = "enrollment_dir")]
+    pub server_cert_file: Option<PathBuf>,
+    /// A DNS name of the coordinator, as daemons dial it: the server certificate names each
+    /// one given.
+    #[arg(long = "server-name", requires = "enrollment_dir")]
+    pub server_names: Vec<String>,
+    /// How many enrollment requests may wait for an operator at once (default 256). A new
+    /// request over it is refused `pending_full`; no waiting request is dropped for it, and a
+    /// host posting its waiting request again is still answered.
+    #[arg(long, requires = "enrollment_dir", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_pending_enrollments: Option<u64>,
+    /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
+    /// prefix, role and services of each: a TOML file of `[[mac]]` entries (`serial`,
+    /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
+    #[arg(long, requires = "enrollment_dir")]
+    pub mac_serial_allowlist: Option<PathBuf>,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -376,6 +437,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     );
     let desired = DesiredStore::open(&flags.state_file, legacy)?;
     let ops = OpsStore::open(&ops_path)?;
+    let verdicts = VerdictFile::open(&verdicts_path(&flags.state_file))?;
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
     let files = |client_ca| TlsFiles {
@@ -385,21 +447,73 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     };
     let origin = Instant::now();
     let clock: Clock = Arc::new(move || origin.elapsed());
+    let mut coordinator = Coordinator::new(desired, Arc::new(verifier), tokens, clock)
+        .with_services(services)
+        .with_legacy_service(legacy.map(str::to_owned))
+        .with_quiet(Duration::from_secs(flags.quiet_secs))
+        .with_prefixes(prefixes)
+        .with_ops(ops)
+        .with_verdicts(verdicts)
+        .with_ui(ui);
+    let heartbeat_tls = match (
+        &flags.enrollment_dir,
+        &flags.ca_key_file,
+        &flags.server_cert_file,
+    ) {
+        (Some(dir), Some(ca_key), Some(server_cert)) => {
+            let allowlist = flags
+                .mac_serial_allowlist
+                .as_deref()
+                .map(MacAllowlist::load)
+                .transpose()?
+                .unwrap_or_default();
+            if let Some(unknown) = allowlist
+                .services()
+                .find(|service| coordinator.services.get(service.as_str()).is_none())
+            {
+                return Err(StartError::MacService(unknown.as_str().to_owned()));
+            }
+            let max_pending = flags
+                .max_pending_enrollments
+                .map_or(DEFAULT_MAX_PENDING, |max| {
+                    usize::try_from(max).unwrap_or(usize::MAX)
+                });
+            let enrollment = setup(
+                Arc::new(RealFs),
+                &Setup {
+                    dir,
+                    ca_key,
+                    ca_init: flags.ca_init,
+                    server_cert,
+                    server_names: &flags.server_names,
+                },
+                Arc::new(SystemClock),
+                os_random(),
+            )?
+            .with_max_pending(max_pending)
+            // The MDM gate is not built into this coordinator: no device is known to it.
+            .with_mac(MacPolicy {
+                device_state: Arc::new(NoDeviceState),
+                allowlist,
+            });
+            let client = ClientAuth {
+                optional: true,
+                extra_roots: vec![enrollment.ca_bundle().certificate_der().to_vec()],
+            };
+            coordinator = coordinator.with_enrollment(Arc::new(enrollment));
+            let served = TlsFiles {
+                cert: server_cert.clone(),
+                key: server_cert.clone(),
+                client_ca: Some(flags.client_ca.clone()),
+            };
+            TlsSource::files_with("heartbeat", served, interval, Alpn::H2AndHttp1, client)?
+        }
+        // clap requires the three together: one alone is no enrollment.
+        _ => TlsSource::files("heartbeat", files(Some(flags.client_ca.clone())), interval)?,
+    };
     Ok(Parts {
-        coordinator: Arc::new(
-            Coordinator::new(desired, Arc::new(verifier), tokens, clock)
-                .with_quiet(Duration::from_secs(flags.quiet_secs))
-                .with_services(services)
-                .with_legacy_service(legacy.map(str::to_owned))
-                .with_prefixes(prefixes)
-                .with_ops(ops)
-                .with_ui(ui),
-        ),
-        heartbeat_tls: TlsSource::files(
-            "heartbeat",
-            files(Some(flags.client_ca.clone())),
-            interval,
-        )?,
+        coordinator: Arc::new(coordinator),
+        heartbeat_tls,
         control_tls: TlsSource::files("control", files(None), interval)?,
         heartbeat_listen: flags.heartbeat_listen,
         control_listen: flags.private_listen,

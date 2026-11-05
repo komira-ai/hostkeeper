@@ -6,7 +6,9 @@
 #   the OIDC verifier;
 #   the enrollment nonce check;
 # and, apart from them, to stamp a record with the time it was made, which nothing reads back to
-# decide: the coordinator's audit file.
+# decide: the coordinator's audit file; and for the one decision whose file format is in unix
+# seconds and that is bounded whatever the clock says: the heartbeat loop's deferral retry time,
+# capped at an hour from now at every read.
 # Each entry has a `#` line directly above it saying which of these it serves and why. The test
 # no_decision_reads_the_wall_clock in crates/xtask/tests/wallclock reads this file; it refuses
 # an entry that matches no file or whose files read no wall clock.
@@ -24,3 +26,9 @@ crates/hostkeeper-enrollment/src/validity.rs
 # Certificate validity: the enroller reads the wall clock only to decide whether its host
 # certificate is due for renewal at half life, has expired, and whether one just issued is valid now.
 crates/hostkeeper-enroll/src/validity.rs
+# The deferral's retry time: SystemUnixClock is the unix second the heartbeat loop counts a
+# deferral from. The deferral file keeps it in unix seconds, the format kbf's agent shares,
+# because a restart has no memory of the monotonic clock; the loop caps every deferral at
+# MAX_RETRY_SECS from now at each read, so a wrong clock can run a deferred target early, or hold
+# it for at most that long. No other decision of the daemon reads it.
+crates/hostkeeper-daemon/src/unix_clock.rs

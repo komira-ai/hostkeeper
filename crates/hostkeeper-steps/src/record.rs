@@ -1,4 +1,4 @@
-//! The step record: the updater's memory of one update (docs/design/host-updates.md, 3.5).
+//! The step record: the updater's memory of one update (docs/design/hostkeeper-design.md, 6.2).
 //!
 //! Before each step the record is written and fsynced (temporary file, fsync, rename, directory
 //! fsync) with the step in state `running`; when the step ends it is written again as `done`
@@ -53,7 +53,18 @@ pub enum State {
     /// The step is chosen and has not started (or its unit was stopped on resume).
     Pending,
     /// The step started at `started` and must end by `deadline_secs` on the same boot.
-    Running { started: Stamp, deadline_secs: u64 },
+    Running {
+        started: Stamp,
+        /// The second it must end by; for an `unbounded` step the second it started, and read by
+        /// nothing.
+        deadline_secs: u64,
+        /// The step has no bound (a `prepare` whose manifest timeout is 0): the dead-man was not
+        /// armed.
+        /// Written only when true, so a bounded step writes the bytes it always did, and a
+        /// record without it (every record from before it existed) reads as bounded.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unbounded: bool,
+    },
     /// The step ended.
     Done {
         code: Option<i32>,
@@ -155,7 +166,7 @@ fn is_false(value: &bool) -> bool {
 impl Record {
     /// The deterministic name of the unit a step of this update runs in.
     pub fn unit(&self, step: Step) -> String {
-        step_unit(&self.service, step, self.generation)
+        crate::systemd::unit_name(&self.service, step, self.generation)
     }
 
     /// Closes the update as a `force` closes one it stopped: `forced` set, and `Failed` with the
@@ -175,12 +186,6 @@ impl Record {
             reason: Some(REASON_FORCED_OVER.to_owned()),
         };
     }
-}
-
-/// The name of the unit `step` of `service` runs in, in generation `generation`, without the
-/// `.service` systemd adds.
-pub(crate) fn step_unit(service: &str, step: Step, generation: u64) -> String {
-    format!("updater-{service}-{step}-{generation}")
 }
 
 /// What a state directory holds.

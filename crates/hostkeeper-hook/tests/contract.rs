@@ -617,10 +617,10 @@ fn the_artifact_digest_is_sha256_and_64_lowercase_hex() {
     );
 }
 
-/// Catches a declaration that sets a key only the updater may write: its own `[hook.params]`
+/// Catches a manifest that sets a key only the updater may write: its own `[params]` table
 /// may carry anything but the `updater.` namespace.
 #[test]
-fn a_declaration_may_not_set_an_updater_key() {
+fn a_manifest_params_table_may_not_set_an_updater_key() {
     assert_eq!(
         Params::parse_declared("promotion_bound_secs = 900\n")
             .unwrap()

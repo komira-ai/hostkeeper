@@ -12,19 +12,31 @@ description = "The CI steps of this repository (cargo xtask <verb>)."
 clap.workspace = true
 flate2.workspace = true
 hex.workspace = true
+# The daemon's launchd label, plist and paths the macOS installer pkg installs
+# (`release macos-pkg`).
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
+# The zstd compression of the hostkeeper package (`release package`).
+ruzstd.workspace = true
+# Reads back the launchd plist of the installer pkg (`release check-macos-pkg`).
+plist.workspace = true
+# The JSON `gh` prints: workflow runs, issues, releases and verified attestations.
+serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
+# The member manifests `release set-version` checks.
+toml.workspace = true
 
 [dev-dependencies]
+# The packaging test (tests/packaging) loads the config template with the daemon config's loader,
+# and the package test loads the produced `manifest.toml` with the manifest loader.
+hostkeeper-config = { path = "../hostkeeper-config" }
 # The packaging test (tests/packaging/daemon_flags.rs) parses the unit's command lines with the
 # binary's own flag parser and reads its default paths.
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
-# The packaging test (tests/packaging) loads the config template with the daemon config's loader.
-hostkeeper-config = { path = "../hostkeeper-config" }
+# The daemon's unpacker (design 5.5), which the package test unpacks the produced archive with.
+hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 saphyr-parser.workspace = true
-# The layering test (tests/layering) reads `cargo metadata`'s JSON.
-serde_json.workspace = true
 
 [lints]
 workspace = true

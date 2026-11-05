@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use hostkeeper_hook::{Params, Step};
 use hostkeeper_steps::record::CrashGate;
 use hostkeeper_steps::{
-    Bounds, Clock, LaunchError, RecordStore, Staged, StepCall, StepExit, StepLauncher, StepRunner,
-    UpdateOrder,
+    Bound, Bounds, Clock, LaunchError, RecordStore, Staged, StepCall, StepExit, StepLauncher,
+    StepRunner, UpdateOrder,
 };
 
 /// A directory under the target directory, unique to the test, removed when it is dropped.
@@ -76,6 +77,19 @@ impl Clock for FakeClock {
     }
 }
 
+/// A bound of `n` seconds, `n` at least 1.
+pub fn secs(n: u64) -> Bound {
+    Bound::Secs(NonZeroU64::new(n).expect("a bound of at least one second"))
+}
+
+/// The seconds of a bounded step.
+pub fn secs_of(bound: Bound) -> u64 {
+    match bound {
+        Bound::Secs(secs) => secs.get(),
+        Bound::Unbounded => panic!("the step is unbounded"),
+    }
+}
+
 /// What the fake hook does in one run.
 #[derive(Clone, Debug)]
 pub enum Reply {
@@ -106,7 +120,7 @@ pub enum Event {
         step: Step,
         unit: String,
         executable: PathBuf,
-        timeout_secs: u64,
+        bound: Bound,
         artifact: Option<PathBuf>,
         params_file: PathBuf,
         params: String,
@@ -201,7 +215,7 @@ impl StepLauncher for Fake {
             step: call.invocation.step,
             unit: call.unit.to_owned(),
             executable: call.executable.to_path_buf(),
-            timeout_secs: call.timeout_secs,
+            bound: call.bound,
             artifact: call.invocation.artifact.clone(),
             params: fs::read_to_string(&params_file).expect("the params file exists"),
             params_file,

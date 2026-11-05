@@ -1,0 +1,16 @@
+# A hand-written sample of the `launchctl print` format, to be replaced by output captured on a
+# device.
+system/dev.hostkeeper.hostkeeper = {
+	active count = 1
+	path = /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist
+	state = running
+
+	program = /usr/local/bin/hostkeeper
+	arguments = {
+		/usr/local/bin/hostkeeper
+		daemon
+	}
+
+	pid = 4242
+	last exit code = (never exited)
+}

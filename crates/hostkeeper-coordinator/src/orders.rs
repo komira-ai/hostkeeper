@@ -1,14 +1,17 @@
-//! The typed orders a heartbeat answer carries instead of the rollout gate's update: an `abort`
-//! an operator queued (`Hosts.Abort`) and the `force` of a standing force ([`crate::force`]),
-//! which go past the gate, and the gate's own `install` and `uninstall` ([`crate::decide`]).
+//! The typed orders a heartbeat answer carries on a transport that carries them: the
+//! operator's, which go instead of the rollout gate's update (an `abort` an operator queued,
+//! `Hosts.Abort`, and the `force` of a standing force, [`crate::force`]); the gate's update
+//! itself, with the terms the JSON answer carries ([`Order::Update`]); and the gate's own
+//! `install` and `uninstall` ([`crate::decide`]).
 //!
 //! They go only over a transport that carries typed orders
 //! ([`crate::service::Coordinator::heartbeat_with_orders`], the `Order` of
 //! `hostkeeper.agent.v1`), and only to a daemon that announced the order's feature: [`ABORT_FEATURE`]
 //! for an abort, [`crate::force::FEATURE`] for a force, [`INSTALL_FEATURE`] for an install or an
-//! uninstall. The JSON heartbeat route carries none of them, so its answers never name them, and
-//! an abort queued for a host that cannot be sent it waits. An abort and a force take no update
-//! slot; an install and an uninstall take it as an update does.
+//! uninstall. The JSON heartbeat route carries none of the operator's orders, an install or an
+//! uninstall, so its answers never name them, and an abort queued for a host that cannot be sent
+//! it waits. An abort and a force take no update slot; an install and an uninstall take it as an
+//! update does.
 //!
 //! An abort is sent once: it is taken from the queue when it is answered. A force's order goes
 //! to each host the force orders at every heartbeat until the host runs the version, is running
@@ -20,7 +23,7 @@
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::Heartbeat;
+use hostkeeper_wire::wire::{Heartbeat, PackageDigest};
 
 use crate::fleet::Fleet;
 use crate::ops::OpsState;
@@ -62,9 +65,25 @@ pub fn next_try(beat: Option<&Heartbeat>, order_id: &str) -> u64 {
         .map_or(1, |r| r.order_try.unwrap_or(0).saturating_add(1))
 }
 
-/// An order of the operator's, as a heartbeat answer carries it.
+/// An order a heartbeat answer carries as a typed order: an operator's, or the rollout gate's
+/// update with its terms, install or uninstall.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Order {
+    /// The rollout gate's update, with the terms the JSON answer of an `order-v1` agent carries
+    /// too ([`crate::order_terms`]): the same order id, try and package digest on both
+    /// transports.
+    Update {
+        /// The service.
+        service: String,
+        /// The version to run.
+        version: Version,
+        /// The package digest CI registered for the version.
+        digest: PackageDigest,
+        /// The order's id ([`crate::order_terms::order_id_text`]).
+        order_id: String,
+        /// The try, from 1.
+        order_try: u64,
+    },
     /// Stop the service's running step and end its order in the halt phase.
     Abort {
         /// The service.
@@ -113,10 +132,25 @@ pub enum Order {
 
 impl Order {
     /// The order as `hostkeeper.agent.v1` says it: the verb and its typed arguments, the order
-    /// id, and the try (the first, for an abort and a force).
+    /// id, and the try (the first, for an operator's order).
     #[must_use]
     pub fn to_proto(&self) -> agent::Order {
         let (order_id, order_try, verb) = match self {
+            Self::Update {
+                service,
+                version,
+                digest,
+                order_id,
+                order_try,
+            } => (
+                order_id,
+                *order_try,
+                agent::order::Verb::Update(agent::Update {
+                    service: service.clone(),
+                    version: version.to_string(),
+                    package_digest: digest.as_str().to_owned(),
+                }),
+            ),
             Self::Abort { service, order_id } => (
                 order_id,
                 1,

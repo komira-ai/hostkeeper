@@ -1,0 +1,40 @@
+[package]
+name = "hostkeeper-launchd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The macOS side of the host daemon: launchd labels and plists, the launchctl port, the launchd service manager, unit control and process probe, the step launcher, and the Platform value."
+
+# Design section 5.9: a Mac runs the same daemon; only the service manager differs. Everything
+# here is ports and pure logic measured on Linux; the real adapters (`launchctl` as a child
+# process, `std::fs` metadata, and, macOS-only, `proc_pidpath` and the host's step launcher with
+# its clock) are thin.
+[dependencies]
+# The step a step job's label names.
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+# `ServiceManager`, `ProcessProbe` and their values, which the launchd adapters implement, and
+# `digest_open_file`, the digest of an open executable.
+hostkeeper-observe = { path = "../hostkeeper-observe" }
+# `UnitControl`, the write side of the service manager that linking needs.
+hostkeeper-placed = { path = "../hostkeeper-placed" }
+# `StepLauncher` and its values, which the launchd step launcher implements, and the capture
+# `Ring` it keeps a step's output in. The step runner never depends on this crate
+# (crates/xtask/tests/layering keeps it so).
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+thiserror.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libproc.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# Reads the step plist the launcher wrote, in the tests' stand-in for launchd.
+plist.workspace = true
+# The expected digest of the file a fake pid runs.
+sha2.workspace = true
+
+[lints]
+workspace = true

@@ -72,6 +72,8 @@ fn assert_fixtures_read(store: &EnrollmentStore, ca: &TestCa) {
             addresses: vec!["192.0.2.10".to_owned()],
             mac_serial: String::new(),
             mac_platform_uuid: String::new(),
+            // The release that wrote the fixtures had no BMC claim: it reads as none.
+            bmc_mac: String::new(),
         }
     );
     assert_eq!(view.image, "hostkeeper-image-1");

@@ -1,0 +1,10 @@
+[package]
+name = "hostkeeper-ci"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-ctl = { path = "../hostkeeper-ctl" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

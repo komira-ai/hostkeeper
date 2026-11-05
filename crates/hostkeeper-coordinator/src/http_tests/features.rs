@@ -3,6 +3,9 @@
 
 use super::*;
 
+use hostkeeper_wire::wire::ORDER_FEATURE;
+
+use crate::grpc::GRPC_FEATURE;
 use crate::service::FEATURES;
 
 const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
@@ -201,13 +204,29 @@ async fn advertised_features_equal_the_handled_set() {
             "halt-v1",
             r#","last_update":{"target":"2.0","outcome":"failed","phase":"halt","reason":"tainted"}"#,
         ),
+        // A verdict that names its order and try: the answer acknowledges it.
+        (
+            "verdict-acks-v1",
+            r#","last_update":{"target":"0.9","outcome":"failed","order_id":"o-1","order_try":1}"#,
+        ),
     ]);
-    let announced = FEATURES.join(r#"",""#);
+    // An `order-v1` agent's top level is not kbf, so a heartbeat with no services is refused:
+    // the agents below announce the others and `order-v1` is proven apart.
+    let others: Vec<&str> = FEATURES
+        .iter()
+        .copied()
+        .filter(|name| *name != ORDER_FEATURE)
+        .collect();
+    let announced = others.join(r#"",""#);
     let announce = format!(r#","agent_features":["{announced}"]"#);
     let rig = rig("http-features-handled", FEATURES).await;
     let mut proven = Vec::new();
     for name in FEATURES {
-        if let Some(extra) = uses.get(name) {
+        if *name == ORDER_FEATURE {
+            order_v1_is_acted_on().await;
+        } else if *name == GRPC_FEATURE {
+            grpc_v1_is_acted_on().await;
+        } else if let Some(extra) = uses.get(name) {
             let without = beat_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
             let with = beat_text(&rig, "d2", "daemon", &with_it).await;
@@ -220,7 +239,45 @@ async fn advertised_features_equal_the_handled_set() {
     }
     let mut handled: Vec<&str> = uses.keys().copied().collect();
     handled.push("heartbeat-v2");
+    handled.push(ORDER_FEATURE);
+    handled.push(GRPC_FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);
+}
+
+/// Catches: `order-v1` advertised and gated but not acted on: a service with no registered
+/// package digest is ordered to an agent without it and not to one that announced it.
+async fn order_v1_is_acted_on() {
+    let rig = rig("http-features-order", FEATURES).await;
+    let announcing = format!(r#","agent_features":["order-v1"]{OTHER}"#);
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &beat("2.0", &announcing)).await,
+        r#"{"reply":"nothing","features":["order-v1"]}"#
+    );
+    assert_eq!(
+        beat_text(&rig, "d2", "daemon", &beat("2.0", OTHER)).await,
+        r#"{"reply":"update","service":"other","version":"3.0"}"#
+    );
+}
+
+/// Catches: `grpc-v1` advertised to an agent that did not announce it, or not advertised to
+/// one that did: it is in `features` of exactly the replies to a heartbeat that announces it,
+/// and the gRPC route is the code that handles it.
+async fn grpc_v1_is_acted_on() {
+    let rig = rig("http-features-grpc", FEATURES).await;
+    let announcing = beat("2.0", r#","agent_features":["grpc-v1"]"#);
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &announcing).await,
+        r#"{"reply":"nothing","features":["grpc-v1"]}"#
+    );
+    let other = beat("2.0", r#","agent_features":["halt-v1"]"#);
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &other).await,
+        r#"{"reply":"nothing","features":["halt-v1"]}"#
+    );
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &beat("2.0", "")).await,
+        r#"{"reply":"nothing"}"#
+    );
 }

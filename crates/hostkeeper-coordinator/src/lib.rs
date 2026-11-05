@@ -3,11 +3,17 @@
 //! minimums a desired state carries are kept, written and printed, and no decision reads them.
 //!
 //! - [`identity`]: who is calling, from the client certificate's subjectAltNames alone;
+//! - [`enrollment`]: how a host gets and keeps its certificate (`Enroll`, `Poll`, `Renew`) over
+//!   `hostkeeper_enrollment`'s CA and store, the start that opens them and makes the
+//!   coordinator's server certificate, and what the heartbeat path asks of them (who an
+//!   enrolled host's certificate names, whether it is denied, retiring or duplicate);
 //! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically,
 //!   with the [`registry`] of every version CI has set and the digest of its package;
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
-//! - [`verdicts`]: the release failures heard, each counted once per host, order id and try;
+//! - [`verdicts`]: the release failures heard, each counted once per host, order id and try,
+//!   and the [`verdict_file`] that stores them with the verdict each host was last acknowledged,
+//!   before an answer acknowledges it;
 //! - [`bake`] and [`canary`]: how long an updated host holds its slot, and the hosts that go
 //!   alone first;
 //! - [`converge`]: whether the farm has reached the desired version, for CI to wait on;
@@ -20,12 +26,17 @@
 //!   entries per role and host on top, the minimum versions per role and host, and the hosts
 //!   ordered to uninstall a service; the uninstall intents a heartbeat ends are cleared by
 //!   `intents`;
+//! - [`order_terms`]: the order id, try and package digest an update answer of the JSON route
+//!   carries to an agent that announced `order-v1`;
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the one live update,
 //!   and [`orders`], the typed orders a heartbeat answer carries (`force`, `abort`, `install`,
 //!   `uninstall`);
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
 //!   halts, aborts, exclusions, holds, the audit log), and [`assign`], its assignment calls
-//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`);
+//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), and [`operator_enrollment`],
+//!   its `Enrollment.List` and `Enrollment.Approve`;
+//! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`),
+//!   kept in the ops file, and the match of each request `Enrollment.List` shows against it;
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
 //!   last good versions and the audit ring, in the operations file, and every change as a line of
 //!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
@@ -41,6 +52,9 @@
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
+//! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
+//!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
+//!   operator API, and the router that tells them from the frozen JSON routes;
 //! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
 //! - [`config`]: the flags and the start, under the [`lock`] of the state files, with CI's spent
 //!   token ids in the [`jti_file`] beside them.
@@ -63,21 +77,26 @@ pub mod converge;
 pub mod decide;
 pub mod defer;
 pub mod desired;
+pub mod enrollment;
 pub mod fleet;
 pub mod force;
+pub mod grpc;
 pub mod halt;
 pub mod holds;
 pub mod http;
 pub mod identity;
 pub(crate) mod intents;
+pub mod inventory;
 pub mod jti_file;
 pub mod listen;
 pub mod lock;
 pub mod membership;
 pub mod operate;
 pub mod operator;
+pub mod operator_enrollment;
 pub mod ops;
 pub(crate) mod ops_file;
+pub mod order_terms;
 pub mod orders;
 pub mod reconcile;
 pub mod registry;
@@ -86,6 +105,7 @@ pub mod services;
 pub mod status;
 pub mod tokens;
 pub mod ui;
+pub mod verdict_file;
 pub mod verdicts;
 
 #[cfg(test)]
@@ -137,6 +157,8 @@ mod http_tests;
 #[cfg(test)]
 mod install_tests;
 #[cfg(test)]
+mod inventory_tests;
+#[cfg(test)]
 mod marks_support;
 #[cfg(test)]
 mod marks_tests;
@@ -156,6 +178,8 @@ mod ops_crash_tests;
 mod ops_downgrade_tests;
 #[cfg(test)]
 mod ops_tests;
+#[cfg(test)]
+mod order_terms_tests;
 #[cfg(test)]
 mod priority_tests;
 #[cfg(test)]
@@ -196,3 +220,7 @@ mod tierstore_service_tests;
 mod tokens_tests;
 #[cfg(test)]
 mod uninstall_tests;
+#[cfg(test)]
+mod verdict_acks_tests;
+#[cfg(test)]
+mod verdict_file_tests;
