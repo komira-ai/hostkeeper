@@ -191,6 +191,12 @@ ref, and requires the attested commit to be the commit released. It then runs th
 binary (step 6). A test that keeps the commands in this document equal to the ones that job runs
 comes with the release tooling.
 
+The CI client, `.github/workflows/set-desired.yml` ([The CI client](ci-client.md)), runs steps 2
+and 3 and the `--version` check of step 6 as written here, on the binary tarball for
+`linux-x86_64`. The workflow lint (`cargo test -p xtask --test workflows`) refuses a change to
+those commands, to the tag or to the binary tarball's name in this document that the workflow
+does not follow, and the reverse.
+
 ## Refuse
 
 Do not use a release when any of these holds:
