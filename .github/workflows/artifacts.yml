@@ -220,8 +220,10 @@ jobs:
   # The coordinator's image, per platform on a runner of that architecture, from the binary of
   # the coordinator tarball the build job released: built twice, each time by a new builder from
   # a context holding that binary alone, and released only when the two are byte for byte equal.
-  # The docker driver cannot write an OCI tarball, so each build has a docker-container builder
-  # of the pinned BuildKit image. The image is the artifact `assets-image-<platform>`, which the
+  # Each build has a docker-container builder of the pinned BuildKit image, whose `docker`
+  # exporter writes a tarball that is an OCI image layout (`oci-layout`, `index.json`, `blobs/`,
+  # what compare-images reads) and also holds the `manifest.json` that `docker load` reads, named
+  # hostkeeper-coordinator:<version>. The image is the artifact `assets-image-<platform>`, which the
   # jobs after this one take with the build jobs' `assets-*`.
   image:
     name: image ${{ matrix.platform }}
@@ -267,20 +269,20 @@ jobs:
       - name: The first builder
         run: docker buildx create --name image-a --driver docker-container --driver-opt "image=$BUILDKIT_IMAGE" --bootstrap
       - name: The first build
-        run: docker buildx build --builder image-a --no-cache --platform "$OCI_PLATFORM" --provenance=false --sbom=false --file packaging/container/Dockerfile --output "type=oci,dest=$RUNNER_TEMP/image-a.tar,rewrite-timestamp=true" "$RUNNER_TEMP/context-a"
+        run: docker buildx build --builder image-a --no-cache --platform "$OCI_PLATFORM" --provenance=false --sbom=false --file packaging/container/Dockerfile --output "type=docker,name=hostkeeper-coordinator:$RELEASE_VERSION,dest=$RUNNER_TEMP/image-a.tar,rewrite-timestamp=true" "$RUNNER_TEMP/context-a"
       - name: The second builder
         run: docker buildx create --name image-b --driver docker-container --driver-opt "image=$BUILDKIT_IMAGE" --bootstrap
       - name: The second build
-        run: docker buildx build --builder image-b --no-cache --platform "$OCI_PLATFORM" --provenance=false --sbom=false --file packaging/container/Dockerfile --output "type=oci,dest=$RUNNER_TEMP/image-b.tar,rewrite-timestamp=true" "$RUNNER_TEMP/context-b"
+        run: docker buildx build --builder image-b --no-cache --platform "$OCI_PLATFORM" --provenance=false --sbom=false --file packaging/container/Dockerfile --output "type=docker,name=hostkeeper-coordinator:$RELEASE_VERSION,dest=$RUNNER_TEMP/image-b.tar,rewrite-timestamp=true" "$RUNNER_TEMP/context-b"
       - name: The two builds are byte for byte equal
         run: cargo xtask release compare-images "$RUNNER_TEMP/image-a.tar" "$RUNNER_TEMP/image-b.tar"
       # The image as a deployment starts it: loaded into the runner's docker and run through its
       # own entrypoint, with --version as its only argument, it exits 0 and prints exactly the
       # coordinator's stamp of this version and commit.
       - name: Load the image
-        run: docker load --input "$RUNNER_TEMP/image-a.tar" > "$RUNNER_TEMP/image-loaded.txt"
+        run: docker load --input "$RUNNER_TEMP/image-a.tar"
       - name: The image's entrypoint says the version and the commit
-        run: test "$(docker run --rm "$(sed -n 's/^Loaded image ID:[[:space:]]*//p' "$RUNNER_TEMP/image-loaded.txt")" --version)" = "hostkeeper-coordinator $RELEASE_VERSION+${GITHUB_SHA:0:12}"
+        run: test "$(docker run --rm "hostkeeper-coordinator:$RELEASE_VERSION" --version)" = "hostkeeper-coordinator $RELEASE_VERSION+${GITHUB_SHA:0:12}"
       - name: Name the image
         run: cp "$RUNNER_TEMP/image-a.tar" "dist/hostkeeper-coordinator-$RELEASE_VERSION-$PLATFORM.image.tar"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -37,7 +37,7 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package |
 | `hostkeeper-coordinator-<version>-<platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-coordinator-<version>-<platform>.image.tar` | the coordinator's container image, an OCI image layout as a tarball |
+| `hostkeeper-coordinator-<version>-<platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
 | `index.json` | the release index: for each platform the package file, its SHA-256 and size |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
 | `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm` and `.image.tar` |
