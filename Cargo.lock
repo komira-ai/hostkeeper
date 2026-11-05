@@ -1132,6 +1132,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-enrollment"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hostkeeper-testkit",
+ "libc",
+ "prost",
+ "protox",
+ "rcgen",
+ "ring",
+ "rustix",
+ "rustls",
+ "sha2",
+ "thiserror",
+ "time",
+ "tonic-prost-build",
+ "tracing",
+ "x509-parser",
+]
+
+[[package]]
 name = "hostkeeper-hook"
 version = "0.1.0"
 dependencies = [

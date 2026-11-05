@@ -8,6 +8,8 @@
 //!   `hostkeeper-hook`, and `hostkeeper-unpack` on `hostkeeper-config`,
 //!   `hostkeeper-hook` and `hostkeeper-steps`, and on no other workspace crate
 //!   (dev-dependencies: themselves and `hostkeeper-testkit`);
+//! - `hostkeeper-enrollment` (the coordinator's CA and enrollment store) depends on no other
+//!   crate of this workspace (dev-dependencies: itself and `hostkeeper-testkit`);
 //! - `hostkeeper-testkit` depends on no workspace crate, and no crate has it but as a
 //!   dev-dependency.
 //!
@@ -589,7 +591,8 @@ fn a_missing_layer_crate_is_refused() {
     let root = (
         "Cargo.toml".to_string(),
         "[workspace]\nresolver = \"3\"\nexclude = [\"vendored\"]\nmembers = [\n    \
-         \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
+         \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-enrollment\",\n    \
+         \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
          \"crates/hostkeeper-testkit\",\n    \"crates/hostkeeper-unpack\",\n]\n"
             .to_string(),
     );
@@ -660,4 +663,34 @@ version = "9.9.9"
     assert_eq!(edges["alpha"], expected(&["beta", "delta", "gamma"]));
     assert_eq!(edges["beta"], expected(&[]));
     assert_eq!(edges["gamma"], expected(&["beta"]));
+}
+
+/// Catches: the enrollment crate (the coordinator's CA and enrollment store) gaining a normal
+/// or build dependency on another workspace crate, or a dev-dependency on one other than the
+/// testkit; and the crate missing from the workspace going unseen.
+#[test]
+fn enrollment_depending_on_a_workspace_crate_is_refused() {
+    let dir = fixture(
+        "clean",
+        vec![manifest_of(
+            "hostkeeper-enrollment",
+            layered("hostkeeper-enrollment", HOOK_DEP, CONFIG_DEP, RIGHTS_DEP),
+        )],
+    );
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-enrollment depends (normal or build) on the workspace crates \
+             {hostkeeper-config, hostkeeper-hook}, but must depend on exactly {}\n\
+             hostkeeper-enrollment has a dev-dependency on the workspace crate \
+             hostkeeper-rights, which is neither itself nor hostkeeper-testkit"
+        )
+    );
+    let dir = fixture("clean", vec![]);
+    std::fs::remove_dir_all(dir.join("crates/hostkeeper-enrollment")).expect("remove the crate");
+    cargo(&["generate-lockfile", "--offline"], &dir.join("Cargo.toml"));
+    assert_eq!(
+        check(&dir),
+        refused("hostkeeper-enrollment is not a workspace member")
+    );
 }

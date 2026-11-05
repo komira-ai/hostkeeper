@@ -43,11 +43,16 @@ hyper-util = { version = "0.1.21", default-features = false }
 # Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests;
 # hostkeeper-ui-tests adds `serde` to read a message's canonical JSON against its descriptor.
 prost-reflect = "0.16.5"
-# Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's build script and tests.
+# Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
+# hostkeeper-enrollment's build scripts, and tests.
 protox = "0.10.0"
-# Test certificates for the TLS tests of hostkeeper-ctl, made at run time so that no key is
-# committed. A dev-dependency only.
+# Certificates: the CA module of hostkeeper-enrollment signs with it (members add `x509-parser`,
+# which reads a public key back for signing), and the TLS tests of hostkeeper-ctl make their test
+# certificates with it at run time, so that no key is committed. The ring backend.
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
+# ECDSA P-256 / SHA-256 signature checks and SHA-256 digests (hostkeeper-enrollment: a CSR's
+# self-signature, a poll's signed nonce, the request id).
+ring = "0.17.14"
 # The zstd decoder of hostkeeper-unpack: pure Rust (MIT); `hash` (twox-hash, MIT) to check a
 # frame's content checksum; no dictionary builder.
 ruzstd = { version = "0.9.1", default-features = false, features = ["hash", "std"] }
@@ -57,6 +62,7 @@ regex = "1.13.1"
 # hostkeeper-package's tests: a TLS server on loopback for its HTTPS client, with the ring
 # provider ureq already brings; and reading the test certificates. Also the TLS of
 # `hostkeeper ctl`'s gateway client (hostkeeper-ctl), with the ring provider of tonic's `tls-ring`.
+# hostkeeper-enrollment's tests (dev only): verify the certificates its CA issues as TLS would.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 rustls-pki-types = { version = "1.15.1", features = ["std"] }
 # Safe system calls: the effective uid, flock, the monotonic clock, kill of a process group.
@@ -68,6 +74,8 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
+# The validity of a certificate, in the type rcgen takes (hostkeeper-enrollment).
+time = { version = "0.3.45", default-features = false }
 # The `--params` file, the daemon config and the manifest are TOML.
 toml = { version = "1.1.8", default-features = false, features = ["display", "parse", "serde", "std"] }
 # The daemon's runtime: the admin socket's server (hostkeeper-daemon); and the runtime of one
@@ -82,6 +90,10 @@ tokio-stream = { version = "0.1.19", default-features = false }
 tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
 tonic-prost = "0.14.6"
 tonic-prost-build = "0.14.6"
+# The alerts of hostkeeper-enrollment (a duplicate claim, a duplicate host): warn events with fields.
+tracing = "0.1.44"
+# Reads a CSR and a certificate (hostkeeper-enrollment), and its tests read issued certificates back.
+x509-parser = "0.18.1"
 # `service_fn`, the connector of the tests' gRPC client in hostkeeper-daemon; dev-dependency only.
 tower = { version = "0.5.3", default-features = false }
 # The package fetch's HTTPS client (hostkeeper-package): blocking, rustls with the ring provider and
