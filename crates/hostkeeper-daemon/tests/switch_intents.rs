@@ -387,7 +387,7 @@ fn a_crash_in_the_switch_to_the_target_is_finished_forward_at_start() {
         ));
         let reply =
             rig.daemon_with(failing, rig.units.clone())
-                .order(&update("web", "2.0.0", &d(), 1));
+                .order(&update("web", "2.0.0", &d(), 2));
         if reply.refusal() != Some(Refusal::LinkFailed) {
             assert!(matches!(reply, Reply::Finished { .. }), "{n}: {reply:?}");
             continue;
@@ -440,7 +440,7 @@ fn a_crash_in_the_switch_back_is_undone_at_start() {
     };
     rig.launcher.exits("web", Step::Verify, &[1]);
     let reply =
-        Daemon::new(config(), rig.dirs(), ports, OWN).order(&update("web", "2.0.0", &d(), 1));
+        Daemon::new(config(), rig.dirs(), ports, OWN).order(&update("web", "2.0.0", &d(), 2));
     assert_eq!(reply.refusal(), Some(Refusal::LinkFailed), "{reply:?}");
     assert_eq!(rig.launcher.steps("web").last(), Some(&Step::Verify));
     assert!(rig.placed_record().reload_pending);

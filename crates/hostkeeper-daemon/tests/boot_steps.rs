@@ -322,7 +322,8 @@ fn the_notify_systemd_flag_needs_the_socket_systemd_sets() {
 fn the_boot_step_unit_carries_the_generation_of_the_last_update() {
     let rig = Rig::new("steps-generation");
     restoring(&rig, "alpha", "1.0.0");
-    rig.add("alpha", "2.0.0");
+    // The update switches `current` to 2.0.0, so the boot step is 2.0.0's.
+    rig.add_with("alpha", "2.0.0", &manifest_with("alpha", "2.0.0", RESTORE));
     let (daemon, mut report) = rig.booted();
     let reply = daemon.order(&update("alpha", "2.0.0", &d(), 1));
     assert!(reply.refusal().is_none(), "{reply:?}");

@@ -95,11 +95,13 @@ fn every_package_failure_maps_to_one_closed_reason() {
             (refusal, outcome, class),
             "{reason}"
         );
-        assert_eq!(
-            refused.refusal.token(),
-            reason,
-            "the token is the library's"
-        );
+        // The library's own token, but for its digest mismatch, which is the daemon's
+        // `digest_mismatch` whichever step found it.
+        let token = match reason {
+            PACKAGE_DIGEST_MISMATCH => "digest_mismatch",
+            other => other,
+        };
+        assert_eq!(refused.refusal.token(), token, "{reason}");
         assert_eq!(refused.detail, failed.to_string());
     }
 

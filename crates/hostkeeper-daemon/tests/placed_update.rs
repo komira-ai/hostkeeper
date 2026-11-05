@@ -113,7 +113,7 @@ fn a_hooked_update_places_paths_at_the_design_points() {
     let gate = rig.launcher.hold("web", Step::Cutover);
     let running = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
+        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 2)))
     };
     gate.entered();
     // At `cutover`: `current` and `previous` switched, the new paths pending, the old still there.
@@ -179,7 +179,7 @@ fn a_failed_verify_puts_the_release_replaced_back_before_rollback() {
     let rig = Rig::new("placed-rollback");
     let daemon = installed(&rig);
     rig.launcher.exits("web", Step::Verify, &[1]);
-    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let reply = daemon.order(&update("web", "2.0.0", &d(), 2));
     assert!(
         matches!(
             reply,
@@ -228,7 +228,7 @@ fn an_update_that_would_place_over_another_file_is_refused_before_any_step() {
     fs::write(&blocker, "mine\n").expect("a file where the unit would go");
     let ran = rig.launcher.runs().len();
     let record = rig.record("web");
-    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let reply = daemon.order(&update("web", "2.0.0", &d(), 2));
     assert_eq!(reply.refusal(), Some(Refusal::PathConflict), "{reply:?}");
     assert_eq!(rig.launcher.runs().len(), ran);
     assert!(rig.placed_log.events().is_empty());

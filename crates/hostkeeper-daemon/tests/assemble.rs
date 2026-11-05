@@ -4,10 +4,6 @@
 //! ports of the host's build, built from paths alone.
 
 mod support;
-#[allow(
-    dead_code,
-    reason = "each test binary uses part of the shared archive support"
-)]
 mod support_archive;
 
 use std::fs;
