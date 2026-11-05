@@ -1,0 +1,12 @@
+[package]
+name = "hostkeeper-privileged"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+
+[dev-dependencies]
+hostkeeper-observe = { path = "../hostkeeper-observe" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
