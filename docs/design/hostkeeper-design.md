@@ -175,6 +175,8 @@ Designed. Certificate issuance is a module of the coordinator, not a second proc
 
 A release job in a service's repository downloads the hostkeeper release, verifies its provenance (checksums, attestation, signer workflow, attested source commit equal to the pin), and only then requests an OIDC token and runs `hostkeeper ctl releases set-desired --service X --version V`, then polls convergence.
 
+hostkeeper's own release planner holds releases from a commit whose privileged run on `main` failed: that commit is never released, a later commit whose ci, privileged and artifacts runs all succeeded is released and lifts the hold, and a ci success alone never lifts it.
+
 ### 4.6 The boot image and installers
 
 Linux: a PXE-installed Ubuntu boot image carries the daemon, its unit and `/etc/hostkeeper/hostkeeper.toml`; a host built from it needs nothing else to enroll. A deb and an rpm carry the daemon and unit for hosts not built from the image; whoever installs them places the config. macOS: a signed pkg whose postinstall writes `hostkeeper.toml` (section 5.9). Both publish into the operator's shared package repositories. The PXE service itself is the operator's, outside this document. Designed.
