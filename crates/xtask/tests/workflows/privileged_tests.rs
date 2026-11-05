@@ -352,7 +352,8 @@ const RUN: &str = "cargo test -p hostkeeper-privileged --features privileged --l
 /// What is wrong with the shape of privileged.yml's `text`, whose privileged test targets are
 /// `targets`: `sudo` named other than once in its values (a comment is not a value); other than
 /// one build step and one step as root; the build as root or after the run; a step that builds
-/// or runs another set of test targets.
+/// or runs another set of test targets; a step that runs more than one command (`;`, `&&`, `||`,
+/// a pipe or more than one line), whose logic belongs in a Rust tool.
 fn shape_problems(text: &str, targets: &BTreeSet<String>) -> Vec<String> {
     let doc = match yaml::load(text) {
         Ok(doc) => doc,
@@ -366,6 +367,14 @@ fn shape_problems(text: &str, targets: &BTreeSet<String>) -> Vec<String> {
         problems.push(format!("sudo is named {sudo} times, not once"));
     }
     let runs = runs(&doc);
+    for run in &runs {
+        let chained = [";", "&&", "||", "|", "\n"]
+            .iter()
+            .any(|sep| run.trim_end().contains(sep));
+        if chained {
+            problems.push(format!("the step `{run}` runs more than one command"));
+        }
+    }
     let builds: Vec<usize> = (0..runs.len())
         .filter(|&i| runs[i].starts_with(BUILD))
         .collect();
@@ -525,6 +534,21 @@ fn the_shape_check_of_privileged_yml_refuses_each_defect() {
             "the build step names the test targets {\"transient_unit\"}, not {\"observer\", \"transient_unit\"}"
         ]
     );
+    for chained in [
+        "      - run: test -d /run/systemd/system || exit 1\n",
+        "      - run: systemctl --version && systemd-analyze --version\n",
+        "      - run: systemctl --version; true\n",
+        "      - run: journalctl --no-pager | tail\n",
+        "      - run: |\n          systemctl --version\n          systemd-analyze --version\n",
+    ] {
+        let text = with_in(&clean, build, &format!("{chained}{build}"));
+        let found = shape_problems(&text, &targets);
+        assert_eq!(found.len(), 1, "{chained}: {found:?}");
+        assert!(
+            found[0].ends_with("runs more than one command"),
+            "{found:?}"
+        );
+    }
     let no_build = with_in(&clean, build, "");
     assert_eq!(
         shape_problems(&no_build, &targets),
