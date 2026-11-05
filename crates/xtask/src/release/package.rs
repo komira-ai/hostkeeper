@@ -39,9 +39,13 @@ pub(crate) struct Request {
     pub(crate) out: PathBuf,
 }
 
-/// The `[hook]` tables of the manifest: the one place the hook values are set. The daemon does
-/// not run this hook for its own package until the self-update design decides what it is.
-const HOOK: &str = r#"[hook]
+/// The `[hook]` tables of the manifest: the one place the hook values are set. The manifest
+/// loader requires a hook with bounded steps, so hostkeeper's own package carries one; the daemon
+/// does not run it for its own package, because hostkeeper's self-update is compiled into the
+/// daemon (design section 6.6). The manifest says so in a comment.
+const HOOK: &str = r#"# The daemon does not run this hook for its own package: hostkeeper's self-update is
+# compiled into the daemon. The table is here because every manifest has a bounded hook.
+[hook]
 command = ["bin/hostkeeper", "update-hook"]
 verify_deadline_secs = 600
 

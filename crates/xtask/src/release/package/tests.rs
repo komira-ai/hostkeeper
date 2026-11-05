@@ -317,10 +317,13 @@ fn package_manifest_loads_with_the_manifest_loader_and_names_the_hostkeeper_unit
 
 #[test]
 fn the_manifest_text_is_exact() {
-    // Catches: a changed key or value of the manifest that no loader check notices.
+    // Catches: a changed key or value of the manifest that no loader check notices, or a hook
+    // table that no longer says the daemon does not run it for its own package.
     assert_eq!(
         manifest(&version()),
         "schema = 1\nname = \"hostkeeper\"\nversion = \"0.1.5\"\nmin_hostkeeper = \"0.1.5\"\n\n\
+         # The daemon does not run this hook for its own package: hostkeeper's self-update is\n\
+         # compiled into the daemon. The table is here because every manifest has a bounded hook.\n\
          [hook]\ncommand = [\"bin/hostkeeper\", \"update-hook\"]\nverify_deadline_secs = 600\n\n\
          [hook.timeout_secs]\nprepare = 300\ncutover = 300\nverify = 300\nrollback = 300\n\
          cleanup = 300\n\n[units]\nrun = [\"hostkeeper.service\"]\n"
