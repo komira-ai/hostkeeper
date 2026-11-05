@@ -7,7 +7,8 @@
 //! defines; `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
-//! operator's; it takes the address of one interface.
+//! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
+//! files of that directory under `/ui/` (`crate::ui`).
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
 //! the whole start can be driven over in-memory connections.
 
@@ -37,6 +38,7 @@ use crate::ops::{OpsError, OpsStore};
 use crate::service::{Clock, Coordinator};
 use crate::services::{Services, ServicesError};
 use crate::tokens::{OperatorTokens, TokensError};
+use crate::ui::{UiDir, UiDirError};
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -97,6 +99,9 @@ pub enum StartError {
     /// A TLS file is refused.
     #[error(transparent)]
     Tls(#[from] TlsError),
+    /// `--ui-dir` does not name a directory.
+    #[error("--ui-dir: {0}")]
+    UiDir(#[from] UiDirError),
     /// A socket, the runtime or the signal handlers failed.
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -199,6 +204,13 @@ pub struct Serve {
     /// How often the TLS files and the tokens file are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
+    /// A directory of static files (the operator web app) that the private listener serves
+    /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
+    /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
+    /// The files need no token; the operator API they call does. It must be a directory at
+    /// start. Without it no file is served.
+    #[arg(long)]
+    pub ui_dir: Option<PathBuf>,
 }
 
 /// Where the listeners are bound.
@@ -231,10 +243,10 @@ pub struct Parts {
 ///
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
-/// file; the ops file must be one this build reads), `--private-listen` is a wildcard address,
-/// both token flags or neither is given, the legacy service or an allow-list entry names a
-/// service `--rollout-file` does not define, an entry names no services with no legacy service
-/// set, or the two URI prefixes are refused.
+/// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
+/// `--private-listen` is a wildcard address, both token flags or neither is given, the legacy
+/// service or an allow-list entry names a service `--rollout-file` does not define, an entry
+/// names no services with no legacy service set, or the two URI prefixes are refused.
 pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
     if flags.private_listen.ip().to_canonical().is_unspecified() {
         return Err(StartError::PrivateListen(flags.private_listen));
@@ -283,6 +295,7 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
         PathBuf::from(name)
     });
     let ops = OpsStore::open(&ops_path)?;
+    let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
     let files = |client_ca| TlsFiles {
         cert: flags.tls_cert.clone(),
@@ -297,7 +310,8 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
                 .with_services(services)
                 .with_legacy_service(legacy.map(str::to_owned))
                 .with_prefixes(prefixes)
-                .with_ops(ops),
+                .with_ops(ops)
+                .with_ui(ui),
         ),
         heartbeat_tls: TlsSource::files(
             "heartbeat",
