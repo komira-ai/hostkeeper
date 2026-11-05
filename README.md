@@ -80,9 +80,9 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
 
 - **Host daemon.** Built: B2 (the config and manifest loaders), B4 (the daemon and its admin
   socket), B8 (the service observer), B9 (the heartbeat loop), B13 (pruning to two versions),
-  B22 (self-update of hostkeeper), B3 (`SystemdLauncher`, in `hostkeeper-steps`; the daemon does
-  not use it yet). Planned: B20 (the verbs `abort`, `clear_halt` and `clear_record` answer
-  `not_implemented`).
+  B22 (self-update of hostkeeper), B3 (`SystemdLauncher`, in `hostkeeper-steps`, which the daemon
+  runs each hook step through). Planned: B20 (the verbs `abort`, `clear_halt` and `clear_record`
+  answer `not_implemented`).
 - **Packages and placement.** Built: B5 (fetch, verify, unpack, seal), B27 (placed-path
   linking), B28 (hookless force), B23's `install` and `uninstall` orders in the daemon. Partly
   built: B23's assignment of services by the coordinator (roles in the rollout file; the
@@ -131,10 +131,12 @@ a request an operator approves, renewal at half life) and keeps it under `/etc/u
 heartbeat loop reads the certificate under that directory's `current` link at every heartbeat,
 and while there is none it says once what it waits for and sends nothing. It then serves the
 admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
-new binary. This build fetches, verifies and unpacks packages, and observes each service for
-`Status`, but has no step launcher or service manager wired in (`hostkeeper-steps` has a
-systemd launcher that the daemon does not use yet) and no coordinator link for its heartbeats
-yet, so it serves the admin socket's `Status` and runs no order.
+new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
+transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
+the unit's name), and observes each service for `Status`. It has no service manager wired in,
+its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
+protocol probe (each fails without starting), and it has no coordinator link for its heartbeats yet, so no order
+reaches it from the coordinator.
 
 | exit status | meaning |
 |---|---|
