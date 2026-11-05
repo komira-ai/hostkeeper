@@ -48,7 +48,7 @@ tracing-subscriber.workspace = true
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 rcgen.workspace = true
-rustls.workspace = true
+rustls = { workspace = true, features = ["tls12"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "test-util", "time"] }
 
 [lints]

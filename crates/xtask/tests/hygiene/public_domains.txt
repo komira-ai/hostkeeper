@@ -7,9 +7,14 @@
 github.com
 crates.io
 
-# GitHub's OIDC issuer, token.actions.githubusercontent.com, which the coordinator's OIDC
-# allow-list tests name.
+# What a package attestation names (hostkeeper-package): the OIDC issuer of GitHub Actions
+# (token.actions.githubusercontent.com), which the coordinator's OIDC allow-list tests name too,
+# the SLSA provenance predicate type and the in-toto statement type.
 githubusercontent.com
+slsa.dev
+in-toto.io
+# The Sigstore transparency log a captured attestation bundle's checkpoint names (rekor.sigstore.dev).
+sigstore.dev
 
 # Licence texts.
 apache.org
@@ -36,6 +41,8 @@ yaml.org
 =hook.group
 =hook.environment.name
 
+# The SVG namespace URI every diagram under docs/design/diagrams declares; a namespace name, not a host the code reaches.
+=www.w3.org
 # Field paths of hostkeeper-proto's tests (the kbf JSON keys and proto fields they map onto, and
 # fixture field names) that end in a word the IANA list delegates (`name`, `target`, `health`,
 # `pin`). They are names, not hosts.
@@ -47,5 +54,12 @@ yaml.org
 =services.version.name
 =t.v1.health
 =f.v1.login.pin
-# A protobuf type path in hostkeeper-proto's operator.proto, not a host.
+# Protobuf type paths in hostkeeper-proto's operator.proto and tests, not hosts.
 =hostkeeper.agent.v1.health
+=hostkeeper.agent.v1.claims
+=hostkeeper.operator.v1.services
+# systemd targets in packaging/linux/hostkeeper.service and its test (`target` is a top-level
+# domain), not hosts.
+=default.target
+=multi-user.target
+=network-online.target

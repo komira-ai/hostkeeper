@@ -20,17 +20,21 @@ const WIRE: &str = "hostkeeper-wire";
 const OIDC: &str = "hostkeeper-oidc";
 const TLS: &str = "hostkeeper-tls";
 const COORDINATOR: &str = "hostkeeper-coordinator";
+const UNPACK: &str = "hostkeeper-unpack";
+const ENROLLMENT: &str = "hostkeeper-enrollment";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
-const LAYERS: [(&str, &[&str]); 8] = [
+const LAYERS: [(&str, &[&str]); 10] = [
     (HOOK, &[]),
     (CONFIG, &[]),
-    (STEPS, &[HOOK]),
+    (STEPS, &[CONFIG, HOOK]),
     (RIGHTS, &[CONFIG, HOOK]),
     (WIRE, &[]),
     (OIDC, &[]),
     (TLS, &[]),
     (COORDINATOR, &[WIRE, OIDC, TLS]),
+    (UNPACK, &[CONFIG, HOOK, STEPS]),
+    (ENROLLMENT, &[]),
 ];
 
 /// Dev-dependencies on another layer crate that are allowed besides the crate itself and the
@@ -282,7 +286,7 @@ fn chain_to(edges: &Edges, members: &[&str], target: &str) -> Vec<String> {
 }
 
 /// Every rule the workspace breaks, one line each: first the kbf names (all of `lock`), then
-/// the layer crates (hook, config, steps, rights, wire, oidc, tls, coordinator), then the testkit.
+/// the layer crates in the order of `LAYERS`, then the testkit.
 fn violations(members: &Members, lock: &Edges) -> Vec<String> {
     let mut out = Vec::new();
     let member_names: Vec<&str> = members.keys().map(String::as_str).collect();

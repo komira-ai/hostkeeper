@@ -1,0 +1,18 @@
+{
+  "phases": [
+    "started",
+    "units_stopped",
+    "unlinked",
+    "switched",
+    "linked",
+    "reloaded",
+    "units_started",
+    "verdicted"
+  ],
+  "verdicts": [
+    { "verdict": "succeeded" },
+    { "verdict": "failed", "reason": "link_failed" },
+    { "verdict": "failed", "reason": "daemon_reload_failed" },
+    { "verdict": "failed", "reason": "start_failed" }
+  ]
+}

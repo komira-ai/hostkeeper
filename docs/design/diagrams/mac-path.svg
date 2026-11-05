@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780" role="img" aria-label="Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and the one launchd daemon.">
+<title>Mac path</title>
+<desc>A Mac is enrolled by the MDM gate, which installs the hostkeeper installer pkg by digest and pushes a one-time nonce. The coordinator auto-approves the Mac only when every nonce and serial condition holds, otherwise the request stays pending.</desc>
+<defs><marker id="mac-path-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="mac-path-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="780" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Mac path: MDM gate, per-device nonce, enrollment, and launchd jobs</text>
+<rect x="20" y="48" width="280" height="640" rx="6" class="box-p"/>
+<text x="32" y="70" class="b" text-anchor="start">Operator and MDM gate</text>
+<rect x="400" y="48" width="400" height="640" rx="6" class="box-p"/>
+<text x="412" y="70" class="b" text-anchor="start">Coordinator</text>
+<rect x="900" y="48" width="280" height="640" rx="6" class="box-p"/>
+<text x="912" y="70" class="b" text-anchor="start">Mac</text>
+<rect x="30" y="90" width="260" height="200" rx="5" class="box-b"/>
+<text x="160" y="116" class="b" text-anchor="middle">MDM gate</text>
+<text x="160" y="134" class="t-m" text-anchor="middle">allowlisted serial</text>
+<text x="160" y="150" class="t-m" text-anchor="middle">enrolled + supervised check</text>
+<text x="160" y="166" class="t-m" text-anchor="middle">one-time nonce, managed profile</text>
+<text x="160" y="182" class="t-m" text-anchor="middle">serial check for the coordinator</text>
+<rect x="30" y="340" width="260" height="56" rx="5" class="box"/>
+<text x="160" y="364" class="b" text-anchor="middle">Device enrolment (ADE)</text>
+<text x="160" y="382" class="t-m" text-anchor="middle">Apple device enrolment</text>
+<path d="M160,340 L160,290" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="170" y="320" class="t-m lbl" text-anchor="start">enrolled device</text>
+<path d="M290,112 L910,112" class="ln" marker-end="url(#mac-path-ak)"/>
+<circle cx="304" cy="98" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="304" y="102" class="b" font-size="12" text-anchor="middle">1</text>
+<text x="326" y="106" class="t-m lbl" text-anchor="start">MDM enrols the device</text>
+<path d="M290,152 L910,152" class="ln" marker-end="url(#mac-path-ak)"/>
+<circle cx="304" cy="138" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="304" y="142" class="b" font-size="12" text-anchor="middle">2</text>
+<text x="326" y="146" class="t-m lbl" text-anchor="start">install hostkeeper pkg by digest</text>
+<path d="M290,192 L910,192" class="ln" marker-end="url(#mac-path-ak)"/>
+<circle cx="304" cy="178" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="304" y="182" class="b" font-size="12" text-anchor="middle">3</text>
+<text x="326" y="186" class="t-m lbl" text-anchor="start">one-time nonce, managed profile, 1 h</text>
+<rect x="910" y="90" width="260" height="120" rx="5" class="box"/>
+<text x="1040" y="116" class="b" text-anchor="middle">Mac, supervised</text>
+<text x="1040" y="134" class="t-m" text-anchor="middle">pkg postinstall writes</text>
+<text x="1040" y="150" class="t-m" text-anchor="middle">hostkeeper.toml: coordinator, CA hash,</text>
+<text x="1040" y="166" class="t-m" text-anchor="middle">release channel, trusted signers;</text>
+<text x="1040" y="182" class="t-m" text-anchor="middle">no secret</text>
+<circle cx="910" cy="90" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="910" y="94" class="b" font-size="12" text-anchor="middle">4</text>
+<rect x="910" y="250" width="260" height="160" rx="5" class="box-o dash"/>
+<text x="1040" y="275" class="b" text-anchor="middle">launchd daemon: hostkeeper</text>
+<text x="1040" y="293" class="t-m" text-anchor="middle">user root, one process</text>
+<text x="1040" y="318" class="t-m" text-anchor="middle">heartbeats, verifies releases,</text>
+<text x="1040" y="334" class="t-m" text-anchor="middle">runs hooks as root</text>
+<text x="1040" y="350" class="t-m" text-anchor="middle">no unprivileged part</text>
+<rect x="910" y="450" width="260" height="70" rx="5" class="box-o dash"/>
+<text x="1040" y="474" class="b" text-anchor="middle">Each step</text>
+<text x="1040" y="492" class="t-m" text-anchor="middle">launchd job as root: timeout,</text>
+<text x="1040" y="508" class="t-m" text-anchor="middle">kill, log capture; no sandbox</text>
+<text x="1040" y="540" class="t-m" text-anchor="middle">(a transient unit on Linux)</text>
+<rect x="410" y="250" width="380" height="208" rx="5" class="box-b"/>
+<text x="600" y="272" class="b" text-anchor="middle">Coordinator</text>
+<text x="600" y="288" class="t-m" text-anchor="middle">auto-approves only if all hold</text>
+<text x="424" y="310" class="t-m" text-anchor="start">- nonce valid</text>
+<text x="424" y="330" class="t-m" text-anchor="start">- nonce unexpired</text>
+<text x="424" y="350" class="t-m" text-anchor="start">- nonce unused</text>
+<text x="424" y="370" class="t-m" text-anchor="start">- nonce consumed in the same transaction as approval</text>
+<text x="424" y="390" class="t-m" text-anchor="start">- nonce issued for the claimed serial</text>
+<text x="424" y="410" class="t-m" text-anchor="start">- device supervised</text>
+<text x="424" y="430" class="t-m" text-anchor="start">- serial on the allowlist</text>
+<circle cx="410" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="410" y="254" class="b" font-size="12" text-anchor="middle">7</text>
+<rect x="410" y="478" width="380" height="44" rx="5" class="box-o"/>
+<text x="600" y="498" class="b" text-anchor="middle">any miss: stays pending</text>
+<text x="600" y="514" class="t-m" text-anchor="middle">nothing is installed until an operator decides</text>
+<path d="M600,458 L600,478" class="ln-o" marker-end="url(#mac-path-ao)"/>
+<path d="M910,268 L790,268" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="850" y="238" class="t-m lbl" text-anchor="middle">request + nonce,</text>
+<text x="850" y="253" class="t-m lbl" text-anchor="middle">serial</text>
+<circle cx="850" cy="268" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="850" y="272" class="b" font-size="12" text-anchor="middle">5</text>
+<path d="M410,268 L290,268" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="350" y="255" class="t-m lbl" text-anchor="middle">CheckSerial</text>
+<circle cx="350" cy="268" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="350" y="272" class="b" font-size="12" text-anchor="middle">6</text>
+<path d="M790,300 L910,300" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="850" y="326" class="t-m lbl" text-anchor="middle">certificate</text>
+<circle cx="850" cy="300" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="850" y="304" class="b" font-size="12" text-anchor="middle">8</text>
+<path d="M790,380 L910,380" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="850" y="362" class="t-m lbl" text-anchor="middle">Install order</text>
+<circle cx="850" cy="380" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="850" y="384" class="b" font-size="12" text-anchor="middle">9</text>
+<text x="910" y="570" class="b" text-anchor="start">Differences from Linux</text>
+<rect x="910" y="580" width="260" height="24" rx="3" class="box"/>
+<text x="1040" y="596" class="t-m" text-anchor="middle">no port hand-over: update with a gap</text>
+<rect x="910" y="608" width="260" height="24" rx="3" class="box"/>
+<text x="1040" y="624" class="t-m" text-anchor="middle">live leases: Deferred leases_live</text>
+<rect x="910" y="636" width="260" height="40" rx="3" class="box"/>
+<text x="1040" y="652" class="t-m" text-anchor="middle">release must carry no quarantine</text>
+<text x="1040" y="667" class="t-m" text-anchor="middle">attribute and a valid signature</text>
+<rect x="30" y="738" width="22" height="14" rx="3" class="box-o"/>
+<text x="60" y="750" class="t-m" text-anchor="start">runs as root</text>
+<rect x="162.862" y="738" width="22" height="14" rx="3" class="box-b"/>
+<text x="192.862" y="750" class="t-m" text-anchor="start">parses network input</text>
+<rect x="349.631" y="738" width="22" height="14" rx="3" class="box"/>
+<text x="379.631" y="750" class="t-m" text-anchor="start">local only</text>
+<rect x="522.923" y="738" width="22" height="14" rx="3" class="box-p"/>
+<text x="552.923" y="750" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
+<path d="M810.769,746 L840.769,746" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="848.769" y="750" class="t-m" text-anchor="start">request</text>
+<path d="M917.938,746 L947.938,746" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="955.938" y="750" class="t-m" text-anchor="start">reply or report</text>
+</svg>

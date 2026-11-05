@@ -13,7 +13,7 @@ description = "The TLS server configuration of a listener whose certificate, key
 # builds `rustls` configurations (the ring provider) and opens no socket; the caller accepts
 # connections and calls `reload` on its own interval. It depends on no workspace crate.
 [dependencies]
-rustls.workspace = true
+rustls = { workspace = true, features = ["tls12"] }
 sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
