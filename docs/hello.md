@@ -18,9 +18,9 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Linux host | the daemon runs each step through `SystemdLauncher` | — |
 | running a hook step on a Mac | `LaunchdLauncher` (`hostkeeper-launchd`) | the daemon running its steps through it (`docs/macos.md`) |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
-| assigning to a role | the rollout file's `roles` and `install_when_absent` | `Services.Assign` per host, komira-ai/hostkeeper#45 |
+| assigning to a role | the rollout file's `roles`, `Services.Assign` and the coordinator's `install` order (komira-ai/hostkeeper#45) | the daemon announcing `install-v1`, without which it is never ordered an install |
 | setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow | a UI control: the Rollout page shows the desired version and does not set it |
-| unassigning with uninstall | the daemon's uninstall verb and hello's `uninstall` step | `Services.Unassign`, komira-ai/hostkeeper#45, and a UI control |
+| unassigning with uninstall | the daemon's uninstall verb, hello's `uninstall` step and `Services.Unassign` (komira-ai/hostkeeper#45) | the daemon announcing `install-v1`, and a UI control |
 
 ## The package
 
@@ -83,9 +83,10 @@ makes that directory, owner only, on its first step.
 
 ## 1. Assign hello to a role
 
-The rollout entry assigns hello to every host of the role. `install_when_absent = true` makes
-the coordinator order an install on a host of the role that has never run hello. Nothing is
-ordered until a desired version is set.
+The rollout entry assigns hello to every host of the role, and the coordinator orders an
+install on each host of the role that does not run hello (`docs/operations/assignments.md`).
+**Specified, not built:** the install goes only to a daemon that announces `install-v1`, which
+the daemon does not yet. Nothing is ordered until a desired version is set.
 
 A host enrolled after this joins the role through its approval:
 `hostkeeper ctl enrollment approve ... --role <role>`.
@@ -145,8 +146,8 @@ One failed host is enough for the rollback: the entry sets `rollback_after_faile
 
 ## 5. Unassign with uninstall
 
-**Specified, not built:** the coordinator's `Services.Unassign` is komira-ai/hostkeeper#45, and
-the UI has no control for it. When it lands, unassign hello from each host of the role:
+**Specified, not built:** the uninstall goes only to a daemon that announces `install-v1`, and
+the UI has no control for it. Unassign hello from the role (`--role <role>`) or from each host:
 
 ```sh
 hostkeeper ctl ... services unassign --node-id <host> --service hello --uninstall true

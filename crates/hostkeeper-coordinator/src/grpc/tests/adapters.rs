@@ -11,6 +11,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::Audit as _;
 use hostkeeper_proto::hostkeeper::operator::v1::hold_scope::Scope;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::Hosts as _;
+use hostkeeper_proto::hostkeeper::operator::v1::min_version::Scope as MinScope;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::Releases as _;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::Services as _;
 use tonic::{Code, Request, Response, Status};
@@ -124,21 +125,6 @@ async fn a_method_no_handler_serves_yet_is_unimplemented_with_no_message() {
     assert_pending(
         releases(&world)
             .unmark_bad(as_operator(c, proto::UnmarkBadRequest::default()).await)
-            .await,
-    );
-    assert_pending(
-        services(&world)
-            .assign(as_operator(c, proto::AssignRequest::default()).await)
-            .await,
-    );
-    assert_pending(
-        services(&world)
-            .unassign(as_operator(c, proto::UnassignRequest::default()).await)
-            .await,
-    );
-    assert_pending(
-        services(&world)
-            .set_min_version(as_operator(c, proto::SetMinVersionRequest::default()).await)
             .await,
     );
 }
@@ -823,6 +809,74 @@ async fn services_hold_unhold_and_list_answer_their_marks_and_their_refusals() {
             .await,
         Code::InvalidArgument,
         "invalid_request",
+    );
+}
+
+/// Proves `Services.Assign`, `Unassign` and `SetMinVersion`: each answers the entry its handler
+/// made, and each refusal is the status of its value: a role nothing names is `unknown_role`
+/// (`NOT_FOUND`), an unassign of a role the service is not assigned to `not_assigned`, and a
+/// minimum above the desired version `below_min_version` (both `FAILED_PRECONDITION`).
+#[tokio::test]
+async fn services_assign_unassign_and_set_min_version_answer_their_entries_and_refusals() {
+    let world = world_of("adapters-assign", Some(&["other"]));
+    let c = &world.coordinator;
+    set(&world, "other", "2.0").await.expect("set");
+    let assign = |role: &str| proto::AssignRequest {
+        service: "other".to_owned(),
+        role: role.to_owned(),
+        ..proto::AssignRequest::default()
+    };
+    let unassign = |service: &str| proto::UnassignRequest {
+        service: service.to_owned(),
+        role: "search".to_owned(),
+        ..proto::UnassignRequest::default()
+    };
+    let floor = |version: &str| proto::SetMinVersionRequest {
+        service: "other".to_owned(),
+        min_version: Some(proto::MinVersion {
+            scope: Some(MinScope::Role("search".to_owned())),
+            version: version.to_owned(),
+        }),
+    };
+
+    let assigned = services(&world)
+        .assign(as_operator(c, assign("search")).await)
+        .await
+        .expect("assigned")
+        .into_inner();
+    assert_eq!(assigned.entry.expect("an entry").action, "assign");
+    assert_refused(
+        services(&world)
+            .assign(as_operator(c, assign("nowhere")).await)
+            .await,
+        Code::NotFound,
+        "unknown_role",
+    );
+    let unassigned = services(&world)
+        .unassign(as_operator(c, unassign("other")).await)
+        .await
+        .expect("unassigned")
+        .into_inner();
+    assert_eq!(unassigned.entry.expect("an entry").action, "unassign");
+    assert_refused(
+        services(&world)
+            .unassign(as_operator(c, unassign("other")).await)
+            .await,
+        Code::FailedPrecondition,
+        "not_assigned",
+    );
+    let min = services(&world)
+        .set_min_version(as_operator(c, floor("1.5")).await)
+        .await
+        .expect("set")
+        .into_inner();
+    assert_eq!(min.entry.expect("an entry").action, "set_min_version");
+    assert_refused(
+        services(&world)
+            .set_min_version(as_operator(c, floor("3.0")).await)
+            .await,
+        Code::FailedPrecondition,
+        "below_min_version",
     );
 }
 

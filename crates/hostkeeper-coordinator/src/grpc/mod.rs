@@ -76,9 +76,6 @@ pub const PENDING: &[&str] = &[
     "/hostkeeper.operator.v1.Hosts/List",
     "/hostkeeper.operator.v1.Hosts/Get",
     "/hostkeeper.operator.v1.Releases/UnmarkBad",
-    "/hostkeeper.operator.v1.Services/Assign",
-    "/hostkeeper.operator.v1.Services/Unassign",
-    "/hostkeeper.operator.v1.Services/SetMinVersion",
 ];
 
 /// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response.

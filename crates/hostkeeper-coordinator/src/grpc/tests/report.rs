@@ -711,7 +711,8 @@ fn every_membership_maps_to_its_proto_name() {
 }
 
 /// Each closed gate, and each question that does not apply, maps to its proto reason; the
-/// floor gate has no spelling and is unspecified; no hold at all is `none`.
+/// floor gate, and a host that cannot take an install or an uninstall or a version with no
+/// package digest to install, have no spelling and are unspecified; no hold at all is `none`.
 #[test]
 fn every_rollout_hold_maps_to_its_proto_gate_reason() {
     use proto::GateReason as R;
@@ -726,13 +727,13 @@ fn every_rollout_hold_maps_to_its_proto_gate_reason() {
         (Some(Why::Gate(Gate::Quiet)), R::Quiet),
         (Some(Why::Gate(Gate::CanaryWait)), R::CanaryWait),
         (Some(Why::Gate(Gate::Baking)), R::Baking),
-        (Some(Why::Skip(Skip::NoDefinition)), R::NoDefinition),
         (Some(Why::Skip(Skip::NoDesired)), R::NoDesired),
         (Some(Why::Skip(Skip::NotAMember)), R::NotAMember),
-        (Some(Why::Skip(Skip::Absent)), R::Absent),
         (Some(Why::Skip(Skip::UpToDate)), R::UpToDate),
         (Some(Why::Skip(Skip::FailedHere)), R::FailedHere),
         (Some(Why::Skip(Skip::Deferred)), R::Deferred),
+        (Some(Why::Skip(Skip::Unsupported)), R::Unspecified),
+        (Some(Why::Skip(Skip::NoDigest)), R::Unspecified),
         (None, R::None),
     ];
     for (why, expected) in cases {

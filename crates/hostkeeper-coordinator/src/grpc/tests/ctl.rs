@@ -25,6 +25,7 @@ use tokio::runtime::Runtime;
 use tonic::Status;
 use tonic::metadata::MetadataMap;
 
+use crate::assignment::Entry;
 use crate::grpc::gateway::is_method;
 use crate::grpc::route;
 use crate::http::Surface;
@@ -40,6 +41,12 @@ const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 
 /// The path of `Releases.Force`.
 const FORCE: &str = "/hostkeeper.operator.v1.Releases/Force";
+
+/// The path of `Services.Assign`.
+const ASSIGN: &str = "/hostkeeper.operator.v1.Services/Assign";
+
+/// The path of `Services.Unassign`.
+const UNASSIGN: &str = "/hostkeeper.operator.v1.Services/Unassign";
 
 /// A `Connect` whose transport calls the router of `coordinator` in process, the way the
 /// transport named by `kind` would over the network. It refuses a `Target` that names the other
@@ -200,14 +207,25 @@ struct Ran {
 /// Runs `hostkeeper ctl releases <rpc>` over `bridge` with `token` as the bearer and
 /// `request` as the request file, in a scratch directory of its own.
 fn ctl(bridge: &Bridge, token: &str, rpc: &[&str], request: &str) -> Ran {
+    let files = scratch("ctl-request");
+    let request_file = files.path().join("request.json");
+    fs::write(&request_file, request).expect("request");
+    let mut command: Vec<OsString> = vec!["releases".into()];
+    command.extend(rpc.iter().map(OsString::from));
+    command.push("--request".into());
+    command.push(request_file.into_os_string());
+    run_ctl(bridge, token, command)
+}
+
+/// Runs `hostkeeper ctl <command>` over `bridge` with `token` as the bearer, its CA and token
+/// files in a scratch directory of its own.
+fn run_ctl(bridge: &Bridge, token: &str, command: Vec<OsString>) -> Ran {
     let files = scratch("ctl-files");
     let ca = files.path().join("ca.pem");
     let token_file = files.path().join("token");
-    let request_file = files.path().join("request.json");
     // The bridge makes no TLS: it reads none of these, but ctl needs the flags.
     fs::write(&ca, "the bridge reads no CA").expect("ca");
     fs::write(&token_file, token).expect("token");
-    fs::write(&request_file, request).expect("request");
     let mut args: Vec<OsString> = vec![
         "hostkeeper".into(),
         "--endpoint".into(),
@@ -220,11 +238,8 @@ fn ctl(bridge: &Bridge, token: &str, rpc: &[&str], request: &str) -> Ran {
         bridge.flag().into(),
         "--output".into(),
         "json".into(),
-        "releases".into(),
     ];
-    args.extend(rpc.iter().map(OsString::from));
-    args.push("--request".into());
-    args.push(request_file.into_os_string());
+    args.extend(command);
     let mut stdin = io::empty();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -373,5 +388,53 @@ fn a_token_no_one_holds_reaches_the_command_line_as_exit_3_with_unauthorized() {
         assert_eq!(ran.code, 3, "{kind:?}");
         assert_eq!(ran.stdout, "", "{kind:?}");
         assert_eq!(ran.stderr, "refused: unauthorized\n", "{kind:?}");
+    }
+}
+
+/// Proves: `services unassign --role` and `services assign --role`, parsed and run by ctl
+/// through `--transport grpc` and `--transport gateway`, carry the role to the coordinator:
+/// each exits 0 and prints the audit entry of its scope (`role storage`), the unassign leaves
+/// the role's exclusion of `web` in the ops file, and the assign takes it off again.
+///
+/// Catches: a `--role` flag dropped or sent as the node id by either transport, so that the
+/// call is refused for want of a scope, or changes another scope than the role.
+#[test]
+fn services_assign_and_unassign_by_role_run_through_ctl() {
+    for (name, kind) in [
+        ("ctl-role-grpc", TransportKind::Grpc),
+        ("ctl-role-gateway", TransportKind::Gateway),
+    ] {
+        let farm = rig(name, "");
+        let coordinator = Arc::new(farm.coordinator);
+        let bridge = Bridge::new(kind, &coordinator);
+        let by_role = |verb: &str| -> Vec<OsString> {
+            ["services", verb, "--service", "web", "--role", "storage"]
+                .iter()
+                .map(OsString::from)
+                .collect()
+        };
+
+        let ran = run_ctl(&bridge, OPERATOR, by_role("unassign"));
+        assert_eq!((ran.code, ran.stderr.as_str()), (0, ""), "{kind:?}");
+        let response: Value = serde_json::from_str(&ran.stdout).expect("JSON");
+        assert_eq!(response["entry"]["action"], "unassign", "{kind:?}");
+        assert_eq!(response["entry"]["reason"], "role storage", "{kind:?}");
+        let excluded = coordinator.ops().state().assignments;
+        assert_eq!(
+            excluded["web"].roles.get("storage"),
+            Some(&Entry::Exclude),
+            "{kind:?}"
+        );
+
+        let ran = run_ctl(&bridge, OPERATOR, by_role("assign"));
+        assert_eq!((ran.code, ran.stderr.as_str()), (0, ""), "{kind:?}");
+        let response: Value = serde_json::from_str(&ran.stdout).expect("JSON");
+        assert_eq!(response["entry"]["action"], "assign", "{kind:?}");
+        assert_eq!(response["entry"]["reason"], "role storage", "{kind:?}");
+        assert!(
+            !coordinator.ops().state().assignments.contains_key("web"),
+            "{kind:?}: the rollout file's role again"
+        );
+        assert_eq!(bridge.paths(), [UNASSIGN, ASSIGN], "{kind:?}");
     }
 }

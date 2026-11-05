@@ -85,10 +85,12 @@ command services list /hostkeeper.operator.v1.Services/List
 command services assign /hostkeeper.operator.v1.Services/Assign
 flag services assign --node-id STRING
 flag services assign --service STRING
+flag services assign --role STRING
 command services unassign /hostkeeper.operator.v1.Services/Unassign
 flag services unassign --node-id STRING
 flag services unassign --service STRING
 flag services unassign --uninstall true|false
+flag services unassign --role STRING
 command services set-min-version /hostkeeper.operator.v1.Services/SetMinVersion
 flag services set-min-version --service STRING
 request-file services set-min-version min_version

@@ -2,8 +2,8 @@
 //! `Services`, `Enrollment` and `Audit`.
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
-//! ([`crate::operator`], [`crate::force`]) calls it with the caller the router admitted. A
-//! method the frozen JSON routes have (`Hosts.Include`, `Hosts.SetLabels`, `Releases.ClearHalt`,
+//! ([`crate::operator`], [`crate::force`], [`crate::assign`]) calls it with the caller the
+//! router admitted. A method the frozen JSON routes have (`Hosts.Include`, `Hosts.SetLabels`, `Releases.ClearHalt`,
 //! `Releases.SetDesired`, `Releases.Converge`, `Releases.Status`) builds the request that route
 //! reads and calls what that route calls. A method no handler serves yet is `UNIMPLEMENTED`
 //! ([`super::PENDING`] lists them). The caller was settled before the request was read
@@ -417,23 +417,35 @@ impl ServicesApi for ServicesService {
 
     async fn assign(
         &self,
-        _request: Request<proto::AssignRequest>,
+        request: Request<proto::AssignRequest>,
     ) -> Result<Response<proto::AssignResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .assign(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
     }
 
     async fn unassign(
         &self,
-        _request: Request<proto::UnassignRequest>,
+        request: Request<proto::UnassignRequest>,
     ) -> Result<Response<proto::UnassignResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .unassign(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
     }
 
     async fn set_min_version(
         &self,
-        _request: Request<proto::SetMinVersionRequest>,
+        request: Request<proto::SetMinVersionRequest>,
     ) -> Result<Response<proto::SetMinVersionResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .set_min_version(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
     }
 
     async fn hold(

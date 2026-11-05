@@ -124,7 +124,9 @@ message HeartbeatRequest {
   AgentInfo agent = 2;
   // What this agent can use of the coordinator's side, by feature name (`deferred-v1`,
   // `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb,
-  // `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
+  // `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, and
+  // `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes
+  // of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
   // as missing them.
@@ -341,7 +343,8 @@ message Order {
     // below the running version.
     Update update = 3;
     // Add a service the coordinator assigned to the host, by the update path with no previous
-    // version.
+    // version. Only for a daemon that announced `install-v1` and lists every service it runs
+    // (`heartbeat-v2`).
     Install install = 4;
     // A hooked update to a lower version, which automatic rollback sends.
     ForceRollback force_rollback = 5;
@@ -349,6 +352,7 @@ message Order {
     // Refused for the service `hostkeeper`. Only for a daemon that announced `forced-v1`.
     Force force = 6;
     // Stop the service's units, run its `uninstall` hook and remove its package and placed paths.
+    // Only for a daemon that announced `install-v1`.
     Uninstall uninstall = 7;
     // Stop the service's running step and end its order in the halt phase.
     Abort abort = 8;

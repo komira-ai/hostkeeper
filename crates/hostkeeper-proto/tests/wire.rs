@@ -626,6 +626,7 @@ fn wire_names_are_pinned() {
             "forced-v1",
             "halt-v1",
             "heartbeat-v2",
+            "install-v1",
             "verdict-acks-v1"
         ]
     );
@@ -725,6 +726,8 @@ fn wire_names_are_pinned() {
                 "not_assigned",
                 "not_held",
                 "store_failed",
+                "unknown_role",
+                "below_min_version",
             ],
         ),
         (

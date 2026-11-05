@@ -154,6 +154,12 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
             (ServicesRefusal::NotHeld, FailedPrecondition, "not_held"),
             (ServicesRefusal::StoreFailed, Internal, "store_failed"),
+            (ServicesRefusal::UnknownRole, NotFound, "unknown_role"),
+            (
+                ServicesRefusal::BelowMinVersion,
+                FailedPrecondition,
+                "below_min_version",
+            ),
         ],
         refusal::services,
     );

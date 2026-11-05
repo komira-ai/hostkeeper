@@ -9,17 +9,17 @@ use hostkeeper_coordinator::services::Services;
 const ENTRY: &str = include_str!("../../../examples/hello/rollout.toml");
 
 /// Catches the entry the proof appends to a rollout file being refused by the coordinator, or
-/// losing a setting the proof needs: install by role, a lone canary, and an automatic rollback
-/// that one failed host is enough for.
+/// losing a setting the proof needs: assigned by role (which orders the install), a lone
+/// canary, and an automatic rollback that one failed host is enough for.
 #[test]
 fn the_hello_entry_loads_with_the_settings_the_farm_proof_needs() {
     let services = Services::parse(ENTRY).unwrap_or_else(|e| panic!("refused: {e}"));
     assert_eq!(services.names().collect::<Vec<_>>(), ["hello"]);
     let hello = services.get("hello").expect("hello is defined");
-    assert_eq!(hello.role_names(), ["farm"]);
-    assert!(
-        hello.install_when_absent,
-        "a host of the role is ordered to install it"
+    assert_eq!(
+        hello.role_names(),
+        ["farm"],
+        "assigned to the role: a host of it is ordered to install it"
     );
     assert_eq!(hello.bake_beats, 2);
     assert_eq!(hello.canary, Some(Canary { count: 1 }));

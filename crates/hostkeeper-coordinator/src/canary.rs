@@ -28,15 +28,16 @@ pub struct Canary {
 
 /// Whether the canary gate of `def` is closed to the host `id` at `now`: the service has a
 /// canary, fewer than `count` hosts have baked at the desired version, and `id` (the host
-/// `me`, a member of the service) is not among the hosts that may still be ordered. A host
-/// under its own order is never held: it is told the same again.
+/// `me`, a member of the service, or none for a host that does not run it yet and is to be
+/// installed) is not among the hosts that may still be ordered. A host under its own order is
+/// never held: it is told the same again.
 #[must_use]
 pub(crate) fn closed_to(
     def: &ServiceDef,
     want: &Desired,
     fleet: &Fleet,
     id: &HostId,
-    me: &Host,
+    me: Option<&Host>,
     now: Duration,
 ) -> bool {
     let Some(canary) = def.canary else {
@@ -75,7 +76,8 @@ pub(crate) fn closed_to(
             .deferred_until(service, o, &want.version, &def.defer_backoff)
             .is_some_and(|until| now < until)
     };
-    if started(id, me) {
+    // A host the service has no beat of (one to be installed) has started once it is ordered.
+    if fleet.is_ordered(service, id, now) || me.is_some_and(|me| started(id, me)) {
         return false;
     }
     let before = members()

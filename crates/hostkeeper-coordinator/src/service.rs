@@ -13,9 +13,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
-use crate::acks::release_ack;
 use crate::converge::{Convergence, role_counts};
-use crate::decide::Decision;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
@@ -33,6 +31,7 @@ use crate::tokens::{OperatorTokens, TokenName};
 use crate::ui::UiDir;
 use crate::verdict_file::{self, VerdictFile};
 use enrollment_calls::Turn;
+use gate_orders::Asked;
 
 pub use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
 
@@ -625,6 +624,13 @@ impl Coordinator {
         // occupies, so an update it was ordered before it left holds its slot until it ends.
         let dropped =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Dropped;
+        // A host ordered to uninstall a service it is no longer assigned says how the uninstall
+        // goes: kept as what it occupies, as a dropped host's word is.
+        let uninstalling = |def: &ServiceDef| {
+            ops.assignments
+                .get(&def.name)
+                .is_some_and(|entries| entries.uninstall.contains_key(who.host_id.as_str()))
+        };
         // Only a verdict the fleet takes in is stored and acknowledged.
         heard.retain(|(name, _)| match self.services.get(name) {
             Some(def) => counted(def) || dropped(def),
@@ -650,13 +656,21 @@ impl Coordinator {
                     one.as_heartbeat(platform),
                     now,
                 ),
-                Some(def) if dropped(def) => fleet.record_outside_in(
-                    &one.name,
-                    who.host_id.clone(),
-                    &who.role,
-                    one.as_heartbeat(platform),
-                    now,
-                ),
+                // A host taken off the service while it ran an update of it says when that ends.
+                Some(def)
+                    if dropped(def)
+                        || uninstalling(def)
+                        || (fleet.get_in(&one.name, &who.host_id).is_none()
+                            && fleet.occupant(&one.name, &who.host_id).is_some()) =>
+                {
+                    fleet.record_outside_in(
+                        &one.name,
+                        who.host_id.clone(),
+                        &who.role,
+                        one.as_heartbeat(platform),
+                        now,
+                    );
+                }
                 _ => {}
             }
         }
@@ -664,6 +678,7 @@ impl Coordinator {
         if turn == Turn::Hold {
             return (ServiceReply::Nothing, None, None, Vec::new());
         }
+        crate::intents::settle(&self.ops, &self.services, &mut fleet, &who.host_id);
         let mut names: Vec<&str> = legacy
             .into_iter()
             .chain(announced.iter().map(|one| one.name.as_str()))
@@ -694,39 +709,21 @@ impl Coordinator {
         {
             return (ServiceReply::Nothing, Some(order), None, acks);
         }
-        let desired = self.desired.all();
-        for name in names {
-            if held.iter().any(|service| service == name) {
-                continue;
-            }
-            let decision = halt::decide(
-                &self.ops,
-                &self.services,
-                &desired,
-                name,
-                &fleet,
-                &who.host_id,
-                now,
-            );
-            if let Decision::Update { version } = decision {
-                // An agent that reads order terms is ordered only a version with a digest.
-                let terms = order_v1.then(|| {
-                    let digests = self.desired.digests(name);
-                    order_terms::of_beat(&digests, name, &version, &announced, &who.host_id)
-                });
-                let Some(terms) = terms.map_or(Some(None), |made| made.map(Some)) else {
-                    continue;
-                };
-                // The host's ack goes from the file before the order exists.
-                if !release_ack(&self.ops, name, &who.host_id) {
-                    continue;
-                }
-                fleet.order(name, who.host_id.clone(), version.clone(), now);
-                let service = (Some(name) != legacy).then(|| name.to_owned());
-                return (ServiceReply::Update { service, version }, None, terms, acks);
-            }
-        }
-        (ServiceReply::Nothing, None, None, acks)
+        let asked = Asked {
+            who: &who,
+            legacy,
+            announced: &announced,
+            held: &held,
+            order_v1,
+            orders,
+            now,
+        };
+        let (reply, order, terms) = self.gate_order(&mut fleet, &asked, names).unwrap_or((
+            ServiceReply::Nothing,
+            None,
+            None,
+        ));
+        (reply, order, terms, acks)
     }
 
     /// The CI token in `bearer`, checked by the verifier.
@@ -968,3 +965,7 @@ mod enrollment_calls;
 /// The calls that act for a CI token already checked.
 #[path = "service_ci.rs"]
 mod ci_calls;
+
+/// The rollout gate's update, install or uninstall for a heartbeat.
+#[path = "service_orders.rs"]
+mod gate_orders;

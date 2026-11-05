@@ -25,7 +25,7 @@ pub(crate) const ZONE_A: &str = "[[service]]\nname = \"other\"\nroles = [\"daemo
 
 const TWO: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n\
     [service.selector]\nroles = [\"daemon\"]\n\
-    [[service]]\nname = \"second\"\ninstall_when_absent = true\n\
+    [[service]]\nname = \"second\"\n\
     roles = [\"daemon\"]\n[service.selector]\nroles = [\"daemon\"]\n";
 
 const KBF_ZONE_B: &str = "[[service]]\nname = \"kbf\"\nroles = [\"daemon\"]\n\
@@ -290,25 +290,23 @@ async fn a_down_selected_host_is_down_not_missing() {
     assert_eq!(check()["roles"][0]["down"], 1);
 }
 
-/// Catches: an absent host counted up or ordered: it holds the service in progress even at the
-/// desired version, is not ordered and says why, and is ordered when the definition says
-/// `install_when_absent`.
+/// Catches: an absent host counted up, or ordered over the JSON route: it holds the service in
+/// progress even at the desired version, and is not ordered (an absent copy is one to install,
+/// and only a daemon that takes the `install` verb, over a transport that carries it, is told to
+/// install), and says why.
 #[tokio::test]
-async fn an_absent_host_is_not_up_and_is_ordered_only_with_install_when_absent() {
+async fn an_absent_host_is_not_up_and_is_not_ordered_over_the_json_route() {
     let rig = rig("mem-absent", TWO, &["other", "second"]).await;
     send(&rig, "d1", true, &[("other", "3.0", "absent")]);
     let c = convergence(&rig, "other");
     assert_eq!(c["hosts"], counts(0, 1, 0, 0));
     assert_eq!(c["state"], "in_progress");
     let both = [("other", "1.0", "absent"), ("second", "1.0", "absent")];
+    assert_eq!(send(&rig, "d1", true, &both), ServiceReply::Nothing);
     assert_eq!(
-        send(&rig, "d1", true, &both),
-        ServiceReply::Update {
-            service: Some("second".to_owned()),
-            version: crate::testutil::version("3.0")
-        }
+        service_status(&rig, "other")["hosts"][0]["hold"],
+        "unsupported"
     );
-    assert_eq!(service_status(&rig, "other")["hosts"][0]["hold"], "absent");
     send(&rig, "d1", true, &[OTHER]);
     let c = convergence(&rig, "other");
     assert_eq!(c["hosts"], counts(0, 0, 0, 0));

@@ -1,62 +1,77 @@
-//! The reconciling decision: whether to tell one host to update now
-//! (`docs/design/host-updates.md`).
+//! The reconciling decision: whether to tell one host to update, install or uninstall a service
+//! now (`docs/design/host-updates.md`; design 5.4 and 5.7).
 //!
 //! A pure function of the services, their desired states, the fleet the heartbeats built, the
-//! host and the time, decided per host and service. A host is told to update a service only if
-//! every rule below holds, checked in this order (the role is the host's role in that service's
-//! definition):
+//! host and the time, decided per host and service. A host runs the services the coordinator
+//! assigns to it ([`crate::assignment`]: by its role in the rollout file, with the operator's
+//! entries on top), and nothing else: a service not assigned to the host is never ordered,
+//! whether the host runs it or not, unless an operator's `Unassign` ordered the host to
+//! uninstall it ([`Decision::Uninstall`]). A service the coordinator does not manage, a host an
+//! operator excluded, and a pair the fleet has no word of are [`Skip::NotAMember`].
+//!
+//! An assigned service the host runs is told to update, and one it does not run (it does not
+//! list it, or lists it `absent`: staged, never run) is told to install
+//! ([`Decision::Install`], with the desired version's package digest), under the same rules,
+//! checked in this order (an install has no version to be up to date at, and is ordered only to
+//! a daemon that announced [`crate::orders::INSTALL_FEATURE`] and lists every service it runs):
 //!
 //! 1. the coordinator has been up for its quiet start (`--quiet-secs`, by default
 //!    [`crate::fleet::QUIET_START`]);
 //! 2. the host is not already updating, and no other service updates on it or has an order
 //!    outstanding for it (a host does one update at a time);
 //! 3. the host is behind: it does not run the desired version (a rollback is a desired
-//!    version older than the one the hosts run, under the same rules);
-//! 4. the host did not fail an update to this very version (it is not told again; setting
-//!    another version lifts it);
+//!    version older than the one the hosts run, under the same rules), or does not run the
+//!    service at all;
+//! 4. the host did not fail an update or an install to this very version (it is not told
+//!    again; setting another version lifts it);
 //! 5. the host did not decline an update to this version within its wait
 //!    ([`crate::defer`]; a deferral is not a failure, holds no slot, and a new desired
 //!    version lifts it);
 //! 6. the service's canary gate, if it has one, is open to the host ([`crate::canary`]; a
 //!    host that is deferring is not chosen as a canary);
-//! 7. the service runs on the host's role, and no update is live anywhere: no host, of any
-//!    role, holds an update slot for any service. One update is live at a time across every
-//!    service and role ([`live`]). A host holds a slot while updating, while its promotion is
-//!    pending, after a failed update until it heartbeats healthy, from the order the
-//!    coordinator gave it until the host reports it or the order ages out,
-//!    [`crate::fleet::ORDER_AGE`], and, at its service's desired version, until it has beaten
-//!    healthy that service's `bake_beats` times, [`crate::bake`]. The asking host's own slot
-//!    for the asked service is not counted, so a host asking again under its own order is told
-//!    the same again. A host the service no longer counts (excluded, out of its selector, not
-//!    announcing it) still holds its slot until its beats or its order's age free it
-//!    ([`Fleet::occupants_of`]).
+//! 7. no update is live anywhere: no host, of any role, holds an update slot for any service.
+//!    One update is live at a time across every service and role ([`live`]). A host holds a
+//!    slot while updating, while its promotion is pending, after a failed update until it
+//!    heartbeats healthy, from the order the coordinator gave it (an update, an install or an
+//!    uninstall) until the host reports it or the order ages out, [`crate::fleet::ORDER_AGE`],
+//!    and, at its service's desired version, until it has beaten healthy that service's
+//!    `bake_beats` times, [`crate::bake`]. The asking host's own slot for the asked service is
+//!    not counted, so a host asking again under its own order is told the same again. A host
+//!    the service no longer counts (excluded, out of its selector, not announcing it) still
+//!    holds its slot until its beats or its order's age free it ([`Fleet::occupants_of`]).
 //!
 //! A version marked bad ([`crate::reconcile`]) is ordered to nobody, whatever the rules above
 //! say, and is held at [`Gate::Bad`] after the quiet start; so is a desired version below the
-//! service's `min_version` ([`Gate::BelowMinVersion`]), however it got into the state file: CI's
-//! set refuses one, and a hand edit of the file does not reach a host.
-//! A host that reports the service `absent` (declared, never registered) is held back before
-//! all of these but the first, unless the definition says `install_when_absent` ([`Skip::Absent`]).
+//! minimum version that applies to the host ([`Gate::BelowMinVersion`]: its own, else its
+//! role's, never below the rollout file's `min_version`), however it got into the state file:
+//! CI's set refuses one below the rollout file's, and a hand edit of the file does not reach a
+//! host.
+//!
+//! An uninstall is ordered to a host that lists the service, is not assigned it, and has an
+//! uninstall intent for it, under the halt, the hold, the quiet start and the one live update
+//! (rules 2 and 7); one that failed is left for the operator, and one the host declined waits
+//! out its backoff, keyed by the version the host runs.
 //!
 //! A pair an operator holds ([`crate::holds`]: the host, its role at the time of the decision,
 //! or the whole fleet) is told nothing, after a halt and the membership check and before every
-//! numbered rule above ([`Gate::Held`]): no update, however far behind it is. It takes no slot
-//! of rule 7 and never bakes; an update it was running, or an order it was given, when the hold
-//! was set still counts until it ends. The pairs a standing force orders
+//! numbered rule above ([`Gate::Held`]): no update, install or uninstall, however far behind it
+//! is. It takes no slot of rule 7 and never bakes; an update it was running, or an order it was
+//! given, when the hold was set still counts until it ends. The pairs a standing force orders
 //! ([`crate::force`]) take no slot either.
 //!
-//! The decision records nothing: the caller notes an `Update` it returns with
-//! [`Fleet::order`], under the same lock, so the next host's decision sees it. A host that
-//! asks again while its own order is outstanding is told the same again: its own order never
-//! counts against it, and the others' slots have not changed.
+//! The decision records nothing: the caller notes an order it returns with [`Fleet::order`] or
+//! [`Fleet::order_uninstall`], under the same lock, so the next host's decision sees it. A host
+//! that asks again while its own order is outstanding is told the same again: its own order
+//! never counts against it, and the others' slots have not changed.
 //!
-//! The reply carries the desired version and nothing else. [`decide_why`] is the same decision
+//! The JSON reply carries the desired version of an update and nothing else; an install and an
+//! uninstall go only as typed orders ([`crate::orders`]). [`decide_why`] is the same decision
 //! that also says why it holds. A [`Gate`] is a rule that is closed at this moment and opens by
 //! itself or when something changes (the quiet start, the one live update, the canary, a bake, a
-//! version marked bad, a halt); a [`Skip`] is a question that does not apply (no definition, no
-//! desired state, not a member of the service, a host the service has not registered, a host at
-//! the desired version, one that failed it, one that declined it). [`Why`] is either, spelled in
-//! snake case for the status. [`decide_in`] drops the reason.
+//! version marked bad, a halt); a [`Skip`] is a question that does not apply (no desired state,
+//! not a member of the service, a host at the desired version, one that failed it, one that
+//! declined it, an install the host's agent cannot take or that has no package digest). [`Why`]
+//! is either, spelled in snake case for the status. [`decide_in`] drops the reason.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -69,11 +84,14 @@ use serde::Serialize;
 use crate::canary;
 use crate::desired::Desired;
 use crate::fleet::Fleet;
+use crate::membership::HEARTBEAT_V2;
+use crate::orders::INSTALL_FEATURE;
+use crate::registry::Digest;
 use crate::services::{ServiceDef, Services};
 
 /// What to tell the host `id` about `service` at `now`, given every service's `desired`
-/// state. A service with no definition or no desired state is told nothing. This is
-/// [`decide_why`] without the reason.
+/// state, as the JSON reply says it: an update, or nothing (an install and an uninstall go only
+/// as typed orders). This is [`decide_why`] without the reason.
 #[must_use]
 pub fn decide_in(
     services: &Services,
@@ -85,7 +103,10 @@ pub fn decide_in(
 ) -> Reply {
     match decide_why(services, desired, service, fleet, id, now) {
         Decision::Update { version } => Reply::Update { version },
-        Decision::Gate(_) | Decision::Skip(_) => Reply::Nothing,
+        Decision::Install { .. }
+        | Decision::Uninstall { .. }
+        | Decision::Gate(_)
+        | Decision::Skip(_) => Reply::Nothing,
     }
 }
 
@@ -102,7 +123,8 @@ pub enum Gate {
     Held,
     /// The desired version is marked bad ([`crate::reconcile`]).
     Bad,
-    /// The desired version is below the service's `min_version`: no order goes below the floor.
+    /// The desired version is below the minimum version that applies to the host: no order
+    /// goes below the floor.
     BelowMinVersion,
     /// The host is updating this service.
     Updating,
@@ -124,22 +146,25 @@ pub enum Gate {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Skip {
-    /// The service has no definition.
-    NoDefinition,
     /// The service has no desired state.
     NoDesired,
-    /// The coordinator has not heard from the host for the service, or the service does not
-    /// run on the host's role.
+    /// The service is not one the coordinator manages or not assigned to the host, an operator
+    /// excluded the host from it, or the coordinator has not heard from the host for it (nor,
+    /// for one the host does not run, from an agent that lists every service it runs).
     NotAMember,
-    /// The service is declared on the host and has never registered, and the definition does
-    /// not say `install_when_absent`.
-    Absent,
     /// The host runs the desired version.
     UpToDate,
-    /// The host failed an update to the desired version.
+    /// The host failed an update or an install to the desired version, or the uninstall it is
+    /// ordered.
     FailedHere,
-    /// The host declined an update to the desired version and its wait is not over.
+    /// The host declined an update to the desired version, or the uninstall it is ordered, and
+    /// its wait is not over.
     Deferred,
+    /// The pair needs an install or an uninstall, and the host's agent did not announce that it
+    /// takes them ([`crate::orders::INSTALL_FEATURE`]).
+    Unsupported,
+    /// The pair needs an install, and the desired version has no package digest to install.
+    NoDigest,
 }
 
 /// Why a host is told nothing, as the status says it in `hold`: a gate or a skip, each in its own
@@ -161,6 +186,20 @@ pub enum Decision {
         /// The desired version.
         version: Version,
     },
+    /// Tell the host to install the service at `version`, from the package `digest`.
+    Install {
+        /// The desired version.
+        version: Version,
+        /// Its package digest, as CI set it.
+        digest: Digest,
+    },
+    /// Tell the host, which runs `running` of the service, to uninstall it.
+    Uninstall {
+        /// The order id of the uninstall the operator's `Unassign` ordered.
+        order_id: String,
+        /// The version the host runs, which the order is tracked against.
+        running: Version,
+    },
     /// Tell it nothing: a gate is closed.
     Gate(Gate),
     /// Tell it nothing: the question does not apply.
@@ -168,11 +207,11 @@ pub enum Decision {
 }
 
 impl Decision {
-    /// Why the host is told nothing, or `None` when it is told to update.
+    /// Why the host is told nothing, or `None` when it is told to update, install or uninstall.
     #[must_use]
     pub fn why(&self) -> Option<Why> {
         match self {
-            Self::Update { .. } => None,
+            Self::Update { .. } | Self::Install { .. } | Self::Uninstall { .. } => None,
             Self::Gate(gate) => Some(Why::Gate(*gate)),
             Self::Skip(skip) => Some(Why::Skip(*skip)),
         }
@@ -207,24 +246,31 @@ pub fn decide_marked(
     now: Duration,
 ) -> Decision {
     let Some(def) = services.get(service) else {
-        return Decision::Skip(Skip::NoDefinition);
+        return Decision::Skip(Skip::NotAMember);
     };
+    let member = !fleet.is_excluded(service, id) && fleet.is_assigned(def, id);
+    if !member
+        && !fleet.is_excluded(service, id)
+        && let Some(order_id) = fleet.uninstall_order(service, id)
+    {
+        return uninstall(services, def, desired, fleet, id, order_id, now);
+    }
     let Some(want) = desired.get(service) else {
         return Decision::Skip(Skip::NoDesired);
     };
-    first_hold(services, def, want, desired, bad, fleet, id, now).unwrap_or_else(|| {
-        Decision::Update {
-            version: want.version.clone(),
-        }
-    })
+    if !member {
+        return Decision::Skip(Skip::NotAMember);
+    }
+    order_or_hold(services, def, want, desired, bad, fleet, id, now)
 }
 
-/// The first rule that fails for the host `id`, or `None` when every rule holds.
+/// The update or the install the host `id`, assigned `def`, is told, or the first rule that
+/// holds it back.
 #[expect(
     clippy::too_many_arguments,
     reason = "the inputs of the one decision, passed down from decide_marked"
 )]
-fn first_hold(
+fn order_or_hold(
     services: &Services,
     def: &ServiceDef,
     desired: &Desired,
@@ -233,18 +279,36 @@ fn first_hold(
     fleet: &Fleet,
     id: &HostId,
     now: Duration,
-) -> Option<Decision> {
+) -> Decision {
     let service = def.name.as_str();
-    let Some(host) = fleet
-        .get_in(service, id)
-        .filter(|h| def.roles.contains(h.role_name()))
-    else {
-        return Some(Decision::Skip(Skip::NotAMember));
+    // What the fleet kept of a service the host's last heartbeat no longer lists is no word of it.
+    let host = fleet.get_in(service, id).filter(|_| {
+        fleet
+            .node(id)
+            .is_none_or(|node| node.announced.contains_key(service))
+    });
+    // A host the service has no word of is told to install it only when its agent lists every
+    // service it runs: from any other, a missing entry says nothing.
+    if host.is_none() && !fleet.announced(id, HEARTBEAT_V2) {
+        return Decision::Skip(Skip::NotAMember);
+    }
+    let beat = host.map(|h| &h.beat);
+    let installed = beat.is_some_and(|b| b.health != Health::Absent);
+    let order = if installed {
+        Some(Decision::Update {
+            version: desired.version.clone(),
+        })
+    } else {
+        desired
+            .release_digest
+            .clone()
+            .map(|digest| Decision::Install {
+                version: desired.version.clone(),
+                digest,
+            })
     };
-    let failed_here = host
-        .beat
-        .last_update
-        .as_ref()
+    let failed_here = beat
+        .and_then(|b| b.last_update.as_ref())
         .is_some_and(|r| r.outcome == Outcome::Failed && r.target == desired.version);
     let live = live(services, all, fleet, service, id, now);
     let rules = [
@@ -252,24 +316,28 @@ fn first_hold(
         (fleet.is_quiet(now), Decision::Gate(Gate::Quiet)),
         (bad.contains(&desired.version), Decision::Gate(Gate::Bad)),
         (
-            def.min_version
-                .as_ref()
+            fleet
+                .min_version(def, id)
                 .is_some_and(|floor| !desired.version.at_least(floor)),
             Decision::Gate(Gate::BelowMinVersion),
         ),
         (
-            host.beat.health == Health::Absent && !def.install_when_absent,
-            Decision::Skip(Skip::Absent),
+            beat.is_some_and(|b| b.updating.is_some()),
+            Decision::Gate(Gate::Updating),
         ),
-        (host.beat.updating.is_some(), Decision::Gate(Gate::Updating)),
         (
             fleet.is_busy_besides(service, id, now),
             Decision::Gate(Gate::BusyElsewhere),
         ),
         (
-            host.beat.version == desired.version,
+            installed && beat.is_some_and(|b| b.version == desired.version),
             Decision::Skip(Skip::UpToDate),
         ),
+        (
+            !installed && !fleet.announced(id, INSTALL_FEATURE),
+            Decision::Skip(Skip::Unsupported),
+        ),
+        (order.is_none(), Decision::Skip(Skip::NoDigest)),
         (failed_here, Decision::Skip(Skip::FailedHere)),
         (
             fleet
@@ -287,6 +355,66 @@ fn first_hold(
     rules
         .into_iter()
         .find_map(|(holds, why)| holds.then_some(why))
+        .or(order)
+        .unwrap_or(Decision::Skip(Skip::NoDigest))
+}
+
+/// The uninstall of `def` the host `id` is ordered by `order_id`, or the first rule that holds
+/// it back: the host must still list the service, and the hold, the quiet start, the one update
+/// at a time on the host, its failure or deferral of this uninstall and the one live update hold
+/// it.
+fn uninstall(
+    services: &Services,
+    def: &ServiceDef,
+    all: &BTreeMap<String, Desired>,
+    fleet: &Fleet,
+    id: &HostId,
+    order_id: String,
+    now: Duration,
+) -> Decision {
+    let service = def.name.as_str();
+    let Some(host) = fleet
+        .occupant(service, id)
+        .filter(|_| fleet.lists(id, service))
+    else {
+        return Decision::Skip(Skip::NotAMember);
+    };
+    let failed = host.beat.last_update.as_ref().is_some_and(|r| {
+        r.outcome == Outcome::Failed
+            && r.order_id
+                .as_ref()
+                .is_some_and(|reported| reported.as_str() == order_id)
+    });
+    let live = live(services, all, fleet, service, id, now);
+    let rules = [
+        (fleet.is_held(service, id), Decision::Gate(Gate::Held)),
+        (fleet.is_quiet(now), Decision::Gate(Gate::Quiet)),
+        (host.beat.updating.is_some(), Decision::Gate(Gate::Updating)),
+        (
+            fleet.is_busy_besides(service, id, now),
+            Decision::Gate(Gate::BusyElsewhere),
+        ),
+        (
+            !fleet.announced(id, INSTALL_FEATURE),
+            Decision::Skip(Skip::Unsupported),
+        ),
+        (failed, Decision::Skip(Skip::FailedHere)),
+        (
+            fleet
+                .deferred_until(service, id, &host.beat.version, &def.defer_backoff)
+                .is_some_and(|until| now < until),
+            Decision::Skip(Skip::Deferred),
+        ),
+        (live.slots > 0, Decision::Gate(Gate::NoSlot)),
+        (live.slots + live.baking > 0, Decision::Gate(Gate::Baking)),
+    ];
+    rules
+        .into_iter()
+        .find_map(|(holds, why)| holds.then_some(why))
+        .unwrap_or(Decision::Uninstall {
+            order_id,
+            running: host.beat.version.clone(),
+        })
 }
 
 /// The updates live across the fleet, as rule 7 counts them: each host once, however many
@@ -318,6 +446,13 @@ fn live(
     for def in services.defs() {
         let name = def.name.as_str();
         let want = all.get(name);
+        // A host told to install a service it does not list holds its slot by its order alone.
+        holding.extend(
+            fleet
+                .ordered_unseen(name, now)
+                .filter(|o| !(name == service && *o == id))
+                .filter(|o| !fleet.is_forced(name, o)),
+        );
         for (o, h) in fleet
             .occupants_of(name)
             .filter(|(o, _)| !(name == service && *o == id))

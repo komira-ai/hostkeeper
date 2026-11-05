@@ -32,6 +32,15 @@ pub(crate) const NEW_DAEMON: &[&str] = &[
     "forced-v1",
     "abort-v1",
 ];
+/// The features of a daemon that also takes the `install` and `uninstall` verbs.
+pub(crate) const INSTALLER: &[&str] = &[
+    "heartbeat-v2",
+    "halt-v1",
+    "deferred-v1",
+    "forced-v1",
+    "abort-v1",
+    "install-v1",
+];
 /// The features of a daemon that predates the force and the abort.
 pub(crate) const OLD_DAEMON: &[&str] = &["heartbeat-v2", "halt-v1", "deferred-v1"];
 

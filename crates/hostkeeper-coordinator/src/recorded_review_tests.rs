@@ -222,13 +222,13 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
     };
     let skip = |skip: Skip| -> &'static str {
         match skip {
-            Skip::NoDefinition => "no_definition",
             Skip::NoDesired => "no_desired",
             Skip::NotAMember => "not_a_member",
-            Skip::Absent => "absent",
             Skip::UpToDate => "up_to_date",
             Skip::FailedHere => "failed_here",
             Skip::Deferred => "deferred",
+            Skip::Unsupported => "unsupported",
+            Skip::NoDigest => "no_digest",
         }
     };
     for g in [
@@ -247,13 +247,13 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
         assert_eq!(json!(Why::Gate(g)), json!(gate(g)));
     }
     for s in [
-        Skip::NoDefinition,
         Skip::NoDesired,
         Skip::NotAMember,
-        Skip::Absent,
         Skip::UpToDate,
         Skip::FailedHere,
         Skip::Deferred,
+        Skip::Unsupported,
+        Skip::NoDigest,
     ] {
         assert_eq!(json!(s), json!(skip(s)));
         assert_eq!(json!(Why::Skip(s)), json!(skip(s)));

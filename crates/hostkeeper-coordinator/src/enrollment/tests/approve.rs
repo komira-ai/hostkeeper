@@ -15,6 +15,7 @@ use super::support::{
     HostKey, NOW, Rig, approval, audit_after, audit_of, audited, coordinator_over, enroll_request,
     enrolled, host_id, identity, signed_poll,
 };
+use crate::assignment::Entry;
 use crate::operator::Caller;
 use crate::ops::{AuditEntry, OpsState, Write};
 use crate::rollback_tests::unwritable;
@@ -109,7 +110,8 @@ async fn approval_with_another_requests_key_hash_is_refused() {
 }
 
 /// Catches an approval that does not feed issuance, records the host id, role, services or
-/// approver wrongly, or audits without the operator's token name.
+/// approver wrongly, audits without the operator's token name, or leaves the services it names
+/// unassigned.
 #[tokio::test]
 async fn approval_with_the_right_key_records_host_role_services_and_approver() {
     let (enrollment, rig, operator) = rig("approve-records").await;
@@ -132,12 +134,15 @@ async fn approval_with_the_right_key_records_host_role_services_and_approver() {
     );
     assert_eq!(
         audit_after(&rig.coordinator, before),
-        [audited(
-            "operator",
-            "enroll_approve",
-            Some("s1"),
-            &approved_reason(&key, "machine-1")
-        )]
+        [
+            audited(
+                "operator",
+                "enroll_approve",
+                Some("s1"),
+                &approved_reason(&key, "machine-1")
+            ),
+            audited("operator", "assign", Some("s1"), "host s1"),
+        ]
     );
     let store = enrollment.enrollment.store();
     let recorded = store.recorded_approvals().expect("read");
@@ -161,6 +166,9 @@ async fn approval_with_the_right_key_records_host_role_services_and_approver() {
         store.host_role(&host_id("s1")).expect("read"),
         Some(Role::parse("storage").expect("a role"))
     );
+    // The services it names are assigned to the host, as `Services.Assign` of the host does.
+    let assigned = rig.coordinator.ops().state().assignments;
+    assert_eq!(assigned["kbf"].hosts.get("s1"), Some(&Entry::Include));
     // Nothing is listed as waiting any more, and the next poll issues for the host id.
     let listed = rig
         .coordinator
@@ -255,12 +263,15 @@ async fn replace_revokes_the_old_host_and_is_audited() {
     assert_eq!(answer.host_id, "s1");
     assert_eq!(
         audit_after(&rig.coordinator, before),
-        [audited(
-            "operator",
-            "enroll_replace",
-            Some("s1"),
-            &approved_reason(&second, "machine-2")
-        )]
+        [
+            audited(
+                "operator",
+                "enroll_replace",
+                Some("s1"),
+                &approved_reason(&second, "machine-2")
+            ),
+            audited("operator", "assign", Some("s1"), "host s1"),
+        ]
     );
     // The certificate of the first key names the host no longer; the second key's does.
     assert!(rig.coordinator.identify(&old).is_err());

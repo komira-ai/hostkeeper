@@ -354,8 +354,8 @@ fn commit_state(state: Option<wire::CommitState>) -> agent::CommitState {
     }
 }
 
-/// Why the rollout gate holds a host back: `none` when nothing does. A gate the proto has no
-/// spelling for (`below_min_version`) is unspecified.
+/// Why the rollout gate holds a host back: `none` when nothing does. A gate or a skip the proto
+/// has no spelling for (`below_min_version`, `unsupported`, `no_digest`) is unspecified.
 fn gate_reason(hold: Option<Why>) -> proto::GateReason {
     match hold {
         None => proto::GateReason::None,
@@ -383,13 +383,12 @@ fn gate_of(gate: Gate) -> proto::GateReason {
 /// A question that does not apply, by name.
 fn skip_of(skip: Skip) -> proto::GateReason {
     match skip {
-        Skip::NoDefinition => proto::GateReason::NoDefinition,
         Skip::NoDesired => proto::GateReason::NoDesired,
         Skip::NotAMember => proto::GateReason::NotAMember,
-        Skip::Absent => proto::GateReason::Absent,
         Skip::UpToDate => proto::GateReason::UpToDate,
         Skip::FailedHere => proto::GateReason::FailedHere,
         Skip::Deferred => proto::GateReason::Deferred,
+        Skip::Unsupported | Skip::NoDigest => proto::GateReason::Unspecified,
     }
 }
 

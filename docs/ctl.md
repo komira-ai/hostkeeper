@@ -73,7 +73,7 @@ What the host runs and how it is, and the coordinator's answer: at most one orde
 | flag | value | meaning |
 |---|---|---|
 | `--platform` | VALUE | The platform the host's releases are built for. |
-| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
+| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, and `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
 
 Through `--request` only: `agent` (hostkeeper.agent.v1.AgentInfo), `services` (repeated hostkeeper.agent.v1.ServiceBeat).
 
@@ -366,39 +366,45 @@ The service `Services` of the package `hostkeeper.operator.v1`. The services the
 
 `/hostkeeper.operator.v1.Services/List`
 
-Every service, with the hosts it is assigned to, its minimum versions and its holds.
+Every service, with its desired version, the roles and hosts it is assigned to, the
+operator's assignments, its minimum versions, the hosts ordered to uninstall it and its holds.
 
 #### `hostkeeper ctl services assign`
 
 `/hostkeeper.operator.v1.Services/Assign`
 
-Assign a service to a host: the host is ordered to install it at its next heartbeat, unless a
-hold stands. Assigning a service already assigned changes nothing.
+Assign a service to a host or a role: a host that does not run it is ordered to install it
+at its next heartbeat, unless a hold stands. Assigning a service already assigned changes
+nothing.
 
 | flag | value | meaning |
 |---|---|---|
 | `--node-id` | STRING |  |
 | `--service` | STRING |  |
+| `--role` | STRING | A role to assign the service to instead of one host: every host of the role, those that join it later included. Exactly one of `node_id` and `role` is set. |
 
 #### `hostkeeper ctl services unassign`
 
 `/hostkeeper.operator.v1.Services/Unassign`
 
-Take a service off a host. With `uninstall`, the host is ordered to uninstall it; without,
-the coordinator stops managing it there and the host keeps running it.
+Take a service off a host or a role. With `uninstall`, each host that no longer has any
+assignment of it is ordered to uninstall it; without, the coordinator stops managing it
+there and the host keeps running it.
 
 | flag | value | meaning |
 |---|---|---|
 | `--node-id` | STRING |  |
 | `--service` | STRING |  |
 | `--uninstall` | true\|false | Order the host to uninstall the service; false (the default) leaves it running there, unmanaged. |
+| `--role` | STRING | A role to take the service off instead of one host. Exactly one of `node_id` and `role` is set. |
 
 #### `hostkeeper ctl services set-min-version`
 
 `/hostkeeper.operator.v1.Services/SetMinVersion`
 
-Set the version below which no order (a force, an automatic rollback) takes the service, for
-a role or a host.
+Set the version below which the rollout gate orders the service to no host of a role, or to
+one host: no update, install or automatic rollback. A host's own minimum stands before its
+role's, and neither goes below the rollout file's.
 
 | flag | value | meaning |
 |---|---|---|

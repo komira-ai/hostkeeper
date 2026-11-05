@@ -18,17 +18,23 @@
 //!   alone first;
 //! - [`converge`]: whether the farm has reached the desired version, for CI to wait on;
 //! - [`decide`]: the decision as a pure function of the desired state, the fleet, the host
-//!   and the time;
+//!   and the time: an update, an install, an uninstall, or why none;
 //! - [`reconcile`]: the last good version, the bad ones, and the automatic rollback;
 //! - [`holds`]: the operator's holds of a service on a host, a role or the fleet, which the
 //!   gate orders nothing and the counts leave out;
+//! - [`assignment`]: which services each host runs: the rollout file's roles with the operator's
+//!   entries per role and host on top, the minimum versions per role and host, and the hosts
+//!   ordered to uninstall a service; the uninstall intents a heartbeat ends are cleared by
+//!   `intents`;
 //! - [`order_terms`]: the order id, try and package digest an update answer of the JSON route
 //!   carries to an agent that announced `order-v1`;
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the one live update,
-//!   and [`orders`], the operator's orders (`force`, `abort`) a typed heartbeat answer carries;
+//!   and [`orders`], the typed orders a heartbeat answer carries (`force`, `abort`, `install`,
+//!   `uninstall`);
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
-//!   halts, aborts, exclusions, holds, the audit log), and [`operator_enrollment`], its
-//!   `Enrollment.List` and `Enrollment.Approve`;
+//!   halts, aborts, exclusions, holds, the audit log), and [`assign`], its assignment calls
+//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), and [`operator_enrollment`],
+//!   its `Enrollment.List` and `Enrollment.Approve`;
 //! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`),
 //!   kept in the ops file, and the match of each request `Enrollment.List` shows against it;
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
@@ -63,6 +69,8 @@
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
 pub mod acks;
+pub mod assign;
+pub mod assignment;
 pub(crate) mod audit_file;
 pub mod bake;
 pub mod canary;
@@ -79,6 +87,7 @@ pub mod halt;
 pub mod holds;
 pub mod http;
 pub mod identity;
+pub(crate) mod intents;
 pub mod inventory;
 pub mod jti_file;
 pub mod listen;
@@ -102,6 +111,14 @@ pub mod ui;
 pub mod verdict_file;
 pub mod verdicts;
 
+#[cfg(test)]
+mod assign_calls_tests;
+#[cfg(test)]
+mod assign_edge_tests;
+#[cfg(test)]
+mod assign_support;
+#[cfg(test)]
+mod assignment_tests;
 #[cfg(test)]
 mod audit_file_tests;
 #[cfg(test)]
@@ -140,6 +157,8 @@ mod holds_calls_tests;
 mod holds_tests;
 #[cfg(test)]
 mod http_tests;
+#[cfg(test)]
+mod install_tests;
 #[cfg(test)]
 mod inventory_tests;
 #[cfg(test)]
@@ -202,6 +221,8 @@ mod testutil;
 mod tierstore_service_tests;
 #[cfg(test)]
 mod tokens_tests;
+#[cfg(test)]
+mod uninstall_tests;
 #[cfg(test)]
 mod verdict_acks_tests;
 #[cfg(test)]

@@ -8,9 +8,16 @@
 //! no operator made the call. The work is [`Enrollment::list`] and [`Enrollment::approve`],
 //! which audits each approval and each refused one under the name of the operator's token. A
 //! coordinator without `--enrollment-dir` has no pending request.
+//!
+//! An approval assigns the services it names to the host it approves
+//! ([`Coordinator::assign_host`], the one path by which `Services.Assign` of a host assigns
+//! too), after the approval is recorded: each service is one audit entry `assign`. An
+//! assignment that cannot be written is logged and leaves the approval standing; the operator
+//! assigns the services with `Services.Assign`.
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
+use hostkeeper_wire::{HostId, RoleName};
 
 use crate::enrollment::Enrollment;
 use crate::inventory::show_match;
@@ -41,8 +48,9 @@ impl Coordinator {
     }
 
     /// `Enrollment.Approve`: approves a pending request as the host id, role and services it
-    /// names, which must be services this coordinator manages ([`Enrollment::approve`]). The
-    /// host gets its certificate at its next `Poll`, never in this answer.
+    /// names, which must be services this coordinator manages ([`Enrollment::approve`]), and
+    /// assigns those services to the host ([`Coordinator::assign_host`]). The host gets its
+    /// certificate at its next `Poll`, never in this answer.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, and the refusals of [`Enrollment::approve`]; without
@@ -55,7 +63,23 @@ impl Coordinator {
         let by = caller.operator()?;
         let enrollment: &Enrollment = self.enrollment().ok_or(EnrollmentRefusal::UnknownRequest)?;
         let known = |name: &str| self.services.get(name).is_some();
+        let (role, services) = (request.role.clone(), request.services.clone());
         let approved = enrollment.approve(by, request, &known)?;
+        // The approval checked the host id, the role and the services by the same rules.
+        let assigned = approved
+            .host_id
+            .as_str()
+            .parse::<HostId>()
+            .ok()
+            .zip(role.parse::<RoleName>().ok())
+            .map(|(host, role)| self.assign_host(by, &host, Some(&role), &services));
+        if let Some(Err(refusal)) = assigned {
+            tracing::error!(
+                host_id = %approved.host_id,
+                refusal = refusal.as_str_name(),
+                "the services of an approval were not assigned: assign them with Services.Assign"
+            );
+        }
         Ok(proto::ApproveResponse {
             host_id: approved.host_id.to_string(),
             certificate_issued_at_poll: true,

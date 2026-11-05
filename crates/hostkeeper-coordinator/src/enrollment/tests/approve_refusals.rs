@@ -390,16 +390,19 @@ async fn an_approvals_audit_quotes_the_claims() {
         .expect("approved");
     assert_eq!(
         audit_after(&rig.coordinator, before),
-        [audited(
-            "operator",
-            "enroll_approve",
-            Some("s1"),
-            &format!(
-                "request {}; role storage; services kbf; claims machine_id=m?1? dmi_serial={} \
-                 addresses=192.0.2.10,2001:db8::10; new rack",
-                key.key_hash(),
-                "D".repeat(64)
-            )
-        )]
+        [
+            audited(
+                "operator",
+                "enroll_approve",
+                Some("s1"),
+                &format!(
+                    "request {}; role storage; services kbf; claims machine_id=m?1? \
+                     dmi_serial={} addresses=192.0.2.10,2001:db8::10; new rack",
+                    key.key_hash(),
+                    "D".repeat(64)
+                )
+            ),
+            audited("operator", "assign", Some("s1"), "host s1"),
+        ]
     );
 }

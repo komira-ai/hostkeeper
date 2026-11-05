@@ -191,6 +191,24 @@ fn each_removed_key_is_refused_by_name() {
     );
 }
 
+/// Catches: `install_when_absent = true` silently ignored, which would leave an operator believing
+/// absent hosts are updated as before: it is refused with the text that names what replaced it,
+/// while `false`, the old default and what an agent that cannot take an install still gets,
+/// reads as before.
+#[test]
+fn install_when_absent_true_is_refused_and_false_still_reads() {
+    let text = |value: bool| {
+        format!("[[service]]\nname = \"a\"\nroles = [\"daemon\"]\ninstall_when_absent = {value}\n")
+    };
+    assert_eq!(
+        refusal(&text(true)),
+        "services: a: install_when_absent = true is no longer read: a host the service is \
+         assigned to that does not run it is ordered to install it; take the key out"
+    );
+    let read = Services::parse(&text(false)).expect("read");
+    assert_eq!(read.names().collect::<Vec<_>>(), ["a"]);
+}
+
 /// Proves: `version_scheme` is optional, `semver` is its default and its only value, and any
 /// other value is refused naming the key.
 ///

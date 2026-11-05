@@ -18,9 +18,9 @@ use crate::decide::{Gate, Why};
 use crate::fleet::{Fleet, Marks, QUIET_START};
 use crate::holds::{HoldMark, HoldScope};
 use crate::marks_support::{
-    DB, NEW_DAEMON, WEB, ask, ask_typed, beat_of, fleet_target, force_request, hold, operator,
-    restart, rig, runs, scope_fleet, scope_host, scope_role, services_with, set, unhold, update,
-    who,
+    DB, INSTALLER, NEW_DAEMON, WEB, ask, ask_typed, beat_of, fleet_target, force_request, hold,
+    operator, restart, rig, runs, scope_fleet, scope_host, scope_role, services_with, set, unhold,
+    update, who,
 };
 use crate::ops::{OpsState, ServiceOps};
 use crate::orders::Order;
@@ -213,26 +213,29 @@ async fn a_held_pair_is_never_ordered() {
     assert_eq!(ask(&rig, "d1", "daemon", web_at("2.0")), update(WEB, "3.0"));
 }
 
-/// A held host that reports the service `absent` is not installed even where the definition says
-/// `install_when_absent`, and an unheld absent host is.
+/// A held host that does not run the service (it reports it `absent`) is not told to install it,
+/// and an unheld one is.
 ///
-/// Catches: the held check placed after the absent rule, or skipped for the install of a service
-/// that never registered.
+/// Catches: the held check placed after the choice of an install, or skipped for the install of
+/// a service that never ran.
 #[tokio::test]
 async fn a_held_host_that_reports_the_service_absent_is_not_installed() {
-    let rig = rig("holds-absent", "install_when_absent = true");
+    let rig = rig("holds-absent", "");
     set(&rig, WEB, "1.0", 1).await;
     hold(&rig, WEB, scope_host("d1")).expect("held");
     let mut missing = runs(WEB, "0.9");
     missing.health = Health::Absent;
+    let installer = |one: ServiceBeat| beat_of(INSTALLER, vec![one]);
     assert_eq!(
-        ask(&rig, "d1", "daemon", web_with(missing.clone())),
-        ServiceReply::Nothing
+        ask_typed(&rig, "d1", "daemon", installer(missing.clone())),
+        (ServiceReply::Nothing, None)
     );
     assert_eq!(standing(&rig, WEB, "d1").0, Some(Why::Gate(Gate::Held)));
+    let (reply, order) = ask_typed(&rig, "d2", "daemon", installer(missing));
+    assert_eq!(reply, ServiceReply::Nothing);
     assert_eq!(
-        ask(&rig, "d2", "daemon", web_with(missing)),
-        update(WEB, "1.0"),
+        order,
+        Some(crate::assign_support::install("1.0", 1)),
         "an absent host that no one holds is installed"
     );
 }

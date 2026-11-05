@@ -67,8 +67,12 @@ pub(crate) fn services(refusal: ServicesRefusal) -> Status {
         ServicesRefusal::Unauthorized => Code::Unauthenticated,
         ServicesRefusal::Forbidden => Code::PermissionDenied,
         ServicesRefusal::InvalidRequest => Code::InvalidArgument,
-        ServicesRefusal::UnknownService | ServicesRefusal::UnknownHost => Code::NotFound,
-        ServicesRefusal::NotAssigned | ServicesRefusal::NotHeld => Code::FailedPrecondition,
+        ServicesRefusal::UnknownService
+        | ServicesRefusal::UnknownHost
+        | ServicesRefusal::UnknownRole => Code::NotFound,
+        ServicesRefusal::NotAssigned
+        | ServicesRefusal::NotHeld
+        | ServicesRefusal::BelowMinVersion => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "SERVICES_REFUSAL_")
 }

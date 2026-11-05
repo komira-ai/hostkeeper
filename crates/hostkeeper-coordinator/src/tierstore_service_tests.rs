@@ -57,7 +57,6 @@ fn the_recorded_definition_says_what_the_rollout_rests_on() {
             min_hosts: 2
         }
     );
-    assert!(!def.install_when_absent);
 }
 
 /// The definition is a rollout-file entry that may follow kbf's: alone it defines tierstore

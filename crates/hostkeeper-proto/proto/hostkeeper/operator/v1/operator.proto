@@ -101,16 +101,20 @@ service Releases {
 
 // The services the coordinator manages, which hosts run them, and the operator's holds.
 service Services {
-  // Every service, with the hosts it is assigned to, its minimum versions and its holds.
+  // Every service, with its desired version, the roles and hosts it is assigned to, the
+  // operator's assignments, its minimum versions, the hosts ordered to uninstall it and its holds.
   rpc List(ListServicesRequest) returns (ListServicesResponse);
-  // Assign a service to a host: the host is ordered to install it at its next heartbeat, unless a
-  // hold stands. Assigning a service already assigned changes nothing.
+  // Assign a service to a host or a role: a host that does not run it is ordered to install it
+  // at its next heartbeat, unless a hold stands. Assigning a service already assigned changes
+  // nothing.
   rpc Assign(AssignRequest) returns (AssignResponse);
-  // Take a service off a host. With `uninstall`, the host is ordered to uninstall it; without,
-  // the coordinator stops managing it there and the host keeps running it.
+  // Take a service off a host or a role. With `uninstall`, each host that no longer has any
+  // assignment of it is ordered to uninstall it; without, the coordinator stops managing it
+  // there and the host keeps running it.
   rpc Unassign(UnassignRequest) returns (UnassignResponse);
-  // Set the version below which no order (a force, an automatic rollback) takes the service, for
-  // a role or a host.
+  // Set the version below which the rollout gate orders the service to no host of a role, or to
+  // one host: no update, install or automatic rollback. A host's own minimum stands before its
+  // role's, and neither goes below the rollout file's.
   rpc SetMinVersion(SetMinVersionRequest) returns (SetMinVersionResponse);
   // Hold a service on a host, a role or the whole fleet where it is: the coordinator orders the
   // held pairs nothing (no update, install, rollback, uninstall or force) until the hold is
@@ -207,12 +211,18 @@ enum ServicesRefusal {
   SERVICES_REFUSAL_UNKNOWN_SERVICE = 4;
   // NOT_FOUND: the coordinator knows no such host.
   SERVICES_REFUSAL_UNKNOWN_HOST = 5;
-  // FAILED_PRECONDITION: `Unassign` of a service the host is not assigned.
+  // FAILED_PRECONDITION: `Unassign` of a service the host or the role is not assigned.
   SERVICES_REFUSAL_NOT_ASSIGNED = 6;
   // FAILED_PRECONDITION: `Unhold` of a pair no hold of that scope holds.
   SERVICES_REFUSAL_NOT_HELD = 7;
   // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
   SERVICES_REFUSAL_STORE_FAILED = 8;
+  // NOT_FOUND: no service of the rollout file runs on the role, no host heard from has it, and
+  // no assignment names it.
+  SERVICES_REFUSAL_UNKNOWN_ROLE = 9;
+  // FAILED_PRECONDITION: `SetMinVersion` above the service's desired version, which would hold
+  // every host of the scope below its minimum.
+  SERVICES_REFUSAL_BELOW_MIN_VERSION = 10;
 }
 
 // Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.
@@ -236,9 +246,10 @@ message AuditEntry {
   Actor by = 2;
   // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
   // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
-  // `set_min_version`, `hold`, `unhold`, `abort`, `exclude_abandon`, `enroll_approve`,
-  // `enroll_replace`, `enroll_approve_refused`, `mac_auto_approve_declined`, `record_add`,
-  // `record_remove`). Open: a later coordinator adds actions.
+  // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
+  // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
+  // `mac_auto_approve_declined`, `record_add`, `record_remove`). Open: a later coordinator adds
+  // actions.
   string action = 3;
   // The service, when the change is about one.
   optional string service = 4;
@@ -811,12 +822,47 @@ message ListServicesResponse {
 // One service the coordinator manages.
 message ServiceEntry {
   string service = 1;
-  // The hosts it is assigned to, by node id.
+  // The hosts heard from since the coordinator started that it is assigned to, by node id.
   repeated string hosts = 2;
-  // The version below which no order takes it, by role or host.
+  // The version below which no order takes it, by role or host, as an operator set it.
   repeated MinVersion min_versions = 3;
   // The holds of the service.
   repeated HoldMark holds = 4;
+  // The desired version; absent when CI has set none.
+  optional string desired_version = 5;
+  // The roles it is assigned to: the rollout file's, with the operator's role assignments on top.
+  repeated string roles = 6;
+  // The operator's assignments of the service, by role and by host.
+  repeated Assignment assignments = 7;
+  // Each host of `hosts`, with what it last reported, the minimum version that applies to it and
+  // the holds that hold it.
+  repeated AssignedHost assigned = 8;
+  // The hosts ordered to uninstall the service, until each reports it gone.
+  repeated string uninstalling = 9;
+}
+
+// An operator's assignment of a service, to a role or a host, or its removal from one.
+message Assignment {
+  oneof scope {
+    string role = 1;
+    string host = 2;
+  }
+  // The service is taken off the scope (that the rollout file or a role assigns it) rather than
+  // assigned to it.
+  bool removed = 3;
+}
+
+// A host a service is assigned to.
+message AssignedHost {
+  string node_id = 1;
+  string role = 2;
+  // The version installed, as the host last reported it; absent when it does not run the service.
+  optional string installed_version = 3;
+  // The minimum version that applies to the host: its own, else its role's, and never below the
+  // rollout file's; absent when there is none.
+  optional string min_version = 4;
+  // The operator's holds that hold the pair.
+  repeated HoldMark holds = 5;
 }
 
 // A minimum version, for a role or a host.
@@ -825,12 +871,16 @@ message MinVersion {
     string role = 1;
     string host = 2;
   }
+  // The version; empty in `SetMinVersion` removes the minimum an operator set for the scope.
   string version = 3;
 }
 
 message AssignRequest {
   string node_id = 1;
   string service = 2;
+  // A role to assign the service to instead of one host: every host of the role, those that join
+  // it later included. Exactly one of `node_id` and `role` is set.
+  string role = 3;
 }
 
 message AssignResponse {
@@ -843,6 +893,9 @@ message UnassignRequest {
   // Order the host to uninstall the service; false (the default) leaves it running there,
   // unmanaged.
   bool uninstall = 3;
+  // A role to take the service off instead of one host. Exactly one of `node_id` and `role` is
+  // set.
+  string role = 4;
 }
 
 message UnassignResponse {

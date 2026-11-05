@@ -388,3 +388,90 @@ fn an_older_admin_reader_keeps_the_lifecycle_of_a_service() {
     let read = ServiceRecord::decode(round_trip(&before).as_slice()).expect("decodes");
     assert_eq!(read.lifecycle(), Lifecycle::Unspecified);
 }
+
+/// Catches: a field added to a released message of `Services` that the release before drops or
+/// cannot read past: an `Assign` or an `Unassign` of a role, a refusal token it does not know,
+/// and a `List` entry with assignments, assigned hosts and the hosts ordered to uninstall are
+/// read by the baseline's messages with every field they know, and written back with the new
+/// ones kept.
+#[test]
+fn an_older_reader_keeps_the_assignments_of_services() {
+    let older = baseline_pool();
+    let assign = op::AssignRequest {
+        node_id: String::new(),
+        service: "db".to_owned(),
+        role: "storage".to_owned(),
+    };
+    let unassign = op::UnassignRequest {
+        node_id: String::new(),
+        service: "db".to_owned(),
+        uninstall: true,
+        role: "storage".to_owned(),
+    };
+    let entry = op::ServiceEntry {
+        service: "db".to_owned(),
+        hosts: vec!["db-1".to_owned()],
+        min_versions: vec![op::MinVersion {
+            scope: Some(op::min_version::Scope::Role("storage".to_owned())),
+            version: "1.5".to_owned(),
+        }],
+        holds: Vec::new(),
+        desired_version: Some("2.0".to_owned()),
+        roles: vec!["storage".to_owned()],
+        assignments: vec![op::Assignment {
+            scope: Some(op::assignment::Scope::Host("db-2".to_owned())),
+            removed: true,
+        }],
+        assigned: vec![op::AssignedHost {
+            node_id: "db-1".to_owned(),
+            role: "storage".to_owned(),
+            installed_version: Some("1.9".to_owned()),
+            min_version: Some("1.5".to_owned()),
+            holds: Vec::new(),
+        }],
+        uninstalling: vec!["db-2".to_owned()],
+    };
+    let cases: [(&str, &str, Vec<u8>); 3] = [
+        (
+            "hostkeeper.operator.v1.AssignRequest",
+            "role",
+            round_trip(&assign),
+        ),
+        (
+            "hostkeeper.operator.v1.UnassignRequest",
+            "role",
+            round_trip(&unassign),
+        ),
+        (
+            "hostkeeper.operator.v1.ServiceEntry",
+            "assigned",
+            round_trip(&entry),
+        ),
+    ];
+    for (name, added, bytes) in cases {
+        let message = older.get_message_by_name(name).expect("released");
+        assert!(message.get_field_by_name(added).is_none(), "{name}");
+        let read = DynamicMessage::decode(message, bytes.as_slice()).expect("decodes");
+        assert_eq!(
+            read.get_field_by_name("service").as_deref(),
+            Some(&Value::String("db".to_owned())),
+            "{name}"
+        );
+        assert_eq!(read.encode_to_vec(), bytes, "{name}");
+    }
+    let refusal = older
+        .get_enum_by_name("hostkeeper.operator.v1.ServicesRefusal")
+        .expect("released");
+    for added in [
+        op::ServicesRefusal::UnknownRole,
+        op::ServicesRefusal::BelowMinVersion,
+    ] {
+        assert!(refusal.get_value(added as i32).is_none(), "{added:?}");
+    }
+    for name in [
+        "hostkeeper.operator.v1.Assignment",
+        "hostkeeper.operator.v1.AssignedHost",
+    ] {
+        assert!(older.get_message_by_name(name).is_none(), "{name} is new");
+    }
+}

@@ -51,7 +51,10 @@ fn why(
                 version: version.clone()
             }
         ),
-        Decision::Gate(_) | Decision::Skip(_) => assert_eq!(reply, Reply::Nothing),
+        Decision::Install { .. }
+        | Decision::Uninstall { .. }
+        | Decision::Gate(_)
+        | Decision::Skip(_) => assert_eq!(reply, Reply::Nothing),
     }
     decision
 }
@@ -77,15 +80,16 @@ fn a_host_that_passes_every_rule_is_ordered() {
     assert_eq!(kbf(&desired("2.0", 1, 1), &f, "d1", NOW), update("2.0"));
 }
 
-/// A service no definition names holds with `NoDefinition`, even with a desired state.
+/// A service no definition names is not one the host is a member of, even with a desired state:
+/// the coordinator orders only the services it manages and assigns.
 #[test]
-fn a_service_without_a_definition_holds_as_no_definition() {
+fn a_service_without_a_definition_holds_as_not_a_member() {
     let f = fleet(NOW, &[("d1", role("daemon"), beat("1.0"))]);
     let all = BTreeMap::from([("ghost".to_owned(), desired("2.0", 1, 1))]);
     let services = kbf_services();
     assert_eq!(
         why(&services, &all, "ghost", &f, "d1", NOW),
-        skip(Skip::NoDefinition)
+        skip(Skip::NotAMember)
     );
 }
 

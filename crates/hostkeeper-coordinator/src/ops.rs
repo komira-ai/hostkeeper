@@ -2,12 +2,14 @@
 //! desired state (`docs/design/host-updates.md`, sections 3.8 and 5).
 //!
 //! It holds the hosts an operator excluded from a service, the labels an operator put on a
-//! host, the operator's holds ([`crate::holds`]), the host inventory ([`crate::inventory`]), the
-//! per-service marks later changes fill (a
+//! host, the operator's holds ([`crate::holds`]) and assignments ([`crate::assignment`]: which
+//! roles and hosts run each service, their minimum versions, the hosts ordered to uninstall
+//! it), the host inventory ([`crate::inventory`]), the per-service marks later changes fill (a
 //! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), and
 //! a ring of the last changes made. A key this build added is written only when it holds
 //! something, so a file that never held one keeps the shape the release before reads; once it
-//! does, the release before refuses the file, as it should: it would ignore a hold or a force.
+//! does, the release before refuses the file, as it should: it would ignore a hold, a force or an
+//! assignment.
 //! It is one JSON file, `--ops-file`, kept apart from `desired.json` so that an earlier coordinator, which refuses a key it does not
 //! know there, still reads the desired state. The file is created by the first change (a
 //! farm that never uses it keeps its files as they are) and replaced whole after that, like
@@ -60,6 +62,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::UpdateResult;
 use serde::{Deserialize, Serialize};
 
+use crate::assignment::ServiceAssignments;
 use crate::audit_file::{self, AuditLine, AuditLog, UnixClock, wall_clock};
 use crate::desired::StoreError;
 use crate::force::ForceRecord;
@@ -260,10 +263,10 @@ pub struct AuditEntry {
     /// `coordinator` for the coordinator's own changes, `ci` for CI's.
     pub by: String,
     /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`,
-    /// `halt`, `mark_bad`, `abort`, `hold`, `unhold`, `force` with the `unmark_bad`, `mark_bad`
-    /// and `clear_halt` it made; the coordinator's own: `last_good`, `clear_last_good`,
-    /// `mark_bad`; CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an earlier build
-    /// wrote).
+    /// `halt`, `mark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`, `set_min_version`,
+    /// `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the coordinator's own:
+    /// `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and `uninstall_cancelled`;
+    /// CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an earlier build wrote).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -312,6 +315,11 @@ pub struct OpsState {
     /// with none keeps the shape the release before reads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holds: Vec<HoldMark>,
+    /// The operator's assignments of each service, by service name ([`crate::assignment`]):
+    /// role and host entries, minimum versions and uninstall intents. Written only when there
+    /// are any, so a file with none keeps the shape the release before reads.
+    #[serde(default, skip_serializing_if = "crate::assignment::none")]
+    pub assignments: BTreeMap<String, ServiceAssignments>,
     /// The host inventory ([`crate::inventory`]), by host id; written only when there is a
     /// record, so a file with none keeps the shape the release before reads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -327,6 +335,7 @@ impl Default for OpsState {
             services: BTreeMap::new(),
             audit: Vec::new(),
             holds: Vec::new(),
+            assignments: BTreeMap::new(),
             inventory: Vec::new(),
         }
     }
