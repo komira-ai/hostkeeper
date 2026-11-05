@@ -254,12 +254,15 @@ impl StepLauncher for ScriptedLauncher {
     }
 }
 
-/// A manifest for `service` at `version` that every load rule accepts, its hook `bin/hook`.
+/// A manifest for `service` at `version` that every load rule accepts, its hook `bin/hook`, built
+/// for the platform these tests run on (the daemon's own, `Platform::current()`).
 pub fn manifest(service: &str, version: &str) -> String {
+    let platform = hostkeeper_config::platform::Platform::current();
     format!(
         r#"schema = 1
 name = "{service}"
 version = "{version}"
+platform = "{platform}"
 min_hostkeeper = "0.1.0"
 
 [hook]
