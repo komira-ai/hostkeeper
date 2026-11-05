@@ -168,7 +168,7 @@ fn verbs_that_read_no_port_run_with_the_ports_lent_back() {
     assert!(run_with(compare, &ports).is_ok());
 
     let index = verb(&["index", "--version", "0.1.9", "--dir", text(&d)]);
-    assert!(matches!(run_with(index, &ports), Err(Error::Failed(_))));
+    assert!(matches!(run_with(index, &ports), Err(Error::Refused(_))));
 }
 
 #[test]
@@ -176,12 +176,15 @@ fn index_writes_the_release_index_without_asking_for_adapters() {
     // Catches: `--version` or `--dir` not reaching the index verb, or the verb building the real
     // adapters though it reads no port.
     let d = scratch("release-index-verb");
-    std::fs::write(d.join("hostkeeper-0.1.9-linux-arm64.tar.zst"), b"arm").expect("write");
+    for p in Platform::RELEASED {
+        let file = format!("hostkeeper-0.1.9-{}.tar.zst", p.name());
+        std::fs::write(d.join(file), p.name()).expect("write");
+    }
     let (out, connected) = connects(verb(&["index", "--version", "0.1.9", "--dir", text(&d)]));
     assert_eq!(
         out,
         Ok(vec![format!(
-            "{}: the packages of hostkeeper 0.1.9 for linux-arm64",
+            "{}: the packages of hostkeeper 0.1.9 for linux-arm64, linux-x86_64, macos-arm64",
             d.join("index.json").display()
         )])
     );
@@ -621,6 +624,7 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
             store: &fakes.store,
             verifier: &verifier,
             run_version: &fakes.run_version,
+            pkgbuild: &fakes.pkgbuild,
         };
         run_with(publish_verb(&dir, &ver, &commit), &ports).expect("publish");
         assert_eq!(fakes.store.all()[i + 1].commit, commit.to_string());

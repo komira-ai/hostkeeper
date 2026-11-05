@@ -3,13 +3,13 @@
 //!
 //! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]),
 //! `github::Gh` ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]) and
-//! `check_binary::VersionOf` ([`RunVersion`]). Each runs its program through an [`Exec`], and the
+//! `check_binary::VersionOf` ([`RunVersion`]) and `macos_pkg::PkgbuildCli` ([`BuildPkg`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
 
 use std::path::Path;
 
-use super::contract::{Commit, Repo};
+use super::contract::{Commit, Repo, Version};
 
 /// Why a port could not answer: what was asked and why it failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -157,6 +157,19 @@ pub(crate) trait RunVersion {
     fn version_of(&self, binary: &Path) -> Result<Said, PortError>;
 }
 
+/// Builds a flat macOS installer package from a directory tree (`pkgbuild`).
+pub(crate) trait BuildPkg {
+    /// Builds `pkg` from the tree `root`, installed at `/`, with the package identifier
+    /// `identifier` and version `version`, every entry owned by root and wheel, and no scripts.
+    fn build_pkg(
+        &self,
+        root: &Path,
+        identifier: &str,
+        version: &Version,
+        pkg: &Path,
+    ) -> Result<(), PortError>;
+}
+
 /// How a process ended: its status was success or not, and its output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Ran {
@@ -178,6 +191,7 @@ pub(crate) struct Ports<'a> {
     pub(crate) store: &'a dyn ReleaseStore,
     pub(crate) verifier: &'a dyn Verifier,
     pub(crate) run_version: &'a dyn RunVersion,
+    pub(crate) pkgbuild: &'a dyn BuildPkg,
 }
 
 /// What owns a set of adapters and lends them as [`Ports`]: the wired adapters (`Wired`, over
