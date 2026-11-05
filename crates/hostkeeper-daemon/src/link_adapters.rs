@@ -1,5 +1,5 @@
-//! The daemon behind two ports of the heartbeat loop (`hostkeeper_link`): the executor and the
-//! held halts.
+//! The daemon behind four ports of the heartbeat loop (`hostkeeper_link`): the executor, the
+//! held halts, the installed services and the service observer.
 //!
 //! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order as the protobuf
 //! `Order` that [`Daemon::order`] takes ([`wire_order`]), and reads the daemon's [`Reply`] as
@@ -9,18 +9,30 @@
 //! [`DaemonHalts`] is the loop's [`HeldHalts`] over the very store the executor reads
 //! ([`crate::executor::Ctx::halts`]): a generation the loop raises is the one the next order
 //! of the service is judged against.
+//!
+//! [`DaemonRecords`] is the loop's [`ServiceRecords`]: every service whose `current` link names a
+//! version, at that version, with the target of its step record while the record is unfinished
+//! ([`recorded`]). [`DaemonObserver`] is its [`ServiceObserver`]: the observation the admin
+//! `Status` reports ([`Daemon::observer`]), in the loop's words ([`observation`]).
 
 use std::io;
 use std::sync::Arc;
 
-use hostkeeper_config::names::ServiceName;
+use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Phase, Verdict};
-use hostkeeper_link::{HeldHalts, Order, OrderResult, OrderSink, Outcome, Reason, Verb};
+use hostkeeper_link::{
+    Health, HeldHalts, Liveness, Observation, Order, OrderResult, OrderSink, Outcome, Reason,
+    RecordedService, ServiceObserver, ServiceRecords, Verb,
+};
+use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
+use hostkeeper_steps::record::{Loaded, State};
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
 
-use crate::executor::{Daemon, Reply};
+use crate::executor::{Ctx, Daemon, Reply};
 use crate::halt::HaltError;
+use crate::installed::{self, CURRENT};
+use crate::observer;
 
 /// The most bytes of a verdict's `detail` (`UpdateResult.detail` of `hostkeeper.agent.v1`).
 pub const MAX_DETAIL: usize = 512;
@@ -175,5 +187,123 @@ impl HeldHalts for DaemonHalts {
             Ok(()) | Err(HaltError::Lower { .. }) => Ok(()),
             Err(error) => Err(io::Error::other(error)),
         }
+    }
+}
+
+/// The installed-services port over the daemon's packages directory and step records.
+pub struct DaemonRecords {
+    daemon: Arc<Daemon>,
+}
+
+impl DaemonRecords {
+    pub fn new(daemon: Arc<Daemon>) -> DaemonRecords {
+        DaemonRecords { daemon }
+    }
+}
+
+impl ServiceRecords for DaemonRecords {
+    /// Every service of the packages directory that [`recorded`] lists, by name. The packages
+    /// directory that cannot be listed is the error: the loop then sends no heartbeat.
+    fn installed(&self) -> io::Result<Vec<RecordedService>> {
+        let ctx = self.daemon.ctx();
+        let services = installed::service_dirs(&ctx.dirs.packages)?;
+        Ok(services
+            .into_values()
+            .filter_map(|service| recorded(ctx, service))
+            .collect())
+    }
+}
+
+/// `service` as the heartbeat lists it: at the version its `current` link names, `None` when
+/// it has none (it is not installed, or not yet); `updating` the target of its step record while
+/// the record is unfinished, and nothing when it is finished, absent, newer or unreadable (the
+/// executor refuses the service's orders while it cannot read the record). The record keeps no
+/// order id of a hooked order, so no verdict is given back here: after a restart the
+/// coordinator's resend of the order is answered from the record (design 8.3).
+pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
+    let version = installed::linked_version(&ctx.dirs.packages, &service, CURRENT)?;
+    let updating = match ctx.store(&service).load() {
+        Ok(Loaded::Current(record)) => match record.state {
+            State::Finished { .. } => None,
+            _ => Version::new(&record.target_version).ok(),
+        },
+        _ => None,
+    };
+    Some(RecordedService {
+        name: service,
+        version,
+        updating,
+        last_result: None,
+    })
+}
+
+/// The service-observer port over the daemon's observer.
+pub struct DaemonObserver {
+    daemon: Arc<Daemon>,
+}
+
+impl DaemonObserver {
+    pub fn new(daemon: Arc<Daemon>) -> DaemonObserver {
+        DaemonObserver { daemon }
+    }
+}
+
+/// The detail of a service the daemon does not observe: it has no `current`, or the manifest of
+/// the version `current` names does not load.
+pub const NOT_OBSERVED: &str = "not_observed";
+
+impl ServiceObserver for DaemonObserver {
+    /// One observation of `service` ([`observer::observe`]); a service the daemon does not
+    /// observe is `unobserved`, never absent or stopped.
+    fn observe(&self, service: &ServiceName) -> Observation {
+        let ctx = self.daemon.ctx();
+        observer::observe(
+            self.daemon.observer(),
+            &ctx.dirs.packages,
+            &ctx.own_version,
+            service,
+        )
+        .map_or_else(
+            || Observation {
+                liveness: Liveness::Unobserved,
+                version: None,
+                health: Health::Unhealthy,
+                health_detail: Some(NOT_OBSERVED.to_owned()),
+            },
+            |seen| observation(&seen),
+        )
+    }
+}
+
+/// `seen` in the loop's words: the state as the liveness (live is running); the version only when
+/// the running executable confirmed it; the health as the heartbeat's health of the admin
+/// `Status` ([`beat_health`]), a health the observer cannot tell being unhealthy; and the token
+/// that says why the service is not plainly live, healthy and confirmed as the detail.
+pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
+    let liveness = match &seen.state {
+        ServiceState::Absent => Liveness::Absent,
+        ServiceState::Stopped => Liveness::Stopped,
+        ServiceState::Transitioning => Liveness::Transitioning,
+        ServiceState::Unobserved { .. } => Liveness::Unobserved,
+        ServiceState::Unmonitored => Liveness::Unmonitored,
+        ServiceState::Live => Liveness::Running,
+    };
+    let version = match &seen.version {
+        VersionView::Recorded {
+            version,
+            confirmed: true,
+        } => Version::new(version).ok(),
+        _ => None,
+    };
+    let health = match beat_health(seen).0 {
+        wire::Health::Healthy => Health::Healthy,
+        wire::Health::Absent => Health::Absent,
+        wire::Health::Unhealthy | wire::Health::Unspecified => Health::Unhealthy,
+    };
+    Observation {
+        liveness,
+        version,
+        health,
+        health_detail: seen.reason_token().map(str::to_owned),
     }
 }

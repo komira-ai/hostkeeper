@@ -8,6 +8,8 @@
 
 use std::fmt;
 
+use crate::manifest::HostkeeperVersion;
+
 /// The most bytes of a service name or a version: 255, Linux's `NAME_MAX`, the longest single
 /// file name, since each becomes one path component (`packages/<service>/<version>/`).
 pub const MAX_NAME: usize = 255;
@@ -113,6 +115,14 @@ impl Version {
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl From<HostkeeperVersion> for Version {
+    /// A version of hostkeeper as a version: `major.minor.patch` is digits and dots, at most 62
+    /// bytes, which [`is_version`] keeps.
+    fn from(version: HostkeeperVersion) -> Version {
+        Version(version.to_string())
     }
 }
 

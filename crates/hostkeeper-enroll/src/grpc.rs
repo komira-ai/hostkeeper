@@ -47,7 +47,7 @@ use crate::wire::{
 #[derive(Debug, thiserror::Error)]
 pub enum GrpcError {
     #[error(
-        "the coordinator endpoint {0:?} is not host:port (with or without a leading https://), with a DNS name or an IP address as the host"
+        "the coordinator endpoint {0:?} is not host:port, or an https:// URL of a host with an optional port, with a DNS name or an IP address as the host"
     )]
     Endpoint(String),
     #[error("cannot start the runtime of the coordinator client: {0}")]
@@ -56,6 +56,9 @@ pub enum GrpcError {
 
 /// The type label of a PEM PKCS#8 private key.
 const PRIVATE_KEY: &str = "PRIVATE KEY";
+
+/// The port of an `https://` URL that names none.
+const HTTPS_PORT: u16 = 443;
 
 /// The coordinator's address.
 #[derive(Debug)]
@@ -73,14 +76,20 @@ struct Target {
 impl Target {
     fn parse(text: &str) -> Result<Target, GrpcError> {
         let bad = || GrpcError::Endpoint(text.to_owned());
-        let uri = format!("https://{}", text.strip_prefix("https://").unwrap_or(text))
+        let url = text.strip_prefix("https://");
+        let uri = format!("https://{}", url.unwrap_or(text))
             .parse::<Uri>()
             .map_err(|_| bad())?;
-        // Nothing but the host and the port: no user, path or query.
+        // Nothing but the host and the port: no user, path or query. An `https://` URL that names
+        // no port names 443, as the daemon config's `coordinator` may; a bare `host:port` must
+        // name its port.
+        let written = uri.port().map(|port| format!(":{port}"));
         let (shown_host, port) = uri
             .host()
-            .zip(uri.port_u16())
-            .filter(|(host, port)| uri.to_string() == format!("https://{host}:{port}/"))
+            .zip(uri.port_u16().or(url.map(|_| HTTPS_PORT)))
+            .filter(|(host, _)| {
+                uri.to_string() == format!("https://{host}{}/", written.as_deref().unwrap_or(""))
+            })
             .ok_or_else(bad)?;
         let shown = format!("{shown_host}:{port}");
         let host = shown_host
@@ -111,8 +120,8 @@ pub struct GrpcEnroll {
 }
 
 impl GrpcEnroll {
-    /// A client of the coordinator at `endpoint`: `host:port`, with or without a leading
-    /// `https://`, the host a DNS name or an IP address. `current` names the files of the host's
+    /// A client of the coordinator at `endpoint`: `host:port`, or an `https://` URL of a host
+    /// with an optional port (443 when it names none), the host a DNS name or an IP address. `current` names the files of the host's
     /// current certificate and key, which `Renew` presents. `timeout` bounds the connection and
     /// handshake of every connection and every call. Nothing is connected until
     /// [`CoordinatorEnroll::presented_ca_der`].

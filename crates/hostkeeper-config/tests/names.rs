@@ -1,6 +1,7 @@
 //! The grammars of names and paths. The path cases are those of `hostkeeper-rights` before the
 //! move; the service-name and version cases are the rules of design section 11.8.
 
+use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{
     MAX_NAME, MAX_PATH, MAX_UNIT_NAME, NameError, PathError, SERVICE_NAME_RULE, ServiceName,
     UnitError, UnitName, VERSION_RULE, Version, check_path, check_relative, is_service_name,
@@ -308,4 +309,27 @@ fn errors_read_as_sentences() {
         UnitError::TooLong.to_string(),
     ];
     assert!(all.iter().all(|text| !text.is_empty()));
+}
+
+/// Catches a version of hostkeeper that the heartbeat names in another spelling, or that the
+/// version grammar would refuse: the conversion keeps `major.minor.patch` as written, the
+/// largest numbers included.
+#[test]
+fn a_hostkeeper_version_is_the_version_of_its_own_text() {
+    for own in [
+        HostkeeperVersion {
+            major: 0,
+            minor: 1,
+            patch: 0,
+        },
+        HostkeeperVersion {
+            major: u64::MAX,
+            minor: u64::MAX,
+            patch: u64::MAX,
+        },
+    ] {
+        let version = Version::from(own);
+        assert_eq!(version.as_str(), own.to_string());
+        assert_eq!(Version::new(version.as_str()), Ok(version));
+    }
 }
