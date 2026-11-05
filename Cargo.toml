@@ -68,8 +68,9 @@ rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "
 # self-signature, a poll's signed nonce, the request id); the RS256 signature of a CI token
 # (hostkeeper-oidc).
 ring = "0.17.14"
-# The zstd decoder of hostkeeper-unpack: pure Rust (MIT); `hash` (twox-hash, MIT) to check a
-# frame's content checksum; no dictionary builder.
+# The zstd of hostkeeper packages, pure Rust (MIT): the decoder of hostkeeper-unpack, and the
+# compression of `cargo xtask release package`. `hash` (twox-hash, MIT) checks a frame's content
+# checksum; no dictionary builder.
 ruzstd = { version = "0.9.1", default-features = false, features = ["hash", "std"] }
 # hostkeeper-package's tests: the signer identity it passes to `gh` is compiled and matched as
 # the regular expression `gh` reads it as.

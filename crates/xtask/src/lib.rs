@@ -3,12 +3,15 @@
 //!
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
+//! - `release <verb>`: the release steps: the version of a commit, the hostkeeper package, the
+//!   release plan, and the check and publication of a release's assets (`release`).
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
 //! them to the rules of this repository. The crate's one export is [`main`], the entry point of
 //! the binary.
 
 mod install;
+mod release;
 
 #[cfg(test)]
 mod testdir;
@@ -26,6 +29,8 @@ enum Error {
     /// Flags that do not fit together (exit status 2, like a clap error).
     #[error(transparent)]
     Usage(#[from] install::UnpackFlags),
+    #[error(transparent)]
+    Release(#[from] release::Error),
 }
 
 #[derive(Parser)]
@@ -55,6 +60,11 @@ enum Verb {
         #[arg(long)]
         member: Option<PathBuf>,
     },
+    /// The release steps: version, package, plan, check and publish.
+    Release {
+        #[command(subcommand)]
+        verb: release::Verb,
+    },
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -71,6 +81,7 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
                 &download, &sha256, &unpack, &out,
             )?])
         }
+        Verb::Release { verb } => Ok(release::run(verb, release::real::connect)?),
     }
 }
 
@@ -87,7 +98,7 @@ pub fn main() -> ExitCode {
             eprintln!("xtask: {e}");
             match e {
                 Error::Usage(_) => ExitCode::from(2),
-                Error::Install(_) => ExitCode::FAILURE,
+                Error::Install(_) | Error::Release(_) => ExitCode::FAILURE,
             }
         }
     }

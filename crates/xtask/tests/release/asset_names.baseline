@@ -1,0 +1,36 @@
+# The asset names of a hostkeeper release, one per line, `<version>` standing for X.Y.Z: the
+# contract that cargo xtask release (crates/xtask/src/release/contract.rs, asset_names) keeps.
+# A name may be added (add it here in the same pull request); a name is never removed or
+# renamed, since consumers fetch assets by these names. Lines starting with `#` are comments.
+SHA256SUMS
+hostkeeper-<version>-1.aarch64.rpm
+hostkeeper-<version>-1.aarch64.rpm.sigstore.json
+hostkeeper-<version>-1.x86_64.rpm
+hostkeeper-<version>-1.x86_64.rpm.sigstore.json
+hostkeeper-<version>-linux-arm64.cdx.json
+hostkeeper-<version>-linux-arm64.tar.gz
+hostkeeper-<version>-linux-arm64.tar.gz.sigstore.json
+hostkeeper-<version>-linux-arm64.tar.zst
+hostkeeper-<version>-linux-arm64.tar.zst.sha256
+hostkeeper-<version>-linux-arm64.tar.zst.sigstore.json
+hostkeeper-<version>-linux-x86_64.cdx.json
+hostkeeper-<version>-linux-x86_64.tar.gz
+hostkeeper-<version>-linux-x86_64.tar.gz.sigstore.json
+hostkeeper-<version>-linux-x86_64.tar.zst
+hostkeeper-<version>-linux-x86_64.tar.zst.sha256
+hostkeeper-<version>-linux-x86_64.tar.zst.sigstore.json
+hostkeeper-coordinator-<version>-linux-arm64.cdx.json
+hostkeeper-coordinator-<version>-linux-arm64.image.tar
+hostkeeper-coordinator-<version>-linux-arm64.image.tar.sigstore.json
+hostkeeper-coordinator-<version>-linux-arm64.tar.gz
+hostkeeper-coordinator-<version>-linux-arm64.tar.gz.sigstore.json
+hostkeeper-coordinator-<version>-linux-x86_64.cdx.json
+hostkeeper-coordinator-<version>-linux-x86_64.image.tar
+hostkeeper-coordinator-<version>-linux-x86_64.image.tar.sigstore.json
+hostkeeper-coordinator-<version>-linux-x86_64.tar.gz
+hostkeeper-coordinator-<version>-linux-x86_64.tar.gz.sigstore.json
+hostkeeper_<version>_amd64.deb
+hostkeeper_<version>_amd64.deb.sigstore.json
+hostkeeper_<version>_arm64.deb
+hostkeeper_<version>_arm64.deb.sigstore.json
+index.json

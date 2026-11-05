@@ -3822,11 +3822,14 @@ dependencies = [
  "hex",
  "hostkeeper-config",
  "hostkeeper-daemon",
+ "hostkeeper-unpack",
+ "ruzstd",
  "saphyr-parser",
  "serde_json",
  "sha2",
  "tar",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

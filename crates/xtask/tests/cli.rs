@@ -190,3 +190,81 @@ fn install_tool_with_a_wrong_sha256_is_a_failure_with_status_1_and_installs_noth
     );
     assert!(!d.join("tool").exists());
 }
+
+// The release verbs run here read no port: a verb that reads git or GitHub is tested in the
+// library over fakes, never through the binary, which would reach the real programs.
+const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[test]
+fn release_stamp_prints_the_stamp_with_status_0() {
+    // Catches: `--version` or `--commit` not reaching the stamp, a stamp that is not the text a
+    // built binary prints, or a non-zero status for a verb that reads no port.
+    let d = dir("stamp");
+    let o = run(
+        &d,
+        &["release", "stamp", "--version", "0.1.2", "--commit", COMMIT],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "hostkeeper 0.1.2+0123456789ab\n");
+}
+
+#[test]
+fn release_stamp_with_a_two_number_version_is_a_usage_error_with_status_2() {
+    // Catches: a version that is not X.Y.Z accepted, or reported as a failure (status 1).
+    let d = dir("stamp-usage");
+    let o = run(
+        &d,
+        &["release", "stamp", "--version", "1.2", "--commit", COMMIT],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
+}
+
+#[test]
+fn release_compare_images_of_missing_files_is_a_failure_with_status_1() {
+    // Catches: unreadable images compared as equal, or reported with a status other than 1.
+    let d = dir("compare-missing");
+    let o = run(&d, &["release", "compare-images", "a.tar", "b.tar"]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(stderr(&o).starts_with("xtask: read "), "{}", stderr(&o));
+}
+
+#[test]
+fn release_set_version_writes_the_version_into_the_workspace_with_status_0() {
+    // Catches: `--version` or `--root` not reaching set-version, or the workspace manifest left
+    // at its old version.
+    let d = dir("set-version");
+    std::fs::create_dir_all(d.join("crates/a")).expect("member directory");
+    std::fs::write(
+        d.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.package]\nversion = \"0.1.0\"\n",
+    )
+    .expect("root manifest");
+    std::fs::write(
+        d.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion.workspace = true\n",
+    )
+    .expect("member manifest");
+    std::fs::write(
+        d.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"a\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("lock file");
+    let root = d.to_str().expect("a UTF-8 path");
+    let o = run(
+        &d,
+        &[
+            "release",
+            "set-version",
+            "--version",
+            "0.1.9",
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let manifest = std::fs::read_to_string(d.join("Cargo.toml")).expect("manifest");
+    assert!(manifest.contains("version = \"0.1.9\""), "{manifest}");
+    let lock = std::fs::read_to_string(d.join("Cargo.lock")).expect("lock");
+    assert!(lock.contains("version = \"0.1.9\""), "{lock}");
+}
