@@ -98,6 +98,11 @@ impl RoleLimits {
         self.0.get(role).copied()
     }
 
+    /// Every role the map names with its number, in role-name order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, u32)> {
+        self.0.iter().map(|(role, n)| (role.as_str(), *n))
+    }
+
     /// Sets the number of `role`.
     pub fn set(&mut self, role: &str, n: u32) {
         self.0.insert(role.to_owned(), n);

@@ -18,16 +18,17 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::boot::{ALERT_START, BootReport, BootStep, Stage, alert_line};
 use hostkeeper_daemon::cli::{
     CA_BUNDLE, DEADMAN_POLL_SECS, GH_BINARY, GH_HOME, HostFiles, HostVerifier, PKI_DIR,
-    SIGSTORE_TRUSTED_ROOT, UNWIRED, host_ports, start_with, tls_roots,
+    SIGSTORE_TRUSTED_ROOT, host_ports, start_with, tls_roots,
 };
 use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
 use hostkeeper_daemon::start::{self, EXIT_FAILED, Settings, StartError, before_records};
 use hostkeeper_daemon::testing::{FakeNotifier, FakePackages, Log};
 use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_daemon::{NoNotifier, Ports, ReadyNotifier, Refusal};
+use hostkeeper_hook::{Invocation, Step};
 use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier, VerifyError};
 use hostkeeper_placed::testing::{Event, FsWrite, Log as PlacedLog, UnitCall};
-use hostkeeper_steps::{LaunchError, Stamp};
+use hostkeeper_steps::{Bound, Stamp, StepCall};
 use support::{OWN, Rig, Tap, alerting, config, d, lines, name, update};
 use support_archive::{Answer, Rig as ArchiveRig, SERVICE, VERSION};
 
@@ -366,8 +367,9 @@ fn the_registration_socket_directory_is_beside_the_admin_socket_directory() {
 /// with the packages directory there the ports open with the sweep of the real store (a service
 /// entry that is a file is an `io_error`), the dead-man poll and the host's directories for
 /// placement; without it the start is `Io` naming it; `gh`'s home under the state directory is
-/// made mode 0700, and one that cannot be made is `Io` naming it. The launcher is still the
-/// unwired one.
+/// made mode 0700, and one that cannot be made is `Io` naming it. Catches a launcher left
+/// unwired: the ports' launcher is the host's systemd launcher, which refuses a hook that is not
+/// there by its path before it spawns anything.
 #[test]
 fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
     let rig = Rig::new("assemble-host-ports");
@@ -417,10 +419,34 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         swept.err().map(|error| error.refusal()),
         Some(Refusal::PackageIoError)
     );
-    assert!(matches!(
-        ports.launcher.stop("u"),
-        Err(LaunchError::Launcher(why)) if why == UNWIRED
-    ));
+
+    // The launcher is the host's: a hook that is not there does not start, named by its path
+    // (the unwired launcher would answer that it has none), and nothing is spawned for it.
+    let missing = rig.scratch.path().join("no-such-hook");
+    let unit = "updater-web-prepare-1";
+    let call = StepCall {
+        service: "web",
+        invocation: Invocation {
+            step: Step::Prepare,
+            artifact: Some(rig.packages.join("web")),
+            params: Some(rig.scratch.path().join("params.toml")),
+        },
+        executable: &missing,
+        unit,
+        bound: Bound::Unbounded,
+    };
+    let refused = ports
+        .launcher
+        .run(&call)
+        .err()
+        .map(|error| error.to_string());
+    assert_eq!(
+        refused,
+        Some(format!(
+            "the hook did not start: {}: No such file or directory (os error 2)",
+            missing.display()
+        ))
+    );
 }
 
 /// Catches a start of the host's build that goes on past ports it could not build: a config that

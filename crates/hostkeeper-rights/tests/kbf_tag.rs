@@ -4,11 +4,7 @@
 
 mod support;
 
-use std::path::Path;
-
-use hostkeeper_hook::Step;
 use hostkeeper_rights::load::{HOOKS_ROOT, Kind, RESERVED, Violation, check};
-use hostkeeper_rights::{Launch, command, unit_name};
 
 /// The kbf tag the crate was imported from.
 const KBF_TAG: &str = "v0.0.64";
@@ -16,8 +12,8 @@ const KBF_TAG: &str = "v0.0.64";
 const KBF_COMMIT: &str = "8f90d0604794f3fee057e71647c7e1c1e034fa2e";
 
 /// Catches a rename or edit of a name that a host, a hook or a file on disk already sees: the
-/// default hook arguments, the unit name of a step, the hooks root and the reserved updater
-/// directories.
+/// default hook arguments, the hooks root and the reserved updater directories. (The unit name
+/// of a step moved with the launcher: `constants_match_kbf_at_the_tag` of `hostkeeper-steps`.)
 /// The kbf source at the tag has no boot unit and no constant for `/var/lib/updater/state` or
 /// `/var/lib/updater/releases`; those two paths appear only in the design document, so this test
 /// asserts instead that the reserved-path rules refuse each as a write path or a record
@@ -39,39 +35,5 @@ fn constants_match_kbf_at_the_tag() {
                 "{path} as {kind:?} at {at}"
             );
         }
-    }
-
-    let expected = [
-        (Step::Prepare, "updater-tierstore-prepare-7"),
-        (Step::Cutover, "updater-tierstore-cutover-7"),
-        (Step::Verify, "updater-tierstore-verify-7"),
-        (Step::Rollback, "updater-tierstore-rollback-7"),
-        (Step::Cleanup, "updater-tierstore-cleanup-7"),
-    ];
-    for (step, name) in expected {
-        assert_eq!(unit_name("tierstore", step, 7), name, "{at}");
-    }
-}
-
-/// Catches a change to the unit name that `systemd-run` is given for a step of the sample
-/// declaration: for every step the command carries exactly one `--unit=` argument, and it is
-/// `updater-tierstore-<step>-<generation>`.
-#[test]
-fn the_command_of_each_step_names_the_kbf_unit() {
-    let declared = support::declared(support::sample(), 65534, &["tierstore"]);
-    let release = Path::new("/var/lib/updater/releases/tierstore/abc");
-    for step in Step::ALL {
-        let launch = Launch::of(&declared, step, 7, release, None);
-        let run = command(&launch).expect("the sample builds a command");
-        let units: Vec<&str> = run
-            .args
-            .iter()
-            .filter_map(|arg| arg.to_str()?.strip_prefix("--unit="))
-            .collect();
-        assert_eq!(
-            units,
-            [format!("updater-tierstore-{step}-7")],
-            "{step} at kbf {KBF_TAG}"
-        );
     }
 }

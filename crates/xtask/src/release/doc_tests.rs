@@ -97,11 +97,11 @@ fn quoted(text: &str) -> Vec<String> {
 fn placeholders(doc: &str) -> Option<Vec<(String, Vec<String>)>> {
     let (_, rest) = doc.split_once(PLATFORMS)?;
     let sentence = format!(
-        "{PLATFORMS}{}",
-        rest.split(".\n").next().unwrap_or_default()
+        "{PLATFORMS}{}`",
+        rest.split("`.").next().unwrap_or_default()
     );
     sentence
-        .split("; ")
+        .split(';')
         .map(|clause| {
             let words = quoted(clause);
             let (name, values) = words.split_first()?;
@@ -111,29 +111,29 @@ fn placeholders(doc: &str) -> Option<Vec<(String, Vec<String>)>> {
 }
 
 /// Every asset name `doc` lists for `version`, sorted: each line of the list under
-/// "Every name" with `<version>` written out, and a line that holds the platform placeholders
-/// once for each platform, the placeholders taken together. Fails saying what of the document
-/// is missing.
+/// "Every name" with `<version>` written out, once when it holds no placeholder of the platform
+/// sentence and otherwise once per value of the placeholders it holds, taken together. Fails
+/// saying what of the document is missing, or which line holds placeholders of unequal length.
 pub(super) fn documented_names(doc: &str, version: &Version) -> Result<Vec<String>, String> {
     let list = section(doc, EVERY_NAME)
         .and_then(|s| blocks(s, "text").into_iter().next())
         .ok_or("the document has no ```text block under \"### Every name\"")?;
     let places = placeholders(doc).ok_or("the document has no sentence listing the platforms")?;
-    let count = places.first().map_or(0, |(_, values)| values.len());
-    if places.iter().any(|(_, values)| values.len() != count) {
-        return Err(format!(
-            "the platform sentence lists {places:?}, not as many of each"
-        ));
-    }
     let mut names = Vec::new();
     for line in list.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let line = line.replace("<version>", &version.to_string());
-        if !places.iter().any(|(name, _)| line.contains(name.as_str())) {
-            names.push(line);
-            continue;
+        let here: Vec<&(String, Vec<String>)> = places
+            .iter()
+            .filter(|(name, _)| line.contains(name.as_str()))
+            .collect();
+        let count = here.first().map_or(1, |(_, values)| values.len());
+        if here.iter().any(|(_, values)| values.len() != count) {
+            return Err(format!(
+                "the line {line} holds {here:?}, not as many of each"
+            ));
         }
         for i in 0..count {
-            names.push(places.iter().fold(line.clone(), |text, (name, values)| {
+            names.push(here.iter().fold(line.clone(), |text, (name, values)| {
                 text.replace(name.as_str(), &values[i])
             }));
         }
@@ -409,15 +409,17 @@ fn a_document_without_the_list_or_the_platforms_has_no_names() {
     assert_eq!(without(PLATFORMS, "`<platforms>` are "), no_sentence);
     let rpm = "`<rpm-arch>` is `x86_64` or `aarch64`";
     assert_eq!(without(rpm, "rpm-arch is x86_64 or aarch64"), no_sentence);
-    assert!(
-        without(rpm, "`<rpm-arch>` is `x86_64`").is_err_and(|e| e.contains("not as many of each"))
+    let mixed = without(
+        "hostkeeper-<version>-1.<rpm-arch>.rpm\n",
+        "hostkeeper-<version>-1.<rpm-arch>.<platform>.rpm\n",
     );
+    assert!(mixed.is_err_and(|e| e.contains("not as many of each")));
 }
 
 #[test]
 fn the_platform_sentence_lists_the_released_platforms() {
-    // Catches: a document that names a platform the release does not ship, or misses one, or
-    // pairs a platform with another's deb or rpm architecture.
+    // Catches: a document that names a platform the release does not ship, or misses one, pairs
+    // a platform with another's deb or rpm architecture, or lists the coordinator for macOS.
     fn values(list: &[&str]) -> Vec<String> {
         list.iter().map(|v| (*v).to_owned()).collect()
     }
@@ -427,6 +429,10 @@ fn the_platform_sentence_lists_the_released_platforms() {
         places,
         vec![
             ("<platform>".to_owned(), values(&released)),
+            (
+                "<linux-platform>".to_owned(),
+                values(&["linux-x86_64", "linux-arm64"])
+            ),
             ("<deb-arch>".to_owned(), values(&["amd64", "arm64"])),
             ("<rpm-arch>".to_owned(), values(&["x86_64", "aarch64"])),
         ]
@@ -436,8 +442,16 @@ fn the_platform_sentence_lists_the_released_platforms() {
     for name in [
         "hostkeeper_0.1.5_amd64.deb",
         "hostkeeper-0.1.5-1.aarch64.rpm",
+        "hostkeeper-coordinator-0.1.5-linux-arm64.image.tar",
+        "hostkeeper-0.1.5-macos-arm64.pkg",
     ] {
         assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
     }
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.starts_with("hostkeeper-coordinator-0.1.5-macos")),
+        "{names:?}"
+    );
     assert_eq!(names.len(), asset_names(&v, &Platform::RELEASED).len());
 }

@@ -24,23 +24,26 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 
 ## The assets
 
-`<version>` is X.Y.Z. `<platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or
-`arm64`; `<rpm-arch>` is `x86_64` or `aarch64`.
+`<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`;
+`<linux-platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or `arm64`;
+`<rpm-arch>` is `x86_64` or `aarch64`. The deb, the rpm and the coordinator are for the two Linux
+platforms; the installer pkg is for `macos-arm64`.
 
 | Asset | Content |
 |---|---|
 | `hostkeeper-<version>-<platform>.tar.gz` | the daemon binary |
 | `hostkeeper-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-<version>-<platform>.tar.zst` | the hostkeeper self-update package: `manifest.toml`, `bin/hostkeeper`, `units/hostkeeper.service` |
+| `hostkeeper-<version>-<platform>.tar.zst` | the hostkeeper self-update package: `manifest.toml`, `bin/hostkeeper` and, on Linux, `units/hostkeeper.service` (the macOS package has no unit) |
 | `hostkeeper-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package |
-| `hostkeeper-coordinator-<version>-<platform>.tar.gz` | the coordinator binary |
-| `hostkeeper-coordinator-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-coordinator-<version>-<platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
-| `index.json` | the release index: for each platform the package file, its SHA-256 and size |
+| `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
+| `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
+| `hostkeeper-coordinator-<version>-<linux-platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
+| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755) and `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), owned by root and wheel, no scripts; not signed, attested |
+| `index.json` | the release index: for each of the three platforms the package file, its SHA-256 and size |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm` and `.image.tar` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` |
 
 `index.json` is a lookup, not a trust anchor: it has no bundle of its own, and a host trusts a
 package for its own attestation and manifest, never for its entry in the index. (`SHA256SUMS`
@@ -52,15 +55,19 @@ built twice from clean contexts and released only when the two builds are byte f
 anyone can rebuild it from the commit and compare; before it is released it is also loaded and run
 through its entrypoint with `--version`, which must print the coordinator's stamp.
 
-macOS assets (`macos-arm64`) are not released yet. Names are only ever added, never renamed or
-removed, so a consumer ignores assets it does not know.
+A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
+lacks any of them, and `index.json` lists the package of each. The pkg carries no installer
+signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
+verify it by its attestation, steps 3 and 4, like any other asset. Names are only ever added,
+never renamed or removed, so a consumer ignores assets it does not know.
 
 ### Every name
 
-The whole list, each line with a placeholder once per platform, `<platform>`, `<deb-arch>` and
-`<rpm-arch>` taken together in the order the sentence above gives them. The release tooling
-produces exactly these names (`cargo xtask release check` refuses a directory that holds any
-other), and a test keeps this list equal to them.
+The whole list. A line with placeholders stands for one name per value of them, the placeholders
+of one line taken together in the order the sentence above gives their values: a `<platform>`
+line for each of the three platforms, a `<linux-platform>`, `<deb-arch>` or `<rpm-arch>` line for
+each Linux platform. The release tooling produces exactly these names (`cargo xtask release
+check` refuses a directory that holds any other), and a test keeps this list equal to them.
 
 ```text
 SHA256SUMS
@@ -75,11 +82,13 @@ hostkeeper_<version>_<deb-arch>.deb
 hostkeeper_<version>_<deb-arch>.deb.sigstore.json
 hostkeeper-<version>-1.<rpm-arch>.rpm
 hostkeeper-<version>-1.<rpm-arch>.rpm.sigstore.json
-hostkeeper-coordinator-<version>-<platform>.tar.gz
-hostkeeper-coordinator-<version>-<platform>.tar.gz.sigstore.json
-hostkeeper-coordinator-<version>-<platform>.cdx.json
-hostkeeper-coordinator-<version>-<platform>.image.tar
-hostkeeper-coordinator-<version>-<platform>.image.tar.sigstore.json
+hostkeeper-coordinator-<version>-<linux-platform>.tar.gz
+hostkeeper-coordinator-<version>-<linux-platform>.tar.gz.sigstore.json
+hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
+hostkeeper-coordinator-<version>-<linux-platform>.image.tar
+hostkeeper-coordinator-<version>-<linux-platform>.image.tar.sigstore.json
+hostkeeper-<version>-macos-arm64.pkg
+hostkeeper-<version>-macos-arm64.pkg.sigstore.json
 ```
 
 ## Steps
@@ -150,8 +159,8 @@ For a host without access to the GitHub API. Once, on a host that has it:
 gh attestation trusted-root > trusted_root.jsonl
 ```
 
-Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm` and `.image.tar` you use, with the bundle
-released next to it (the other assets have no bundle and are verified online, step 3):
+Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` you use, with the
+bundle released next to it (the other assets have no bundle and are verified online, step 3):
 
 ```sh
 gh attestation verify release/<asset> \
@@ -172,7 +181,7 @@ Refuse when: the same as step 3, or the bundle is absent.
 ### 5. SBOM attestation (optional)
 
 The SBOM is attested as well. Verify the binary tarball (the daemon's, or the coordinator's
-`hostkeeper-coordinator-<version>-<platform>.tar.gz`) with the same identity flags as step 3 and
+`hostkeeper-coordinator-<version>-<linux-platform>.tar.gz`) with the same identity flags as step 3 and
 with `--predicate-type` set to the CycloneDX predicate type that `attest-sbom` records:
 
 ```sh
@@ -198,7 +207,7 @@ tar -xzf release/hostkeeper-<version>-<platform>.tar.gz
 
 Expected output, exactly: `hostkeeper <X.Y.Z>+<first 12 hex digits of $PIN>`.
 
-For the coordinator, unpack `hostkeeper-coordinator-<version>-<platform>.tar.gz` and run
+For the coordinator, unpack `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` and run
 `./hostkeeper-coordinator --version`; its output is, exactly,
 `hostkeeper-coordinator <X.Y.Z>+<first 12 hex digits of $PIN>`.
 

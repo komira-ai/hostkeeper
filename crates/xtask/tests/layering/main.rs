@@ -11,13 +11,16 @@
 //! - `hostkeeper-wire`, `hostkeeper-oidc` and `hostkeeper-tls` depend on no workspace crate;
 //!   `hostkeeper-coordinator` depends on exactly those three, `hostkeeper-enrollment` (its CA
 //!   and enrollment store) and `hostkeeper-proto` (the messages of `Enroll`, `Poll` and
-//!   `Renew`) (dev-dependencies: itself, `hostkeeper-testkit` and `hostkeeper-oidc`, whose
-//!   `testkit` feature its tests use);
+//!   `Renew`) (dev-dependencies: itself, `hostkeeper-testkit`, `hostkeeper-oidc`, whose
+//!   `testkit` feature its tests use, and `hostkeeper-ctl`, which its tests run against it);
 //! - `hostkeeper-enrollment` (the coordinator's CA and enrollment store) depends on no other
 //!   crate of this workspace (dev-dependencies: itself and `hostkeeper-testkit`);
 //! - `hostkeeper-steps` and `hostkeeper-observe` reach `hostkeeper-launchd` through no normal or
 //!   build dependency, direct or through any chain (a fixture without `hostkeeper-observe` has
 //!   nothing to check for it);
+//! - `hostkeeper-launchd` may depend on `hostkeeper-steps` (its step launcher implements the
+//!   runner's `StepLauncher`): the edge runs from the macOS crate down to the shared layer, never
+//!   back;
 //! - `hostkeeper-testkit` depends on no workspace crate, and no crate has it but as a
 //!   dev-dependency;
 //! - no non-test source file under `crates/*/src` brings back a closed set of roles (the enum
@@ -921,4 +924,28 @@ fn hostkeeper_steps_and_observe_do_not_depend_on_launchd() {
              but reaches it through hostkeeper-observe -> shim -> hostkeeper-launchd"
         )
     );
+}
+
+/// Catches: a check that refuses the edge the macOS crate needs, `hostkeeper-launchd` on the step
+/// runner and the hook (its step launcher implements `StepLauncher`), while the runner and the
+/// observer keep reaching nothing of it.
+#[test]
+fn the_launchd_crate_may_depend_on_the_step_runner() {
+    let steps_dep = "hostkeeper-steps = { path = \"../hostkeeper-steps\" }\n";
+    let mut edits = bare_crate("crates", "hostkeeper-observe");
+    edits.push((
+        "crates/hostkeeper-launchd/Cargo.toml".to_owned(),
+        layered(
+            "hostkeeper-launchd",
+            &format!("{HOOK_DEP}{steps_dep}"),
+            "",
+            TESTKIT_DEP,
+        ),
+    ));
+    edits.push((
+        "crates/hostkeeper-launchd/src/lib.rs".to_owned(),
+        String::new(),
+    ));
+    let dir = fixture("clean", edits);
+    assert_eq!(check(&dir), Ok(()));
 }

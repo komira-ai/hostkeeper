@@ -65,6 +65,7 @@ fn states() -> Vec<State> {
         State::Running {
             started: stamp("boot-a", 300),
             deadline_secs: 900,
+            unbounded: false,
         },
         State::Done {
             code: Some(0),
@@ -208,6 +209,7 @@ fn running(boot: &str) -> State {
     State::Running {
         started: stamp(boot, 300),
         deadline_secs: 900,
+        unbounded: false,
     }
 }
 
@@ -430,9 +432,9 @@ fn the_reboot_cells_reach_their_verdict_through_the_runner() {
         .filter_map(|e| match e {
             support::Event::Run {
                 step: Step::Verify,
-                timeout_secs,
+                bound,
                 ..
-            } => Some(*timeout_secs),
+            } => Some(support::secs_of(*bound)),
             _ => None,
         })
         .collect();

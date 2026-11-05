@@ -1,4 +1,4 @@
-//! The listeners: TLS in front of [`crate::http::handle`].
+//! The listeners: TLS in front of [`crate::grpc::route`].
 //!
 //! A listener is a way to accept connections (a function; [`accept_tcp`] makes one of a bound
 //! socket) and a [`TlsSource`]; what the connections are is the caller's, so a test serves
@@ -8,9 +8,13 @@
 //! client certificate that chains to the farm CA, or, with enrollment, lets a client without one
 //! through the handshake and admits one of the coordinator's CA too (each route then decides:
 //! only `Enroll` and `Poll` answer a caller without one); the private listener's asks for none. A
-//! connection speaks HTTP/1.1 only, and has a limit on its handshake, its request head, its
-//! request body and on any single write of a response that its peer does not read; a listener
-//! has a limit on its connections.
+//! handshake offers `h2` and `http/1.1`, whatever the source's own protocols are: a connection
+//! that negotiates `h2` speaks HTTP/2 (gRPC, and the JSON routes over HTTP/2), any other speaks
+//! HTTP/1.1 (the JSON routes). Either has a limit on its handshake, its request body and on any
+//! single write of a response that its peer does not read; an HTTP/1.1 connection has a limit on
+//! its request head; an HTTP/2 connection has a limit on its streams, pings its peer, takes new
+//! calls for one patience only and is closed one patience after that; a listener has a limit on
+//! its connections.
 
 use std::convert::Infallible;
 use std::io;
@@ -22,25 +26,38 @@ use std::time::Duration;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use hostkeeper_tls::TlsSource;
-use hyper::server::conn::http1;
+use hyper::body::Incoming;
+use hyper::server::conn::{http1, http2};
 use hyper::service::service_fn;
-use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::time::{Instant, Sleep};
 use tokio_rustls::TlsAcceptor;
 
-use crate::http::{Peer, Surface, handle};
+use crate::grpc::route;
+use crate::http::{Peer, Surface};
 use crate::service::Coordinator;
 use crate::tokens::OperatorTokens;
 
 /// How long a client has to finish its TLS handshake, and then to send a request head.
 pub const CLIENT_PATIENCE: Duration = Duration::from_secs(10);
 
+/// The protocol a handshake settles on for HTTP/2, as ALPN names it.
+const H2: &[u8] = b"h2";
+
+/// The protocols a handshake offers, in the order of preference.
+const ALPN: [&[u8]; 2] = [H2, b"http/1.1"];
+
+/// The most requests one HTTP/2 connection serves at once. An updater or `hostkeeper ctl` sends
+/// one call at a time; the rest is slack for a client that pipelines.
+pub const MAX_STREAMS: u32 = 16;
+
 /// The most connections one listener serves at once. A client with a handshake, a head, a
-/// body or an unread response in flight holds one for at most [`CLIENT_PATIENCE`] each, so the cap makes a flood
-/// wait in the kernel's backlog rather than take the process's descriptors and memory.
+/// body or an unread response in flight holds one for at most [`CLIENT_PATIENCE`] each, and an
+/// HTTP/2 connection is closed two patiences after its handshake, so the cap makes a flood wait
+/// in the kernel's backlog rather than take the process's descriptors and memory.
 pub const MAX_CONNECTIONS: usize = 1024;
 
 /// One listener: `accept` yields the next connection, as a function of no argument that
@@ -219,7 +236,8 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for WriteDeadline<S> {
     }
 }
 
-/// Serves one connection until it ends: the TLS handshake, then HTTP/1.1, each with its limit.
+/// Serves one connection until it ends: the TLS handshake, then HTTP/2 when the handshake
+/// settled on `h2` and HTTP/1.1 otherwise, each with its limit.
 pub async fn connection<S>(
     stream: S,
     tls: TlsSource,
@@ -230,7 +248,7 @@ pub async fn connection<S>(
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let mut config = (*tls.config()).clone();
-    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    config.alpn_protocols = ALPN.iter().map(|name| name.to_vec()).collect();
     let shaken = tokio::time::timeout(patience, TlsAcceptor::from(Arc::new(config)).accept(stream));
     let tls = match shaken.await {
         Ok(Ok(tls)) => tls,
@@ -249,16 +267,40 @@ pub async fn connection<S>(
         .peer_certificates()
         .and_then(<[_]>::first)
         .map(|leaf| Arc::from(leaf.as_ref()));
-    let service = service_fn(move |request| {
+    let speaks_h2 = tls.get_ref().1.alpn_protocol() == Some(H2);
+    let service = service_fn(move |request: hyper::Request<Incoming>| {
         let coordinator = Arc::clone(&coordinator);
         let peer = peer.clone();
-        async move { Ok::<_, Infallible>(handle(&coordinator, surface, &peer, request, patience).await) }
+        async move { Ok::<_, Infallible>(route(&coordinator, surface, &peer, request, patience).await) }
     });
-    let served = http1::Builder::new()
-        .timer(TokioTimer::new())
-        .header_read_timeout(patience)
-        .serve_connection(TokioIo::new(WriteDeadline::new(tls, patience)), service)
-        .await;
+    let io = TokioIo::new(WriteDeadline::new(tls, patience));
+    let served = if speaks_h2 {
+        let serving = http2::Builder::new(TokioExecutor::new())
+            .timer(TokioTimer::new())
+            .max_concurrent_streams(MAX_STREAMS)
+            .keep_alive_interval(patience)
+            .keep_alive_timeout(patience)
+            .serve_connection(io, service);
+        let mut serving = std::pin::pin!(serving);
+        // An HTTP/2 connection takes new calls for one patience: then it is told to go away
+        // (no new stream; the calls in flight finish), and dropped one patience later, so an
+        // idle client that answers pings cannot keep a slot of the listener.
+        match tokio::time::timeout(patience, serving.as_mut()).await {
+            Ok(ended) => ended,
+            Err(_) => {
+                serving.as_mut().graceful_shutdown();
+                tokio::time::timeout(patience, serving)
+                    .await
+                    .unwrap_or(Ok(()))
+            }
+        }
+    } else {
+        http1::Builder::new()
+            .timer(TokioTimer::new())
+            .header_read_timeout(patience)
+            .serve_connection(io, service)
+            .await
+    };
     if let Err(why) = served {
         tracing::debug!(%why, "a connection ended badly");
     }

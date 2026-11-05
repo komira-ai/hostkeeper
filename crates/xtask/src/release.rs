@@ -9,7 +9,10 @@
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
 //!   ([`contract::stamp_of`]) and the check that a built binary prints exactly it.
 //! - `package` ([`package`]): the deterministic hostkeeper package, `.tar.zst`, and its SHA-256.
-//! - `index` ([`index`]): the release index, `index.json`: which package serves each platform.
+//! - `index` ([`index`]): the release index, `index.json`: which package serves each platform,
+//!   refused unless it has the package of every released platform.
+//! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
+//!   install, and the check of its payload read back from the built pkg.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `plan` ([`plan`]): whether a commit (or, on the scheduled path, each missed commit) is
 //!   released, and under which version.
@@ -18,8 +21,9 @@
 //!   the signer identity of [`contract`] and the commit.
 //! - `publish` ([`publish`]): the GitHub release of a checked directory, idempotent.
 //!
-//! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`
-//! and `gh` are in [`git`] and [`github`], over the [`ports::Exec`] port; the only code that starts
+//! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
+//! `gh` and `pkgbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
+//! port; the only code that starts
 //! a process is `real::SystemExec`, built in [`real`] alone.
 
 mod check;
@@ -34,6 +38,7 @@ mod git;
 mod github;
 mod index;
 mod locate;
+mod macos_pkg;
 #[cfg(test)]
 mod no_network;
 mod package;
@@ -52,6 +57,7 @@ use check_binary::VersionOf;
 use contract::{Commit, Platform, Repo, Version};
 use git::GitCli;
 use github::Gh;
+use macos_pkg::PkgbuildCli;
 use ports::{Adapters, Exec, PortError, Ports, Run};
 
 /// Why a release verb failed.
@@ -138,21 +144,48 @@ pub(crate) enum Verb {
         /// The hostkeeper binary of that platform: `bin/hostkeeper` in the package.
         #[arg(long)]
         binary: PathBuf,
-        /// The systemd unit: `units/hostkeeper.service` in the package.
+        /// The systemd unit: `units/hostkeeper.service` in the package. Required for a Linux
+        /// platform; refused for macos-arm64, whose package carries no unit.
         #[arg(long)]
-        unit: PathBuf,
+        unit: Option<PathBuf>,
         /// The directory the package and its `.sha256` are written to.
         #[arg(long)]
         out: PathBuf,
     },
     /// Write `index.json`, the release index of the hostkeeper packages of a version in a
-    /// directory: one entry per platform whose package is there.
+    /// directory: one entry per released platform, refused when the package of any is missing.
     Index {
         #[arg(long)]
         version: Version,
         /// The directory holding the packages; the index is written there.
         #[arg(long)]
         dir: PathBuf,
+    },
+    /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary and
+    /// its launchd plist, nothing else, and no scripts.
+    MacosPkg {
+        #[arg(long)]
+        version: Version,
+        /// The macos-arm64 hostkeeper binary: `/usr/local/bin/hostkeeper` in the pkg.
+        #[arg(long)]
+        binary: PathBuf,
+        /// A directory to lay the pkg's tree out in; it must not exist.
+        #[arg(long)]
+        stage: PathBuf,
+        /// The directory the pkg is written to.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Check a pkg that `pkgutil --expand` expanded into a directory: no scripts, and a payload
+    /// of exactly the binary and the daemon's plist with their modes, owners and bytes.
+    CheckMacosPkg {
+        /// The directory `pkgutil --expand` wrote.
+        expanded: PathBuf,
+        #[arg(long)]
+        version: Version,
+        /// The binary the pkg must hold.
+        #[arg(long)]
+        binary: PathBuf,
     },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
@@ -216,6 +249,11 @@ pub(crate) fn run<A: Adapters>(
         Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
         Verb::Index { version, dir } => index::write_index(&dir, &version),
+        Verb::CheckMacosPkg {
+            expanded,
+            version,
+            binary,
+        } => macos_pkg::check(&expanded, &version, &binary),
         verb => run_with(verb, &connect().ports()),
     }
 }
@@ -251,6 +289,20 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 commit,
                 binary,
                 unit,
+                out,
+            },
+        ),
+        Verb::MacosPkg {
+            version,
+            binary,
+            stage,
+            out,
+        } => macos_pkg::build(
+            ports.pkgbuild,
+            &macos_pkg::Request {
+                version,
+                binary,
+                stage,
                 out,
             },
         ),
@@ -291,7 +343,8 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
-        | Verb::Index { .. } => run(verb, || Lent(*ports)),
+        | Verb::Index { .. }
+        | Verb::CheckMacosPkg { .. } => run(verb, || Lent(*ports)),
     }
 }
 
@@ -305,14 +358,15 @@ impl Adapters for Lent<'_> {
     }
 }
 
-/// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations) and
-/// the `--version` of a binary, each running its program through a copy of `exec`. The real
+/// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations),
+/// the `--version` of a binary and `pkgbuild`, each running its program through a copy of `exec`. The real
 /// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
 /// fake one.
 struct Wired<E> {
     git: GitCli<E>,
     gh: Gh<E>,
     version_of: VersionOf<E>,
+    pkgbuild: PkgbuildCli<E>,
 }
 
 impl<E: Exec + Clone> Wired<E> {
@@ -320,7 +374,8 @@ impl<E: Exec + Clone> Wired<E> {
         Wired {
             git: GitCli::new(exec.clone()),
             gh: Gh::new(exec.clone()),
-            version_of: VersionOf::new(exec),
+            version_of: VersionOf::new(exec.clone()),
+            pkgbuild: PkgbuildCli::new(exec),
         }
     }
 }
@@ -333,6 +388,7 @@ impl<E: Exec> Adapters for Wired<E> {
             store: &self.gh,
             verifier: &self.gh,
             run_version: &self.version_of,
+            pkgbuild: &self.pkgbuild,
         }
     }
 }

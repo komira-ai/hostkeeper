@@ -1,18 +1,19 @@
-# The release files of one commit, for linux-x86_64 and linux-arm64: the `hostkeeper` and
-# `hostkeeper-coordinator` binaries as tarballs, each with its CycloneDX SBOM; the deb and the rpm;
-# hostkeeper's own package (`.tar.zst` with its `.sha256`); the coordinator's container image
-# (`.image.tar`, an OCI image layout); the release index `index.json`; one SHA256SUMS over them;
-# and, on a push to main, the build-provenance and SBOM attestations of this repository with a
-# bundle per signed file. The names are the release contract (docs/deploy/verify-a-release.md,
-# "Every name"):
+# The release files of one commit: for linux-x86_64, linux-arm64 and macos-arm64, the `hostkeeper`
+# binary as a tarball with its CycloneDX SBOM and hostkeeper's own package (`.tar.zst` with its
+# `.sha256`); for each Linux platform the deb and the rpm, and the `hostkeeper-coordinator` binary
+# as a tarball with its SBOM and its container image (`.image.tar`, an OCI image layout); for
+# macos-arm64 the installer pkg of a Mac's first install; the release index `index.json` over the
+# three packages; one SHA256SUMS over them; and, on a push to main, the build-provenance and SBOM
+# attestations of this repository with a bundle per signed file. The names are the release
+# contract (docs/deploy/verify-a-release.md, "Every name"):
 #
-#   hostkeeper-<version>-<platform>.tar.gz               hostkeeper-<version>-<platform>.cdx.json
-#   hostkeeper-coordinator-<version>-<platform>.tar.gz   hostkeeper-coordinator-<version>-<platform>.cdx.json
-#   hostkeeper-<version>-<platform>.tar.zst              hostkeeper-<version>-<platform>.tar.zst.sha256
-#   hostkeeper_<version>_<deb-arch>.deb                  hostkeeper-<version>-1.<rpm-arch>.rpm
-#   hostkeeper-coordinator-<version>-<platform>.image.tar
-#   index.json   SHA256SUMS   <signed file>.sigstore.json
-#
+#   hostkeeper-<version>-<platform>.tar.gz          hostkeeper-<version>-<platform>.cdx.json
+#   hostkeeper-<version>-<platform>.tar.zst         hostkeeper-<version>-<platform>.tar.zst.sha256
+#   hostkeeper_<version>_<deb-arch>.deb             hostkeeper-<version>-1.<rpm-arch>.rpm
+#   hostkeeper-coordinator-<version>-<linux-platform>.tar.gz
+#   hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
+#   hostkeeper-coordinator-<version>-<linux-platform>.image.tar
+#   hostkeeper-<version>-macos-arm64.pkg
 # `<version>` is X.Y.Z (`cargo xtask release version`: X.Y from the VERSION file, Z the number of
 # first-parent commits of main since the commit that last changed it). Every build job writes it
 # into the workspace (`release set-version`) and builds with RELEASE_COMMIT set to the commit, so
@@ -38,7 +39,7 @@
 # job published (their digest is a job output) and then files that differ from the sums.
 #
 # No pull request runs this workflow (AGENTS.md B9: a pull request runs only build and unit tests
-# with coverage). A push to main builds, sums, signs and checks what it signed (`verify`); a run
+# with coverage, and never a macOS job). A push to main builds, sums, signs and checks what it signed (`verify`); a run
 # by hand on a branch builds and sums and signs nothing. release.yml starts when a push run of
 # this workflow on main completes, and publishes these files once `ci` and `privileged` have
 # passed on the same commit.
@@ -217,6 +218,90 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+  # macos-arm64 on a GitHub-hosted Apple silicon runner, so the binary runs where it is built: the
+  # binary tarball, its SBOM and hostkeeper's own package as for Linux (the package has no unit:
+  # the daemon's launchd job is the plist of the installer), and the installer pkg of a Mac's first
+  # install, read back from the built pkg and checked here. No deb, rpm or coordinator on macOS.
+  # The pkg is not signed (that needs an Apple Developer ID Installer identity); it is attested
+  # with every other file. The runner's `gtar` is GNU tar, so the tarball is made as on Linux.
+  build-macos:
+    name: macos-arm64
+    needs: [version]
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      PLATFORM: macos-arm64
+      TARGET: aarch64-apple-darwin
+      CYCLONEDX_SHA256: 4c53dfa21e70b65bf7f8d2592aadde3bcb02c1a40b6ec63b877e5ca65a29e180
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Download cargo-cyclonedx (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      - name: Check cargo-cyclonedx (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/cyclonedx.tar.xz" --sha256 "$CYCLONEDX_SHA256" --out "$RUNNER_TEMP/cyclonedx-checked.tar.xz"
+      # The macOS image keeps cargo outside $HOME/.cargo/bin, so the tool goes into a directory of
+      # its own on the PATH.
+      - run: mkdir "$RUNNER_TEMP/bin"
+      - name: Install cargo-cyclonedx
+        run: tar -xJf "$RUNNER_TEMP/cyclonedx-checked.tar.xz" -C "$RUNNER_TEMP/bin" --strip-components 1 "cargo-cyclonedx-$TARGET/cargo-cyclonedx"
+      - name: Put the tool directory on the PATH
+        run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: cargo cyclonedx --version
+      - run: gtar --version
+      - name: The workspace takes the version of the release
+        run: cargo xtask release set-version --version "$RELEASE_VERSION"
+      - name: Keep the lock file as written
+        run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
+      - name: Build hostkeeper
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release -p hostkeeper --bin hostkeeper
+      - name: hostkeeper says the version and the commit
+        run: cargo xtask release check-binary target/release/hostkeeper "$RELEASE_VERSION" "$GITHUB_SHA"
+      # The macOS unpack refuses a Mach-O without a valid code signature of its own bytes; the
+      # linker signs the binary ad hoc, and this checks it as the unpack does.
+      - name: hostkeeper has a valid code signature
+        run: codesign --verify --strict --verbose=2 target/release/hostkeeper
+      - name: SBOM
+        run: cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target "$TARGET"
+      - name: The SBOM step left Cargo.lock unchanged
+        run: cmp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
+      - run: mkdir dist
+      - name: Name the SBOM
+        run: cp crates/hostkeeper/hostkeeper_bin.cdx.json "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.cdx.json"
+      - name: The commit time
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
+      - name: Tarball of the binary
+        run: gtar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper | gzip -n > "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      - name: hostkeeper's own package and its SHA-256
+        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --out dist
+      - name: The installer pkg
+        run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --stage "$RUNNER_TEMP/pkg-root" --out dist
+      # Read back from the built pkg: its payload holds exactly the binary and the daemon's plist,
+      # with their paths, modes, owners and bytes, the plist names the daemon's label, and the pkg
+      # has no scripts.
+      - name: Expand the installer pkg
+        run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
+      - name: The installer pkg installs exactly the binary and the plist
+        run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/pkg-expanded" --version "$RELEASE_VERSION" --binary target/release/hostkeeper
+      - run: mkdir "$RUNNER_TEMP/unpacked"
+      - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper
+      - name: The packaged hostkeeper says the version and the commit
+        run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper" "$RELEASE_VERSION" "$GITHUB_SHA"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assets-${{ env.PLATFORM }}
+          path: dist/
+          retention-days: 90
+          if-no-files-found: error
+
   # The coordinator's image, per platform on a runner of that architecture, from the binary of
   # the coordinator tarball the build job released: built twice, each time by a new builder from
   # a context holding that binary alone, and released only when the two are byte for byte equal.
@@ -296,7 +381,7 @@ jobs:
   # (the bundles come later, from attest). The attest job signs these sums, so they are the one
   # list of what a release holds.
   sums:
-    needs: [version, build, image]
+    needs: [version, build, build-macos, image]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -390,6 +475,10 @@ jobs:
         with:
           subject-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
           sbom-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.gz
+          sbom-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.cdx.json
       - id: tarball-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -486,6 +575,30 @@ jobs:
         env:
           BUNDLE: ${{ steps.image-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-coordinator-${V}-linux-arm64.image.tar.sigstore.json"
+      - id: tarball-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.gz
+      - name: Name the bundle of the tarball for macos-arm64
+        env:
+          BUNDLE: ${{ steps.tarball-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.tar.gz.sigstore.json"
+      - id: package-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.zst
+      - name: Name the bundle of the package for macos-arm64
+        env:
+          BUNDLE: ${{ steps.package-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.tar.zst.sigstore.json"
+      - id: pkg-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.pkg
+      - name: Name the bundle of the installer pkg for macos-arm64
+        env:
+          BUNDLE: ${{ steps.pkg-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.pkg.sigstore.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bundles

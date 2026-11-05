@@ -170,7 +170,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: cargo xtask release check dist --version "$RELEASE_VERSION" --commit "$COMMIT"
       # The runner is linux-x86_64: the binaries of those tarballs run here, unpacked outside
-      # dist. The linux-arm64 binaries were run and checked the same way by their own build job.
+      # dist. The linux-arm64 and macos-arm64 binaries were run and checked the same way by their
+      # own build jobs.
       - run: mkdir "$RUNNER_TEMP/binary"
       - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper
       - name: hostkeeper says the version and the commit it is released under
