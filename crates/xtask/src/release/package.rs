@@ -131,6 +131,15 @@ pub(crate) fn compress(tar: &[u8]) -> Vec<u8> {
 
 /// Builds the package of `request` and its digest file; the lines to print.
 pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<String>, Error> {
+    package_dated(request, || Ok(git.commit_time(&request.commit)?))
+}
+
+/// [`package`], with the archive's times from `mtime` (asked for after the binary and the unit
+/// are read and checked) in place of the commit's time in git.
+pub(crate) fn package_dated(
+    request: &Request,
+    mtime: impl FnOnce() -> Result<u64, Error>,
+) -> Result<Vec<String>, Error> {
     let unit = match (request.platform, &request.unit) {
         (Platform::MacosArm64, Some(_)) => {
             return Err(Error::Failed(MACOS_TAKES_NO_UNIT.to_owned()));
@@ -145,7 +154,7 @@ pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<Str
     }
     let entries = entries(&request.version, binary, unit.map(|(_, text)| text));
     check_entries(&entries)?;
-    let mtime = git.commit_time(&request.commit)?;
+    let mtime = mtime()?;
     let bytes = compress(&archive(&entries, mtime)?);
     let name = package_name(&request.version, request.platform);
     let hex = hex::encode(Sha256::digest(&bytes));

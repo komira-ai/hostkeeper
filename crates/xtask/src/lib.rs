@@ -13,6 +13,9 @@
 mod install;
 mod release;
 
+#[cfg(feature = "test-support")]
+pub use release::test_support;
+
 #[cfg(test)]
 mod testdir;
 

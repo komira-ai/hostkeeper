@@ -47,6 +47,8 @@ pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
 mod set_version;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 mod version;
 
 use std::fmt;
