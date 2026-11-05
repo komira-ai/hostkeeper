@@ -88,6 +88,8 @@ counted toward `rollback_after_failed`. A line that states `false`, or leaves `r
 
 ## The harness
 
+How a service repository outside this workspace depends on it, and what it does not check: [docs/conformance.md](../../docs/conformance.md).
+
 `hostkeeper_hook::conformance` is a library for a service's own tests (a dev-dependency). It is given the
 hook's path and `hook_args` and a `FakeService`: the world the hook acts on, in a directory. It starts
 the hook as the updater would and checks:

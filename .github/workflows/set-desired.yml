@@ -1,0 +1,347 @@
+# The CI client of hostkeeper (design, section 4.5): the one step of a service's release job
+# that sets the desired version of the service on the coordinator and waits for the fleet to
+# converge. A service calls it from its own release job (docs/deploy/ci-client.md):
+#
+#   set-desired:
+#     permissions:
+#       contents: read
+#       id-token: write
+#     uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@<commit> # v<release>
+#     with: ...
+#
+# The order of the steps is the point of this file, and the workflow lint
+# (crates/xtask/tests/workflows, `set_desired.rs`) holds it: the hostkeeper release is downloaded
+# and proven first (its SHA256SUMS line, its attestation by `artifacts.yml` of
+# komira-ai/hostkeeper on refs/heads/main, and the attested source commit equal to the pinned
+# `hostkeeper_commit`), and only then is an OIDC token requested and ctl run. Every
+# step in the job can read the token request variables once the job holds `id-token: write`, so
+# no step before the last verification uses an action, reads those variables or runs `ctl`. A
+# verification that fails stops the job before any token exists: the version is not set.
+#
+# Each OIDC token is good for one call (the coordinator spends its `jti`), so the token is
+# requested once for `set-desired` and once for each convergence read. It is written to a file
+# only the runner user can read (mode 0600) and passed as `--token-file`, never as an argument
+# (argv is world-readable) or an environment variable, and each file is removed after its call.
+#
+# The names of the release's assets are written once, in the job's `env`.
+name: set-desired
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: The service whose desired version is set, as the coordinator names it.
+        type: string
+        required: true
+      version:
+        description: The version of the service to set.
+        type: string
+        required: true
+      package_digest:
+        description: The SHA-256 of the service's package for this version, 64 lower-case hex digits.
+        type: string
+        required: true
+      hostkeeper_version:
+        description: The hostkeeper release whose ctl makes the calls, pinned by the caller.
+        type: string
+        required: true
+      hostkeeper_commit:
+        description: The commit of komira-ai/hostkeeper that release was built from, 40 lower-case hex digits, pinned by the caller.
+        type: string
+        required: true
+      coordinator_url:
+        description: The coordinator's private listener, https://<host>[:<port>].
+        type: string
+        required: true
+      coordinator_ca:
+        description: The PEM certificates of the CA the coordinator's certificate chains to.
+        type: string
+        required: true
+      audience:
+        description: The audience of the OIDC token, as the coordinator's allow-list entry for this repository names it.
+        type: string
+        required: true
+      wait:
+        description: Whether to wait for the fleet to converge on the version.
+        type: boolean
+        required: false
+        default: true
+      max_polls:
+        description: The most convergence reads before the job fails, from 1 to 1000; one read every 10 seconds.
+        type: number
+        required: false
+        default: 180
+    outputs:
+      desired_version:
+        description: The desired version the coordinator stored; empty when it stored none.
+        value: ${{ jobs.set-desired.outputs.desired_version }}
+      converged:
+        description: "`true` when the fleet converged on the version, `false` otherwise."
+        value: ${{ jobs.set-desired.outputs.converged }}
+      reason:
+        description: Why the job ended where it did, one token.
+        value: ${{ jobs.set-desired.outputs.reason }}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  set-desired:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      desired_version: ${{ steps.set-desired.outputs.desired_version }}
+      converged: ${{ steps.converge.outputs.converged || 'false' }}
+      reason: ${{ steps.converge.outputs.reason || steps.set-desired.outputs.reason }}
+    env:
+      # The hostkeeper release: its tag, the platform of this runner, and the names of the
+      # archive, its attestation bundle and the program inside it.
+      HOSTKEEPER_TAG: v${{ inputs.hostkeeper_version }}
+      HOSTKEEPER_PLATFORM: linux-x86_64
+      HOSTKEEPER_ASSET: hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz
+      HOSTKEEPER_BUNDLE: hostkeeper-${{ inputs.hostkeeper_version }}-linux-x86_64.tar.gz.sigstore.json
+      HOSTKEEPER_PROGRAM: bin/hostkeeper
+      # The pause between two convergence reads.
+      POLL_PAUSE_SECS: 10
+    steps:
+      - name: Check the inputs
+        id: inputs
+        env:
+          SERVICE: ${{ inputs.service }}
+          VERSION: ${{ inputs.version }}
+          PACKAGE_DIGEST: ${{ inputs.package_digest }}
+          HOSTKEEPER_VERSION: ${{ inputs.hostkeeper_version }}
+          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
+          COORDINATOR_URL: ${{ inputs.coordinator_url }}
+          MAX_POLLS: ${{ inputs.max_polls }}
+        run: |
+          refuse() { printf '::error::%s\n' "$1"; exit 1; }
+          [[ "$SERVICE" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,254}$ ]] || refuse "service is not a service name"
+          [[ "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9._+-]{0,254}$ ]] || refuse "version is not a version"
+          [[ "$PACKAGE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || refuse "package_digest is not 64 lower-case hex digits"
+          [[ "$HOSTKEEPER_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$ ]] || refuse "hostkeeper_version is not a release version"
+          [[ "$HOSTKEEPER_COMMIT" =~ ^[0-9a-f]{40}$ ]] || refuse "hostkeeper_commit is not 40 lower-case hex digits"
+          [[ "$COORDINATOR_URL" =~ ^https://[^[:space:]]+$ ]] || refuse "coordinator_url is not an https:// URL"
+          if [[ ! "$MAX_POLLS" =~ ^[1-9][0-9]{0,3}$ ]] || (( MAX_POLLS > 1000 )); then
+            refuse "max_polls is not from 1 to 1000"
+          fi
+
+      - name: Download the hostkeeper release
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -- "$RUNNER_TEMP/hostkeeper-release"
+          gh release download "$HOSTKEEPER_TAG" --repo komira-ai/hostkeeper --dir "$RUNNER_TEMP/hostkeeper-release" --pattern "$HOSTKEEPER_ASSET" --pattern "$HOSTKEEPER_BUNDLE" --pattern SHA256SUMS
+          for asset in "$HOSTKEEPER_ASSET" "$HOSTKEEPER_BUNDLE" SHA256SUMS; do
+            if [[ ! -f "$RUNNER_TEMP/hostkeeper-release/$asset" ]]; then
+              printf '::error::the release %s has no asset %s; the version is not set\n' "$HOSTKEEPER_TAG" "$asset"
+              exit 1
+            fi
+          done
+
+      # Verification 1 of 3: the archive's line of SHA256SUMS, which must name it exactly once.
+      - name: Check the archive against SHA256SUMS
+        id: checksum
+        run: |
+          release="$RUNNER_TEMP/hostkeeper-release"
+          # A line is the digest, a space, a space or `*`, and the file name.
+          mapfile -t sums < "$release/SHA256SUMS"
+          found=()
+          for line in "${sums[@]}"; do
+            if [[ "${line:64:1}" == " " && "${line:66}" == "$HOSTKEEPER_ASSET" ]]; then
+              found+=("$line")
+            fi
+          done
+          printf '%s\n' "${found[@]}" > "$release/asset.sha256"
+          if (( ${#found[@]} != 1 )); then
+            printf '::error::SHA256SUMS of %s does not name %s exactly once; the version is not set\n' "$HOSTKEEPER_TAG" "$HOSTKEEPER_ASSET"
+            exit 1
+          fi
+          # The line names the archive relative to the directory it is in.
+          (cd -- "$release" && sha256sum --check --strict asset.sha256)
+
+      # Verification 2 of 3: the attestation, signed by `artifacts.yml` of komira-ai/hostkeeper
+      # on a GitHub-hosted runner, for a build of refs/heads/main at the pinned commit.
+      - name: Verify the attestation of the archive
+        id: attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
+        run: |
+          release="$RUNNER_TEMP/hostkeeper-release"
+          gh attestation verify "$release/$HOSTKEEPER_ASSET" --bundle "$release/$HOSTKEEPER_BUNDLE" \
+            --repo komira-ai/hostkeeper \
+            --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \
+            --source-ref refs/heads/main \
+            --source-digest "$HOSTKEEPER_COMMIT" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners \
+            --format json > "$release/attestation.json"
+
+      # Verification 3 of 3: every verified attestation names the pinned commit as its source,
+      # and no other.
+      - name: Compare the attested source commit with hostkeeper_commit
+        id: commit
+        env:
+          HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
+        run: |
+          release="$RUNNER_TEMP/hostkeeper-release"
+          attested="$(jq --raw-output '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique | join(" ")' "$release/attestation.json")"
+          if [[ "$attested" != "$HOSTKEEPER_COMMIT" ]]; then
+            printf '::error::the release was built from %s, not from hostkeeper_commit %s; the version is not set\n' "${attested:-no commit}" "$HOSTKEEPER_COMMIT"
+            exit 1
+          fi
+          printf 'hostkeeper %s was built from %s\n' "$HOSTKEEPER_TAG" "$attested"
+
+      - name: Unpack the verified hostkeeper
+        id: unpack
+        run: |
+          unpacked="$RUNNER_TEMP/hostkeeper-unpacked"
+          mkdir -- "$unpacked"
+          tar --extract --no-same-owner --file "$RUNNER_TEMP/hostkeeper-release/$HOSTKEEPER_ASSET" --directory "$unpacked"
+          program="$unpacked/$HOSTKEEPER_PROGRAM"
+          if [[ ! -f "$program" || ! -x "$program" ]]; then
+            printf '::error::%s holds no program %s\n' "$HOSTKEEPER_ASSET" "$HOSTKEEPER_PROGRAM"
+            exit 1
+          fi
+          dirname -- "$program" >> "$GITHUB_PATH"
+
+      - name: Request the OIDC token
+        id: oidc-token
+        env:
+          AUDIENCE: ${{ inputs.audience }}
+        run: |
+          umask 077
+          token="$RUNNER_TEMP/hostkeeper-oidc-token"
+          printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" > "$RUNNER_TEMP/hostkeeper-oidc-request"
+          curl --proto =https --tlsv1.2 --fail --silent --show-error --get --header "@$RUNNER_TEMP/hostkeeper-oidc-request" --data-urlencode "audience=$AUDIENCE" --url "$ACTIONS_ID_TOKEN_REQUEST_URL" --output "$RUNNER_TEMP/hostkeeper-oidc-reply"
+          rm -f -- "$RUNNER_TEMP/hostkeeper-oidc-request"
+          jq --raw-output --exit-status '.value' "$RUNNER_TEMP/hostkeeper-oidc-reply" > "$token"
+          rm -f -- "$RUNNER_TEMP/hostkeeper-oidc-reply"
+          printf '::add-mask::%s\n' "$(< "$token")"
+
+      - name: Set the desired version
+        id: set-desired
+        env:
+          SERVICE: ${{ inputs.service }}
+          VERSION: ${{ inputs.version }}
+          PACKAGE_DIGEST: ${{ inputs.package_digest }}
+          COORDINATOR_URL: ${{ inputs.coordinator_url }}
+          COORDINATOR_CA: ${{ inputs.coordinator_ca }}
+        run: |
+          token="$RUNNER_TEMP/hostkeeper-oidc-token"
+          trap 'rm -f -- "$token"' EXIT
+          work="$RUNNER_TEMP/hostkeeper-calls"
+          mkdir -- "$work"
+          printf '%s\n' "$COORDINATOR_CA" > "$work/ca.pem"
+          jq --null-input '{desired: {version: env.VERSION}}' > "$work/set-desired.json"
+          if hostkeeper ctl --endpoint "$COORDINATOR_URL" --ca-file "$work/ca.pem" --token-file "$token" --output json \
+            releases set-desired --service "$SERVICE" --package-digest "$PACKAGE_DIGEST" --request "$work/set-desired.json" \
+            > "$work/set-desired.out" 2> "$work/set-desired.err"; then
+            stored="$(jq --raw-output '.desired.version // ""' "$work/set-desired.out")"
+            printf 'desired_version=%s\n' "$stored" >> "$GITHUB_OUTPUT"
+            if [[ "$stored" != "$VERSION" ]]; then
+              printf 'reason=not_stored\n' >> "$GITHUB_OUTPUT"
+              printf '::error::the coordinator stored %s, not %s\n' "${stored:-no version}" "$VERSION"
+              exit 1
+            fi
+            printf 'The desired version of %s is %s\n' "$SERVICE" "$stored"
+          else
+            code=$?
+            cat -- "$work/set-desired.err" >&2
+            refusal="$(sed -n 's/^refused: \([a-z0-9_]\{1,64\}\)$/\1/p' "$work/set-desired.err" | head -n 1)"
+            printf 'reason=%s\n' "${refusal:-no_answer}" >> "$GITHUB_OUTPUT"
+            printf '::error::set-desired failed (exit %s, %s); the version is not set\n' "$code" "${refusal:-no answer}"
+            exit 1
+          fi
+
+      # One read every POLL_PAUSE_SECS, at most max_polls of them, each with a token of its own.
+      # Each state is printed once, when it is first seen.
+      - name: Wait for the fleet to converge
+        id: converge
+        env:
+          WAIT: ${{ inputs.wait }}
+          MAX_POLLS: ${{ inputs.max_polls }}
+          SERVICE: ${{ inputs.service }}
+          VERSION: ${{ inputs.version }}
+          AUDIENCE: ${{ inputs.audience }}
+          COORDINATOR_URL: ${{ inputs.coordinator_url }}
+        run: |
+          if [[ "$WAIT" != true ]]; then
+            printf 'converged=false\nreason=not_waited\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          token="$RUNNER_TEMP/hostkeeper-oidc-token"
+          trap 'rm -f -- "$token" "$RUNNER_TEMP/hostkeeper-oidc-request" "$RUNNER_TEMP/hostkeeper-oidc-reply"' EXIT
+          work="$RUNNER_TEMP/hostkeeper-calls"
+          finish() { printf 'converged=%s\nreason=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+          last=""
+          for ((poll = 1; poll <= MAX_POLLS; poll++)); do
+            printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" > "$RUNNER_TEMP/hostkeeper-oidc-request"
+            curl --proto =https --tlsv1.2 --fail --silent --show-error --get --header "@$RUNNER_TEMP/hostkeeper-oidc-request" --data-urlencode "audience=$AUDIENCE" --url "$ACTIONS_ID_TOKEN_REQUEST_URL" --output "$RUNNER_TEMP/hostkeeper-oidc-reply"
+            jq --raw-output --exit-status '.value' "$RUNNER_TEMP/hostkeeper-oidc-reply" > "$token"
+            rm -f -- "$RUNNER_TEMP/hostkeeper-oidc-request" "$RUNNER_TEMP/hostkeeper-oidc-reply"
+            printf '::add-mask::%s\n' "$(< "$token")"
+            if hostkeeper ctl --endpoint "$COORDINATOR_URL" --ca-file "$work/ca.pem" --token-file "$token" --output json \
+              releases converge --service "$SERVICE" > "$work/converge.out" 2> "$work/converge.err"; then
+              rm -f -- "$token"
+              desired="$(jq --raw-output '.convergence.desired // ""' "$work/converge.out")"
+              state="$(jq --raw-output '.convergence.state // "CONVERGENCE_STATE_UNSPECIFIED"' "$work/converge.out")"
+              state="${state#CONVERGENCE_STATE_}"
+              state="${state,,}"
+              roles="$(jq --compact-output '[.convergence.roles[]? | {role, atDesired: (.atDesired // 0), updating: (.updating // 0), failed: (.failed // 0), down: (.down // 0)}]' "$work/converge.out")"
+              seen="$state, desired ${desired:-none}, roles $roles"
+              if [[ "$seen" != "$last" ]]; then
+                printf 'poll %s: %s\n' "$poll" "$seen"
+                last="$seen"
+              fi
+              if [[ "$desired" != "$VERSION" ]]; then
+                finish false superseded
+                printf '::error::the desired version of %s is now %s, not %s\n' "$SERVICE" "${desired:-none}" "$VERSION"
+                exit 1
+              fi
+              case "$state" in
+                converged)
+                  finish true converged
+                  exit 0
+                  ;;
+                halted)
+                  finish false halted
+                  printf '::error::%s is halted; the version %s is set, and no host is ordered to it before an operator clears the halt\n' "$SERVICE" "$VERSION"
+                  exit 1
+                  ;;
+              esac
+            else
+              code=$?
+              rm -f -- "$token"
+              refusal="$(sed -n 's/^refused: \([a-z0-9_]\{1,64\}\)$/\1/p' "$work/converge.err" | head -n 1)"
+              if [[ -n "$refusal" ]]; then
+                cat -- "$work/converge.err" >&2
+                finish false "$refusal"
+                printf '::error::converge was refused (exit %s, %s); the version %s is set\n' "$code" "$refusal" "$VERSION"
+                exit 1
+              fi
+              if [[ "no answer" != "$last" ]]; then
+                printf 'poll %s: no answer (exit %s)\n' "$poll" "$code"
+                cat -- "$work/converge.err" >&2
+                last="no answer"
+              fi
+            fi
+            if (( poll < MAX_POLLS )); then
+              sleep "$POLL_PAUSE_SECS"
+            fi
+          done
+          finish false not_converged
+          printf '::error::the version %s of %s was set but did not converge in %s reads\n' "$VERSION" "$SERVICE" "$MAX_POLLS"
+          exit 1
+
+      - name: Remove the token files
+        if: ${{ always() }}
+        run: rm -f -- "$RUNNER_TEMP/hostkeeper-oidc-token" "$RUNNER_TEMP/hostkeeper-oidc-request" "$RUNNER_TEMP/hostkeeper-oidc-reply"

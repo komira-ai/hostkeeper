@@ -65,7 +65,10 @@ cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 Nothing privileged and nothing for macOS runs on a pull request. The workflow lint refuses such a
 job in any workflow that runs on `pull_request`, and it also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
-`permissions: {}`, and `pull_request_target`.
+`permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
+`set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
+to the order of its steps: the release is verified before any step can request an OIDC token or
+run `ctl`. That job is the only one that may hold `id-token: write`.
 
 ## Tests
 
