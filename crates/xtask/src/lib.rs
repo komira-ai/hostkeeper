@@ -8,7 +8,8 @@
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
 //! them to the rules of this repository. The crate's one export is [`main`], the entry point of
-//! the binary.
+//! the binary; with the feature `test-support`, which only this crate's own tests turn on, it
+//! also exports `test_support`, what its integration tests need of its internals.
 
 mod install;
 mod release;
