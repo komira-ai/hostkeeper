@@ -6,8 +6,9 @@ It is planned as:
 - a **coordinator** that holds the desired version of each service and moves hosts to it a group
   at a time;
 - an **agent** on each host, with a separate root part, that updates each service through the
-  service's own update hook (`prepare`, `cutover`, `verify`, `cleanup`, `rollback`), within the
-  rights the service declares in `/etc/updater.d`;
+  service's own update hook (`prepare`, `cutover`, `verify`, `cleanup`, `rollback`), run as root
+  from the package a trusted signer attested, each step in a transient systemd unit that bounds
+  its time;
 - **enrollment**: a new host asks to join, and an operator approves it;
 - **device management** of Macs through a self-hosted MDM server.
 
@@ -26,8 +27,8 @@ tooling:
 |---|---|
 | [`hostkeeper-hook`](crates/hostkeeper-hook) | the contract between the updater and a service's update hook, and the conformance harness a service tests its hook with (feature `conformance`) |
 | [`hostkeeper-config`](crates/hostkeeper-config) | the strict loaders of the host's daemon config (`/etc/hostkeeper/hostkeeper.toml`) and of the `manifest.toml` a package carries, the owner and mode check of a trusted file, and the name and path grammars |
-| [`hostkeeper-rights`](crates/hostkeeper-rights) | the transient unit that runs one step of a hook, and the part of the old declaration it is still built from |
-| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the layout of versions with `current` and `previous` and its prune to those two, the tree digest and the seal of a package version |
+| [`hostkeeper-rights`](crates/hostkeeper-rights) | what is left of the old per-service declaration (its parser, the reserved-path rules, the name grammars), used by nothing and to be deleted |
+| [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the layout of versions with `current` and `previous` and its prune to those two, the tree digest and the seal of a package version, and the transient systemd unit that runs one step |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (the P-256 request profile, host and server certificates, the owner-only key file, the CA bundle) and its durable enrollment store (requests, approval, one certificate per request, duplicate claims, deny rows), as a library |
 | [`hostkeeper-unpack`](crates/hostkeeper-unpack) | the unpack of a verified `.tar.zst` package into a sealed version directory, in one streaming pass under the archive bounds ([package format](docs/package-format.md)) |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon, the one root process of a host: start-up and its lock, the executor of orders with the service and step locks, the daemon's own checks, the try rules and the held halts, the root-only admin socket, and the enrollment and heartbeat loops it starts once it is ready |

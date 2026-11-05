@@ -1,5 +1,5 @@
-//! The declaration that is left for `launch.rs` (B3 rewrites it): its fields, its tables, and the
-//! rules on the values that reach a unit property.
+//! The declaration that is left (B26 deletes it): its fields, its tables, and the rules on the
+//! values that reached a unit property.
 
 mod support;
 
@@ -27,7 +27,7 @@ fn field_of(refusal: &Refusal) -> String {
     }
 }
 
-/// Catches a field `launch.rs` reads being dropped or renamed.
+/// Catches a field of the declaration that is left being dropped or renamed.
 #[test]
 fn the_example_reads_into_every_field() {
     let d = sample();

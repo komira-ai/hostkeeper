@@ -1,8 +1,9 @@
 //! What is left of the declaration loader: [`Declared`], a declaration with the hook account the
 //! loader resolved and the host's declared names, and [`recheck_targets`], the reserved-path rules
-//! the step runner repeats before every launch, with the deny list they apply.
+//! the step runner repeated before every launch, with the deny list they apply. Nothing calls
+//! them since the launcher of a step moved to `hostkeeper-steps`.
 //!
-//! B3 rewrites launch.rs and deletes this. The loader of `/etc/updater.d`, the account checks,
+//! B26 deletes this. The loader of `/etc/updater.d`, the account checks,
 //! the record-directory check and the conflicts between declarations are gone: the daemon config
 //! and the package manifest (`hostkeeper-config`) replace the declaration.
 //!
@@ -24,7 +25,7 @@ use crate::declaration::{Declaration, Refusal};
 /// Whether `path` is `dir` or lies below it, on whole components (`hostkeeper-config`'s).
 pub use crate::names::is_within;
 
-/// The directories no entry may name or contain. B3 rewrites launch.rs and deletes this.
+/// The directories no entry may name or contain. B26 deletes this.
 pub const RESERVED: &[&str] = &[
     "/",
     "/bin",
@@ -62,18 +63,18 @@ pub const RESERVED: &[&str] = &[
     "/var/spool/cron",
 ];
 
-/// The trees where nothing is written. B3 rewrites launch.rs and deletes this.
+/// The trees where nothing is written. B26 deletes this.
 pub const WRITE_FORBIDDEN: [&str; 3] = ["/dev", "/proc", "/sys"];
 
 /// The one place inside the reserved directories where a hook may write: the record directories
-/// of the hooks. B3 rewrites launch.rs and deletes this.
+/// of the hooks. B26 deletes this.
 pub const HOOKS_ROOT: &str = "/var/lib/updater/hooks";
 
-/// The directories a hook may write below, one component down and anything under that. B3
-/// rewrites launch.rs and deletes this.
+/// The directories a hook may write below, one component down and anything under that. B26
+/// deletes this.
 pub const WRITE_ROOTS: [&str; 4] = ["/var/lib", "/var/cache", "/run", "/opt"];
 
-/// What an entry is for. B3 rewrites launch.rs and deletes this.
+/// What an entry is for. B26 deletes this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Read,
@@ -81,7 +82,7 @@ pub enum Kind {
     State,
 }
 
-/// Why an entry was refused. B3 rewrites launch.rs and deletes this.
+/// Why an entry was refused. B26 deletes this.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Violation {
     #[error("names the reserved directory {0}")]
@@ -101,8 +102,8 @@ pub enum Violation {
 }
 
 /// Whether a hook that runs as root may write `path` for `service`: at or below a directory of a
-/// write root whose name is the service's, or the service's followed by `-` and more. B3
-/// rewrites launch.rs and deletes this.
+/// write root whose name is the service's, or the service's followed by `-` and more. B26
+/// deletes this.
 pub fn check_service_write(path: &str, service: &str) -> Result<(), Violation> {
     let own = first_below_a_write_root(path).is_some_and(|first| belongs_to(first, service));
     if own {
@@ -129,8 +130,7 @@ fn belongs_to(first: &str, service: &str) -> bool {
             .is_some_and(|more| more.starts_with('-'))
 }
 
-/// Checks one entry against the deny list. `path` is in the path grammar. B3 rewrites launch.rs
-/// and deletes this.
+/// Checks one entry against the deny list. `path` is in the path grammar. B26 deletes this.
 pub fn check(kind: Kind, path: &str) -> Result<(), Violation> {
     if let Some(reserved) = RESERVED.iter().find(|r| **r == path) {
         return Err(Violation::Names(reserved));
@@ -158,8 +158,8 @@ pub fn check(kind: Kind, path: &str) -> Result<(), Violation> {
     }
 }
 
-/// A declaration with what a launch needs besides it: the uid of the hook account and the names
-/// of the host's declared services. B3 rewrites launch.rs and deletes this.
+/// A declaration with what a launch needed besides it: the uid of the hook account and the names
+/// of the host's declared services. B26 deletes this.
 #[derive(Clone, Debug)]
 pub struct Declared {
     pub(crate) declaration: Declaration,
@@ -168,18 +168,17 @@ pub struct Declared {
 }
 
 impl Declared {
-    /// The declaration. B3 rewrites launch.rs and deletes this.
+    /// The declaration. B26 deletes this.
     pub fn declaration(&self) -> &Declaration {
         &self.declaration
     }
 
-    /// The uid of the hook's account. B3 rewrites launch.rs and deletes this.
+    /// The uid of the hook's account. B26 deletes this.
     pub fn hook_uid(&self) -> u32 {
         self.hook_uid
     }
 
-    /// The names of every declared service of the host, this one included. B3 rewrites
-    /// launch.rs and deletes this.
+    /// The names of every declared service of the host, this one included. B26 deletes this.
     pub fn names(&self) -> &BTreeSet<String> {
         &self.names
     }
@@ -196,8 +195,7 @@ impl Declared {
         }
     }
 
-    /// [`recheck_targets`] for this declaration, with its own hook uid and names. B3 rewrites
-    /// launch.rs and deletes this.
+    /// [`recheck_targets`] for this declaration, with its own hook uid and names. B26 deletes this.
     pub fn recheck(&self) -> Result<(), Refusal> {
         recheck_targets(&self.declaration, self.hook_uid, &self.names)
     }
@@ -208,7 +206,7 @@ impl Declared {
 /// judged as written first (the root rules), then on what it points to when it exists (the deny
 /// list, then the root rules again).
 /// What the rules read of the host's file system: where a path leads once its links are
-/// followed, and the owner and mode of a directory. A launch reads the real file system
+/// followed, and the owner and mode of a directory. [`recheck_targets`] reads the real file system
 /// ([`Host::real`]); the unit tests at the end of this file give a fixed one, so the rules of a
 /// root hook are judged without depending on the directories of the machine that runs them.
 struct Host<'a> {
@@ -310,8 +308,8 @@ fn swappable_above(path: &str, host: &Host<'_>) -> Option<String> {
     })
 }
 
-/// The reserved-path rules on what each entry points to now, for the step runner to call before
-/// every launch: a link can be re-pointed after the load. B3 rewrites launch.rs and deletes this.
+/// The reserved-path rules on what each entry points to now, which the deleted launcher called
+/// before every launch: a link can be re-pointed after the load. B26 deletes this.
 pub(crate) fn recheck_targets(
     declaration: &Declaration,
     hook_uid: u32,
@@ -365,8 +363,7 @@ fn trespass_among(
 #[cfg(test)]
 mod tests {
     //! The rules of a root hook on a fixed file system: what the test names exists, root-owned and
-    //! closed unless it says otherwise, and nothing else exists or is a link. B3 rewrites
-    //! launch.rs and deletes this.
+    //! closed unless it says otherwise, and nothing else exists or is a link. B26 deletes this.
 
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;

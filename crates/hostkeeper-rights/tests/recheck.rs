@@ -1,8 +1,8 @@
-//! The reserved-path rules `run_step` repeats before every launch (`recheck_targets`, kept in
-//! `load.rs` until B3 rewrites launch.rs): the deny list on what an entry points to, and the rules
+//! The reserved-path rules the deleted `run_step` repeated before every launch (`recheck_targets`,
+//! kept in `load.rs` until B26 deletes it): the deny list on what an entry points to, and the rules
 //! of a hook that runs as root. These are the deny-list cases of the deleted `reserved.rs`, kept
-//! because `run_step` still applies the list, and the root cases of the deleted loader tests,
-//! driven through `Declared::recheck`.
+//! while the list is, and the root cases of the deleted loader tests, driven through
+//! `Declared::recheck`.
 
 mod support;
 
@@ -479,4 +479,36 @@ fn a_declared_reports_what_it_was_made_with() {
     assert_eq!(loaded.declaration(), &d);
     let names: Vec<&str> = loaded.names().iter().map(String::as_str).collect();
     assert_eq!(names, ["other", "tierstore"]);
+}
+
+/// Catches the rules of a root hook not reading the real file system: a read path of a hook that
+/// runs as root, below a directory that is not root's (the test's scratch directory), is refused
+/// with that directory named as the one that could swap it.
+#[test]
+fn a_root_hook_read_path_below_a_directory_root_does_not_own_is_refused() {
+    let scratch = Scratch::new("recheck-root-read");
+    let readable = scratch.dir("readable", 0o755);
+    let text = with(
+        "read_paths = [\"/usr/libexec/kbf\", \"/usr/sbin/nft\", \"/etc/tierstore\", \"/etc/updater.d/tierstore.toml\"]",
+        &format!("read_paths = [\"{}\"]", readable.display()),
+    );
+    let loaded = declared(
+        hostkeeper_rights::Declaration::parse(&text).unwrap(),
+        0,
+        &["tierstore"],
+    );
+    match loaded.recheck() {
+        Err(Refusal::Ancestor {
+            field: "hook.read_paths",
+            path,
+            ancestor,
+        }) => {
+            assert_eq!(path, readable.display().to_string());
+            assert!(
+                readable.starts_with(&ancestor),
+                "{ancestor} is above {path}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
 }
