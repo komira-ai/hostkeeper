@@ -238,7 +238,7 @@ impl Layout {
         let moved = self.dir().join(prune_name(version));
         if fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
             remove_tree(&moved, at)?;
-            fs::rename(&dir, &moved)?;
+            fs::rename(dir, &moved)?;
             self.sync()?;
             at(PruneStep::Moved { version })?;
         }

@@ -12,7 +12,7 @@
 //! pruned to make room.
 //!
 //! Besides `current` and `previous`, a prune keeps what the service's records say is still in
-//! use ([`protected`]): the release an unfinished step record replaces, the target of an
+//! use: the release an unfinished step record replaces, the target of an
 //! unfinished step record or force record, the version of a `placed.json` entry still `pending`
 //! for the service, and the version the confirmed switch went to. A version staged by an update
 //! that did not switch stays until the next confirmed switch, so a retry needs no fetch.

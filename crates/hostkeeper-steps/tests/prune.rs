@@ -68,7 +68,7 @@ fn holding(layout: &Layout, versions: &[&str], current: &str, previous: &str) {
 fn link(layout: &Layout, name: &str, target: &str) {
     let path = layout.dir().join(name);
     fs::remove_file(&path).ok();
-    symlink(target, &path).unwrap();
+    symlink(target, path).unwrap();
 }
 
 /// The names in `dir`, sorted.
@@ -87,7 +87,7 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(at) = stack.pop() {
-        for entry in fs::read_dir(&at).unwrap() {
+        for entry in fs::read_dir(at).unwrap() {
             let path = entry.unwrap().path();
             let meta = fs::symlink_metadata(&path).unwrap();
             let body = match meta.is_file() {
@@ -319,7 +319,7 @@ fn prune_stays_inside_the_version_directory() {
     symlink("..", doomed.join("bin/up")).unwrap();
     symlink(layout.version_path("C").join("bin/x"), doomed.join("x")).unwrap();
     fs::set_permissions(doomed.join("bin"), fs::Permissions::from_mode(0o555)).unwrap();
-    fs::set_permissions(&doomed, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(doomed, fs::Permissions::from_mode(0o555)).unwrap();
     let sibling_before = snapshot(sibling.dir());
 
     let report = layout.prune(&Protected::default()).unwrap();
@@ -437,7 +437,7 @@ fn a_removal_that_fails_is_reported_and_the_others_are_deleted() {
     fs::remove_file(layout.seal_path("1")).unwrap();
     fs::create_dir(layout.seal_path("1")).unwrap();
     let leftover = layout.dir().join(".stage-prune-ffffffffffffffff");
-    fs::create_dir(&leftover).unwrap();
+    fs::create_dir(leftover).unwrap();
 
     let report = layout
         .prune_with(&Protected::default(), &mut |step| match step {
@@ -466,14 +466,14 @@ fn a_removal_that_fails_is_reported_and_the_others_are_deleted() {
     );
 }
 
-/// Catches a prune that a long version name defeats: a version of 250 bytes, the longest whose
-/// seal `<version>.seal` still fits a file name of 255 bytes, is renamed under a short name (the
-/// prefix and the version would not fit) and deleted.
+/// Catches a prune that a long version name defeats: a version of 245 bytes, the longest a
+/// package directory takes (its temporary seal `.<version>.seal.tmp` fits a name of 255 bytes),
+/// is renamed under a short name (the prefix and the version would not fit) and deleted.
 #[test]
 fn a_version_with_the_longest_name_is_pruned() {
     let s = Scratch::new("prune-long");
     let layout = package(&s, "web");
-    let long = "a".repeat(250);
+    let long = "a".repeat(245);
     holding(&layout, &[long.as_str(), "2", "3"], "3", "2");
     let report = layout.prune(&Protected::default()).unwrap();
     assert_eq!(report.deleted, set(&[long.as_str()]));

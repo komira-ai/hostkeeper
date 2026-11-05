@@ -26,7 +26,9 @@ use hostkeeper_steps::{
     RecordStore, Stamp, tree_digest,
 };
 use support::force::{WEB, daemon_on, failed, forced, link_of, succeeded, token_of, web};
-use support::{OWN, PENDING_LINE, Rig, alerting, config, d, force, lines, name, snapshot, update};
+use support::{
+    OWN, PENDING_LINE, Rig, alerting, config, d, digest, force, lines, name, snapshot, update,
+};
 
 /// A version, from a literal.
 fn version(text: &str) -> Version {
@@ -488,10 +490,12 @@ fn a_failed_or_deferred_update_prunes_nothing() {
     stale(&rig, "0.9.0");
     web(&rig, "3.0.0");
     let before = snapshot(&rig.packages);
-    let ends = [(1, 3), (75, 4), (76, 5)];
-    for (code, order_try) in ends {
+    // A deferred update is run again by the same order; a failed one is final for its package,
+    // so the halt is of another package digest.
+    let ends = [(75, 3, d()), (1, 4, d()), (76, 5, digest("cd"))];
+    for (code, order_try, package_digest) in ends {
         rig.launcher.exits(WEB, Step::Prepare, &[code]);
-        let reply = daemon.order(&update(WEB, "3.0.0", &d(), order_try));
+        let reply = daemon.order(&update(WEB, "3.0.0", &package_digest, order_try));
         let verdict = match reply {
             Reply::Finished { verdict, .. } => verdict,
             other => panic!("{other:?}"),
@@ -711,7 +715,7 @@ fn a_record_that_cannot_be_read_prunes_nothing() {
     let record = rig.state.join(WEB).join(RECORD_FILE);
     let before = snapshot(&rig.packages);
     for text in [r#"{"schema":99}"#, "not a record"] {
-        fs::write(&record, text).expect("the record");
+        fs::write(record.as_path(), text).expect("the record");
         assert_eq!(confirm(&daemon), None, "{text}");
     }
     save(&rig, WEB, &rec);
