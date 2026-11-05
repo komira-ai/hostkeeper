@@ -61,12 +61,16 @@ only, never from the environment:
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
-(one daemon per state directory) and does its boot work: it reads every step record against the
-host's boot id (kept in `.boot-id` in the state directory), runs each update left unfinished by a
-crash or a reboot to its verdict, restarts the post-success watchers, runs each service's
-`[hook] boot` step from `current`, and only then tells systemd it is ready. It then serves the
-admin socket. This build has no step launcher or package store wired in and no order source yet,
-so it serves the admin socket's `Status` and runs no order.
+(one daemon per state directory) and does its boot work. It removes the registration socket
+kbf's agent left (`updater/register.sock` beside the admin socket's directory, `/run/updater`
+by default), removes what a crashed package fetch or unpack left, finishes or undoes each switch
+of `current` a step record says was begun, and relinks the placed paths that differ from `current`.
+It then reads every step record against the host's boot id (kept in `.boot-id` in the state
+directory), runs each update left unfinished by a crash or a reboot to its verdict, restarts the
+post-success watchers, runs each service's `[hook] boot` step from `current`, and only then tells
+systemd it is ready. It then serves the admin socket. This build fetches, verifies and unpacks
+packages, and observes each service for `Status`, but has no step launcher or service manager
+wired in and no order source yet, so it serves the admin socket's `Status` and runs no order.
 
 | exit status | meaning |
 |---|---|

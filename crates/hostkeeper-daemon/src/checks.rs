@@ -199,12 +199,7 @@ pub fn force_allowed(lifecycle: Lifecycle) -> Result<(), Refusal> {
 
 /// The token of a package error.
 pub fn package_refusal(error: &PackageError) -> Refusal {
-    match error {
-        PackageError::NotFound(_) => Refusal::PackageNotFound,
-        PackageError::DigestMismatch(_) => Refusal::DigestMismatch,
-        PackageError::NoSpace(_) => Refusal::NoSpace,
-        PackageError::Other(_) => Refusal::PackageFailed,
-    }
+    error.refusal()
 }
 
 /// What a hooked order is, for the try rules: the verb, the package and the try.

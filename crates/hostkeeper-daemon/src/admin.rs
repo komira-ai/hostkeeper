@@ -15,11 +15,16 @@ use std::io;
 use std::sync::Arc;
 
 use hostkeeper_hook::{Class, Phase, Verdict};
-use hostkeeper_proto::hostkeeper::agent::v1::{FailureClass, FailurePhase};
+use hostkeeper_observe::{
+    HealthView, Observation, ServiceState as Observed, UnhealthyReason, UnobservedReason,
+    VersionView, beat_health,
+};
+use hostkeeper_proto::hostkeeper::agent::v1::{FailureClass, FailurePhase, Health};
 use hostkeeper_proto::hostkeeper::local::v1::admin_server::{Admin, AdminServer};
 use hostkeeper_proto::hostkeeper::local::v1::{
     AbortRequest, AbortResponse, ClearRecordRequest, ClearRecordResponse, Lifecycle as Life,
-    RecordProblem, ServiceRecord, StatusRequest, StatusResponse, StepOutcome, StepRecord,
+    Liveness, RecordProblem, ServiceRecord, ServiceState, StatusRequest, StatusResponse,
+    StepOutcome, StepRecord, Unhealthy,
 };
 use hostkeeper_steps::record::{Record, State};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -83,10 +88,15 @@ impl Admin for AdminService {
         &self,
         _request: Request<StatusRequest>,
     ) -> Result<Response<StatusResponse>, Status> {
-        let status = self
-            .daemon
-            .status()
-            .map_err(|_| Status::internal(Refusal::StoreFailed.token()))?;
+        // The status probes each service's health and asks the service manager, so it runs on a
+        // thread meant for blocking; a status that cannot be had, or whose thread failed, is one
+        // answer.
+        let daemon = Arc::clone(&self.daemon);
+        let status = tokio::task::spawn_blocking(move || daemon.status())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .ok_or_else(|| Status::internal(Refusal::StoreFailed.token()))?;
         let services = status.services.iter().map(service_record).collect();
         Ok(Response::new(StatusResponse { services }))
     }
@@ -106,10 +116,11 @@ impl Admin for AdminService {
     }
 }
 
-/// One service as `Status` reports it. What the service manager says of it (`state`) is not
-/// observed by this daemon yet and is left out. A service whose step could not be stopped is
-/// under way, with the reason `unstoppable_unit`. A service being removed says so in its
-/// lifecycle, and its `last` is the verdict of its uninstall's last run when the daemon has one.
+/// One service as `Status` reports it. How it runs (`state`) is its observation
+/// ([`service_state`]), left out for a service that was not observed. A service whose step could
+/// not be stopped is under way, with the reason `unstoppable_unit`. A service being removed says
+/// so in its lifecycle, and its `last` is the verdict of its uninstall's last run when the daemon
+/// has one.
 pub fn service_record(status: &ServiceStatus) -> ServiceRecord {
     let (mut current, last, problem) = match &status.record {
         RecordState::Absent => (None, None, RecordProblem::Unspecified),
@@ -130,9 +141,91 @@ pub fn service_record(status: &ServiceStatus) -> ServiceRecord {
         service: status.service.to_string(),
         current,
         last,
-        state: None,
+        state: status.observation.as_ref().map(service_state),
         record_problem: problem as i32,
         lifecycle: lifecycle(status.lifecycle) as i32,
+    }
+}
+
+/// An observation in the fields of the wire's `ServiceState`.
+///
+/// - `liveness` is the observed state, one to one.
+/// - `version` is the recorded version, only when the running executable's digest confirmed it.
+/// - `healthy` is a live service whose heartbeat health is healthy ([`beat_health`]) and that has
+///   no `unhealthy` reason.
+/// - `unhealthy` is `OBSERVING` for a round discarded because the units changed during it,
+///   `VERSION_MISMATCH` for an executable that is not the sealed one, `HEALTH`,
+///   `HEALTH_REDIRECT` or `HEALTH_UNMAPPED` for the health check's reason (`status_non_2xx` and
+///   `unreachable`, `redirect`, `url_invalid`), and `NO_MAIN_PROCESS` for a live service whose
+///   recorded version could not be told apart; else `UNSPECIFIED`.
+///
+/// The wire has no field for the observation's reason token or for the unit that decided it, so
+/// `unit` is empty; the reason is in the library's [`Observation::reason_token`].
+pub fn service_state(observation: &Observation) -> ServiceState {
+    let liveness = match &observation.state {
+        Observed::Absent => Liveness::Absent,
+        Observed::Stopped => Liveness::Stopped,
+        Observed::Transitioning => Liveness::Transitioning,
+        Observed::Unobserved { .. } => Liveness::Unobserved,
+        Observed::Unmonitored => Liveness::Unmonitored,
+        Observed::Live => Liveness::Live,
+    };
+    let version = match &observation.version {
+        VersionView::Recorded {
+            version,
+            confirmed: true,
+        } => Some(version.clone()),
+        _ => None,
+    };
+    let live = observation.state == Observed::Live;
+    let unhealthy = match (
+        &observation.state,
+        &observation.version,
+        &observation.health,
+    ) {
+        (
+            Observed::Unobserved {
+                reason: UnobservedReason::ChangedDuringRound,
+                ..
+            },
+            _,
+            _,
+        ) => Unhealthy::Observing,
+        (_, VersionView::Mismatch { .. }, _) => Unhealthy::VersionMismatch,
+        (
+            _,
+            _,
+            HealthView::Unhealthy {
+                reason: UnhealthyReason::StatusNon2xx | UnhealthyReason::Unreachable,
+            },
+        ) => Unhealthy::Health,
+        (
+            _,
+            _,
+            HealthView::Unhealthy {
+                reason: UnhealthyReason::Redirect,
+            },
+        ) => Unhealthy::HealthRedirect,
+        (
+            _,
+            _,
+            HealthView::Unhealthy {
+                reason: UnhealthyReason::UrlInvalid,
+            },
+        ) => Unhealthy::HealthUnmapped,
+        (Observed::Live, VersionView::Unknown, _) if observation.recorded.is_some() => {
+            Unhealthy::NoMainProcess
+        }
+        _ => Unhealthy::Unspecified,
+    };
+    ServiceState {
+        liveness: liveness as i32,
+        version,
+        healthy: live
+            & (beat_health(observation).0 == Health::Healthy)
+            & (unhealthy == Unhealthy::Unspecified),
+        unhealthy: unhealthy as i32,
+        unit: String::new(),
     }
 }
 

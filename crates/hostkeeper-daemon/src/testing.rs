@@ -452,6 +452,7 @@ pub struct FakePackages {
     root: PathBuf,
     failures: Mutex<BTreeMap<(String, String), PackageError>>,
     asked: Mutex<Vec<(String, String)>>,
+    swept: Mutex<Vec<String>>,
     notify: Mutex<Vec<Sender<String>>>,
 }
 
@@ -467,6 +468,7 @@ impl FakePackages {
             root: packages_dir.to_path_buf(),
             failures: Mutex::default(),
             asked: Mutex::default(),
+            swept: Mutex::default(),
             notify: Mutex::default(),
         })
     }
@@ -518,6 +520,11 @@ impl FakePackages {
         lock(&self.asked).clone()
     }
 
+    /// Every service whose orphans were asked to be removed, in order.
+    pub fn swept(&self) -> Vec<String> {
+        lock(&self.swept).clone()
+    }
+
     /// Sends `<service> <version>` of every package asked for from now on to `tx`.
     pub fn notify(&self, tx: Sender<String>) {
         lock(&self.notify).push(tx);
@@ -544,6 +551,11 @@ impl Packages for FakePackages {
                 .map_err(|e| PackageError::Other(e.to_string()))
         };
         failure.map_or_else(seal, Err)
+    }
+
+    fn remove_orphans(&self, service: &ServiceName) -> Result<(), PackageError> {
+        lock(&self.swept).push(service.to_string());
+        Ok(())
     }
 }
 

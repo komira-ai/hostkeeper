@@ -76,11 +76,35 @@ pub enum Refusal {
     /// `placed.json` could not be read or written, or a placed link, `current` or a directory of
     /// the service could not be made or removed.
     LinkFailed,
+    /// The release index or the package could not be downloaded, or the host could not write it
+    /// down for a reason other than a full disk.
+    FetchFailed,
+    /// The attestation bundle could not be downloaded, or the verifier could not run or ran out
+    /// of time.
+    AttestationUnavailable,
+    /// The package is not attested by the trusted signer.
+    NotAttested,
+    /// The archive breaks a bound or a shape rule of design section 5.5.
+    BadArchive,
+    /// The version is on the host already and is not what its seal says, or was sealed for
+    /// another archive.
+    ArtifactChanged,
+    /// The release index is not the index of the version asked for.
+    IndexInvalid,
+    /// The release index lists no package for this host's platform.
+    NoPackageForPlatform,
+    /// The order's version is a name the package directory holds for itself.
+    ReservedVersion,
+    /// The order's version is too long for the names the package directory derives from it.
+    VersionTooLong,
+    /// The archive, the staging directory or a seal cannot be read or written right now, for a
+    /// reason other than a full disk.
+    PackageIoError,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 28] = [
+    pub const ALL: [Refusal; 38] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -109,6 +133,16 @@ impl Refusal {
         Refusal::UninstallUnsupported,
         Refusal::PathConflict,
         Refusal::LinkFailed,
+        Refusal::FetchFailed,
+        Refusal::AttestationUnavailable,
+        Refusal::NotAttested,
+        Refusal::BadArchive,
+        Refusal::ArtifactChanged,
+        Refusal::IndexInvalid,
+        Refusal::NoPackageForPlatform,
+        Refusal::ReservedVersion,
+        Refusal::VersionTooLong,
+        Refusal::PackageIoError,
     ];
 
     /// The token.
@@ -142,6 +176,16 @@ impl Refusal {
             Refusal::UninstallUnsupported => "uninstall_unsupported",
             Refusal::PathConflict => "path_conflict",
             Refusal::LinkFailed => "link_failed",
+            Refusal::FetchFailed => "fetch_failed",
+            Refusal::AttestationUnavailable => "attestation_unavailable",
+            Refusal::NotAttested => "not_attested",
+            Refusal::BadArchive => "bad_archive",
+            Refusal::ArtifactChanged => "artifact_changed",
+            Refusal::IndexInvalid => "index_invalid",
+            Refusal::NoPackageForPlatform => "no_package_for_platform",
+            Refusal::ReservedVersion => "reserved_version",
+            Refusal::VersionTooLong => "version_too_long",
+            Refusal::PackageIoError => "io_error",
         }
     }
 }

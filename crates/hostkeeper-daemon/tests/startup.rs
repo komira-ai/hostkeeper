@@ -10,14 +10,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
-use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::cli::{
     self, Cli, Command, DEFAULT_ADMIN_SOCKET, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR,
     DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED, Unwired,
 };
-use hostkeeper_daemon::packages::{PackageError, Packages};
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
-use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_placed::{UnitControl, UnitControlError};
 use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
@@ -257,7 +254,7 @@ fn the_locked_and_config_errors_exit_with_distinct_codes() {
     );
 }
 
-/// Catches a build without a launcher, package store or service manager running something: each
+/// Catches a build without a launcher or service manager running something: each
 /// port refuses, naming what it was asked, and an order on them ends without running a step.
 #[test]
 fn the_unwired_ports_refuse_everything() {
@@ -270,12 +267,6 @@ fn the_unwired_ports_refuse_everything() {
     assert_eq!(Unwired.stop_unit("u"), Err(unwired("stop u")));
     assert_eq!(Unwired.start_unit("u"), Err(unwired("start u")));
     assert_eq!(Unwired.is_active("u"), Err(unwired("is-active u")));
-    let refused = Unwired.version_dir(
-        &ServiceName::new("web").expect("name"),
-        &Version::new("1.0.0").expect("version"),
-        &PackageDigest::new(&"ab".repeat(32)).expect("digest"),
-    );
-    assert_eq!(refused, Err(PackageError::Other(UNWIRED.to_owned())));
     let rig = Rig::new("unwired");
     rig.add("web", "2.0.0");
     let mut ports = rig.ports();

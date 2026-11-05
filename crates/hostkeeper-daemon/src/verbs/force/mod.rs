@@ -320,12 +320,11 @@ fn failed_before(class: ManifestClass, reason: &str) -> Reply {
     }
 }
 
-/// Whom a package error is blamed on: the package for one the channel does not have or whose
-/// bytes are not the digest, the host for the rest.
+/// Whom a package error is blamed on: the class it carries ([`PackageError::class`]).
 fn package_class(error: &PackageError) -> ManifestClass {
-    match error {
-        PackageError::NotFound(_) | PackageError::DigestMismatch(_) => ManifestClass::Release,
-        PackageError::NoSpace(_) | PackageError::Other(_) => ManifestClass::Environment,
+    match error.class() {
+        Class::Release => ManifestClass::Release,
+        Class::Environment => ManifestClass::Environment,
     }
 }
 

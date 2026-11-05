@@ -8,15 +8,17 @@
 //! release installed, `update` and `force_rollback` only with one); an `update` below the
 //! running version is refused; the package from the [`crate::packages::Packages`] port, outside
 //! the step lock; its manifest, read by the manifest's loader for the order's service and
-//! version and this daemon's version; the release it replaces, none for an `install`; for an
-//! order with no release to replace, the paths it places checked against `placed.json`
-//! (`path_conflict`); then the step lock and [`hostkeeper_steps::StepRunner::run`], whose verdict
-//! is the reply. Every refusal before the runner writes nothing.
+//! version and this daemon's version; the release it replaces, none for an `install`; the paths
+//! it places checked against `placed.json` and the disk (`path_conflict`); then the step lock
+//! and [`hostkeeper_steps::StepRunner::run`], whose verdict is the reply. Every refusal before
+//! the runner writes nothing.
 //!
 //! An `install` is the update path with no previous release: no `updater.previous_*` key in the
 //! params file and no `previous_digest` in the step record. The runner's switch
-//! ([`crate::executor::Ctx::runner`]) places the package and points `current` at it immediately
-//! before `cutover`, and removes both immediately before `rollback`.
+//! ([`crate::place::hooked_switch`]) places the package and points `current` at it immediately
+//! before `cutover`; before `rollback` it takes an install off the host, and puts an update back
+//! on the release it replaced. After `cleanup` it commits the placed paths and removes those the
+//! release no longer lists.
 
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -168,11 +170,9 @@ fn steps(
             previous(ctx, service, &order.version, running)?
         }
     };
-    // With no release to replace, the runner's switch places this package: its paths are
-    // checked now, before anything changes.
-    if previous.is_none() {
-        claims_check(ctx, &manifest)?;
-    }
+    // The runner's switch places this package, whether or not it replaces a release: its paths
+    // are checked now, before anything changes.
+    claims_check(ctx, &manifest)?;
     let declared = declared_params(&manifest.params)?;
     let update = update_order(order, &dir, &manifest, previous, declared);
     files::make_private(&ctx.service_dir(service))
