@@ -55,7 +55,8 @@ pub enum Refusal {
     /// The dead-man could not stop a step at its bound: the service stays locked. A `force` that
     /// could not stop the running step of its service ends with it too.
     Unstopped,
-    /// A `force` of the service `hostkeeper`, which updates itself by its own path.
+    /// A `force` or a `force_rollback` of the service `hostkeeper`, which updates itself by its
+    /// own path.
     SelfService,
     /// An `install` of a service that has a release installed (`current` names one).
     AlreadyInstalled,
@@ -76,11 +77,14 @@ pub enum Refusal {
     /// `placed.json` could not be read or written, or a placed link, `current` or a directory of
     /// the service could not be made or removed.
     LinkFailed,
+    /// An `update` of the service `hostkeeper` while its local list of bad versions
+    /// (`<state-dir>/hostkeeper/bad-versions`) cannot be read: no self-update runs until it can.
+    BadVersionsUnreadable,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 28] = [
+    pub const ALL: [Refusal; 29] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -109,6 +113,7 @@ impl Refusal {
         Refusal::UninstallUnsupported,
         Refusal::PathConflict,
         Refusal::LinkFailed,
+        Refusal::BadVersionsUnreadable,
     ];
 
     /// The token.
@@ -142,6 +147,7 @@ impl Refusal {
             Refusal::UninstallUnsupported => "uninstall_unsupported",
             Refusal::PathConflict => "path_conflict",
             Refusal::LinkFailed => "link_failed",
+            Refusal::BadVersionsUnreadable => "bad_versions_unreadable",
         }
     }
 }

@@ -30,8 +30,10 @@ use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
+use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
 use crate::verb::Verb;
 use crate::verbs;
+use crate::verbs::force::SELF_SERVICE;
 use crate::watchers::{STOPPED, SlicedClock, WatchEnd, Watchers, Yielding};
 
 /// A test's way to change every step record store the daemon makes, as it is made: to stop the
@@ -114,9 +116,23 @@ pub struct Ctx {
     deadman_poll_secs: Option<u64>,
     /// Ends the dead-men when the daemon is dropped.
     stop: Arc<AtomicBool>,
+    /// Asks a new hostkeeper binary for its self-update protocol.
+    probe: Arc<dyn ProtocolProbe>,
+    /// The daemon's request to exit so that its unit starts a new binary.
+    restart: Restart,
 }
 
 impl Ctx {
+    /// The probe a new hostkeeper binary's self-update protocol is asked with.
+    pub fn probe(&self) -> &dyn ProtocolProbe {
+        &*self.probe
+    }
+
+    /// The daemon's request to exit with status 0 after the follow-on of its own update.
+    pub fn restart(&self) -> &Restart {
+        &self.restart
+    }
+
     /// The state directory of `service`.
     pub fn service_dir(&self, service: &ServiceName) -> PathBuf {
         self.dirs.state.join(service.as_str())
@@ -241,6 +257,7 @@ impl Ctx {
                 self.store(service),
             )
             .with_switch(switch);
+            let runner = selfupdate::runner_for(runner, service);
             self.watch(runner.watch());
             Arc::new(runner)
         });
@@ -273,6 +290,7 @@ impl Ctx {
             stop: Arc::clone(&stop),
         };
         let runner = StepRunner::new(Arc::new(launcher), Arc::new(clock), self.store(service));
+        let runner = selfupdate::runner_for(runner, service);
         self.watch(runner.watch());
         let (locks, alerts, name) = (
             self.locks.clone(),
@@ -479,6 +497,7 @@ impl Daemon {
         own_version: HostkeeperVersion,
     ) -> Daemon {
         let halts = HaltStore::new(&dirs.state);
+        let probe = Arc::new(LauncherProbe::new(Arc::clone(&ports.launcher)));
         Daemon {
             ctx: Ctx {
                 config,
@@ -502,8 +521,17 @@ impl Daemon {
                 alerts: Arc::new(|line: &str| eprintln!("{line}")),
                 deadman_poll_secs: ports.deadman_poll_secs,
                 stop: Arc::new(AtomicBool::new(false)),
+                probe,
+                restart: Restart::default(),
             },
         }
+    }
+
+    /// The same daemon, a new hostkeeper binary's self-update protocol asked of `probe` in place
+    /// of the step launcher: the seam of the tests of the protocol check.
+    pub fn with_probe(mut self, probe: Arc<dyn ProtocolProbe>) -> Daemon {
+        self.ctx.probe = probe;
+        self
     }
 
     /// The same daemon, every step record store it makes changed by `seam` as it is made: the
@@ -571,6 +599,9 @@ impl Daemon {
     fn dispatch(&self, verb: Verb) -> Reply {
         let ctx = &self.ctx;
         match verb {
+            Verb::Update(order) if order.service.as_str() == SELF_SERVICE => {
+                selfupdate::run(ctx, order)
+            }
             Verb::Update(order) => verbs::update::run(ctx, order),
             Verb::ForceRollback(order) => verbs::force_rollback::run(ctx, order),
             Verb::Install(order) => verbs::install::run(ctx, order),
