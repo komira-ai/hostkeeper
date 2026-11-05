@@ -15,7 +15,7 @@ pub mod issue;
 pub mod key;
 pub mod profile;
 
-pub use bundle::{CaBundle, PollBundle};
+pub use bundle::{CaBundle, HostCertificate, PollBundle};
 pub use issue::{
     CA_VALIDITY_SECS, Ca, Certificate, HOST_VALIDITY_SECS, SERVER_VALIDITY_CAP_SECS, SignError,
     SignRequest, Signer, Subject,

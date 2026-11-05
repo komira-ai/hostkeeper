@@ -3,6 +3,10 @@
 //! minimums a desired state carries are kept, written and printed, and no decision reads them.
 //!
 //! - [`identity`]: who is calling, from the client certificate's subjectAltNames alone;
+//! - [`enrollment`]: how a host gets and keeps its certificate (`Enroll`, `Poll`, `Renew`) over
+//!   `hostkeeper_enrollment`'s CA and store, the start that opens them and makes the
+//!   coordinator's server certificate, and what the heartbeat path asks of them (who an
+//!   enrolled host's certificate names, whether it is denied, retiring or duplicate);
 //! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically;
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
 //! - [`acks`]: the failure reports a by-hand set of a bad version acknowledged;
@@ -42,6 +46,7 @@ pub mod converge;
 pub mod decide;
 pub mod defer;
 pub mod desired;
+pub mod enrollment;
 pub mod fleet;
 pub mod halt;
 pub mod http;

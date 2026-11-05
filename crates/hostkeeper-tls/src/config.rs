@@ -53,6 +53,19 @@ pub enum TlsError {
     },
 }
 
+/// What a listener asks of a client's certificate besides the CA file of
+/// [`TlsFiles::client_ca`]: whether a client may connect without one, and more CA certificates
+/// one may chain to. It applies only to a listener with a client CA file; the default asks what
+/// the file alone says.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClientAuth {
+    /// A client that presents no certificate completes the handshake, and the caller decides
+    /// per request what it may do; a client that presents one must still chain to a CA.
+    pub optional: bool,
+    /// CA certificates, DER, a client certificate may chain to besides those of the file.
+    pub extra_roots: Vec<Vec<u8>>,
+}
+
 /// The application protocols a listener's handshake offers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Alpn {
@@ -161,14 +174,15 @@ pub(crate) fn validity(leaf: &CertificateDer<'_>, path: &Path) -> Result<(i64, b
     ))
 }
 
-/// The configuration `material` makes. With `reject_expired`, a leaf whose validity has
-/// ended is refused (a reload does; the first load does not, as a server has always
-/// started with the certificate it was given).
+/// The configuration `material` makes, asking of a client what `client` says. With
+/// `reject_expired`, a leaf whose validity has ended is refused (a reload does; the first load
+/// does not, as a server has always started with the certificate it was given).
 pub(crate) fn build(
     files: &TlsFiles,
     material: &Material,
     reject_expired: bool,
     alpn: Alpn,
+    client: &ClientAuth,
 ) -> Result<Built, TlsError> {
     let chain = certificates(&files.cert, &material.cert)?;
     let key = PrivateKeyDer::from_pem_slice(&material.key).map_err(|e| pem_error(&files.key, e))?;
@@ -183,10 +197,22 @@ pub(crate) fn build(
             // Certificates that do not parse as trust anchors are left out; if none
             // does, the verifier cannot be made, which is the refusal.
             roots.add_parsable_certificates(certificates(path, bytes)?);
-            let verifier =
-                WebPkiClientVerifier::builder_with_provider(Arc::new(roots), Arc::clone(&provider))
-                    .build()
-                    .map_err(|e| pem_error(path, format!("no usable CA certificate: {e}")))?;
+            roots.add_parsable_certificates(
+                client
+                    .extra_roots
+                    .iter()
+                    .map(|der| CertificateDer::from(der.clone())),
+            );
+            let builder =
+                WebPkiClientVerifier::builder_with_provider(Arc::new(roots), Arc::clone(&provider));
+            let builder = if client.optional {
+                builder.allow_unauthenticated()
+            } else {
+                builder
+            };
+            let verifier = builder
+                .build()
+                .map_err(|e| pem_error(path, format!("no usable CA certificate: {e}")))?;
             Some(verifier)
         }
         _ => None,

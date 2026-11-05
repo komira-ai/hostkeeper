@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use rustls::ServerConfig;
 
-use crate::config::{Alpn, Built, Material, TlsError, TlsFiles, build, digest, read};
+use crate::config::{Alpn, Built, ClientAuth, Material, TlsError, TlsFiles, build, digest, read};
 
 /// What one look at the files did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +57,8 @@ struct Shared {
     watch: bool,
     /// The application protocols every configuration of this source offers.
     alpn: Alpn,
+    /// What every configuration of this source asks of a client's certificate.
+    client: ClientAuth,
     interval: Duration,
     state: Mutex<State>,
     applied: AtomicU64,
@@ -118,8 +120,24 @@ impl TlsSource {
         interval: Duration,
         alpn: Alpn,
     ) -> Result<Self, TlsError> {
+        Self::files_with(listener, files, interval, alpn, ClientAuth::default())
+    }
+
+    /// [`TlsSource::files_alpn`], asking of a client's certificate what `client` says: whether
+    /// a client may connect without one, and the CA certificates one may chain to besides the
+    /// client CA file's. Every reload keeps it.
+    ///
+    /// # Errors
+    /// As [`TlsSource::files`].
+    pub fn files_with(
+        listener: &'static str,
+        files: TlsFiles,
+        interval: Duration,
+        alpn: Alpn,
+        client: ClientAuth,
+    ) -> Result<Self, TlsError> {
         let material = read(&files)?;
-        Self::of(listener, files, true, interval, &material, alpn)
+        Self::of(listener, files, true, interval, &material, alpn, client)
     }
 
     /// The source for the listener called `listener` over PEM text given here: it has no
@@ -159,7 +177,15 @@ impl TlsSource {
             key: key.to_vec(),
             client_ca: client_ca.map(<[u8]>::to_vec),
         };
-        Self::of(listener, files, false, Duration::ZERO, &material, alpn)
+        Self::of(
+            listener,
+            files,
+            false,
+            Duration::ZERO,
+            &material,
+            alpn,
+            ClientAuth::default(),
+        )
     }
 
     fn of(
@@ -169,8 +195,9 @@ impl TlsSource {
         interval: Duration,
         material: &Material,
         alpn: Alpn,
+        client: ClientAuth,
     ) -> Result<Self, TlsError> {
-        let Built { config, not_after } = build(&files, material, false, alpn)?;
+        let Built { config, not_after } = build(&files, material, false, alpn, &client)?;
         let seen = Seen::Files(digest(material));
         Ok(Self {
             shared: Arc::new(Shared {
@@ -178,6 +205,7 @@ impl TlsSource {
                 files,
                 watch,
                 alpn,
+                client,
                 interval,
                 state: Mutex::new(State {
                     config,
@@ -214,7 +242,7 @@ impl TlsSource {
             key: key.to_vec(),
             client_ca: None,
         };
-        let built = build(&shared.files, &material, true, shared.alpn)?;
+        let built = build(&shared.files, &material, true, shared.alpn, &shared.client)?;
         let mut state = shared.state();
         state.config = built.config;
         state.not_after = built.not_after;
@@ -250,7 +278,7 @@ impl TlsSource {
         // Remembered whether or not it applies, so a bad state is reported once and a
         // second look at it does no work.
         state.seen = seen;
-        match material.and_then(|m| build(&shared.files, &m, true, shared.alpn)) {
+        match material.and_then(|m| build(&shared.files, &m, true, shared.alpn, &shared.client)) {
             Ok(built) => {
                 state.config = built.config;
                 state.not_after = built.not_after;

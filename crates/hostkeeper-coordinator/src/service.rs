@@ -17,6 +17,7 @@ use crate::acks::{clear_bad, release_ack};
 use crate::converge::{Convergence, RoleCounts, converge_service, role_counts};
 use crate::decide::{Decision, Why};
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
+use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Host, Node};
 use crate::halt;
 use crate::identity::Identity;
@@ -25,6 +26,7 @@ use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsState, OpsStore};
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
 use crate::tokens::{OperatorTokens, TokenName};
+use enrollment_calls::Turn;
 
 /// The time since the coordinator started.
 pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
@@ -265,6 +267,8 @@ pub struct Coordinator {
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
     features: Vec<String>,
+    /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
+    enrollment: Option<Arc<Enrollment>>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -312,6 +316,7 @@ impl Coordinator {
             services_dropped: AtomicU64::new(0),
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
+            enrollment: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -463,11 +468,35 @@ impl Coordinator {
     /// [`HeartbeatRefused`]: the heartbeat lists no services (none, or a list that was bad and
     /// dropped) and no legacy service is set.
     pub fn heartbeat(&self, who: Identity, beat: Heartbeat) -> Result<Answer, HeartbeatRefused> {
+        self.heartbeat_from(who, beat, None)
+    }
+
+    /// [`Self::heartbeat`] from the daemon on the machine `machine_id`, when the transport
+    /// carries one: with enrollment it is reported live ([`Enrollment::report_live`]), so two
+    /// machines speaking for one host id mark it duplicate. A duplicate host is heard and
+    /// ordered nothing ([`Self::host_is_duplicate`]).
+    ///
+    /// # Errors
+    /// As [`Self::heartbeat`].
+    pub fn heartbeat_from(
+        &self,
+        who: Identity,
+        beat: Heartbeat,
+        machine_id: Option<&str>,
+    ) -> Result<Answer, HeartbeatRefused> {
         if self.legacy.is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
+        if let (Some(enrollment), Some(machine_id)) = (&self.enrollment, machine_id) {
+            enrollment.report_live(&who.host_id, machine_id);
+        }
+        let turn = if self.host_is_duplicate(&who.host_id) {
+            Turn::Hold
+        } else {
+            Turn::Order
+        };
         let asked = beat.agent_features.clone();
-        let reply = self.reply_to(who, beat);
+        let (reply, _) = self.reply_to(who, beat, turn);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -492,7 +521,9 @@ impl Coordinator {
         })
     }
 
-    fn reply_to(&self, who: Identity, beat: Heartbeat) -> ServiceReply {
+    /// Notes the heartbeat of `who` and, as `turn` says, decides its order: the reply, and
+    /// whether a retiring host was released.
+    fn reply_to(&self, who: Identity, beat: Heartbeat, turn: Turn) -> (ServiceReply, bool) {
         let now = (self.clock)();
         let legacy = self.legacy.as_deref();
         let announced = beat.services.clone().unwrap_or_default();
@@ -556,6 +587,16 @@ impl Coordinator {
             }
         }
         fleet.note_node(who.host_id.clone(), node);
+        match turn {
+            Turn::Order => {}
+            Turn::Hold => return (ServiceReply::Nothing, false),
+            Turn::Final => {
+                return (
+                    ServiceReply::Nothing,
+                    fleet.release_if_final(&who.host_id, now),
+                );
+            }
+        }
         let mut names: Vec<&str> = legacy
             .into_iter()
             .chain(announced.iter().map(|one| one.name.as_str()))
@@ -587,13 +628,16 @@ impl Coordinator {
                     continue;
                 }
                 fleet.order(name, who.host_id.clone(), version.clone(), now);
-                return ServiceReply::Update {
-                    service: (Some(name) != legacy).then(|| name.to_owned()),
-                    version,
-                };
+                return (
+                    ServiceReply::Update {
+                        service: (Some(name) != legacy).then(|| name.to_owned()),
+                        version,
+                    },
+                    false,
+                );
             }
         }
-        ServiceReply::Nothing
+        (ServiceReply::Nothing, false)
     }
 
     /// The CI token in `bearer`, checked by the verifier.
@@ -868,3 +912,7 @@ pub(crate) fn convergence_of(
         None => convergence,
     }
 }
+
+/// The calls of the heartbeat path that ask enrollment.
+#[path = "service_enrollment.rs"]
+mod enrollment_calls;

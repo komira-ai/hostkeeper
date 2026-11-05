@@ -5,7 +5,9 @@
 //! in-memory ones. Each listener holds a [`TlsSource`], so a certificate the farm CA renewed is picked up
 //! without a restart (the files are looked at every interval, and a pair that does not make
 //! a working configuration leaves the one in use). A heartbeat listener's source requires a
-//! client certificate that chains to the farm CA; the private listener's asks for none. A
+//! client certificate that chains to the farm CA, or, with enrollment, lets a client without one
+//! through the handshake and admits one of the coordinator's CA too (each route then decides:
+//! only `Enroll` and `Poll` answer a caller without one); the private listener's asks for none. A
 //! connection speaks HTTP/1.1 only, and has a limit on its handshake, its request head, its
 //! request body and on any single write of a response that its peer does not read; a listener
 //! has a limit on its connections.

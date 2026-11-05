@@ -17,9 +17,12 @@
 //!   next look finds the pair whole and applies it.
 //! - The first load must succeed, as it always has: a server does not start on a bad
 //!   file.
+//! - A listener with a client CA requires a client certificate that chains to it, unless it
+//!   is made with a [`ClientAuth`] that lets a client in without one; a [`ClientAuth`] may also
+//!   add CA certificates a client's may chain to.
 
 mod config;
 mod source;
 
-pub use config::{Alpn, TlsError, TlsFiles};
+pub use config::{Alpn, ClientAuth, TlsError, TlsFiles};
 pub use source::{Outcome, Reloads, TlsSource, render_metrics};
