@@ -6,9 +6,9 @@
 //! second daemon on the same state directory gets [`StartError::Locked`]); remove the
 //! registration socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is
 //! touched; [`settle_self_update`]; [`before_records`] and [`boot_pass`]; bind the admin socket,
-//! removing a stale socket only now that the lock is held; [`after_boot`]. [`serve`] then serves
-//! the admin socket, until the daemon is asked to exit for its own update
-//! ([`crate::selfupdate::Restart`]).
+//! removing a stale socket only now that the lock is held; [`after_boot`]. [`serve`] then starts
+//! the enrollment and heartbeat loops ([`crate::links`]) and serves the admin socket, until the
+//! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
 //!
 //! [`settle_self_update`] settles the update of hostkeeper itself that waits for this start
 //! (design section 6.6), before any step record is read by the boot pass: the new binary
@@ -43,6 +43,7 @@ use crate::boot::{ALERT_START, BootError, BootReport, Stage, boot_changed};
 use crate::executor::{Daemon, Dirs, Ports};
 use crate::files;
 use crate::installed;
+use crate::links::Links;
 use crate::notify::{NoNotifier, ReadyNotifier};
 use crate::socket;
 
@@ -311,16 +312,22 @@ fn after_boot(daemon: &Daemon, report: &mut BootReport, notifier: &dyn ReadyNoti
     daemon.after_boot(report, notifier);
 }
 
-/// Serves the admin socket of a started daemon, holding its lock, until the socket fails or the
-/// daemon is asked to exit for its own update: then the requests in flight are answered, and
-/// this returns `Ok`, for the binary to exit with status 0.
-pub async fn serve(started: Started) -> Result<(), StartError> {
+/// Serves a started daemon, holding its lock: starts its enrollment and heartbeat loops
+/// ([`Links::start`], the enrollment loop first), then serves the admin socket until the socket
+/// fails or the daemon is asked to exit for its own update: then the requests in flight are
+/// answered, the loops are told to stop, and this returns `Ok`, for the binary to exit with
+/// status 0. The readiness notice was sent by [`startup_notifying`], so neither loop starts
+/// before the boot work is over (design section 6.5); a socket that cannot be served starts
+/// neither.
+pub async fn serve(started: Started, links: Links) -> Result<(), StartError> {
     let path = &started.socket_path;
     let incoming = socket::incoming(started.listener).map_err(io_at(path))?;
+    let stop = links.stop.clone();
+    links.start(&started.daemon);
     let daemon = Arc::clone(&started.daemon);
     let restart = async move { daemon.ctx().restart().wait().await };
     // `started._lock` stays held until this returns.
-    admin::serve_until(Arc::clone(&started.daemon), incoming, restart)
-        .await
-        .map_err(StartError::from)
+    let served = admin::serve_until(Arc::clone(&started.daemon), incoming, restart).await;
+    stop.stop();
+    served.map_err(StartError::from)
 }

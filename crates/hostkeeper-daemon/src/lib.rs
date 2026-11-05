@@ -3,8 +3,8 @@
 //!
 //! - [`start`]: start-up, in order: the daemon config, the lock on the state directory, the
 //!   registration socket of kbf's agent unlinked, the sweep of package leftovers and the
-//!   reconciliation of the placed paths, the boot work, the admin socket; then serving the admin
-//!   socket.
+//!   reconciliation of the placed paths, the boot work, the admin socket; then serving: the
+//!   enrollment and heartbeat loops started ([`links`]), and the admin socket served.
 //! - [`boot`]: the boot work: the switch each step record says was begun
 //!   ([`boot::switch_intent`]), the step records read against the boot id, each unfinished
 //!   update run to its verdict, the post-success watchers restarted ([`watchers`]), the
@@ -37,9 +37,12 @@
 //!   `self-update-protocol`; the binary only forwards to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
-//! - [`link_adapters`]: the daemon as the executor and the held halts of the heartbeat loop
-//!   (`hostkeeper_link`): its order becomes a protobuf `Order` for [`Daemon::order`], and the
-//!   daemon's reply the verdict the loop reports.
+//! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and
+//!   the service observer of the heartbeat loop (`hostkeeper_link`): its order becomes a protobuf
+//!   `Order` for [`Daemon::order`], and the daemon's reply the verdict the loop reports.
+//! - [`links`]: the enrollment loop (`hostkeeper_enroll`) and the heartbeat loop, which
+//!   [`start::serve`] starts, in that order, once the daemon is ready; [`unix_clock`] is the
+//!   wall clock of the loop's deferrals, the daemon's one read of it.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
 //! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
@@ -57,6 +60,7 @@ mod files;
 pub mod halt;
 pub mod installed;
 pub mod link_adapters;
+pub mod links;
 pub mod locks;
 pub mod notify;
 pub mod observer;
@@ -72,6 +76,7 @@ pub mod start;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod uninstall;
+pub mod unix_clock;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;

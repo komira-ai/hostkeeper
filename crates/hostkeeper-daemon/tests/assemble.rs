@@ -17,7 +17,7 @@ use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::boot::{ALERT_START, BootReport, BootStep, Stage, alert_line};
 use hostkeeper_daemon::cli::{
-    CA_BUNDLE, DEADMAN_POLL_SECS, GH_BINARY, GH_HOME, HostFiles, HostVerifier,
+    CA_BUNDLE, DEADMAN_POLL_SECS, GH_BINARY, GH_HOME, HostFiles, HostVerifier, PKI_DIR,
     SIGSTORE_TRUSTED_ROOT, UNWIRED, host_ports, start_with, tls_roots,
 };
 use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
@@ -375,6 +375,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         ca_bundle: rig.scratch.path().join("ca.pem"),
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
+        pki: rig.scratch.path().join("pki"),
     };
     let error = host_ports(&config(), &rig.settings(), &files, OWN)
         .err()
@@ -433,6 +434,7 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         ca_bundle: rig.scratch.path().join("ca.pem"),
         gh: rig.scratch.path().join("gh"),
         trusted_root: rig.scratch.path().join("trusted_root.json"),
+        pki: rig.scratch.path().join("pki"),
     };
     let notifier = FakeNotifier::new(Log::default());
     let error = start_with(&rig.settings(), &files, OWN, &*notifier)
@@ -455,7 +457,7 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
 }
 
 /// Catches the host's files moved without the constants: where a host keeps the CA bundle, the
-/// pinned `gh` and the trusted root, and the directory `gh` runs in.
+/// pinned `gh`, the trusted root and the pki directory, and the directory `gh` runs in.
 #[test]
 fn the_host_files_are_where_the_packaging_puts_them() {
     assert_eq!(
@@ -464,6 +466,7 @@ fn the_host_files_are_where_the_packaging_puts_them() {
             ca_bundle: PathBuf::from("/etc/ssl/certs/ca-certificates.crt"),
             gh: PathBuf::from("/usr/lib/hostkeeper/gh"),
             trusted_root: PathBuf::from("/usr/lib/hostkeeper/trusted_root.json"),
+            pki: PathBuf::from("/etc/updater/pki"),
         }
     );
     assert_eq!(CA_BUNDLE, "/etc/ssl/certs/ca-certificates.crt");
@@ -473,6 +476,7 @@ fn the_host_files_are_where_the_packaging_puts_them() {
         "/usr/lib/hostkeeper/trusted_root.json"
     );
     assert_eq!(GH_HOME, ".gh");
+    assert_eq!(PKI_DIR, "/etc/updater/pki");
 }
 
 /// Catches a CA bundle read wrongly: each certificate section becomes a root, in order; a

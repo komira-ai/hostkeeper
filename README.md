@@ -30,7 +30,7 @@ tooling:
 | [`hostkeeper-steps`](crates/hostkeeper-steps) | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update, and the layout of versions with `current` and `previous` and its prune to those two, the tree digest and the seal of a package version |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (the P-256 request profile, host and server certificates, the owner-only key file, the CA bundle) and its durable enrollment store (requests, approval, one certificate per request, duplicate claims, deny rows), as a library |
 | [`hostkeeper-unpack`](crates/hostkeeper-unpack) | the unpack of a verified `.tar.zst` package into a sealed version directory, in one streaming pass under the archive bounds ([package format](docs/package-format.md)) |
-| [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon, the one root process of a host: start-up and its lock, the executor of orders with the service and step locks, the daemon's own checks, the try rules and the held halts, and the root-only admin socket |
+| [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon, the one root process of a host: start-up and its lock, the executor of orders with the service and step locks, the daemon's own checks, the try rules and the held halts, the root-only admin socket, and the enrollment and heartbeat loops it starts once it is ready |
 | [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, `hostkeeper ctl`, `hostkeeper ci`, the CI client of `hostkeeper-ci`, and the two plumbing verbs of its own update (`self-update-fallback`, `self-update-protocol`); it only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), the command table of `hostkeeper ctl` generated from them, and the test that keeps them compatible |
 | [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, called over gRPC or the coordinator's HTTP/JSON gateway |
@@ -66,6 +66,7 @@ only, never from the environment:
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
 | `--admin-socket` | `/run/hostkeeper/admin.sock` | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
+| `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1 |
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
@@ -76,10 +77,15 @@ of `current` a step record says was begun, and relinks the placed paths that dif
 It then reads every step record against the host's boot id (kept in `.boot-id` in the state
 directory), runs each update left unfinished by a crash or a reboot to its verdict, restarts the
 post-success watchers, runs each service's `[hook] boot` step from `current`, and only then tells
-systemd it is ready. It then serves the admin socket, until an update of hostkeeper itself asks
-it to exit so that its unit starts the new binary. This build fetches, verifies and unpacks
-packages, and observes each service for `Status`, but has no step launcher or service manager
-wired in and no order source yet, so it serves the admin socket's `Status` and runs no order.
+systemd it is ready. Only then does it start its two loops, the enrollment loop first: the
+enrollment loop gets the host's certificate from the coordinator (a P-256 key made on the host,
+a request an operator approves, renewal at half life) and keeps it under `/etc/updater/pki`; the
+heartbeat loop reads the certificate under that directory's `current` link at every heartbeat,
+and while there is none it says once what it waits for and sends nothing. It then serves the
+admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
+new binary. This build fetches, verifies and unpacks packages, and observes each service for
+`Status`, but has no step launcher or service manager wired in and no coordinator link for its
+heartbeats yet, so it serves the admin socket's `Status` and runs no order.
 
 | exit status | meaning |
 |---|---|

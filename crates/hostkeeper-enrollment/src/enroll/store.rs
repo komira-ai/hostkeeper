@@ -1,6 +1,6 @@
 //! The store itself: its directory, its lock, reading and writing its files, and the two
 //! steps a request takes before issuance: [`EnrollmentStore::post`] and
-//! [`EnrollmentStore::approve`].
+//! [`EnrollmentStore::approve`] (or [`EnrollmentStore::approve_recorded`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -13,9 +13,10 @@ use super::files::{
     DenyState, HostRow, RequestRow, SCHEMA, claims_of_pb, claims_to_pb, pb, read_deny, read_issued,
     read_serial,
 };
+use super::mac_nonce::{MAC_NONCES, MacNonceHash};
 use super::{
-    Approval, ApproveError, Claims, Decision, NewRequest, PostError, PostOutcome, RequestState,
-    RequestView, StoreError,
+    Approval, ApprovalRecord, ApproveError, Claims, Decision, NewRequest, PostError, PostOutcome,
+    RecordedApproval, RequestState, RequestView, StoreError,
 };
 use crate::ca::check_request;
 use crate::fs::{FileLock, Fs, write_atomic};
@@ -27,6 +28,10 @@ pub const LIVE_WINDOW_SECS: u64 = 600;
 
 /// The serial of the first certificate the store hands out; 1 is the CA certificate's.
 pub const FIRST_SERIAL: u64 = 2;
+
+/// How many requests may wait for an operator, unless [`EnrollmentStore::with_max_pending`]
+/// says otherwise (the coordinator's `--max-pending-enrollments`).
+pub const DEFAULT_MAX_PENDING: usize = 256;
 
 const REQUESTS: &str = "requests";
 const ISSUED: &str = "issued";
@@ -45,6 +50,11 @@ pub struct EnrollmentStore {
     mutex: Mutex<()>,
     /// Per host id, the machine ids that reported it live and when, within the window.
     pub(super) live: Mutex<BTreeMap<HostId, BTreeMap<String, u64>>>,
+    /// The most requests that may wait for an operator.
+    max_pending: usize,
+    /// The Mac nonces an approval consumed: read from the approvals at open and added to by
+    /// each approval, so a nonce whose own file was not yet marked is still used.
+    pub(super) consumed: Mutex<BTreeSet<MacNonceHash>>,
 }
 
 impl std::fmt::Debug for EnrollmentStore {
@@ -67,21 +77,39 @@ pub(super) fn io_at(path: &Path) -> impl FnOnce(io::Error) -> StoreError + '_ {
 }
 
 impl EnrollmentStore {
-    /// The store in `dir`, which is made (mode 0700) with its subdirectories when missing.
+    /// The store in `dir`, which is made (mode 0700) with its subdirectories when missing. A
+    /// Mac nonce an approval consumed whose own file was not yet marked is marked now.
     ///
     /// # Errors
-    /// [`StoreError::Io`] when a directory cannot be made.
+    /// [`StoreError::Io`] when a directory cannot be made; [`StoreError`] when a request or
+    /// nonce file cannot be read or written.
     pub fn open(fs: Arc<dyn Fs>, dir: &Path) -> Result<EnrollmentStore, StoreError> {
-        for sub in [REQUESTS, ISSUED, HOSTS, DENY] {
+        for sub in [REQUESTS, ISSUED, HOSTS, DENY, MAC_NONCES] {
             let path = dir.join(sub);
             fs.create_dir(&path).map_err(io_at(&path))?;
         }
-        Ok(EnrollmentStore {
+        let store = EnrollmentStore {
             fs,
             dir: dir.to_path_buf(),
             mutex: Mutex::new(()),
             live: Mutex::new(BTreeMap::new()),
-        })
+            max_pending: DEFAULT_MAX_PENDING,
+            consumed: Mutex::new(BTreeSet::new()),
+        };
+        store.reconcile_mac_nonces()?;
+        Ok(store)
+    }
+
+    /// The same store, letting at most `max` requests wait for an operator.
+    #[must_use]
+    pub fn with_max_pending(mut self, max: usize) -> EnrollmentStore {
+        self.max_pending = max;
+        self
+    }
+
+    /// The most requests that may wait for an operator.
+    pub fn max_pending(&self) -> usize {
+        self.max_pending
     }
 
     /// Takes the store's mutex, then the `flock` on its lock file.
@@ -95,11 +123,16 @@ impl EnrollmentStore {
         })
     }
 
-    fn read(&self, path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
+    pub(super) fn read(&self, path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
         self.fs.read(path).map_err(io_at(path))
     }
 
-    fn write(&self, sub: &str, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
+    /// The path of `name` in the store's subdirectory `sub`.
+    pub(super) fn path_in(&self, sub: &str, name: &str) -> PathBuf {
+        self.dir.join(sub).join(name)
+    }
+
+    pub(super) fn write(&self, sub: &str, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
         let dir = self.dir.join(sub);
         let path = dir.join(name);
         write_atomic(&*self.fs, &dir, name, bytes, FILE_MODE).map_err(io_at(&path))
@@ -247,9 +280,13 @@ impl EnrollmentStore {
     /// issued it starts the next round. Every duplicate claim emits a warn event
     /// (`duplicate enrollment claim`).
     ///
+    /// A request that would wait while [`Self::max_pending`] requests wait already is refused
+    /// and nothing is written: no waiting request is dropped for it, and a repost of a waiting
+    /// request is accepted as before. Approved, issued and denied requests do not count.
+    ///
     /// # Errors
     /// [`PostError::Profile`] for a CSR outside the profile, [`PostError::RenewalNotAllowed`],
-    /// [`PostError::Store`].
+    /// [`PostError::PendingFull`], [`PostError::Store`].
     pub fn post(&self, request: NewRequest, now: u64) -> Result<PostOutcome, PostError> {
         let verified = check_request(&request.csr_der)?;
         let id = verified.key().key_hash();
@@ -268,10 +305,14 @@ impl EnrollmentStore {
             Some(row) => row.pb.round + 1,
             None => 0,
         };
+        let all = self.all_requests()?;
+        if all.iter().filter(|row| row.state.is_pending()).count() >= self.max_pending {
+            return Err(PostError::PendingFull);
+        }
         let reason = match &host {
             Some(host) => (host.pb.machine_id != request.claims.machine_id)
                 .then_some("the renewal's machine id is not the host's"),
-            None => match self.machine_id_taken(&request.claims.machine_id)? {
+            None => match machine_id_taken(&all, &request.claims.machine_id) {
                 Some(reason) => Some(reason),
                 None => self.mac_bound(&request.claims)?,
             },
@@ -296,6 +337,7 @@ impl EnrollmentStore {
                 spki_der: verified.key().spki_der().to_vec(),
                 round,
                 serial: 0,
+                mac_nonce_presented: request.mac_nonce_presented,
             },
             id,
             key: verified.key().clone(),
@@ -320,18 +362,6 @@ impl EnrollmentStore {
         self.load_host(host)?
             .filter(|row| row.key == *id && !denied)
             .ok_or(PostError::RenewalNotAllowed)
-    }
-
-    /// Why a new request with `machine_id` is a duplicate claim, if another request has it.
-    fn machine_id_taken(&self, machine_id: &str) -> Result<Option<&'static str>, StoreError> {
-        if machine_id.is_empty() {
-            return Ok(None);
-        }
-        let taken = self
-            .all_requests()?
-            .iter()
-            .any(|row| row.machine_id() == machine_id);
-        Ok(taken.then_some("another request has this machine id"))
     }
 
     /// Why a new request is a duplicate claim for the MACs it claims: one of them is bound to an
@@ -386,11 +416,20 @@ impl EnrollmentStore {
         Ok(bound)
     }
 
-    /// The same key posted again: the same request, flagged when its machine id changed.
+    /// The same key posted again: the same request, flagged when its machine id changed, and
+    /// marked as having presented a Mac nonce when it waits and does now.
     fn repost(&self, mut row: RequestRow, request: &NewRequest) -> Result<PostOutcome, StoreError> {
         let changed = row.machine_id() != request.claims.machine_id;
-        if changed && row.state == RequestState::Pending {
+        let flag = changed && row.state == RequestState::Pending;
+        let presented =
+            request.mac_nonce_presented && !row.pb.mac_nonce_presented && row.state.is_pending();
+        if flag {
             row.set_state(RequestState::DuplicateClaim);
+        }
+        if presented {
+            row.pb.mac_nonce_presented = true;
+        }
+        if flag || presented {
             self.write_request(&row)?;
         }
         if changed {
@@ -417,7 +456,7 @@ impl EnrollmentStore {
     /// renews); then a deny row it clears is marked cleared by this request, the host row is
     /// written (host id, key hash, machine id, role, services), and the request is marked
     /// approved. A crash between those writes leaves a host row of this key, which a retry
-    /// accepts as its own. It does not issue.
+    /// accepts as its own. It does not issue. The key hash is compared in constant time.
     ///
     /// # Errors
     /// [`ApproveError`]; nothing is written when one is returned before the writes.
@@ -428,15 +467,84 @@ impl EnrollmentStore {
         decision: &Decision,
     ) -> Result<Approval, ApproveError> {
         let _held = self.lock()?;
+        self.approve_held(request_id, key_hash, decision, None)
+    }
+
+    /// [`Self::approve`] with `record` written into the approval: who approved, when and why.
+    /// Under the same lock, before anything is written, it also refuses a request flagged
+    /// `duplicate_claim` unless `decision.replace` ([`ApproveError::DuplicateClaim`]), and
+    /// checks the Mac nonce of `record`, if any, at `record.approved_unix`: issued, unexpired,
+    /// unused, and for the serial the request claims ([`ApproveError::MacNonce`]). The request
+    /// file that marks the request approved is the one write that commits the approval and
+    /// consumes the nonce; the nonce's own file is marked after it (and at the next
+    /// [`Self::open`], should that write not land).
+    ///
+    /// # Errors
+    /// [`ApproveError`]; nothing is written when one is returned before the writes.
+    pub fn approve_recorded(
+        &self,
+        request_id: &KeyHash,
+        key_hash: &KeyHash,
+        decision: &Decision,
+        record: &ApprovalRecord,
+    ) -> Result<Approval, ApproveError> {
+        let _held = self.lock()?;
+        self.approve_held(request_id, key_hash, decision, Some(record))
+    }
+
+    /// The approvals recorded with an approver ([`Self::approve_recorded`]), in the order of
+    /// their request ids: what the coordinator audits, and audits again at a start when its
+    /// entry is missing.
+    ///
+    /// # Errors
+    /// [`StoreError`] when a request file cannot be read.
+    pub fn recorded_approvals(&self) -> Result<Vec<RecordedApproval>, StoreError> {
+        Ok(self
+            .all_requests()?
+            .iter()
+            .filter_map(|row| {
+                let approved = row.pb.approved.as_ref()?;
+                (!approved.approver.is_empty()).then(|| RecordedApproval {
+                    request_id: row.id,
+                    host_id: approved.host_id.clone(),
+                    role: approved.role.clone(),
+                    services: approved.services.clone(),
+                    replace: approved.replace,
+                    approver: approved.approver.clone(),
+                    approved_unix: approved.approved_unix,
+                    reason: approved.reason.clone(),
+                    claims: claims_of_pb(row.pb.claims.as_ref()),
+                    mac_nonce: !approved.mac_nonce_sha256.is_empty(),
+                })
+            })
+            .collect())
+    }
+
+    /// The approval of [`Self::approve`] and [`Self::approve_recorded`]; the caller holds the
+    /// lock.
+    fn approve_held(
+        &self,
+        request_id: &KeyHash,
+        key_hash: &KeyHash,
+        decision: &Decision,
+        record: Option<&ApprovalRecord>,
+    ) -> Result<Approval, ApproveError> {
         let mut row = self
             .load_request(request_id)?
             .ok_or(ApproveError::UnknownRequest)?;
-        if key_hash != request_id {
+        if !key_hash.equals_in_constant_time(request_id) {
             return Err(ApproveError::KeyMismatch);
         }
         if !row.state.is_pending() {
             return Err(ApproveError::NotPending(row.state));
         }
+        if record.is_some() && row.state == RequestState::DuplicateClaim && !decision.replace {
+            return Err(ApproveError::DuplicateClaim);
+        }
+        let nonce = match record.and_then(|r| r.mac_nonce.map(|hash| (hash, r.approved_unix))) {
+            Some((hash, at)) => Some((hash, self.mac_nonce_verdict(&hash, row.mac_serial(), at)??)),
+            None => None,
+        };
         let renewal = row.renewal_of()?;
         let host = &decision.host_id;
         if renewal.as_ref().is_some_and(|of| of != host) {
@@ -479,8 +587,18 @@ impl EnrollmentStore {
             role: decision.role.as_str().to_owned(),
             services,
             replace: decision.replace,
+            approver: record.map(|r| r.approver.clone()).unwrap_or_default(),
+            approved_unix: record.map_or(0, |r| r.approved_unix),
+            reason: record.map(|r| r.reason.clone()).unwrap_or_default(),
+            mac_nonce_sha256: nonce
+                .as_ref()
+                .map(|(hash, _)| hash.as_bytes().to_vec())
+                .unwrap_or_default(),
         });
         self.write_request(&row)?;
+        if let Some((hash, file)) = nonce {
+            self.consume_mac_nonce(&hash, file, request_id);
+        }
         Ok(Approval {
             request_id: *request_id,
             host_id: host.clone(),
@@ -490,6 +608,12 @@ impl EnrollmentStore {
             cleared_deny: denied,
         })
     }
+}
+
+/// Why a new request with `machine_id` is a duplicate claim, if another of `all` has it.
+fn machine_id_taken(all: &[RequestRow], machine_id: &str) -> Option<&'static str> {
+    let taken = !machine_id.is_empty() && all.iter().any(|row| row.machine_id() == machine_id);
+    taken.then_some("another request has this machine id")
 }
 
 /// The warn event of a duplicate claim. The machine id is not a secret; no key or claim but
@@ -509,5 +633,6 @@ fn view(row: &RequestRow) -> Result<RequestView, StoreError> {
         renewal_of: row.renewal_of()?,
         round: row.pb.round,
         host_id: row.host_id()?,
+        mac_nonce_presented: row.pb.mac_nonce_presented,
     })
 }

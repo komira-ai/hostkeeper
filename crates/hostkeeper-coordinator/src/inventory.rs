@@ -8,14 +8,12 @@
 //! `Enrollment.ListRecords` ([`Coordinator::list_records`]) and `Enrollment.RemoveRecord`
 //! ([`Coordinator::remove_record`]). No two records hold one host id, one MAC or one serial.
 //!
-//! `Enrollment.List` ([`Coordinator::list_pending`]) shows each pending request with its match
-//! ([`match_claims`]): the one record it matches, none, or several (every candidate named, none
+//! `Enrollment.List` ([`Coordinator::enrollment_list`]) shows each pending request with its
+//! match ([`show_match`], [`match_claims`]): the one record it matches, none, or several (every candidate named, none
 //! chosen). A match fills in a host id and a role for the operator to read; it approves nothing,
 //! and an approval still names the request's key hash (design 5.7, step 3).
 
-use std::cmp::Ordering;
-
-use hostkeeper_enrollment::enroll::{Claims, RequestState, RequestView};
+use hostkeeper_enrollment::enroll::Claims;
 use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
@@ -32,7 +30,7 @@ pub const MAX_RECORDS: usize = 10_000;
 /// The most data MACs one record holds.
 pub const MAX_DATA_MACS: usize = 16;
 
-/// The most records or requests one page answers: a `limit` of 0, or one above this, is this.
+/// The most records one page answers: a `limit` of 0, or one above this, is this.
 pub const MAX_PAGE: usize = 256;
 
 /// The longest serial a record holds.
@@ -219,63 +217,24 @@ fn record_of(
     })
 }
 
-/// The page `limit` asks for: [`MAX_PAGE`] for 0 or for a limit above it.
-fn page_size(limit: u32) -> usize {
-    match usize::try_from(limit) {
-        Ok(0) | Err(_) => MAX_PAGE,
-        Ok(limit) => limit.min(MAX_PAGE),
-    }
-}
-
-/// The page token of the request `view`: its first-seen time and its id, so the next page goes
-/// on after it whatever was approved in between.
-fn pending_token(view: &RequestView) -> String {
-    format!("{}.{}", view.posted_unix, view.request_id)
-}
-
-/// The order of the pending view: oldest first, then by id.
-fn pending_order(a: &RequestView, b: &RequestView) -> Ordering {
-    (a.posted_unix, a.request_id).cmp(&(b.posted_unix, b.request_id))
-}
-
-/// The page token `token` as the place it names, checked: `<unix seconds>.<64 hex digits>`.
-fn read_pending_token(token: &str) -> Option<(u64, String)> {
-    let (unix, id) = token.split_once('.')?;
-    let unix = unix.parse::<u64>().ok()?;
-    let id_ok = id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-    id_ok.then(|| (unix, id.to_owned()))
-}
-
-/// `claims` as the agent's protocol says them.
-fn claims_proto(claims: &Claims) -> agent::Claims {
-    agent::Claims {
+/// The store's spelling of what a pending request claims, as `Enrollment.List` carries it.
+fn claims_of(claims: &agent::Claims) -> Claims {
+    Claims {
         machine_id: claims.machine_id.clone(),
         dmi_serial: claims.dmi_serial.clone(),
-        product_uuid: claims.dmi_product_uuid.clone(),
+        dmi_product_uuid: claims.product_uuid.clone(),
         addresses: claims.addresses.clone(),
         mac_serial: claims.mac_serial.clone(),
-        platform_uuid: claims.mac_platform_uuid.clone(),
+        mac_platform_uuid: claims.platform_uuid.clone(),
         bmc_mac: claims.bmc_mac.clone(),
     }
 }
 
-/// The pending request `view` as `Enrollment.List` shows it, matched against `records`.
-fn pending_proto(view: &RequestView, records: &[InventoryRecord]) -> proto::PendingEnrollment {
-    let mut pending = proto::PendingEnrollment {
-        request_id: view.request_id.to_hex(),
-        key_sha256: view.request_id.to_hex(),
-        claims: Some(claims_proto(&view.claims)),
-        image: view.image.clone(),
-        first_seen_unix: view.posted_unix,
-        renewal_of: view
-            .renewal_of
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default(),
-        duplicate_claim: view.state == RequestState::DuplicateClaim,
-        ..proto::PendingEnrollment::default()
-    };
-    match match_claims(&view.claims, records) {
+/// Fills in how the pending request `pending` matches `records`: the one record's host id and
+/// role, every candidate of an ambiguous match, or unmatched.
+pub fn show_match(pending: &mut proto::PendingEnrollment, records: &[InventoryRecord]) {
+    let claims = claims_of(&pending.claims.clone().unwrap_or_default());
+    match match_claims(&claims, records) {
         InventoryMatch::Matched(record) => {
             pending.set_inventory_match(proto::InventoryMatch::Matched);
             pending.record_host_id.clone_from(&record.host_id);
@@ -287,7 +246,14 @@ fn pending_proto(view: &RequestView, records: &[InventoryRecord]) -> proto::Pend
             pending.candidate_host_ids = ids;
         }
     }
-    pending
+}
+
+/// The page `limit` asks for: [`MAX_PAGE`] for 0 or for a limit above it.
+fn page_size(limit: u32) -> usize {
+    match usize::try_from(limit) {
+        Ok(0) | Err(_) => MAX_PAGE,
+        Ok(limit) => limit.min(MAX_PAGE),
+    }
 }
 
 impl Coordinator {
@@ -409,56 +375,6 @@ impl Coordinator {
         })?;
         Ok(proto::RemoveRecordResponse {
             entry: Some(entry_proto(&done)),
-        })
-    }
-
-    /// `Enrollment.List`: the requests waiting for an operator, duplicate claims included,
-    /// oldest first, after the request `page_token` names, at most `limit` ([`MAX_PAGE`] for 0
-    /// or above it), each with its match against the records. A coordinator without enrollment has
-    /// none. Changes nothing.
-    ///
-    /// # Errors
-    /// `unauthorized`, `forbidden`, `invalid_request` (a page token this call did not give),
-    /// `store_failed` (the enrollment store could not be read).
-    pub fn list_pending(
-        &self,
-        caller: &Caller,
-        request: proto::ListPendingRequest,
-    ) -> Result<proto::ListPendingResponse, proto::EnrollmentRefusal> {
-        caller.operator()?;
-        let after = match request.page_token.as_str() {
-            "" => None,
-            token => {
-                Some(read_pending_token(token).ok_or(proto::EnrollmentRefusal::InvalidRequest)?)
-            }
-        };
-        let Some(enrollment) = self.enrollment() else {
-            return Ok(proto::ListPendingResponse::default());
-        };
-        let mut pending = enrollment.store().pending().map_err(|why| {
-            tracing::error!(%why, "the enrollment store could not be read");
-            proto::EnrollmentRefusal::StoreFailed
-        })?;
-        pending.sort_by(pending_order);
-        let size = page_size(request.limit);
-        let mut rest = pending.iter().filter(|view| {
-            after.as_ref().is_none_or(|(unix, id)| {
-                (view.posted_unix, view.request_id.to_hex()) > (*unix, id.clone())
-            })
-        });
-        let page: Vec<&RequestView> = rest.by_ref().take(size).collect();
-        let more = rest.next().is_some();
-        let records = self.ops.read(|state| state.inventory.clone());
-        let next_page_token = match page.last() {
-            Some(last) if more => pending_token(last),
-            _ => String::new(),
-        };
-        Ok(proto::ListPendingResponse {
-            requests: page
-                .iter()
-                .map(|view| pending_proto(view, &records))
-                .collect(),
-            next_page_token,
         })
     }
 }

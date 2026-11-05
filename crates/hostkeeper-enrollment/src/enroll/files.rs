@@ -111,6 +111,14 @@ impl RequestRow {
             .map_or("", |claims| &claims.machine_id)
     }
 
+    /// The Mac serial number the request claims; empty when it claims none.
+    pub fn mac_serial(&self) -> &str {
+        self.pb
+            .claims
+            .as_ref()
+            .map_or("", |claims| &claims.mac_serial)
+    }
+
     /// The host this request renews.
     pub fn renewal_of(&self) -> Result<Option<HostId>, StoreError> {
         optional_host(&self.path, &self.pb.renewal_of)
@@ -182,6 +190,11 @@ pub(crate) fn read_deny(path: &Path, bytes: &[u8]) -> Result<DenyState, StoreErr
 /// The issued file `path`.
 pub(crate) fn read_issued(path: &Path, bytes: &[u8]) -> Result<pb::Issued, StoreError> {
     decode(path, bytes, |m: &pb::Issued| m.schema)
+}
+
+/// The Mac nonce file `path`.
+pub(crate) fn read_mac_nonce(path: &Path, bytes: &[u8]) -> Result<pb::MacNonce, StoreError> {
+    decode(path, bytes, |m: &pb::MacNonce| m.schema)
 }
 
 /// The next serial of the counter file `path`.

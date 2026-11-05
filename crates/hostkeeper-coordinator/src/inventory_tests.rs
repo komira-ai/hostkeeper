@@ -387,7 +387,7 @@ fn the_record_calls_take_the_operator_token_only() {
         assert_eq!(removed.err(), Some(refusal));
         let pending = rig
             .coordinator
-            .list_pending(&caller, proto::ListPendingRequest::default());
+            .enrollment_list(&caller, &proto::ListPendingRequest::default());
         assert_eq!(pending.err(), Some(refusal));
     }
 }

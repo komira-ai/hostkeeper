@@ -1,15 +1,15 @@
 //! `Enrollment.List` over the enrollment store and the host inventory: each pending request is
 //! shown with the one record it matches, none, or every candidate; a match approves nothing; a
-//! MAC bound to an enrolled host is a duplicate claim; the view pages oldest first.
+//! MAC bound to an enrolled host is a duplicate claim. Paging, tokens and an unreadable store are
+//! `list.rs`'s.
 
 use std::sync::Arc;
 
-use hostkeeper_enrollment::enroll::{ApproveError, Decision, RequestState};
-use hostkeeper_enrollment::names::Role;
+use hostkeeper_enrollment::enroll::RequestState;
 use hostkeeper_proto::hostkeeper::agent::v1::{EnrollResponse, EnrollState};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
-use super::support::{HostKey, NOW, Rig, approve, enroll_request, host_id};
+use super::support::{HostKey, Rig, approve, enroll_request};
 use crate::marks_support::operator;
 use crate::testutil::{Log, Rig as CoordinatorRig};
 
@@ -56,24 +56,16 @@ fn post(
     enrollment.enrollment.enroll(request).expect("posted")
 }
 
-fn pending(
-    rig: &CoordinatorRig,
-    limit: u32,
-    token: &str,
-) -> Result<proto::ListPendingResponse, Refusal> {
-    rig.coordinator.list_pending(
-        &operator(),
-        proto::ListPendingRequest {
-            limit,
-            page_token: token.to_owned(),
-        },
-    )
+fn pending(rig: &CoordinatorRig) -> proto::ListPendingResponse {
+    rig.coordinator
+        .enrollment_list(&operator(), &proto::ListPendingRequest::default())
+        .expect("listed")
 }
 
 /// The one pending request of `key`.
 fn shown(rig: &CoordinatorRig, key: &HostKey) -> proto::PendingEnrollment {
     let hex = key.key_hash().to_hex();
-    let all = pending(rig, 0, "").expect("listed").requests;
+    let all = pending(rig).requests;
     let mut found = all.into_iter().filter(|p| p.request_id == hex);
     let one = found.next().expect("listed");
     assert!(found.next().is_none());
@@ -189,28 +181,31 @@ fn a_matched_request_still_refuses_another_key() {
     let view = shown(&rig, &key);
     assert_eq!(view.inventory_match(), Match::Matched);
 
-    let decision = Decision {
-        host_id: host_id(&view.record_host_id),
-        role: Role::parse(&view.record_role).expect("a role"),
+    let approval = |key_sha256: String| proto::ApproveRequest {
+        request_id: key.key_hash().to_hex(),
+        key_sha256,
+        host_id: view.record_host_id.clone(),
+        role: view.record_role.clone(),
         services: Vec::new(),
         replace: false,
+        reason: "built today".to_owned(),
     };
     let other = HostKey::new();
+    let refused = rig
+        .coordinator
+        .enrollment_approve(&operator(), approval(other.key_hash().to_hex()));
+    assert_eq!(refused.err(), Some(Refusal::KeyMismatch));
     let store = enrollment.enrollment.store();
-    let refused = store.approve(&key.key_hash(), &other.key_hash(), &decision);
-    assert!(
-        matches!(refused, Err(ApproveError::KeyMismatch)),
-        "{refused:?}"
-    );
     let still = store.request(&key.key_hash()).expect("read").expect("held");
     assert_eq!(still.state, RequestState::Pending);
     assert_eq!(shown(&rig, &key).inventory_match(), Match::Matched);
 
-    let approved = store
-        .approve(&key.key_hash(), &key.key_hash(), &decision)
+    let approved = rig
+        .coordinator
+        .enrollment_approve(&operator(), approval(key.key_hash().to_hex()))
         .expect("its own key is approved");
-    assert_eq!(approved.host_id, host_id("db-1"));
-    assert_eq!(pending(&rig, 0, "").expect("listed").requests, Vec::new());
+    assert_eq!(approved.host_id, "db-1");
+    assert_eq!(pending(&rig).requests, Vec::new());
 }
 
 /// Catches: a second machine claiming a MAC of an enrolled host shown as an ordinary pending
@@ -245,75 +240,4 @@ fn a_mac_bound_to_an_enrolled_host_shows_as_a_duplicate_claim_with_an_alert() {
             && text.contains("a MAC is bound to an enrolled host"),
         "{text}"
     );
-}
-
-/// Catches: a pending view that is not oldest first, a page that repeats or skips a request, a
-/// next-page token on the last page, a token this call never gave let through, a coordinator
-/// without enrollment that refuses instead of listing nothing, and an unreadable store answered
-/// as an empty queue.
-#[test]
-fn the_pending_view_pages_oldest_first_and_says_when_the_store_cannot_be_read() {
-    let enrollment = Rig::new("inventory-pages");
-    let rig = coordinator("inventory-pages-coordinator", &enrollment);
-    let keys: Vec<HostKey> = (0..3).map(|_| HostKey::new()).collect();
-    for (n, key) in keys.iter().enumerate().rev() {
-        enrollment.clock.set(NOW + u64::try_from(n).expect("small"));
-        post(&enrollment, key, &format!("m-{n}"), &[], "");
-    }
-    let first = pending(&rig, 2, "").expect("a page");
-    let ids: Vec<&str> = first
-        .requests
-        .iter()
-        .map(|p| p.request_id.as_str())
-        .collect();
-    let hex: Vec<String> = keys.iter().map(|k| k.key_hash().to_hex()).collect();
-    assert_eq!(ids, [hex[0].as_str(), hex[1].as_str()]);
-    assert_eq!(first.next_page_token, format!("{}.{}", NOW + 1, hex[1]));
-    assert_eq!(first.requests[0].first_seen_unix, NOW);
-    assert_eq!(first.requests[0].inventory_match(), Match::Unmatched);
-    let second = pending(&rig, 2, &first.next_page_token).expect("a page");
-    let ids: Vec<&str> = second
-        .requests
-        .iter()
-        .map(|p| p.request_id.as_str())
-        .collect();
-    assert_eq!(
-        (ids, second.next_page_token.as_str()),
-        (vec![hex[2].as_str()], "")
-    );
-    let exact = pending(&rig, 3, "").expect("a page");
-    assert_eq!(
-        (exact.requests.len(), exact.next_page_token.as_str()),
-        (3, "")
-    );
-
-    let upper = format!("{NOW}.{}", hex[0].to_uppercase());
-    for token in [
-        "db-1",
-        "x.ab",
-        &format!("{NOW}"),
-        &format!("{NOW}.{}", &hex[0][1..]),
-        &upper,
-    ] {
-        assert_eq!(
-            pending(&rig, 0, token).err(),
-            Some(Refusal::InvalidRequest),
-            "{token}"
-        );
-    }
-
-    let without = CoordinatorRig::new("inventory-pages-none");
-    let none = without
-        .coordinator
-        .list_pending(&operator(), proto::ListPendingRequest::default())
-        .expect("no enrollment, nothing pending");
-    assert_eq!(none, proto::ListPendingResponse::default());
-
-    let file = enrollment
-        .files
-        .store
-        .join("requests")
-        .join(format!("{}.pb", hex[0]));
-    std::fs::write(&file, b"not a request").expect("spoiled");
-    assert_eq!(pending(&rig, 0, "").err(), Some(Refusal::StoreFailed));
 }

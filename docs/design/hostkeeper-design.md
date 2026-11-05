@@ -290,9 +290,8 @@ The operator API is protobuf services (`operator.proto`, PR #3) with an HTTP/JSO
 | `Releases` | `MarkBad`, `Halt`; `Force` gains targets (fleet, role or hosts) and `include_held` (section 5.6) | Designed (B1, B7) |
 | `Services` | `List` (includes holds), `Assign`, `Unassign`, `SetMinVersion` (per role or host), `Hold`, `Unhold` (host, role or fleet, section 5.4) | Designed (B1, B7, B23) |
 | `Hosts` | `Abort` (queued as an order for the host's next heartbeat; takes no slot), `Exclude --abandon` | Designed (B7) |
-| `Enrollment` | `List` (each pending request with its match against the host inventory, section 5.7) | Built (`crates/hostkeeper-coordinator/src/inventory.rs`) |
-| `Enrollment` | `AddRecord`, `ListRecords`, `RemoveRecord`: the host inventory (section 5.7) | Built (`crates/hostkeeper-coordinator/src/inventory.rs`) |
-| `Enrollment` | `Approve` | Designed (B17) |
+| `Enrollment` | `List`, `Approve` | Built (`crates/hostkeeper-coordinator/src/enrollment/list.rs`, `approve.rs`) |
+| `Enrollment` | `List` shows each pending request's match against the host inventory; `AddRecord`, `ListRecords`, `RemoveRecord` keep the inventory (section 5.7) | Built (`crates/hostkeeper-coordinator/src/inventory.rs`) |
 | `Audit` | `List` | Designed (B7) |
 
 The operator does not set the desired version: CI does (Q6).

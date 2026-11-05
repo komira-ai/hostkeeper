@@ -10,6 +10,7 @@
 //   hosts/<host id>.pb              Host
 //   deny/<host id>.pb               Deny
 //   serial.pb                       SerialCounter
+//   mac-nonces/<nonce sha256, hex>.pb  MacNonce
 //
 // Field 1 of every message is `schema`, and this release writes 1. A reader refuses a schema
 // above the one it knows, a missing schema, and a state value it does not know; it ignores
@@ -60,6 +61,15 @@ message Approval {
   repeated string services = 3;
   // The approval took the host id over from another key, or out of a deny row.
   bool replace = 4;
+  // Who approved it: the name of the operator's token, or `mdm-nonce` for a Mac approved by
+  // its nonce. Empty when the approval was recorded without one (no audit entry is due).
+  string approver = 5;
+  uint64 approved_unix = 6;
+  // The operator's reason.
+  string reason = 7;
+  // The SHA-256 of the Mac nonce this approval consumed; empty when none. This field is the
+  // consumption: the nonce's own file is marked after it, and again at the store's next open.
+  bytes mac_nonce_sha256 = 8;
 }
 
 message Request {
@@ -83,6 +93,8 @@ message Request {
   uint32 round = 11;
   // The serial reserved for this round's certificate; 0 until one is reserved.
   uint64 serial = 12;
+  // The host presented a Mac nonce with the request (the nonce itself is not kept here).
+  bool mac_nonce_presented = 13;
 }
 
 // The certificate made for one round of a request.
@@ -131,4 +143,15 @@ message Deny {
 message SerialCounter {
   uint32 schema = 1;
   uint64 next = 2;
+}
+
+// A one-time Mac nonce the policy gate issued for one serial. Only its SHA-256 is kept.
+message MacNonce {
+  uint32 schema = 1;
+  bytes nonce_sha256 = 2;
+  // The Mac serial number it was issued for.
+  string serial = 3;
+  uint64 issued_unix = 4;
+  // The request whose approval consumed it; empty while it is unused.
+  bytes consumed_by = 5;
 }
