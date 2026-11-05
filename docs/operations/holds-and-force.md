@@ -81,7 +81,7 @@ no hold is removed.
 
 A host that reports the force failed is not ordered again; a second force, to another version,
 orders it again. A force whose targets are all held or too old orders no host and still makes
-every change above. The force stands until CI sets another version or another force replaces it.
+every change above. The force stands until CI or an operator sets another version or another force replaces it.
 While it stands, the automatic rollback of the service is suspended, and the hosts it orders
 take no update slot.
 

@@ -23,6 +23,19 @@ Browse to `https://<private-address>/ui/` and paste an operator token when the p
 The page keeps the token in memory only and sends it on each API call; reloading the page asks for
 it again.
 
+## What the pages do for services
+
+- **Rollout**: for each service, the roles it is assigned to, the operator's assignments (a
+  removal is shown as one), the hosts it is assigned to, the hosts being uninstalled, and the
+  desired version. The same section sets the desired version (a version and, if you have it, the
+  package digest), assigns the service to a role, and unassigns it from a role, with a box to
+  uninstall it from each host that loses its last assignment. Setting the desired version and
+  unassigning with uninstall ask first.
+- **Host**: the services assigned to that host, how each is assigned (to the host or through its
+  role), the installed version against the desired one, and the minimum version.
+- Each action is one API call, and the Audit page shows it by the token's name. A refused call
+  shows the API's code and reason as they are.
+
 ## What is served
 
 - `GET` and `HEAD` of `/ui/` and of every path below it, on the private listener only. The

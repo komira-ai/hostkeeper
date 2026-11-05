@@ -366,6 +366,21 @@ pub fn lift_by_ci(
     version: &Version,
     workflow: &str,
 ) -> Result<Lifted, OpsError> {
+    lift_by_setter(ops, service, version, crate::reconcile::CI, workflow)
+}
+
+/// [`lift_by_ci`] for any setter of the desired version: the audit entry `lift_halt` is by
+/// `actor`, and its reason says the version was set by `set_by`.
+///
+/// # Errors
+/// [`OpsError`]: the ops file could not be written; the halt stands.
+pub(crate) fn lift_by_setter(
+    ops: &OpsStore,
+    service: &str,
+    version: &Version,
+    actor: &str,
+    set_by: &str,
+) -> Result<Lifted, OpsError> {
     let lifted = ops.decide_change(Write::BeforeMemory, |state| {
         let Some(marks) = state.services.get_mut(service) else {
             return Err(Unchanged::Known);
@@ -381,10 +396,10 @@ pub fn lift_by_ci(
         let Some(halt) = marks.halt.take().filter(|_| liftable) else {
             return Err(Unchanged::Known);
         };
-        let mut entry = AuditEntry::new(crate::reconcile::CI, "lift_halt");
+        let mut entry = AuditEntry::new(actor, "lift_halt");
         entry.service = Some(service.to_owned());
         entry.node_id = Some(halt.node_id.clone());
-        entry.reason = Some(format!("{version} set by {workflow}"));
+        entry.reason = Some(format!("{version} set by {set_by}"));
         let seen = std::mem::take(&mut marks.halt_seen);
         for report in std::iter::once(HaltAck::from(halt)).chain(seen) {
             marks.halt_acked.retain(|ack| ack.node_id != report.node_id);

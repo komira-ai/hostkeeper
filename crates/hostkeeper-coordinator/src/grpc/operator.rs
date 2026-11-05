@@ -277,15 +277,23 @@ impl ReleasesApi for ReleasesService {
         &self,
         request: Request<proto::SetDesiredRequest>,
     ) -> Result<Response<proto::SetDesiredResponse>, Status> {
-        let verified = match request.extensions().get::<Admitted>() {
-            Some(Admitted::Ci(verified)) => verified.clone(),
-            _ => return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized)),
+        let ci = match request.extensions().get::<Admitted>() {
+            Some(Admitted::Ci(verified)) => Some(verified.clone()),
+            _ => None,
+        };
+        let (ci, operator) = match (ci, caller_of(&request).operator()) {
+            (Some(verified), _) => (Some(verified), String::new()),
+            (None, Ok(name)) => (None, name.to_owned()),
+            (None, Err(_)) => {
+                return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
+            }
         };
         let body = desired_body(request.into_inner()).map_err(refusal::releases)?;
-        let set = self
-            .coordinator
-            .set_desired_verified(&verified, &body)
-            .map_err(|why| refusal::releases(set_refusal(why)))?;
+        let set = match &ci {
+            Some(verified) => self.coordinator.set_desired_verified(verified, &body),
+            None => self.coordinator.set_desired_operator(&operator, &body),
+        }
+        .map_err(|why| refusal::releases(set_refusal(why)))?;
         Ok(Response::new(proto::SetDesiredResponse {
             desired: Some(desired_proto(&set.desired)),
             record: None,
@@ -299,7 +307,7 @@ impl ReleasesApi for ReleasesService {
     ) -> Result<Response<proto::ConvergeResponse>, Status> {
         if !matches!(
             request.extensions().get::<Admitted>(),
-            Some(Admitted::Ci(_))
+            Some(Admitted::Ci(_) | Admitted::Operator { .. })
         ) {
             return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
         }

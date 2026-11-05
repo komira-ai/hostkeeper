@@ -48,7 +48,7 @@
 //! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
-//!   token, the status read by the operator token;
+//!   token or an operator token, the status read by the operator token;
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`stamp`]: the commit and the version `--version` prints;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private

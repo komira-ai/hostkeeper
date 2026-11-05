@@ -124,7 +124,13 @@ fn host_page_shows_services_marks_and_last_update() {
         }}),
     );
     let out = render(&mut ui, "host", r#"{ nodeId: "web-2" }"#);
-    assert_eq!(bodies(&ui), [(m("Hosts/Get"), json!({"nodeId": "web-2"}))]);
+    assert_eq!(
+        bodies(&ui),
+        [
+            (m("Hosts/Get"), json!({"nodeId": "web-2"})),
+            (m("Services/List"), json!({})),
+        ]
+    );
     assert_shows(
         &out,
         &[
@@ -238,6 +244,7 @@ return {
         bodies(&ui),
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
+            (m("Services/List"), json!({})),
             (
                 m("Hosts/Exclude"),
                 json!({"service": "api", "nodeId": "web-2", "reason": reason, "abandon": false})
@@ -377,6 +384,7 @@ return shown;
         bodies(&ui),
         [
             (m("Hosts/Get"), json!({"nodeId": "web-3"})),
+            (m("Services/List"), json!({})),
             (
                 m("Hosts/SetLabels"),
                 json!({"nodeId": "web-3", "labels": {}})
@@ -412,7 +420,7 @@ fn rollout_page_shows_desired_against_converged() {
     let mut ui = Ui::start();
     ui.reply(&m("Releases/Status"), status_reply());
     let out = render(&mut ui, "rollout", "{}");
-    assert_eq!(ui.methods(), [m("Releases/Status")]);
+    assert_eq!(ui.methods(), [m("Releases/Status"), m("Services/List")]);
     assert_shows(
         &out,
         &[
@@ -435,7 +443,7 @@ fn rollout_page_shows_desired_against_converged() {
             "converged",
             "none set",
             "Halt",
-            "CI sets the desired version",
+            "CI or an operator sets the desired version",
         ],
     );
 }
@@ -480,6 +488,7 @@ await click(tree, "converge");
         bodies(&ui),
         [
             (m("Releases/Status"), json!({})),
+            (m("Services/List"), json!({})),
             (
                 m("Releases/MarkBad"),
                 json!({"service": "api", "version": "1.4.0", "reason": "crash loop"})
@@ -847,7 +856,10 @@ return text(await render(other));
 #[test]
 fn every_page_shows_the_refusal_when_its_call_is_unimplemented() {
     // Catches: a page that shows nothing, or a blank, when the gateway does not serve its method
-    // yet (its handler has not merged).
+    // yet (its handler has not merged). A page asks once, except the host page, which also asks
+    // Services.List for its assigned services after Hosts.Get fails and shows both refusals.
+    // The rollout page stops at its first call: without Releases.Status it has no services to
+    // show, so it never asks Services.List.
     for (page, params) in [
         ("fleet", "{}"),
         ("host", r#"{ nodeId: "web-1" }"#),
@@ -863,7 +875,14 @@ fn every_page_shows_the_refusal_when_its_call_is_unimplemented() {
             "{page}: {}",
             shown(&out)
         );
-        assert_eq!(ui.requests().len(), 1, "{page}");
+        let expected = if page == "host" { 2 } else { 1 };
+        assert_eq!(ui.requests().len(), expected, "{page}");
+        if page == "host" {
+            assert_eq!(
+                shown(&out).matches("UNIMPLEMENTED unimplemented").count(),
+                2
+            );
+        }
     }
 }
 

@@ -18,9 +18,9 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Linux host | the daemon runs each step through `SystemdLauncher` | — |
 | running a hook step on a Mac | `LaunchdLauncher` (`hostkeeper-launchd`) | the daemon running its steps through it (`docs/macos.md`) |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
-| assigning to a role | the rollout file's `roles`, `Services.Assign` and the coordinator's `install` order (komira-ai/hostkeeper#45) | the daemon announcing `install-v1`, without which it is never ordered an install |
-| setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow | a UI control: the Rollout page shows the desired version and does not set it |
-| unassigning with uninstall | the daemon's uninstall verb, hello's `uninstall` step and `Services.Unassign` (komira-ai/hostkeeper#45) | the daemon announcing `install-v1`, and a UI control |
+| assigning to a role | the rollout file's `roles`, `Services.Assign` (komira-ai/hostkeeper#45), the Rollout page's Assign, and the coordinator's `install` order | the daemon announcing `install-v1`, without which it is never ordered an install |
+| setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow, the Rollout page's Set desired (through the gateway) | — |
+| unassigning with uninstall | the daemon's uninstall verb, hello's `uninstall` step, `Services.Unassign` (komira-ai/hostkeeper#45) and the Rollout page's Unassign | the daemon announcing `install-v1` |
 
 ## The package
 
@@ -88,10 +88,16 @@ install on each host of the role that does not run hello (`docs/operations/assig
 **Specified, not built:** the install goes only to a daemon that announces `install-v1`, which
 the daemon does not yet. Nothing is ordered until a desired version is set.
 
+An alternative to the rollout entry: in the Rollout page, section `hello`, type the role in
+`Role` and press `Assign to the role`.
+
 A host enrolled after this joins the role through its approval:
 `hostkeeper ctl enrollment approve ... --role <role>`.
 
 **Watch:** nothing is ordered yet. The Rollout page's section `hello` shows `Desired` as
+`none set`. After an Assign in the page, `Assigned roles` lists the role and `Operator
+assignments` shows `role <role>`. The Audit page shows an `assign` entry by the token's name. The
+Host page's `Assigned services` lists hello for each host of the role, with `Desired` as
 `none set`.
 
 ## 2. Set v1 and watch it converge
@@ -108,6 +114,9 @@ hostkeeper ctl --endpoint <coordinator> --ca-file <ca.pem> --token-file <token> 
 or let CI do it with the set-desired workflow (`docs/deploy/ci-client.md`), with
 `service: hello`.
 
+Or use the Rollout page, section `hello`: type `<v1>` in `Version` and the digest in `Package
+digest`, press `Set desired` and confirm. The page keeps the limits CI set earlier.
+
 **Watch:**
 
 - Rollout, section `hello`: `Desired` is `<v1>`. The canary host goes first, then the others
@@ -115,19 +124,24 @@ or let CI do it with the set-desired workflow (`docs/deploy/ci-client.md`), with
 - Fleet: each host shows `hello <v1>, healthy`. Healthy is the daemon's own probe of
   `/readyz` on each running slot.
 - Host, `Last update`: `Verdict` succeeded, the steps prepare, cutover, verify and cleanup.
+  `Assigned services` shows hello with `Installed` and `Desired` both `<v1>`, and `State` `at
+  desired`; while the host is behind it shows `behind`.
+- Audit: a `set_desired` entry by the token's name, when an operator set it in the page.
 
 After the hosts have baked (two healthy beats each), `<v1>` is hello's last good version.
 
 ## 3. Set v2
 
-Repeat step 2 with the next release, `<v2>`, and its digest.
+Repeat step 2 with the next release, `<v2>`, and its digest (in the Rollout page's `Set
+desired`, or the other ways).
 
 **Watch:** the same pages. On each host the other slot now serves, at `<v2>`, and the one
 that served `<v1>` is stopped. When the hosts have baked, `<v2>` is the last good version.
 
 ## 4. A failing build: watch the automatic rollback
 
-Set the desired version to `<v2>-fail-ready`, with the digest of its package. That build runs
+Set the desired version to `<v2>-fail-ready`, with the digest of its package (the Rollout page's
+`Set desired` does it). That build runs
 the server with `--fail-ready`, so `/readyz` answers 503. (Its `/version` answers `<v2>`: `verify`
 stops at the 503 and never compares it.)
 
@@ -146,8 +160,10 @@ One failed host is enough for the rollback: the entry sets `rollback_after_faile
 
 ## 5. Unassign with uninstall
 
-**Specified, not built:** the uninstall goes only to a daemon that announces `install-v1`, and
-the UI has no control for it. Unassign hello from the role (`--role <role>`) or from each host:
+**Specified, not built:** the uninstall goes only to a daemon that announces `install-v1`.
+Unassign hello in the Rollout page, section `hello`: type the role in `Role`, tick `Uninstall
+from each host that loses its last assignment`, press `Unassign from the role` and confirm. Or
+unassign it from the role (`--role <role>`) or from each host with ctl:
 
 ```sh
 hostkeeper ctl ... services unassign --node-id <host> --service hello --uninstall true
@@ -157,7 +173,9 @@ The daemon then runs hello's `uninstall` step, which stops both slots and remove
 record. It then removes hello's placed units, its package directory and its step records.
 Remove the entry from the rollout file afterwards.
 
-**Watch:** Fleet. The host no longer lists hello.
+**Watch:** Fleet. The host no longer lists hello. The Audit page shows an `unassign` entry by the
+token's name. The Rollout page's `Uninstalling` lists the hosts until each reports hello gone,
+and the Host page's `Assigned services` shows hello with `State` `uninstalling`.
 
 ## What the proof does not show
 

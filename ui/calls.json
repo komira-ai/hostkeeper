@@ -17,10 +17,13 @@
     { "method": "hostkeeper.operator.v1.Releases/Force", "pages": ["rollout"] },
     { "method": "hostkeeper.operator.v1.Releases/Halt", "pages": ["rollout"] },
     { "method": "hostkeeper.operator.v1.Releases/MarkBad", "pages": ["rollout"] },
+    { "method": "hostkeeper.operator.v1.Releases/SetDesired", "pages": ["rollout"] },
     { "method": "hostkeeper.operator.v1.Releases/Status", "pages": ["fleet", "rollout"] },
     { "method": "hostkeeper.operator.v1.Releases/UnmarkBad", "pages": ["rollout"] },
+    { "method": "hostkeeper.operator.v1.Services/Assign", "pages": ["rollout"] },
     { "method": "hostkeeper.operator.v1.Services/Hold", "pages": ["holds", "host"] },
-    { "method": "hostkeeper.operator.v1.Services/List", "pages": ["holds"] },
+    { "method": "hostkeeper.operator.v1.Services/List", "pages": ["holds", "host", "rollout"] },
+    { "method": "hostkeeper.operator.v1.Services/Unassign", "pages": ["rollout"] },
     { "method": "hostkeeper.operator.v1.Services/Unhold", "pages": ["holds", "host"] }
   ]
 }

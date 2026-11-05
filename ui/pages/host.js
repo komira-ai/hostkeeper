@@ -1,9 +1,10 @@
 // Host: one host's services, holds, marks and last update, and what an operator may do to it.
-// Calls: Hosts.Get; on a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort,
-// Hosts.SetLabels, Services.Hold and Services.Unhold.
+// Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
+// when Hosts.Get fails, and each failure is shown as is); on a button, one of Hosts.Exclude,
+// Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold and Services.Unhold.
 
 import {
-  h, action, checkbox, enumLabel, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, table,
+  h, action, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, table,
   trimmed,
 } from "../view.js";
 
@@ -133,6 +134,46 @@ function serviceSection(ctx, nodeId, view) {
         })))));
 }
 
+// The rows of the services Services.List assigns to `nodeId`, or orders it to uninstall.
+function assignedRows(entries, nodeId) {
+  const rows = [];
+  for (const entry of entries) {
+    const desired = typeof entry.desiredVersion === "string" ? entry.desiredVersion : null;
+    const mine = list(entry, "assigned").find((a) => a.nodeId === nodeId);
+    if (mine) {
+      const direct = list(entry, "assignments").some((given) => given["host"] === nodeId && given.removed !== true);
+      const installed = typeof mine.installedVersion === "string" ? mine.installedVersion : null;
+      let state = "behind";
+      if (desired === null) {
+        state = "-";
+      } else if (installed === null) {
+        state = "not installed";
+      } else if (installed === desired) {
+        state = "at desired";
+      }
+      rows.push([entry.service, direct ? "this host" : `role ${mine.role}`, installed || "not installed",
+        desired || "none set", state, mine.minVersion || "-"]);
+    } else if (list(entry, "uninstalling").includes(nodeId)) {
+      rows.push([entry.service, "-", "-", desired || "none set", "uninstalling", "-"]);
+    }
+  }
+  return rows;
+}
+
+// `listing` is `{entries}` of Services.List, or `{error}` when it failed.
+function assignedSection(listing, nodeId) {
+  if (listing.error) {
+    return h("section", { class: "assigned" }, h("h3", {}, "Assigned services"),
+      h("p", { class: "error", role: "alert" }, describeError(listing.error)));
+  }
+  const rows = assignedRows(listing.entries, nodeId);
+  return h("section", { class: "assigned" }, h("h3", {}, "Assigned services"),
+    rows.length === 0
+      ? h("p", {}, "No service is assigned to this host.")
+      : table(["Service", "Through", "Installed", "Desired", "State", "Minimum"],
+        rows.map((cells) => h("tr", {}, cells.map((c) => h("td", {}, c))))));
+}
+
 function chooser(ctx) {
   const form = { nodeId: "" };
   return h("section", { class: "page" },
@@ -154,10 +195,21 @@ export async function render(ctx) {
     return chooser(ctx);
   }
   let host;
+  let failure = null;
   try {
     host = (await ctx.api.call("hostkeeper.operator.v1.Hosts/Get", { nodeId })).host || {};
   } catch (error) {
-    return errorView(`Host ${nodeId}`, error);
+    failure = error;
+  }
+  let listing;
+  try {
+    listing = { entries: list(await ctx.api.call("hostkeeper.operator.v1.Services/List", {}), "services") };
+  } catch (error) {
+    listing = { error };
+  }
+  if (failure !== null) {
+    return h("section", { class: "page" },
+      errorView(`Host ${nodeId}`, failure).children, assignedSection(listing, nodeId));
   }
   const agent = host.heartbeat && host.heartbeat.agent;
   const labelsForm = {
@@ -191,5 +243,6 @@ export async function render(ctx) {
         ctx.refresh();
         return `Labels of ${nodeId} set.`;
       })),
+    assignedSection(listing, nodeId),
     list(host, "services").map((view) => serviceSection(ctx, nodeId, view)));
 }

@@ -341,10 +341,11 @@ async fn hosts_answers_a_failed_write_of_the_ops_file_store_failed() {
     );
 }
 
-/// Proves that `Releases.SetDesired` is CI's: a call with no admission, and one admitted as the
-/// operator, are `unauthorized` and set nothing.
+/// Proves that `Releases.SetDesired` is for CI and the operator only: a call with no admission,
+/// one admitted as a peer, and one whose caller the router found to be CI under an operator
+/// admission are `unauthorized` and set nothing.
 #[tokio::test]
-async fn set_desired_refuses_a_call_that_was_not_admitted_as_ci() {
+async fn set_desired_refuses_a_call_that_was_not_admitted_as_ci_or_the_operator() {
     let world = world_of("adapters-set-callers", None);
     let before = world.file("desired.json");
     assert_refused(
@@ -354,9 +355,16 @@ async fn set_desired_refuses_a_call_that_was_not_admitted_as_ci() {
         Code::Unauthenticated,
         "unauthorized",
     );
+    let mut peer = Request::new(set_request("kbf", "2.0"));
+    peer.extensions_mut().insert(Admitted::Peer(None));
+    assert_refused(
+        releases(&world).set_desired(peer).await,
+        Code::Unauthenticated,
+        "unauthorized",
+    );
     assert_refused(
         releases(&world)
-            .set_desired(as_operator(&world.coordinator, set_request("kbf", "2.0")).await)
+            .set_desired(as_ci_caller(set_request("kbf", "2.0")))
             .await,
         Code::Unauthenticated,
         "unauthorized",
@@ -505,10 +513,10 @@ async fn set_desired_answers_the_state_as_stored_and_the_roles_it_dropped() {
     assert_eq!(reply.dropped_roles, ["search"]);
 }
 
-/// Proves that `Releases.Converge` is CI's: a call with no admission, and one admitted as the
-/// operator, are `unauthorized`.
+/// Proves that `Releases.Converge` is for CI and the operator only: a call with no admission,
+/// and one admitted as a peer, are `unauthorized`.
 #[tokio::test]
-async fn converge_refuses_a_call_that_was_not_admitted_as_ci() {
+async fn converge_refuses_a_call_that_was_not_admitted_as_ci_or_the_operator() {
     let world = world_of("adapters-converge-callers", None);
     let request = || proto::ConvergeRequest {
         service: "kbf".to_owned(),
@@ -518,10 +526,10 @@ async fn converge_refuses_a_call_that_was_not_admitted_as_ci() {
         Code::Unauthenticated,
         "unauthorized",
     );
+    let mut peer = Request::new(request());
+    peer.extensions_mut().insert(Admitted::Peer(None));
     assert_refused(
-        releases(&world)
-            .converge(as_operator(&world.coordinator, request()).await)
-            .await,
+        releases(&world).converge(peer).await,
         Code::Unauthenticated,
         "unauthorized",
     );
