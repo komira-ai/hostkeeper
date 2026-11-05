@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use hostkeeper_link::testing::{FakeClock, ScriptedSleeper, verdict};
 use hostkeeper_link::{
-    ANNOUNCED, BeatOutcome, ClockSleeper, Health, Heartbeat, LinkError, Liveness, Observation,
-    Observed, OrderResult, Outcome, Platform, RecordedService, Reply, ServiceFacts, Sleeper,
-    StopFlag, Tick,
+    ANNOUNCED, Acknowledged, BeatOutcome, ClockSleeper, Health, Heartbeat, LinkError, Liveness,
+    Observation, Observed, OrderResult, Outcome, Platform, RecordedService, Reply, ServiceFacts,
+    Sleeper, StopFlag, Tick,
 };
 use hostkeeper_steps::Clock;
 
@@ -169,7 +169,10 @@ fn a_service_listed_again_takes_its_record_and_keeps_what_was_counted() {
     rig.install(vec![with(&old)]);
     let mut heartbeater = rig.heartbeater();
     rig.world.link.answer(Ok(Reply {
-        acknowledged: vec![old.order.clone()],
+        acknowledged: vec![Acknowledged {
+            service: service("x"),
+            order: old.order.clone(),
+        }],
         ..Reply::default()
     }));
     heartbeater.beat_once();

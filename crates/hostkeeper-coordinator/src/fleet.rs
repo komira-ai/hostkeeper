@@ -185,6 +185,12 @@ impl Fleet {
         }
     }
 
+    /// The same fleet ordering nothing for `quiet` after its start: what it holds (the verdicts
+    /// counted before a restart among it) is kept.
+    pub(crate) fn set_quiet(&mut self, quiet: Duration) {
+        self.quiet = quiet;
+    }
+
     /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the
     /// coordinator's start.
     #[must_use]
@@ -200,6 +206,16 @@ impl Fleet {
         version: &Version,
     ) -> impl Iterator<Item = (&HostId, &UpdateResult)> {
         self.verdicts.of(service, version)
+    }
+
+    /// Every verdict of `service` counted ([`crate::verdicts::Verdicts::all_of`]).
+    pub(crate) fn counted_of(&self, service: &str) -> Vec<(HostId, UpdateResult)> {
+        self.verdicts.all_of(service)
+    }
+
+    /// Counts again a verdict counted before a restart ([`crate::verdicts::Verdicts::restore`]).
+    pub(crate) fn restore_verdict(&mut self, service: &str, id: HostId, report: UpdateResult) {
+        self.verdicts.restore(service, id, report);
     }
 
     /// Forgets the verdicts of `service` about any version but `version`, its desired one, and

@@ -60,6 +60,11 @@ impl Nonces {
         Some(nonce)
     }
 
+    /// Fills `buffer` with random bytes from the same source; `false` when it could not.
+    pub fn fill(&self, buffer: &mut [u8]) -> bool {
+        (self.random)(buffer)
+    }
+
     /// Whether `nonce` was given for `request` and not yet taken. It is taken now: a second
     /// `Poll` with it is refused.
     pub fn take(&self, request: &KeyHash, nonce: &[u8]) -> bool {

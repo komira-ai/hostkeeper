@@ -140,6 +140,7 @@ fn full_request() -> EnrollRequest {
             ],
             mac_serial: Some("mac-serial-1".to_owned()),
             platform_uuid: Some("platform-uuid-1".to_owned()),
+            bmc_mac: Some("0c:c4:7a:00:00:01".to_owned()),
         },
         image: "image-1".to_owned(),
         renewal_of: Some(host()),
@@ -426,6 +427,7 @@ fn an_enroll_request_goes_field_for_field_and_its_answer_is_read() {
                     ],
                     mac_serial: "mac-serial-1".to_owned(),
                     platform_uuid: "platform-uuid-1".to_owned(),
+                    bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
                 }),
                 image: "image-1".to_owned(),
                 renewal_of: "web-1".to_owned(),
@@ -731,13 +733,14 @@ fn a_renewal_without_a_usable_certificate_and_key_sends_nothing() {
 /// The message of the error for the endpoint `text`.
 fn endpoint_error(text: &str) -> String {
     format!(
-        "the coordinator endpoint {text:?} is not host:port (with or without a leading https://), with a DNS name or an IP address as the host"
+        "the coordinator endpoint {text:?} is not host:port, or an https:// URL of a host with an optional port, with a DNS name or an IP address as the host"
     )
 }
 
-/// Catches an endpoint taken that is not a host and a port (a missing port, a scheme other than
-/// https, a user, a path, a query, a space, a host that is not a name or an address) and one that
-/// is refused: `host:port`, the same under a leading `https://`, and a bracketed IPv6 address.
+/// Catches an endpoint taken that is not a host and a port (a bare host with no port, a scheme
+/// other than https, a user, a path, a query, a space, a host that is not a name or an address)
+/// and one that is refused: `host:port`, the same under a leading `https://`, a bracketed IPv6
+/// address, and an `https://` URL with no port, which is port 443, with or without a final `/`.
 #[test]
 fn an_endpoint_is_a_host_and_a_port() {
     for text in [
@@ -750,6 +753,8 @@ fn an_endpoint_is_a_host_and_a_port() {
         "127.0.0.1:1/path",
         "127.0.0.1:1?query",
         "-x:1",
+        "https://127.0.0.1/path",
+        "https://user@127.0.0.1",
     ] {
         let error = GrpcEnroll::new(text, nowhere(), TIMEOUT).expect_err(text);
         assert_eq!(error.to_string(), endpoint_error(text));
@@ -773,6 +778,19 @@ fn an_endpoint_is_a_host_and_a_port() {
             "{text}"
         );
         assert_eq!(target.uri.to_string(), format!("https://{shown}/"));
+    }
+    for text in [
+        "https://coordinator.example",
+        "https://coordinator.example/",
+    ] {
+        let grpc = GrpcEnroll::new(text, nowhere(), TIMEOUT).expect(text);
+        let target = &grpc.target;
+        assert_eq!(
+            (target.host.as_str(), target.port, target.shown.as_str()),
+            ("coordinator.example", 443, "coordinator.example:443"),
+            "{text}"
+        );
+        assert_eq!(target.uri.to_string(), "https://coordinator.example/");
     }
 }
 

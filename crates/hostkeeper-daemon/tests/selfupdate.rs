@@ -202,7 +202,7 @@ async fn the_daemon_stops_serving_once_its_restart_is_asked() {
     let s = SelfRig::new("su-serve");
     let started = start::startup(&s.rig.settings(), s.rig.ports(), own(OLD)).expect("started");
     let daemon = Arc::clone(started.daemon());
-    let served = tokio::spawn(start::serve(started));
+    let served = tokio::spawn(start::serve(started, support::idle_links()));
     daemon.ctx().restart().request();
     let ended = served.await.expect("the server task");
     assert!(ended.is_ok(), "{ended:?}");

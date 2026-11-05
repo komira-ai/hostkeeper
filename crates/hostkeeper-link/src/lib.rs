@@ -51,7 +51,9 @@ pub use heartbeater::{
 };
 pub use mtls::{Conn, EndpointError, HEAD_MAX, JsonMtlsLink, REPLY_MAX, Transport};
 pub use names::{OrderId, PackageDigest, Reason, WordError};
-pub use order::{DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb};
+pub use order::{
+    Acknowledged, DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
+};
 pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, HeldHalts, Job,

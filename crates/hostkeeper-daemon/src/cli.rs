@@ -21,15 +21,22 @@
 //! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
 
 use std::ffi::OsString;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_ctl::transport::Network;
 use hostkeeper_ctl::{Connect, Io};
+use hostkeeper_enroll::{
+    Enroller, GrpcEnroll, LinuxClaims, OsEntropy, PkiDir, Settings as EnrollSettings,
+    SystemWallClock,
+};
+use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
 use hostkeeper_package::gh::{GhVerifier, OwnedBy, SystemRunner};
 use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_package::ports::{Attest, Attested, Verifier, VerifyError};
@@ -40,13 +47,15 @@ use hostkeeper_unpack::Owner;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-use crate::executor::{Placement, Ports};
+use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
+use crate::links::{DaemonLog, Links, NoLink};
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::observer::host_observer;
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::start::{self, Settings, StartError};
+use crate::unix_clock::SystemUnixClock;
 
 pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
 
@@ -72,6 +81,11 @@ pub const SIGSTORE_TRUSTED_ROOT: &str = "/usr/lib/hostkeeper/trusted_root.json";
 pub const GH_HOME: &str = ".gh";
 /// How often each service's dead-man looks at its running step on a host, in seconds.
 pub const DEADMAN_POLL_SECS: u64 = 1;
+/// The pki directory: the host's key and its certificate generations, `current` the one in use
+/// (design section 10).
+pub const PKI_DIR: &str = "/etc/updater/pki";
+/// How long the enrollment loop's connection, handshake and each call to the coordinator may take.
+pub const ENROLL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// hostkeeper: keeps a host's services on the versions its coordinator orders.
 #[derive(Debug, Parser)]
@@ -133,6 +147,9 @@ pub struct DaemonFlags {
     /// of `Type=notify`) once its boot work is over.
     #[arg(long)]
     pub notify_systemd: bool,
+    /// The heartbeat loop's flag: `--heartbeat-secs`.
+    #[command(flatten)]
+    pub link: LoopFlags,
 }
 
 impl DaemonFlags {
@@ -181,8 +198,9 @@ pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
         }
         Command::Ci(command) => return hostkeeper_ci::run(command),
     };
+    let period = flags.link.heartbeat_secs;
     let started = notifier(&flags, notify_socket)
-        .and_then(|notifier| daemon(&flags.settings(), notifier.as_ref()));
+        .and_then(|notifier| daemon(&flags.settings(), period, notifier.as_ref()));
     started.err().map_or(ExitCode::SUCCESS, report)
 }
 
@@ -230,23 +248,93 @@ fn report(error: StartError) -> ExitCode {
     ExitCode::from(error.exit_code())
 }
 
-/// Starts the daemon and serves it, returning only on an error.
-fn daemon(settings: &Settings, notifier: &dyn ReadyNotifier) -> Result<(), StartError> {
+/// Starts the daemon and serves it, beating every `period` seconds, returning only on an error
+/// or for its own update.
+fn daemon(
+    settings: &Settings,
+    period: NonZeroU64,
+    notifier: &dyn ReadyNotifier,
+) -> Result<(), StartError> {
     let own_version = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION"))?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build();
     let runtime = runtime.map_err(StartError::Runtime)?;
-    runtime.block_on(start_and_serve(settings, own_version, notifier))
+    runtime.block_on(start_and_serve(settings, period, own_version, notifier))
 }
 
 async fn start_and_serve(
     settings: &Settings,
+    period: NonZeroU64,
     own_version: HostkeeperVersion,
     notifier: &dyn ReadyNotifier,
 ) -> Result<(), StartError> {
-    let started = start_with(settings, &HostFiles::host(), own_version, notifier)?;
-    start::serve(started).await
+    let files = HostFiles::host();
+    let started = start_with(settings, &files, own_version, notifier)?;
+    let links = host_links(started.daemon(), &files, period);
+    start::serve(started, links).await
+}
+
+/// The enrollment and heartbeat loops of a host ([`Links`]), over the pki directory of `files`:
+///
+/// - the enrollment loop's enroller is made on its own worker ([`host_enroller`]): gRPC with TLS
+///   to the daemon config's `coordinator`, pinned to its `ca_sha256`, the key and the
+///   certificate generations in the pki directory, the host's Linux claims;
+/// - the heartbeat loop reads the certificate and key of the pki directory's `current` link at
+///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock;
+///   this build has no coordinator link yet ([`NoLink`]), so every heartbeat ends unsent;
+/// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
+/// - both loops log through the daemon's alert sink ([`DaemonLog`]).
+pub fn host_links(daemon: &Arc<Daemon>, files: &HostFiles, period: NonZeroU64) -> Links {
+    let ctx = daemon.ctx();
+    let log = Arc::new(DaemonLog::new(Arc::clone(daemon)));
+    let stop = StopFlag::default();
+    let endpoint = ctx.config.coordinator.as_str().to_owned();
+    let settings = EnrollSettings {
+        ca_sha256: ctx.config.ca_sha256.clone(),
+        image: image_of(ctx.own_version),
+    };
+    let pki = files.pki.clone();
+    Links {
+        enroller: Box::new(move || host_enroller(&endpoint, &pki, settings)),
+        link: Arc::new(NoLink),
+        certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
+        clock: Arc::new(SystemUnixClock),
+        log,
+        sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
+        period,
+        dispatch: Arc::new(ThreadDispatch),
+        stop,
+    }
+}
+
+/// What the enrollment request says the daemon came from: this binary, `hostkeeper-<version>`.
+pub fn image_of(own_version: HostkeeperVersion) -> String {
+    format!("hostkeeper-{own_version}")
+}
+
+/// The enroller of a host: [`GrpcEnroll`] to `endpoint`, the pki directory at `pki` (its
+/// `current` generation is what a renewal presents), [`LinuxClaims::host`], the operating
+/// system's entropy, the wall clock for the certificates' validity alone, and the monotonic
+/// clock for the retries. Opening it takes the pki directory's lock and finishes what a crash
+/// left there. `Err` names what refused: the endpoint, the runtime or the pki directory.
+pub fn host_enroller(
+    endpoint: &str,
+    pki: &Path,
+    settings: EnrollSettings,
+) -> Result<Enroller, String> {
+    let store = PkiDir::new(pki);
+    let coordinator = GrpcEnroll::new(endpoint, store.current_paths(), ENROLL_TIMEOUT)
+        .map_err(|error| error.to_string())?;
+    let ports = hostkeeper_enroll::Ports {
+        coordinator: Box::new(coordinator),
+        store: Box::new(store),
+        claims: Box::new(LinuxClaims::host()),
+        entropy: Box::new(OsEntropy),
+        wall: Box::new(SystemWallClock),
+        clock: Box::new(SystemClock),
+    };
+    Enroller::open(settings, ports).map_err(|error| error.to_string())
 }
 
 /// Starts the daemon on the ports of the host's build, reading the host's own files from
@@ -263,7 +351,7 @@ pub fn start_with(
         .and_then(|ports| start::startup_notifying(settings, ports, own_version, notifier))
 }
 
-/// The files outside the daemon's own directories that the host's ports read.
+/// The files outside the daemon's own directories that the host's ports and loops read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostFiles {
     /// The CA bundle, PEM: the roots the package fetch trusts.
@@ -272,15 +360,19 @@ pub struct HostFiles {
     pub gh: PathBuf,
     /// The Sigstore trusted root.
     pub trusted_root: PathBuf,
+    /// The pki directory, which the enrollment loop writes and the heartbeat loop reads.
+    pub pki: PathBuf,
 }
 
 impl HostFiles {
-    /// Where a host keeps them: [`CA_BUNDLE`], [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`].
+    /// Where a host keeps them: [`CA_BUNDLE`], [`GH_BINARY`], [`SIGSTORE_TRUSTED_ROOT`] and
+    /// [`PKI_DIR`].
     pub fn host() -> HostFiles {
         HostFiles {
             ca_bundle: PathBuf::from(CA_BUNDLE),
             gh: PathBuf::from(GH_BINARY),
             trusted_root: PathBuf::from(SIGSTORE_TRUSTED_ROOT),
+            pki: PathBuf::from(PKI_DIR),
         }
     }
 }
@@ -343,9 +435,8 @@ impl Verifier for HostVerifier {
 /// The ports of this build. The package store is the real one ([`RealPackages`]: HTTPS over the
 /// CA bundle of `files`, `gh` for the attestation, unpacked into `--packages-dir` as root); the
 /// observer looks through `systemctl`, `/proc` and TCP ([`host_observer`]). The host's step
-/// launcher and service manager are not part of this build yet, and no order reaches the daemon
-/// yet (the heartbeat loop that brings them comes later): until they are wired in, an order that
-/// did come would be refused when it reached them, never run. Placed paths are linked under the
+/// launcher and service manager are not part of this build yet: until they are wired in, an
+/// order that reached them would be refused there, never run. Placed paths are linked under the
 /// host's own directories, `--packages-dir` being the packages directory; the prune of step 18
 /// of a force deletes nothing yet. The directory `gh` runs in (`<state-dir>/.gh`) is made mode 0700
 /// here. `Err` when that directory cannot be made or the packages directory cannot be opened.

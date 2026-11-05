@@ -62,7 +62,7 @@ const PREVIOUS: &str = r#"{
 /// (`deny_unknown_fields`), which refuse a key they do not know.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PreviousOps {
+pub(crate) struct PreviousOps {
     schema: u32,
     #[serde(default)]
     hosts: std::collections::BTreeMap<String, Value>,
@@ -103,7 +103,7 @@ impl PreviousService {
 
 impl PreviousOps {
     /// What the previous release makes of `text`: its state, or its refusal.
-    fn read(text: &str) -> Result<Self, String> {
+    pub(crate) fn read(text: &str) -> Result<Self, String> {
         serde_json::from_str(text).map_err(|e| e.to_string())
     }
 

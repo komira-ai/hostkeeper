@@ -15,9 +15,10 @@
 //! sent without it.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
-//! services the daemon could run (a name outside its grammar names none). This wire has no
-//! acknowledgement, so none is read: a verdict is sent in every heartbeat, as the coordinator of
-//! this route expects. An update is the loop's update order when the answer carries its terms
+//! services the daemon could run (a name outside its grammar names none). The verdicts the
+//! coordinator acknowledges (`acks`, sent to an agent that announced `verdict-acks-v1`) whose
+//! service and order id the daemon's grammars read; one they do not names no verdict the daemon
+//! sent, and is dropped. An update is the loop's update order when the answer carries its terms
 //! (the order id, try and package digest a coordinator sends to an agent that announced
 //! `order-v1`) and the daemon's grammars read every word of it. Any other update (one with no
 //! service, the legacy service's; one with no terms, from a coordinator that sends none; one
@@ -33,7 +34,7 @@ use hostkeeper_wire::Platform as WirePlatform;
 use hostkeeper_wire::version::Version as WireVersion;
 use hostkeeper_wire::wire::{
     self, Agent, AgentName, Answer, OrderId as WireOrderId, PackageDigest as WirePackageDigest,
-    ServiceBeat, ServiceReply, UpdateResult, is_service_name,
+    ServiceBeat, ServiceReply, UpdateResult, VerdictAck, is_service_name,
 };
 use hostkeeper_wire::wire_report::{
     Class as WireClass, DeferredReport as WireDeferred, Phase as WirePhase, Token,
@@ -41,7 +42,9 @@ use hostkeeper_wire::wire_report::{
 
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, ServiceFacts};
 use crate::names::{OrderId, PackageDigest};
-use crate::order::{DeferredReport, Order, OrderResult, Outcome, Reply, Target, Verb};
+use crate::order::{
+    Acknowledged, DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
+};
 use crate::ports::Unsendable;
 
 /// The heartbeat `beat` on the JSON route.
@@ -201,6 +204,7 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
         reply,
         features,
         halts,
+        acks,
         order_id,
         order_try,
         package_digest,
@@ -260,7 +264,7 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
             order,
             features,
             halt_generations,
-            acknowledged: Vec::new(),
+            acknowledged: acks.iter().filter_map(acknowledged).collect(),
         },
         update,
     }
@@ -273,6 +277,18 @@ pub(crate) const NO_TERMS: &str = "it carries no order id, try or package digest
 /// Why an update whose words the daemon's grammars refuse is not run.
 pub(crate) const NOT_READ: &str =
     "its service, version, order id or digest is not one the daemon reads";
+
+/// The loop's acknowledgement of the wire's, when the daemon's grammars read its service and
+/// order id.
+fn acknowledged(ack: &VerdictAck) -> Option<Acknowledged> {
+    Some(Acknowledged {
+        service: ServiceName::new(&ack.service).ok()?,
+        order: OrderRef {
+            id: OrderId::new(ack.order_id.as_str()).ok()?,
+            order_try: ack.order_try,
+        },
+    })
+}
 
 /// The loop's update order of the wire's words, when the daemon's grammars read every one: an
 /// order id, a service name and a version are narrower there than on the wire.

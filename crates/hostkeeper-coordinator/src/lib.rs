@@ -11,7 +11,9 @@
 //!   with the [`registry`] of every version CI has set and the digest of its package;
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
-//! - [`verdicts`]: the release failures heard, each counted once per host, order id and try;
+//! - [`verdicts`]: the release failures heard, each counted once per host, order id and try,
+//!   and the [`verdict_file`] that stores them with the verdict each host was last acknowledged,
+//!   before an answer acknowledges it;
 //! - [`bake`] and [`canary`]: how long an updated host holds its slot, and the hosts that go
 //!   alone first;
 //! - [`converge`]: whether the farm has reached the desired version, for CI to wait on;
@@ -25,7 +27,10 @@
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the one live update,
 //!   and [`orders`], the operator's orders (`force`, `abort`) a typed heartbeat answer carries;
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
-//!   halts, aborts, exclusions, holds, the audit log);
+//!   halts, aborts, exclusions, holds, the audit log), and [`operator_enrollment`], its
+//!   `Enrollment.List` and `Enrollment.Approve`;
+//! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`),
+//!   kept in the ops file, and the match of each request `Enrollment.List` shows against it;
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
 //!   last good versions and the audit ring, in the operations file, and every change as a line of
 //!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
@@ -68,12 +73,14 @@ pub mod halt;
 pub mod holds;
 pub mod http;
 pub mod identity;
+pub mod inventory;
 pub mod jti_file;
 pub mod listen;
 pub mod lock;
 pub mod membership;
 pub mod operate;
 pub mod operator;
+pub mod operator_enrollment;
 pub mod ops;
 pub(crate) mod ops_file;
 pub mod order_terms;
@@ -85,6 +92,7 @@ pub mod services;
 pub mod status;
 pub mod tokens;
 pub mod ui;
+pub mod verdict_file;
 pub mod verdicts;
 
 #[cfg(test)]
@@ -125,6 +133,8 @@ mod holds_calls_tests;
 mod holds_tests;
 #[cfg(test)]
 mod http_tests;
+#[cfg(test)]
+mod inventory_tests;
 #[cfg(test)]
 mod marks_support;
 #[cfg(test)]
@@ -185,3 +195,7 @@ mod testutil;
 mod tierstore_service_tests;
 #[cfg(test)]
 mod tokens_tests;
+#[cfg(test)]
+mod verdict_acks_tests;
+#[cfg(test)]
+mod verdict_file_tests;

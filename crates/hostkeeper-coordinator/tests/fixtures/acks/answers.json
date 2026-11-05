@@ -1,0 +1,58 @@
+[
+  {
+    "case": "an agent that announced nothing: the reply alone, as before",
+    "host": "d1",
+    "beat": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "last_update": {"target": "2.0", "outcome": "failed", "order_id": "o-1", "order_try": 1}},
+    "json": "{\"reply\":\"nothing\"}",
+    "acks": []
+  },
+  {
+    "case": "an agent that announced other features: no acks",
+    "host": "d2",
+    "beat": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "agent_features": ["halt-v1"], "last_update": {"target": "2.0", "outcome": "failed", "order_id": "o-2", "order_try": 1}},
+    "json": "{\"reply\":\"nothing\",\"features\":[\"halt-v1\"]}",
+    "acks": []
+  },
+  {
+    "case": "a verdict that names its order and try: acknowledged",
+    "host": "d3",
+    "beat": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "agent_features": ["verdict-acks-v1"], "last_update": {"target": "2.0", "outcome": "failed", "order_id": "o-3", "order_try": 1}},
+    "json": "{\"reply\":\"nothing\",\"features\":[\"verdict-acks-v1\"],\"acks\":[{\"service\":\"kbf\",\"order_id\":\"o-3\",\"order_try\":1}]}",
+    "acks": [{"service": "kbf", "order_id": "o-3", "order_try": 1}]
+  },
+  {
+    "case": "the same verdict again, after a lost answer: acknowledged again",
+    "host": "d3",
+    "beat": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "agent_features": ["verdict-acks-v1"], "last_update": {"target": "2.0", "outcome": "failed", "order_id": "o-3", "order_try": 1}},
+    "json": "{\"reply\":\"nothing\",\"features\":[\"verdict-acks-v1\"],\"acks\":[{\"service\":\"kbf\",\"order_id\":\"o-3\",\"order_try\":1}]}",
+    "acks": [{"service": "kbf", "order_id": "o-3", "order_try": 1}]
+  },
+  {
+    "case": "the verdict no longer sent: nothing to acknowledge, and still not ordered",
+    "host": "d3",
+    "beat": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "agent_features": ["verdict-acks-v1"]},
+    "json": "{\"reply\":\"nothing\",\"features\":[\"verdict-acks-v1\"]}",
+    "acks": []
+  },
+  {
+    "case": "a verdict with no order id: not acknowledged",
+    "host": "d4",
+    "beat": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "agent_features": ["verdict-acks-v1"], "last_update": {"target": "2.0", "outcome": "failed"}},
+    "json": "{\"reply\":\"nothing\",\"features\":[\"verdict-acks-v1\"]}",
+    "acks": []
+  },
+  {
+    "case": "a verdict with an order id and no try: not acknowledged",
+    "host": "d5",
+    "beat": {"platform": "linux-x86_64", "version": "1.0", "health": "healthy", "agent_features": ["verdict-acks-v1"], "last_update": {"target": "2.0", "outcome": "failed", "order_id": "o-5"}},
+    "json": "{\"reply\":\"nothing\",\"features\":[\"verdict-acks-v1\"]}",
+    "acks": []
+  },
+  {
+    "case": "a success, and a service the coordinator does not manage: the managed one acknowledged",
+    "host": "d6",
+    "beat": {"platform": "linux-x86_64", "version": "2.0", "health": "healthy", "agent_features": ["verdict-acks-v1", "halt-v1"], "last_update": {"target": "2.0", "outcome": "succeeded", "order_id": "o-6", "order_try": 2}, "services": [{"name": "unmanaged", "version": "1.0", "health": "healthy", "last_update": {"target": "1.1", "outcome": "succeeded", "order_id": "o-7", "order_try": 1}}]},
+    "json": "{\"reply\":\"nothing\",\"features\":[\"halt-v1\",\"verdict-acks-v1\"],\"acks\":[{\"service\":\"kbf\",\"order_id\":\"o-6\",\"order_try\":2}]}",
+    "acks": [{"service": "kbf", "order_id": "o-6", "order_try": 2}]
+  }
+]

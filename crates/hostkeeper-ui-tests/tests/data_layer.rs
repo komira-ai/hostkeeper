@@ -409,7 +409,7 @@ import { domTexts, elements, domNamed, fire } from "../test/kit.js";
 export async function main() {
   const doc = globalThis.doc;
   const pages = [];
-  for (const name of ["host", "rollout", "holds", "enrollment", "audit"]) {
+  for (const name of ["host", "rollout", "holds", "enrollment", "inventory", "audit"]) {
     fire(domNamed(doc.root, `page-${name}`), "click", {});
     await null;
     pages.push(domTexts(doc.root).join(" "));

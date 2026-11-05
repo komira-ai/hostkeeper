@@ -138,6 +138,9 @@ pub struct Claims {
     pub mac_serial: Option<String>,
     /// A Mac's platform UUID (`IOPlatformUUID`).
     pub platform_uuid: Option<String>,
+    /// The MAC address of the host's BMC, lower-case `aa:bb:cc:dd:ee:ff` (LAN configuration
+    /// parameter 5); absent when it cannot be read, and on a Mac.
+    pub bmc_mac: Option<String>,
 }
 
 /// An `Enroll` request. It is a function of the key, the claims, the image and `renewal_of`

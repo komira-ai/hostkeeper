@@ -15,13 +15,19 @@
 //!    deferred verdict with no deferral of its target on record starts one.
 //! 4. [`fit`] keeps the bound; a heartbeat over it is refused and logged, never sent cut short.
 //! 5. The heartbeat goes out through [`CoordinatorLink::heartbeat`], the one outbound call.
-//! 6. From the reply: the advertised features replace the last ones; a verdict whose order id and
-//!    try the reply acknowledges is not sent again; with `halt-v1`, a halt generation newer than
-//!    the held one is raised in [`HeldHalts`]; and the order goes to the executor.
+//! 6. From the reply: the advertised features replace the last ones; a verdict whose service,
+//!    order id and try the reply acknowledges is not sent again; with `halt-v1`, a halt
+//!    generation newer than the held one is raised in [`HeldHalts`]; and the order goes to the
+//!    executor.
 //!
 //! **Verdicts.** A service may have several verdicts not yet acknowledged (an order's, then a
 //! `busy` answer, then another order's). A heartbeat carries one per service: the newest. Once
-//! it is acknowledged the one before it is sent, so every verdict is sent until counted. Across
+//! it is acknowledged the one before it is sent, so every verdict is sent until counted. To a
+//! coordinator that advertises `verdict-acks-v1`, which reads the last verdict it acknowledged
+//! as the host's report from then on, they go oldest first instead, so the newest is the last
+//! it hears, and an ack also ends every verdict of the service older than the one it names (the
+//! newest, sent before the reply that advertised the feature): an older one heard after it
+//! would stand in its place. Across
 //! a restart only the step record's verdict, the last order's, comes back: the coordinator
 //! orders a host only when it has no outstanding order (design 8.1), and after its own restart
 //! it rebuilds from heartbeats before it orders (8.2), so an order's verdict has reached it
@@ -345,7 +351,13 @@ impl Heartbeater {
                 last_update: self
                     .pending
                     .get(name.as_str())
-                    .and_then(|queue| queue.last())
+                    .and_then(|queue| {
+                        if self.advertised.has(Feature::VerdictAcksV1) {
+                            queue.first()
+                        } else {
+                            queue.last()
+                        }
+                    })
                     .map(|result| result.shaped(&self.advertised)),
                 deferred,
                 health_detail: observation.health_detail,
@@ -373,9 +385,23 @@ impl Heartbeater {
             acknowledged,
         } = reply;
         self.advertised = Features::of(&features);
+        let in_order = self.advertised.has(Feature::VerdictAcksV1);
         for (service, queue) in &mut self.pending {
+            let acks = |result: &OrderResult| {
+                acknowledged
+                    .iter()
+                    .any(|ack| ack.service.as_str() == service && ack.order == result.order)
+            };
+            // Oldest first: what is older than an acknowledged verdict is ended with it.
+            let ended = if in_order {
+                queue.iter().rposition(acks).map_or(0, |at| at + 1)
+            } else {
+                0
+            };
+            let mut at = 0;
             queue.retain(|result| {
-                let counted = acknowledged.contains(&result.order);
+                at += 1;
+                let counted = acks(result);
                 if counted {
                     let refs = self.acked.entry(service.clone()).or_default();
                     refs.push(result.order.clone());
@@ -383,7 +409,7 @@ impl Heartbeater {
                         refs.remove(0);
                     }
                 }
-                !counted
+                !counted && at > ended
             });
         }
         self.pending.retain(|_, queue| !queue.is_empty());

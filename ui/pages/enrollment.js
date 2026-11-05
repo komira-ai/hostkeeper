@@ -1,6 +1,8 @@
-// Enrollment: the hosts waiting for an operator, with what they claim, and Approve.
-// Calls: Enrollment.List; on a button, Enrollment.Approve, which sends back the key hash the
-// list gave for the request. Claims authorise nothing: they help an operator recognise a machine.
+// Enrollment: the hosts waiting for an operator, with what they claim, the inventory record each
+// matches, and Approve. Calls: Enrollment.List; on a button, Enrollment.Approve, which sends back
+// the key hash the list gave for the request. Claims authorise nothing: they help an operator
+// recognise a machine. A match against one record (the Inventory page) fills in the host id and
+// role; it approves nothing, and several matching records fill in nothing.
 
 import {
   h, action, checkbox, errorView, field, fmtUnix, reasonProblem, table, trimmed, words,
@@ -22,6 +24,7 @@ function claimTable(c) {
     ["Addresses", (c.addresses || []).join(", ")],
     ["Mac serial", c.macSerial],
     ["Platform UUID", c.platformUuid],
+    ["BMC MAC", c.bmcMac],
   ].filter(([, v]) => typeof v === "string" && v !== "");
   return facts.length === 0
     ? h("p", {}, "No claims.")
@@ -70,16 +73,39 @@ export function approval(request, form) {
   };
 }
 
+// What the request's match against the inventory says, as one line.
+export function matchLine(request) {
+  switch (request.inventoryMatch) {
+    case "INVENTORY_MATCH_MATCHED":
+      return `Matches the record of ${request.recordHostId}`
+        + (request.recordRole ? ` (role ${request.recordRole}).` : " (no role).");
+    case "INVENTORY_MATCH_AMBIGUOUS":
+      return `Matches several records: ${(request.candidateHostIds || []).join(", ")}. None is chosen.`;
+    case "INVENTORY_MATCH_UNMATCHED":
+      return "Matches no inventory record.";
+    default:
+      return "Not matched against the inventory.";
+  }
+}
+
 function pending(ctx, request) {
+  const matched = request.inventoryMatch === "INVENTORY_MATCH_MATCHED";
   const form = {
-    hostId: request.renewalOf || "", role: "", serviceList: "", reason: "", replace: false,
+    hostId: request.renewalOf || (matched ? request.recordHostId || "" : ""),
+    role: matched ? request.recordRole || "" : "",
+    serviceList: "",
+    reason: "",
+    replace: false,
   };
   return h("section", { class: "service" },
     h("h3", {}, `Request ${request.requestId}`),
     request.duplicateClaim === true
       ? h("p", { class: "error", role: "alert" },
-        "Duplicate claim: another host presents the same machine id or key. Approving it needs Replace.")
+        "Duplicate claim: another host presents the same machine id or key, or a MAC of an enrolled host. "
+        + "Approving it needs Replace.")
       : null,
+    h("p", { class: request.inventoryMatch === "INVENTORY_MATCH_AMBIGUOUS" ? "warning" : "note" },
+      matchLine(request)),
     table(["", ""], [
       ["Key SHA-256", request.keySha256 || "-"],
       ["Image", request.image || "-"],

@@ -35,6 +35,7 @@ use hostkeeper_wire::secret::{SecretError, read_secret};
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
+use crate::enrollment::MAC_APPROVER;
 use crate::ops::label;
 use crate::ops_file::digest;
 use crate::reconcile::{CI, COORDINATOR};
@@ -73,7 +74,10 @@ impl FromStr for TokenName {
         if !label(text) {
             return Err(TokenNameError::Grammar);
         }
-        if let Some(reserved) = [COORDINATOR, CI].into_iter().find(|name| *name == text) {
+        if let Some(reserved) = [COORDINATOR, CI, MAC_APPROVER]
+            .into_iter()
+            .find(|name| *name == text)
+        {
             return Err(TokenNameError::Reserved(reserved));
         }
         Ok(Self(text.to_owned()))
