@@ -32,7 +32,8 @@ path = "src/main.rs"
 # The CA and the enrollment store (`--enrollment-dir`, `--ca-key-file`).
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc" }
-# The messages and refusals of `Enroll`, `Poll` and `Renew`.
+# The messages and refusals of the operator's calls, the orders a typed heartbeat answer
+# carries, and the messages of `Enroll`, `Poll` and `Renew`.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }

@@ -47,6 +47,8 @@ pub(crate) fn closed_to(
         fleet
             .hosts_of(service)
             .filter(|(_, h)| def.roles.contains(h.role_name()))
+            // A pair an operator holds is never a canary, and neither counts as one nor bakes.
+            .filter(|(o, _)| !fleet.is_held(service, o))
     };
     let started = |o: &HostId, h: &Host| {
         h.beat.updating.is_some()

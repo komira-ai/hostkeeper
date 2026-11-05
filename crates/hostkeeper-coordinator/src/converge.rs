@@ -142,6 +142,7 @@ fn counts(
     let mine = || {
         fleet
             .hosts_of(service)
+            .filter(|(id, _)| !fleet.is_held(service, id))
             .map(|(_, h)| h)
             .filter(move |h| h.role_name() == role)
     };
@@ -160,7 +161,7 @@ fn counts(
     }
 }
 
-/// The counts of every role of `def` that has a host, in role order
+/// The counts of every role of `def` that has a host an operator does not hold, in role order
 /// ([`ServiceDef::role_names`]); none when no desired state was set.
 #[must_use]
 pub fn role_counts(
@@ -180,9 +181,10 @@ pub fn role_counts(
 }
 
 /// Where the hosts of the service `def` stand at `now` against its `desired`, over the hosts
-/// that heartbeated the service. One rule serves every service: converged when every live
-/// member runs the desired version and none is updating, failed, baking or waiting for a
-/// promotion; no number of hosts up is required.
+/// that heartbeated the service and that an operator does not hold ([`Fleet::is_held`]). One
+/// rule serves every service: converged when every live member runs the desired version and
+/// none is updating, failed, baking or waiting for a promotion; no number of hosts up is
+/// required.
 #[must_use]
 pub fn converge_service(
     def: &ServiceDef,
@@ -206,14 +208,17 @@ pub fn converge_service(
     let roles = role_counts(def, Some(desired), fleet, now);
     let live = fleet
         .hosts_of(service)
-        .filter(|(_, h)| def.roles.contains(h.role_name()) && h.is_live(now))
+        .filter(|(id, h)| {
+            def.roles.contains(h.role_name()) && h.is_live(now) && !fleet.is_held(service, id)
+        })
         .count();
     let at_desired: usize = roles.iter().map(|c| c.at_desired).sum();
     let clear = roles.iter().all(|c| c.updating == 0 && c.failed == 0);
     // A host still baking, or waiting for its promotion, is not yet a host that took the
-    // version.
+    // version. A pair an operator holds is left out of every count: it never blocks the others.
     let settled = fleet.hosts_of(service).all(|(id, h)| {
         !h.is_live(now)
+            || fleet.is_held(service, id)
             || !(h.beat.promotion_pending
                 || fleet.is_baking(service, id, h, &desired.version, def.bake_beats, now))
     });

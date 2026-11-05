@@ -18,16 +18,25 @@
 //! - [`decide`]: the decision as a pure function of the desired state, the fleet, the host
 //!   and the time;
 //! - [`reconcile`]: the last good version, the bad ones, and the automatic rollback;
+//! - [`holds`]: the operator's holds of a service on a host, a role or the fleet, which the
+//!   gate orders nothing and the counts leave out;
+//! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the one live update,
+//!   and [`orders`], the operator's orders (`force`, `abort`) a typed heartbeat answer carries;
+//! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
+//!   halts, aborts, exclusions, holds, the audit log);
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
 //!   last good versions and the audit ring, in the operations file, and every change as a line of
 //!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
 //!   file beside it (`ops_file`);
+//! - [`operate`]: the operator actions of the JSON route `/v1/operator`, each validated before it
+//!   changes the ops store;
 //! - [`services`]: services as data, from the rollout file: the roles each runs on and the
 //!   settings of its rollout;
 //! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
 //!   token, the status read by the operator token;
+//! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
 //! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
@@ -52,19 +61,25 @@ pub mod defer;
 pub mod desired;
 pub mod enrollment;
 pub mod fleet;
+pub mod force;
 pub mod halt;
+pub mod holds;
 pub mod http;
 pub mod identity;
 pub mod jti_file;
 pub mod listen;
 pub mod lock;
 pub mod membership;
+pub mod operate;
+pub mod operator;
 pub mod ops;
 pub(crate) mod ops_file;
+pub mod orders;
 pub mod reconcile;
 pub mod registry;
 pub mod service;
 pub mod services;
+pub mod status;
 pub mod tokens;
 pub mod ui;
 pub mod verdicts;
@@ -94,11 +109,23 @@ mod desired_tests;
 #[cfg(test)]
 mod extras_dropped_tests;
 #[cfg(test)]
+mod force_targets_tests;
+#[cfg(test)]
+mod force_tests;
+#[cfg(test)]
 mod halt_membership_tests;
 #[cfg(test)]
 mod halt_race_tests;
 #[cfg(test)]
+mod holds_calls_tests;
+#[cfg(test)]
+mod holds_tests;
+#[cfg(test)]
 mod http_tests;
+#[cfg(test)]
+mod marks_support;
+#[cfg(test)]
+mod marks_tests;
 #[cfg(test)]
 mod membership_tests;
 #[cfg(test)]

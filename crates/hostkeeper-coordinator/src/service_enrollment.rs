@@ -16,10 +16,8 @@ use crate::identity::{Identity, IdentityError, identity_of};
 pub(super) enum Turn {
     /// Decide its order.
     Order,
-    /// Order it nothing: the host is duplicate.
+    /// Record it and order it nothing: the host is duplicate, or retiring.
     Hold,
-    /// Order it nothing, and release the retiring host if its update record is final.
-    Final,
 }
 
 impl Coordinator {
@@ -36,40 +34,21 @@ impl Coordinator {
         beat: Heartbeat,
         machine_id: Option<&str>,
     ) -> Result<Answer, HeartbeatRefused> {
-        if self.legacy.is_none() && beat.services.is_none() {
-            return Err(HeartbeatRefused);
-        }
+        self.answer(who, beat, false, machine_id)
+            .map(|(answer, _)| answer)
+    }
+
+    /// The turn of a heartbeat of `host` from the daemon on `machine_id`, if the transport
+    /// said: it is reported live first, and a duplicate host is held.
+    pub(super) fn turn_of(&self, host: &hostkeeper_wire::HostId, machine_id: Option<&str>) -> Turn {
         if let (Some(enrollment), Some(machine_id)) = (&self.enrollment, machine_id) {
-            enrollment.report_live(&who.host_id, machine_id);
+            enrollment.report_live(host, machine_id);
         }
-        let turn = if self.host_is_duplicate(&who.host_id) {
+        if self.host_is_duplicate(host) {
             Turn::Hold
         } else {
             Turn::Order
-        };
-        let asked = beat.agent_features.clone();
-        let (reply, _) = self.reply_to(who, beat, turn);
-        // Only an agent that announced features gets `features`: an older agent reads the
-        // reply strictly and refuses a field it does not know.
-        let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
-            self.features
-                .iter()
-                .filter(|name| asked.contains(name))
-                .cloned()
-                .collect()
-        });
-        // The generations only to an agent that announced `halt-v1` and a coordinator that
-        // advertises it: an older agent's strict reader refuses the field.
-        let halts = if sends("halts", features.as_deref()) {
-            halt::generations(&self.ops, &self.services)
-        } else {
-            BTreeMap::new()
-        };
-        Ok(Answer {
-            reply,
-            features,
-            halts,
-        })
+        }
     }
 
     /// The same coordinator with `enrollment`: it reads a client certificate its CA issued as
@@ -131,7 +110,8 @@ impl Coordinator {
     /// later heartbeats are refused unread. Returns whether it was released.
     pub fn final_report(&self, who: Identity, beat: Heartbeat) -> bool {
         let host = who.host_id.clone();
-        let (_, released) = self.reply_to(who, beat, Turn::Final);
+        self.reply_to(who, beat, false, Turn::Hold);
+        let released = self.lock_fleet().release_if_final(&host, (self.clock)());
         if released {
             tracing::info!(host_id = %host, "a retiring host reported its update final: slot freed");
             if let Some(enrollment) = &self.enrollment {

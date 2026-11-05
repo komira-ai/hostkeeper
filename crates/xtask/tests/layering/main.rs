@@ -610,7 +610,8 @@ fn a_missing_layer_crate_is_refused() {
          \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
          \"crates/hostkeeper-wire\",\n    \"crates/hostkeeper-oidc\",\n    \
          \"crates/hostkeeper-tls\",\n    \"crates/hostkeeper-coordinator\",\n    \
-         \"crates/hostkeeper-testkit\",\n    \"crates/hostkeeper-unpack\",\n]\n"
+         \"crates/hostkeeper-testkit\",\n    \"crates/hostkeeper-unpack\",\n    \
+         \"crates/hostkeeper-proto\",\n]\n"
             .to_string(),
     );
     let dir = fixture("clean", vec![root]);
