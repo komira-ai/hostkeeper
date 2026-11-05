@@ -220,7 +220,8 @@ async fn ci_token_reaches_only_set_desired_and_converge() {
 }
 
 /// Proves: a service the coordinator manages that CI's allow-list entry does not name is
-/// refused `PERMISSION_DENIED` `forbidden`, and the status lists no service afterwards.
+/// refused `PERMISSION_DENIED` `forbidden`, and afterwards the status lists no service with a
+/// desired state.
 #[tokio::test]
 async fn set_desired_of_a_service_off_the_allow_list_is_forbidden() {
     let served = served_built("grpc-cred-off-list", |dir, clock| {
@@ -246,7 +247,18 @@ async fn set_desired_of_a_service_off_the_allow_list_is_forbidden() {
     let (code, _, body) = call(&served.coordinator, Surface::Control, &None, request).await;
     assert_eq!(code, Code::Ok);
     let status: StatusResponse = decode(&body.expect("a message"));
-    assert!(status.services.is_empty(), "nothing was set: {status:?}");
+    assert!(
+        status.services.iter().all(|one| one.desired.is_none()),
+        "nothing was set: {status:?}"
+    );
+    assert_eq!(
+        status
+            .services
+            .iter()
+            .map(|one| one.service.as_str())
+            .collect::<Vec<_>>(),
+        ["kbf", "other"]
+    );
 }
 
 /// Proves: for every method of the operator API the credentials that are admitted are exactly

@@ -241,16 +241,14 @@ fn refusal(status: &tonic::Status) -> LinkError {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
     use std::io;
     use std::path::Path;
-    use std::pin::Pin;
     use std::sync::{Arc, Mutex};
 
     use hostkeeper_config::daemon::DaemonConfig;
     use tonic::{Code, Status};
 
-    use super::{AsyncConn, Dropped, GrpcDial, GrpcMtlsLink, refusal};
+    use super::{Dialing, Dropped, GrpcDial, GrpcMtlsLink, refusal};
     use crate::names::Reason;
     use crate::ports::{LinkError, Log, ReplyFault};
 
@@ -268,11 +266,7 @@ mod tests {
     struct NoDial;
 
     impl GrpcDial for NoDial {
-        fn dial(
-            &self,
-            _host: &str,
-            _port: u16,
-        ) -> Pin<Box<dyn Future<Output = io::Result<Box<dyn AsyncConn>>> + Send + '_>> {
+        fn dial(&self, _host: &str, _port: u16) -> Dialing<'_> {
             Box::pin(std::future::ready(Err(io::Error::from(
                 io::ErrorKind::Unsupported,
             ))))

@@ -777,7 +777,7 @@ async fn heartbeat_identity_comes_from_the_certificate_not_the_message() {
 #[tokio::test]
 async fn a_heartbeat_without_an_updater_certificate_is_refused_unread() {
     let farm = farm("grpc-forbidden").await;
-    let strangers: Vec<Peer> = vec![
+    let strangers: [Peer; 3] = [
         None,
         peer(&[
             "urn:kbf:role:storage",

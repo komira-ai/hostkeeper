@@ -122,7 +122,7 @@ fn enrollment_in(dir: &Scratch) -> Arc<Enrollment> {
     let store = dir.path().join("enrollment");
     let ca_key = dir.path().join("ca.key");
     let server_cert = dir.path().join("server.pem");
-    let names = vec!["coordinator.example".to_owned()];
+    let names = ["coordinator.example".to_owned()];
     let files = Setup {
         dir: &store,
         ca_key: &ca_key,

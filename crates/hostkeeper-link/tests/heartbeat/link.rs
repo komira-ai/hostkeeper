@@ -219,8 +219,8 @@ fn the_mtls_link_refuses_a_reply_with_an_unknown_key_or_over_the_bound() {
             unknown.clone(),
         ),
         (
-            "an acknowledgement",
-            http(200, r#"{"reply":"nothing","acks":[]}"#),
+            "a key of no answer beside a known one",
+            http(200, r#"{"reply":"nothing","acks":[],"acked":[]}"#),
             unknown,
         ),
         (
