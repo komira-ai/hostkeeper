@@ -17,12 +17,14 @@
 //!   refused by name when the wire has no word for one of its facts, or when it is over the
 //!   wire's [`MAX_HEARTBEAT_BYTES`], which the coordinator reads no more of.
 //! - **What it takes back.** A 200 whose body is exactly an `Answer` of the wire: read strictly
-//!   (a key other than `reply`, `service`, `version`, `features` and `halts` is
+//!   (a key other than `reply`, `service`, `version`, `order_id`, `order_try`,
+//!   `package_digest`, `features` and `halts` is
 //!   [`ReplyFault::UnknownKey`]) and bounded (a body over [`REPLY_MAX`] or a head over
 //!   [`HEAD_MAX`] is [`ReplyFault::OverBound`]). An answer of another status whose body is the
-//!   coordinator's `{"error": <code>}` is [`LinkError::Refused`] by that code. An update in the
-//!   answer is not given to the loop, because this route carries no package digest, and the link
-//!   logs it once, and again when it changes.
+//!   coordinator's `{"error": <code>}` is [`LinkError::Refused`] by that code. An update with
+//!   its order terms (`order-v1`) is the loop's update order; one the loop cannot be given (no
+//!   service, no terms, or words the daemon cannot read) is logged once with why, and again
+//!   when it changes.
 //!
 //! The link reaches the coordinator through a [`Transport`]: [`crate::TcpTransport`] in the
 //! daemon, an in-process one in the tests.
@@ -56,7 +58,16 @@ pub const REPLY_MAX: usize = 16 * 1024;
 pub const HEAD_MAX: usize = 8 * 1024;
 
 /// The keys of an answer of the JSON route.
-const ANSWER_KEYS: [&str; 5] = ["reply", "service", "version", "features", "halts"];
+const ANSWER_KEYS: [&str; 8] = [
+    "reply",
+    "service",
+    "version",
+    "order_id",
+    "order_try",
+    "package_digest",
+    "features",
+    "halts",
+];
 
 /// A byte stream to the coordinator.
 pub trait Conn: Read + Write + Send {}
@@ -251,9 +262,9 @@ impl JsonMtlsLink {
                 .as_deref()
                 .unwrap_or("the coordinator's legacy service");
             self.log.line(&format!(
-                "error: the coordinator's update of {service} to {} is not run: the JSON \
-                 heartbeat route carries no package digest",
-                update.version.as_str()
+                "error: the coordinator's update of {service} to {} is not run: {}",
+                update.version.as_str(),
+                update.why
             ));
         }
         *dropped = update;

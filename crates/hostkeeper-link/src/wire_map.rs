@@ -17,10 +17,13 @@
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none). This wire has no
 //! acknowledgement, so none is read: a verdict is sent in every heartbeat, as the coordinator of
-//! this route expects. An update on this route names a service and a version and no package
-//! digest, order id or try, and nothing runs from a package whose digest the order did not
-//! name: the update is returned beside the reply ([`Mapped::update`]) for the link to log, and
-//! the reply carries no order.
+//! this route expects. An update is the loop's update order when the answer carries its terms
+//! (the order id, try and package digest a coordinator sends to an agent that announced
+//! `order-v1`) and the daemon's grammars read every word of it. Any other update (one with no
+//! service, the legacy service's; one with no terms, from a coordinator that sends none; one
+//! with a word the daemon cannot read) is not run, because nothing runs from a package whose
+//! digest the order did not name: it is returned beside the reply ([`Mapped::update`]), with
+//! why, for the link to log.
 
 use std::collections::BTreeMap;
 
@@ -29,15 +32,16 @@ use hostkeeper_hook::{Class, Phase};
 use hostkeeper_wire::Platform as WirePlatform;
 use hostkeeper_wire::version::Version as WireVersion;
 use hostkeeper_wire::wire::{
-    self, Agent, AgentName, Answer, OrderId, ServiceBeat, ServiceReply, UpdateResult,
-    is_service_name,
+    self, Agent, AgentName, Answer, OrderId as WireOrderId, PackageDigest as WirePackageDigest,
+    ServiceBeat, ServiceReply, UpdateResult, is_service_name,
 };
 use hostkeeper_wire::wire_report::{
     Class as WireClass, DeferredReport as WireDeferred, Phase as WirePhase, Token,
 };
 
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, ServiceFacts};
-use crate::order::{DeferredReport, OrderResult, Outcome, Reply};
+use crate::names::{OrderId, PackageDigest};
+use crate::order::{DeferredReport, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::Unsendable;
 
 /// The heartbeat `beat` on the JSON route.
@@ -120,7 +124,7 @@ fn verdict(result: &OrderResult) -> Result<Option<UpdateResult>, Unsendable> {
             .as_ref()
             .and_then(|r| Token::parse(r.as_str())),
         // A loop's order id is one of the wire's, whose grammar is wider.
-        order_id: OrderId::parse(result.order.id.as_str()),
+        order_id: WireOrderId::parse(result.order.id.as_str()),
         order_try: Some(result.order.order_try),
     }))
 }
@@ -176,15 +180,16 @@ fn class(class: Class) -> WireClass {
     }
 }
 
-/// An update the JSON route asked for, which the loop is not given.
+/// An update the JSON route asked for that the loop is not given, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Update {
     /// The service; none for the coordinator's legacy service.
     pub service: Option<String>,
     pub version: WireVersion,
+    pub why: &'static str,
 }
 
-/// The loop's reply of an answer, and the update the answer asked for.
+/// The loop's reply of an answer, and the update of the answer the loop is not given.
 pub(crate) struct Mapped {
     pub reply: Reply,
     pub update: Option<Update>,
@@ -196,6 +201,9 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
         reply,
         features,
         halts,
+        order_id,
+        order_try,
+        package_digest,
     } = answer;
     let features = features
         .unwrap_or_default()
@@ -210,17 +218,79 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
                 .map(|service| (service, generation))
         })
         .collect();
-    let update = match reply {
-        ServiceReply::Nothing => None,
-        ServiceReply::Update { service, version } => Some(Update { service, version }),
+    let (order, update) = match reply {
+        ServiceReply::Nothing => (None, None),
+        ServiceReply::Update { service, version } => {
+            let terms = order_id.zip(order_try).zip(package_digest);
+            match (service.as_deref(), terms) {
+                (None, _) => (
+                    None,
+                    Some(Update {
+                        service,
+                        version,
+                        why: NO_SERVICE,
+                    }),
+                ),
+                (Some(_), None) => (
+                    None,
+                    Some(Update {
+                        service,
+                        version,
+                        why: NO_TERMS,
+                    }),
+                ),
+                (Some(name), Some(((id, order_try), digest))) => {
+                    match order(name, &version, &id, order_try, &digest) {
+                        Some(order) => (Some(order), None),
+                        None => (
+                            None,
+                            Some(Update {
+                                service,
+                                version,
+                                why: NOT_READ,
+                            }),
+                        ),
+                    }
+                }
+            }
+        }
     };
     Mapped {
         reply: Reply {
-            order: None,
+            order,
             features,
             halt_generations,
             acknowledged: Vec::new(),
         },
         update,
     }
+}
+
+/// Why an update names no service: it is the coordinator's legacy service.
+pub(crate) const NO_SERVICE: &str = "it names no service";
+/// Why an update without its terms is not run: nothing runs without the order's digest.
+pub(crate) const NO_TERMS: &str = "it carries no order id, try or package digest";
+/// Why an update whose words the daemon's grammars refuse is not run.
+pub(crate) const NOT_READ: &str =
+    "its service, version, order id or digest is not one the daemon reads";
+
+/// The loop's update order of the wire's words, when the daemon's grammars read every one: an
+/// order id, a service name and a version are narrower there than on the wire.
+fn order(
+    service: &str,
+    version: &WireVersion,
+    id: &WireOrderId,
+    order_try: u64,
+    digest: &WirePackageDigest,
+) -> Option<Order> {
+    let target = Target {
+        service: ServiceName::new(service).ok()?,
+        version: Version::new(version.as_str()).ok()?,
+        digest: PackageDigest::new(digest.as_str()).ok()?,
+    };
+    Some(Order {
+        id: OrderId::new(id.as_str()).ok()?,
+        order_try,
+        verb: Verb::Update(target),
+    })
 }

@@ -7,8 +7,9 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_link::{
-    ANNOUNCED, ClientIdentity, CoordinatorLink, EndpointError, Feature, HEAD_MAX, Heartbeat,
-    JsonMtlsLink, LinkError, Platform, REPLY_MAX, Reason, Reply, ReplyFault, TrustFault,
+    ANNOUNCED, ClientIdentity, CoordinatorLink, EndpointError, HEAD_MAX, Heartbeat, JsonMtlsLink,
+    LinkError, Order, OrderId, Platform, REPLY_MAX, Reason, Reply, ReplyFault, Target, TrustFault,
+    Verb,
 };
 
 use crate::tls::{
@@ -218,12 +219,17 @@ fn the_mtls_link_refuses_a_reply_with_an_unknown_key_or_over_the_bound() {
             unknown.clone(),
         ),
         (
-            "an order id",
+            "an acknowledgement",
+            http(200, r#"{"reply":"nothing","acks":[]}"#),
+            unknown,
+        ),
+        (
+            "an order id without its try and digest",
             http(
                 200,
                 r#"{"reply":"update","service":"web","version":"2.0","order_id":"o-1"}"#,
             ),
-            unknown,
+            malformed.clone(),
         ),
         (
             "a body one byte over",
@@ -412,51 +418,49 @@ fn the_link_dials_the_host_and_port_of_the_daemon_config() {
     );
 }
 
-/// Catches an update of the JSON route run without the package digest every order must name,
-/// or one that is dropped without a word, or logged at every heartbeat: an update is not given
-/// to the loop and is logged once, again when it changes or comes back after a reply without
-/// one; an update of the coordinator's legacy service says so. Also what the reply does carry:
-/// the features the daemon knows, and the halt generations of the services it could run.
+/// Catches an update run without the terms every order must carry, or one that is dropped
+/// without a word, or logged at every heartbeat: an update with no terms (a coordinator that
+/// sends none) is not given to the loop and is logged once, again when it changes or comes back
+/// after a reply without one; an update of the coordinator's legacy service names no service
+/// and says so. Also what the reply does carry: the features the daemon knows, and the halt
+/// generations of the services it could run.
 #[test]
-fn an_update_of_the_json_route_is_not_run_and_is_logged_once_per_change() {
+fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
     let bench = Bench::new("link-updates");
     let update = |to: &str| {
         http(
             200,
             &format!(
-                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
+                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
             ),
         )
     };
     let expected = Reply {
         order: None,
-        features: vec![
-            Feature::DeferredV1,
-            Feature::HaltV1,
-            Feature::HeartbeatV2,
-            Feature::ForcedV1,
-        ],
+        features: ANNOUNCED.to_vec(),
         halt_generations: vec![(service("web"), 3)],
         acknowledged: Vec::new(),
     };
-    let line = |whom: &str, to: &str| {
-        format!(
-            "error: the coordinator's update of {whom} to {to} is not run: the JSON heartbeat \
-             route carries no package digest"
-        )
+    let line = |whom: &str, to: &str, why: &str| {
+        format!("error: the coordinator's update of {whom} to {to} is not run: {why}")
     };
+    let no_terms = "it carries no order id, try or package digest";
     let script = [
-        (update("2.0"), Some(line("web", "2.0"))),
+        (update("2.0"), Some(line("web", "2.0", no_terms))),
         (update("2.0"), None),
-        (update("2.1"), Some(line("web", "2.1"))),
+        (update("2.1"), Some(line("web", "2.1", no_terms))),
         (
             http(200, r#"{"reply":"nothing","features":[],"halts":{}}"#),
             None,
         ),
-        (update("2.1"), Some(line("web", "2.1"))),
+        (update("2.1"), Some(line("web", "2.1", no_terms))),
         (
             http(200, r#"{"reply":"update","version":"3.0"}"#),
-            Some(line("the coordinator's legacy service", "3.0")),
+            Some(line(
+                "the coordinator's legacy service",
+                "3.0",
+                "it names no service",
+            )),
         ),
     ];
     let mut lines = Vec::new();
@@ -472,6 +476,62 @@ fn an_update_of_the_json_route_is_not_run_and_is_logged_once_per_change() {
         assert_eq!(reply, Ok(want), "answer {n}");
         lines.extend(logged);
         assert_eq!(bench.log.lines(), lines, "answer {n}");
+    }
+}
+
+/// An update answer of `service` to `version` with the terms `id`, `order_try` and the digest
+/// of the tests.
+fn with_terms(service: &str, version: &str, id: &str, order_try: u64) -> Vec<u8> {
+    http(
+        200,
+        &format!(
+            r#"{{"reply":"update","service":"{service}","version":"{version}","order_id":"{id}","order_try":{order_try},"package_digest":"{}"}}"#,
+            crate::digest().as_str()
+        ),
+    )
+}
+
+/// Catches an update with its terms not run, run under another id, try or digest, or run with a
+/// word the daemon's grammars refuse: the answer's service, version, order id, try and package
+/// digest are the loop's update order, with nothing logged; terms whose order id, version or
+/// service the daemon cannot read (the wire's grammars are wider there) are not run, and are
+/// logged with why.
+#[test]
+fn an_update_with_its_terms_is_the_loops_update_order() {
+    let bench = Bench::new("link-update-terms");
+    let (reply, read) = bench.answered(with_terms("web", "2.0", "update-0a1b", 3), Close::Notify);
+    assert!(read);
+    assert_eq!(
+        reply,
+        Ok(Reply {
+            order: Some(Order {
+                id: OrderId::new("update-0a1b").expect("an order id"),
+                order_try: 3,
+                verb: Verb::Update(Target {
+                    service: service("web"),
+                    version: version("2.0"),
+                    digest: crate::digest(),
+                }),
+            }),
+            ..Reply::default()
+        })
+    );
+    assert_eq!(bench.log.lines(), Vec::<String>::new());
+
+    let not_read = "its service, version, order id or digest is not one the daemon reads";
+    let cases = [
+        ("web", "2.0", ".hidden", "web", "2.0"),
+        ("web", "2.0~rc1", "update-1", "web", "2.0~rc1"),
+        ("-web", "2.0", "update-1", "-web", "2.0"),
+    ];
+    for (n, (name, to, id, whom, logged)) in cases.into_iter().enumerate() {
+        let (reply, read) = bench.answered(with_terms(name, to, id, 1), Close::Notify);
+        assert!(read);
+        assert_eq!(reply, Ok(Reply::default()), "{id} {to} {name}");
+        assert_eq!(
+            bench.log.lines()[n],
+            format!("error: the coordinator's update of {whom} to {logged} is not run: {not_read}")
+        );
     }
 }
 

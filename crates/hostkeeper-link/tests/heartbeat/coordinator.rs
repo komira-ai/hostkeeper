@@ -17,14 +17,15 @@ use hostkeeper_coordinator::services::Services;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_link::{
     BeatOutcome, CertState, CoordinatorLink, DEFAULT_HEARTBEAT_SECS, Feature, Heartbeater,
-    LoopConfig, Platform, Ports, Reply,
+    LoopConfig, Order, OrderId, Platform, Ports, Reply, Target, Verb,
 };
 use hostkeeper_testkit::Scratch;
 use http_body_util::{BodyExt, Full};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::tls::{Close, Farm, PipeTransport, Pki, Request, http, link, serve};
-use crate::{Rig, recorded, service, version};
+use crate::{Rig, digest, recorded, service, version};
 
 /// The operator token of the coordinator.
 const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
@@ -32,13 +33,17 @@ const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
 /// How long the handler waits for a body: the whole body is there when it is called.
 const PATIENCE: Duration = Duration::from_secs(30);
 
-/// A coordinator that runs `web` on the role `daemon` and wants it at 2.0, with one halt of
+/// A coordinator that runs `web` on the role `daemon` and wants it at 2.0 (whose package digest
+/// CI registered as [`digest`]), with one halt of
 /// `web` cleared, over the files of `dir`; started at second 1000 of its clock, which then
 /// reads 1100, past its quiet start.
 fn coordinator(dir: &Path) -> Arc<Coordinator> {
     std::fs::write(
         dir.join("desired.json"),
-        r#"{"services":{"web":{"version":"2.0","min_up":{}}}}"#,
+        format!(
+            r#"{{"services":{{"web":{{"version":"2.0","min_up":{{}},"digests":{{"2.0":"{}"}}}}}}}}"#,
+            digest().as_str()
+        ),
     )
     .expect("the desired state");
     std::fs::write(
@@ -113,10 +118,11 @@ fn serve_coordinator(
 }
 
 /// Catches a mapping that drops a field of the reply or a heartbeat the real coordinator does
-/// not read: the coordinator answers the link's heartbeat with an update of `web` to 2.0, the
-/// features both sides know and the halt generation of `web`; the link gives the loop the
-/// features and the generation, and no order (the route carries no package digest), which it
-/// logs; the loop raises the held generation and runs nothing; and the coordinator's status
+/// not read: the coordinator answers the link's heartbeat with an update of `web` to 2.0 and
+/// its terms (`order-v1`: order id, try, the registered digest), the features both sides know
+/// and the halt generation of `web`; the link gives the loop the features, the generation and
+/// the update order with that id, try and digest; the loop raises the held generation and runs
+/// the order; its verdict goes back under the order's id and try; and the coordinator's status
 /// shows the host under the agent and version the heartbeat named.
 #[test]
 fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
@@ -146,7 +152,12 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         json.heartbeat(&farm.host.identity(), &beat),
         Ok(Reply {
             order: None,
-            features: vec![Feature::DeferredV1, Feature::HaltV1, Feature::HeartbeatV2],
+            features: vec![
+                Feature::DeferredV1,
+                Feature::HaltV1,
+                Feature::HeartbeatV2,
+                Feature::OrderV1
+            ],
             halt_generations: vec![(service("web"), 1)],
             acknowledged: Vec::new(),
         })
@@ -179,15 +190,34 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
     assert_eq!(sent["services"][0]["name"], "web");
     assert_eq!(sent["services"][0]["version"], "1.0");
     assert_eq!(rig.world.halts.raises(), [("web".to_owned(), 1)]);
-    assert!(rig.world.orders.orders().is_empty());
-    assert_eq!(rig.world.dispatch.pending(), 0);
-    assert_eq!(
-        rig.world.log.lines(),
-        [
-            "error: the coordinator's update of web to 2.0 is not run: the JSON heartbeat route \
-          carries no package digest"
-        ]
-    );
+    assert_eq!(rig.world.log.lines(), Vec::<String>::new());
+    // The coordinator's order, with its id, try and digest, is the loop's update order.
+    let hash: String = Sha256::digest(b"web\n2.0")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let ordered = Order {
+        id: OrderId::new(&format!("update-{}", &hash[..32])).expect("an order id"),
+        order_try: 1,
+        verb: Verb::Update(Target {
+            service: service("web"),
+            version: version("2.0"),
+            digest: digest(),
+        }),
+    };
+    assert_eq!(rig.world.dispatch.pending(), 1);
+    assert!(rig.world.dispatch.run_next());
+    assert_eq!(rig.world.orders.orders(), [ordered.clone()]);
+
+    // Its verdict goes back under the order's id and try.
+    let server = serve_coordinator(&transport, &farm, &coordinator);
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let request = server.join().expect("the server").expect("a request");
+    let sent: Value = serde_json::from_slice(&request.body).expect("JSON");
+    let last = &sent["services"][0]["last_update"];
+    assert_eq!(last["order_id"], ordered.id.as_str());
+    assert_eq!(last["order_try"], 1);
+    assert_eq!(last["target"], "2.0");
 
     let status = hyper::Request::builder()
         .method("GET")
