@@ -63,6 +63,9 @@ are failures.
 - `class`: `release` or `environment`. A step that dies without the line is `release`.
 - `reason`: optional; a token of `[a-z0-9_]`, 1 to 64 bytes, for machines. Prose goes in `detail`.
 - `retry_after_secs`: used with `75`.
+- Deferral reasons a hook gives with `75` include `drain_bound` (a drain did not finish in its
+  bound) and `leases_live` (the host holds live leases it will not cut; the hook decides it in
+  `prepare`, after undoing what it placed).
 - `reversible`: whether the hook can still undo what it has done; absent means `true`. A step that
   says `false` is the commit.
 - `promotion_pending`: set by `verify` when the service serves but is not yet fully its own.
