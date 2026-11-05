@@ -57,9 +57,11 @@ jobs:
         run: systemctl --version
       - name: systemd-analyze version
         run: systemd-analyze --version
-      # A runner image without systemd as PID 1 is a setup failure, not a test to skip.
-      - name: Fail unless systemd is the service manager
-        run: test -d /run/systemd/system || { echo "::error::/run/systemd/system is missing, so systemd is not the service manager of this runner and the privileged tests cannot run"; exit 1; }
+      # A runner image without systemd as PID 1 is a setup failure, not a test to skip: this step
+      # fails, and its name says why. (The tests' own check refuses such a host too, with the
+      # same reason.)
+      - name: Fail unless systemd is the service manager (/run/systemd/system is a directory)
+        run: test -d /run/systemd/system
       - run: rustup toolchain install
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cargo-cache
