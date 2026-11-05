@@ -58,7 +58,7 @@ pub const REPLY_MAX: usize = 16 * 1024;
 pub const HEAD_MAX: usize = 8 * 1024;
 
 /// The keys of an answer of the JSON route.
-const ANSWER_KEYS: [&str; 8] = [
+const ANSWER_KEYS: [&str; 9] = [
     "reply",
     "service",
     "version",
@@ -67,6 +67,7 @@ const ANSWER_KEYS: [&str; 8] = [
     "package_digest",
     "features",
     "halts",
+    "acks",
 ];
 
 /// A byte stream to the coordinator.

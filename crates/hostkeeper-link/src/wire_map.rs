@@ -15,9 +15,10 @@
 //! sent without it.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
-//! services the daemon could run (a name outside its grammar names none). This wire has no
-//! acknowledgement, so none is read: a verdict is sent in every heartbeat, as the coordinator of
-//! this route expects. An update is the loop's update order when the answer carries its terms
+//! services the daemon could run (a name outside its grammar names none). The `acks` are the
+//! verdicts the coordinator stored, by service, order id and try, each kept when the daemon's
+//! grammars read its service name and order id and dropped otherwise (as a halt of a name outside
+//! the grammar is). An update is the loop's update order when the answer carries its terms
 //! (the order id, try and package digest a coordinator sends to an agent that announced
 //! `order-v1`) and the daemon's grammars read every word of it. Any other update (one with no
 //! service, the legacy service's; one with no terms, from a coordinator that sends none; one
@@ -41,7 +42,9 @@ use hostkeeper_wire::wire_report::{
 
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, ServiceFacts};
 use crate::names::{OrderId, PackageDigest};
-use crate::order::{DeferredReport, Order, OrderResult, Outcome, Reply, Target, Verb};
+use crate::order::{
+    Acknowledged, DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
+};
 use crate::ports::Unsendable;
 
 /// The heartbeat `beat` on the JSON route.
@@ -204,6 +207,7 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
         order_id,
         order_try,
         package_digest,
+        acks,
     } = answer;
     let features = features
         .unwrap_or_default()
@@ -217,6 +221,10 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
                 .ok()
                 .map(|service| (service, generation))
         })
+        .collect();
+    let acknowledged = acks
+        .iter()
+        .filter_map(|ack| acknowledged(&ack.service, ack.order_id.as_str(), ack.order_try))
         .collect();
     let (order, update) = match reply {
         ServiceReply::Nothing => (None, None),
@@ -260,10 +268,22 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
             order,
             features,
             halt_generations,
-            acknowledged: Vec::new(),
+            acknowledged,
         },
         update,
     }
+}
+
+/// The acknowledgement of the verdict of `service` for the order `id` and try, when the daemon's
+/// grammars read both words; shared with the protobuf route.
+pub(crate) fn acknowledged(service: &str, id: &str, order_try: u64) -> Option<Acknowledged> {
+    Some(Acknowledged {
+        service: ServiceName::new(service).ok()?,
+        order: OrderRef {
+            id: OrderId::new(id).ok()?,
+            order_try,
+        },
+    })
 }
 
 /// Why an update names no service: it is the coordinator's legacy service.

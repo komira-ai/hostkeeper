@@ -21,9 +21,10 @@ use hostkeeper_coordinator::listen::connection;
 use hostkeeper_coordinator::service::Coordinator;
 use hostkeeper_link::testing::{FakeLink, RecordingLog, identity, verdict};
 use hostkeeper_link::{
-    ANNOUNCED, AsyncConn, CoordinatorLink, EndpointError, Feature, GrpcDial, GrpcLinkError,
-    GrpcMtlsLink, Health, Heartbeat, LinkError, MAX_HEARTBEAT_BYTES, NegotiatedLink, Order,
-    Outcome, Platform, Reason, Reply, ServiceFacts, Target, TcpDial, TrustFault, Unsendable, Verb,
+    ANNOUNCED, Acknowledged, AsyncConn, CoordinatorLink, EndpointError, Feature, GrpcDial,
+    GrpcLinkError, GrpcMtlsLink, Health, Heartbeat, LinkError, MAX_HEARTBEAT_BYTES, NegotiatedLink,
+    Order, OrderRef, OrderResult, Outcome, Platform, Reason, Reply, ServiceFacts, Target, TcpDial,
+    TrustFault, Unsendable, Verb,
 };
 use hostkeeper_testkit::Scratch;
 use hostkeeper_tls::{Alpn, TlsSource};
@@ -204,6 +205,7 @@ fn expected_reply() -> Reply {
             Feature::HaltV1,
             Feature::HeartbeatV2,
             Feature::OrderV1,
+            Feature::VerdictAcksV1,
             Feature::GrpcV1,
         ],
         halt_generations: vec![(service("web"), 1)],
@@ -264,6 +266,58 @@ fn the_grpc_link_returns_the_same_reply_as_the_json_link_for_the_same_coordinato
         hosts_of_web(&grpc_coordinator),
         BTreeSet::from(["d1".to_owned()])
     );
+}
+
+/// Catches a gRPC link that reads no acknowledgements, or reads them differently from the JSON
+/// link: the same host, reporting a failed verdict of order `o-1` try 1 for `web`, is
+/// acknowledged that verdict by the coordinator, and the reply of both links names it.
+#[test]
+fn a_verdict_is_acknowledged_in_the_same_way_on_the_json_and_the_grpc_link() {
+    let farm = Farm::new();
+    let pki = Pki::with_bundle("grpc-acks", &farm.ca.pem);
+    let mut web = facts("web", "1.0");
+    web.last_update = Some(OrderResult {
+        order: OrderRef {
+            id: order_id("o-1"),
+            order_try: 1,
+        },
+        target: version("2.0"),
+        outcome: Outcome::Failed,
+        phase: None,
+        class: None,
+        reason: None,
+        forced: false,
+        detail: None,
+    });
+    let beat = beat(vec![web]);
+    let acknowledged = vec![Acknowledged {
+        service: service("web"),
+        order: OrderRef {
+            id: order_id("o-1"),
+            order_try: 1,
+        },
+    }];
+
+    let (_json_dir, json_coordinator) = fresh("grpc-acks-json");
+    let transport = Arc::new(PipeTransport::default());
+    let log = Arc::new(RecordingLog::default());
+    let json = link(&farm, &pki, &transport, &log);
+    let json_server = serve_coordinator(&transport, &farm, &json_coordinator);
+    let from_json = json.heartbeat(&farm.host.identity(), &beat);
+    json_server.join().expect("the server").expect("a request");
+
+    let (_grpc_dir, grpc_coordinator) = fresh("grpc-acks-grpc");
+    let server = Server::of(&farm, &grpc_coordinator);
+    let dial = Arc::new(DuplexDial::default());
+    let grpc = grpc_link(&farm, &pki, &dial, &log);
+    server.accept(&dial);
+    let from_grpc = grpc.heartbeat(&farm.host.identity(), &beat);
+
+    assert_eq!(
+        from_json.map(|reply| reply.acknowledged),
+        Ok(acknowledged.clone())
+    );
+    assert_eq!(from_grpc.map(|reply| reply.acknowledged), Ok(acknowledged));
 }
 
 /// Catches a link that talks to a server that is not the coordinator: a server whose certificate

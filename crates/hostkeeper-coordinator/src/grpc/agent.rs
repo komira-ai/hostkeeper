@@ -37,6 +37,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         order: order.as_ref().map(Order::to_proto),
         features: answer.features.unwrap_or_default(),
         halt_generations: answer.halts.into_iter().collect(),
+        acks: crate::verdict_file::to_proto(&answer.acks),
     }
 }
 

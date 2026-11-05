@@ -459,23 +459,73 @@ impl ServicesApi for ServicesService {
     }
 }
 
-/// The service of `Enrollment`: no method has a handler here yet.
-pub(crate) struct EnrollmentService;
+/// The service of `Enrollment`.
+pub(crate) struct EnrollmentService {
+    coordinator: Arc<Coordinator>,
+}
+
+impl EnrollmentService {
+    /// The service over `coordinator`.
+    pub(crate) fn new(coordinator: Arc<Coordinator>) -> Self {
+        Self { coordinator }
+    }
+}
 
 #[tonic::async_trait]
 impl EnrollmentApi for EnrollmentService {
     async fn list(
         &self,
-        _request: Request<proto::ListPendingRequest>,
+        request: Request<proto::ListPendingRequest>,
     ) -> Result<Response<proto::ListPendingResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .enrollment_list(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
     }
 
     async fn approve(
         &self,
-        _request: Request<proto::ApproveRequest>,
+        request: Request<proto::ApproveRequest>,
     ) -> Result<Response<proto::ApproveResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .enrollment_approve(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
+    }
+
+    async fn add_record(
+        &self,
+        request: Request<proto::AddRecordRequest>,
+    ) -> Result<Response<proto::AddRecordResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .add_record(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
+    }
+
+    async fn list_records(
+        &self,
+        request: Request<proto::ListRecordsRequest>,
+    ) -> Result<Response<proto::ListRecordsResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .list_records(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
+    }
+
+    async fn remove_record(
+        &self,
+        request: Request<proto::RemoveRecordRequest>,
+    ) -> Result<Response<proto::RemoveRecordResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .remove_record(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
     }
 }
 

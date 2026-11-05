@@ -9,7 +9,6 @@ use std::fmt::Debug;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::Audit as _;
-use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::Enrollment as _;
 use hostkeeper_proto::hostkeeper::operator::v1::hold_scope::Scope;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::Hosts as _;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::Releases as _;
@@ -18,9 +17,7 @@ use tonic::{Code, Request, Response, Status};
 
 use super::operator::{World, as_ci, as_operator, disk_full, state};
 use crate::grpc::Admitted;
-use crate::grpc::operator::{
-    AuditService, EnrollmentService, HostsService, ReleasesService, ServicesService,
-};
+use crate::grpc::operator::{AuditService, HostsService, ReleasesService, ServicesService};
 use crate::operator::Caller;
 use crate::ops::{OpsState, OpsStore};
 use crate::testutil::{Rig, with_kbf};
@@ -142,16 +139,6 @@ async fn a_method_no_handler_serves_yet_is_unimplemented_with_no_message() {
     assert_pending(
         services(&world)
             .set_min_version(as_operator(c, proto::SetMinVersionRequest::default()).await)
-            .await,
-    );
-    assert_pending(
-        EnrollmentService
-            .list(Request::new(proto::ListPendingRequest::default()))
-            .await,
-    );
-    assert_pending(
-        EnrollmentService
-            .approve(Request::new(proto::ApproveRequest::default()))
             .await,
     );
 }

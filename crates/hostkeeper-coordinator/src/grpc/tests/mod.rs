@@ -1,10 +1,12 @@
 //! The tests of the gRPC services and the HTTP/JSON gateway of the coordinator, each driven in
 //! process through `crate::grpc::route` with an explicit peer certificate and bearer: no socket.
 
+mod acks;
 mod adapters;
 mod agent;
 mod credentials;
 mod ctl;
+mod enrollment;
 mod gateway;
 mod heartbeat;
 mod limits;

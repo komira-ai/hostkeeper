@@ -7,9 +7,9 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_link::{
-    ANNOUNCED, ClientIdentity, CoordinatorLink, EndpointError, HEAD_MAX, Heartbeat, JsonMtlsLink,
-    LinkError, Order, OrderId, Platform, REPLY_MAX, Reason, Reply, ReplyFault, Target, TrustFault,
-    Verb,
+    ANNOUNCED, Acknowledged, ClientIdentity, CoordinatorLink, EndpointError, HEAD_MAX, Heartbeat,
+    JsonMtlsLink, LinkError, Order, OrderId, OrderRef, Platform, REPLY_MAX, Reason, Reply,
+    ReplyFault, Target, TrustFault, Verb,
 };
 
 use crate::tls::{
@@ -431,7 +431,7 @@ fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
         http(
             200,
             &format!(
-                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","grpc-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
+                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
             ),
         )
     };
@@ -533,6 +533,35 @@ fn an_update_with_its_terms_is_the_loops_update_order() {
             format!("error: the coordinator's update of {whom} to {logged} is not run: {not_read}")
         );
     }
+}
+
+/// Catches an acknowledgement dropped from the reply, or one the daemon cannot read kept: the
+/// `acks` of an answer are the loop's acknowledgements in the answer's order, and one whose
+/// service name or order id the daemon's grammars refuse (the wire's are wider) is left out.
+#[test]
+fn the_acks_of_an_answer_are_the_loops_when_the_daemon_reads_them() {
+    let bench = Bench::new("link-acks");
+    let body = r#"{"reply":"nothing","acks":[{"service":"web","order_id":"update-1","order_try":2},{"service":"-web","order_id":"update-1","order_try":1},{"service":"api","order_id":".hidden","order_try":1},{"service":"api","order_id":"force-3","order_try":1}]}"#;
+    let (reply, read) = bench.answered(http(200, body), Close::Notify);
+    assert!(read);
+    let acknowledged = |name: &str, id: &str, order_try: u64| Acknowledged {
+        service: service(name),
+        order: OrderRef {
+            id: OrderId::new(id).expect("an order id"),
+            order_try,
+        },
+    };
+    assert_eq!(
+        reply,
+        Ok(Reply {
+            acknowledged: vec![
+                acknowledged("web", "update-1", 2),
+                acknowledged("api", "force-3", 1)
+            ],
+            ..Reply::default()
+        })
+    );
+    assert_eq!(bench.log.lines(), Vec::<String>::new());
 }
 
 /// Catches a pair that is not a TLS identity sent anyway, and a refusal by the coordinator of

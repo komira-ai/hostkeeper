@@ -161,6 +161,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
                 Feature::HaltV1,
                 Feature::HeartbeatV2,
                 Feature::OrderV1,
+                Feature::VerdictAcksV1,
                 Feature::GrpcV1
             ],
             halt_generations: vec![(service("web"), 1)],

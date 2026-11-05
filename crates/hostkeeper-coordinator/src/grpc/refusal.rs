@@ -7,7 +7,7 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AuditRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
+    AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -71,6 +71,29 @@ pub(crate) fn services(refusal: ServicesRefusal) -> Status {
         ServicesRefusal::NotAssigned | ServicesRefusal::NotHeld => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "SERVICES_REFUSAL_")
+}
+
+/// The status of a refusal by `Enrollment`.
+pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
+    let code = match refusal {
+        EnrollmentRefusal::Unspecified | EnrollmentRefusal::StoreFailed => Code::Internal,
+        EnrollmentRefusal::Unauthorized => Code::Unauthenticated,
+        EnrollmentRefusal::Forbidden => Code::PermissionDenied,
+        EnrollmentRefusal::UnknownRequest | EnrollmentRefusal::NoRecord => Code::NotFound,
+        EnrollmentRefusal::KeyMismatch
+        | EnrollmentRefusal::DuplicateClaim
+        | EnrollmentRefusal::NotPending
+        | EnrollmentRefusal::Denied => Code::FailedPrecondition,
+        EnrollmentRefusal::HostIdTaken
+        | EnrollmentRefusal::RecordExists
+        | EnrollmentRefusal::RecordConflict => Code::AlreadyExists,
+        EnrollmentRefusal::PendingFull | EnrollmentRefusal::Capacity => Code::ResourceExhausted,
+        EnrollmentRefusal::InvalidHostId
+        | EnrollmentRefusal::InvalidRole
+        | EnrollmentRefusal::InvalidService
+        | EnrollmentRefusal::InvalidRequest => Code::InvalidArgument,
+    };
+    refused(code, refusal.as_str_name(), "ENROLLMENT_REFUSAL_")
 }
 
 /// The status of a refusal by `Audit`.

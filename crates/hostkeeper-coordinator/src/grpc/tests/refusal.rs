@@ -4,7 +4,7 @@
 use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AuditRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
+    AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -33,16 +33,16 @@ where
     }
 }
 
-/// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal` and
-/// `AuditRefusal` becomes the status its proto comment names: the code of the comment and the
+/// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`,
+/// `EnrollmentRefusal` and `AuditRefusal` becomes the status its proto comment names: the code of the comment and the
 /// value's name, without its prefix and in lower case, as the whole message; and that
 /// `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the enum gains that
 /// the table lacks fails the test.
 #[test]
 fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
     use Code::{
-        Aborted, FailedPrecondition, Internal, InvalidArgument, NotFound, PermissionDenied,
-        ResourceExhausted, Unauthenticated, Unavailable,
+        Aborted, AlreadyExists, FailedPrecondition, Internal, InvalidArgument, NotFound,
+        PermissionDenied, ResourceExhausted, Unauthenticated, Unavailable,
     };
 
     assert_table(
@@ -156,6 +156,83 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             (ServicesRefusal::StoreFailed, Internal, "store_failed"),
         ],
         refusal::services,
+    );
+
+    assert_table(
+        &[
+            (EnrollmentRefusal::Unspecified, Internal, "unspecified"),
+            (
+                EnrollmentRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (EnrollmentRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                EnrollmentRefusal::UnknownRequest,
+                NotFound,
+                "unknown_request",
+            ),
+            (
+                EnrollmentRefusal::KeyMismatch,
+                FailedPrecondition,
+                "key_mismatch",
+            ),
+            (
+                EnrollmentRefusal::HostIdTaken,
+                AlreadyExists,
+                "host_id_taken",
+            ),
+            (
+                EnrollmentRefusal::PendingFull,
+                ResourceExhausted,
+                "pending_full",
+            ),
+            (
+                EnrollmentRefusal::DuplicateClaim,
+                FailedPrecondition,
+                "duplicate_claim",
+            ),
+            (
+                EnrollmentRefusal::InvalidHostId,
+                InvalidArgument,
+                "invalid_host_id",
+            ),
+            (
+                EnrollmentRefusal::InvalidRole,
+                InvalidArgument,
+                "invalid_role",
+            ),
+            (
+                EnrollmentRefusal::InvalidService,
+                InvalidArgument,
+                "invalid_service",
+            ),
+            (
+                EnrollmentRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (
+                EnrollmentRefusal::NotPending,
+                FailedPrecondition,
+                "not_pending",
+            ),
+            (EnrollmentRefusal::Denied, FailedPrecondition, "denied"),
+            (EnrollmentRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                EnrollmentRefusal::RecordExists,
+                AlreadyExists,
+                "record_exists",
+            ),
+            (
+                EnrollmentRefusal::RecordConflict,
+                AlreadyExists,
+                "record_conflict",
+            ),
+            (EnrollmentRefusal::NoRecord, NotFound, "no_record"),
+            (EnrollmentRefusal::Capacity, ResourceExhausted, "capacity"),
+        ],
+        refusal::enrollment,
     );
 
     assert_table(

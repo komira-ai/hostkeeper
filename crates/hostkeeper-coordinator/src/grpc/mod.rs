@@ -79,8 +79,6 @@ pub const PENDING: &[&str] = &[
     "/hostkeeper.operator.v1.Services/Assign",
     "/hostkeeper.operator.v1.Services/Unassign",
     "/hostkeeper.operator.v1.Services/SetMinVersion",
-    "/hostkeeper.operator.v1.Enrollment/List",
-    "/hostkeeper.operator.v1.Enrollment/Approve",
 ];
 
 /// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response.
@@ -293,7 +291,7 @@ where
             call(server, request).await
         }
         Some(ENROLLMENT) => {
-            let server = EnrollmentServer::new(EnrollmentService)
+            let server = EnrollmentServer::new(EnrollmentService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

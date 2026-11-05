@@ -15,7 +15,8 @@
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
-//! service names. The message has no acknowledgement, so none is read. An order is the loop's
+//! service names. The `acks` are the verdicts the coordinator stored, each kept when the
+//! daemon's grammars read its service name and order id and dropped otherwise. An order is the loop's
 //! when its verb is `update` or `force` and the daemon's grammars read every word of it. Any
 //! other order (a verb the daemon does not run, no verb, or a word the daemon cannot read) is not
 //! run: it is returned beside the reply ([`Mapped::dropped`]), with why, for the link to log.
@@ -30,6 +31,7 @@ use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, ServiceFacts
 use crate::names::{OrderId, PackageDigest};
 use crate::order::{DeferredReport, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::Unsendable;
+use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
 pub(crate) const NOT_RUN: &str = "the daemon runs only update and force orders";
@@ -182,6 +184,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         order,
         features,
         halt_generations,
+        acks,
     } = response;
     let features = features
         .iter()
@@ -197,6 +200,10 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
                 .map(|service| (service, generation))
         })
         .collect();
+    let acknowledged = acks
+        .iter()
+        .filter_map(|ack| acknowledged(&ack.service, &ack.order_id, ack.order_try))
+        .collect();
     let (order, dropped) = match order {
         Some(order) => order_of(order),
         None => (None, None),
@@ -206,7 +213,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
             order,
             features,
             halt_generations,
-            acknowledged: Vec::new(),
+            acknowledged,
         },
         dropped,
     }
@@ -277,7 +284,7 @@ mod tests {
     use crate::beat::{AGENT_NAME, ANNOUNCED, Feature, Health, Heartbeat, Platform, ServiceFacts};
     use crate::names::{OrderId, PackageDigest, Reason};
     use crate::order::{
-        DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
+        Acknowledged, DeferredReport, Order, OrderRef, OrderResult, Outcome, Reply, Target, Verb,
     };
     use crate::ports::Unsendable;
 
@@ -398,6 +405,7 @@ mod tests {
                     "heartbeat-v2",
                     "forced-v1",
                     "order-v1",
+                    "verdict-acks-v1",
                     "grpc-v1"
                 ]
                 .map(str::to_owned)
@@ -594,7 +602,38 @@ mod tests {
             mapped.reply.halt_generations,
             [(name("api"), 1), (name("web"), 2)]
         );
-        assert_eq!(mapped.reply.acknowledged, Vec::<OrderRef>::new());
+        assert_eq!(mapped.reply.acknowledged, Vec::<Acknowledged>::new());
+    }
+
+    /// Proves an ack of a readable service and order id is the loop's, in the response's order,
+    /// and one whose service name or order id the daemon's grammars refuse is dropped.
+    #[test]
+    fn acks_are_kept_when_readable_and_dropped_otherwise() {
+        let ack = |service: &str, order_id: &str, order_try: u64| pb::VerdictAck {
+            service: service.to_owned(),
+            order_id: order_id.to_owned(),
+            order_try,
+        };
+        let mapped = reply(pb::HeartbeatResponse {
+            acks: vec![
+                ack("web", "o-1", 2),
+                ack("a/b", "o-1", 1),
+                ack("api", ".hidden", 1),
+                ack("api", "force-3", 1),
+            ],
+            ..pb::HeartbeatResponse::default()
+        });
+        let expected = |service: &str, id: &str, order_try: u64| Acknowledged {
+            service: name(service),
+            order: OrderRef {
+                id: OrderId::new(id).expect("an order id"),
+                order_try,
+            },
+        };
+        assert_eq!(
+            mapped.reply.acknowledged,
+            [expected("web", "o-1", 2), expected("api", "force-3", 1)]
+        );
     }
 
     /// Proves an `update` order is the loop's update order with its id, try and terms, and a
