@@ -18,6 +18,9 @@
 //! - `hostkeeper-steps` and `hostkeeper-observe` reach `hostkeeper-launchd` through no normal or
 //!   build dependency, direct or through any chain (a fixture without `hostkeeper-observe` has
 //!   nothing to check for it);
+//! - `hostkeeper-launchd` may depend on `hostkeeper-steps` (its step launcher implements the
+//!   runner's `StepLauncher`): the edge runs from the macOS crate down to the shared layer, never
+//!   back;
 //! - `hostkeeper-testkit` depends on no workspace crate, and no crate has it but as a
 //!   dev-dependency;
 //! - no non-test source file under `crates/*/src` brings back a closed set of roles (the enum
@@ -921,4 +924,28 @@ fn hostkeeper_steps_and_observe_do_not_depend_on_launchd() {
              but reaches it through hostkeeper-observe -> shim -> hostkeeper-launchd"
         )
     );
+}
+
+/// Catches: a check that refuses the edge the macOS crate needs, `hostkeeper-launchd` on the step
+/// runner and the hook (its step launcher implements `StepLauncher`), while the runner and the
+/// observer keep reaching nothing of it.
+#[test]
+fn the_launchd_crate_may_depend_on_the_step_runner() {
+    let steps_dep = "hostkeeper-steps = { path = \"../hostkeeper-steps\" }\n";
+    let mut edits = bare_crate("crates", "hostkeeper-observe");
+    edits.push((
+        "crates/hostkeeper-launchd/Cargo.toml".to_owned(),
+        layered(
+            "hostkeeper-launchd",
+            &format!("{HOOK_DEP}{steps_dep}"),
+            "",
+            TESTKIT_DEP,
+        ),
+    ));
+    edits.push((
+        "crates/hostkeeper-launchd/src/lib.rs".to_owned(),
+        String::new(),
+    ));
+    let dir = fixture("clean", edits);
+    assert_eq!(check(&dir), Ok(()));
 }

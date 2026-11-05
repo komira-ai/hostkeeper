@@ -48,17 +48,18 @@ The token is `hostkeeper_hook::REASON_LEASES_LIVE`, beside `drain_bound`.
 
 On Linux the daemon's unit restarts it, and an `OnFailure=` unit runs the previous binary's
 `self-update-fallback` verb once the new binary has failed its start limit. launchd has neither
-a start limit nor `OnFailure=`, so on a Mac the same verb is run by a timer job.
-`hostkeeper_steps::selfupdate` returns the text of both plists:
+a start limit nor `OnFailure=`, so on a Mac the same verb is run by a timer job. Two plists
+serve it:
 
-- `launchd_main_plist`: the daemon's `LaunchDaemons` plist, running `current` at load with
-  `KeepAlive` set to `true` (the counterpart of the unit's `Restart=always`: the daemon exits
-  cleanly after switching to a new binary and must be started again) and a `ThrottleInterval`;
-- `launchd_fallback_job`: the job `<label>.fallback`, which runs
+- the daemon's own `LaunchDaemons` plist, the one `hostkeeper_launchd::plist::daemon_plist`
+  renders (see [One daemon, run by launchd](#one-daemon-run-by-launchd)): `KeepAlive` is plain
+  `true`, the counterpart of the unit's `Restart=always`, because the daemon exits cleanly after
+  switching to a new binary and must be started again. It sets no `ThrottleInterval`: launchd
+  waits its default 10 seconds between two starts;
+- `hostkeeper_steps::selfupdate::launchd_fallback_job`: the job `<label>.fallback`, which runs
   `previous self-update-fallback --dir <dir>` every `StartInterval` seconds and not at load.
-
-The plists are deterministic (keys sorted, fixed indentation) and every path and label in them
-is XML-escaped.
+  The plist is deterministic (keys sorted, fixed indentation) and every path and the label in
+  it are XML-escaped.
 
 ### Enrollment claims
 
@@ -75,8 +76,8 @@ that stops enrollment before any request is posted. No placeholder is ever sent.
 The crate [`hostkeeper-launchd`](../crates/hostkeeper-launchd) holds the launchd side of the
 ports the daemon already has: labels, the plists of the daemon and of a step job, the
 `launchctl` port and its reader of `launchctl print`, the observer's service manager and
-process probe, and the unit control of the linking side. It is tested against fakes on Linux
-and is not wired into the daemon yet; nothing of it has run on a Mac.
+process probe, the unit control of the linking side, and the step launcher. It is tested against
+fakes on Linux and is not wired into the daemon yet; nothing of it has run on a Mac.
 
 #### One daemon, run by launchd
 
@@ -98,10 +99,61 @@ sandbox profile and no environment.
 
 #### A hook step is one launchd job
 
-Each hook step is meant to run as one launchd job with the label
-`<prefix>.hostkeeper.step.<service>.<step>.<generation>`. The job would run as root, for the timeout,
-the kill and the capture of the step's output only. Its plist has no sandbox profile and no `UserName`, and it has no rights, because a hook runs as root from a
-verified release (design 5.3 and 5.9). A step that is tried again keeps its label, so a resumed run finds and stops the same job.
+`hostkeeper_launchd::LaunchdLauncher` is the step launcher of a Mac: it implements the step
+runner's `StepLauncher`, the trait `SystemdLauncher` implements on Linux, under the same
+contract. Each step runs as one transient launchd job in the system domain, as root, with the
+label `<prefix>.hostkeeper.step.<service>.<step>.<generation>`, read from the step's unit name
+`updater-<service>-<step>-<generation>`. The job is there for the kill of the step's process
+group and the capture of its output only: its plist has no sandbox profile, no `UserName` and no
+`KeepAlive`, and it has no rights, because a hook runs as root from a verified release (design
+5.3 and 5.9). A step that is tried again keeps its label, so a resumed run finds and stops the
+same job.
+
+One run of a step:
+
+1. the call is checked as on Linux: the executable and the params file are absolute paths, and
+   the executable is an executable file (a missing one is a hook that did not start);
+2. a job of the same label still loaded from an earlier run is booted out;
+3. `/var/run/hostkeeper/steps/<label>/` gets the job's plist, `<label>.plist`, and two empty
+   files, `stdout` and `stderr`, which the plist names as the job's output (launchd appends to
+   them, so nothing of an earlier run is read as this one's);
+4. `launchctl bootstrap system <plist>` loads the job, and `RunAtLoad` starts it;
+5. `launchctl print system/<label>` is read every 500 ms until the job has ended (no process,
+   and a last exit code or a terminating signal) or is no longer loaded;
+6. the last 1 MiB of each output file is kept, as on Linux, and the last line of the kept
+   standard output is the step's report; the job is booted out (unloaded) and its directory
+   removed.
+
+| how the job ended | the step's exit |
+|---|---|
+| `last exit code = N`, no terminating signal | code `N` |
+| a terminating signal | no code: a failed step |
+| still running at the step's bound | booted out by the launcher, no code: a failed step |
+| no longer loaded (stopped) | no code: a failed step |
+
+launchd has no counterpart of `RuntimeMaxSec=`, so the launcher enforces the bound itself: a
+step bounded at `n` seconds that is still running at the first read at or after `n` seconds is
+booted out. A `prepare` declared with `prepare = 0` is unbounded: the launcher never boots it
+out, and nothing but the hook's own end ends it. Because the bound is the launcher's, a bounded
+job outlives a daemon that dies while it runs; the daemon, back, finds the step `running` in its
+record and stops its job by name before it runs the step again.
+
+Stopping a step is `launchctl bootout system/<label>`, which waits for the job to end: launchd
+sends `SIGTERM`, then `SIGKILL` to the job's process group after its exit timeout (launchd's
+default; the plist sets none). A label that is not loaded is stopped already, so a second stop,
+or a stop of a step that has ended, is not an error.
+
+A step file that cannot be read keeps nothing of that stream (the report is then `{}`, and the
+exit code decides). A failure of `launchctl` (a load that fails, a read that fails, a boot-out
+at the bound that fails) is a failure of the launcher, not of the step: the launcher boots the
+job out once more and removes its directory, and the runner leaves the step `running` and stops
+with the error (resume stops the job by name if it is still there).
+
+The equivalence tests (`crates/hostkeeper-launchd/tests/equivalence.rs`) run the same scenarios
+against both launchers through the trait: a bounded step that overruns is stopped at its bound
+and failed, an unbounded one is not, a double stop is `Ok`, and the capture keeps the tail. The
+real `launchctl` run is not part of the pull-request check (no Mac runs there): the host's
+launcher, `LaunchdLauncher::system`, is compiled on macOS only.
 
 #### Service state
 
@@ -163,9 +215,9 @@ pkg's plist.
 
 ## Specified, not built yet
 
-- The daemon run under launchd with the adapters above wired in, the launcher that runs a hook
-  step as a launchd job (timeout, kill and log capture only), and the placed plists in
-  `/Library/LaunchDaemons`.
+- The daemon run under launchd with the adapters above, the step launcher among them, wired
+  in, and the placed plists in `/Library/LaunchDaemons`.
+- The step launcher run against the real `launchctl` as root on a device.
 - The real adapters behind the ports above: the quarantine read (`listxattr`/`getxattr`),
   `codesign` run with a fixed argument list, and `ioreg`.
 - The self-update verb's decision on a Mac: whether the new binary failed its burst of starts
