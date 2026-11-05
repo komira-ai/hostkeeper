@@ -38,6 +38,8 @@ mod wire_halts_tests;
 #[cfg(test)]
 mod wire_legacy_tests;
 #[cfg(test)]
+mod wire_order_tests;
+#[cfg(test)]
 mod wire_service_facts_tests;
 #[cfg(test)]
 mod wire_size_tests;

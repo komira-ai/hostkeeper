@@ -10,7 +10,7 @@ use std::time::Duration;
 use hostkeeper_oidc::{Refusal, Verified, Verifier};
 use hostkeeper_wire::identity::SanPrefixes;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Answer, Heartbeat, ServiceReply};
+use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply};
 use serde::Serialize;
 
 use crate::acks::release_ack;
@@ -24,6 +24,7 @@ use crate::holds::{alert_on_bad_version, marks_of, on_bad_version};
 use crate::identity::Identity;
 use crate::membership::{Standing, members, standing};
 use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
+use crate::order_terms::{self, Terms};
 use crate::orders::Order;
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
@@ -163,11 +164,14 @@ pub struct Set {
 /// heartbeat's `deferred` report ends the order, holds no slot and backs the host off
 /// ([`crate::defer`]). `halt-v1`: the clear generations of [`crate::halt`]. `heartbeat-v2`:
 /// selector membership, hosts that are `missing`, `absent` or `unmanaged`
-/// ([`crate::membership`]).
+/// ([`crate::membership`]). `order-v1`: an update answer carries the order terms of
+/// [`crate::order_terms`], and the heartbeat's top level is the agent itself, never the legacy
+/// service.
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
     crate::membership::HEARTBEAT_V2,
+    ORDER_FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
@@ -175,7 +179,12 @@ pub const FEATURES: &[&str] = &[
 /// strictly and refuses a field it does not know, so a field listed here is left out of the
 /// answer to an agent that did not announce its feature, and to every agent while this
 /// coordinator does not advertise it ([`FEATURES`]). A field not listed is sent to every agent.
-pub const GATED_FIELDS: &[(&str, &str)] = &[("halts", halt::FEATURE)];
+pub const GATED_FIELDS: &[(&str, &str)] = &[
+    ("halts", halt::FEATURE),
+    ("order_id", ORDER_FEATURE),
+    ("order_try", ORDER_FEATURE),
+    ("package_digest", ORDER_FEATURE),
+];
 
 /// Whether the answer field `field` goes to an agent whose announced features this coordinator
 /// also advertises are `agreed` (none for an agent that announced none): yes for a field
@@ -428,10 +437,26 @@ impl Coordinator {
         tracing::warn!(node_id = %who.host_id, why, "dropped the services list of a heartbeat");
     }
 
+    /// The legacy service for the heartbeat `beat`: the coordinator's, except for an agent that
+    /// announced [`ORDER_FEATURE`], whose top level is the agent itself and which names every
+    /// service in `services`.
+    fn legacy_for(&self, beat: &Heartbeat) -> Option<&str> {
+        if beat.agent_features.iter().any(|name| name == ORDER_FEATURE) {
+            None
+        } else {
+            self.legacy.as_deref()
+        }
+    }
+
     /// Notes a heartbeat from `who` and answers it. With no desired state set, nothing.
     ///
     /// The top-level fields are the legacy service's, when one is set; without one they
-    /// belong to no service and only the entries of `services` count. Each entry of `services`
+    /// belong to no service and only the entries of `services` count. For an agent that
+    /// announced [`ORDER_FEATURE`] no legacy service is set, whatever the coordinator's: its
+    /// top level is the agent itself and every update names its service. Such an agent is
+    /// ordered a version only if CI registered a package digest for it, and the update then
+    /// carries the order terms of [`crate::order_terms`]; a version with no digest is not
+    /// ordered to it, and takes no slot. Each entry of `services`
     /// is noted as that service's heartbeat of the host, if the coordinator manages the
     /// service and runs it on the host's role (any other entry is ignored). The services are
     /// decided by priority, the highest first ([`crate::services::ServiceDef::priority`], 0
@@ -468,11 +493,11 @@ impl Coordinator {
         beat: Heartbeat,
         orders: bool,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
-        if self.legacy.is_none() && beat.services.is_none() {
+        if self.legacy_for(&beat).is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
         let asked = beat.agent_features.clone();
-        let (reply, order) = self.reply_to(who, beat, orders);
+        let (reply, order, terms) = self.reply_to(who, beat, orders);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -489,8 +514,14 @@ impl Coordinator {
         } else {
             BTreeMap::new()
         };
+        // The terms only to an agent that announced `order-v1` and a coordinator that
+        // advertises it.
+        let terms = terms.filter(|_| sends("order_id", features.as_deref()));
         let answer = Answer {
             reply,
+            order_id: terms.as_ref().map(|t| t.order_id.clone()),
+            order_try: terms.as_ref().map(|t| t.order_try),
+            package_digest: terms.map(|t| t.package_digest),
             features,
             halts,
         };
@@ -502,9 +533,11 @@ impl Coordinator {
         who: Identity,
         beat: Heartbeat,
         orders: bool,
-    ) -> (ServiceReply, Option<Order>) {
+    ) -> (ServiceReply, Option<Order>, Option<Terms>) {
         let now = (self.clock)();
-        let legacy = self.legacy.as_deref();
+        let legacy = self.legacy_for(&beat);
+        let order_v1 = self.features.iter().any(|name| name == ORDER_FEATURE)
+            && beat.agent_features.iter().any(|name| name == ORDER_FEATURE);
         let announced = beat.services.clone().unwrap_or_default();
         let node = Node {
             role: who.role.name().to_owned(),
@@ -594,7 +627,7 @@ impl Coordinator {
                 .ops
                 .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))
         {
-            return (ServiceReply::Nothing, Some(order));
+            return (ServiceReply::Nothing, Some(order), None);
         }
         let desired = self.desired.all();
         for name in names {
@@ -611,16 +644,39 @@ impl Coordinator {
                 now,
             );
             if let Decision::Update { version } = decision {
+                // An agent that reads order terms is ordered only a version with a digest.
+                let terms = if order_v1 {
+                    let last = announced
+                        .iter()
+                        .find(|one| one.name == name)
+                        .and_then(|one| one.last_update.as_ref());
+                    let digests = self.desired.digests(name);
+                    let made = digests
+                        .get(&version)
+                        .and_then(|digest| order_terms::terms(name, &version, digest, last));
+                    if made.is_none() {
+                        tracing::warn!(
+                            service = name,
+                            version = %version,
+                            node_id = %who.host_id,
+                            "not ordering an agent that reads order terms: no package digest is registered for the version"
+                        );
+                        continue;
+                    }
+                    made
+                } else {
+                    None
+                };
                 // The host's ack goes from the file before the order exists.
                 if !release_ack(&self.ops, name, &who.host_id) {
                     continue;
                 }
                 fleet.order(name, who.host_id.clone(), version.clone(), now);
                 let service = (Some(name) != legacy).then(|| name.to_owned());
-                return (ServiceReply::Update { service, version }, None);
+                return (ServiceReply::Update { service, version }, None, terms);
             }
         }
-        (ServiceReply::Nothing, None)
+        (ServiceReply::Nothing, None, None)
     }
 
     /// The CI token in `bearer`, checked by the verifier.
