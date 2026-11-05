@@ -635,6 +635,14 @@ fn audit_list_pages_filters_and_caps_the_limit() {
             ..req()
         },
         proto::ListAuditRequest {
+            action: Some(String::new()),
+            ..req()
+        },
+        proto::ListAuditRequest {
+            action: Some("a".repeat(65)),
+            ..req()
+        },
+        proto::ListAuditRequest {
             service: Some("bad name".to_owned()),
             ..req()
         },

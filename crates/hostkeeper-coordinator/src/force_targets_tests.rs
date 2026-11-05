@@ -242,6 +242,42 @@ async fn force_targets_are_described_as_the_audit_says_them() {
     );
 }
 
+/// Proves: a version a targeted host leaves that is marked bad already is not marked again: the
+/// force writes no `mark_bad` entry for it, and does not count it among the versions it left.
+///
+/// Catches: a second mark of a version already bad, or a version an operator marked taken for one
+/// the force left.
+#[tokio::test]
+async fn a_version_left_that_is_bad_already_is_not_marked_again() {
+    let rig = rig("force-left-bad", "");
+    introduce(
+        &rig,
+        &[
+            ("d1", DAEMON, web_only("3.0")),
+            ("d2", DAEMON, web_only("1.0")),
+        ],
+    );
+    registered(&rig, &[("1.0", 1), ("2.0", 2)]).await;
+    rig.coordinator
+        .mark_bad(
+            &operator(),
+            proto::MarkBadRequest {
+                service: WEB.to_owned(),
+                version: "3.0".to_owned(),
+                reason: "crash loop".to_owned(),
+            },
+        )
+        .expect("marked bad");
+
+    let response = force_fleet(&rig, "2.0", false);
+
+    let entries: Vec<&str> = response.entries.iter().map(|e| e.action.as_str()).collect();
+    assert_eq!(entries, ["force"]);
+    assert_eq!(response.targeted, 2);
+    assert_eq!(marks(&rig).bad, [version("3.0")]);
+    assert!(marks(&rig).bad_by_force.is_empty());
+}
+
 /// Proves: a second force replaces the first: the record is the second's, its generation is 2 and
 /// so is the order id, and a host is ordered the second version only.
 ///
