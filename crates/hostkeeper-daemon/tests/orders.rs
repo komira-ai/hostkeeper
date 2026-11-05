@@ -301,6 +301,7 @@ fn a_package_for_another_platform_is_refused() {
         .filter(|platform| *platform != own);
     for other in others {
         let rig = Rig::new("other-platform");
+        rig.running("web", support::BASE);
         let daemon = rig.daemon();
         let text = manifest("web", "2.0.0").replace(
             &format!("platform = \"{own}\""),
