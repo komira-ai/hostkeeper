@@ -69,6 +69,10 @@ fn print_output_maps_to_the_unit_states() {
             state(ActiveState::Activating, "spawn scheduled", None),
         ),
         (
+            LaunchctlOutput::success(&printed(UNIT, &["state = xpcproxy"])),
+            state(ActiveState::Activating, "xpcproxy", None),
+        ),
+        (
             LaunchctlOutput::success(&printed(UNIT, &["state = waiting", "last exit code = 0"])),
             state(ActiveState::Inactive, "waiting", None),
         ),

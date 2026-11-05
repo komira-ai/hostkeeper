@@ -415,11 +415,11 @@ fn the_macos_adapters_ask_launchd_through_the_ports_they_are_given() {
     assert_eq!(adapters.kind, PlatformKind::Macos);
     assert_eq!(adapters.unit_dir, dir.path());
     assert_eq!(adapters.units.is_active(label), Ok(true), "a running job");
-    assert_eq!(launchctl.calls(), [printed.clone()]);
+    assert_eq!(launchctl.calls(), std::slice::from_ref(&printed));
     let state = adapters.manager.unit_state(label).expect("a state");
     assert_eq!(state.active, ActiveState::Active);
     assert_eq!(state.main_pid, Some(301));
-    assert_eq!(print.calls(), [printed.clone()]);
+    assert_eq!(print.calls(), std::slice::from_ref(&printed));
     assert_eq!(
         adapters.process.identity(9),
         Ok(ProcessIdentity {

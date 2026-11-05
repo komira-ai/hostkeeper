@@ -570,3 +570,36 @@ fn a_launchd_job_that_ends_in_exit_75_reports_deferred_through_the_launcher() {
     assert_eq!(logged[0].0, PREPARE_UNIT);
     assert!(!sim.is_loaded(PREPARE_LABEL), "the ended job is booted out");
 }
+
+/// Catches a job read as ended while launchd's spawn helper still runs for it (`xpcproxy`, a state
+/// seen on a device), when the print still shows the exit of an earlier run: the launcher reads
+/// it again after a wait, and the step's exit is the one it ends with.
+#[test]
+fn a_job_in_xpcproxy_is_not_ended_whatever_exit_it_still_shows() {
+    let root = scratch("launcher-xpcproxy");
+    let hook = hook_file(root.path());
+    let jobs = root.path().join("jobs");
+    let fake = FakeLaunchctl::new();
+    let print = print_args(&label());
+    let plist = jobs.join(LABEL).join(format!("{LABEL}.plist"));
+    let printed = |lines: &str| format!("system/{LABEL} = {{\n{lines}}}\n");
+    fake.then(&print, Ok(LaunchctlOutput::not_loaded()));
+    fake.then(&bootstrap_args(&plist), Ok(LaunchctlOutput::success("")));
+    fake.then(
+        &print,
+        Ok(LaunchctlOutput::success(&printed(
+            "\tstate = xpcproxy\n\tlast exit code = 0\n",
+        ))),
+    );
+    fake.then(&print, Ok(LaunchctlOutput::success(&fixture(WAITING_3))));
+    fake.then(&bootout_args(&label()), Ok(LaunchctlOutput::success("")));
+    let pace = FakePace::default();
+    let launcher = LaunchdLauncher::new(fake.clone(), pace.clone(), &jobs);
+
+    let exit = launcher
+        .run(&call(&hook, UNIT, Step::Cutover, secs(600)))
+        .expect("the step ran");
+
+    assert_eq!(exit.code, Some(3));
+    assert_eq!(pace.sleeps(), [POLL]);
+}

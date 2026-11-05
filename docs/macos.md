@@ -201,6 +201,7 @@ The state of a service is read from `launchctl print system/<label>`:
 |---|---|
 | running | active |
 | spawn scheduled | activating |
+| xpcproxy (launchd's spawn helper runs, before the job's program does) | activating |
 | waiting or not running, last exit 0 or none | inactive |
 | waiting or not running, non-zero last exit or a terminating signal | failed |
 | the label is not loaded | not found |
@@ -219,6 +220,19 @@ mapped (`proc_pidinfo` with `PROC_PIDREGIONPATHINFO`: the lowest region backed b
 the main executable's text, read from the mapped vnode and not from a path). The path's device and
 inode must be the image's, and the same again on the file opened to hash it;
 otherwise the round is `unobserved` (`proc_error`), never a version confirmed from the new file.
+
+What the device run found on macOS 15 (arm64):
+
+| case | `proc_pidpath` | the image's (device, inode) | the probe |
+|---|---|---|---|
+| file unchanged | the path it was started from | the file's | its digest |
+| a new file renamed over the path | the same path, still | the old file's, not the path's | refused: the path is not the file the process runs |
+| file unlinked | fails (`ENOENT`) | the old file's, still | refused (no path) |
+| started through a symlink | the link's target | the target's | its digest |
+| a path longer than `PROC_PIDPATHINFO_MAXSIZE` | cannot be made: macOS refuses a path over 1024 bytes (`ENAMETOOLONG`), so no process runs from one | | |
+| run by another user | not started on the runner: the scratch directory is not open to `nobody` | | |
+
+So `proc_pidpath` alone is not enough: after a rename over the path it still names the path, whose file is then another. With the image's device and inode it is: a replaced or unlinked file is refused, and never read as the new version.
 
 #### Units in a package
 

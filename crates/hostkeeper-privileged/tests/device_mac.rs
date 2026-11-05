@@ -301,7 +301,7 @@ fn the_process_identity_check_works_against_a_real_process() {
     println!("|---|---|---|---|---|");
     finding("file unchanged", pid, &exe);
 
-    let new = dir.path().join("fixture.new");
+    let new = dir.path().join("fixture-new");
     fixture_copy(&new);
     fs::rename(&new, &exe).expect("rename over");
     finding("file renamed over", pid, &exe);
@@ -416,7 +416,8 @@ fn a_fixture_hook_runs_as_a_launchd_job_and_is_stopped_at_its_timeout() {
         service: "hkci",
         invocation: Invocation {
             step: Step::Prepare,
-            artifact: None,
+            // `prepare` is given a staged release; the fixture only reads its params.
+            artifact: Some(rig.dir().to_path_buf()),
             params: Some(params),
         },
         executable: Path::new(FIXTURE),
