@@ -22,8 +22,8 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
 use hyper::body::Body;
 use prost::Message;
 
-use super::Enrollment;
 use super::refusal::{RpcError, rpc_error};
+use super::{Enrollment, MacOutcome};
 use crate::http::{BoxError, Peer, read_body};
 
 /// The most bytes of one request message read: a CSR is at most 4096 bytes, and the rest of an
@@ -112,10 +112,13 @@ fn refused(refusal: CoordinatorRefusal) -> RpcError {
 impl Enrollment {
     /// `Enroll`: records the request of the CSR's key (its id is the key's SHA-256, computed
     /// here), pending until an operator approves it. The same key again is the same request.
+    /// A new request while the pending queue is full is refused `pending_full`. A pending
+    /// request that carries a Mac nonce is approved by it when every condition of the Mac path
+    /// holds ([`Enrollment::mac_auto_approve`]); otherwise it stays pending.
     ///
     /// # Errors
     /// `bad_csr`, `key_not_p256`, `renewal_not_allowed` (also for a `renewal_of` that is no
-    /// host id), or [`RpcError::Internal`].
+    /// host id), `pending_full`, or [`RpcError::Internal`].
     pub fn enroll(&self, request: EnrollRequest) -> Result<EnrollResponse, RpcError> {
         let renewal_of = match request.renewal_of.as_str() {
             "" => None,
@@ -139,12 +142,20 @@ impl Enrollment {
                     },
                     image: request.image,
                     renewal_of,
+                    mac_nonce_presented: !request.mac_nonce.is_empty(),
                 },
                 self.clock.now_unix(),
             )
             .map_err(rpc_error)?;
+        let approved_by_nonce = !request.mac_nonce.is_empty()
+            && posted.state.is_pending()
+            && matches!(
+                self.mac_auto_approve(&posted.request_id, &request.mac_nonce),
+                MacOutcome::Approved(_)
+            );
         // A request already approved, issued or denied is polled for where it stands.
         let state = match posted.state {
+            _ if approved_by_nonce => EnrollState::Unspecified,
             RequestState::Pending => EnrollState::Pending,
             RequestState::DuplicateClaim => EnrollState::DuplicateClaim,
             RequestState::Approved | RequestState::Issued | RequestState::Denied => {

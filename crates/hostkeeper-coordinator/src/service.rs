@@ -208,7 +208,8 @@ pub struct Coordinator {
     pub(crate) services: Services,
     legacy: Option<String>,
     prefixes: SanPrefixes,
-    pub(crate) ops: OpsStore,
+    /// Shared with enrollment, which audits its approvals there.
+    pub(crate) ops: Arc<OpsStore>,
     verifier: Arc<Verifier>,
     tokens: OperatorTokens,
     pub(crate) clock: Clock,
@@ -258,7 +259,7 @@ impl Coordinator {
             services: Services::default(),
             legacy: None,
             prefixes: SanPrefixes::default(),
-            ops: OpsStore::volatile(),
+            ops: Arc::new(OpsStore::volatile()),
             verifier,
             tokens: operator.into(),
             clock,
@@ -339,7 +340,10 @@ impl Coordinator {
     /// The same coordinator over `ops` instead of a store that keeps nothing.
     #[must_use]
     pub fn with_ops(mut self, ops: OpsStore) -> Self {
-        self.ops = ops;
+        self.ops = Arc::new(ops);
+        if let Some(enrollment) = &self.enrollment {
+            enrollment.audit_to(Arc::clone(&self.ops));
+        }
         self
     }
 

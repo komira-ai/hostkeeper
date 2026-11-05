@@ -168,6 +168,17 @@ impl KeyHash {
     pub fn to_hex(&self) -> String {
         hex::encode(self.0)
     }
+
+    /// Whether `other` is the same hash, compared over all 32 bytes whatever they hold, so the
+    /// time it takes says nothing of where two hashes differ.
+    pub fn equals_in_constant_time(&self, other: &KeyHash) -> bool {
+        let differ = self
+            .0
+            .iter()
+            .zip(other.0.iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        std::hint::black_box(differ) == 0
+    }
 }
 
 impl fmt::Display for KeyHash {
