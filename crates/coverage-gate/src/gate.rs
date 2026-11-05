@@ -1,12 +1,16 @@
 //! Per-crate totals, the comparison with the threshold, and the table CI prints.
 //!
-//! A crate is a directory under `<root>/crates` holding a `Cargo.toml`. A crate passes when
+//! A crate is a directory under `<root>/crates` or under `<root>/examples` holding a
+//! `Cargo.toml` (the workspace's `members`: `crates/*` and `examples/*`). A crate is named in
+//! the table by its directory name, whichever of the two it is under, so two crates with one
+//! directory name under different bases cannot be told apart in a row: that is refused
+//! ([`ListError::SameName`]) rather than summed into one row. A crate passes when
 //! its line coverage and its branch coverage each reach [`Percent::TARGET`]. A metric with
 //! nothing to measure passes, except lines: a crate with no instrumented line at all fails
 //! ([`Status::NoData`]), because a crate whose tests stopped being instrumented would
 //! otherwise slip past the gate. Every crate is judged: there is no way to exclude one.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -14,13 +18,53 @@ use std::path::{Component, Path, PathBuf};
 use crate::lcov::FileRecord;
 use crate::{Counts, CrateCoverage, Percent, show};
 
-/// The workspace's crates: the directories under `<root>/crates` with a `Cargo.toml`.
-pub fn workspace_crates(root: &Path) -> io::Result<BTreeSet<String>> {
-    let mut out = BTreeSet::new();
-    for entry in std::fs::read_dir(root.join("crates"))? {
-        let entry = entry?;
-        if entry.path().join("Cargo.toml").is_file() {
-            out.insert(entry.file_name().to_string_lossy().into_owned());
+/// The directories under `<root>` that hold crates: `crates` (which must exist) first, then
+/// `examples` (which may be absent: a workspace without examples has none).
+const BASES: [&str; 2] = ["crates", "examples"];
+
+/// Why the workspace's crates cannot be listed.
+#[derive(Debug, thiserror::Error)]
+pub enum ListError {
+    /// A directory that cannot be read: `<root>/crates` (also when it is absent) or an
+    /// `<root>/examples` that exists but cannot be listed.
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    /// Two crates with one directory name under different bases.
+    #[error(
+        "{name} is the directory of both {first}/{name} and {second}/{name}: crates are \
+         named by directory in the table, so rename one"
+    )]
+    SameName {
+        name: String,
+        first: &'static str,
+        second: &'static str,
+    },
+}
+
+/// The workspace's crates: the directories under `<root>/crates` and under `<root>/examples`
+/// with a `Cargo.toml`, each with the base it is under. A missing `<root>/examples` holds no
+/// crates; a missing `<root>/crates` is an error.
+pub fn workspace_crates(root: &Path) -> Result<BTreeMap<String, &'static str>, ListError> {
+    let mut out = BTreeMap::new();
+    for base in BASES {
+        let entries = match std::fs::read_dir(root.join(base)) {
+            Ok(entries) => entries,
+            Err(e) if base == "examples" && e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.path().join("Cargo.toml").is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(first) = out.insert(name.clone(), base) {
+                return Err(ListError::SameName {
+                    name,
+                    first,
+                    second: base,
+                });
+            }
         }
     }
     Ok(out)
@@ -31,35 +75,44 @@ pub fn workspace_crates(root: &Path) -> io::Result<BTreeSet<String>> {
 pub enum Error {
     /// A source outside every workspace crate, or one whose path climbs out of where it seems
     /// to be (a `..` component).
-    #[error("{0} is not under <root>/crates/<crate>/ for any workspace crate")]
+    #[error(
+        "{0} is not under <root>/crates/<crate>/ or <root>/examples/<crate>/ for any workspace crate"
+    )]
     Unattributed(PathBuf),
     /// A sum of counts that does not fit in 64 bits.
     #[error("the coverage counts of {0} do not fit in 64 bits")]
     Overflow(String),
 }
 
-/// Sums the records per crate. Every crate in `crates` gets an entry, zero when no
-/// record names it; a record outside every crate is an error rather than dropped, and so is a
-/// record whose path holds a `..` component (`crates/a/../../outside.rs` is not in `a`).
+/// Sums the records per crate. Every crate in `crates` (name and base, as `workspace_crates`
+/// lists them) gets an entry, zero when no record names it; a record outside every crate is an
+/// error rather than dropped, and so is a record whose path holds a `..` component
+/// (`crates/a/../../outside.rs` is not in `a`). A record is in a crate only under that crate's
+/// own base: `examples/a/src/lib.rs` is not in a crate `a` that lives under `crates`.
 pub fn by_crate(
     root: &Path,
-    crates: &BTreeSet<String>,
+    crates: &BTreeMap<String, &'static str>,
     files: &[FileRecord],
 ) -> Result<BTreeMap<String, CrateCoverage>, Error> {
-    let base = root.join("crates");
     let mut out: BTreeMap<String, CrateCoverage> = crates
-        .iter()
+        .keys()
         .map(|c| (c.clone(), CrateCoverage::default()))
         .collect();
     for f in files {
         let climbs = f.path.components().any(|c| c == Component::ParentDir);
-        let entry = f
-            .path
-            .strip_prefix(&base)
-            .ok()
-            .filter(|rest| !climbs && rest.components().count() > 1)
-            .and_then(|rest| rest.iter().next())
-            .and_then(|name| out.get_key_value(name.to_str()?));
+        let entry = BASES.iter().find_map(|base| {
+            let name = f
+                .path
+                .strip_prefix(root.join(base))
+                .ok()
+                .filter(|rest| !climbs && rest.components().count() > 1)
+                .and_then(|rest| rest.iter().next())?
+                .to_str()?;
+            crates
+                .get(name)
+                .filter(|under| *under == base)
+                .and_then(|_| out.get_key_value(name))
+        });
         let Some((name, total)) = entry else {
             return Err(Error::Unattributed(f.path.clone()));
         };

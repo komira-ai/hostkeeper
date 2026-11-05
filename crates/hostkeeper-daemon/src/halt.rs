@@ -6,8 +6,8 @@
 //! written with a temporary file, fsync, rename and a directory fsync. A missing file is 0. A
 //! file that does not hold a number is an error, never read as 0, and the executor runs no order
 //! of that service until it reads. The generation is only ever raised ([`HaltStore::raise`]);
-//! nothing lowers it. A `force` whose halt generation is greater raises it
-//! ([`crate::verbs::force`]); the heartbeat loop and `clear_halt` will raise it too.
+//! nothing lowers it. `clear_halt` ([`crate::verbs::clear_halt`]) and a `force` whose halt
+//! generation is greater ([`crate::verbs::force`]) raise it.
 
 use std::fs;
 use std::io;

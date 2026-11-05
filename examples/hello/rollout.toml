@@ -1,0 +1,22 @@
+# hello as a service of the coordinator: an entry of a rollout file (the coordinator's
+# --rollout-file). Appended to that file, it makes hello a service the coordinator rolls to the
+# hosts of the role `farm`; replace `farm` with the role of the hosts that run the proof
+# (docs/hello.md). `cargo test -p hostkeeper-coordinator --test hello_rollout` loads this file
+# with the coordinator's own reader.
+#
+# A host of the role on which hello is not installed is ordered to install it, because the entry
+# assigns hello to the role; the daemon must announce `install-v1`. The first host
+# goes alone, and no other starts until it has beaten healthy twice at the new version. A
+# release that fails after its commit on one host is rolled back by the coordinator to the last
+# version that converged and baked.
+
+[[service]]
+name = "hello"
+roles = ["farm"]
+bake_beats = 2
+canary = { count = 1 }
+rollback = "automatic"
+rollback_after_failed = { percent = 25, min_hosts = 1 }
+
+[service.selector]
+roles = ["farm"]

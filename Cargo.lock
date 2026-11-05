@@ -1142,6 +1142,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hello"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-config",
+ "hostkeeper-hook",
+ "hostkeeper-testkit",
+]
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1258,6 +1267,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "clap",
+ "hello",
  "hex",
  "hostkeeper-ci",
  "hostkeeper-config",
@@ -1280,6 +1290,8 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "prost",
+ "prost-types",
  "rustix",
  "rustls-pki-types",
  "serde_json",

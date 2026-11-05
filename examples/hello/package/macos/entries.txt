@@ -1,0 +1,6 @@
+0555 bin/
+0555 bin/hello
+0444 manifest.toml
+0555 units/
+0444 units/hello.a.plist
+0444 units/hello.b.plist

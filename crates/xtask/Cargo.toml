@@ -13,7 +13,8 @@ clap.workspace = true
 flate2.workspace = true
 hex.workspace = true
 # The daemon's launchd label, plist and paths the macOS installer pkg installs
-# (`release macos-pkg`).
+# (`release macos-pkg`), and the launchd plists of a macOS service package
+# (`release package --service hello`), rendered with the renderer the daemon's own plists use.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 # The zstd compression of the hostkeeper package (`release package`).
 ruzstd.workspace = true

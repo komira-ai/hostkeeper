@@ -1,0 +1,27 @@
+schema = 1
+name = "hello"
+version = "1.2.3"
+min_hostkeeper = "0.1.0"
+
+[hook]
+command = ["bin/hello", "update-hook"]
+verify_deadline_secs = 120
+
+[hook.timeout_secs]
+prepare = 30
+cutover = 60
+verify = 30
+rollback = 60
+cleanup = 30
+uninstall = 60
+
+[units]
+run = ["hello.a", "hello.b"]
+
+[health]
+url = "http://127.0.0.1:9310/readyz"
+
+[params]
+units = "launchd"
+port = 9310
+record_dir = "/var/lib/updater/hooks/hello"
