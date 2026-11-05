@@ -28,7 +28,7 @@ enum Val {
 #[derive(Debug)]
 enum Tok {
     Open(String),
-    Close(String),
+    Close,
     Empty(String),
     Text(String),
 }
@@ -53,8 +53,8 @@ fn tokens(body: &str) -> Vec<Tok> {
         }
         let end = rest.find('>').expect("a tag ends with >");
         let tag = &rest[start + 1..end];
-        if let Some(name) = tag.strip_prefix('/') {
-            toks.push(Tok::Close(name.to_owned()));
+        if tag.starts_with('/') {
+            toks.push(Tok::Close);
         } else if let Some(name) = tag.strip_suffix('/') {
             toks.push(Tok::Empty(name.to_owned()));
         } else {
@@ -77,10 +77,10 @@ impl Reader {
     fn text_until_close(&mut self) -> String {
         match self.advance() {
             Tok::Text(text) => {
-                assert!(matches!(self.advance(), Tok::Close(_)));
+                assert!(matches!(self.advance(), Tok::Close));
                 text
             }
-            Tok::Close(_) => String::new(),
+            Tok::Close => String::new(),
             other => panic!("expected text, found {other:?}"),
         }
     }
@@ -94,7 +94,7 @@ impl Reader {
                 let mut items = Vec::new();
                 loop {
                     match self.toks.as_slice().first() {
-                        Some(Tok::Close(_)) => {
+                        Some(Tok::Close) => {
                             self.advance();
                             return Val::Array(items);
                         }
@@ -106,7 +106,7 @@ impl Reader {
                 let mut entries = Vec::new();
                 loop {
                     match self.advance() {
-                        Tok::Close(_) => return Val::Dict(entries),
+                        Tok::Close => return Val::Dict(entries),
                         Tok::Open(key) if key == "key" => {
                             let key = self.text_until_close();
                             entries.push((key, self.value()));
@@ -397,7 +397,9 @@ fn plist_refuses_text_that_is_not_utf8() {
     };
     assert_eq!(daemon_plist(&job), expected);
 
-    let error = expected.expect_err("an error");
+    let error = PlistError::NotUtf8 {
+        value: "\u{fffd}".to_owned(),
+    };
     assert_eq!(
         error.to_string(),
         "plist text \"\u{fffd}\" is not valid UTF-8"

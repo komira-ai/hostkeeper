@@ -12,7 +12,7 @@ use hostkeeper_observe::{
     ServiceInput, ServiceManager, ServiceState, UnitState, UnobservedReason, VersionView,
 };
 
-const UNIT: &str = "dev.hostkeeper.web";
+const UNIT: &str = "dev.hostkeeper.web-main";
 const OTHER: &str = "dev.hostkeeper.web-standby";
 const DEADLINE: Deadline = Deadline {
     connect: Duration::from_secs(2),
@@ -113,16 +113,16 @@ fn print_output_maps_to_the_unit_states() {
 fn a_launchctl_failure_or_unparsable_print_is_an_error_not_a_state() {
     let failures: Vec<Result<LaunchctlOutput, LaunchctlError>> = vec![
         Err(LaunchctlError::Spawn {
-            args: "print system/dev.hostkeeper.web".to_owned(),
+            args: "print system/dev.hostkeeper.web-main".to_owned(),
             why: "no such file".to_owned(),
         }),
         Ok(LaunchctlOutput::exit(1, "Bootstrap failed")),
         Err(LaunchctlError::TimedOut {
-            args: "print system/dev.hostkeeper.web".to_owned(),
+            args: "print system/dev.hostkeeper.web-main".to_owned(),
         }),
         Ok(LaunchctlOutput::success("")),
         Ok(LaunchctlOutput::success(
-            "system/dev.hostkeeper.web = {\n\tstate = running\n",
+            "system/dev.hostkeeper.web-main = {\n\tstate = running\n",
         )),
         Ok(LaunchctlOutput::success(&printed(
             UNIT,

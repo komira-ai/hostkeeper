@@ -37,7 +37,7 @@ fn info(state: JobState, pid: Option<u32>, exit: Option<i32>, signal: Option<i32
 }
 
 fn label() -> Label {
-    Label::parse("dev.hostkeeper.web").expect("a label")
+    Label::parse("dev.hostkeeper.web-main").expect("a label")
 }
 
 fn strings(args: &[&str]) -> Vec<String> {
@@ -311,15 +311,15 @@ fn the_argument_lists() {
     let label = label();
     assert_eq!(
         print_args(&label),
-        strings(&["print", "system/dev.hostkeeper.web"])
+        strings(&["print", "system/dev.hostkeeper.web-main"])
     );
     assert_eq!(
         bootout_args(&label),
-        strings(&["bootout", "system/dev.hostkeeper.web"])
+        strings(&["bootout", "system/dev.hostkeeper.web-main"])
     );
     assert_eq!(
         kickstart_args(&label),
-        strings(&["kickstart", "system/dev.hostkeeper.web"])
+        strings(&["kickstart", "system/dev.hostkeeper.web-main"])
     );
     assert_eq!(
         bootstrap_args(Path::new("/Library/LaunchDaemons/a.plist")),
@@ -417,7 +417,7 @@ fn print_of_output_that_is_not_utf8() {
 #[test]
 fn print_reports_what_failed() {
     let spawn = LaunchctlError::Spawn {
-        args: "print system/dev.hostkeeper.web".to_owned(),
+        args: "print system/dev.hostkeeper.web-main".to_owned(),
         why: "gone".to_owned(),
     };
     assert_eq!(

@@ -14,7 +14,7 @@ use hostkeeper_launchd::{FakeLaunchctl, Label, LaunchdUnitControl};
 use hostkeeper_placed::unit_control::{UnitControl, UnitControlError};
 use hostkeeper_testkit::Scratch;
 
-const WEB: &str = "dev.hostkeeper.web";
+const WEB: &str = "dev.hostkeeper.web-main";
 const DB: &str = "dev.hostkeeper.db";
 
 /// A unit directory with two placed links and two version directories holding their files.
@@ -378,7 +378,8 @@ fn a_failing_launchctl_is_an_error_in_every_call() {
     let rig = rig();
     let print_cmd = format!("launchctl print system/{WEB}");
     let silent = rig.control(&FakeLaunchctl::new());
-    let no_answer = "cannot run launchctl print system/dev.hostkeeper.web: the fake has no answer";
+    let no_answer =
+        "cannot run launchctl print system/dev.hostkeeper.web-main: the fake has no answer";
 
     rig.repoint(WEB, &rig.v2);
     assert_eq!(silent.daemon_reload(), Err(error(&print_cmd, no_answer)));

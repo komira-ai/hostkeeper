@@ -49,11 +49,11 @@ fn run_refusal(unit: &str, why: &str) -> ManifestRefusal {
 /// Catches a loader that refuses a plist under `units/` or a label in `run`.
 #[test]
 fn manifest_accepts_a_launchd_plist_and_label() {
-    let package = plist_package("accepts", &["tierstore.web.plist"]);
+    let package = plist_package("accepts", &["tierstore.web-1.plist"]);
     let manifest = package
-        .load_text(&manifest_running(r#""tierstore.web""#))
+        .load_text(&manifest_running(r#""tierstore.web-1""#))
         .expect("loads");
-    assert_eq!(manifest.run, vec!["tierstore.web".to_owned()]);
+    assert_eq!(manifest.run, vec!["tierstore.web-1".to_owned()]);
 }
 
 /// Catches a label equal to the service name being refused.
