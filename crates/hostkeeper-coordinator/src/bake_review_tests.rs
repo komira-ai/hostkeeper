@@ -17,7 +17,7 @@ use crate::testutil::{LEGACY, beat, desired, id, role, unhealthy, updating, vers
 #[test]
 fn a_host_silent_past_the_down_limit_restarts_its_bake() {
     let s = services("bake_beats = 3");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &beat("2.0"), 100);
     beats(&mut f, "a", &beat("2.0"), 115);
     for (at, expect) in [
@@ -37,7 +37,7 @@ fn a_host_silent_past_the_down_limit_restarts_its_bake() {
 fn a_gap_of_the_down_limit_restarts_the_bake_and_one_second_less_does_not() {
     let s = services("bake_beats = 2");
     for (gap, expect) in [(44, go()), (45, gate(Gate::Baking))] {
-        let mut f = Fleet::new(Duration::ZERO);
+        let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
         beats(&mut f, "a", &beat("2.0"), 100);
         let at = 100 + gap;
         beats(&mut f, "a", &beat("2.0"), at);
@@ -51,7 +51,7 @@ fn a_gap_of_the_down_limit_restarts_the_bake_and_one_second_less_does_not() {
 #[test]
 fn an_unhealthy_host_at_the_desired_version_holds_baking() {
     let s = services("bake_beats = 3");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &unhealthy(beat("2.0")), 100);
     beats(&mut f, "b", &beat("1.0"), 100);
     assert_eq!(why(&s, &f, "b", 100), gate(Gate::Baking));
@@ -65,7 +65,7 @@ fn a_silent_pending_host_holds_its_slot() {
     let s = services("");
     let mut pending = beat("2.0");
     pending.promotion_pending = true;
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &pending, 100);
     beats(&mut f, "b", &beat("1.0"), 1_000);
     assert_eq!(why(&s, &f, "b", 1_000), gate(Gate::NoSlot));
@@ -78,7 +78,7 @@ fn a_pending_host_is_ordered_a_new_desired_version() {
     let s = services("");
     let mut pending = beat("2.0");
     pending.promotion_pending = true;
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &pending, 100);
     let ask = |want: &str| {
         decide_why(
@@ -119,7 +119,7 @@ fn a_canary_that_cannot_go_yet_holds_everyone_else_on_canary_wait() {
         definition("canary = { count = 1 }")
     );
     let s = Services::parse(&text).expect("services");
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for host in ["a", "b", "c"] {
         beats(&mut f, host, &beat("1.0"), 100);
     }
@@ -147,7 +147,7 @@ fn a_deferring_host_is_not_chosen_as_the_canary() {
         reason: Token::parse("drain_bound").expect("a token"),
         retry_after_secs: 300,
     });
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     beats(&mut f, "a", &declined, 100);
     for host in ["b", "c"] {
         beats(&mut f, host, &beat("1.0"), 100);

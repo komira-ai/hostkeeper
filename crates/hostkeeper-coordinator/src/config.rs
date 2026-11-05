@@ -7,15 +7,22 @@
 //! defines; `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
-//! operator's; it takes the address of one interface.
+//! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
+//! files of that directory under `/ui/` (`crate::ui`).
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
 //! the whole start can be driven over in-memory connections.
+//!
+//! Before it opens any state file, the start takes the lock of `<state-file>.lock`
+//! ([`crate::lock`]) and holds it for as long as the coordinator runs, so a second `serve` on
+//! the same files is refused. It then refuses to start over a halt that was being written when
+//! the coordinator stopped (`<ops-file>.halts.unfinished`, [`crate::ops::Write::Halt`]), and
+//! reads the spent ids of CI's tokens (`<state-file>.jti`, [`crate::jti_file`]).
 
 use std::convert::Infallible;
 use std::ffi::OsString;
 use std::io;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -31,12 +38,16 @@ use hostkeeper_wire::identity::{
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::desired::{DesiredStore, StoreError};
+use crate::fleet::QUIET_START;
 use crate::http::Surface;
+use crate::jti_file::{JtiError, JtiFile, jti_path};
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
+use crate::lock::{FileLock, LockError, LockGuard, StateLock, lock_path};
 use crate::ops::{OpsError, OpsStore};
 use crate::service::{Clock, Coordinator};
 use crate::services::{Services, ServicesError};
 use crate::tokens::{OperatorTokens, TokensError};
+use crate::ui::{UiDir, UiDirError};
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -97,9 +108,50 @@ pub enum StartError {
     /// A TLS file is refused.
     #[error(transparent)]
     Tls(#[from] TlsError),
+    /// `--ui-dir` does not name a directory.
+    #[error("--ui-dir: {0}")]
+    UiDir(#[from] UiDirError),
     /// A socket, the runtime or the signal handlers failed.
     #[error(transparent)]
     Io(#[from] io::Error),
+    /// Another coordinator holds the lock of the state files.
+    #[error(
+        "{path}: another coordinator holds the lock of these state files; one coordinator runs on them at a time"
+    )]
+    Locked {
+        /// The lock file.
+        path: PathBuf,
+    },
+    /// The lock of the state files could not be taken.
+    #[error("{path}: the lock of the state files could not be taken: {source}")]
+    Lock {
+        /// The lock file.
+        path: PathBuf,
+        /// Why.
+        source: io::Error,
+    },
+    /// A halt was being written to the ops file when the coordinator stopped, and may not have
+    /// landed.
+    #[error(
+        "{path}: a halt was being written to the ops file when the coordinator stopped and may be lost; read the halts file, settle it by hand, and remove this file to start"
+    )]
+    HaltWriteUnfinished {
+        /// The marker file.
+        path: PathBuf,
+    },
+    /// `--quiet-secs` is below two heartbeat intervals.
+    #[error(
+        "--quiet-secs: {secs} is below {floor}, two heartbeat intervals: a restarted coordinator would order before it has heard the fleet"
+    )]
+    QuietBelowFloor {
+        /// What the flag said.
+        secs: u64,
+        /// The floor.
+        floor: u64,
+    },
+    /// The file of spent token ids is refused.
+    #[error(transparent)]
+    Jti(#[from] JtiError),
 }
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
@@ -199,6 +251,18 @@ pub struct Serve {
     /// How often the TLS files and the tokens file are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
+    /// A directory of static files (the operator web app) that the private listener serves
+    /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
+    /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
+    /// The files need no token; the operator API they call does. It must be a directory at
+    /// start. Without it no file is served.
+    #[arg(long)]
+    pub ui_dir: Option<PathBuf>,
+    /// How long after its start the coordinator orders nothing, in seconds, so that it hears
+    /// the fleet first and knows which host holds the update slot. At least two heartbeat
+    /// intervals (30); a lower value is refused at start.
+    #[arg(long, default_value_t = QUIET_START.as_secs())]
+    pub quiet_secs: u64,
 }
 
 /// Where the listeners are bound.
@@ -224,21 +288,41 @@ pub struct Parts {
     pub control_listen: SocketAddr,
     /// How often to look at the TLS files and the tokens file.
     pub reload: Duration,
+    /// The lock of the state files, held for as long as the coordinator runs: dropping the
+    /// parts lets it go.
+    pub lock: LockGuard,
 }
 
-/// Reads every file the flags name and builds what runs. Fetches nothing: the issuer's keys
-/// are fetched on the first token.
+/// Reads every file the flags name and builds what runs, under the lock of the state files
+/// ([`FileLock`]). Fetches nothing: the issuer's keys are fetched on the first token.
 ///
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
-/// file; the ops file must be one this build reads), `--private-listen` is a wildcard address,
-/// both token flags or neither is given, the legacy service or an allow-list entry names a
-/// service `--rollout-file` does not define, an entry names no services with no legacy service
-/// set, or the two URI prefixes are refused.
+/// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
+/// `--private-listen` is a wildcard address, `--quiet-secs` is below two heartbeat intervals,
+/// another coordinator holds the lock of the state files, a halt was being written when the
+/// coordinator stopped, both token flags or neither is given, the legacy service or an
+/// allow-list entry names a service `--rollout-file` does not define, an entry names no
+/// services with no legacy service set, or the two URI prefixes are refused.
 pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
+    build_with(flags, roots, &FileLock)
+}
+
+/// [`build`], with the lock of the state files taken by `lock`.
+///
+/// # Errors
+/// [`StartError`], as [`build`].
+pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<Parts, StartError> {
     if flags.private_listen.ip().to_canonical().is_unspecified() {
         return Err(StartError::PrivateListen(flags.private_listen));
     }
+    if flags.quiet_secs < QUIET_START.as_secs() {
+        return Err(StartError::QuietBelowFloor {
+            secs: flags.quiet_secs,
+            floor: QUIET_START.as_secs(),
+        });
+    }
+
     let tokens = match (&flags.tokens_file, &flags.operator_token_file) {
         (Some(path), None) => OperatorTokens::from_file(path)?,
         (None, Some(path)) => OperatorTokens::single(
@@ -270,19 +354,29 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
     }
     let keys = HttpsKeys::new(&oidc.entries()[0].issuer, roots, KEY_FETCH_TIMEOUT)
         .map_err(StartError::Keys)?;
-    let verifier = Verifier::new(
-        oidc,
-        Arc::new(keys),
-        KEY_REFETCH,
-        hostkeeper_oidc::system_clock(),
-    );
-    let desired = DesiredStore::open(&flags.state_file, legacy)?;
+    // The lock before any state file: none is opened (an open settles a staged halts file,
+    // which is a write) before this process is the one coordinator on them.
+    let held = take_lock(lock, &lock_path(&flags.state_file))?;
     let ops_path = flags.ops_file.clone().unwrap_or_else(|| {
         let mut name = flags.state_file.clone().into_os_string();
         name.push(".ops");
         PathBuf::from(name)
     });
+    refuse_unfinished_halt(&ops_path)?;
+    // The wall clock is read for the validity of CI's tokens and the expiry of their spent
+    // ids, and for nothing the coordinator decides.
+    let oidc_clock = hostkeeper_oidc::system_clock();
+    let spent = JtiFile::open(&jti_path(&flags.state_file), Arc::clone(&oidc_clock))?;
+    let verifier = Verifier::new(
+        oidc,
+        Arc::new(keys),
+        KEY_REFETCH,
+        oidc_clock,
+        Arc::new(spent),
+    );
+    let desired = DesiredStore::open(&flags.state_file, legacy)?;
     let ops = OpsStore::open(&ops_path)?;
+    let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
     let files = |client_ca| TlsFiles {
         cert: flags.tls_cert.clone(),
@@ -294,10 +388,12 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
     Ok(Parts {
         coordinator: Arc::new(
             Coordinator::new(desired, Arc::new(verifier), tokens, clock)
+                .with_quiet(Duration::from_secs(flags.quiet_secs))
                 .with_services(services)
                 .with_legacy_service(legacy.map(str::to_owned))
                 .with_prefixes(prefixes)
-                .with_ops(ops),
+                .with_ops(ops)
+                .with_ui(ui),
         ),
         heartbeat_tls: TlsSource::files(
             "heartbeat",
@@ -308,6 +404,34 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
         heartbeat_listen: flags.heartbeat_listen,
         control_listen: flags.private_listen,
         reload: interval,
+        lock: held,
+    })
+}
+
+/// Refuses to start over the marker of a halt that was being written to the ops file at `ops`
+/// when the coordinator stopped ([`crate::ops::Write::Halt`]): the halt may be lost, and the
+/// operator settles the halts file by hand and removes the marker.
+///
+/// # Errors
+/// [`StartError::HaltWriteUnfinished`]: the marker is there.
+pub(crate) fn refuse_unfinished_halt(ops: &Path) -> Result<(), StartError> {
+    let marker = crate::ops_file::unfinished_path(ops);
+    if marker.exists() {
+        return Err(StartError::HaltWriteUnfinished { path: marker });
+    }
+    Ok(())
+}
+
+/// The lock of `path`, taken by `lock`.
+fn take_lock(lock: &dyn StateLock, path: &Path) -> Result<LockGuard, StartError> {
+    lock.acquire(path).map_err(|why| match why {
+        LockError::Held => StartError::Locked {
+            path: path.to_owned(),
+        },
+        LockError::Io(source) => StartError::Lock {
+            path: path.to_owned(),
+            source,
+        },
     })
 }
 
@@ -354,6 +478,8 @@ where
     Next: Future<Output = io::Result<Stream>> + Send,
     Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // The lock of the state files is held for as long as this serves.
+    let _held = parts.lock;
     let (heartbeat_addr, heartbeat_accept) = bind(parts.heartbeat_listen).await?;
     let (control_addr, control_accept) = bind(parts.control_listen).await?;
     ready(Bound {

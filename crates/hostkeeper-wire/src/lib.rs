@@ -43,3 +43,5 @@ mod wire_service_facts_tests;
 mod wire_size_tests;
 #[cfg(test)]
 mod wire_tests;
+#[cfg(test)]
+mod wire_verdict_tests;

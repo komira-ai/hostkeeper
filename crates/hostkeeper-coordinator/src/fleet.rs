@@ -18,16 +18,18 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Agent, Health, Heartbeat, Outcome};
+use hostkeeper_wire::wire::{Agent, Health, Heartbeat, Outcome, UpdateResult};
 use hostkeeper_wire::{HostId, RoleName};
 
 use crate::bake::Bake;
 use crate::defer::{DeferBackoff, Defers};
+use crate::verdicts::Verdicts;
 
 /// A host with no heartbeat for this long is down.
 pub const DOWN_AFTER: Duration = Duration::from_secs(45);
 
-/// After it starts, the coordinator orders no update for this long, to hear the hosts first.
+/// After it starts, the coordinator orders no update for this long, to hear the hosts first:
+/// the default of `--quiet-secs`, and its floor, two heartbeat intervals.
 pub const QUIET_START: Duration = Duration::from_secs(30);
 
 /// How long an update order holds its slot without the host reporting it. A host reports
@@ -122,6 +124,8 @@ impl Node {
 #[derive(Clone, Debug)]
 pub struct Fleet {
     started: Duration,
+    /// How long after `started` nothing is ordered.
+    quiet: Duration,
     nodes: BTreeMap<HostId, Node>,
     hosts: BTreeMap<String, BTreeMap<HostId, Host>>,
     /// What hosts the service no longer counts (excluded, or dropped by its selector) last
@@ -132,27 +136,54 @@ pub struct Fleet {
     /// Healthy beats in a row at one version, per service and host ([`Bake`]).
     bake: BTreeMap<(String, HostId), Bake>,
     defers: Defers,
+    /// The release failures heard, each counted once ([`crate::verdicts`]).
+    verdicts: Verdicts,
 }
 
 impl Fleet {
-    /// A fleet that knows no host, for a coordinator that started at `started`.
+    /// A fleet that knows no host, for a coordinator that started at `started` and orders
+    /// nothing for `quiet` after it ([`QUIET_START`] by default).
     #[must_use]
-    pub fn new(started: Duration) -> Self {
+    pub fn new(started: Duration, quiet: Duration) -> Self {
         Self {
             started,
+            quiet,
             nodes: BTreeMap::new(),
             hosts: BTreeMap::new(),
             outside: BTreeMap::new(),
             orders: BTreeMap::new(),
             bake: BTreeMap::new(),
             defers: Defers::default(),
+            verdicts: Verdicts::default(),
         }
     }
 
-    /// Whether `now` is still within [`QUIET_START`] of the coordinator's start.
+    /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the
+    /// coordinator's start.
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
-        now < self.started.saturating_add(QUIET_START)
+        now < self.started.saturating_add(self.quiet)
+    }
+
+    /// The release failures of `service` about `version` heard since the start, each once: the
+    /// host and its report ([`crate::verdicts`]).
+    pub fn verdicts_of(
+        &self,
+        service: &str,
+        version: &Version,
+    ) -> impl Iterator<Item = (&HostId, &UpdateResult)> {
+        self.verdicts.of(service, version)
+    }
+
+    /// Forgets the verdicts of `service` about any version but `version`, its desired one, and
+    /// those `acked` acknowledges ([`crate::verdicts`]).
+    pub fn keep_verdicts_of(
+        &mut self,
+        service: &str,
+        version: &Version,
+        acked: &[crate::ops::FailureAck],
+    ) {
+        self.verdicts.keep_only(service, version, acked);
     }
 
     /// When the coordinator started.
@@ -275,6 +306,7 @@ impl Fleet {
             }
         }
         self.defers.observe(&key, &beat, deferred_order, now);
+        self.verdicts.observe(&key.1, &key.0, &beat);
         let (kept, other) = if counted {
             (&mut self.hosts, &mut self.outside)
         } else {

@@ -25,6 +25,16 @@ pub const RECORD_FILE: &str = "step-record.json";
 pub const PARAMS_FILE: &str = "params.toml";
 /// The reason of a hooked update a `force` stopped (design section 5.6, steps 4 to 6).
 pub const REASON_FORCED_OVER: &str = "forced_over";
+/// The reason of the `Failed` an update of the updater itself ends with when the binary that
+/// runs after it is not the new one: the fallback, or a hand switch, put the previous one back
+/// (design section 6.6).
+pub const REASON_SELF_UPDATE_FALLBACK: &str = "self_update_fallback";
+/// The reasons of the `Deferred` verdicts that a confirmed update of the updater itself clears
+/// ([`RecordStore::clear_updater_old`]): a hook that needs a newer updater
+/// ([`crate::runner::REASON_UPDATER_OLD`]) and a package that needs a newer daemon
+/// (`daemon_too_old`).
+pub const REASONS_CLEARED_BY_SELF_UPDATE: [&str; 2] =
+    [crate::runner::REASON_UPDATER_OLD, "daemon_too_old"];
 
 /// Which release's hook a step runs from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +84,32 @@ pub struct Progress {
     /// The `reason` of the step that sent the update to `rollback`.
     #[serde(default)]
     pub reason: Option<String>,
+    /// The update of the updater itself is over but for the restart: its new binary is in place
+    /// and has not run yet (design section 6.6). The record stays unfinished (`done` at
+    /// `cleanup`) until the next start settles it ([`crate::selfupdate::settle`]), so that no
+    /// binary that does not know this field reads it as succeeded. Additive: written only when
+    /// set, and a record without it loads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_restart: Option<AwaitingRestart>,
+}
+
+/// An update of the updater itself waiting for its new binary to start.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwaitingRestart {
+    /// The version the update switched to.
+    pub version: String,
+    /// What the `Succeeded` the new binary confirms says of the promotion.
+    pub verdict_promotion_pending: bool,
+}
+
+/// How an update waiting for the restart ends ([`RecordStore::settle_awaiting_restart`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settlement {
+    /// The new binary runs: `Succeeded`.
+    Confirmed,
+    /// Another binary runs: `Failed` after the commit, of class release,
+    /// [`REASON_SELF_UPDATE_FALLBACK`].
+    FellBack,
 }
 
 /// The step record.
@@ -254,6 +290,68 @@ impl RecordStore {
     pub fn with_write_fault(mut self, fault: WriteFault) -> RecordStore {
         self.fault = Some(fault);
         self
+    }
+
+    /// The state directory the store keeps its files in.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Under the record lock, closes the update the record holds as waiting for the restart
+    /// ([`Progress::awaiting_restart`]) in one write, the field cleared: `Succeeded` for
+    /// [`Settlement::Confirmed`], with the promotion the field kept, and `Failed` after the
+    /// commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], for [`Settlement::FellBack`].
+    /// `false`, and nothing written, when the record is absent, newer, or waits for no restart.
+    pub fn settle_awaiting_restart(&self, outcome: Settlement) -> Result<bool, RecordError> {
+        let _held = self.hold();
+        let mut rec = match self.load()? {
+            Loaded::Current(rec) => rec,
+            Loaded::Absent | Loaded::Newer { .. } => return Ok(false),
+        };
+        let Some(awaiting) = rec.progress.awaiting_restart.take() else {
+            return Ok(false);
+        };
+        rec.state = match outcome {
+            Settlement::Confirmed => State::Finished {
+                verdict: Verdict::Succeeded {
+                    promotion_pending: awaiting.verdict_promotion_pending,
+                },
+                reason: None,
+            },
+            Settlement::FellBack => State::Finished {
+                verdict: Verdict::Failed {
+                    phase: Phase::AfterCommit,
+                    class: Class::Release,
+                },
+                reason: Some(REASON_SELF_UPDATE_FALLBACK.to_owned()),
+            },
+        };
+        self.save(&rec)?;
+        Ok(true)
+    }
+
+    /// Under the record lock, removes the record when it holds a `Deferred` verdict whose reason
+    /// is one of [`REASONS_CLEARED_BY_SELF_UPDATE`]: the updater that deferred the order is gone,
+    /// and the next order runs. Any other record, of any state, verdict or reason, is left as it
+    /// is, and so is a newer one; no record is fine. `true` when it removed one.
+    pub fn clear_updater_old(&self) -> Result<bool, RecordError> {
+        let _held = self.hold();
+        let rec = match self.load()? {
+            Loaded::Current(rec) => rec,
+            Loaded::Absent | Loaded::Newer { .. } => return Ok(false),
+        };
+        let cleared = match &rec.state {
+            State::Finished {
+                verdict: Verdict::Deferred { .. },
+                reason: Some(reason),
+            } => REASONS_CLEARED_BY_SELF_UPDATE.contains(&reason.as_str()),
+            _ => false,
+        };
+        if cleared {
+            fs::remove_file(self.dir.join(RECORD_FILE))?;
+            File::open(&self.dir)?.sync_all()?;
+        }
+        Ok(cleared)
     }
 
     /// The params file the updater writes once per update.

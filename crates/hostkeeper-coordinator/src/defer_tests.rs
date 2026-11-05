@@ -46,7 +46,7 @@ impl Farm {
         Self {
             services: Services::parse(&text(extra)).expect("services"),
             want: BTreeMap::from([("svc".to_owned(), desired("2.0", 0, 0))]),
-            fleet: Fleet::new(Duration::ZERO),
+            fleet: Fleet::new(Duration::ZERO, crate::fleet::QUIET_START),
         }
     }
 

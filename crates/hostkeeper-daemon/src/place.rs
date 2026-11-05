@@ -1,17 +1,28 @@
-//! The switch of a first install (design sections 4.7, "Placed paths", and 5.2, steps 5 and
-//! 6): the step runner calls it immediately before every run of `cutover` and of `rollback`
-//! ([`hostkeeper_steps::StepRunner::with_switch`]).
+//! The switch of a hooked order (design sections 4.7, "Placed paths", and 5.2, steps 5 and 6):
+//! the step runner calls it immediately before every run of `cutover` and of `rollback`, and
+//! after a `cleanup` that succeeded ([`hostkeeper_steps::StepRunner::with_switch`]). It acts for
+//! every hooked order: an `install`, which has no release to replace, and an `update`, a
+//! `force_rollback` and a `force` that has a hook, which have one.
 //!
-//! It acts only for an order with no release to replace, which on this daemon is an `install`
-//! (an `update` and a `force_rollback` need a release installed, [`crate::checks::installed_rule`]);
-//! for every other order it does nothing, and the placement of an update is left to a later
-//! change. Before `cutover` it places the package by the write-ahead order of `placed.json`:
-//! [`Placer::begin`] (the paths `pending`), [`Placer::link`], [`Placer::switch_current`]
-//! (`current` only: there is no `previous`), [`Placer::reload`] and [`Placer::commit`]. Before
-//! `rollback` it takes the install back off the host: [`Placer::remove_all`] (the `run` units
-//! stopped and disabled, every placed link removed, `daemon-reload`) and then `current`, when it
-//! names the target; the version directory stays, as a staged version a retry uses. Each is
-//! idempotent, so a resumed step switches again.
+//! - [`Toward::Target`], before `cutover`: the target's manifest read from its version
+//!   directory, [`Placer::desired`], [`Placer::begin`] (its paths `pending`), [`Placer::link`],
+//!   [`Placer::switch_current`] to the target (`previous` becomes the release it replaces) and
+//!   [`Placer::reload`]. A first install also commits its paths here ([`Placer::commit`]: there
+//!   is nothing to undo but the install, which `rollback` takes off the host); an update leaves
+//!   them `pending` until it is confirmed.
+//! - [`Toward::Back`], before `rollback`: for an update, `current` is switched back to the
+//!   release it replaced, and [`Placer::relink_to`] that release's manifest links what it
+//!   places, removes what only the target placed and reloads. For a first install, the install
+//!   is taken off the host: [`Placer::remove_all`] (the `run` units stopped and disabled, every
+//!   placed link removed, `daemon-reload`) and then `current`, when it names the target; the
+//!   version directory stays, as a staged version a retry uses.
+//! - [`Toward::Confirmed`], after `cleanup` and before the verdict is written: the target's
+//!   paths are committed (`placed`) and the paths of the service the target does not list are
+//!   removed ([`Placer::unlink_unlisted`]).
+//!
+//! Each is idempotent, so a resumed step switches again. `current` and `previous` are written
+//! by [`Placer::switch_current`], not by the package layout's own switch, which reads a seal and
+//! writes through `std::fs`: this path goes through the [`Fs`] port the placed paths do.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -25,9 +36,9 @@ fn text(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-/// The switch of a first install on the host of `roots`, through `fs` and `units`; a manifest
-/// is read against the daemon's version `own`.
-pub fn first_install(
+/// The switch of a hooked order on the host of `roots`, through `fs` and `units`; a manifest is
+/// read against the daemon's version `own`.
+pub fn hooked_switch(
     roots: Roots,
     fs: Arc<dyn Fs + Send + Sync>,
     units: Arc<dyn UnitControl + Send + Sync>,
@@ -35,10 +46,10 @@ pub fn first_install(
 ) -> Switch {
     Arc::new(move |toward: Toward, order: &UpdateOrder| {
         let placer = Placer::new(roots.clone(), &*fs, &*units);
-        match (&order.previous, toward) {
-            (Some(_), _) => Ok(()),
-            (None, Toward::Target) => forward(&placer, order, &own),
-            (None, Toward::Back) => back(&placer, &*fs, order),
+        match toward {
+            Toward::Target => forward(&placer, order, &own),
+            Toward::Back => back(&placer, &*fs, order, &own),
+            Toward::Confirmed => confirmed(&placer, order, &own),
         }
     })
 }
@@ -50,31 +61,83 @@ fn names(order: &UpdateOrder) -> Result<(ServiceName, Version), String> {
     Ok((service, version))
 }
 
-/// Places the target: its paths `pending`, its links, `current`, `daemon-reload`, its paths
-/// `placed`.
+/// The manifest of the version directory `dir` as the release `version` of `service`.
+fn manifest_of(
+    dir: &Path,
+    service: &ServiceName,
+    version: &Version,
+    own: &HostkeeperVersion,
+) -> Result<Manifest, String> {
+    let expected = Expected {
+        name: service.clone(),
+        version: version.clone(),
+    };
+    Manifest::load(dir, &expected, own).map_err(text)
+}
+
+/// Places the target: its paths `pending`, its links, `current`, `daemon-reload`; and, for a
+/// first install, its paths `placed`.
 fn forward(
     placer: &Placer<'_>,
     order: &UpdateOrder,
     own: &HostkeeperVersion,
 ) -> Result<(), String> {
     let (service, version) = names(order)?;
-    let expected = Expected {
-        name: service.clone(),
-        version: version.clone(),
-    };
-    let manifest = Manifest::load(order.staged.dir(), &expected, own).map_err(text)?;
+    let manifest = manifest_of(order.staged.dir(), &service, &version, own)?;
     let claims = placer.desired(&manifest).map_err(text)?;
     let linking = placer.begin(&claims).map_err(text)?;
     placer.link(&linking).map_err(text)?;
     placer.switch_current(&service, &version).map_err(text)?;
     placer.reload().map_err(text)?;
+    if order.previous.is_none() {
+        placer.commit(linking).map_err(text)?;
+    }
+    Ok(())
+}
+
+/// Undoes the switch: an update goes back to the release it replaced, a first install is taken
+/// off the host.
+fn back(
+    placer: &Placer<'_>,
+    fs: &dyn Fs,
+    order: &UpdateOrder,
+    own: &HostkeeperVersion,
+) -> Result<(), String> {
+    match (&order.previous, order.previous_version.as_deref()) {
+        (Some(previous), Some(version)) => {
+            let (service, _) = names(order)?;
+            let version = Version::new(version).map_err(text)?;
+            let manifest = manifest_of(previous.dir(), &service, &version, own)?;
+            placer.switch_current(&service, &version).map_err(text)?;
+            placer.relink_to(&manifest).map_err(text)?;
+            Ok(())
+        }
+        (None, None) => uninstall_first(placer, fs, order),
+        _ => Err(format!(
+            "the order for {} names only half of the release it replaces",
+            order.service
+        )),
+    }
+}
+
+/// Commits the target's paths and removes what it does not list.
+fn confirmed(
+    placer: &Placer<'_>,
+    order: &UpdateOrder,
+    own: &HostkeeperVersion,
+) -> Result<(), String> {
+    let (service, version) = names(order)?;
+    let manifest = manifest_of(order.staged.dir(), &service, &version, own)?;
+    let claims = placer.desired(&manifest).map_err(text)?;
+    let linking = placer.begin(&claims).map_err(text)?;
     placer.commit(linking).map_err(text)?;
+    placer.unlink_unlisted(&manifest).map_err(text)?;
     Ok(())
 }
 
 /// Takes the install back off the host: every placed path of the service (its units stopped
 /// first), then `current` when it names the target.
-fn back(placer: &Placer<'_>, fs: &dyn Fs, order: &UpdateOrder) -> Result<(), String> {
+fn uninstall_first(placer: &Placer<'_>, fs: &dyn Fs, order: &UpdateOrder) -> Result<(), String> {
     let (service, version) = names(order)?;
     placer.remove_all(&service).map_err(text)?;
     let named = placer.current(service.as_str()).map_err(text)?;

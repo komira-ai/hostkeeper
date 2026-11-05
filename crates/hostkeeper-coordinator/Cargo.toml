@@ -14,9 +14,11 @@ description = "The update coordinator: tells each host's updater which version t
 # them). Updaters dial it over mutual TLS; CI sets the desired state of a service with a GitHub
 # Actions OIDC token (hostkeeper-oidc); an operator reads the status with a named token. The
 # decision is a pure function (`decide`) over the heartbeats the coordinator has seen. On disk it
-# keeps three files: the desired state of each service, the operations file (operator actions,
-# version marks, the audit ring, with every change also a line of the audit file beside it) and
-# the halts file beside it (halt reports, clear generations).
+# keeps three files: the desired state of each service (with the package digest of every version
+# CI has set), the operations file (operator actions, version marks, the audit ring, with every
+# change also a line of the audit file beside it) and the halts file beside it (halt reports, who
+# raised each halt, clear generations); beside the state file, the spent ids of CI's tokens and
+# the lock that keeps a second coordinator off these files.
 # The services it manages are data: the rollout file named by `--rollout-file`. An operator is
 # one of the named tokens of `--tokens-file`.
 [[bin]]

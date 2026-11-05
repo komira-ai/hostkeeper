@@ -126,12 +126,13 @@ pub fn desired(target: &str, storage: u32, frontend: u32) -> Desired {
         version: version(target),
         max_updating: RoleLimits::max_updating_default(),
         min_up: RoleLimits::from([("storage", storage), ("frontend", frontend)]),
+        release_digest: None,
     }
 }
 
 /// A fleet started at time zero whose hosts all heartbeated at `seen`.
 pub fn fleet(seen: Duration, hosts: &[(&str, RoleName, Heartbeat)]) -> Fleet {
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for (name, role, b) in hosts {
         fleet.record_in(LEGACY, id(name), role.clone(), b.clone(), seen);
     }
@@ -202,6 +203,7 @@ pub fn unreachable_verifier() -> Arc<Verifier> {
         Arc::new(Unreachable),
         Duration::from_secs(30),
         issuer_now,
+        hostkeeper_oidc::testkit::spent(),
     ))
 }
 
@@ -273,6 +275,7 @@ impl Rig {
             Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
             Duration::from_secs(30),
             oidc_now,
+            hostkeeper_oidc::testkit::spent(),
         );
         Coordinator::new(
             store,

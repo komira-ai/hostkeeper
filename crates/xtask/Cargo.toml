@@ -17,6 +17,9 @@ tar.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# The packaging test (tests/packaging/daemon_flags.rs) parses the unit's command lines with the
+# binary's own flag parser and reads its default paths.
+hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 # The packaging test (tests/packaging) loads the config template with the daemon config's loader.
 hostkeeper-config = { path = "../hostkeeper-config" }
 saphyr-parser.workspace = true

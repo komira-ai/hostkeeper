@@ -5,8 +5,9 @@
 //! reader refuses a key it does not know: a halt is its host, check and target, an
 //! acknowledgement its host and target. What the halt release adds to them lives beside it in
 //! the halts file (`<ops-file>.halts`): the whole report a halt and each acknowledgement were
-//! made from, the reports received while a halt stood (`halt_seen`) and the clear generation of
-//! each service (`halt_generation`).
+//! made from, who raised the halt (`origin`, written only for the updater: a record without it
+//! is a hook's halt), the reports received while a halt stood (`halt_seen`) and the clear
+//! generation of each service (`halt_generation`).
 //!
 //! The reader of the halts file skips a key it does not know. A record whose report it cannot
 //! read (an outcome a later release added, say) is passed over as a whole and counted, and the
@@ -65,13 +66,22 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use crate::desired::{StoreError, dir_of, io_at, write_whole};
-use crate::ops::{HaltAck, OpsError, OpsState};
+use crate::ops::{HaltAck, HaltOrigin, OpsError, OpsState};
 
 /// The halts file of the ops file at `ops`: its name with `.halts` added.
 #[must_use]
 pub(crate) fn halts_path(ops: &Path) -> PathBuf {
     let mut path = ops.as_os_str().to_owned();
     path.push(".halts");
+    PathBuf::from(path)
+}
+
+/// The marker of a halt being written to the ops file at `ops` ([`crate::ops::Write::Halt`]):
+/// the halts file's name with `.unfinished` added.
+#[must_use]
+pub(crate) fn unfinished_path(ops: &Path) -> PathBuf {
+    let mut path = halts_path(ops).into_os_string();
+    path.push(".unfinished");
     PathBuf::from(path)
 }
 
@@ -118,14 +128,17 @@ fn is_zero(n: &u64) -> bool {
 }
 
 /// The standing halt: its host and version, which the reports kept while it stood join by,
-/// and its report when there is one this release can read. The host and version are kept
-/// even when there is no report, so that those reports still join after any later write.
+/// its report when there is one this release can read, and who raised it. The host and
+/// version are kept even when there is no report, so that those reports still join after any
+/// later write.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Standing {
     node_id: String,
     target: Version,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     report: Option<UpdateResult>,
+    #[serde(default, skip_serializing_if = "HaltOrigin::is_hook")]
+    origin: HaltOrigin,
 }
 
 /// What the halts file keeps of one service.
@@ -189,6 +202,11 @@ fn kept(value: Value, skipped: &mut usize) -> Option<Kept> {
 /// its host or version; with no report, counted, when it cannot read the report.
 fn standing(mut value: Value, skipped: &mut usize) -> Option<Standing> {
     let report = value.get_mut("report").map(Value::take);
+    // Who raised it is read on its own: one this release does not know is a hook's halt, the
+    // safe side, and costs the record nothing else.
+    let origin = value
+        .as_object_mut()
+        .and_then(|record| record.remove("origin"));
     let Ok(mut halt) = serde_json::from_value::<Standing>(value) else {
         *skipped += 1;
         return None;
@@ -198,6 +216,9 @@ fn standing(mut value: Value, skipped: &mut usize) -> Option<Standing> {
         *skipped += usize::from(read.is_none());
         read
     });
+    halt.origin = origin
+        .and_then(|o| serde_json::from_value(o).ok())
+        .unwrap_or_default();
     Some(halt)
 }
 
@@ -242,6 +263,7 @@ fn split(state: &OpsState) -> (OpsState, HaltsFile) {
                 node_id: halt.node_id.clone(),
                 target: halt.target.clone(),
                 report: halt.report.take(),
+                origin: std::mem::take(&mut halt.origin),
             });
         }
         for ack in &mut marks.halt_acked {
@@ -278,6 +300,7 @@ fn join(mut ops: OpsState, halts: HaltsFile) -> OpsState {
             && kept.target == halt.target
         {
             halt.report = kept.report;
+            halt.origin = kept.origin;
             standing = true;
         }
         for ack in &mut marks.halt_acked {
