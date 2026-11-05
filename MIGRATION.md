@@ -165,9 +165,9 @@ named, and every change is audited to a file.
   first service no longer has to be `kbf`. A `[[service]]` table has `name`, `version_scheme`
   (new; default `semver`, the only scheme; any other value is refused naming the key), `roles` (a
   plain list of role names, `roles = ["storage", "daemon"]`, which replaces the
-  `[service.roles.<name>]` tables), `priority`, `selector`, `install_when_absent`, `bake_beats`,
-  `canary`, `rollback`, `rollback_after_failed`, `min_version` and `defer_backoff`. A table refuses
-  a key it does not know, naming it.
+  `[service.roles.<name>]` tables), `priority`, `selector`, `install_when_absent` (read only as
+  `false`; see the assignment below), `bake_beats`, `canary`, `rollback`, `rollback_after_failed`,
+  `min_version` and `defer_backoff`. A table refuses a key it does not know, naming it.
 - **Removed from the rollout file.** Each of these is refused by name, none is ignored: the
   service's `after` and `require_min_up`, and the `max_updating`, `min_up`, `never_last` and
   `after` of a role. kbf's definition becomes `name = "kbf"` and
@@ -186,11 +186,24 @@ named, and every change is audited to a file.
   still read, kept, written in kbf's order (`min_up` always naming `storage` and `frontend`) and
   printed in the status; no decision reads them. `desired.json`, the operations file and the
   halts file are the same bytes, and the status and convergence JSON keep every field.
-- **The decision names a gate or a skip.** `decide::Hold` is split into `Gate` (`halted`, `bad`,
-  `updating`, `busy_elsewhere`, `no_slot`, `quiet`, `canary_wait`, `baking`) and `Skip`
-  (`no_definition`, `no_desired`, `not_a_member`, `absent`, `up_to_date`, `failed_here`,
-  `deferred`), and a decision is `Update`, `Gate` or `Skip`. The status's `hold` keeps its
-  strings; `waiting_for_role`, `waiting_for_service` and `min_up` are no longer produced.
+- **The decision names a gate or a skip.** `decide::Hold` is split into `Gate` (`halted`, `held`,
+  `bad`, `below_min_version`, `updating`, `busy_elsewhere`, `no_slot`, `quiet`, `canary_wait`,
+  `baking`) and `Skip` (`no_desired`, `not_a_member`, `up_to_date`, `failed_here`, `deferred`,
+  `unsupported`, `no_digest`), and a decision is `Update`, `Install`, `Uninstall`, `Gate` or
+  `Skip`. `waiting_for_role`, `waiting_for_service` and `min_up` are no longer produced, nor are
+  `no_definition` (a service the coordinator does not manage is `not_a_member`) and `absent`
+  (see the assignment below).
+- **A host runs the services the coordinator assigns it.** The rollout file's `roles` (or its
+  selector) are the base; `Services.Assign`, `Unassign` and `SetMinVersion` add entries per role
+  and per host on top, kept in the operations file under `assignments`, a key written only once
+  an entry stands. A service assigned to a host that does not run it (it does not list it, or
+  lists it `absent`) is ordered `install` with its desired version and package digest, under
+  every rule of an update, but only as a typed order to a daemon that announces `install-v1` and
+  `heartbeat-v2`; the JSON reply carries no install, so a kbf agent that reports a service
+  `absent` is told nothing (`unsupported`), where `install_when_absent = true` used to order it
+  an update: that value is now refused, naming what replaced it. A service not assigned to a
+  host is never ordered there, installed or not; only `Unassign` with `uninstall` orders a host
+  to uninstall it.
 - **Named operator tokens.** `--tokens-file` is a TOML file of `[[token]]` tables, each with a
   `name` (1 to 32 bytes of `a-z`, `0-9` and `-`, unique; `coordinator` and `ci` are reserved) and
   the `sha256` of the token as lowercase hex, so the file holds no secret. It is read under the

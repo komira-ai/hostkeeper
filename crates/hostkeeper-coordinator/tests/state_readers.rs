@@ -456,6 +456,24 @@ fn the_mirror_of_kbfs_readers_skips_the_keys_their_lenient_readers_skip() {
     }
 }
 
+/// Catches: an `assignments` key that kbf's reader of the ops file, the release before on this
+/// file, would pass over: it refuses the key, so a coordinator rolled back below this one stops
+/// rather than order hosts an operator took a service off, while the file without the key (as
+/// this release writes it when no assignment stands) still reads.
+#[test]
+fn the_ops_files_reader_of_the_release_before_refuses_the_assignments_key() {
+    let readers = Readers::recorded();
+    readers
+        .check("OpsState", &full_ops(), "ops")
+        .expect("without the key");
+    let assigned = json!({"kbf": {"hosts": {"s1": "include"}, "uninstall": {"s2": 1}}});
+    let with = edited(&full_ops(), "/assignments", Some(assigned));
+    let why = readers
+        .check("OpsState", &with, "ops")
+        .expect_err("kbf's reader of the ops file is strict");
+    assert!(why.contains("assignments"), "{why}");
+}
+
 /// What kbf-updater's `Version::parse` takes, and what it refuses, at the tag (its `ACCEPTED`
 /// and `REJECTED`).
 const VERSIONS_TAKEN: &[&str] = &[

@@ -572,7 +572,13 @@ const FIELDS: [(&str, &[(&str, u32)]); 20] = [
 fn wire_names_are_pinned() {
     assert_eq!(
         feature_names(),
-        ["deferred-v1", "forced-v1", "halt-v1", "heartbeat-v2"]
+        [
+            "deferred-v1",
+            "forced-v1",
+            "halt-v1",
+            "heartbeat-v2",
+            "install-v1"
+        ]
     );
 
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
@@ -670,6 +676,8 @@ fn wire_names_are_pinned() {
                 "not_assigned",
                 "not_held",
                 "store_failed",
+                "unknown_role",
+                "below_min_version",
             ],
         ),
         (

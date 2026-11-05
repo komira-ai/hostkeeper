@@ -537,6 +537,13 @@ impl Coordinator {
         // occupies, so an update it was ordered before it left holds its slot until it ends.
         let dropped =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Dropped;
+        // A host ordered to uninstall a service it is no longer assigned says how the uninstall
+        // goes: kept as what it occupies, as a dropped host's word is.
+        let uninstalling = |def: &ServiceDef| {
+            ops.assignments
+                .get(&def.name)
+                .is_some_and(|entries| entries.uninstall.contains_key(who.host_id.as_str()))
+        };
         if let Some(name) = legacy {
             match self.services.get(name) {
                 Some(def) if dropped(def) => {
@@ -557,17 +564,26 @@ impl Coordinator {
                     one.as_heartbeat(platform),
                     now,
                 ),
-                Some(def) if dropped(def) => fleet.record_outside_in(
-                    &one.name,
-                    who.host_id.clone(),
-                    &who.role,
-                    one.as_heartbeat(platform),
-                    now,
-                ),
+                // A host taken off the service while it ran an update of it says when that ends.
+                Some(def)
+                    if dropped(def)
+                        || uninstalling(def)
+                        || (fleet.get_in(&one.name, &who.host_id).is_none()
+                            && fleet.occupant(&one.name, &who.host_id).is_some()) =>
+                {
+                    fleet.record_outside_in(
+                        &one.name,
+                        who.host_id.clone(),
+                        &who.role,
+                        one.as_heartbeat(platform),
+                        now,
+                    );
+                }
                 _ => {}
             }
         }
         fleet.note_node(who.host_id.clone(), node);
+        crate::intents::settle(&self.ops, &self.services, &mut fleet, &who.host_id);
         let mut names: Vec<&str> = legacy
             .into_iter()
             .chain(announced.iter().map(|one| one.name.as_str()))
@@ -597,6 +613,13 @@ impl Coordinator {
             return (ServiceReply::Nothing, Some(order));
         }
         let desired = self.desired.all();
+        // Then the services the host does not list, which it may be told to install.
+        let unlisted: Vec<&str> = self
+            .services
+            .names()
+            .filter(|name| !names.contains(name))
+            .collect();
+        names.extend(unlisted);
         for name in names {
             if held.iter().any(|service| service == name) {
                 continue;
@@ -610,15 +633,55 @@ impl Coordinator {
                 &who.host_id,
                 now,
             );
-            if let Decision::Update { version } = decision {
-                // The host's ack goes from the file before the order exists.
-                if !release_ack(&self.ops, name, &who.host_id) {
-                    continue;
+            let order = match decision {
+                Decision::Update { version } => {
+                    // The host's ack goes from the file before the order exists.
+                    if !release_ack(&self.ops, name, &who.host_id) {
+                        continue;
+                    }
+                    fleet.order(name, who.host_id.clone(), version.clone(), now);
+                    let service = (Some(name) != legacy).then(|| name.to_owned());
+                    return (ServiceReply::Update { service, version }, None);
                 }
-                fleet.order(name, who.host_id.clone(), version.clone(), now);
-                let service = (Some(name) != legacy).then(|| name.to_owned());
-                return (ServiceReply::Update { service, version }, None);
-            }
+                Decision::Install { version, digest } if orders => {
+                    if !release_ack(&self.ops, name, &who.host_id) {
+                        continue;
+                    }
+                    let order_id = crate::orders::install_order_id(&digest);
+                    let order_try = crate::orders::next_try(
+                        fleet.get_in(name, &who.host_id).map(|h| &h.beat),
+                        &order_id,
+                    );
+                    fleet.order(name, who.host_id.clone(), version.clone(), now);
+                    Order::Install {
+                        service: name.to_owned(),
+                        version,
+                        digest,
+                        order_id,
+                        order_try,
+                    }
+                }
+                Decision::Uninstall { order_id, running } if orders => {
+                    let order_try = crate::orders::next_try(
+                        fleet.occupant(name, &who.host_id).map(|h| &h.beat),
+                        &order_id,
+                    );
+                    fleet.order_uninstall(
+                        name,
+                        who.host_id.clone(),
+                        running,
+                        order_id.clone(),
+                        now,
+                    );
+                    Order::Uninstall {
+                        service: name.to_owned(),
+                        order_id,
+                        order_try,
+                    }
+                }
+                _ => continue,
+            };
+            return (ServiceReply::Nothing, Some(order));
         }
         (ServiceReply::Nothing, None)
     }

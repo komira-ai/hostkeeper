@@ -1,7 +1,8 @@
 //! The operator's calls that mark or steer the rollout, as plain functions over the messages of
 //! `hostkeeper.operator.v1`: `Releases.MarkBad` and `Releases.Halt`, `Hosts.Abort` and
-//! `Hosts.Exclude` (with `abandon`), `Services.Hold`, `Services.Unhold` and `Services.List`, and
-//! `Audit.List`; `Releases.Force` is in [`crate::force`]. A transport (the gRPC services, or a
+//! `Hosts.Exclude` (with `abandon`), `Services.Hold` and `Services.Unhold`, and `Audit.List`;
+//! `Releases.Force` is in [`crate::force`], and `Services.Assign`, `Unassign`, `SetMinVersion`
+//! and `List` in [`crate::assign`]. A transport (the gRPC services, or a
 //! JSON gateway) authenticates the bearer ([`Coordinator::caller`]) and hands the call here.
 //!
 //! Every one of them takes the operator token only: a valid CI token is `forbidden` and no
@@ -440,39 +441,6 @@ impl Coordinator {
         fleet.set_marks(self.ops.read(marks_of));
         Ok(proto::UnholdResponse {
             entry: Some(entry_proto(&done)),
-        })
-    }
-
-    /// `Services.List`: every service the coordinator manages, in name order, with its holds,
-    /// and every hold that stands. No service is assigned to a host by this coordinator yet, so
-    /// `hosts` and `min_versions` are empty.
-    ///
-    /// # Errors
-    /// `unauthorized`, `forbidden`.
-    pub fn list_services(
-        &self,
-        caller: &Caller,
-        _request: proto::ListServicesRequest,
-    ) -> Result<proto::ListServicesResponse, proto::ServicesRefusal> {
-        caller.operator()?;
-        let holds = self.ops.read(|state| state.holds.clone());
-        let services = self
-            .services
-            .defs()
-            .map(|def| proto::ServiceEntry {
-                service: def.name.clone(),
-                hosts: Vec::new(),
-                min_versions: Vec::new(),
-                holds: holds
-                    .iter()
-                    .filter(|hold| hold.service == def.name)
-                    .map(hold_proto)
-                    .collect(),
-            })
-            .collect();
-        Ok(proto::ListServicesResponse {
-            services,
-            holds: holds.iter().map(hold_proto).collect(),
         })
     }
 

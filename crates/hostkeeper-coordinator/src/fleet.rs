@@ -25,9 +25,11 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Agent, Health, Heartbeat, Outcome, UpdateResult};
 use hostkeeper_wire::{HostId, RoleName};
 
+use crate::assignment::{Placement, ServiceAssignments, assigned, effective_min_version};
 use crate::bake::Bake;
 use crate::defer::{DeferBackoff, Defers};
 use crate::holds::{HoldMark, holding};
+use crate::services::ServiceDef;
 use crate::verdicts::Verdicts;
 
 /// A host with no heartbeat for this long is down.
@@ -43,11 +45,15 @@ pub const QUIET_START: Duration = Duration::from_secs(30);
 /// frees its slot before an operator would notice.
 pub const ORDER_AGE: Duration = Duration::from_secs(120);
 
-/// An update the coordinator told a host to run, not yet seen in the host's own heartbeats.
+/// An update, an install or an uninstall the coordinator told a host to run, not yet seen in the
+/// host's own heartbeats.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Order {
+    /// The version ordered; for an uninstall, the version the host ran when it was ordered.
     target: Version,
     at: Duration,
+    /// The order id of an uninstall; none for an update or an install.
+    uninstall: Option<String>,
 }
 
 /// A host, as its last heartbeat and certificate left it.
@@ -86,7 +92,8 @@ impl Host {
 
     /// Whether the host holds an update slot (one is live at a time across every service,
     /// [`crate::decide`]): it is updating, its promotion is pending, or its last update failed
-    /// and it has not yet heartbeated healthy.
+    /// and it has not yet heartbeated healthy. A failed install that left the service absent
+    /// (staged, never run) holds none: like a failed update rolled back, nothing of it runs.
     #[must_use]
     pub fn holds_slot(&self) -> bool {
         let failed = self
@@ -96,7 +103,7 @@ impl Host {
             .is_some_and(|r| r.outcome == Outcome::Failed);
         self.beat.updating.is_some()
             || self.beat.promotion_pending
-            || (failed && self.beat.health != Health::Healthy)
+            || (failed && !matches!(self.beat.health, Health::Healthy | Health::Absent))
     }
 }
 
@@ -125,15 +132,22 @@ impl Node {
     }
 }
 
-/// What the fleet keeps of the operator's marks for its decisions: a copy of the holds and of
-/// the hosts each standing force orders, as the ops store holds them
-/// ([`crate::holds::marks_of`]), refreshed under the fleet's lock ([`Fleet::set_marks`]).
+/// What the fleet keeps of the operator's marks for its decisions: a copy of the holds, of the
+/// hosts each standing force orders, of the assignments, the labels and the exclusions, as the
+/// ops store holds them ([`crate::holds::marks_of`]), refreshed under the fleet's lock
+/// ([`Fleet::set_marks`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Marks {
     /// The holds that stand.
     pub holds: Vec<HoldMark>,
     /// Per service, the hosts its standing force orders ([`crate::force`]).
     pub forced: BTreeMap<String, BTreeSet<HostId>>,
+    /// Per service, the operator's assignments ([`crate::assignment`]).
+    pub assignments: BTreeMap<String, ServiceAssignments>,
+    /// Per node id, the labels an operator gave the host.
+    pub labels: BTreeMap<String, BTreeMap<String, String>>,
+    /// The (service, node id) pairs an operator excluded.
+    pub excluded: BTreeSet<(String, String)>,
 }
 
 /// Every host the coordinator has heard from since it started.
@@ -256,9 +270,10 @@ impl Fleet {
     /// one.
     ///
     /// An order for the host and service ends when the beat shows it updating (the beat
-    /// counts from then), runs the ordered version, reports that update failed, or reports
-    /// that it declined it ([`crate::defer`]): a deferral holds no slot, so the order must not
-    /// hold it for [`ORDER_AGE`] either.
+    /// counts from then), or reports that it declined it ([`crate::defer`]: a deferral holds no
+    /// slot, so the order must not hold it for [`ORDER_AGE`] either); an update or an install
+    /// also ends when the host runs the ordered version (not as an `absent` copy) or reports
+    /// that it failed it, and an uninstall when the host reports a verdict of its order id.
     pub fn record_in(
         &mut self,
         service: &str,
@@ -311,15 +326,26 @@ impl Fleet {
         let key = (id, service.to_owned());
         let mut deferred_order = false;
         if let Some(order) = self.orders.get(&key) {
-            let failed = beat
-                .last_update
-                .as_ref()
-                .is_some_and(|r| r.outcome == Outcome::Failed && r.target == order.target);
             deferred_order = beat
                 .deferred
                 .as_ref()
                 .is_some_and(|d| d.target == order.target);
-            if beat.updating.is_some() || beat.version == order.target || failed || deferred_order {
+            // An uninstall ends at its verdict, whatever version the host still runs.
+            let ended = match &order.uninstall {
+                // An install is done once the version runs: an absent copy at it is staged only.
+                None => {
+                    (beat.version == order.target && beat.health != Health::Absent)
+                        || beat.last_update.as_ref().is_some_and(|r| {
+                            r.outcome == Outcome::Failed && r.target == order.target
+                        })
+                }
+                Some(order_id) => beat
+                    .last_update
+                    .as_ref()
+                    .and_then(|r| r.order_id.as_ref())
+                    .is_some_and(|reported| reported.as_str() == order_id),
+            };
+            if beat.updating.is_some() || ended || deferred_order {
                 self.orders.remove(&key);
             }
         }
@@ -352,20 +378,54 @@ impl Fleet {
         );
     }
 
-    /// Notes that the host `id` was told at `now` to update `service` to `target`. An order
-    /// for the same target that has not aged out stays as it was, so a host that asks again
-    /// before it reports is told again without its slot being held longer.
+    /// Notes that the host `id` was told at `now` to update `service` to `target`, or to
+    /// install it at `target`. An order for the same target that has not aged out stays as it
+    /// was, so a host that asks again before it reports is told again without its slot being
+    /// held longer.
     pub fn order(&mut self, service: &str, id: HostId, target: Version, now: Duration) {
-        if self.is_ordered(service, &id, now)
+        self.note_order(service, id, target, None, now);
+    }
+
+    /// Notes that the host `id`, which runs `running` of `service`, was told at `now` to
+    /// uninstall it by the order `order_id`. It holds the host's slot as an update's order does,
+    /// until the host reports it running, reports its verdict, declines it (a deferral of
+    /// `running`) or the order ages out; asking again under it does not hold the slot longer.
+    pub fn order_uninstall(
+        &mut self,
+        service: &str,
+        id: HostId,
+        running: Version,
+        order_id: String,
+        now: Duration,
+    ) {
+        self.note_order(service, id, running, Some(order_id), now);
+    }
+
+    fn note_order(
+        &mut self,
+        service: &str,
+        id: HostId,
+        target: Version,
+        uninstall: Option<String>,
+        now: Duration,
+    ) {
+        let key = (id, service.to_owned());
+        if self.is_ordered(service, &key.0, now)
             && self
                 .orders
-                .get(&(id.clone(), service.to_owned()))
-                .is_some_and(|o| o.target == target)
+                .get(&key)
+                .is_some_and(|o| o.target == target && o.uninstall == uninstall)
         {
             return;
         }
-        self.orders
-            .insert((id, service.to_owned()), Order { target, at: now });
+        self.orders.insert(
+            key,
+            Order {
+                target,
+                at: now,
+                uninstall,
+            },
+        );
     }
 
     /// When the wait of the host `id` ends, if it declined an update of `service` to `target`.
@@ -379,6 +439,20 @@ impl Fleet {
     ) -> Option<Duration> {
         self.defers
             .until(&(id.clone(), service.to_owned()), target, backoff)
+    }
+
+    /// The hosts with an order of `service` outstanding at `now` whose last word about it the
+    /// fleet does not keep: a host told to install a service it does not list. They hold their
+    /// slot as the others do ([`crate::decide`]).
+    pub fn ordered_unseen(&self, service: &str, now: Duration) -> impl Iterator<Item = &HostId> {
+        self.orders
+            .iter()
+            .filter(move |((id, s), order)| {
+                s == service
+                    && now.saturating_sub(order.at) < ORDER_AGE
+                    && self.occupant(service, id).is_none()
+            })
+            .map(|((id, _), _)| id)
     }
 
     /// Whether `id` has an order outstanding for `service` at `now`.
@@ -471,10 +545,20 @@ impl Fleet {
     }
 
     /// What the fleet keeps of the host `id` for `service`, counted or not.
-    fn occupant(&self, service: &str, id: &HostId) -> Option<&Host> {
+    pub(crate) fn occupant(&self, service: &str, id: &HostId) -> Option<&Host> {
         self.occupants_of(service)
             .find(|(occupant, _)| *occupant == id)
             .map(|(_, host)| host)
+    }
+
+    /// The role the host `id` has now: its certificate's at its last heartbeat; for a host the
+    /// fleet knows only by its beats of `service`, the role of those; empty for a host it does
+    /// not know.
+    fn role_of(&self, service: &str, id: &HostId) -> &str {
+        match self.nodes.get(id) {
+            Some(node) => node.role.as_str(),
+            None => self.occupant(service, id).map_or("", Host::role_name),
+        }
     }
 
     /// Whether an operator holds `service` on the host `id`: a hold of the host, of the role it
@@ -482,13 +566,84 @@ impl Fleet {
     /// beats of `service`, the role of those), or of the whole fleet.
     #[must_use]
     pub fn is_held(&self, service: &str, id: &HostId) -> bool {
-        let role = match self.nodes.get(id) {
-            Some(node) => node.role.as_str(),
-            None => self.occupant(service, id).map_or("", Host::role_name),
-        };
-        holding(&self.marks.holds, service, id.as_str(), role)
-            .next()
-            .is_some()
+        holding(
+            &self.marks.holds,
+            service,
+            id.as_str(),
+            self.role_of(service, id),
+        )
+        .next()
+        .is_some()
+    }
+
+    /// The host `id` as an assignment of `service` reads it: its role now and its labels.
+    fn placement<'a>(&'a self, service: &str, id: &'a HostId) -> Placement<'a> {
+        Placement {
+            node_id: id.as_str(),
+            role: self.role_of(service, id),
+            labels: self.marks.labels.get(id.as_str()),
+        }
+    }
+
+    /// Whether `def` is assigned to the host `id`, by its role now and its labels
+    /// ([`crate::assignment::assigned`]).
+    #[must_use]
+    pub fn is_assigned(&self, def: &ServiceDef, id: &HostId) -> bool {
+        assigned(
+            def,
+            self.marks.assignments.get(&def.name),
+            &self.placement(&def.name, id),
+        )
+    }
+
+    /// The minimum version of `def` that applies to the host `id`
+    /// ([`crate::assignment::effective_min_version`]).
+    #[must_use]
+    pub fn min_version<'a>(&'a self, def: &'a ServiceDef, id: &HostId) -> Option<&'a Version> {
+        effective_min_version(
+            def,
+            self.marks.assignments.get(&def.name),
+            &self.placement(&def.name, id),
+        )
+    }
+
+    /// Whether an operator excluded the host `id` from `service`.
+    #[must_use]
+    pub fn is_excluded(&self, service: &str, id: &HostId) -> bool {
+        self.marks
+            .excluded
+            .contains(&(service.to_owned(), id.as_str().to_owned()))
+    }
+
+    /// The order id of the uninstall of `service` the host `id` is ordered, if an operator's
+    /// `Unassign` ordered one ([`crate::assignment`]).
+    #[must_use]
+    pub fn uninstall_order(&self, service: &str, id: &HostId) -> Option<String> {
+        self.marks
+            .assignments
+            .get(service)?
+            .uninstall_order(id.as_str())
+    }
+
+    /// Whether the last heartbeat of the host `id` listed `service`.
+    #[must_use]
+    pub fn lists(&self, id: &HostId, service: &str) -> bool {
+        self.nodes
+            .get(id)
+            .is_some_and(|node| node.announced.contains_key(service))
+    }
+
+    /// Forgets everything of the host `id` for `service`, counted or not, with its order and
+    /// bake: the host no longer has the service at all (it reported it gone after an
+    /// uninstall), so nothing of it occupies a slot.
+    pub fn drop_in(&mut self, service: &str, id: &HostId) {
+        for hosts in [&mut self.hosts, &mut self.outside] {
+            if let Some(hosts) = hosts.get_mut(service) {
+                hosts.remove(id);
+            }
+        }
+        self.orders.remove(&(id.clone(), service.to_owned()));
+        self.bake.remove(&(service.to_owned(), id.clone()));
     }
 
     /// Whether the standing force of `service` orders the host `id`.

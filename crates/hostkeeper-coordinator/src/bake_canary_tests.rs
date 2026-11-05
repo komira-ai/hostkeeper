@@ -45,7 +45,10 @@ pub(crate) fn why(s: &Services, f: &Fleet, host: &str, now: u64) -> Decision {
                 version: version.clone()
             }
         ),
-        Decision::Gate(_) | Decision::Skip(_) => assert_eq!(reply, Reply::Nothing),
+        Decision::Install { .. }
+        | Decision::Uninstall { .. }
+        | Decision::Gate(_)
+        | Decision::Skip(_) => assert_eq!(reply, Reply::Nothing),
     }
     decision
 }

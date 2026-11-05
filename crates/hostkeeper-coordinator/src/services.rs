@@ -3,25 +3,29 @@
 //!
 //! The rollout file (`--rollout-file`) is TOML with one `[[service]]` table for each service the
 //! coordinator manages. A [`ServiceDef`] has a name, a version scheme, the roles it runs on (a
-//! plain list of role names) and the settings of its rollout: its priority, the hosts it is
-//! selected for, whether a host on which it never registered is ordered, how long an updated
-//! host holds its slot, the canary, the automatic rollback and the backoff of a deferral. The
-//! decision reads these and branches on no service name.
+//! plain list of role names: the base of its assignment, [`crate::assignment`]) and the settings
+//! of its rollout: its priority, the hosts it is selected for, how long an updated host holds its
+//! slot, the canary, the automatic rollback and the backoff of a deferral. The decision reads
+//! these and branches on no service name.
 //!
 //! No service is built in: the services are the ones the file defines (an empty file defines
 //! none). A role is any [`RoleName`]. Every table refuses a key it does not know, naming it, so
 //! a key an earlier build read and this one does not (`after`, `require_min_up`, and the
 //! `max_updating`, `min_up`, `never_last` and `after` of a role's table) is refused, never
-//! ignored. Which services a CI token may set is not here: the allow-list entry that admits the
-//! token says (`services = [...]`, default the coordinator's legacy service).
+//! ignored. `install_when_absent = true` is refused the same way: a host assigned the service
+//! that does not run it is ordered `install` ([`crate::decide`]); `install_when_absent = false`,
+//! what an earlier build did by default and what this one does for an agent that cannot take
+//! an install, is read and changes nothing. Which services a CI token may set is not here: the
+//! allow-list entry that admits the token says (`services = [...]`, default the coordinator's
+//! legacy service).
 //!
 //! ```toml
 //! [[service]]
 //! name = "agent"
 //! version_scheme = "semver"      # default semver, the only scheme there is
-//! roles = ["storage", "daemon"]  # a host of any other role is never ordered for the service
+//! roles = ["storage", "daemon"]  # a host of any other role is ordered for the service only
+//!                                # when an operator assigned it there
 //! priority = 0                   # default 0; a host is offered the higher number first
-//! install_when_absent = false    # default false; order a host whose copy never registered
 //! bake_beats = 0                 # default 0, at most 100: healthy beats before a slot frees
 //! canary = { count = 1 }         # optional: only this many hosts go until they have baked
 //! rollback = "manual"            # or "automatic": the coordinator sets the last good version
@@ -104,7 +108,9 @@ pub struct ServiceDef {
     pub name: String,
     /// How its versions are ordered.
     pub version_scheme: VersionScheme,
-    /// The roles it runs on. A host of any other role is never ordered for it.
+    /// The roles it runs on: the base of its assignment, on which the operator's entries go
+    /// ([`crate::assignment`]). A host of any other role is ordered for it only when an operator
+    /// assigned it there.
     pub roles: BTreeSet<String>,
     /// Which service a host is offered first when more than one is behind: the higher
     /// number first, and services with the same number in the tie order of
@@ -114,8 +120,6 @@ pub struct ServiceDef {
     pub priority: i32,
     /// Which hosts should run the service (`None`: the hosts that announce it).
     pub selector: Option<Selector>,
-    /// Whether a host on which the service is declared and has never registered is ordered.
-    pub install_when_absent: bool,
     /// How many healthy beats a host at the desired version must send before it frees the
     /// slot it held while updating (default 0: it frees it at once).
     pub bake_beats: u32,
@@ -142,7 +146,6 @@ impl ServiceDef {
             roles: roles.iter().map(|role| (*role).to_owned()).collect(),
             priority: 0,
             selector: None,
-            install_when_absent: false,
             bake_beats: 0,
             canary: None,
             rollback: Rollback::Manual,
@@ -199,8 +202,7 @@ struct RawService {
     #[serde(default)]
     priority: i32,
     selector: Option<RawSelector>,
-    #[serde(default)]
-    install_when_absent: bool,
+    install_when_absent: Option<bool>,
     #[serde(default)]
     bake_beats: u32,
     canary: Option<RawCanary>,
@@ -292,6 +294,12 @@ fn service_def(
     if defined.contains_key(&name) {
         return invalid(format!("{name} is defined twice"));
     }
+    if install_when_absent == Some(true) {
+        return invalid(format!(
+            "{name}: install_when_absent = true is no longer read: a host the service is \
+             assigned to that does not run it is ordered to install it; take the key out"
+        ));
+    }
     defer_backoff
         .check()
         .or_else(|why| invalid(format!("{name}: defer_backoff: {why}")))?;
@@ -336,7 +344,6 @@ fn service_def(
         roles,
         priority,
         selector,
-        install_when_absent,
         bake_beats,
         canary: canary.map(|c| Canary { count: c.count }),
         rollback,

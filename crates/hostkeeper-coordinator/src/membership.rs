@@ -1,11 +1,12 @@
 //! Which hosts a service counts (`docs/design/host-updates.md`, section 5.1).
 //!
 //! Without a selector a host belongs to a service if its own heartbeat names it and the
-//! service runs on its role: the hosts the coordinator has heard announce it. A service with a
+//! service is assigned to it ([`crate::assignment`]: by its role in the rollout file, or by an
+//! operator's entry): the hosts the coordinator has heard announce it. A service with a
 //! [`Selector`] says instead which hosts should run it, by certificate role and by the labels
-//! an operator gave the host ([`crate::ops`]; a host never sets its own), and a selected host
-//! that did not announce the service is `missing`. [`membership`] places one node, checking in
-//! this order:
+//! an operator gave the host ([`crate::ops`]; a host never sets its own), with the operator's
+//! entries on top, and a selected host that did not announce the service is `missing`.
+//! [`membership`] places one node, checking in this order:
 //!
 //! 1. an operator excluded it from the service: [`Membership::Excluded`];
 //! 2. it is not selected: [`Membership::NotSelected`];
@@ -31,6 +32,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::Health;
 use serde::{Deserialize, Serialize};
 
+use crate::assignment::{Placement, assigned};
 use crate::converge::{Convergence, State};
 use crate::fleet::{Fleet, Node};
 use crate::ops::{MAX_LABELS, OpsState, label};
@@ -95,7 +97,8 @@ impl Selector {
         })
     }
 
-    fn selects(&self, role: &str, has: Option<&BTreeMap<String, String>>) -> bool {
+    /// Whether it selects a host of the role `role` with the labels `has`.
+    pub(crate) fn selects(&self, role: &str, has: Option<&BTreeMap<String, String>>) -> bool {
         self.roles.contains(role)
             && self
                 .labels
@@ -142,12 +145,14 @@ pub fn membership(
         return Membership::Excluded;
     }
     let announced = node.announced.get(&def.name);
-    let selected = match &def.selector {
-        Some(selector) => {
-            selector.selects(&node.role, ops.hosts.get(&key).map(|host| &host.labels))
-        }
-        None => announced.is_some() && def.roles.contains(&node.role),
+    let host = Placement {
+        node_id: &key,
+        role: &node.role,
+        labels: ops.hosts.get(&key).map(|host| &host.labels),
     };
+    // Without a selector, a host is the service's only once it announces it.
+    let selected = assigned(def, ops.assignments.get(&def.name), &host)
+        && (def.selector.is_some() || announced.is_some());
     if !selected {
         Membership::NotSelected
     } else if !node.is_live(now) {

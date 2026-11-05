@@ -94,8 +94,9 @@ pub fn holding<'a>(
         .filter(move |hold| hold.service == service && hold.scope.covers(node_id, role))
 }
 
-/// What the fleet keeps of the ops state for its decisions: the holds, and the hosts each
-/// standing force orders ([`crate::force`]).
+/// What the fleet keeps of the ops state for its decisions: the holds, the hosts each standing
+/// force orders ([`crate::force`]), the assignments ([`crate::assignment`]), the labels and the
+/// exclusions.
 #[must_use]
 pub fn marks_of(state: &OpsState) -> Marks {
     let forced = state
@@ -114,6 +115,17 @@ pub fn marks_of(state: &OpsState) -> Marks {
     Marks {
         holds: state.holds.clone(),
         forced,
+        assignments: state.assignments.clone(),
+        labels: state
+            .hosts
+            .iter()
+            .map(|(id, host)| (id.clone(), host.labels.clone()))
+            .collect(),
+        excluded: state
+            .excluded
+            .iter()
+            .map(|e| (e.service.clone(), e.node_id.clone()))
+            .collect(),
     }
 }
 

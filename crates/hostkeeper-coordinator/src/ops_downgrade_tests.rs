@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use hostkeeper_testkit::Scratch;
 use hostkeeper_wire::wire::{Outcome, Phase, Token, UpdateResult};
 
+use crate::assignment::{Entry, ServiceAssignments};
 use crate::ops::{
     AuditEntry, Exclusion, Halt, HaltAck, HostOps, OpsError, OpsState, OpsStore, ServiceOps, Write,
 };
@@ -460,4 +461,56 @@ fn a_halts_file_once_written_is_written_on_every_change() {
     let halts: serde_json::Value =
         serde_json::from_str(&text(&halts_path(&path))).expect("the halts file");
     assert_eq!(halts["services"], serde_json::json!({}));
+}
+
+/// Catches: the assignments key breaking the additive rule (B8): with no assignment, or only
+/// empty ones, the ops file this release writes carries no `assignments` key and the release
+/// before, whose reader refuses a key it does not know, starts on it; with one it carries the key
+/// and the release before refuses to start (it would order the hosts as if no operator had
+/// assigned or taken off anything, and never rewrites the file), while this release reads back
+/// exactly what it wrote.
+#[test]
+fn ops_file_with_assignments_is_read_by_the_previous_release_schema_check() {
+    let (_dir, path, _) = written("ops-prev-assign-none", calm);
+    let ops = text(&path);
+    assert!(!ops.contains("assignments"), "{ops}");
+    assert_eq!(previous::reads(&ops), Ok(()), "{ops}");
+
+    let (_dir, path, _) = written("ops-prev-assign-empty", |state| {
+        calm(state);
+        state
+            .assignments
+            .insert("kbf".to_owned(), ServiceAssignments::default());
+    });
+    let ops = text(&path);
+    assert!(!ops.contains("assignments"), "{ops}");
+    assert_eq!(previous::reads(&ops), Ok(()), "{ops}");
+
+    let (_dir, path, state) = written("ops-prev-assign-some", |state| {
+        calm(state);
+        let mut entries = ServiceAssignments::default();
+        entries.roles.insert("storage".to_owned(), Entry::Exclude);
+        entries.hosts.insert("s1".to_owned(), Entry::Include);
+        entries
+            .host_min_versions
+            .insert("s1".to_owned(), version("1.5"));
+        entries.uninstall.insert("s3".to_owned(), 1);
+        entries.uninstall_generation = 1;
+        state.assignments.insert("kbf".to_owned(), entries);
+    });
+    let ops = text(&path);
+    let refused = previous::reads(&ops).expect_err("the release before is strict");
+    assert!(refused.contains("assignments"), "{refused}");
+    assert_eq!(OpsStore::open(&path).expect("read").state(), state);
+    let value: serde_json::Value = serde_json::from_str(&ops).expect("JSON");
+    assert_eq!(
+        value["assignments"],
+        serde_json::json!({"kbf": {
+            "roles": {"storage": "exclude"},
+            "hosts": {"s1": "include"},
+            "host_min_versions": {"s1": "1.5"},
+            "uninstall": {"s3": 1},
+            "uninstall_generation": 1
+        }})
+    );
 }
