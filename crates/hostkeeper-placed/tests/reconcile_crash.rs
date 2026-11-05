@@ -174,6 +174,7 @@ fn refusal(world: &World, ver: &str) -> String {
     let expected = Expected {
         name: service("tierstore"),
         version: version(ver),
+        platform: hostkeeper_config::platform::Platform::current(),
     };
     Manifest::load(
         &world.version_dir("tierstore", ver),

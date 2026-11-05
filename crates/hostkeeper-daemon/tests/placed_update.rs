@@ -304,6 +304,7 @@ fn the_switch_refuses_an_order_it_cannot_read_and_writes_nothing() {
         let expected = Expected {
             name: ServiceName::new("web").expect("a name"),
             version: Version::new(version).expect("a version"),
+            platform: hostkeeper_config::platform::Platform::current(),
         };
         Manifest::load(&rig.packages.join("web").join(dir), &expected, &OWN)
             .expect_err("another version")

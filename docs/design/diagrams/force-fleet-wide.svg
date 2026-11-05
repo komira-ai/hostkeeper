@@ -39,7 +39,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="385" y="160" class="t-m" text-anchor="middle">canary, bake, deferral and halts</text>
 <text x="385" y="176" class="t-m" text-anchor="middle">audit log: token, targets, slot passed</text>
 <path d="M520,130 L660,130" class="ln" marker-end="url(#force-fleet-wide-ak)"/>
-<text x="590" y="116" class="t-m lbl" text-anchor="middle">force S V D</text>
+<text x="590" y="116" class="t-m lbl" text-anchor="middle">force S V</text>
 <text x="590" y="146" class="t-m lbl" text-anchor="middle">every target</text>
 <path d="M660,176 L520,176" class="ln-d" marker-end="url(#force-fleet-wide-ak)"/>
 <text x="590" y="170" class="t-m lbl" text-anchor="middle">Forced verdict</text>

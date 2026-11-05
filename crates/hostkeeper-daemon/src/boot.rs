@@ -427,6 +427,7 @@ fn rebuild(
     let expected = Expected {
         name: service.clone(),
         version: version.clone(),
+        platform: hostkeeper_config::platform::Platform::current(),
     };
     let manifest = Manifest::load(&dir, &expected, &ctx.own_version).map_err(unresumable)?;
     let order = UpdateOrder {
@@ -857,6 +858,7 @@ impl Daemon {
         let expected = Expected {
             name: service.clone(),
             version: version.clone(),
+            platform: hostkeeper_config::platform::Platform::current(),
         };
         let manifest = Manifest::load(&dir, &expected, &ctx.own_version).map_err(text)?;
         let Some(step) = manifest.hook.boot.as_deref() else {

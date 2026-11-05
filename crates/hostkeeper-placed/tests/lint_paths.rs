@@ -270,6 +270,7 @@ fn package_under_state(world: &World, exec: &str) -> Manifest {
     let expected = Expected {
         name: service("tierstore"),
         version: version("1.5.0"),
+        platform: hostkeeper_config::platform::Platform::current(),
     };
     Manifest::load(&dir, &expected, &RUNNING).expect("the manifest loads")
 }

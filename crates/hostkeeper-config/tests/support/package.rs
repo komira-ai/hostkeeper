@@ -4,8 +4,10 @@
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 
-use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest, ManifestRefusal};
+pub use hostkeeper_config::manifest::Expected;
+use hostkeeper_config::manifest::{HostkeeperVersion, Manifest, ManifestRefusal};
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::platform::Platform;
 
 use super::Scratch;
 
@@ -13,6 +15,7 @@ use super::Scratch;
 pub const EXAMPLE: &str = r#"schema         = 1
 name           = "tierstore"
 version        = "1.5.0"
+platform       = "linux-x86_64"
 min_hostkeeper = "0.4.0"          # oldest daemon that can run this package
 
 [hook]
@@ -103,6 +106,7 @@ pub fn expected(name: &str, version: &str) -> Expected {
     Expected {
         name: ServiceName::new(name).unwrap(),
         version: Version::new(version).unwrap(),
+        platform: Platform::LinuxX86_64,
     }
 }
 

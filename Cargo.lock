@@ -1198,6 +1198,8 @@ version = "0.1.0"
 dependencies = [
  "hostkeeper-testkit",
  "libc",
+ "serde",
+ "serde_json",
  "thiserror",
  "toml",
 ]

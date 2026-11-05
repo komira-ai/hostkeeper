@@ -28,6 +28,7 @@ use std::path::PathBuf;
 
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::platform::Platform;
 use hostkeeper_hook::{Params, Verdict};
 use hostkeeper_steps::record::{Loaded, Record, RecordError};
 use hostkeeper_steps::{Bounds, Finished, RunError, Staged, UpdateOrder};
@@ -237,6 +238,7 @@ pub(crate) fn prepare(
     let expected = Expected {
         name: service.clone(),
         version: order.version.clone(),
+        platform: Platform::current(),
     };
     let manifest = Manifest::load(dir.dir(), &expected, &ctx.own_version)
         .map_err(|e| Reply::refused(Refusal::from(&e), e))?;

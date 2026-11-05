@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::platform::Platform;
 use hostkeeper_unpack::{HostFs, Limits, Owner, PackageFs, ServiceLock, StagedFile, UnpackOrder};
 use sha2::{Digest, Sha256};
 
@@ -56,6 +57,7 @@ pub const VERSION: &str = "1.5.0";
 pub const MANIFEST: &str = "schema = 1
 name = \"tierstore\"
 version = \"1.5.0\"
+platform = \"linux-x86_64\"
 min_hostkeeper = \"0.1.0\"
 [hook]
 command = [\"bin/x\", \"update-hook\"]
@@ -339,6 +341,7 @@ pub fn order(version: &str, digest: &str) -> UnpackOrder {
     UnpackOrder {
         service: ServiceName::new(SERVICE).unwrap(),
         version: Version::new(version).unwrap(),
+        platform: Platform::LinuxX86_64,
         package_digest: Sha256Hex::parse(digest).unwrap(),
     }
 }

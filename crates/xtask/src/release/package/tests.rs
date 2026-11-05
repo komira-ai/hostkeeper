@@ -166,6 +166,7 @@ fn expected() -> Expected {
     Expected {
         name: ServiceName::new("hostkeeper").expect("a service name"),
         version: ConfigVersion::new("0.1.5").expect("a version"),
+        platform: hostkeeper_config::platform::Platform::LinuxX86_64,
     }
 }
 
@@ -326,8 +327,8 @@ fn the_manifest_text_is_exact() {
     // Catches: a changed key or value of the manifest that no loader check notices, or a hook
     // table that no longer says the daemon does not run it for its own package.
     assert_eq!(
-        manifest(&version(), true),
-        "schema = 1\nname = \"hostkeeper\"\nversion = \"0.1.5\"\nmin_hostkeeper = \"0.1.5\"\n\n\
+        manifest(&version(), Platform::LinuxX86_64, true),
+        "schema = 1\nname = \"hostkeeper\"\nversion = \"0.1.5\"\nplatform = \"linux-x86_64\"\nmin_hostkeeper = \"0.1.5\"\n\n\
          # The daemon does not run this hook for its own package: hostkeeper's self-update is\n\
          # compiled into the daemon. The table is here because every manifest has a bounded hook.\n\
          [hook]\ncommand = [\"bin/hostkeeper\", \"update-hook\"]\nverify_deadline_secs = 600\n\n\
@@ -335,8 +336,8 @@ fn the_manifest_text_is_exact() {
          cleanup = 300\n\n[units]\nrun = [\"hostkeeper.service\"]\n"
     );
     // Without units, the same text up to the hook table's end, and no `[units]`.
-    let with_units = manifest(&version(), true);
-    let without = manifest(&version(), false);
+    let with_units = manifest(&version(), Platform::LinuxX86_64, true);
+    let without = manifest(&version(), Platform::LinuxX86_64, false);
     assert_eq!(
         format!("{without}\n[units]\nrun = [\"hostkeeper.service\"]\n"),
         with_units
@@ -362,7 +363,7 @@ fn the_archive_holds_the_binary_the_manifest_and_the_unit_bytes() {
     assert_eq!(by_name("units/hostkeeper.service"), UNIT.as_bytes());
     assert_eq!(
         by_name("manifest.toml"),
-        manifest(&version(), true).into_bytes()
+        manifest(&version(), Platform::LinuxX86_64, true).into_bytes()
     );
     assert_eq!(by_name("bin/"), Vec::<u8>::new());
 }
@@ -380,8 +381,9 @@ fn compress_round_trips_through_the_zstd_decoder() {
 }
 
 #[test]
-fn the_digest_file_holds_the_sha256_and_the_name_and_platforms_differ_by_name_only() {
-    // Catches: a digest file of another format, or a platform that changes the bytes.
+fn the_digest_file_holds_the_sha256_and_platforms_differ_only_by_name_and_manifest_platform() {
+    // Catches: a digest file of another format, a package whose manifest does not name its own
+    // platform, or a platform that changes any other byte of the package.
     let dir = scratch("package-digest");
     let (history, commit) = history();
     let x86 = request(&dir, UNIT.as_bytes(), &commit, Platform::LinuxX86_64, "x86");
@@ -399,11 +401,29 @@ fn the_digest_file_holds_the_sha256_and_the_name_and_platforms_differ_by_name_on
         format!("{hex}  {name}\n")
     );
     let arm_name = "hostkeeper-0.1.5-linux-arm64.tar.zst";
+    let arm_hex = file_sha256(&arm.out.join(arm_name)).expect("hash");
     assert_eq!(
         std::fs::read_to_string(arm.out.join(format!("{arm_name}.sha256"))).expect("digest"),
-        format!("{hex}  {arm_name}\n")
+        format!("{arm_hex}  {arm_name}\n")
     );
-    assert_eq!(built(&x86), built(&arm));
+    let (x86_entries, arm_entries) = (read_back(&built(&x86)), read_back(&built(&arm)));
+    let names = |entries: &[Seen]| entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&x86_entries), names(&arm_entries));
+    for (x, a) in x86_entries.iter().zip(&arm_entries) {
+        match x.name.as_str() {
+            "manifest.toml" => {
+                assert_eq!(
+                    x.data,
+                    manifest(&version(), Platform::LinuxX86_64, true).into_bytes()
+                );
+                assert_eq!(
+                    a.data,
+                    manifest(&version(), Platform::LinuxArm64, true).into_bytes()
+                );
+            }
+            _ => assert_eq!(x.data, a.data, "{}", x.name),
+        }
+    }
 }
 
 #[test]
@@ -596,7 +616,7 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
         ]))
     );
     let with_unit = Contents {
-        manifest: manifest(&version(), true),
+        manifest: manifest(&version(), Platform::LinuxX86_64, true),
         units: vec![Unit {
             file: UNIT_FILE.to_owned(),
             origin: String::new(),
@@ -608,7 +628,7 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
         Ok(())
     );
     let without_unit = Contents {
-        manifest: manifest(&version(), false),
+        manifest: manifest(&version(), Platform::MacosArm64, false),
         units: Vec::new(),
     };
     assert_eq!(
@@ -670,6 +690,7 @@ fn unpack_as_the_daemon(
     let order = hostkeeper_unpack::UnpackOrder {
         service: ServiceName::new("hostkeeper").expect("a service name"),
         version: ConfigVersion::new(&running).expect("a version"),
+        platform: platform.name().parse().expect("a platform"),
         package_digest: hostkeeper_config::daemon::Sha256Hex::parse(
             &file_sha256(&archive).expect("hash the package"),
         )
@@ -761,7 +782,10 @@ fn a_macos_package_holds_the_binary_and_a_manifest_without_units() {
     let names: Vec<&str> = seen.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, ["bin/", "bin/hostkeeper", "manifest.toml"]);
     assert_eq!(seen[1].data, BINARY);
-    assert_eq!(seen[2].data, manifest(&version(), false).into_bytes());
+    assert_eq!(
+        seen[2].data,
+        manifest(&version(), Platform::MacosArm64, false).into_bytes()
+    );
     let name = "hostkeeper-0.1.5-macos-arm64.tar.zst";
     let hex = hex::encode(Sha256::digest(&bytes));
     assert_eq!(
@@ -777,7 +801,15 @@ fn a_macos_package_holds_the_binary_and_a_manifest_without_units() {
     assert_eq!(built(&r), bytes);
     let version_dir = scratch("package-macos-unpacked");
     unpack(&bytes, &version_dir);
-    let manifest = Manifest::load(&version_dir, &expected(), &host(5)).expect("the manifest loads");
+    let mac = Expected {
+        platform: hostkeeper_config::platform::Platform::MacosArm64,
+        ..expected()
+    };
+    let manifest = Manifest::load(&version_dir, &mac, &host(5)).expect("the manifest loads");
+    assert_eq!(
+        manifest.platform,
+        hostkeeper_config::platform::Platform::MacosArm64
+    );
     assert_eq!(manifest.run, Vec::<String>::new());
     assert_eq!(manifest.unit_files, BTreeSet::new());
     assert_eq!(manifest.hook.command, ["bin/hostkeeper", "update-hook"]);

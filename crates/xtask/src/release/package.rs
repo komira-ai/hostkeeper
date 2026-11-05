@@ -156,16 +156,18 @@ struct Contents {
     units: Vec<Unit>,
 }
 
-/// The manifest of hostkeeper's package for `version`: it needs a daemon of its own version, and
-/// with `units` runs [`UNIT_FILE`].
-fn manifest(version: &Version, units: bool) -> String {
+/// The manifest of hostkeeper's package for `version` built for `platform`: it needs a daemon of
+/// its own version, names the platform the daemon checks against its own, and with `units` runs
+/// [`UNIT_FILE`].
+fn manifest(version: &Version, platform: Platform, units: bool) -> String {
+    let platform = platform.name();
     let units = if units {
         format!("\n[units]\nrun = [\"{UNIT_FILE}\"]\n")
     } else {
         String::new()
     };
     format!(
-        "schema = 1\nname = \"hostkeeper\"\nversion = \"{version}\"\nmin_hostkeeper = \"{version}\"\n\n{HOOK}{units}"
+        "schema = 1\nname = \"hostkeeper\"\nversion = \"{version}\"\nplatform = \"{platform}\"\nmin_hostkeeper = \"{version}\"\n\n{HOOK}{units}"
     )
 }
 
@@ -211,7 +213,7 @@ pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<Str
     let binary = read(&request.binary)?;
     let contents = match source {
         Source::File(path) => Contents {
-            manifest: manifest(&request.version, true),
+            manifest: manifest(&request.version, request.platform, true),
             units: vec![Unit {
                 file: UNIT_FILE.to_owned(),
                 origin: path.display().to_string(),
@@ -219,7 +221,7 @@ pub(crate) fn package(git: &dyn GitHistory, request: &Request) -> Result<Vec<Str
             }],
         },
         Source::NoUnit => Contents {
-            manifest: manifest(&request.version, false),
+            manifest: manifest(&request.version, request.platform, false),
             units: Vec::new(),
         },
         Source::Rendered => hello::contents(

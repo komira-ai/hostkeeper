@@ -226,7 +226,12 @@ impl StepLauncher for HelloLauncher {
 /// The package of hello at `version`: the golden manifest for that version, keeping its record
 /// in `record_dir`, the unit template, and a program the hook finds at `bin/hello`; sealed.
 fn add_hello(rig: &Rig, version: &str, record_dir: &Path) {
+    let platform = hostkeeper_config::platform::Platform::current();
     let manifest = MANIFEST
+        .replace(
+            "platform = \"linux-x86_64\"",
+            &format!("platform = \"{platform}\""),
+        )
         .replace(GOLDEN_VERSION, &format!("version = \"{version}\""))
         .replace(
             GOLDEN_RECORD_DIR,

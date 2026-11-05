@@ -1,6 +1,7 @@
 schema = 1
 name = "hello"
 version = "1.2.3"
+platform = "macos-arm64"
 min_hostkeeper = "0.1.0"
 
 [hook]

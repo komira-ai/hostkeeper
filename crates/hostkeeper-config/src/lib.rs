@@ -11,8 +11,10 @@
 //! The crate depends on no crate of this workspace; a layering test of the workspace keeps it so.
 
 pub mod daemon;
+pub mod index;
 pub mod manifest;
 pub mod names;
+pub mod platform;
 pub mod trust;
 
 mod table;

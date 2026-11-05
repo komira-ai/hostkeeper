@@ -37,8 +37,11 @@
 //
 // Orders: an order is one verb with typed arguments (`Order`): a service name, a version, a
 // package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds
-// everything else (the release channel, the hook, the units) in its own configuration and in the
-// manifest of the package whose digest verified.
+// everything else (the release channel, the package of its own platform with its size and digest
+// in the version's release index, the hook, the units) in its own configuration, in the index and
+// in the manifest of the package that verified (design section 5.5). The daemon does not check a
+// package against an order's `package_digest`; the field stays so that every release reads every
+// order.
 //
 // Enrollment: a host with no certificate generates a P-256 key, keeps it, and sends `Enroll`
 // with a CSR for it and its claims. Its request is pending until an operator approves it
@@ -249,7 +252,7 @@ message UpdateResult {
   // host, order id and try, however often the daemon resends it. Absent from kbf's agent.
   optional string order_id = 8;
   // The verdict of a `Force` order, which runs no hook: SUCCEEDED; FAILED before anything changed
-  // on the host (`digest_mismatch`, `path_conflict` and the like); or FAILED after the switch, with
+  // on the host (`package_digest_mismatch`, `path_conflict` and the like); or FAILED after the switch, with
   // the reason `link_failed`, `daemon_reload_failed` or `start_failed`.
   bool forced = 9;
   // What the hook or the daemon said of the outcome, at most 512 bytes.
@@ -362,7 +365,7 @@ message Order {
 message Update {
   string service = 1;
   string version = 2;
-  // The digest the package must have; nothing runs from a package that does not match it.
+  // Not checked by the daemon, which takes the digest from the release index (see Orders above).
   string package_digest = 3;
 }
 
@@ -384,7 +387,7 @@ message ForceRollback {
 message Force {
   string service = 1;
   string version = 2;
-  // The digest CI registered for this service and version.
+  // Not checked by the daemon, which takes the digest from the release index (see Orders above).
   string package_digest = 3;
   // Greater than the generation the service is held under: a force lifts a standing halt.
   uint64 halt_generation = 4;

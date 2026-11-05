@@ -209,6 +209,7 @@ fn stop_left(
             let expected = Expected {
                 name: service.clone(),
                 version,
+                platform: hostkeeper_config::platform::Platform::current(),
             };
             Manifest::load(&dir, &expected, &ctx.own_version).ok()
         });

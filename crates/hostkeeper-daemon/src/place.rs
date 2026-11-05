@@ -71,6 +71,7 @@ fn manifest_of(
     let expected = Expected {
         name: service.clone(),
         version: version.clone(),
+        platform: hostkeeper_config::platform::Platform::current(),
     };
     Manifest::load(dir, &expected, own).map_err(text)
 }

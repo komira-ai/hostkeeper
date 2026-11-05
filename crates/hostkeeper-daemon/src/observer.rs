@@ -58,6 +58,7 @@ pub fn service_input(
     let expected = Expected {
         name: service.clone(),
         version: version.clone(),
+        platform: hostkeeper_config::platform::Platform::current(),
     };
     let manifest = Manifest::load(&dir, &expected, own).ok()?;
     Some(ServiceInput {
@@ -115,6 +116,7 @@ impl SealedExe {
         let expected = Expected {
             name: ServiceName::new(service).ok()?,
             version: Version::new(version).ok()?,
+            platform: hostkeeper_config::platform::Platform::current(),
         };
         let service_dir = self.packages.join(service);
         let sealed = fs::metadata(service_dir.join(format!("{version}.seal")))

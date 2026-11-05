@@ -208,6 +208,7 @@ impl Packages for RealPackages {
         let unpack_order = UnpackOrder {
             service: service.clone(),
             version: version.clone(),
+            platform: hostkeeper_config::platform::Platform::current(),
             package_digest: verified.sha256().clone(),
         };
         let unpacked = hostkeeper_unpack::unpack(
