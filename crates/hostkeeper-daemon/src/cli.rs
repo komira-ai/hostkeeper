@@ -1,4 +1,6 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags. Configuration
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
+//! `hostkeeper ci`, the CI client a service's release job runs once it has verified this binary
+//! (`hostkeeper_ci`, docs/deploy/ci-client.md). Configuration
 //! comes in as flags only, never from the environment (AGENTS.md S2); every default is a
 //! constant here.
 //!
@@ -34,7 +36,7 @@ use crate::executor::{Placement, Ports};
 use crate::files;
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::observer::host_observer;
-use crate::prune::NoPrune;
+use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::start::{self, Settings, StartError};
 
@@ -73,6 +75,10 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
+    /// The CI client: set a service's desired version from its release job and wait for the
+    /// fleet (docs/deploy/ci-client.md).
+    #[command(subcommand)]
+    Ci(hostkeeper_ci::CiCommand),
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -132,7 +138,10 @@ pub fn run(cli: Cli) -> ExitCode {
 /// Runs a parsed command line to its exit status; `notify_socket` is the address of the notify
 /// socket systemd set for the process, used with `--notify-systemd` only.
 pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
-    let Command::Daemon(flags) = cli.command;
+    let flags = match cli.command {
+        Command::Daemon(flags) => flags,
+        Command::Ci(command) => return hostkeeper_ci::run(command),
+    };
     let started = notifier(&flags, notify_socket)
         .and_then(|notifier| daemon(&flags.settings(), notifier.as_ref()));
     started.err().map_or(ExitCode::SUCCESS, report)
@@ -325,7 +334,8 @@ pub fn host_ports(
             ),
             fs: Arc::new(RealFs::new(Path::new("/"))),
         },
-        prune: Arc::new(NoPrune),
+        prune: Arc::new(LayoutPrune),
+        force_lock_point: Arc::new(NoLockPoint),
         observer: Arc::new(host_observer(&settings.packages_dir, own_version)),
     })
 }

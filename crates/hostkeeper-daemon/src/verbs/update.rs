@@ -11,7 +11,10 @@
 //! version and this daemon's version; the release it replaces, none for an `install`; the paths
 //! it places checked against `placed.json` and the disk (`path_conflict`); then the step lock
 //! and [`hostkeeper_steps::StepRunner::run`], whose verdict is the reply. Every refusal before
-//! the runner writes nothing.
+//! the runner writes nothing. An order that ends `Succeeded`, `promotion_pending` or not,
+//! confirms its switch: under its locks, before a pending promotion is watched, the service's
+//! package directory is pruned to `current` and `previous` ([`crate::prune::confirmed_switch`]),
+//! keeping the order's target. A resend answered from the record prunes nothing.
 //!
 //! An `install` is the update path with no previous release: no `updater.previous_*` key in the
 //! params file and no `previous_digest` in the step record. The runner's switch
@@ -25,7 +28,7 @@ use std::path::PathBuf;
 
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_hook::Params;
+use hostkeeper_hook::{Params, Verdict};
 use hostkeeper_steps::record::{Loaded, Record, RecordError};
 use hostkeeper_steps::{Bounds, Finished, RunError, Staged, UpdateOrder};
 
@@ -35,6 +38,7 @@ use crate::files;
 use crate::installed::{self, CURRENT, PREVIOUS};
 use crate::locks::{Held, Holder, Package, ServiceGuard};
 use crate::packages::VersionDir;
+use crate::prune;
 use crate::refusal::Refusal;
 use crate::verb::{Hooked, HookedVerb};
 
@@ -179,7 +183,23 @@ fn steps(
         .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     let runner = ctx.runner(service);
     let _step = guard.step(&ctx.step_lock);
-    Ok(ran(runner.run(&update)))
+    // The runner stops where a pending promotion hands the record to the post-success watcher:
+    // the update has ended `Succeeded` there, and its switch is confirmed before the watcher
+    // runs, so the prune never waits for the promotion. The watcher then runs here, under the
+    // same locks, and its end is the reply.
+    let ended = runner.run_until_watching(&update);
+    if let Ok(Finished {
+        verdict: Verdict::Succeeded { promotion_pending },
+        ..
+    }) = &ended
+    {
+        let watching = *promotion_pending;
+        prune::confirmed_switch(ctx, guard, service, &order.version);
+        if watching {
+            return Ok(ran(runner.run(&update)));
+        }
+    }
+    Ok(ran(ended))
 }
 
 /// The paths `manifest` places, checked against `placed.json` and what is on disk: a path

@@ -31,9 +31,19 @@ const ENVIRONMENT_KEYS: [&str; 4] = [
 fn parse_flags(words: &[String]) -> Result<DaemonFlags, String> {
     let args = std::iter::once("hostkeeper").chain(words.iter().skip(1).map(String::as_str));
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
-    let Command::Daemon(flags) = cli.command;
-    Ok(flags)
+    match cli.command {
+        Command::Daemon(flags) => Ok(flags),
+        Command::Ci(_) => {
+            Err("the line runs the CI client (`hostkeeper ci`), not the daemon".to_owned())
+        }
+    }
 }
+
+/// A command line of the CI client that parses, which a unit of the daemon must not run.
+const CI_LINE: &str = "ci set-desired --service web --version 1.0.0 --package-digest \
+    0000000000000000000000000000000000000000000000000000000000000000 \
+    --endpoint https://coordinator.example --ca-file ca.pem --audience web-release \
+    --work-dir work --web-roots roots.pem";
 
 fn check_unit_lines(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
@@ -134,6 +144,14 @@ fn every_unit_command_line_parses_under_the_binarys_own_flags() {
             ),
             "ExecStop= does not parse",
         ),
+        (
+            altered(
+                &text,
+                "--notify-systemd\n",
+                &format!("--notify-systemd\nExecReload=/usr/bin/hostkeeper {CI_LINE}\n"),
+            ),
+            "not the daemon",
+        ),
     ];
     refuses(check_unit_lines, &cases);
 }
@@ -148,9 +166,7 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
     let unit = Unit::parse(unit_text)?;
     let words = unit::command_words(unit.single("Service", "ExecStart")?)?;
     let flags = parse_flags(&words)?;
-    let Command::Daemon(defaults) = Cli::try_parse_from(["hostkeeper", "daemon"])
-        .map_err(|e| e.to_string())?
-        .command;
+    let defaults = parse_flags(&["hostkeeper".to_owned(), "daemon".to_owned()])?;
     let literals = [
         ("--config", &flags.config, &defaults.config, DEFAULT_CONFIG),
         (

@@ -30,7 +30,7 @@ use crate::installed::{self, CURRENT, Lifecycle};
 use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::observer;
 use crate::packages::Packages;
-use crate::prune::Prune;
+use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::verb::Verb;
 use crate::verbs;
@@ -61,8 +61,11 @@ pub struct Ports {
     pub units: Arc<dyn UnitControl + Send + Sync>,
     /// Where placed-path linking works, and the filesystem it goes through.
     pub placement: Placement,
-    /// Step 18 of a `force`: the prune of the versions a switch of `current` leaves behind.
+    /// The prune of the versions a confirmed switch leaves behind: at the end of an update that
+    /// ends `Succeeded`, and at step 18 of a `force` that moved `current`.
     pub prune: Arc<dyn Prune>,
+    /// The point of a `force` between its switch of `current` and its prune.
+    pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Looks at how each installed service runs: what `Status` reports of it.
     pub observer: Arc<Observer>,
 }
@@ -98,6 +101,7 @@ pub struct Ctx {
     pub units: Arc<dyn UnitControl + Send + Sync>,
     pub placement: Placement,
     pub prune: Arc<dyn Prune>,
+    pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Observes the installed services; it takes none of the daemon's locks.
     pub observer: Arc<Observer>,
     pub locks: ServiceLocks,
@@ -496,6 +500,7 @@ impl Daemon {
                 units: ports.units,
                 placement: ports.placement,
                 prune: ports.prune,
+                force_lock_point: ports.force_lock_point,
                 observer: ports.observer,
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
