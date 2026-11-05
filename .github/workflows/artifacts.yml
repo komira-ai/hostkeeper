@@ -24,6 +24,8 @@
 # a context that holds the released binary alone, with the commit time as SOURCE_DATE_EPOCH and
 # every timestamp in the image rewritten to it; `release compare-images` refuses the two unless
 # they are byte for byte equal, so the released image is one anyone can rebuild from the commit.
+# The image is then loaded and run through its entrypoint with --version, which must print the
+# coordinator's stamp.
 #
 # The attest job is in THIS file for one reason: the signer identity of an attestation is the
 # workflow file that ran the signing step, and every consumer verifies exactly
@@ -272,6 +274,13 @@ jobs:
         run: docker buildx build --builder image-b --no-cache --platform "$OCI_PLATFORM" --provenance=false --sbom=false --file packaging/container/Dockerfile --output "type=oci,dest=$RUNNER_TEMP/image-b.tar,rewrite-timestamp=true" "$RUNNER_TEMP/context-b"
       - name: The two builds are byte for byte equal
         run: cargo xtask release compare-images "$RUNNER_TEMP/image-a.tar" "$RUNNER_TEMP/image-b.tar"
+      # The image as a deployment starts it: loaded into the runner's docker and run through its
+      # own entrypoint, with --version as its only argument, it exits 0 and prints exactly the
+      # coordinator's stamp of this version and commit.
+      - name: Load the image
+        run: docker load --input "$RUNNER_TEMP/image-a.tar" > "$RUNNER_TEMP/image-loaded.txt"
+      - name: The image's entrypoint says the version and the commit
+        run: test "$(docker run --rm "$(sed -n 's/^Loaded image ID:[[:space:]]*//p' "$RUNNER_TEMP/image-loaded.txt")" --version)" = "hostkeeper-coordinator $RELEASE_VERSION+${GITHUB_SHA:0:12}"
       - name: Name the image
         run: cp "$RUNNER_TEMP/image-a.tar" "dist/hostkeeper-coordinator-$RELEASE_VERSION-$PLATFORM.image.tar"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

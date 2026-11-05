@@ -605,16 +605,22 @@ impl Drop for Unseal {
     }
 }
 
-#[test]
-fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() {
-    // Catches: a package the daemon's unpacker (design 5.5 steps 3 and 4, hostkeeper-unpack)
-    // refuses: an entry outside the four top-level names, a link or other kind, a mode bit it
-    // does not allow, a digest that is not the archive's, or a manifest it cannot load.
-    let dir = scratch("package-daemon-unpack");
+/// A package of the running daemon's own version (so `min_hostkeeper` admits it) built over
+/// `unit`, under `dir`, and unpacked by the daemon's unpacker (design 5.5 steps 3 and 4,
+/// hostkeeper-unpack) into `dir/packages`. Returns the packages directory, the version, the
+/// unpacker's answer, and the guard that removes the sealed tree.
+fn daemon_unpacked(
+    dir: &Path,
+    unit: &str,
+) -> (
+    std::path::PathBuf,
+    String,
+    hostkeeper_unpack::Unpacked,
+    Unseal,
+) {
     let (history, commit) = history();
-    // The package of the running daemon's own version, so `min_hostkeeper` admits it.
     let running = hostkeeper_unpack::running_hostkeeper().to_string();
-    let mut req = request(&dir, UNIT.as_bytes(), &commit, Platform::LinuxX86_64, "out");
+    let mut req = request(dir, unit.as_bytes(), &commit, Platform::LinuxX86_64, "out");
     req.version = running.parse().expect("the workspace version");
     package(&history, &req).expect("package");
     let name = package_name(&req.version, Platform::LinuxX86_64);
@@ -648,6 +654,16 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
         hostkeeper_unpack::Platform::Linux,
     )
     .expect("unpack");
+    (packages, running, unpacked, unseal)
+}
+
+#[test]
+fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() {
+    // Catches: a package the daemon's unpacker (design 5.5 steps 3 and 4, hostkeeper-unpack)
+    // refuses: an entry outside the four top-level names, a link or other kind, a mode bit it
+    // does not allow, a digest that is not the archive's, or a manifest it cannot load.
+    let dir = scratch("package-daemon-unpack");
+    let (packages, running, unpacked, unseal) = daemon_unpacked(&dir, UNIT);
     assert!(unpacked.fresh);
     assert_eq!(unpacked.manifest.run, ["hostkeeper.service"]);
     assert_eq!(
@@ -660,6 +676,103 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
         .expect("the unpacked binary"),
         BINARY
     );
+    drop(unseal);
+    assert!(!packages.exists(), "the unpacked tree is removed");
+}
+
+/// The unit hostkeeper's own package carries, as committed (the release workflow passes it to
+/// `release package --unit`).
+const PACKAGE_UNIT: &str =
+    include_str!("../../../../../packaging/linux/package/hostkeeper.service");
+
+/// The unit the deb and the rpm install, as committed.
+const DEB_UNIT: &str = include_str!("../../../../../packaging/linux/hostkeeper.service");
+
+/// What a launcher starts for the `ExecStart=` of `unit` on a host whose packages directory is
+/// `packages`: the program, with the unit's own `--packages-dir` rebased onto `packages` and every
+/// link on its path followed, and the arguments. Fails naming what the unit lacks, or when the
+/// program is not under its packages directory or does not resolve to a file.
+fn launched(unit: &str, packages: &Path) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    let line = unit
+        .lines()
+        .find_map(|l| l.strip_prefix("ExecStart="))
+        .ok_or("the unit has no ExecStart=")?;
+    let mut words = line.split_whitespace().map(str::to_owned);
+    let program = words.next().ok_or("ExecStart= names no program")?;
+    let args: Vec<String> = words.collect();
+    let dir = args
+        .windows(2)
+        .find(|w| w[0] == "--packages-dir")
+        .map(|w| format!("{}/", w[1]))
+        .ok_or("ExecStart= has no --packages-dir")?;
+    let inside = program
+        .strip_prefix(&dir)
+        .ok_or_else(|| format!("{program} is not under the --packages-dir {dir}"))?;
+    let path = std::fs::canonicalize(packages.join(inside))
+        .map_err(|e| format!("{program} does not resolve: {e}"))?;
+    Ok((path, args))
+}
+
+#[test]
+fn the_committed_package_unit_launches_the_packaged_binary_through_current() {
+    // Catches: a package unit whose ExecStart does not reach the binary the package carries once
+    // the daemon has unpacked it and `current` names its version (the deb's /usr/bin path, a
+    // path outside --packages-dir, a broken link), or whose arguments the daemon refuses.
+    use clap::Parser;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = scratch("package-unit-launch");
+    let (packages, running, unpacked, unseal) = daemon_unpacked(&dir, PACKAGE_UNIT);
+    assert_eq!(unpacked.manifest.run, ["hostkeeper.service"]);
+    let service = packages.join("hostkeeper");
+    let unit = std::fs::read_to_string(service.join(&running).join("units/hostkeeper.service"))
+        .expect("the unpacked unit");
+    assert_eq!(unit, PACKAGE_UNIT);
+
+    // Before `current` names a version, the unit starts nothing.
+    let current = service.join(hostkeeper_daemon::installed::CURRENT);
+    let refused = launched(&unit, &packages).expect_err("no current yet");
+    assert!(refused.contains("does not resolve"), "{refused}");
+
+    std::os::unix::fs::symlink(&running, &current).expect("link current");
+    let (program, args) = launched(&unit, &packages).expect("a launch");
+    let binary = service.join(&running).join("bin/hostkeeper");
+    assert_eq!(program, std::fs::canonicalize(&binary).expect("the binary"));
+    assert_eq!(std::fs::read(&program).expect("the launched file"), BINARY);
+    let mode = std::fs::metadata(&program)
+        .expect("stat")
+        .permissions()
+        .mode();
+    assert_eq!(
+        mode & 0o111,
+        0o111,
+        "the launched file is executable: {mode:o}"
+    );
+    let cli = hostkeeper_daemon::cli::Cli::try_parse_from(
+        std::iter::once("hostkeeper".to_owned()).chain(args),
+    )
+    .expect("the daemon's flags");
+    assert!(matches!(
+        cli.command,
+        hostkeeper_daemon::cli::Command::Daemon(_)
+    ));
+
+    // The deb's unit, and units that lack what the launch needs, are refused by name.
+    let deb = launched(DEB_UNIT, &packages).expect_err("the deb's unit");
+    assert!(
+        deb.starts_with("/usr/bin/hostkeeper is not under the --packages-dir"),
+        "{deb}"
+    );
+    for (text, why) in [
+        ("[Service]\nType=notify\n", "the unit has no ExecStart="),
+        ("[Service]\nExecStart=\n", "ExecStart= names no program"),
+        (
+            "[Service]\nExecStart=/opt/hostkeeper daemon\n",
+            "ExecStart= has no --packages-dir",
+        ),
+    ] {
+        assert_eq!(launched(text, &packages), Err(why.to_owned()));
+    }
     drop(unseal);
     assert!(!packages.exists(), "the unpacked tree is removed");
 }

@@ -480,9 +480,26 @@ fn release_workflow_keeps_its_three_jobs_and_checks_the_binary() {
 #[test]
 fn the_image_job_builds_twice_from_scratch_and_compares() {
     // Catches: an image released from one build (nothing shows it can be rebuilt), a second
-    // build that reuses the first one's cache, or two builds never compared.
+    // build that reuses the first one's cache, two builds never compared, or an image never
+    // started through its entrypoint (or compared with another stamp than the coordinator's).
     let build_b = "      - name: The second build\n        run: docker buildx build --builder image-b --no-cache ";
     let compare = "        run: cargo xtask release compare-images ";
+    let entrypoint = "test \"$(docker run --rm ";
+    for (from, to, want) in [
+        (
+            entrypoint,
+            "true \"$(docker run --rm ",
+            "artifacts.yml: job image must run the image through its entrypoint",
+        ),
+        (
+            "--version)\" = \"hostkeeper-coordinator $RELEASE_VERSION+${GITHUB_SHA:0:12}\"",
+            "--version)\" = \"hostkeeper $RELEASE_VERSION+${GITHUB_SHA:0:12}\"",
+            "artifacts.yml: job image must run the image through its entrypoint",
+        ),
+    ] {
+        let text = with_in(&workflow("artifacts.yml"), from, to);
+        assert_refused("artifacts.yml", &text, want);
+    }
     let want = "artifacts.yml: job image must build the image twice";
     for (from, to) in [
         (

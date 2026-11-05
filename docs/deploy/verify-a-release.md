@@ -49,7 +49,8 @@ lists `index.json`, so the provenance of a release covers its bytes too.)
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
 distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It is
 built twice from clean contexts and released only when the two builds are byte for byte equal, so
-anyone can rebuild it from the commit and compare.
+anyone can rebuild it from the commit and compare; before it is released it is also loaded and run
+through its entrypoint with `--version`, which must print the coordinator's stamp.
 
 macOS assets (`macos-arm64`) are not released yet. Names are only ever added, never renamed or
 removed, so a consumer ignores assets it does not know.
