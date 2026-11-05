@@ -240,7 +240,7 @@ async fn the_same_digest_again_is_accepted_and_changes_nothing() {
 #[tokio::test]
 async fn a_digest_that_is_not_sixty_four_lowercase_hex_is_malformed() {
     let rig = rig("digest-malformed", "", ONE).await;
-    let (upper, long) = (D1.to_uppercase(), format!("{D1}0"));
+    let (upper, long) = ("AB".repeat(32), format!("{D1}0"));
     for bad in [&D1[1..], upper.as_str(), long.as_str(), "z"] {
         let refused = set(&rig, &body("2.0", Some(bad))).await;
         assert!(
@@ -338,7 +338,8 @@ fn a_digest_and_a_registry_are_read_strictly() {
     assert_eq!(digest(D1).as_str(), D1);
     assert_eq!(digest(D1).to_string(), D1);
     assert_eq!(String::from(digest(D1)), D1);
-    assert_eq!(Digest::try_from(D1.to_uppercase()), Err(DigestError));
+    assert_eq!(Digest::try_from("AB".repeat(32)), Err(DigestError));
+    assert_eq!(digest(&"ab".repeat(32)).as_str(), "ab".repeat(32));
     assert_eq!(
         DigestError.to_string(),
         "a digest is 64 lowercase hex characters"

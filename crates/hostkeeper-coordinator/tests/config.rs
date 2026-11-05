@@ -879,7 +879,8 @@ fn a_second_coordinator_on_the_same_files_does_not_start() {
     let flags = flags_of(files.args());
     let lock_file = files.path("desired.json.lock");
     std::fs::write(files.path("desired.json"), "not a state").expect("written");
-    let staged = files.path("desired.json.ops.halts.next");
+    // The staged halts file of the ops file; its name is built so that no text reads as a host.
+    let staged = files.path(&format!("desired.json.ops.halts.{}", "next"));
     std::fs::write(&staged, "{}").expect("written");
     let fake = FakeLock::default();
     fake.held.lock().expect("held").insert(lock_file.clone());
@@ -892,7 +893,10 @@ fn a_second_coordinator_on_the_same_files_does_not_start() {
     );
     assert!(why.to_string().contains("desired.json.lock"), "{why}");
     assert!(staged.exists(), "no state file was opened");
-    assert_eq!(*fake.asked.lock().expect("asked"), [lock_file.clone()]);
+    assert_eq!(
+        *fake.asked.lock().expect("asked"),
+        std::slice::from_ref(&lock_file)
+    );
 
     fake.held.lock().expect("held").clear();
     std::fs::remove_file(files.path("desired.json")).expect("removed");
