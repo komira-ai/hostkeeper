@@ -1,11 +1,17 @@
-//! Compiles hostkeeper's protos into Rust, and writes their descriptor set.
+//! Compiles hostkeeper's protos into Rust, and writes their descriptor set and the command
+//! table of `hostkeeper ctl`.
 //!
 //! `protox` parses the `.proto` files in pure Rust, so the build needs no `protoc`;
-//! `tonic-prost-build` turns the descriptors into messages, service traits and clients. Nothing
-//! generated is checked in: the code, and the descriptor set `src/lib.rs` embeds as
-//! `FILE_DESCRIPTOR_SET`, land in `OUT_DIR`.
+//! `tonic-prost-build` turns the descriptors into messages, service traits and clients, and
+//! `src/ctl_gen.rs` turns them into `ctl`'s command table. Nothing generated is checked in: the
+//! code, the descriptor set `src/lib.rs` embeds as `FILE_DESCRIPTOR_SET`, and the table
+//! `src/ctl.rs` includes land in `OUT_DIR`.
 
 use std::path::PathBuf;
+
+/// The generator of the command table; the unit tests of this crate run it on fixture protos.
+#[path = "src/ctl_gen.rs"]
+mod ctl_gen;
 
 /// Every file under `proto/hostkeeper`; `tests/layout.rs` fails when one is missing here.
 const FILES: &[&str] = &[
@@ -27,10 +33,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )]
     let out = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("cargo set no OUT_DIR")?);
     // The encoded set keeps custom options (`(hostkeeper.secret)`), which the decoded one drops.
-    std::fs::write(
-        out.join("hostkeeper.binpb"),
-        compiler.encode_file_descriptor_set(),
-    )?;
+    let encoded = compiler.encode_file_descriptor_set();
+    std::fs::write(out.join("hostkeeper.binpb"), &encoded)?;
+
+    // Read back from the encoded set, so the generator sees the options too.
+    let pool = prost_reflect::DescriptorPool::decode(&encoded[..])?;
+    let table = ctl_gen::generate(&pool).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("ctl_commands.rs"), table)?;
 
     tonic_prost_build::configure()
         .build_client(true)

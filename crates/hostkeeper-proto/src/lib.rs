@@ -59,5 +59,10 @@ pub const MAX_SERVICES_PER_HEARTBEAT: usize = 16;
 pub const FILE_DESCRIPTOR_SET: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/hostkeeper.binpb"));
 
+/// The command table of `hostkeeper ctl`, generated from the descriptors.
+pub mod ctl;
+
 #[cfg(test)]
 mod compat;
+#[cfg(test)]
+mod ctl_gen;

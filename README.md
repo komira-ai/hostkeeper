@@ -29,7 +29,8 @@ and coverage tooling:
 | [`hostkeeper-unpack`](crates/hostkeeper-unpack) | the unpack of a verified `.tar.zst` package into a sealed version directory, in one streaming pass under the archive bounds ([package format](docs/package-format.md)) |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon, the one root process of a host: start-up and its lock, the executor of orders with the service and step locks, the daemon's own checks, the try rules and the held halts, and the root-only admin socket |
 | [`hostkeeper`](crates/hostkeeper) | the binary, `hostkeeper daemon`, which only forwards to `hostkeeper-daemon` |
-| [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), and the test that keeps them compatible |
+| [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), the command table of `hostkeeper ctl` generated from them, and the test that keeps them compatible |
+| [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, called over gRPC or the coordinator's HTTP/JSON gateway |
 | `hostkeeper-testkit` | helpers the tests share |
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui): every call it makes is a method of the protobuf descriptors, its sources keep no token and load nothing from another origin, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; not shipped |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
@@ -40,6 +41,9 @@ the coordinator's HTTP/JSON gateway with the operator's token, each button one m
 coordinator serves it yet.
 
 The design is [docs/design/host-updates.md](docs/design/host-updates.md).
+
+Every command of `hostkeeper ctl`, with its flags and exit codes, is in [docs/ctl.md](docs/ctl.md),
+which a test regenerates from the protos and compares, so it cannot drift from them.
 
 ## Running the daemon
 

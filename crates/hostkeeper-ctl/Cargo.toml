@@ -1,0 +1,44 @@
+[package]
+name = "hostkeeper-ctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "`hostkeeper ctl`: the command line generated from hostkeeper's protobuf services, with its gRPC, HTTP/JSON gateway and in-memory transports."
+
+[dependencies]
+bytes.workspace = true
+# The command tree is built at run time from the generated table: names and help are strings.
+clap = { workspace = true, features = ["string"] }
+# The command table and the descriptor set it was generated from.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+prost.workspace = true
+# Requests and responses as dynamic messages, and the request file as canonical JSON.
+prost-reflect = { workspace = true, features = ["serde"] }
+rustls.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# `time` bounds a whole call by `--timeout-secs`.
+tokio = { workspace = true, features = ["rt", "time"] }
+# The gRPC client over rustls (ring), and the generic client the in-memory transport also uses.
+tonic = { workspace = true, features = ["channel", "tls-ring"] }
+
+[build-dependencies]
+# The fixture protos of the tests compile to a fixture command table with the generator
+# hostkeeper-proto's build script runs.
+prost-reflect.workspace = true
+protox.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+rcgen.workspace = true
+# `test-util` for the paused clock that tests of the call deadline run on.
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "test-util", "time"] }
+tokio-stream = { workspace = true, features = ["net"] }
+# A loopback gRPC server with TLS, for the tonic transport's tests.
+tonic = { workspace = true, features = ["server", "tls-ring"] }
+
+[lints]
+workspace = true
