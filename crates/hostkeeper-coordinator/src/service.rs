@@ -718,9 +718,11 @@ impl Coordinator {
             orders,
             now,
         };
-        let (reply, order, terms) = self
-            .gate_order(&mut fleet, &asked, names)
-            .unwrap_or((ServiceReply::Nothing, None, None));
+        let (reply, order, terms) = self.gate_order(&mut fleet, &asked, names).unwrap_or((
+            ServiceReply::Nothing,
+            None,
+            None,
+        ));
         (reply, order, terms, acks)
     }
 
