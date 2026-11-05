@@ -12,11 +12,18 @@
 //!   service, and is a bad request when there is none); `POST /v1/operator` with an operator
 //!   token as the bearer and an action as JSON (`crate::ops`; CI's token is refused). An
 //!   operator token is one of the named tokens ([`crate::tokens`]); its name is the `by` of the
-//!   change.
+//!   change. With `--ui-dir` it also answers `GET` and `HEAD` for `/ui/` and every path below
+//!   from that directory ([`crate::ui`]), with no token read; without it those paths are not
+//!   found. The heartbeat surface never serves them.
 //!
-//! An answer is JSON, and an error is `{"error":"<code>"}` with a code from a closed set:
-//! never a claim value, a path or the text of an internal error. A heartbeat that lists no
-//! services, at a coordinator with no legacy service, is a bad request.
+//! No answer, on either surface, carries an `Access-Control-*` header: the operator web app is
+//! served from the private listener itself, so its calls are same-origin, and a cross-origin
+//! `OPTIONS` is answered as any other method a path does not take.
+//!
+//! An answer of the API is JSON (a file under `/ui/` is the file's bytes), and an error is
+//! `{"error":"<code>"}` with a code from a closed set: never a claim value, a path or the text
+//! of an internal error. A heartbeat that lists no services, at a coordinator with no legacy
+//! service, is a bad request.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -119,6 +126,12 @@ where
 {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    if surface == Surface::Control
+        && let Some(ui) = coordinator.ui()
+        && let Some(rest) = path.strip_prefix(crate::ui::PREFIX)
+    {
+        return ui.answer(&method, rest).await;
+    }
     match (surface, method, path.as_str()) {
         (Surface::Heartbeat, Method::POST, HEARTBEAT_PATH) => {
             heartbeat(coordinator, peer, request, patience).await
