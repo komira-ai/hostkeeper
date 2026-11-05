@@ -117,6 +117,8 @@ fn failed(target: &str) -> UpdateResult {
         phase: Some(Phase::AfterCommit),
         class: Some(Class::Release),
         reason: None,
+        order_id: None,
+        order_try: None,
     }
 }
 
@@ -243,7 +245,9 @@ async fn one_storage_host_out_does_not_hold_the_roll() {
 
 /// Two of six storage hosts failing a release after the commit roll tierstore back by
 /// itself, to the version recorded as last good; one failure alone does not. The failed
-/// version is marked bad, and desired and the marks are on disk.
+/// version is marked bad, and desired and the marks are on disk. The failures come after the
+/// canary has baked at the new version: a canary's failure meets the threshold alone
+/// (`state_safety_rollout_tests`).
 #[tokio::test]
 async fn two_failed_hosts_of_six_roll_tierstore_back_and_one_does_not() {
     let rig = rig("ts-rollback");
@@ -273,12 +277,15 @@ async fn two_failed_hosts_of_six_roll_tierstore_back_and_one_does_not() {
     assert_eq!(marks(&rig).last_good, Some(version("1.0")));
 
     rig.set(TWO).await;
+    for at in [2_060, 2_075, 2_090] {
+        let _ = round(&rig, at, &[at_two("s1")]);
+    }
     let bad = |host: &'static str| (host, "1.0", None, Some(failed("2.0")));
-    let _ = round(&rig, 2_060, &[bad("s1")]);
+    let _ = round(&rig, 2_105, &[at_two("s1"), bad("s2")]);
     assert_eq!(wanted(&rig), version("2.0"), "one failed host of six");
     assert!(marks(&rig).bad.is_empty());
 
-    let _ = round(&rig, 2_075, &[bad("s1"), bad("s2")]);
+    let _ = round(&rig, 2_120, &[at_two("s1"), bad("s2"), bad("s3")]);
     assert_eq!(wanted(&rig), version("1.0"), "two failed hosts of six");
     assert_eq!(marks(&rig).bad, vec![version("2.0")]);
     let on_disk =

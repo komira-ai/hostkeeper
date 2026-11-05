@@ -18,8 +18,11 @@ use std::time::Duration;
 use clap::Parser;
 use clap::error::ErrorKind;
 use futures::FutureExt;
-use hostkeeper_coordinator::config::{Bound, Cli, Command, Serve, StartError, build, run, start};
+use hostkeeper_coordinator::config::{
+    Bound, Cli, Command, Serve, StartError, build, build_with, run, start,
+};
 use hostkeeper_coordinator::desired::DesiredStore;
+use hostkeeper_coordinator::lock::{LockError, LockGuard, StateLock};
 use hostkeeper_coordinator::service::Unauthorized;
 use hostkeeper_coordinator::tokens::Reload;
 use hostkeeper_oidc::Roots;
@@ -432,6 +435,8 @@ async fn a_coordinator_with_no_services_starts_and_grants_nothing() {
     let shown = serde_json::to_value(&status).expect("json");
     assert_eq!(shown["services"], serde_json::json!({}));
     assert_eq!(shown["per_service"], serde_json::json!({}));
+    // The parts hold the lock of the state files: a second start waits for them to go.
+    drop(parts);
 
     let bind = |addr: SocketAddr| async move { Ok::<_, io::Error>((addr, never as Never)) };
     let stop = async {
@@ -462,6 +467,7 @@ fn a_single_state_file_needs_the_legacy_service_to_belong_to() {
     let args = with(&files.args(), "--oidc-config", &path);
     let parts = build_given(&flags_of(args.clone())).expect("read with the legacy service");
     assert_eq!(parts.coordinator.legacy_service(), Some("kbf"));
+    drop(parts);
     let why = refusal(without(&args, "--legacy-service"));
     assert!(matches!(why, StartError::Desired(_)), "{why}");
     assert!(
@@ -826,4 +832,157 @@ fn a_wildcard_private_listen_is_refused_at_start() {
     }
     build_given(&flags_of(with(&args, "--heartbeat-listen", "0.0.0.0:1")))
         .expect("a wildcard heartbeat listener is accepted");
+}
+
+/// A lock of the state files a test holds and lets go: the paths held, and every path asked for.
+#[derive(Clone, Default)]
+struct FakeLock {
+    held: Arc<Mutex<std::collections::BTreeSet<PathBuf>>>,
+    asked: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+/// What a [`FakeLock`] guard lets go of when it is dropped.
+struct Release {
+    held: Arc<Mutex<std::collections::BTreeSet<PathBuf>>>,
+    path: PathBuf,
+}
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.held.lock().expect("held").remove(&self.path);
+    }
+}
+
+impl StateLock for FakeLock {
+    fn acquire(&self, path: &std::path::Path) -> Result<LockGuard, LockError> {
+        self.asked.lock().expect("asked").push(path.to_owned());
+        if !self.held.lock().expect("held").insert(path.to_owned()) {
+            return Err(LockError::Held);
+        }
+        Ok(LockGuard::new(Release {
+            held: Arc::clone(&self.held),
+            path: path.to_owned(),
+        }))
+    }
+}
+
+/// Catches: a second coordinator started on the same state files, the lock taken after a state
+/// file is opened, or the lock let go before the coordinator stops: with the lock held elsewhere
+/// the start is `Locked`, naming the lock file, and no state file is read or settled (a bad state
+/// file and a staged halts file are left as they were); the lock is held for as long as the
+/// parts live, and a start after they are dropped goes on. The real lock refuses a second
+/// start in the same way.
+#[test]
+fn a_second_coordinator_on_the_same_files_does_not_start() {
+    let files = Files::new("config-lock");
+    let flags = flags_of(files.args());
+    let lock_file = files.path("desired.json.lock");
+    std::fs::write(files.path("desired.json"), "not a state").expect("written");
+    let staged = files.path("desired.json.ops.halts.next");
+    std::fs::write(&staged, "{}").expect("written");
+    let fake = FakeLock::default();
+    fake.held.lock().expect("held").insert(lock_file.clone());
+    let Err(why) = build_with(&flags, roots(), &fake) else {
+        panic!("a start over a held lock");
+    };
+    assert!(
+        matches!(&why, StartError::Locked { path } if *path == lock_file),
+        "{why}"
+    );
+    assert!(why.to_string().contains("desired.json.lock"), "{why}");
+    assert!(staged.exists(), "no state file was opened");
+    assert_eq!(*fake.asked.lock().expect("asked"), [lock_file.clone()]);
+
+    fake.held.lock().expect("held").clear();
+    std::fs::remove_file(files.path("desired.json")).expect("removed");
+    let parts = build_with(&flags, roots(), &fake).expect("the lock is free");
+    assert!(!staged.exists(), "the open settled it");
+    assert!(matches!(
+        build_with(&flags, roots(), &fake),
+        Err(StartError::Locked { .. })
+    ));
+    drop(parts);
+    let again = build_with(&flags, roots(), &fake).expect("let go with the parts");
+    drop(again);
+
+    let first = build_given(&flags).expect("the real lock");
+    assert!(matches!(
+        build_given(&flags),
+        Err(StartError::Locked { .. })
+    ));
+    drop(first);
+    build_given(&flags).expect("free again");
+}
+
+/// Catches: a lock file that cannot be made taken for a lock held, or ignored.
+#[test]
+fn a_lock_file_that_cannot_be_made_stops_the_start() {
+    let files = Files::new("config-lock-io");
+    let missing = files.path("missing").join("desired.json");
+    let args = with(
+        &files.args(),
+        "--state-file",
+        &missing.display().to_string(),
+    );
+    let why = refusal(args);
+    assert!(matches!(why, StartError::Lock { .. }), "{why}");
+    assert!(why.to_string().contains("desired.json.lock"), "{why}");
+}
+
+/// Catches: a start over a halt that was being written when the coordinator stopped: the
+/// marker beside the ops file stops it, naming the marker, until the operator removes it.
+#[test]
+fn a_halt_marker_left_over_stops_the_start() {
+    let files = Files::new("config-halt-marker");
+    let marker = files.path("desired.json.ops.halts.unfinished");
+    std::fs::write(&marker, "").expect("written");
+    let why = refusal(files.args());
+    assert!(
+        matches!(&why, StartError::HaltWriteUnfinished { path } if *path == marker),
+        "{why}"
+    );
+    assert!(why.to_string().contains("settle it by hand"), "{why}");
+    std::fs::remove_file(&marker).expect("removed by the operator");
+    build_given(&flags_of(files.args())).expect("a start");
+}
+
+/// Catches: a damaged file of spent token ids read leniently: a malformed line stops the
+/// start, naming the file and the line.
+#[test]
+fn a_malformed_jti_file_stops_the_start() {
+    let files = Files::new("config-jti");
+    std::fs::write(files.path("desired.json.jti"), "one 1\ntwo\n").expect("written");
+    let why = refusal(files.args());
+    assert!(matches!(why, StartError::Jti(_)), "{why}");
+    let text = why.to_string();
+    assert!(
+        text.contains("desired.json.jti") && text.contains("line 2"),
+        "{text}"
+    );
+}
+
+/// Catches: a quiet start shorter than two heartbeat intervals accepted (a restarted
+/// coordinator would order before it has heard who holds the slot), or the floor itself
+/// refused: 29 seconds is refused, naming the flag; 30, the default, starts.
+#[test]
+fn quiet_below_two_heartbeat_intervals_is_refused() {
+    let files = Files::new("config-quiet");
+    let mut short = files.args();
+    short.extend(["--quiet-secs".into(), "29".into()]);
+    let why = refusal(short);
+    assert!(
+        matches!(
+            why,
+            StartError::QuietBelowFloor {
+                secs: 29,
+                floor: 30
+            }
+        ),
+        "{why}"
+    );
+    assert!(why.to_string().starts_with("--quiet-secs: 29"), "{why}");
+    assert_eq!(flags_of(files.args()).quiet_secs, 30);
+    let mut floor = files.args();
+    floor.extend(["--quiet-secs".into(), "30".into()]);
+    build_given(&flags_of(floor)).expect("the floor starts");
 }

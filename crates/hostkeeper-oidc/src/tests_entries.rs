@@ -42,6 +42,7 @@ fn verifier(text: &str) -> Verifier {
         Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
         Duration::from_secs(30),
         clock,
+        super::testkit::spent(),
     )
 }
 

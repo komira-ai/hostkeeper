@@ -3,9 +3,11 @@
 //! minimums a desired state carries are kept, written and printed, and no decision reads them.
 //!
 //! - [`identity`]: who is calling, from the client certificate's subjectAltNames alone;
-//! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically;
+//! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically,
+//!   with the [`registry`] of every version CI has set and the digest of its package;
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
-//! - [`acks`]: the failure reports a by-hand set of a bad version acknowledged;
+//! - [`acks`]: the failure reports an override of a bad version acknowledged;
+//! - [`verdicts`]: the release failures heard, each counted once per host, order id and try;
 //! - [`bake`] and [`canary`]: how long an updated host holds its slot, and the hosts that go
 //!   alone first;
 //! - [`converge`]: whether the farm has reached the desired version, for CI to wait on;
@@ -24,7 +26,8 @@
 //!   token, the status read by the operator token;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
-//! - [`config`]: the flags and the start.
+//! - [`config`]: the flags and the start, under the [`lock`] of the state files, with CI's spent
+//!   token ids in the [`jti_file`] beside them.
 //!
 //! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
 
@@ -46,14 +49,18 @@ pub mod fleet;
 pub mod halt;
 pub mod http;
 pub mod identity;
+pub mod jti_file;
 pub mod listen;
+pub mod lock;
 pub mod membership;
 pub mod ops;
 pub(crate) mod ops_file;
 pub mod reconcile;
+pub mod registry;
 pub mod service;
 pub mod services;
 pub mod tokens;
+pub mod verdicts;
 
 #[cfg(test)]
 mod audit_file_tests;
@@ -121,6 +128,14 @@ mod rollback_tests;
 mod service_tests;
 #[cfg(test)]
 mod services_tests;
+#[cfg(test)]
+mod state_safety_digest_tests;
+#[cfg(test)]
+mod state_safety_halt_tests;
+#[cfg(test)]
+mod state_safety_jti_tests;
+#[cfg(test)]
+mod state_safety_rollout_tests;
 #[cfg(test)]
 mod status_service_tests;
 #[cfg(test)]
