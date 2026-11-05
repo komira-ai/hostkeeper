@@ -599,6 +599,43 @@ async fn a_held_pair_that_is_updating_holds_the_slot_until_it_stops() {
     );
 }
 
+/// A host held after it was ordered and before its beat says it is updating still holds the one
+/// live update while the order is outstanding, so no second update starts beside the one it
+/// may be starting; once its beat shows the order done, the slot is free.
+///
+/// Catches: a hold that frees the slot of an order just given, so two updates are live at once.
+#[tokio::test]
+async fn a_held_pair_with_an_order_outstanding_holds_the_slot_until_the_order_ends() {
+    let rig = rig("holds-ordered", "");
+    set(&rig, WEB, "2.0", 2).await;
+    assert_eq!(ask(&rig, "d1", "daemon", web_at("1.0")), update(WEB, "2.0"));
+    hold(&rig, WEB, scope_host("d1")).expect("held");
+    assert_eq!(
+        ask(&rig, "d2", "daemon", web_at("1.0")),
+        ServiceReply::Nothing
+    );
+    assert_eq!(standing(&rig, WEB, "d2").0, Some(Why::Gate(Gate::NoSlot)));
+    assert_eq!(
+        ask(&rig, "d1", "daemon", web_at("1.0")),
+        ServiceReply::Nothing,
+        "held: not told the order again"
+    );
+    assert_eq!(
+        ask(&rig, "d2", "daemon", web_at("1.0")),
+        ServiceReply::Nothing,
+        "the order is still outstanding"
+    );
+    assert_eq!(
+        ask(&rig, "d1", "daemon", web_at("2.0")),
+        ServiceReply::Nothing
+    );
+    assert_eq!(
+        ask(&rig, "d2", "daemon", web_at("1.0")),
+        update(WEB, "2.0"),
+        "the slot is free once the held host's order ended"
+    );
+}
+
 /// Unholding releases the pair to the desired version of its next heartbeat, not to a version CI
 /// set while it was held.
 ///

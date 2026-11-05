@@ -11,14 +11,15 @@ under the name of the token that made it; `Audit.List` reads the log back.
 with a reason; `Services.Unhold` releases it. A hold freezes the service where it is:
 
 - The coordinator orders a held pair (a host and a service) nothing: no update, no install, no
-  rollback, no force. The rollout status shows the pair as `held`.
+  rollback, and no force unless the force sets `include_held`. The rollout status shows the
+  pair as `held`.
 - A hold carries no version. The host keeps running what it runs, and never learns of the hold.
 - A role hold is matched against the host's role each time the coordinator decides, so a host
   that joins the role later is held, and one that leaves it is released.
 - A held pair takes no update slot, is never a canary, never holds back a bake, and is left out
   of the convergence and of the hosts an automatic rollback is counted against, so it never
-  blocks the others. An update the host was already running when the hold was set finishes,
-  and holds the slot until it ends (`Hosts.Abort` stops it).
+  blocks the others. An update the host was already running, or had been ordered, when the
+  hold was set finishes, and holds the slot until it ends (`Hosts.Abort` stops it).
 - Automatic rollback and a version marked bad do not reach a held pair. A held host that runs a
   version marked bad is an alert: an error-level log line with `alert=held_on_bad_version`, and
   the status flags the host.
@@ -79,7 +80,8 @@ service. A held pair is ordered only when the call sets `include_held`, for that
 no hold is removed.
 
 A host that reports the force failed is not ordered again; a second force, to another version,
-orders it again. The force stands until CI sets another version or another force replaces it.
+orders it again. A force whose targets are all held or too old orders no host and still makes
+every change above. The force stands until CI sets another version or another force replaces it.
 While it stands, the automatic rollback of the service is suspended, and the hosts it orders
 take no update slot.
 

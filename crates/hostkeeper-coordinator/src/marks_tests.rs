@@ -311,12 +311,14 @@ async fn halt_raised_by_an_operator_blocks_every_host_until_clear_halt() {
     assert_eq!(hold_of(&rig, "d2"), Some(Why::Gate(Gate::Halted)));
     assert!(ops_of(&rig.dir).marks(WEB).halt.is_some());
 
-    rig.coordinator
+    let cleared = rig
+        .coordinator
         .operate(
             Some(OPERATOR),
             br#"{"action":"clear_halt","service":"web","reason":"disk replaced"}"#,
         )
         .expect("cleared");
+    assert_eq!(cleared.node_id, None, "an operator's halt names no host");
     assert!(ops_of(&rig.dir).marks(WEB).halt.is_none());
     assert_eq!(ask(&rig, "d1", "daemon", daemon("1.0")), update(WEB, "3.0"));
 }

@@ -6,8 +6,8 @@
 //! skips it unless the call says `include_held` ([`crate::force`]), and an automatic rollback or a
 //! version marked bad does not reach it. A held pair takes no update slot, is never a canary,
 //! never holds back a bake and is left out of the convergence and of the hosts a rollback is
-//! counted against; an update it was already running when the hold was set still counts as
-//! live until it ends. The host never learns of the hold.
+//! counted against; an update it was already running, or an order it was given, when the hold
+//! was set still counts as live until it ends. The host never learns of the hold.
 //!
 //! The holds are kept in the ops file ([`crate::ops::OpsState::holds`]), so they survive a
 //! restart. A role hold is matched against the host's role at the time of each decision, so a

@@ -6,8 +6,8 @@
 //! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), and
 //! a ring of the last changes made. A key this build added is written only when it holds
 //! something, so a file that never held one keeps the shape the release before reads; once it
-//! does, the release before refuses the file, as it should: it would ignore a hold or a force. It is one JSON file, `--ops-file`, kept
-//! apart from `desired.json` so that an earlier coordinator, which refuses a key it does not
+//! does, the release before refuses the file, as it should: it would ignore a hold or a force.
+//! It is one JSON file, `--ops-file`, kept apart from `desired.json` so that an earlier coordinator, which refuses a key it does not
 //! know there, still reads the desired state. The file is created by the first change (a
 //! farm that never uses it keeps its files as they are) and replaced whole after that, like
 //! the desired state: a temporary file, fsync, rename and a directory fsync. What the halt

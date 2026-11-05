@@ -39,9 +39,10 @@
 //! all of these but the first, unless the definition says `install_when_absent` ([`Skip::Absent`]).
 //!
 //! A pair an operator holds ([`crate::holds`]: the host, its role at the time of the decision,
-//! or the whole fleet) is told nothing, before every rule above ([`Gate::Held`]): no update,
-//! however far behind it is. It takes no slot of rule 7 and never bakes; an update it was
-//! running when the hold was set still counts until it ends. The pairs a standing force orders
+//! or the whole fleet) is told nothing, after a halt and the membership check and before every
+//! numbered rule above ([`Gate::Held`]): no update, however far behind it is. It takes no slot
+//! of rule 7 and never bakes; an update it was running, or an order it was given, when the hold
+//! was set still counts until it ends. The pairs a standing force orders
 //! ([`crate::force`]) take no slot either.
 //!
 //! The decision records nothing: the caller notes an `Update` it returns with
@@ -302,7 +303,7 @@ struct Live {
 /// The updates live across every service the coordinator manages and every role, leaving out
 /// the asking host `id`'s own slot for the asked `service` and the pairs a standing force orders
 /// ([`crate::force`]: a force takes no slot). A pair an operator holds counts only while it runs
-/// an update ([`crate::holds`]). A service with no desired
+/// an update or has an order outstanding ([`crate::holds`]). A service with no desired
 /// state has nothing to bake, so only its slots count.
 fn live(
     services: &Services,
@@ -322,11 +323,11 @@ fn live(
             .filter(|(o, _)| !(name == service && *o == id))
             .filter(|(o, _)| !fleet.is_forced(name, o))
         {
-            // A held pair takes no slot and never bakes: only an update it was already running
-            // when the hold was set counts, until it ends.
+            // A held pair takes no slot and never bakes: only an update it was already running,
+            // or an order it was given, when the hold was set counts, until it ends.
             let held = fleet.is_held(name, o);
             let slot = if held {
-                h.beat.updating.is_some()
+                h.beat.updating.is_some() || fleet.is_ordered(name, o, now)
             } else {
                 fleet.holds_slot(name, o, h, now)
             };

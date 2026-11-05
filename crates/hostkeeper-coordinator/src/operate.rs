@@ -245,7 +245,8 @@ pub fn operate(
                     .ok_or(OperateError::Invalid("the service is not halted"))?;
                 let mut entry = AuditEntry::new(by, "clear_halt");
                 entry.service = Some(name);
-                entry.node_id = Some(halt.node_id.clone());
+                // An operator's halt names no host.
+                entry.node_id = Some(halt.node_id.clone()).filter(|node| !node.is_empty());
                 entry.reason = Some(why);
                 let seen = std::mem::take(&mut marks.halt_seen);
                 let reports = std::iter::once(HaltAck::from(halt)).chain(seen);

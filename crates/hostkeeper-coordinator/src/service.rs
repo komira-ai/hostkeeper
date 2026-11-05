@@ -705,14 +705,15 @@ impl Coordinator {
             let marks = self.ops.marks(&service);
             self.desired
                 .record(&service, desired.clone(), |v| kept(&marks, v))?;
-            halt::lift_by_ci(
+            // CI's set of another version ends a force that stands ([`crate::force`]), before
+            // the lift: a lift that fails then leaves no force ordering the old version.
+            end_by_ci(
                 &self.ops,
                 &service,
                 &desired.version,
                 &verified.job_workflow_ref,
             )?;
-            // CI's set of another version ends a force that stands ([`crate::force`]).
-            end_by_ci(
+            halt::lift_by_ci(
                 &self.ops,
                 &service,
                 &desired.version,
