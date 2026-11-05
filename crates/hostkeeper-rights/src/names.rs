@@ -1,5 +1,5 @@
 //! The grammars of the declaration that is left: account names, environment variables,
-//! capabilities and address families. B3 rewrites launch.rs and deletes this.
+//! capabilities and address families. B26 deletes this.
 //!
 //! Every value that reaches a systemd property is checked here first. systemd reads a property
 //! value as a list split on white space, with `-`, `+` and `!` in front of a path meaning
@@ -14,12 +14,12 @@ pub use hostkeeper_config::names::{
 };
 
 /// The most bytes of the value of an environment variable.
-/// B3 rewrites launch.rs and deletes this.
+/// B26 deletes this.
 pub const MAX_ENV_VALUE: usize = 256;
 
 /// Whether `name` is an account name: a lowercase letter or `_` first, then lowercase letters,
 /// digits, `_` and `-`, at most 32 bytes.
-/// B3 rewrites launch.rs and deletes this.
+/// B26 deletes this.
 pub fn is_account_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     let first = bytes
@@ -31,7 +31,7 @@ pub fn is_account_name(name: &str) -> bool {
 }
 
 /// Whether `name` can be an environment variable of a hook: `[A-Za-z_][A-Za-z0-9_]*`.
-/// B3 rewrites launch.rs and deletes this.
+/// B26 deletes this.
 pub fn is_env_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     let first = bytes
@@ -43,7 +43,7 @@ pub fn is_env_name(name: &str) -> bool {
 /// The variable names that change what a program loads or how it resolves names: the dynamic
 /// loader's (`LD_*`), the character set and locale search paths, the allocator's (`MALLOC_*`) and
 /// the resolver's.
-/// B3 rewrites launch.rs and deletes this.
+/// B26 deletes this.
 pub const HIJACKING_ENV: &[&str] = &[
     "GCONV_PATH",
     "LOCPATH",
@@ -89,7 +89,7 @@ pub const HIJACKING_ENV: &[&str] = &[
 
 /// Whether a hook may be given the variable `name` with `value`: not a name of [`HIJACKING_ENV`],
 /// not `LD_*`, `MALLOC_*`, `PYTHON*`, `DYLD_*` or `GIT_*`, and `PATH` only as a list of absolute directories.
-/// B3 rewrites launch.rs and deletes this.
+/// B26 deletes this.
 pub fn env_allowed(name: &str, value: &str) -> bool {
     let hijack = ["LD_", "MALLOC_", "PYTHON", "DYLD_", "GIT_"]
         .iter()
@@ -102,7 +102,7 @@ pub fn env_allowed(name: &str, value: &str) -> bool {
 /// Whether `value` can be an environment value: letters, digits and `. _ / : @ , + = -`, at
 /// most [`MAX_ENV_VALUE`] bytes. No white space, quote, `$`, `%` or `\`: systemd would read the
 /// property as several words or expand it.
-/// B3 rewrites launch.rs and deletes this.
+/// B26 deletes this.
 pub fn is_env_value(value: &str) -> bool {
     (value.len() <= MAX_ENV_VALUE)
         & value

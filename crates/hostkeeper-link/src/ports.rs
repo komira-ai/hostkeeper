@@ -41,6 +41,51 @@ pub enum LinkError {
     /// The heartbeat was not sent.
     #[error("the heartbeat is not sent: {0}")]
     TooLarge(Oversize),
+    /// The heartbeat was not sent: the link's wire cannot carry one of its facts.
+    #[error("the heartbeat is not sent: {0}")]
+    Unsendable(Unsendable),
+    /// The heartbeat was not sent: the TLS of the link refused the coordinator or this host.
+    #[error("the heartbeat is not sent: {0}")]
+    Untrusted(TrustFault),
+}
+
+/// A fact of a heartbeat the JSON route's wire has no word for: its names and versions have
+/// narrower grammars than the daemon's (design 11.8).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Unsendable {
+    #[error(
+        "the service name {0:?} is not one the JSON heartbeat carries: 1 to 64 bytes of a-z, 0-9 and -"
+    )]
+    ServiceName(String),
+    #[error(
+        "the version {0:?} is not one the JSON heartbeat carries: a digit, then letters, digits and . + ~ -, at most 128 bytes"
+    )]
+    Version(String),
+    /// More bytes than the coordinator reads of a heartbeat. The loop keeps its heartbeat
+    /// under the same bound, measured on its own JSON, which is longer than the wire's for
+    /// any heartbeat this long: only a caller of the link that does not fit its heartbeat
+    /// meets it.
+    #[error(
+        "the encoded heartbeat is {len} bytes, more than {}",
+        hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES
+    )]
+    Bytes { len: usize },
+}
+
+/// What the TLS of the link refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum TrustFault {
+    /// No certificate of the CA bundle has the SHA-256 the daemon config pins, or the bundle
+    /// cannot be read: nothing is dialed.
+    #[error("no certificate of the CA bundle has the SHA-256 the daemon config pins")]
+    NoPinnedCa,
+    /// What answered presented a certificate that does not chain to the pinned CA, or is not
+    /// for the coordinator's name, or is not a server's.
+    #[error("what answered is not the coordinator: its certificate is refused")]
+    ServerCertificate,
+    /// The host's certificate and key do not make a TLS client identity.
+    #[error("the client certificate and key are not a TLS identity")]
+    ClientIdentity,
 }
 
 /// The coordinator, as the loop reaches it. [`CoordinatorLink::heartbeat`] is the one outbound

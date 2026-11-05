@@ -1,18 +1,30 @@
-//! The heartbeat loop, over the fakes of `hostkeeper_link::testing`: no network, no wall clock,
-//! no thread but the one test of the thread dispatcher. Each module is one subject of the loop.
+//! The heartbeat loop, over the fakes of `hostkeeper_link::testing`, and its links: no wall
+//! clock, and no network but the loopback sockets of `dial` and of the one test of `TcpDial` in
+//! `grpc`.
+//! Each module is one subject of the loop or of its links. The JSON link's tests run real TLS over
+//! in-process pipes, with a server thread on the other end (`tls`); `coordinator` puts the real
+//! coordinator's handler behind it; `grpc` runs the gRPC link against the coordinator's listener
+//! code over in-memory streams; `dial` is the test of the blocking transport's socket, on the
+//! loopback address with a port the system chose.
 
 mod certs;
+mod coordinator;
 mod deferral;
+mod dial;
 mod facts;
 mod features;
+mod grpc;
 mod halts;
 mod kbf;
+mod link;
 mod orders;
 mod pki;
 mod ports;
 mod resend;
 mod size;
+mod tls;
 mod types;
+mod wire;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

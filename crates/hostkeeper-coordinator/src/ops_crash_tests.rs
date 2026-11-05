@@ -34,10 +34,15 @@ fn halting() -> Heartbeat {
     b
 }
 
-/// The heartbeat of a host at 1.0 with no update to report, announcing `halt-v1`.
+/// The heartbeat of a kbf host at 1.0 with no update to report, announcing `halt-v1` and
+/// every other feature but `order-v1`: its top level is the legacy service's.
 fn calm() -> Heartbeat {
     let mut b = beat("1.0");
-    b.agent_features = FEATURES.iter().map(|f| (*f).to_owned()).collect();
+    b.agent_features = FEATURES
+        .iter()
+        .filter(|f| **f != hostkeeper_wire::wire::ORDER_FEATURE)
+        .map(|f| (*f).to_owned())
+        .collect();
     b
 }
 

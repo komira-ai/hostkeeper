@@ -17,8 +17,8 @@ release replaces them there.
 | kbf | hostkeeper | what it holds |
 |---|---|---|
 | `update-hook` | `hostkeeper-hook` | the hook contract (steps, exit codes, the JSON last line, the params table, the next-step table) and, behind the feature `conformance`, the conformance harness |
-| `update-rights` | `hostkeeper-rights` | the declaration, its loader, the widening check, approvals, the gate and the transient unit of one step, as imported; since cut down to the transient unit (see "Since the import") |
-| `kbf-step-runner` | `hostkeeper-steps` | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update |
+| `update-rights` | `hostkeeper-rights` | the declaration, its loader, the widening check, approvals, the gate and the transient unit of one step, as imported; since cut down to what is left of the declaration, the transient unit having moved to `hostkeeper-steps` (see "Since the import") |
+| `kbf-step-runner` | `hostkeeper-steps` | the step runner: the step record and its resume, the dead-man, the staged-artifact check, the updater's own update; since the import also the transient unit of one step |
 | (the `Scratch` helpers of the three crates' tests) | `hostkeeper-testkit` | the scratch directory the tests share; a dev-dependency only |
 
 | kbf name | hostkeeper name |
@@ -97,8 +97,18 @@ Deleted from `hostkeeper-rights`, with their tests: the declaration loader (`loa
 `DECLARATION_DIR`), the widening check, the gate (`FIRST_INSTALL`, `RIGHTS_CHANGE`), the approval
 store (`APPROVALS_FILE`) and its `approve` command, the account checks, the record-directory check,
 the per-service signer, the declaration digest, and the shipped declarations of
-`tests/fixtures/updater.d`. What is left is the transient unit of one step and the part of the
-declaration it reads (the crate's README lists each kept item and why); B3 rewrites it.
+`tests/fixtures/updater.d`.
+
+The transient unit of one step moved from `hostkeeper-rights` (`launch.rs`, deleted with its
+tests and the test program `hostkeeper-rights-spawn-fixture`) to `hostkeeper-steps` (`systemd.rs`,
+with `capture.rs`), as the `StepLauncher` of the host. It runs a hook as root with
+`RuntimeMaxSec=` as its one property (design 5.3), writes `RuntimeMaxSec=infinity` for
+`prepare = 0`, keeps the last 1 MiB of each output stream and reads a last line of at most 64 KiB.
+Its test program is `hostkeeper-steps-spawn-fixture`, built only with the feature `test-support`
+of `hostkeeper-steps`. A step record of a running unbounded `prepare` carries `"unbounded": true`;
+the field is written only when true and read as `false` when absent, so the records of the next
+section read and write as before. What is left in `hostkeeper-rights` is the part of the
+declaration the unit was built from (the crate's README lists each kept item); B26 deletes it.
 
 The tree digest of `hostkeeper-steps` (`tree_digest`, which `Staged` and the step record hold)
 is now the package format of `docs/package-format.md`: kind, name, mode, size and bytes, no owner
@@ -110,7 +120,8 @@ update after its verdict), which `tests/digest_change.rs` holds.
 ## Tests that hold this file
 
 - `constants_match_kbf_at_the_tag` (in each of `hostkeeper-hook`, `hostkeeper-rights` and
-  `hostkeeper-steps`): the names under "What does not change" are the literals of the tag.
+  `hostkeeper-steps`): the names under "What does not change" are the literals of the tag; the
+  unit names are pinned in `hostkeeper-steps`, where the unit is now built.
 - `reads_step_record_written_by_kbf_tag` and `kbf_tag_reader_contract_documented`
   (`hostkeeper-steps`): the records under "Step records written by kbf".
 

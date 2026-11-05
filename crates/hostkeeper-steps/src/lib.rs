@@ -21,12 +21,16 @@
 //! - [`force`] is the journal of a hookless `force` ([`ForceRecord`]), an optional field of the
 //!   step record; a force that stops a running update flags its record `forced`, and the runner
 //!   then closes it `forced_over` and launches nothing more.
+//! - [`SystemdLauncher`] is the [`StepLauncher`] of the host: one transient systemd unit per
+//!   step, with `RuntimeMaxSec=` and nothing else; [`capture`] bounds what is kept of a hook's
+//!   output.
 //!
-//! The crate names no service and reads no declaration: the launcher that runs a step under the
-//! rights of a declaration, and the loader of declarations, plug in through [`StepLauncher`].
+//! The crate names no service and reads no manifest: the runner is given the order and its
+//! bounds, and runs each step through the [`StepLauncher`] it is given.
 
 pub mod artifact;
 pub mod bad;
+pub mod capture;
 pub mod clock;
 pub mod deadman;
 pub mod force;
@@ -37,14 +41,16 @@ pub mod resume;
 pub mod runner;
 pub mod seal;
 pub mod selfupdate;
+pub mod systemd;
 
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
 pub use bad::{BAD_VERSIONS_FILE, BadVersions, BadVersionsError, MAX_BAD_VERSIONS};
+pub use capture::{LAST_LINE_MAX, RING_BYTES, Ring};
 pub use clock::{Clock, Stamp, SystemClock};
 pub use deadman::{DeadMan, Watch};
 pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{
-    AdditiveCall, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit, StepLauncher,
+    AdditiveCall, Bound, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit, StepLauncher,
 };
 pub use prune::{
     PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,
@@ -54,3 +60,4 @@ pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
 pub use runner::{Bounds, Finished, RunError, StepRunner, Switch, Toward, UpdateOrder};
 pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
 pub use selfupdate::{FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_with};
+pub use systemd::{Captured, Program, Spawner, StepLog, SystemdLauncher, SystemdRunProcess};

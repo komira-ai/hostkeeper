@@ -17,5 +17,5 @@ mod refusals;
 mod renew;
 mod rpc;
 mod setup;
-mod support;
+pub(crate) mod support;
 mod wire;

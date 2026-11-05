@@ -20,8 +20,8 @@ use crate::names::Platform;
 use crate::version::Version;
 pub use crate::wire_report::{
     Answer, Class, CommitState, DeferredReport, MAX_ACKS, MAX_FEATURES, MAX_ORDER_ID,
-    MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, OrderId, Phase, StepName, StepRun, Token,
-    VERDICT_ACKS_FEATURE, VerdictAck,
+    MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, ORDER_FEATURE, OrderId, PackageDigest, Phase,
+    StepName, StepRun, Token, VERDICT_ACKS_FEATURE, VerdictAck,
 };
 use crate::wire_report::{features_text, is_false, lenient, or_default, step_secs_text};
 
@@ -141,7 +141,9 @@ pub struct Heartbeat {
     /// updater that does not know services: the host is a legacy-service-only host, and the
     /// coordinator never names a service in its reply. Present (even empty) from one that
     /// does. The legacy service (the coordinator's `--legacy-service`) is never among them:
-    /// its state is the fields above, and [`read_heartbeat`] drops a list that names it. A
+    /// its state is the fields above, and [`read_heartbeat`] drops a list that names it,
+    /// unless the heartbeat announces [`ORDER_FEATURE`]: its fields above are then the agent
+    /// itself, and the legacy service is an entry like any other. A
     /// heartbeat that lists a name twice, names a service that is no service name, or lists
     /// more than [`MAX_SERVICES`] is not read as a [`Heartbeat`]; the coordinator reads such
     /// a heartbeat with [`read_heartbeat`], which drops the list and keeps the rest.
@@ -389,7 +391,9 @@ pub struct HeartbeatRead {
 /// `legacy` is the legacy service (the coordinator's `--legacy-service`), whose state is the
 /// top level of a heartbeat and so is no entry of its list: a list that names it is dropped
 /// like a bad one, with the reason `<name> is the top level of a heartbeat, not a service`.
-/// With `None` no name is reserved.
+/// With `None` no name is reserved. The name is not applied to a heartbeat that announces
+/// [`ORDER_FEATURE`] in `agent_features`: its top level is the agent itself, so a list that
+/// names the legacy service is kept.
 ///
 /// # Errors
 /// The strict read's error: the bytes are no heartbeat, with or without the dropped fields.
@@ -415,7 +419,9 @@ pub fn read_heartbeat(
             read
         }
     };
-    if let Some(name) = legacy {
+    if let Some(name) = legacy
+        && !read.beat.agent_features.iter().any(|f| f == ORDER_FEATURE)
+    {
         drop_legacy_entry(&mut read, name);
     }
     Ok(read)

@@ -13,13 +13,13 @@ fn only_service(rig: &Rig, beat: usize) -> ServiceFacts {
     rig.world.link.beats()[beat].services[0].clone()
 }
 
-/// Catches an announced list that is not the five names in their order, and a loop that uses a
+/// Catches an announced list that is not the seven names in their order, and a loop that uses a
 /// feature its last reply did not advertise: with none advertised a deferral is reported as a
 /// failure before the commit point with no deferral report, a halt generation is not kept and a
 /// forced order is not run; once `deferred-v1` is advertised the deferral is reported as one;
 /// once it is no longer advertised the old shape is back.
 #[test]
-fn features_announced_are_the_five_names_and_a_behaviour_needs_the_reply_to_advertise_it() {
+fn features_announced_are_the_seven_names_and_a_behaviour_needs_the_reply_to_advertise_it() {
     let names: Vec<&str> = ANNOUNCED.iter().map(|f| f.as_str()).collect();
     assert_eq!(
         names,
@@ -28,7 +28,9 @@ fn features_announced_are_the_five_names_and_a_behaviour_needs_the_reply_to_adve
             "halt-v1",
             "heartbeat-v2",
             "forced-v1",
-            "verdict-acks-v1"
+            "order-v1",
+            "verdict-acks-v1",
+            "grpc-v1"
         ]
     );
 

@@ -165,7 +165,7 @@ fn a_step_past_its_own_bound_is_stopped() {
     let (clock, seen) = (rig.clock.clone(), man.clone());
     rig.fake.on_run(move |call| {
         if call.invocation.step == Step::Cutover {
-            clock.advance(call.timeout_secs);
+            clock.advance(support::secs_of(call.bound));
             assert!(seen.tick().unwrap());
         }
     });

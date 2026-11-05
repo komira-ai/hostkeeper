@@ -376,6 +376,7 @@ fn prune_never_removes_the_previous_release_of_an_unfinished_record() {
     rec.state = State::Running {
         started: Stamp::now(&*rig.clock),
         deadline_secs: 100,
+        unbounded: false,
     };
     save(&rig, WEB, &rec);
     let report = confirm(&daemon).expect("a report");
