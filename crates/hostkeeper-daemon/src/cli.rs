@@ -1,6 +1,8 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
-//! `hostkeeper ctl`, which hands every argument after it to `hostkeeper-ctl`. Configuration comes
-//! in as flags only, never from the environment (AGENTS.md S2); every default is a constant here.
+//! `hostkeeper ctl`, which hands every argument after it to `hostkeeper-ctl`; and `hostkeeper ci`,
+//! the CI client a service's release job runs once it has verified this binary (`hostkeeper_ci`,
+//! docs/deploy/ci-client.md). Configuration comes in as flags only, never from the environment
+//! (AGENTS.md S2); every default is a constant here.
 //!
 //! The one value read from the environment is the address of systemd's notify socket, a
 //! platform-set marker, and only `--notify-systemd` makes the daemon use it.
@@ -72,6 +74,10 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., value_name = "ARGS")]
         args: Vec<OsString>,
     },
+    /// The CI client: set a service's desired version from its release job and wait for the
+    /// fleet (docs/deploy/ci-client.md).
+    #[command(subcommand)]
+    Ci(hostkeeper_ci::CiCommand),
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -134,6 +140,7 @@ pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
     let flags = match cli.command {
         Command::Daemon(flags) => flags,
         Command::Ctl { args } => return ExitCode::from(ctl_on_terminal(args)),
+        Command::Ci(command) => return hostkeeper_ci::run(command),
     };
     let started = notifier(&flags, notify_socket)
         .and_then(|notifier| daemon(&flags.settings(), notifier.as_ref()));

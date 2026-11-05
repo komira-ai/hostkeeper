@@ -23,6 +23,8 @@ testing = []
 [dependencies]
 clap.workspace = true
 hostkeeper-config = { path = "../hostkeeper-config" }
+# `hostkeeper ci`: the CI client, a subcommand of the one binary (docs/deploy/ci-client.md).
+hostkeeper-ci = { path = "../hostkeeper-ci" }
 # `hostkeeper ctl`, which the binary reaches through `cli`.
 hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }

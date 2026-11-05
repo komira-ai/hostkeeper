@@ -204,7 +204,7 @@ fn the_command_line_exits_with_the_config_errors_status() {
 #[test]
 fn daemon_flag_defaults_are_the_documented_ones() {
     let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
-        panic!("`daemon` parses to the daemon command");
+        panic!("`hostkeeper daemon` parses as the daemon command");
     };
     assert_eq!(
         flags,
@@ -289,4 +289,37 @@ fn the_unwired_ports_refuse_everything() {
         "{reply:?}"
     );
     assert!(rig.launcher.runs().is_empty());
+}
+
+/// Catches `hostkeeper ci` missing from the binary, or run as the daemon: the CI client's
+/// subcommand parses and runs the client, which refuses a malformed service name with a usage
+/// error (exit 2) before it requests any token or reads any file.
+#[test]
+fn hostkeeper_ci_runs_the_ci_client() {
+    let digest = "0".repeat(64);
+    let args = [
+        "hostkeeper",
+        "ci",
+        "set-desired",
+        "--service",
+        "not a service",
+        "--version",
+        "1.0.0",
+        "--package-digest",
+        &digest,
+        "--endpoint",
+        "https://coordinator.example",
+        "--ca-file",
+        "ca.pem",
+        "--audience",
+        "my-service-release",
+        "--work-dir",
+        "work",
+        "--web-roots",
+        "roots.pem",
+    ];
+    let cli = Cli::try_parse_from(args).expect("`hostkeeper ci set-desired` parses");
+    assert!(matches!(cli.command, Command::Ci(_)), "{cli:?}");
+    let code = cli::run(cli);
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(2)));
 }

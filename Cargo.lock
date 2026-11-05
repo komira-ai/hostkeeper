@@ -1122,6 +1122,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-ci"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "hostkeeper-ctl",
+ "hostkeeper-proto",
+ "hostkeeper-testkit",
+ "prost",
+ "rcgen",
+ "rustls-pki-types",
+ "serde_json",
+ "thiserror",
+ "tonic",
+ "ureq",
+]
+
+[[package]]
 name = "hostkeeper-config"
 version = "0.1.0"
 dependencies = [
@@ -1184,6 +1202,7 @@ name = "hostkeeper-daemon"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "hostkeeper-ci",
  "hostkeeper-config",
  "hostkeeper-ctl",
  "hostkeeper-daemon",
