@@ -626,6 +626,7 @@ pub fn claims() -> Claims {
         network_addresses: vec!["02:00:00:00:00:01".into()],
         mac_serial: None,
         platform_uuid: None,
+        bmc_mac: None,
     }
 }
 

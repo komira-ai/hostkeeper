@@ -10,7 +10,7 @@ use std::time::Duration;
 use hostkeeper_oidc::{Refusal, Verified, Verifier};
 use hostkeeper_wire::identity::SanPrefixes;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply};
+use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
 use crate::acks::release_ack;
@@ -31,6 +31,7 @@ use crate::services::{ServiceDef, Services};
 use crate::status::host_status;
 use crate::tokens::{OperatorTokens, TokenName};
 use crate::ui::UiDir;
+use crate::verdict_file::{self, VerdictFile};
 use enrollment_calls::Turn;
 
 pub use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
@@ -167,13 +168,15 @@ pub struct Set {
 /// selector membership, hosts that are `missing`, `absent` or `unmanaged`
 /// ([`crate::membership`]). `order-v1`: an update answer carries the order terms of
 /// [`crate::order_terms`], and the heartbeat's top level is the agent itself, never the legacy
-/// service. `grpc-v1`: the coordinator serves `hostkeeper.agent.v1.Coordinator` on the heartbeat
+/// service. `verdict-acks-v1`: the acks of the verdicts stored ([`crate::verdict_file`]).
+/// `grpc-v1`: the coordinator serves `hostkeeper.agent.v1.Coordinator` on the heartbeat
 /// listener ([`crate::grpc`]), so an agent that announced it may send its next heartbeat there.
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
     crate::membership::HEARTBEAT_V2,
     ORDER_FEATURE,
+    verdict_file::FEATURE,
     crate::grpc::GRPC_FEATURE,
 ];
 
@@ -187,6 +190,7 @@ pub const GATED_FIELDS: &[(&str, &str)] = &[
     ("order_id", ORDER_FEATURE),
     ("order_try", ORDER_FEATURE),
     ("package_digest", ORDER_FEATURE),
+    ("acks", verdict_file::FEATURE),
 ];
 
 /// Whether the answer field `field` goes to an agent whose announced features this coordinator
@@ -218,7 +222,9 @@ pub struct Coordinator {
     pub(crate) services: Services,
     legacy: Option<String>,
     prefixes: SanPrefixes,
-    pub(crate) ops: OpsStore,
+    /// Shared with enrollment, which audits its approvals there.
+    pub(crate) ops: Arc<OpsStore>,
+    pub(crate) verdicts: VerdictFile,
     verifier: Arc<Verifier>,
     tokens: OperatorTokens,
     pub(crate) clock: Clock,
@@ -268,7 +274,8 @@ impl Coordinator {
             services: Services::default(),
             legacy: None,
             prefixes: SanPrefixes::default(),
-            ops: OpsStore::volatile(),
+            ops: Arc::new(OpsStore::volatile()),
+            verdicts: VerdictFile::volatile(),
             verifier,
             tokens: operator.into(),
             clock,
@@ -286,8 +293,10 @@ impl Coordinator {
     /// [`QUIET_START`] (`--quiet-secs`, whose floor [`crate::config::build`] checks).
     #[must_use]
     pub fn with_quiet(mut self, quiet: Duration) -> Self {
-        let fleet = self.fleet.get_mut().unwrap_or_else(PoisonError::into_inner);
-        *fleet = Fleet::new(fleet.started(), quiet);
+        self.fleet
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_quiet(quiet);
         self
     }
 
@@ -349,7 +358,22 @@ impl Coordinator {
     /// The same coordinator over `ops` instead of a store that keeps nothing.
     #[must_use]
     pub fn with_ops(mut self, ops: OpsStore) -> Self {
-        self.ops = ops;
+        self.ops = Arc::new(ops);
+        if let Some(enrollment) = &self.enrollment {
+            enrollment.audit_to(Arc::clone(&self.ops));
+        }
+        self
+    }
+
+    /// The same coordinator over the verdicts of `verdicts` instead of a store that keeps
+    /// nothing: those it counted before its restart count again.
+    #[must_use]
+    pub fn with_verdicts(mut self, verdicts: VerdictFile) -> Self {
+        let fleet = self.fleet.get_mut().unwrap_or_else(PoisonError::into_inner);
+        for (service, host, report) in verdicts.counted() {
+            fleet.restore_verdict(&service, host, report);
+        }
+        self.verdicts = verdicts;
         self
     }
 
@@ -509,7 +533,7 @@ impl Coordinator {
         }
         let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
-        let (reply, order, terms) = self.reply_to(who, beat, orders, turn);
+        let (reply, order, terms, acks) = self.reply_to(who, beat, orders, turn);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -531,6 +555,11 @@ impl Coordinator {
         let terms = terms.filter(|_| sends("order_id", features.as_deref()));
         // On a transport that carries typed orders, the update is one too, with the same terms.
         let order = order.or_else(|| order_terms::typed(&reply, terms.as_ref()).filter(|_| orders));
+        let acks = if sends("acks", features.as_deref()) {
+            acks
+        } else {
+            Vec::new()
+        };
         let answer = Answer {
             reply,
             order_id: terms.as_ref().map(|t| t.order_id.clone()),
@@ -538,6 +567,7 @@ impl Coordinator {
             package_digest: terms.map(|t| t.package_digest),
             features,
             halts,
+            acks,
         };
         Ok((answer, order))
     }
@@ -545,10 +575,10 @@ impl Coordinator {
     fn reply_to(
         &self,
         who: Identity,
-        beat: Heartbeat,
+        mut beat: Heartbeat,
         orders: bool,
         turn: Turn,
-    ) -> (ServiceReply, Option<Order>, Option<Terms>) {
+    ) -> (ServiceReply, Option<Order>, Option<Terms>, Vec<VerdictAck>) {
         let now = (self.clock)();
         let legacy = self.legacy_for(&beat);
         let order_v1 = self.features.iter().any(|name| name == ORDER_FEATURE)
@@ -569,6 +599,16 @@ impl Coordinator {
         // made under: a halt is never raised between another heartbeat's decision to order and
         // its order. The lock order is the fleet's, then the ops store's, as everywhere.
         let mut fleet = self.lock_fleet();
+        // An agent acknowledged its verdicts is read as still reporting the last one, so every
+        // rule below reads what it read while the agent resent it.
+        let acking =
+            verdict_file::asks(&beat) && self.features.iter().any(|f| f == verdict_file::FEATURE);
+        let mut heard = if acking {
+            verdict_file::fill(&self.verdicts, legacy, &who.host_id, &mut beat)
+        } else {
+            Vec::new()
+        };
+        let announced = beat.services.clone().unwrap_or_default();
         // A halt whose write failed is written again at every heartbeat until it lands.
         self.ops.retry_unwritten(now);
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
@@ -585,6 +625,11 @@ impl Coordinator {
         // occupies, so an update it was ordered before it left holds its slot until it ends.
         let dropped =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Dropped;
+        // Only a verdict the fleet takes in is stored and acknowledged.
+        heard.retain(|(name, _)| match self.services.get(name) {
+            Some(def) => counted(def) || dropped(def),
+            None => Some(name.as_str()) == legacy,
+        });
         if let Some(name) = legacy {
             match self.services.get(name) {
                 Some(def) if dropped(def) => {
@@ -617,7 +662,7 @@ impl Coordinator {
         }
         fleet.note_node(who.host_id.clone(), node);
         if turn == Turn::Hold {
-            return (ServiceReply::Nothing, None, None);
+            return (ServiceReply::Nothing, None, None, Vec::new());
         }
         let mut names: Vec<&str> = legacy
             .into_iter()
@@ -639,13 +684,15 @@ impl Coordinator {
                 alert_on_bad_version(&mut fleet, state, &def.name, &who.host_id);
             });
         }
+        // The verdicts are durable before the answer acknowledges them, and before any order.
+        let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);
         // The operator's orders go first, past the gate, to a transport that carries them.
         if orders
             && let Some(order) = self
                 .ops
                 .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))
         {
-            return (ServiceReply::Nothing, Some(order), None);
+            return (ServiceReply::Nothing, Some(order), None, acks);
         }
         let desired = self.desired.all();
         for name in names {
@@ -676,10 +723,10 @@ impl Coordinator {
                 }
                 fleet.order(name, who.host_id.clone(), version.clone(), now);
                 let service = (Some(name) != legacy).then(|| name.to_owned());
-                return (ServiceReply::Update { service, version }, None, terms);
+                return (ServiceReply::Update { service, version }, None, terms, acks);
             }
         }
-        (ServiceReply::Nothing, None, None)
+        (ServiceReply::Nothing, None, None, acks)
     }
 
     /// The CI token in `bearer`, checked by the verifier.

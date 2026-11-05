@@ -36,18 +36,23 @@ pub enum Feature {
     /// `order-v1`: the JSON route's update answer carries the order's id, try and package
     /// digest, and the heartbeat's top level is the daemon itself, never a legacy service.
     OrderV1,
+    /// `verdict-acks-v1`: the coordinator names the verdicts it has stored, by service, order
+    /// id and try, and reads a service entry with no verdict as still reporting the last one
+    /// it acknowledged.
+    VerdictAcksV1,
     /// `grpc-v1`: the coordinator serves the heartbeat as gRPC over HTTP/2 on its heartbeat
     /// listener; the daemon uses it for the next heartbeat.
     GrpcV1,
 }
 
 /// The features every heartbeat announces, in this order.
-pub const ANNOUNCED: [Feature; 6] = [
+pub const ANNOUNCED: [Feature; 7] = [
     Feature::DeferredV1,
     Feature::HaltV1,
     Feature::HeartbeatV2,
     Feature::ForcedV1,
     Feature::OrderV1,
+    Feature::VerdictAcksV1,
     Feature::GrpcV1,
 ];
 
@@ -60,6 +65,7 @@ impl Feature {
             Feature::HeartbeatV2 => "heartbeat-v2",
             Feature::ForcedV1 => "forced-v1",
             Feature::OrderV1 => hostkeeper_wire::wire::ORDER_FEATURE,
+            Feature::VerdictAcksV1 => "verdict-acks-v1",
             Feature::GrpcV1 => "grpc-v1",
         }
     }

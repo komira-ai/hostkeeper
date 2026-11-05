@@ -73,7 +73,7 @@ What the host runs and how it is, and the coordinator's answer: at most one orde
 | flag | value | meaning |
 |---|---|---|
 | `--platform` | VALUE | The platform the host's releases are built for. |
-| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
+| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
 
 Through `--request` only: `agent` (hostkeeper.agent.v1.AgentInfo), `services` (repeated hostkeeper.agent.v1.ServiceBeat).
 
@@ -144,6 +144,45 @@ id, role and services the approval names.
 | `--role` | STRING |  |
 | `--services` | STRING, repeated | Services to assign to the host; may be empty. |
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. |
+| `--reason` | STRING |  |
+
+#### `hostkeeper ctl enrollment add-record`
+
+`/hostkeeper.operator.v1.Enrollment/AddRecord`
+
+Record a server the operator built, before it first boots: its host id, optional role, data
+MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
+holds, is refused; remove the record first.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING |  |
+| `--role` | STRING | Empty for none. |
+| `--data-macs` | STRING, repeated | At least one, or a `serial`. |
+| `--bmc-mac` | STRING | Empty for none. |
+| `--serial` | STRING | Empty for none. |
+| `--notes` | STRING | Empty for none. |
+
+#### `hostkeeper ctl enrollment list-records`
+
+`/hostkeeper.operator.v1.Enrollment/ListRecords`
+
+The records, by host id, a page at a time.
+
+| flag | value | meaning |
+|---|---|---|
+| `--limit` | UINT32 | The most records to return; capped at 256, and 0 means the cap. |
+| `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
+
+#### `hostkeeper ctl enrollment remove-record`
+
+`/hostkeeper.operator.v1.Enrollment/RemoveRecord`
+
+Remove the record of a host id. An enrolled host keeps its certificate.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING |  |
 | `--reason` | STRING |  |
 
 ### `hosts`

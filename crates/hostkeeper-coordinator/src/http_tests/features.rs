@@ -204,6 +204,11 @@ async fn advertised_features_equal_the_handled_set() {
             "halt-v1",
             r#","last_update":{"target":"2.0","outcome":"failed","phase":"halt","reason":"tainted"}"#,
         ),
+        // A verdict that names its order and try: the answer acknowledges it.
+        (
+            "verdict-acks-v1",
+            r#","last_update":{"target":"0.9","outcome":"failed","order_id":"o-1","order_try":1}"#,
+        ),
     ]);
     // An `order-v1` agent's top level is not kbf, so a heartbeat with no services is refused:
     // the agents below announce the others and `order-v1` is proven apart.

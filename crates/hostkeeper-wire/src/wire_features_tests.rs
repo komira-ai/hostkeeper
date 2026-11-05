@@ -406,6 +406,7 @@ fn an_answer_with_features_names_them_after_the_reply_and_reads_back() {
                 order_id: None,
                 order_try: None,
                 package_digest: None,
+                acks: Vec::new(),
             },
             r#"{"reply":"nothing","features":[]}"#,
         ),
@@ -420,6 +421,7 @@ fn an_answer_with_features_names_them_after_the_reply_and_reads_back() {
                 order_id: None,
                 order_try: None,
                 package_digest: None,
+                acks: Vec::new(),
             },
             r#"{"reply":"update","service":"db","version":"2.0","features":["deferred-v1"]}"#,
         ),
@@ -454,6 +456,7 @@ fn an_answer_equals_the_reply_it_carries() {
         order_id: None,
         order_try: None,
         package_digest: None,
+        acks: Vec::new(),
     };
     assert_eq!(answer, ServiceReply::Nothing);
     assert_eq!(answer, Reply::Nothing);

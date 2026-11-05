@@ -1,0 +1,232 @@
+// hostkeeper.operator.v1: the `Enrollment` service of the operator API, its refusals
+// (`EnrollmentRefusal`) and its messages: the hosts waiting for an operator to approve their
+// enrollment, and the host inventory the operator records them against. The rest of the package,
+// `Audit` and `AuditRefusal` among it, is operator.proto; this file is the same package and API,
+// kept apart so that each file stays under 1000 lines.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Enrollment` takes the operator token only; no CI token reaches it (see
+// operator.proto).
+//
+// Refusals: a gRPC status whose message is exactly one token of `EnrollmentRefusal`, written as
+// the value's name without the prefix, in lower case; the status code is the one each value
+// names. A refused request changes nothing.
+//
+// Units: as operator.proto says. A MAC is six octets of two hex digits, separated all by `:` or
+// all by `-`, or twelve hex digits, in either case, and is answered as lower-case
+// `aa:bb:cc:dd:ee:ff`.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/agent/v1/agent.proto";
+import "hostkeeper/operator/v1/operator.proto";
+
+// The hosts waiting for an operator to approve their enrollment.
+service Enrollment {
+  // The pending requests, oldest first, a page at a time.
+  rpc List(ListPendingRequest) returns (ListPendingResponse);
+  // Approve a pending request: the host gets its certificate at its next `Poll`, with the host
+  // id, role and services the approval names.
+  rpc Approve(ApproveRequest) returns (ApproveResponse);
+  // Record a server the operator built, before it first boots: its host id, optional role, data
+  // MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
+  // holds, is refused; remove the record first.
+  rpc AddRecord(AddRecordRequest) returns (AddRecordResponse);
+  // The records, by host id, a page at a time.
+  rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
+  // Remove the record of a host id. An enrolled host keeps its certificate.
+  rpc RemoveRecord(RemoveRecordRequest) returns (RemoveRecordResponse);
+}
+
+// Why `Enrollment` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum EnrollmentRefusal {
+  ENROLLMENT_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no bearer, or not the operator token.
+  ENROLLMENT_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Enrollment` does not take.
+  ENROLLMENT_REFUSAL_FORBIDDEN = 2;
+  // NOT_FOUND: the coordinator holds no request with the id.
+  ENROLLMENT_REFUSAL_UNKNOWN_REQUEST = 3;
+  // FAILED_PRECONDITION: `key_sha256` is not the SHA-256 of the pending request's key.
+  ENROLLMENT_REFUSAL_KEY_MISMATCH = 4;
+  // ALREADY_EXISTS: another host holds the host id, and `replace` is not set.
+  ENROLLMENT_REFUSAL_HOST_ID_TAKEN = 5;
+  // RESOURCE_EXHAUSTED: the pending queue is full. `Enroll` returns it, as `pending_full` of
+  // `CoordinatorRefusal`; it is listed here so that this enum names every enrollment refusal.
+  ENROLLMENT_REFUSAL_PENDING_FULL = 6;
+  // FAILED_PRECONDITION: the request is flagged `duplicate_claim`, and `replace` is not set.
+  ENROLLMENT_REFUSAL_DUPLICATE_CLAIM = 7;
+  // INVALID_ARGUMENT: the host id breaks its rule.
+  ENROLLMENT_REFUSAL_INVALID_HOST_ID = 8;
+  // INVALID_ARGUMENT: the role breaks its rule.
+  ENROLLMENT_REFUSAL_INVALID_ROLE = 9;
+  // INVALID_ARGUMENT: a service name breaks its rule, or names no service the coordinator
+  // manages.
+  ENROLLMENT_REFUSAL_INVALID_SERVICE = 10;
+  // INVALID_ARGUMENT: another field breaks its rule (a request id, a key hash, a reason, a page
+  // token).
+  ENROLLMENT_REFUSAL_INVALID_REQUEST = 11;
+  // FAILED_PRECONDITION: the request is no longer pending: it was approved, issued or denied.
+  ENROLLMENT_REFUSAL_NOT_PENDING = 12;
+  // FAILED_PRECONDITION: an operator denied the host id, and `replace` is not set.
+  ENROLLMENT_REFUSAL_DENIED = 13;
+  // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
+  ENROLLMENT_REFUSAL_STORE_FAILED = 14;
+  // ALREADY_EXISTS: `AddRecord` for a host id that has a record.
+  ENROLLMENT_REFUSAL_RECORD_EXISTS = 15;
+  // ALREADY_EXISTS: `AddRecord` with a MAC or a serial that another host id's record holds.
+  ENROLLMENT_REFUSAL_RECORD_CONFLICT = 16;
+  // NOT_FOUND: `RemoveRecord` of a host id that has no record.
+  ENROLLMENT_REFUSAL_NO_RECORD = 17;
+  // RESOURCE_EXHAUSTED: `AddRecord` past the 10000 records the coordinator keeps.
+  ENROLLMENT_REFUSAL_CAPACITY = 18;
+}
+
+message ListPendingRequest {
+  // The most requests to return; capped at 256, and 0 means the cap.
+  uint32 limit = 1;
+  // Where to go on, as `next_page_token` gave it; empty for the first page.
+  string page_token = 2;
+}
+
+message ListPendingResponse {
+  // Oldest first.
+  repeated PendingEnrollment requests = 1;
+  // The token of the next page; empty on the last.
+  string next_page_token = 2;
+}
+
+// One pending enrollment request. It never carries the CSR bytes or a nonce value.
+message PendingEnrollment {
+  string request_id = 1;
+  // The SHA-256 of the request's key, which an approval must name.
+  string key_sha256 = 2;
+  // What the host says it is; claims authorise nothing.
+  hostkeeper.agent.v1.Claims claims = 3;
+  // The image the host's daemon came from, as it named it.
+  string image = 4;
+  // When the coordinator first received the request.
+  uint64 first_seen_unix = 5;
+  // The host id this request would return, for a host whose certificate expired; empty
+  // otherwise.
+  string renewal_of = 6;
+  // Another host presents the same machine id or key, or the request claims a MAC bound to an
+  // enrolled host.
+  bool duplicate_claim = 7;
+  // The request carried a Mac nonce (its value is never listed).
+  bool mac_nonce_presented = 8;
+  // How the request matches the host inventory. UNSPECIFIED from a coordinator that does not
+  // match.
+  InventoryMatch inventory_match = 9;
+  // The host id of the one matching record (MATCHED only).
+  string record_host_id = 10;
+  // The role of the one matching record; empty when it names none (MATCHED only).
+  string record_role = 11;
+  // The host ids of every matching record, sorted (AMBIGUOUS only); none is chosen.
+  repeated string candidate_host_ids = 12;
+}
+
+// How a pending request matches the host inventory. A record matches a Linux request when one of
+// its data MACs is among the claimed addresses, and the request claims no BMC MAC or the record's
+// BMC MAC; it matches a Mac request when its serial equals the claimed Mac serial, letters
+// compared without case.
+enum InventoryMatch {
+  INVENTORY_MATCH_UNSPECIFIED = 0;
+  // Exactly one record matches: its host id and role are filled in.
+  INVENTORY_MATCH_MATCHED = 1;
+  // No record matches.
+  INVENTORY_MATCH_UNMATCHED = 2;
+  // More than one record matches; none is chosen.
+  INVENTORY_MATCH_AMBIGUOUS = 3;
+}
+
+// One server the operator recorded when building it.
+message InventoryRecord {
+  string host_id = 1;
+  // The role the host is meant for; empty when the record names none.
+  string role = 2;
+  // The MACs of the host's data interfaces, lower-case, colon-separated, sorted; one to 16, or
+  // none for a record that holds a serial.
+  repeated string data_macs = 3;
+  // The MAC of the host's BMC; empty when the record names none (a Mac has no BMC).
+  string bmc_mac = 4;
+  // The serial number: a Mac's is what its request is matched by. 1 to 64 of `A-Za-z0-9._-`,
+  // or empty.
+  string serial = 5;
+  // Free text, 0 to 256 bytes once trimmed, with no control character.
+  string notes = 6;
+  // The name of the operator token that added it.
+  string added_by = 7;
+  uint64 added_unix = 8;
+}
+
+message ApproveRequest {
+  string request_id = 1;
+  // The SHA-256 of the pending request's key, as `PendingEnrollment.key_sha256` lists it.
+  string key_sha256 = 2;
+  // The host id the certificate names.
+  string host_id = 3;
+  string role = 4;
+  // Services to assign to the host; may be empty.
+  repeated string services = 5;
+  // Take the host id from the host that holds it, revoking that host's certificate; also needed
+  // to approve a `duplicate_claim` request or a denied host id.
+  bool replace = 6;
+  string reason = 7;
+}
+
+message ApproveResponse {
+  string host_id = 1;
+  // Always true: the certificate goes to the host at its next `Poll`, never in this answer.
+  bool certificate_issued_at_poll = 2;
+  AuditEntry entry = 3;
+}
+
+message AddRecordRequest {
+  string host_id = 1;
+  // Empty for none.
+  string role = 2;
+  // At least one, or a `serial`.
+  repeated string data_macs = 3;
+  // Empty for none.
+  string bmc_mac = 4;
+  // Empty for none.
+  string serial = 5;
+  // Empty for none.
+  string notes = 6;
+}
+
+message AddRecordResponse {
+  // As kept: MACs in their one spelling.
+  InventoryRecord record = 1;
+  AuditEntry entry = 2;
+}
+
+message ListRecordsRequest {
+  // The most records to return; capped at 256, and 0 means the cap.
+  uint32 limit = 1;
+  // Where to go on, as `next_page_token` gave it; empty for the first page.
+  string page_token = 2;
+}
+
+message ListRecordsResponse {
+  // By host id.
+  repeated InventoryRecord records = 1;
+  // The token of the next page; empty on the last.
+  string next_page_token = 2;
+}
+
+message RemoveRecordRequest {
+  string host_id = 1;
+  string reason = 2;
+}
+
+message RemoveRecordResponse {
+  AuditEntry entry = 1;
+}

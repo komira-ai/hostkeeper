@@ -160,6 +160,94 @@ fn enrollment_flags_go_together_and_a_missing_ca_needs_ca_init() {
     assert!(again.coordinator.enrollment().is_some());
 }
 
+/// The `Enroll` of a new P-256 key from machine `machine_id`.
+fn new_request(machine_id: &str) -> EnrollRequest {
+    let pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("a key");
+    let mut params = CertificateParams::default();
+    params.distinguished_name = DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(DnType::CommonName, "host:pending");
+    EnrollRequest {
+        csr_der: params
+            .serialize_request(&pair)
+            .expect("a CSR")
+            .der()
+            .to_vec(),
+        claims: Some(Claims {
+            machine_id: machine_id.to_owned(),
+            ..Claims::default()
+        }),
+        ..EnrollRequest::default()
+    }
+}
+
+/// An allowlist of one Mac serial, approved as `mac-<serial>` with role `build` and
+/// `service`.
+fn allowlist(service: &str) -> String {
+    format!(
+        "[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\n\
+         services = [\"{service}\"]\n"
+    )
+}
+
+/// Catches the pending cap or the Mac allowlist accepted without enrollment, a cap of 0, an
+/// allowlist that cannot be read or that names a service the rollout file does not define
+/// letting the coordinator start, and the cap not reaching the enrollment it starts.
+#[test]
+fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
+    let files = Files::new("enrollment-cap-flags");
+    let with = |extra: &[&'static str]| {
+        let mut flags = enrollment_flags(true);
+        flags.extend_from_slice(extra);
+        flags
+    };
+    for refused in [
+        vec!["--max-pending-enrollments", "5"],
+        vec!["--mac-serial-allowlist", "=mac.toml"],
+        with(&["--max-pending-enrollments", "0"]),
+    ] {
+        let args = files.args(&refused);
+        assert_eq!(
+            hostkeeper_coordinator::config::main(args),
+            ExitCode::from(2),
+            "{refused:?}"
+        );
+    }
+    match start(&files, &with(&["--mac-serial-allowlist", "=absent.toml"])) {
+        Err(StartError::MacAllowlist(why)) => {
+            assert!(why.to_string().contains("absent.toml"), "{why}");
+        }
+        Err(other) => panic!("refused otherwise: {other}"),
+        Ok(_) => panic!("started without its allowlist"),
+    }
+    files.put("mac.toml", &allowlist("nosuch"), 0o600);
+    match start(&files, &with(&["--mac-serial-allowlist", "=mac.toml"])) {
+        Err(StartError::MacService(service)) => assert_eq!(service, "nosuch"),
+        Err(other) => panic!("refused otherwise: {other}"),
+        Ok(_) => panic!("started with a service it does not manage"),
+    }
+    files.put("mac.toml", &allowlist("kbf"), 0o600);
+    let parts = start(
+        &files,
+        &with(&[
+            "--mac-serial-allowlist",
+            "=mac.toml",
+            "--max-pending-enrollments",
+            "1",
+        ]),
+    )
+    .expect("started");
+    let enrollment = parts.coordinator.enrollment().expect("enrollment");
+    enrollment
+        .enroll(new_request("machine-1"))
+        .expect("the first waits");
+    let full = enrollment
+        .enroll(new_request("machine-2"))
+        .expect_err("the cap is 1");
+    assert_eq!(full.token(), "pending_full");
+}
+
 /// A host's P-256 key, enrolled as `s1`, a storage host: its certificate, DER, and its key,
 /// PKCS#8.
 fn enroll_host(enrollment: &Enrollment) -> (Vec<u8>, Vec<u8>) {
