@@ -39,6 +39,7 @@ tooling:
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services it manages and the roles they run on (a rollout file), the desired version of each service, the heartbeat endpoint and the private endpoint of CI and the operator (named operator tokens), the convergence of a fleet; run as `hostkeeper-coordinator serve` |
+| [`hostkeeper-launchd`](crates/hostkeeper-launchd) | the macOS side behind existing ports: labels and plists, the `launchctl` port and its reader of `launchctl print`, the observer's service manager and process probe, and the unit control of the linking side, tested against fakes ([macOS](docs/macos.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui): every call it makes is a method of the protobuf descriptors, its sources keep no token and load nothing from another origin, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; not shipped |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
