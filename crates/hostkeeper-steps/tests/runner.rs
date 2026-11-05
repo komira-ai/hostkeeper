@@ -86,7 +86,7 @@ fn a_successful_update_runs_the_four_steps_from_the_new_release() {
 
 /// Catches a params file that differs between steps, loses a reserved key, or lets the
 /// artifact of `prepare` differ from `updater.staged_release`: one file, the same bytes in
-/// every step, the declared table beside the five reserved keys.
+/// every step, the params table beside the five reserved keys.
 #[test]
 fn every_step_gets_the_same_params_file() {
     let rig = Rig::new("run-params");
@@ -607,7 +607,7 @@ fn rollback_falls_back_to_the_previous_hook_only_when_the_new_one_cannot_start()
     );
 }
 
-/// Catches a hook path that leads out of the release: a declared `binary` of `../x` or an absolute
+/// Catches a hook path that leads out of the release: a hook program of `../x` or an absolute
 /// path never runs, and the update fails as a hook that cannot start.
 #[test]
 fn a_hook_path_outside_the_release_never_runs() {

@@ -8,6 +8,8 @@
 //! it is the verbatim third-party notice with its authors' date. Test sources that need a text a
 //! rule refuses build it from pieces at run time, so that this directory passes its own lint.
 
+mod links;
+mod retired;
 mod rules;
 mod rust_text;
 mod tlds;

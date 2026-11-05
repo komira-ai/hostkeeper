@@ -1,5 +1,5 @@
-//! The grammars of names and paths. The path cases are those of `hostkeeper-rights` before the
-//! move; the service-name and version cases are the rules of design section 11.8.
+//! The grammars of names and paths. The path cases are those imported from kbf's `update-rights`
+//! (MIGRATION.md); the service-name and version cases are the rules of design section 11.8.
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{

@@ -1,0 +1,14 @@
+[package]
+name = "hostkeeper-link"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

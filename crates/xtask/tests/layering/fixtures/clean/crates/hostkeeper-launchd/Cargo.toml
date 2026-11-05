@@ -1,0 +1,12 @@
+[package]
+name = "hostkeeper-launchd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-observe = { path = "../hostkeeper-observe" }
+hostkeeper-placed = { path = "../hostkeeper-placed" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

@@ -1,0 +1,10 @@
+[package]
+name = "hostkeeper-placed"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-config = { path = "../hostkeeper-config" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
