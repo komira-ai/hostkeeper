@@ -371,11 +371,11 @@ fn the_link_dials_the_host_and_port_of_the_daemon_config() {
         "the coordinator address \"https://coordinator.test/base\" has a path: the heartbeat \
          goes to /v1/heartbeat at its root"
     );
-    let host = "https://a..b:8443";
+    let host = "https://bad..example.com:8443";
     assert_eq!(refused(host), Some(EndpointError::Host(host.to_owned())));
     assert_eq!(
         EndpointError::Host(host.to_owned()).to_string(),
-        "the coordinator address \"https://a..b:8443\" has no host a certificate can be \
+        "the coordinator address \"https://bad..example.com:8443\" has no host a certificate can be \
          checked against"
     );
 }
