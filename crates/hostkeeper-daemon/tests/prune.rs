@@ -266,7 +266,7 @@ fn second_prune(daemon: &Daemon) -> &'static str {
             "pruned"
         }
         Err(held) => {
-            assert_eq!(held.package.verb, HookedVerb::Force);
+            assert!(held.is_force(), "{held:?}");
             "locked"
         }
     }
