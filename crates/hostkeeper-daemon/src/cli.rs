@@ -29,7 +29,7 @@ use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, SystemCloc
 use crate::executor::{Placement, Ports};
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::packages::{PackageError, Packages, VersionDir};
-use crate::prune::NoPrune;
+use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::start::{self, Settings, StartError};
 use crate::verb::PackageDigest;
 
@@ -173,8 +173,8 @@ async fn start_and_serve(
 /// The ports of this build. The host's step launcher, package store and service manager are not
 /// part of it yet, and no order reaches the daemon yet (the heartbeat loop that brings them comes
 /// later): until they are wired in, an order that did come would be refused, never run. Placed
-/// paths are linked under the host's own directories, `packages_dir` being `--packages-dir`; the
-/// prune of step 18 of a force deletes nothing yet.
+/// paths are linked under the host's own directories, `packages_dir` being `--packages-dir`, and
+/// a confirmed switch prunes the service's package directory to `current` and `previous`.
 fn host_ports(packages_dir: &Path) -> Ports {
     Ports {
         launcher: Arc::new(Unwired),
@@ -190,7 +190,8 @@ fn host_ports(packages_dir: &Path) -> Ports {
             ),
             fs: Arc::new(RealFs::new(Path::new("/"))),
         },
-        prune: Arc::new(NoPrune),
+        prune: Arc::new(LayoutPrune),
+        force_lock_point: Arc::new(NoLockPoint),
     }
 }
 
