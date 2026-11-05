@@ -259,29 +259,100 @@ fn a_directory_without_a_package_has_no_index() {
     );
     assert_eq!(
         write_index(&dir, &version()),
-        Err(Error::Failed(format!(
-            "{} holds no package of hostkeeper 1.5.0",
-            dir.display()
-        )))
+        Err(Error::Refused(
+            [
+                "hostkeeper-1.5.0-linux-x86_64.tar.zst",
+                "hostkeeper-1.5.0-linux-arm64.tar.zst",
+                "hostkeeper-1.5.0-macos-arm64.tar.zst",
+            ]
+            .map(missing)
+            .to_vec()
+        ))
     );
     assert!(!dir.join("index.json").exists());
 }
 
+/// The line of the index verb's refusal for the package `file` that is not there.
+fn missing(file: &str) -> String {
+    format!("missing {file}: a release has the package of every platform")
+}
+
+/// Writes the package of hostkeeper 1.5.0 for each of `platforms` into `dir`, each holding its
+/// platform's name.
+fn write_packages(dir: &Path, platforms: &[Platform]) {
+    for &p in platforms {
+        let file = package_file("hostkeeper", &version(), p);
+        std::fs::write(dir.join(file), p.name()).expect("write a package");
+    }
+}
+
 #[test]
-fn the_index_verb_writes_the_canonical_index_beside_the_packages() {
-    // Catches: an index written elsewhere, not canonically, or naming platforms that have no
-    // package.
+fn the_index_verb_refuses_a_release_missing_any_platform_and_writes_nothing() {
+    // Catches: a release index (and so a release) that leaves out macOS, or any one platform,
+    // and is written all the same because the packages that are there are listed.
+    for left_out in Platform::ALL {
+        let dir = scratch(&format!("index-verb-without-{}", left_out.name()));
+        let others: Vec<Platform> = Platform::ALL
+            .into_iter()
+            .filter(|&p| p != left_out)
+            .collect();
+        write_packages(&dir, &others);
+        assert_eq!(
+            write_index(&dir, &version()),
+            Err(Error::Refused(vec![missing(&package_file(
+                "hostkeeper",
+                &version(),
+                left_out
+            ))])),
+            "{}",
+            left_out.name()
+        );
+        assert!(!dir.join("index.json").exists(), "{}", left_out.name());
+    }
+    // A file of another kind for the platform is not its package.
+    let dir = scratch("index-verb-tarball-for-mac");
+    write_packages(&dir, &[Platform::LinuxX86_64, Platform::LinuxArm64]);
+    std::fs::write(dir.join("hostkeeper-1.5.0-macos-arm64.tar.gz"), b"tarball").expect("write");
+    std::fs::create_dir(dir.join("hostkeeper-1.5.0-macos-arm64.tar.zst")).expect("a directory");
+    assert_eq!(
+        write_index(&dir, &version()),
+        Err(Error::Refused(vec![missing(
+            "hostkeeper-1.5.0-macos-arm64.tar.zst"
+        )]))
+    );
+}
+
+#[test]
+fn the_index_verb_writes_the_canonical_index_of_all_three_platforms_beside_the_packages() {
+    // Catches: an index written elsewhere, not canonically, or without one of the three
+    // platforms (the macOS package left out of the release index).
     let dir = scratch("index-verb");
-    std::fs::write(dir.join("hostkeeper-1.5.0-linux-arm64.tar.zst"), b"arm").expect("write");
+    write_packages(&dir, &Platform::RELEASED);
     let path = dir.join("index.json");
     assert_eq!(
         write_index(&dir, &version()),
         Ok(vec![format!(
-            "{}: the packages of hostkeeper 1.5.0 for linux-arm64",
+            "{}: the packages of hostkeeper 1.5.0 for linux-arm64, linux-x86_64, macos-arm64",
             path.display()
         )])
     );
     let written = std::fs::read_to_string(&path).expect("read the index");
+    let read = ReleaseIndex::parse(&written, "hostkeeper", &version()).expect("the index reads");
+    assert_eq!(
+        read.packages.iter().map(|e| e.platform).collect::<Vec<_>>(),
+        Platform::ALL
+    );
+    let mac = &read.packages[2];
+    assert_eq!(
+        (mac.file.as_str(), mac.bytes, mac.sha256.as_str()),
+        (
+            "hostkeeper-1.5.0-macos-arm64.tar.zst",
+            "macos-arm64".len() as u64,
+            file_sha256(&dir.join("hostkeeper-1.5.0-macos-arm64.tar.zst"))
+                .expect("hash")
+                .as_str()
+        )
+    );
     let expected =
         ReleaseIndex::of_dir(&dir, "hostkeeper", &version(), &Platform::ALL).expect("index");
     assert_eq!(written, expected.to_json());
@@ -291,7 +362,7 @@ fn the_index_verb_writes_the_canonical_index_beside_the_packages() {
 fn an_index_that_cannot_be_written_is_an_io_error() {
     // Catches: a failed write reported as success.
     let dir = scratch("index-unwritable");
-    std::fs::write(dir.join("hostkeeper-1.5.0-linux-arm64.tar.zst"), b"arm").expect("write");
+    write_packages(&dir, &Platform::RELEASED);
     std::fs::create_dir(dir.join("index.json")).expect("a directory in the way");
     assert!(matches!(
         write_index(&dir, &version()),

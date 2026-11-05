@@ -120,8 +120,8 @@ fn a_check_changed_in_the_document_alone_is_refused() {
         (
             with_in(
                 &doc,
-                "`<platform>` is `linux-x86_64` or `linux-arm64`",
-                "`<platform>` is `linux-arm64`",
+                "`<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`",
+                "`<platform>` is `linux-arm64` or `macos-arm64`",
             ),
             vec![asset_problem(ASSET)],
         ),
