@@ -24,6 +24,13 @@ fn workspace(name: &str, names: &[&str]) -> TestDir {
     root
 }
 
+/// Adds a crate under `<root>/examples`.
+fn example(root: &Path, name: &str) {
+    let dir = root.join("examples").join(name);
+    std::fs::create_dir_all(dir.join("src")).expect("example dir");
+    std::fs::write(dir.join("Cargo.toml"), b"").expect("manifest");
+}
+
 /// A tracefile with one source per `(path, lf, lh, brf, brh)`.
 fn lcov(root: &Path, files: &[(&str, u64, u64, u64, u64)]) -> PathBuf {
     let mut text = String::new();
@@ -291,5 +298,87 @@ fn a_source_that_climbs_out_of_its_crate_is_status_2() {
         String::from_utf8_lossy(&o.stderr).contains("is not under <root>/crates/<crate>/"),
         "{}",
         String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+#[test]
+fn a_crate_under_examples_is_judged_and_named_by_its_directory() {
+    // Catches: an examples crate whose record fails the run as unattributed, one left out of
+    // the table, and one that is not held to 99%.
+    let root = workspace("examples", &["a"]);
+    example(&root, "hello");
+    let tracefile = lcov(
+        &root,
+        &[
+            ("crates/a/src/lib.rs", 10, 10, 0, 0),
+            ("examples/hello/src/lib.rs", 100, 99, 10, 10),
+        ],
+    );
+    let o = gate(&root, &tracefile, &[]);
+    assert_eq!(o.status.code(), Some(0), "{}", out(&o));
+    assert!(
+        out(&o).contains("| hello | 99/100 | 99.00 | 10/10 | 100.00 | ok |"),
+        "{}",
+        out(&o)
+    );
+    let tracefile = lcov(
+        &root,
+        &[
+            ("crates/a/src/lib.rs", 10, 10, 0, 0),
+            ("examples/hello/src/lib.rs", 100, 90, 0, 0),
+        ],
+    );
+    let o = gate(&root, &tracefile, &[]);
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    assert!(
+        out(&o).contains("| hello | 90/100 | 90.00 | - | - | BELOW THRESHOLD (lines) |"),
+        "{}",
+        out(&o)
+    );
+}
+
+#[test]
+fn a_workspace_without_an_examples_directory_is_judged_as_before() {
+    // Catches: a missing `examples` directory failing the run (the workspace of every
+    // repository without examples), or changing a byte of the table.
+    let root = workspace("no-examples", &["a"]);
+    assert!(!root.join("examples").exists());
+    let tracefile = lcov(&root, &[("crates/a/src/lib.rs", 10, 10, 0, 0)]);
+    let o = gate(&root, &tracefile, &[]);
+    assert_eq!(o.status.code(), Some(0), "{}", out(&o));
+    assert_eq!(
+        out(&o),
+        "| crate | lines | line % | branches | branch % | status |\n\
+         |---|---:|---:|---:|---:|---|\n\
+         | a | 10/10 | 100.00 | - | - | ok |\n\
+         | **workspace** | 10/10 | 100.00 | - | - |  |\n\
+         \n\
+         coverage gate: PASS (threshold 99.00 of lines and branches)\n"
+    );
+}
+
+#[test]
+fn two_crates_with_one_directory_name_are_status_2() {
+    // Catches: `crates/hello` and `examples/hello` merged into one row, which would let one
+    // hide the other's shortfall.
+    let root = workspace("same-name", &["hello"]);
+    example(&root, "hello");
+    let tracefile = lcov(
+        &root,
+        &[
+            ("crates/hello/src/lib.rs", 10, 10, 0, 0),
+            ("examples/hello/src/lib.rs", 10, 1, 0, 0),
+        ],
+    );
+    let o = gate(&root, &tracefile, &[]);
+    assert_eq!(o.status.code(), Some(2), "{}", out(&o));
+    assert_eq!(out(&o), "");
+    assert_eq!(
+        String::from_utf8_lossy(&o.stderr),
+        format!(
+            "coverage-gate: list crates under {}: hello is the directory of both crates/hello \
+             and examples/hello: crates are named by directory in the table, so rename one\n",
+            root.display()
+        )
     );
 }

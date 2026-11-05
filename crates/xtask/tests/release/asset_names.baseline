@@ -2,7 +2,29 @@
 # contract that cargo xtask release (crates/xtask/src/release/contract.rs, asset_names) keeps.
 # A name may be added (add it here in the same pull request); a name is never removed or
 # renamed, since consumers fetch assets by these names. Lines starting with `#` are comments.
+# The `hello-` names are the packages and release indexes of the example service, examples/hello, and
+# of its failing build (`hello-<version>-fail-ready-*`, the same package started with `--fail-ready`).
 SHA256SUMS
+hello-<version>-fail-ready-linux-arm64.tar.zst
+hello-<version>-fail-ready-linux-arm64.tar.zst.sha256
+hello-<version>-fail-ready-linux-arm64.tar.zst.sigstore.json
+hello-<version>-fail-ready-linux-x86_64.tar.zst
+hello-<version>-fail-ready-linux-x86_64.tar.zst.sha256
+hello-<version>-fail-ready-linux-x86_64.tar.zst.sigstore.json
+hello-<version>-fail-ready-macos-arm64.tar.zst
+hello-<version>-fail-ready-macos-arm64.tar.zst.sha256
+hello-<version>-fail-ready-macos-arm64.tar.zst.sigstore.json
+hello-<version>-linux-arm64.tar.zst
+hello-<version>-linux-arm64.tar.zst.sha256
+hello-<version>-linux-arm64.tar.zst.sigstore.json
+hello-<version>-linux-x86_64.tar.zst
+hello-<version>-linux-x86_64.tar.zst.sha256
+hello-<version>-linux-x86_64.tar.zst.sigstore.json
+hello-<version>-macos-arm64.tar.zst
+hello-<version>-macos-arm64.tar.zst.sha256
+hello-<version>-macos-arm64.tar.zst.sigstore.json
+hello-fail-ready-index.json
+hello-index.json
 hostkeeper-<version>-1.aarch64.rpm
 hostkeeper-<version>-1.aarch64.rpm.sigstore.json
 hostkeeper-<version>-1.x86_64.rpm

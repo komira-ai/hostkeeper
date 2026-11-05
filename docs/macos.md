@@ -74,7 +74,7 @@ that stops enrollment before any request is posted. No placeholder is ever sent.
 ### launchd adapters, behind ports
 
 The crate [`hostkeeper-launchd`](../crates/hostkeeper-launchd) holds the launchd side of the
-ports the daemon already has: labels, the plists of the daemon and of a step job, the
+ports the daemon already has: labels, the plists of the daemon, of a step job and of a service package's job, the
 `launchctl` port and its reader of `launchctl print`, the observer's service manager and
 process probe, the unit control of the linking side, and the step launcher. It is tested against
 fakes on Linux and is not wired into the daemon yet; nothing of it has run on a Mac.
@@ -183,13 +183,20 @@ is refused.
 
 A package's `units/` may hold `<label>.plist` files. A label is the service name or starts with
 `<service>.`. The manifest's `[units] run` then names labels instead of systemd unit names.
+The plists of a service package are rendered by `hostkeeper_launchd::service_plist`: the program and
+its arguments, `RunAtLoad` false, and a `KeepAlive` that holds the job alive only while a given path
+exists, so a slot without its marker file never starts.
 
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
 `hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, hostkeeper's own package `.tar.zst` (its
 `manifest.toml` and `bin/hostkeeper`, and no `units/`), and the installer pkg
-`hostkeeper-<v>-macos-arm64.pkg`. The artifacts workflow builds them on a GitHub-hosted Apple
+`hostkeeper-<v>-macos-arm64.pkg`. It also ships the packages of `hello`, the example service of
+`examples/hello`, and of its failing build, for macos-arm64: `bin/hello`, `manifest.toml` and
+`units/hello.a.plist` and `units/hello.b.plist`, the plists of its two slots rendered by
+`hostkeeper_launchd::service_plist`; `hello` carries the same ad-hoc code signature as the
+hostkeeper binary. The artifacts workflow builds them on a GitHub-hosted Apple
 silicon runner, never on a pull request; it runs by hand until its push-to-`main` trigger lands with
 the rest of the release automation.
 

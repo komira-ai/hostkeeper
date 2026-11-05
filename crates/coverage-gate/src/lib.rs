@@ -1,9 +1,12 @@
 //! Per-crate line and branch coverage for the workspace, and the gate that keeps it up.
 //!
 //! CI runs the tests under `cargo llvm-cov --branch`, which writes an lcov tracefile. This crate
-//! reads it (`lcov`), sums its per-file counts into one [`CrateCoverage`] per directory under
-//! `crates/` (`gate::by_crate`) and fails any crate whose line or branch coverage is under
-//! [`Percent::TARGET`], 99.00%. Every crate is judged, the repository's own tooling included:
+//! reads it (`lcov`), sums its per-file counts into one [`CrateCoverage`] per crate, a directory
+//! holding a `Cargo.toml` under `crates/` or under `examples/` (`gate::by_crate`), and fails any
+//! crate whose line or branch coverage is under [`Percent::TARGET`], 99.00%. A crate is named by
+//! its directory name; two crates with one name under the two bases are refused (exit status 2),
+//! so a row is always one crate. A missing `examples/` is a workspace without examples. Every
+//! crate is judged, the repository's own tooling included:
 //! there is no exclusion. [`main`] is the program CI runs and the crate's one export; `main.rs`
 //! only forwards to it.
 //!

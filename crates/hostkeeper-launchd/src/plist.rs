@@ -1,6 +1,7 @@
-//! The XML property lists of the two kinds of launchd job: the daemon's own job and a step job.
+//! The XML property lists of the three kinds of launchd job: the daemon's own job, a step job and
+//! a service package's job.
 //!
-//! The writer is small and pure. It knows the four value kinds these two files use (string,
+//! The writer is small and pure. It knows the four value kinds these files use (string,
 //! boolean, array, dictionary), writes Apple's XML layout with one tab per level, and refuses any
 //! text that holds a control character or is not UTF-8, so a path can never inject markup or
 //! lines into a plist that runs as root.
@@ -63,6 +64,24 @@ pub struct StepJob {
     pub stderr: PathBuf,
 }
 
+/// A service package's launchd job: a long-running program that launchd keeps alive while the
+/// file `run_while` exists, and that does not start at load otherwise (`RunAtLoad` is false).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceJob {
+    /// The job's label.
+    pub label: Label,
+    /// The program to run.
+    pub program: PathBuf,
+    /// The program's arguments.
+    pub args: Vec<OsString>,
+    /// The path whose existence keeps the job alive (`KeepAlive` / `PathState`).
+    pub run_while: PathBuf,
+    /// Where launchd sends the job's standard output.
+    pub stdout: PathBuf,
+    /// Where launchd sends the job's standard error.
+    pub stderr: PathBuf,
+}
+
 /// Why a plist was not written.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PlistError {
@@ -91,7 +110,10 @@ pub fn daemon_plist(job: &DaemonJob) -> Result<String, PlistError> {
     job_plist(
         &job.label,
         argv,
-        ("KeepAlive", true),
+        [
+            ("RunAtLoad", Value::Bool(true)),
+            ("KeepAlive", Value::Bool(true)),
+        ],
         &job.stdout,
         &job.stderr,
     )
@@ -100,14 +122,29 @@ pub fn daemon_plist(job: &DaemonJob) -> Result<String, PlistError> {
 /// A step job's plist: `Label`, `ProgramArguments`, `RunAtLoad` true, `AbandonProcessGroup`
 /// false, and the two output paths. It has no `KeepAlive`.
 pub fn step_plist(job: &StepJob) -> Result<String, PlistError> {
-    let argv = std::iter::once(job.program.as_os_str())
-        .chain(job.args.iter().map(OsString::as_os_str))
-        .map(utf8)
-        .collect::<Result<Vec<_>, _>>()?;
     job_plist(
         &job.label,
-        argv,
-        ("AbandonProcessGroup", false),
+        argv(&job.program, &job.args)?,
+        [
+            ("RunAtLoad", Value::Bool(true)),
+            ("AbandonProcessGroup", Value::Bool(false)),
+        ],
+        &job.stdout,
+        &job.stderr,
+    )
+}
+
+/// A service job's plist: `Label`, `ProgramArguments`, `RunAtLoad` false, `KeepAlive` as a
+/// dictionary whose `PathState` holds `run_while` true, and the two output paths.
+pub fn service_plist(job: &ServiceJob) -> Result<String, PlistError> {
+    let keep_alive = Value::Dict(vec![(
+        "PathState".to_owned(),
+        Value::Dict(vec![(utf8(job.run_while.as_os_str())?, Value::Bool(true))]),
+    )]);
+    job_plist(
+        &job.label,
+        argv(&job.program, &job.args)?,
+        [("RunAtLoad", Value::Bool(false)), ("KeepAlive", keep_alive)],
         &job.stdout,
         &job.stderr,
     )
@@ -118,29 +155,44 @@ enum Value {
     Str(String),
     Bool(bool),
     Array(Vec<Value>),
-    Dict(Vec<(&'static str, Value)>),
+    Dict(Vec<(String, Value)>),
 }
 
+/// The program followed by its arguments, each as UTF-8 text.
+fn argv(program: &Path, args: &[OsString]) -> Result<Vec<String>, PlistError> {
+    std::iter::once(program.as_os_str())
+        .chain(args.iter().map(OsString::as_os_str))
+        .map(utf8)
+        .collect()
+}
+
+/// The plist of one job: the label, the arguments, the job's own keys (`own`, in order), and the
+/// two output paths.
 fn job_plist(
     label: &Label,
     argv: Vec<String>,
-    flag: (&'static str, bool),
+    own: [(&'static str, Value); 2],
     stdout: &Path,
     stderr: &Path,
 ) -> Result<String, PlistError> {
-    let dict = Value::Dict(vec![
-        ("Label", Value::Str(label.as_str().to_owned())),
+    let mut entries = vec![
+        ("Label".to_owned(), Value::Str(label.as_str().to_owned())),
         (
-            "ProgramArguments",
+            "ProgramArguments".to_owned(),
             Value::Array(argv.into_iter().map(Value::Str).collect()),
         ),
-        ("RunAtLoad", Value::Bool(true)),
-        (flag.0, Value::Bool(flag.1)),
-        ("StandardOutPath", Value::Str(utf8(stdout.as_os_str())?)),
-        ("StandardErrorPath", Value::Str(utf8(stderr.as_os_str())?)),
-    ]);
+    ];
+    entries.extend(own.map(|(key, value)| (key.to_owned(), value)));
+    entries.push((
+        "StandardOutPath".to_owned(),
+        Value::Str(utf8(stdout.as_os_str())?),
+    ));
+    entries.push((
+        "StandardErrorPath".to_owned(),
+        Value::Str(utf8(stderr.as_os_str())?),
+    ));
     let mut out = String::from(HEADER);
-    render(&dict, 0, &mut out)?;
+    render(&Value::Dict(entries), 0, &mut out)?;
     out.push_str("</plist>\n");
     Ok(out)
 }
@@ -168,7 +220,7 @@ fn render(value: &Value, depth: usize, out: &mut String) -> Result<(), PlistErro
         Value::Dict(entries) => {
             out.push_str(&format!("{indent}<dict>\n"));
             for (key, entry) in entries {
-                out.push_str(&format!("{indent}\t<key>{key}</key>\n"));
+                out.push_str(&format!("{indent}\t<key>{}</key>\n", escape(key)?));
                 render(entry, depth + 1, out)?;
             }
             out.push_str(&format!("{indent}</dict>\n"));
