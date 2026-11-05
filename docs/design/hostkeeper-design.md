@@ -599,7 +599,9 @@ The fields on each page are the fields the API returns (`Hosts.Get`, section 4.8
 | running, updating, halted, rolled back | Force, units start | running |
 | the same four | Force, units do not start | forced failed |
 | forced failed | Force again, to the previous version | running |
-| absent, installing, removing | Force | refused; nothing changes |
+| absent | Force, units start | running: the force installs it (the package is fetched if absent, then `current` is switched, linked and started) |
+| absent | Force, units do not start | forced failed |
+| installing, removing | Force | refused (`installing`, `uninstalling`); nothing changes |
 
 **Not host states:** a hold, an exclusion and a bad version are coordinator marks. They decide whether an order is sent, not what the host reports.
 
