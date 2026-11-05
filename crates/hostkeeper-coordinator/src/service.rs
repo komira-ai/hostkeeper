@@ -17,6 +17,7 @@ use crate::acks::release_ack;
 use crate::converge::{Convergence, role_counts};
 use crate::decide::Decision;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
+use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
 use crate::force::end_by_ci;
 use crate::halt;
@@ -31,6 +32,7 @@ use crate::services::{ServiceDef, Services};
 use crate::status::host_status;
 use crate::tokens::{OperatorTokens, TokenName};
 use crate::ui::UiDir;
+use enrollment_calls::Turn;
 
 pub use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
 
@@ -222,6 +224,8 @@ pub struct Coordinator {
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
     features: Vec<String>,
+    /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
+    enrollment: Option<Arc<Enrollment>>,
     ui: Option<UiDir>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
@@ -270,6 +274,7 @@ impl Coordinator {
             services_dropped: AtomicU64::new(0),
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
+            enrollment: None,
             ui: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
@@ -469,13 +474,17 @@ impl Coordinator {
     /// [`HeartbeatRefused`]: the heartbeat lists no services (none, or a list that was bad and
     /// dropped) and no legacy service is set.
     pub fn heartbeat(&self, who: Identity, beat: Heartbeat) -> Result<Answer, HeartbeatRefused> {
-        self.answer(who, beat, false).map(|(answer, _)| answer)
+        self.answer(who, beat, false, None)
+            .map(|(answer, _)| answer)
     }
 
     /// [`Self::heartbeat`] for a transport that carries typed orders (the `Order` of
     /// `hostkeeper.agent.v1`): with the answer, the operator's order for the host when one is
     /// due ([`crate::orders`]: an `abort` queued for it, or the `force` of a standing force),
-    /// which is sent instead of an update; the answer's reply is then `nothing`.
+    /// which is sent instead of an update, and the answer's reply is then `nothing`. When the
+    /// rollout gate orders an update with its terms (an agent that announced `order-v1`, a
+    /// registered digest), the update is the typed order ([`Order::Update`]): the order id, try
+    /// and package digest of the answer's terms, which the answer carries too.
     ///
     /// # Errors
     /// [`HeartbeatRefused`], as for [`Self::heartbeat`].
@@ -484,7 +493,7 @@ impl Coordinator {
         who: Identity,
         beat: Heartbeat,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
-        self.answer(who, beat, true)
+        self.answer(who, beat, true, None)
     }
 
     fn answer(
@@ -492,12 +501,14 @@ impl Coordinator {
         who: Identity,
         beat: Heartbeat,
         orders: bool,
+        machine_id: Option<&str>,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
         if self.legacy_for(&beat).is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
+        let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
-        let (reply, order, terms) = self.reply_to(who, beat, orders);
+        let (reply, order, terms) = self.reply_to(who, beat, orders, turn);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -517,6 +528,8 @@ impl Coordinator {
         // The terms only to an agent that announced `order-v1` and a coordinator that
         // advertises it.
         let terms = terms.filter(|_| sends("order_id", features.as_deref()));
+        // On a transport that carries typed orders, the update is one too, with the same terms.
+        let order = order.or_else(|| order_terms::typed(&reply, terms.as_ref()).filter(|_| orders));
         let answer = Answer {
             reply,
             order_id: terms.as_ref().map(|t| t.order_id.clone()),
@@ -533,6 +546,7 @@ impl Coordinator {
         who: Identity,
         beat: Heartbeat,
         orders: bool,
+        turn: Turn,
     ) -> (ServiceReply, Option<Order>, Option<Terms>) {
         let now = (self.clock)();
         let legacy = self.legacy_for(&beat);
@@ -601,6 +615,9 @@ impl Coordinator {
             }
         }
         fleet.note_node(who.host_id.clone(), node);
+        if turn == Turn::Hold {
+            return (ServiceReply::Nothing, None, None);
+        }
         let mut names: Vec<&str> = legacy
             .into_iter()
             .chain(announced.iter().map(|one| one.name.as_str()))
@@ -645,27 +662,12 @@ impl Coordinator {
             );
             if let Decision::Update { version } = decision {
                 // An agent that reads order terms is ordered only a version with a digest.
-                let terms = if order_v1 {
-                    let last = announced
-                        .iter()
-                        .find(|one| one.name == name)
-                        .and_then(|one| one.last_update.as_ref());
+                let terms = order_v1.then(|| {
                     let digests = self.desired.digests(name);
-                    let made = digests
-                        .get(&version)
-                        .and_then(|digest| order_terms::terms(name, &version, digest, last));
-                    if made.is_none() {
-                        tracing::warn!(
-                            service = name,
-                            version = %version,
-                            node_id = %who.host_id,
-                            "not ordering an agent that reads order terms: no package digest is registered for the version"
-                        );
-                        continue;
-                    }
-                    made
-                } else {
-                    None
+                    order_terms::of_beat(&digests, name, &version, &announced, &who.host_id)
+                });
+                let Some(terms) = terms.map_or(Some(None), |made| made.map(Some)) else {
+                    continue;
                 };
                 // The host's ack goes from the file before the order exists.
                 if !release_ack(&self.ops, name, &who.host_id) {
@@ -973,3 +975,7 @@ impl Coordinator {
 pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
     marks.last_good.as_ref() == Some(version) || marks.bad.contains(version)
 }
+
+/// The calls of the heartbeat path that ask enrollment.
+#[path = "service_enrollment.rs"]
+mod enrollment_calls;
