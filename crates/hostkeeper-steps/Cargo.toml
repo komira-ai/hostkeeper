@@ -27,6 +27,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# Decodes the launchd plists of `selfupdate` in their tests.
+plist.workspace = true
 
 [lints]
 workspace = true

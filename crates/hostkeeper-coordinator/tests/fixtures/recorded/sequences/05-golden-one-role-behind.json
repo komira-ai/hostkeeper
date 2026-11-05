@@ -1,0 +1,84 @@
+{
+ "from": "kbf-coordinator/src/decide_golden_tests.rs::one_role_behind_keeps_the_frontends_waiting (the daemon variant of the loop over roles)",
+ "steps": [
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "s1",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "m1",
+   "role": "mac-daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "f1",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "f2",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"2.0\",\"min_up\":{\"storage\":0,\"frontend\":1}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"2.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":0,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "d1",
+   "role": "daemon",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "f1",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "f2",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  }
+ ]
+}

@@ -1,0 +1,11 @@
+# kbf's own service as an entry of a rollout file (the coordinator's --rollout-file). It was
+# built in to the coordinator that kbf shipped; here it is plain data like any other service.
+#
+# kbf's four roles. What kbf's definition also said, that a frontend is never the last one up
+# and waits for every other role, and that a desired state names its `min_up` keys, is not a
+# rollout setting any more: the coordinator decides on no order of roles and no number of hosts
+# up.
+
+[[service]]
+name = "kbf"
+roles = ["frontend", "storage", "daemon", "mac-daemon"]

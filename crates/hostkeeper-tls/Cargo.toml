@@ -1,0 +1,30 @@
+[package]
+name = "hostkeeper-tls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The TLS server configuration of a listener whose certificate, key and client CA files are re-read while it serves."
+
+# The reloadable TLS configuration of a server listener: the files are read and checked as a
+# whole, a configuration is applied only if it works, and the one in use stays otherwise. It
+# builds `rustls` configurations (the ring provider) and opens no socket; the caller accepts
+# connections and calls `reload` on its own interval. It depends on no workspace crate.
+[dependencies]
+rustls = { workspace = true, features = ["tls12"] }
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+rcgen.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync", "time"] }
+tokio-rustls.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

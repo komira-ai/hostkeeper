@@ -1,0 +1,102 @@
+{
+ "from": "kbf-coordinator/src/decide_golden_tests.rs::a_rollback_follows_the_same_rules (first fleet of the test)",
+ "steps": [
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "s1",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "s2",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "s3",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "f1",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "f2",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "desired",
+   "body": "{\"version\":\"1.0\",\"min_up\":{\"storage\":2,\"frontend\":1}}",
+   "expect_status": 200,
+   "expect_body": "{\"version\":\"1.0\",\"max_updating\":{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2},\"min_up\":{\"storage\":2,\"frontend\":1}}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "s1",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"update\",\"version\":\"1.0\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "s2",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "s3",
+   "role": "storage",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "f1",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  },
+  {
+   "at_secs": 2000,
+   "call": "heartbeat",
+   "host": "f2",
+   "role": "frontend",
+   "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\"}",
+   "expect_status": 200,
+   "expect_body": "{\"reply\":\"nothing\"}"
+  }
+ ]
+}

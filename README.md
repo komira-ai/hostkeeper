@@ -13,12 +13,14 @@ It is planned as:
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
-**hostkeeper is pre-release.** There is no release yet, and the one program, `hostkeeper daemon`,
-serves its admin socket's `Status` and runs no order yet (see [Running the daemon](#running-the-daemon)).
-The parts listed above are being moved here from [kbf](https://github.com/komira-ai/kbf), where
-they are developed today. So far this repository holds the generic half of the host updater,
-moved from kbf ([MIGRATION.md](MIGRATION.md)), the first part of the daemon, and the build, lint
-and coverage tooling:
+**hostkeeper is pre-release.** There is no release yet. Two programs are built from source: the
+one host program, `hostkeeper daemon`, which serves its admin socket's `Status` and runs no order
+yet (see [Running the daemon](#running-the-daemon)), and the update coordinator,
+`hostkeeper-coordinator serve`. The parts listed above are being moved here from
+[kbf](https://github.com/komira-ai/kbf), where they are developed today. So far this repository
+holds the generic half of the host updater and its coordinator, moved from kbf
+([MIGRATION.md](MIGRATION.md)), the first part of the daemon, and the build, lint and coverage
+tooling:
 
 | crate | what it holds |
 |---|---|
@@ -32,6 +34,10 @@ and coverage tooling:
 | [`hostkeeper`](crates/hostkeeper) | the binary, `hostkeeper daemon`, which only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), the command table of `hostkeeper ctl` generated from them, and the test that keeps them compatible |
 | [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, called over gRPC or the coordinator's HTTP/JSON gateway |
+| [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and the agent exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity of an updater, the secret-file rule |
+| [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
+| [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
+| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services it manages and the roles they run on (a rollout file), the desired version of each service, the heartbeat endpoint and the private endpoint of CI and the operator (named operator tokens), the convergence of a fleet; run as `hostkeeper-coordinator serve` |
 | [`hostkeeper-launchd`](crates/hostkeeper-launchd) | the macOS side behind existing ports: labels and plists, the `launchctl` port and its reader of `launchctl print`, the observer's service manager and process probe, and the unit control of the linking side, tested against fakes ([macOS](docs/macos.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui): every call it makes is a method of the protobuf descriptors, its sources keep no token and load nothing from another origin, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; not shipped |
@@ -39,8 +45,9 @@ and coverage tooling:
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
 no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
-the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. No
-coordinator serves it yet.
+the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. The
+coordinator serves it under `/ui/` of its private listener when started with `--ui-dir`
+([docs/ui-serving.md](docs/ui-serving.md)).
 
 The design is [docs/design/host-updates.md](docs/design/host-updates.md).
 

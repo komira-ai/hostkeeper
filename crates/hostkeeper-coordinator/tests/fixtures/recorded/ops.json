@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "hosts": {
+    "s1": {
+      "labels": {
+        "rack": "r1"
+      }
+    }
+  },
+  "excluded": [
+    {
+      "service": "kbf",
+      "node_id": "s2",
+      "reason": "bad disk"
+    }
+  ],
+  "services": {
+    "kbf": {
+      "halt": {
+        "node_id": "s1",
+        "check": "disk_tainted",
+        "target": "2.0"
+      },
+      "halt_acked": [],
+      "last_good": null,
+      "bad": []
+    }
+  },
+  "audit": [
+    {
+      "seq": 1,
+      "by": "operator",
+      "action": "exclude",
+      "service": "kbf",
+      "node_id": "s2",
+      "reason": "bad disk"
+    },
+    {
+      "seq": 2,
+      "by": "operator",
+      "action": "set_labels",
+      "node_id": "s1"
+    },
+    {
+      "seq": 3,
+      "by": "coordinator",
+      "action": "halt",
+      "service": "kbf",
+      "node_id": "s1",
+      "reason": "disk_tainted"
+    }
+  ]
+}
