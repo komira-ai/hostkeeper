@@ -2,8 +2,14 @@
 //!
 //! - **Heartbeat** (mutual TLS, updaters): `POST /v1/heartbeat` with the heartbeat as JSON;
 //!   the answer is the reply as JSON. The caller is the certificate's updater identity
-//!   ([`identity_of`]); a certificate that names none is refused with 403 before the body
-//!   is read.
+//!   ([`Coordinator::identify`]: the farm CA's subjectAltNames, or, with enrollment, the host a
+//!   certificate of the coordinator's CA names); no certificate, or one that names none, is
+//!   refused with 403 `forbidden` before the body is read. With enrollment the listener lets a
+//!   connection without a client certificate through the handshake (for `Enroll` and `Poll`),
+//!   so this refusal is the route's own. A host an operator denied is refused with 403
+//!   `denied`: before the body is read once its deny row is final, and after it while it
+//!   retires, when its heartbeat is heard for its final report only
+//!   ([`Coordinator::final_report`]).
 //! - **Private** (TLS, no client certificate; `Surface::Control`): the listener of
 //!   `--private-listen`, which serves CI's OIDC calls and the operator's. `POST /v1/desired` with
 //!   CI's OIDC token as the bearer and the desired state as JSON; `GET /v1/status` with an
@@ -22,8 +28,11 @@
 //!
 //! An answer of the API is JSON (a file under `/ui/` is the file's bytes), and an error is
 //! `{"error":"<code>"}` with a code from a closed set: never a claim value, a path or the text
-//! of an internal error. A heartbeat that lists no services, at a coordinator with no legacy
-//! service, is a bad request.
+//! of an internal error. A desired state may name the digest of its version's package
+//! (`release_digest`, 64 lowercase hex characters); a version the coordinator refuses is
+//! answered with its reason as the code: `unparseable_version` (400), and
+//! `below_min_version`, `bad_version` and `digest_conflict` (409). A heartbeat that lists no
+//! services, at a coordinator with no legacy service, is a bad request.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,7 +45,7 @@ use hyper::header::{AUTHORIZATION, CONTENT_TYPE};
 use hyper::{Method, Request, Response, StatusCode};
 use serde::Serialize;
 
-use crate::identity::identity_of;
+use crate::enrollment::Admission;
 use crate::ops::OperateError;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
 
@@ -58,6 +67,9 @@ pub const MAX_DESIRED_BYTES: usize = 4096;
 /// The most bytes of an operator action read.
 pub const MAX_OPERATOR_BYTES: usize = 4096;
 
+/// The error code of a heartbeat from a host an operator denied (`COORDINATOR_REFUSAL_DENIED`).
+pub const DENIED: &str = "denied";
+
 /// Which listener a request came in on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
@@ -72,7 +84,8 @@ pub type Peer = Option<Arc<[u8]>>;
 
 type Answer = Response<Full<Bytes>>;
 
-type BoxError = Box<dyn std::error::Error + Send + Sync>;
+/// The error of a request body.
+pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 fn json<T: Serialize>(status: StatusCode, value: &T) -> Answer {
     let body = serde_json::to_vec(value).unwrap_or_default();
@@ -103,7 +116,16 @@ where
     B: Body,
     B::Error: Into<BoxError>,
 {
-    let body = Limited::new(request.into_body(), limit);
+    read_body(request.into_body(), limit, patience).await
+}
+
+/// `body`, if it is at most `limit` bytes and all of it arrives within `patience`.
+pub(crate) async fn read_body<B>(body: B, limit: usize, patience: Duration) -> Option<Bytes>
+where
+    B: Body,
+    B::Error: Into<BoxError>,
+{
+    let body = Limited::new(body, limit);
     tokio::time::timeout(patience, body.collect())
         .await
         .ok()?
@@ -191,10 +213,7 @@ where
     B: Body,
     B::Error: Into<BoxError>,
 {
-    let identity = match peer
-        .as_deref()
-        .map(|der| identity_of(der, coordinator.prefixes()))
-    {
+    let identity = match peer.as_deref().map(|der| coordinator.identify(der)) {
         Some(Ok(identity)) => identity,
         Some(Err(why)) => {
             tracing::warn!(%why, "refused a heartbeat: the certificate is no updater's");
@@ -203,6 +222,14 @@ where
         None => {
             tracing::warn!("refused a heartbeat: no client certificate");
             return error(StatusCode::FORBIDDEN, "forbidden");
+        }
+    };
+    let retiring = match coordinator.admission(&identity) {
+        Admission::Admitted => false,
+        Admission::Retiring => true,
+        Admission::Denied => {
+            tracing::warn!(node_id = %identity.host_id, "refused a heartbeat: the host is denied");
+            return error(StatusCode::FORBIDDEN, DENIED);
         }
     };
     let beat = read(request, MAX_HEARTBEAT_BYTES, patience)
@@ -220,6 +247,12 @@ where
             }
             if let Some(why) = extras_dropped {
                 coordinator.note_extras_dropped(&identity, &why, &extras_dropped_facts);
+            }
+            if retiring {
+                // Heard for its final report only: a slot it held is freed once the report is
+                // final, and the host is refused all the same.
+                coordinator.final_report(identity, beat);
+                return error(StatusCode::FORBIDDEN, DENIED);
             }
             match coordinator.heartbeat(identity, beat) {
                 Ok(answer) => json(StatusCode::OK, &answer),
@@ -251,6 +284,16 @@ where
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(SetError::Invalid(_)) => error(StatusCode::BAD_REQUEST, "bad_request"),
+        Err(why @ SetError::UnparseableVersion) => error(
+            StatusCode::BAD_REQUEST,
+            why.reason().unwrap_or("bad_request"),
+        ),
+        Err(
+            why @ (SetError::BelowMinVersion | SetError::BadVersion | SetError::DigestConflict),
+        ) => {
+            tracing::warn!(%why, "refused a desired state");
+            error(StatusCode::CONFLICT, why.reason().unwrap_or("conflict"))
+        }
         Err(why @ (SetError::Store(_) | SetError::Ops(_))) => {
             tracing::error!(%why, "the desired state could not be stored");
             error(StatusCode::INTERNAL_SERVER_ERROR, "internal")

@@ -17,7 +17,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use hostkeeper_coordinator::desired::DesiredStore;
-use hostkeeper_coordinator::ops::{OpsError, OpsStore};
+use hostkeeper_coordinator::ops::{AuditEntry, FailureAck, OpsError, OpsStore, Write};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use support::readers::Readers;
@@ -353,41 +353,64 @@ async fn an_automatic_rollback_writes_its_marks_within_kbfs_readers(readers: &Re
     );
 }
 
-/// CI setting by hand the version the coordinator marked bad lifts the mark and acknowledges
-/// the failure reports standing for it, one for each host, with the whole report: the ops file
-/// with its `failure_acked` is within kbf's readers.
-async fn an_override_of_a_bad_version_writes_failure_acks_within_kbfs_readers(readers: &Readers) {
+/// CI setting by hand the version the coordinator marked bad is refused (`bad_version`) and
+/// changes no file; the acks an override writes (one for each host that failed, with the whole
+/// report) put in the ops file beside the marks are within kbf's readers.
+async fn a_refused_set_of_a_bad_version_and_failure_acks_are_within_kbfs_readers(
+    readers: &Readers,
+) {
     let rig = rolled_back("state-failure-ack").await;
+    let ops_path = rig.dir.path().join("desired.json.ops");
+    let before = (bytes(&rig, "desired.json"), bytes(&rig, "desired.json.ops"));
     rig.at(2_040);
     let (code, body) = rig.desired(TWO).await;
-    assert_eq!(code, 200, "{body}");
+    assert_eq!((code, body.as_str()), (409, r#"{"error":"bad_version"}"#));
+    assert_eq!(
+        (bytes(&rig, "desired.json"), bytes(&rig, "desired.json.ops")),
+        before,
+        "a refused set changes no file"
+    );
+    let report = |text: &str| -> hostkeeper_wire::wire::UpdateResult {
+        serde_json::from_str(text).expect("a report")
+    };
+    let acks = [
+        (
+            "d1",
+            report(
+                r#"{"target":"2.0","outcome":"failed","phase":"after_commit","class":"release"}"#,
+            ),
+        ),
+        (
+            "d2",
+            report(r#"{"target":"2.0","outcome":"failed","phase":"gate_release"}"#),
+        ),
+    ];
+    OpsStore::open(&ops_path)
+        .expect("the ops file")
+        .change(
+            Write::BeforeMemory,
+            AuditEntry::new("operator", "unmark_bad"),
+            |state| {
+                let marks = state.services.entry("kbf".to_owned()).or_default();
+                marks.bad.clear();
+                marks.failure_acked = acks
+                    .iter()
+                    .map(|(node, report)| FailureAck {
+                        node_id: (*node).to_owned(),
+                        report: report.clone(),
+                    })
+                    .collect();
+            },
+        )
+        .expect("written");
     check_ops(&rig, readers);
     check_desired(&rig, readers, "desired-single");
-    let ops = parse(&rig.dir.path().join("desired.json.ops"));
-    let marks = &ops["services"]["kbf"];
-    assert_eq!(marks["bad"], json!([]), "the override lifts the mark");
-    let acks = marks["failure_acked"].as_array().expect("the acks");
-    assert_eq!(acks.len(), 2, "one for each host that failed 2.0");
-    let report = |host: &str| {
-        acks.iter()
-            .find(|ack| ack["node_id"] == host)
-            .map(|ack| ack["report"].clone())
-    };
+    let ops = parse(&ops_path);
     assert_eq!(
-        report("d1"),
-        Some(
-            json!({"target": "2.0", "outcome": "failed", "phase": "after_commit", "class": "release"})
-        )
-    );
-    assert_eq!(
-        report("d2"),
-        Some(json!({"target": "2.0", "outcome": "failed", "phase": "gate_release"}))
-    );
-    assert_eq!(audited(&ops).last(), Some(&("ci", "unmark_bad")));
-    assert_eq!(
-        parse(&rig.dir.path().join("desired.json"))["version"],
-        "2.0",
-        "CI's version is the desired state"
+        ops["services"]["kbf"]["failure_acked"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
     );
 }
 
@@ -527,7 +550,7 @@ async fn state_files_written_by_kbf_are_read_and_the_reverse_holds_by_schema_rul
     kbf_ops_files_are_read_and_rewritten_within_kbfs_readers(&readers).await;
     what_this_coordinator_writes_is_within_kbfs_readers(&readers).await;
     an_automatic_rollback_writes_its_marks_within_kbfs_readers(&readers).await;
-    an_override_of_a_bad_version_writes_failure_acks_within_kbfs_readers(&readers).await;
+    a_refused_set_of_a_bad_version_and_failure_acks_are_within_kbfs_readers(&readers).await;
     limits_for_a_custom_role_are_written_within_kbfs_readers(&readers).await;
     a_second_halt_report_and_the_clear_are_written_within_kbfs_readers(&readers).await;
     a_newer_ops_file_is_refused_and_left_alone();
@@ -606,4 +629,50 @@ fn the_mirror_of_kbfs_readers_refuses_what_they_refuse() {
     let mut stray = desired.clone();
     stray["services"]["kbf"]["version2"] = json!("3");
     assert!(readers.check("MapFile", &stray, "desired").is_err());
+}
+
+/// Names the readers of the release before that refuse the keys this coordinator adds, and
+/// those that skip them. The desired-state file's readers (`desired-single` and `desired-map`)
+/// were strict, and refuse `release_digest` and `digests` once CI sends a digest: a coordinator
+/// rolled back below this one refuses to start rather than run without the digests. With no
+/// digest neither key is written (`an_old_state_file_still_reads` in the unit tests). The halts
+/// file's reader was lenient and skips `origin` on a halt, keeping the record.
+///
+/// Catches: a new key put in a file whose earlier reader is strict where it was not meant to be,
+/// or a halts record that the earlier reader would pass over.
+#[tokio::test]
+async fn the_new_keys_are_refused_only_by_the_readers_that_were_strict() {
+    let readers = Readers::recorded();
+    let spec = Spec::recorded().with_oidc_services(&["kbf", "tierstore"]);
+    let rig = Rig::new("state-new-keys", spec);
+    let digest = "ab".repeat(32);
+    let single = format!(
+        r#"{{"version":"2.0","min_up":{{"storage":0,"frontend":0}},"release_digest":"{digest}"}}"#
+    );
+    let (code, body) = rig.desired(&single).await;
+    assert_eq!(code, 200, "{body}");
+    let state = parse(&rig.dir.path().join("desired.json"));
+    assert_eq!(state["digests"]["2.0"], digest.as_str());
+    let refused = readers
+        .check(readers.reader_of("desired-single"), &state, "desired.json")
+        .expect_err("the single state's reader is strict");
+    assert!(refused.contains("digests is a key"), "{refused}");
+
+    let map = format!(
+        r#"{{"service":"tierstore","version":"2.0","min_up":{{}},"release_digest":"{digest}"}}"#
+    );
+    let (code, body) = rig.desired(&map).await;
+    assert_eq!(code, 200, "{body}");
+    let state = parse(&rig.dir.path().join("desired.json"));
+    let refused = readers
+        .check(readers.reader_of("desired-map"), &state, "desired.json")
+        .expect_err("the map's reader is strict");
+    assert!(refused.contains("digests is a key"), "{refused}");
+
+    let mut halts: Value =
+        serde_json::from_slice(&recorded_bytes("ops.json.halts")).expect("kbf's halts file");
+    halts["services"]["kbf"]["halt"]["origin"] = json!("updater");
+    readers
+        .check(readers.reader_of("halts"), &halts, "halts")
+        .expect("the halts file's reader is lenient");
 }

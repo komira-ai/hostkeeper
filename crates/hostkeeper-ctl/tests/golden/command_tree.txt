@@ -130,6 +130,19 @@ flag enrollment approve --role STRING
 flag enrollment approve --services STRING
 flag enrollment approve --replace true|false
 flag enrollment approve --reason STRING
+command enrollment add-record /hostkeeper.operator.v1.Enrollment/AddRecord
+flag enrollment add-record --host-id STRING
+flag enrollment add-record --role STRING
+flag enrollment add-record --data-macs STRING
+flag enrollment add-record --bmc-mac STRING
+flag enrollment add-record --serial STRING
+flag enrollment add-record --notes STRING
+command enrollment list-records /hostkeeper.operator.v1.Enrollment/ListRecords
+flag enrollment list-records --limit UINT32
+flag enrollment list-records --page-token STRING
+command enrollment remove-record /hostkeeper.operator.v1.Enrollment/RemoveRecord
+flag enrollment remove-record --host-id STRING
+flag enrollment remove-record --reason STRING
 flag hosts exclude --abandon true|false
 command hosts abort /hostkeeper.operator.v1.Hosts/Abort
 flag hosts abort --node-id STRING

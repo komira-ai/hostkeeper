@@ -1,0 +1,14 @@
+# A service repository's view of the harness: a crate outside this workspace (its own empty
+# `[workspace]` table makes it its own root) that depends on `hostkeeper-hook` by git tag, with
+# the line `docs/conformance.md` gives. `tests/outside_consumer.rs` builds and runs a copy of it
+# offline, with that line's source replaced by a path to this checkout. Not a member of the workspace and not published.
+[package]
+name = "consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dev-dependencies]
+hostkeeper-hook = { git = "https://github.com/komira-ai/hostkeeper", tag = "v0.1.0", features = ["conformance"] }

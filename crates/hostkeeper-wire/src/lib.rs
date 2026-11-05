@@ -28,6 +28,8 @@ mod secret_tests;
 #[cfg(test)]
 mod wire_absent_tests;
 #[cfg(test)]
+mod wire_acks_tests;
+#[cfg(test)]
 mod wire_agent_tests;
 #[cfg(test)]
 mod wire_dropped_facts_tests;
@@ -43,3 +45,5 @@ mod wire_service_facts_tests;
 mod wire_size_tests;
 #[cfg(test)]
 mod wire_tests;
+#[cfg(test)]
+mod wire_verdict_tests;

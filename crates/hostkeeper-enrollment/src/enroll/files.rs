@@ -111,6 +111,14 @@ impl RequestRow {
             .map_or("", |claims| &claims.machine_id)
     }
 
+    /// The Mac serial number the request claims; empty when it claims none.
+    pub fn mac_serial(&self) -> &str {
+        self.pb
+            .claims
+            .as_ref()
+            .map_or("", |claims| &claims.mac_serial)
+    }
+
     /// The host this request renews.
     pub fn renewal_of(&self) -> Result<Option<HostId>, StoreError> {
         optional_host(&self.path, &self.pb.renewal_of)
@@ -184,6 +192,11 @@ pub(crate) fn read_issued(path: &Path, bytes: &[u8]) -> Result<pb::Issued, Store
     decode(path, bytes, |m: &pb::Issued| m.schema)
 }
 
+/// The Mac nonce file `path`.
+pub(crate) fn read_mac_nonce(path: &Path, bytes: &[u8]) -> Result<pb::MacNonce, StoreError> {
+    decode(path, bytes, |m: &pb::MacNonce| m.schema)
+}
+
 /// The next serial of the counter file `path`.
 pub(crate) fn read_serial(path: &Path, bytes: &[u8]) -> Result<u64, StoreError> {
     let pb: pb::SerialCounter = decode(path, bytes, |m: &pb::SerialCounter| m.schema)?;
@@ -198,6 +211,7 @@ pub(crate) fn claims_to_pb(claims: &Claims) -> pb::Claims {
         addresses: claims.addresses.clone(),
         mac_serial: claims.mac_serial.clone(),
         mac_platform_uuid: claims.mac_platform_uuid.clone(),
+        bmc_mac: claims.bmc_mac.clone(),
     }
 }
 
@@ -209,6 +223,7 @@ pub(crate) fn claims_of_pb(claims: Option<&pb::Claims>) -> Claims {
         addresses: claims.addresses.clone(),
         mac_serial: claims.mac_serial.clone(),
         mac_platform_uuid: claims.mac_platform_uuid.clone(),
+        bmc_mac: claims.bmc_mac.clone(),
     })
 }
 

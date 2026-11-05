@@ -100,6 +100,7 @@ impl Spec {
             Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
             Duration::from_secs(30),
             oidc_now,
+            hostkeeper_oidc::testkit::spent(),
         );
         Coordinator::new(
             store,

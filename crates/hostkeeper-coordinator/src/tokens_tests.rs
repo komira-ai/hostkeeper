@@ -100,15 +100,20 @@ fn a_token_name_is_1_to_32_bytes_of_a_z_0_9_and_hyphen() {
     assert_eq!(TokenNameError::Grammar.to_string(), GRAMMAR);
 }
 
-/// Proves: `coordinator` and `ci` are not token names, since the audit uses them for changes
-/// that are not an operator's; a name that only starts with one is fine.
+/// Proves: `coordinator`, `ci` and `mdm-nonce` are not token names, since the audit uses them
+/// for changes that are not an operator's; a name that only starts with one is fine.
 ///
-/// Catches: an operator token named `ci` whose changes read as CI's in the audit.
+/// Catches: an operator token named `ci` whose changes read as CI's in the audit, or one named
+/// `mdm-nonce` whose approvals read as a Mac's automatic one.
 #[test]
 fn no_token_may_take_a_name_the_audit_uses_for_other_actors() {
     assert_eq!(
         "coordinator".parse::<TokenName>(),
         Err(TokenNameError::Reserved("coordinator"))
+    );
+    assert_eq!(
+        "mdm-nonce".parse::<TokenName>(),
+        Err(TokenNameError::Reserved("mdm-nonce"))
     );
     assert_eq!(
         "ci".parse::<TokenName>(),

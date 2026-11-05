@@ -68,6 +68,7 @@ fn mac_only() -> Claims {
         network_addresses: Vec::new(),
         mac_serial: Some("C02TEST0ABCD".into()),
         platform_uuid: Some("12345678-90AB-CDEF-1234-567890ABCDEF".into()),
+        bmc_mac: None,
     }
 }
 

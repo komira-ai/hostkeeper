@@ -24,6 +24,7 @@ const UNPACK: &str = "hostkeeper-unpack";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
+const PROTO: &str = "hostkeeper-proto";
 
 /// Per layer crate: the workspace crates its normal and build dependencies must be exactly.
 const LAYERS: [(&str, &[&str]); 10] = [
@@ -34,7 +35,7 @@ const LAYERS: [(&str, &[&str]); 10] = [
     (WIRE, &[]),
     (OIDC, &[]),
     (TLS, &[]),
-    (COORDINATOR, &[WIRE, OIDC, TLS]),
+    (COORDINATOR, &[WIRE, OIDC, TLS, ENROLLMENT, PROTO]),
     (UNPACK, &[CONFIG, HOOK, STEPS]),
     (ENROLLMENT, &[]),
 ];

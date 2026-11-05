@@ -10,22 +10,33 @@ use std::time::Duration;
 use hostkeeper_oidc::{Refusal, Verified, Verifier};
 use hostkeeper_wire::identity::SanPrefixes;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Agent, Answer, Heartbeat, LEGACY_AGENT_NAME, ServiceReply};
+use hostkeeper_wire::wire::{Answer, Heartbeat, ServiceReply, VerdictAck};
 use serde::Serialize;
 
-use crate::acks::{clear_bad, release_ack};
-use crate::converge::{Convergence, RoleCounts, converge_service, role_counts};
-use crate::decide::{Decision, Why};
+use crate::acks::release_ack;
+use crate::converge::{Convergence, role_counts};
+use crate::decide::Decision;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
-use crate::fleet::{Fleet, Host, Node};
+use crate::enrollment::Enrollment;
+use crate::fleet::{Fleet, Node, QUIET_START};
+use crate::force::end_by_ci;
 use crate::halt;
+use crate::holds::{alert_on_bad_version, marks_of, on_bad_version};
 use crate::identity::Identity;
-use crate::membership::{Member, Standing, account, deferred_count, members, standing};
-use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsState, OpsStore};
+use crate::membership::{Standing, members, standing};
+use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
+use crate::orders::Order;
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
+use crate::status::host_status;
 use crate::tokens::{OperatorTokens, TokenName};
 use crate::ui::UiDir;
+use crate::verdict_file::{self, VerdictFile};
+use enrollment_calls::Turn;
+
+pub use crate::status::{AgentStatus, HostStatus, ServiceHostStatus, ServiceStatus, Status};
+
+pub(crate) use crate::status::convergence_of;
 
 /// The time since the coordinator started.
 pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
@@ -39,7 +50,8 @@ pub const MAX_BEARER_BYTES: usize = 8192;
 #[error("it lists no services and no legacy service is set")]
 pub struct HeartbeatRefused;
 
-/// Why the desired state was not set.
+/// Why the desired state was not set. Every refusal is decided before anything changes: a
+/// refused set leaves the state file, the ops file and memory as they were.
 #[derive(Debug, thiserror::Error)]
 pub enum SetError {
     /// The caller has no valid CI token: no bearer, or the verifier refused it (the name is
@@ -55,12 +67,47 @@ pub enum SetError {
     /// The state file could not be written.
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// The ops file could not be written (the bad mark of the version could not be cleared).
+    /// The ops file could not be written: the desired state is set, and the halt the updater
+    /// raised, which the set lifts, stands. Setting the same state again is safe and tries the
+    /// lift again.
     #[error(transparent)]
     Ops(#[from] OpsError),
     /// The allow-list entry that admitted the token does not name this service.
     #[error("the token may not set this service")]
     Forbidden,
+    /// The version is below the service's `min_version`.
+    #[error("below_min_version: the version is below the service's min_version")]
+    BelowMinVersion,
+    /// The service's `version_scheme` cannot order the version.
+    #[error("unparseable_version: the service's version scheme cannot read the version")]
+    UnparseableVersion,
+    /// The version is marked bad: only the operator's unmark or a force lifts the mark.
+    #[error("bad_version: the version is marked bad")]
+    BadVersion,
+    /// CI set the version before with another package digest: a changed artifact for a version.
+    #[error("digest_conflict: the version was set before with another package digest")]
+    DigestConflict,
+}
+
+impl SetError {
+    /// The closed reason token of a refusal of the version itself (`below_min_version`,
+    /// `unparseable_version`, `bad_version`, `digest_conflict`), which the answer says; `None`
+    /// for every other error.
+    #[must_use]
+    pub const fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::BelowMinVersion => Some("below_min_version"),
+            Self::UnparseableVersion => Some("unparseable_version"),
+            Self::BadVersion => Some("bad_version"),
+            Self::DigestConflict => Some("digest_conflict"),
+            Self::Unauthorized(_)
+            | Self::Unavailable
+            | Self::Invalid(_)
+            | Self::Store(_)
+            | Self::Ops(_)
+            | Self::Forbidden => None,
+        }
+    }
 }
 
 /// Why a CI token was not accepted.
@@ -89,91 +136,6 @@ impl From<CiRefused> for SetError {
 #[error("unauthorized")]
 pub struct Unauthorized;
 
-/// One host in the status.
-#[derive(Debug, Serialize)]
-pub struct HostStatus {
-    /// The node id from its certificate.
-    pub node_id: String,
-    /// The agent that sent the heartbeat: its name and version, from the host's last
-    /// heartbeat.
-    pub agent: AgentStatus,
-    /// The host role from its certificate.
-    pub role: String,
-    /// Heartbeated within the down limit.
-    pub live: bool,
-    /// Live, healthy and not updating.
-    pub up: bool,
-    /// Holds an update slot for the service (one is live at a time across every service).
-    pub holds_slot: bool,
-    /// Whole seconds since its last heartbeat.
-    pub silent_secs: u64,
-    /// What it last said.
-    #[serde(flatten)]
-    pub beat: Heartbeat,
-}
-
-/// The agent of a host in the status: what its heartbeat's `agent` said, and, for an agent
-/// that predates the field, only the name it is counted under ([`LEGACY_AGENT_NAME`]).
-#[derive(Debug, PartialEq, Eq, Serialize)]
-pub struct AgentStatus {
-    /// The agent's name.
-    pub name: String,
-    /// The agent's version; left out when the heartbeat did not say.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<Version>,
-}
-
-impl AgentStatus {
-    /// The status of `agent`, if the heartbeat named one.
-    #[must_use]
-    pub fn of(agent: Option<&Agent>) -> Self {
-        match agent {
-            Some(agent) => Self {
-                name: agent.name.as_str().to_owned(),
-                version: Some(agent.version.clone()),
-            },
-            None => Self {
-                name: LEGACY_AGENT_NAME.to_owned(),
-                version: None,
-            },
-        }
-    }
-}
-
-/// One host in the status of a service: the host as that service sees it, and why it is
-/// not ordered.
-#[derive(Debug, Serialize)]
-pub struct ServiceHostStatus {
-    /// The host, with `up` and `holds_slot` counted for the service.
-    #[serde(flatten)]
-    pub host: HostStatus,
-    /// The rule that holds an order for the service back at this moment, or `None` when the
-    /// host would be ordered at its next heartbeat. It is spelled in snake case: a gate such as
-    /// `no_slot` or a skip such as `up_to_date`.
-    pub hold: Option<Why>,
-}
-
-/// One service in the status.
-#[derive(Debug, Serialize)]
-pub struct ServiceStatus {
-    /// Its desired state, if one was ever set.
-    pub desired: Option<Desired>,
-    /// The counts of every role that has a host heartbeating the service, in role order.
-    pub roles: Vec<RoleCounts>,
-    /// Every host that heartbeated the service, by node id.
-    pub hosts: Vec<ServiceHostStatus>,
-    /// The nodes the service does not count, by why: excluded (with the operator's reason),
-    /// absent, missing or unmanaged. Left out when there are none.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub members: Vec<Member>,
-    /// How many of `hosts` are up for the service.
-    pub up: usize,
-    /// How many of `hosts` hold one of the service's update slots.
-    pub slots_held: usize,
-    /// What `GET /v1/convergence` answers for the service.
-    pub convergence: Convergence,
-}
-
 /// Why the convergence was not read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ConvergenceError {
@@ -197,36 +159,6 @@ pub struct Set {
     pub dropped_roles: Vec<String>,
 }
 
-/// What an operator reads.
-#[derive(Debug, Serialize)]
-pub struct Status {
-    /// The desired state of the legacy service, if there is one and one was ever set.
-    pub desired: Option<Desired>,
-    /// The desired state of every service, by name.
-    pub services: BTreeMap<String, Desired>,
-    /// The coordinator is still within its quiet period and orders nothing.
-    pub quiet: bool,
-    /// Heartbeats since the coordinator started whose `services` list was bad and was
-    /// dropped: the host was answered as a host that lists no services.
-    pub services_dropped: u64,
-    /// Heartbeats since the coordinator started whose optional fact was bad and was dropped,
-    /// by the fact's name (`step`, `commit`, ...): one per beat per fact. Absent while none.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub extras_dropped: BTreeMap<&'static str, u64>,
-    /// Every host of the legacy service heard from since the coordinator started, by node id
-    /// (none without a legacy service).
-    pub hosts: Vec<HostStatus>,
-    /// Every service the coordinator manages, by name: its desired state, the
-    /// counts of its hosts per role, its hosts, and its convergence.
-    pub per_service: BTreeMap<String, ServiceStatus>,
-    /// What operators changed ([`crate::ops`]): exclusions, labels, the audit ring. Left out
-    /// until the first change, so a farm that never uses it reads the status it always did.
-    #[serde(skip_serializing_if = "OpsState::is_empty")]
-    pub ops: OpsState,
-    /// The commit this coordinator was built from ([`crate::BUILD_COMMIT`]).
-    pub commit: &'static str,
-}
-
 /// The features this coordinator advertises to an agent that announces `agent_features`.
 ///
 /// Each name is added in the change that implements what it names (`halt-v1`; the others
@@ -234,12 +166,33 @@ pub struct Status {
 /// heartbeat's `deferred` report ends the order, holds no slot and backs the host off
 /// ([`crate::defer`]). `halt-v1`: the clear generations of [`crate::halt`]. `heartbeat-v2`:
 /// selector membership, hosts that are `missing`, `absent` or `unmanaged`
-/// ([`crate::membership`]).
+/// ([`crate::membership`]). `verdict-acks-v1`: the acks of the verdicts stored
+/// ([`crate::verdict_file`]).
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
     crate::membership::HEARTBEAT_V2,
+    verdict_file::FEATURE,
 ];
+
+/// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
+/// each with the feature: the one place that says which. An older agent reads the answer
+/// strictly and refuses a field it does not know, so a field listed here is left out of the
+/// answer to an agent that did not announce its feature, and to every agent while this
+/// coordinator does not advertise it ([`FEATURES`]). A field not listed is sent to every agent.
+pub const GATED_FIELDS: &[(&str, &str)] =
+    &[("halts", halt::FEATURE), ("acks", verdict_file::FEATURE)];
+
+/// Whether the answer field `field` goes to an agent whose announced features this coordinator
+/// also advertises are `agreed` (none for an agent that announced none): yes for a field
+/// [`GATED_FIELDS`] does not list, and for one it lists only when its feature is agreed.
+#[must_use]
+pub fn sends(field: &str, agreed: Option<&[String]>) -> bool {
+    GATED_FIELDS
+        .iter()
+        .find(|(name, _)| *name == field)
+        .is_none_or(|(_, feature)| agreed.is_some_and(|names| names.iter().any(|n| n == feature)))
+}
 
 /// How long a host's warn about one dropped fact is silent after it was logged.
 const EXTRAS_LOG_EVERY: Duration = Duration::from_secs(3600);
@@ -254,18 +207,22 @@ struct ExtrasDropped {
 
 /// The coordinator.
 pub struct Coordinator {
-    fleet: Mutex<Fleet>,
-    desired: DesiredStore,
-    services: Services,
+    pub(crate) fleet: Mutex<Fleet>,
+    pub(crate) desired: DesiredStore,
+    pub(crate) services: Services,
     legacy: Option<String>,
     prefixes: SanPrefixes,
-    ops: OpsStore,
+    /// Shared with enrollment, which audits its approvals there.
+    pub(crate) ops: Arc<OpsStore>,
+    pub(crate) verdicts: VerdictFile,
     verifier: Arc<Verifier>,
     tokens: OperatorTokens,
-    clock: Clock,
+    pub(crate) clock: Clock,
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
     features: Vec<String>,
+    /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
+    enrollment: Option<Arc<Enrollment>>,
     ui: Option<UiDir>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
@@ -302,22 +259,35 @@ impl Coordinator {
     ) -> Self {
         let started = clock();
         Self {
-            fleet: Mutex::new(Fleet::new(started)),
+            fleet: Mutex::new(Fleet::new(started, QUIET_START)),
             desired,
             services: Services::default(),
             legacy: None,
             prefixes: SanPrefixes::default(),
-            ops: OpsStore::volatile(),
+            ops: Arc::new(OpsStore::volatile()),
+            verdicts: VerdictFile::volatile(),
             verifier,
             tokens: operator.into(),
             clock,
             services_dropped: AtomicU64::new(0),
             extras: Mutex::new(ExtrasDropped::default()),
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
+            enrollment: None,
             ui: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
+    }
+
+    /// The same coordinator ordering nothing for `quiet` after its start instead of
+    /// [`QUIET_START`] (`--quiet-secs`, whose floor [`crate::config::build`] checks).
+    #[must_use]
+    pub fn with_quiet(mut self, quiet: Duration) -> Self {
+        self.fleet
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_quiet(quiet);
+        self
     }
 
     /// The same coordinator over `services` instead of none.
@@ -378,7 +348,22 @@ impl Coordinator {
     /// The same coordinator over `ops` instead of a store that keeps nothing.
     #[must_use]
     pub fn with_ops(mut self, ops: OpsStore) -> Self {
-        self.ops = ops;
+        self.ops = Arc::new(ops);
+        if let Some(enrollment) = &self.enrollment {
+            enrollment.audit_to(Arc::clone(&self.ops));
+        }
+        self
+    }
+
+    /// The same coordinator over the verdicts of `verdicts` instead of a store that keeps
+    /// nothing: those it counted before its restart count again.
+    #[must_use]
+    pub fn with_verdicts(mut self, verdicts: VerdictFile) -> Self {
+        let fleet = self.fleet.get_mut().unwrap_or_else(PoisonError::into_inner);
+        for (service, host, report) in verdicts.counted() {
+            fleet.restore_verdict(&service, host, report);
+        }
+        self.verdicts = verdicts;
         self
     }
 
@@ -422,7 +407,16 @@ impl Coordinator {
             .for_each(|waits| {
                 let _ = waits.send(SetProgress::Waits);
             });
-        self.fleet.lock().unwrap_or_else(PoisonError::into_inner)
+        self.lock_fleet()
+    }
+
+    /// The fleet's lock, which every decision and order is made under, with the operator's
+    /// marks the decisions read refreshed from the ops store ([`crate::holds::marks_of`]). The
+    /// lock order is the fleet's, then the ops store's.
+    pub(crate) fn lock_fleet(&self) -> std::sync::MutexGuard<'_, Fleet> {
+        let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        fleet.set_marks(self.ops.read(marks_of));
+        fleet
     }
 
     /// The ops store.
@@ -479,11 +473,38 @@ impl Coordinator {
     /// [`HeartbeatRefused`]: the heartbeat lists no services (none, or a list that was bad and
     /// dropped) and no legacy service is set.
     pub fn heartbeat(&self, who: Identity, beat: Heartbeat) -> Result<Answer, HeartbeatRefused> {
+        self.answer(who, beat, false, None)
+            .map(|(answer, _)| answer)
+    }
+
+    /// [`Self::heartbeat`] for a transport that carries typed orders (the `Order` of
+    /// `hostkeeper.agent.v1`): with the answer, the operator's order for the host when one is
+    /// due ([`crate::orders`]: an `abort` queued for it, or the `force` of a standing force),
+    /// which is sent instead of an update; the answer's reply is then `nothing`.
+    ///
+    /// # Errors
+    /// [`HeartbeatRefused`], as for [`Self::heartbeat`].
+    pub fn heartbeat_with_orders(
+        &self,
+        who: Identity,
+        beat: Heartbeat,
+    ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
+        self.answer(who, beat, true, None)
+    }
+
+    fn answer(
+        &self,
+        who: Identity,
+        beat: Heartbeat,
+        orders: bool,
+        machine_id: Option<&str>,
+    ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
         if self.legacy.is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
+        let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
-        let reply = self.reply_to(who, beat);
+        let (reply, order, acks) = self.reply_to(who, beat, orders, turn);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -495,20 +516,32 @@ impl Coordinator {
         });
         // The generations only to an agent that announced `halt-v1` and a coordinator that
         // advertises it: an older agent's strict reader refuses the field.
-        let halts = features
-            .as_ref()
-            .filter(|names| names.iter().any(|name| name == halt::FEATURE))
-            .map_or_else(BTreeMap::new, |_| {
-                halt::generations(&self.ops, &self.services)
-            });
-        Ok(Answer {
+        let halts = if sends("halts", features.as_deref()) {
+            halt::generations(&self.ops, &self.services)
+        } else {
+            BTreeMap::new()
+        };
+        let acks = if sends("acks", features.as_deref()) {
+            acks
+        } else {
+            Vec::new()
+        };
+        let answer = Answer {
             reply,
             features,
             halts,
-        })
+            acks,
+        };
+        Ok((answer, order))
     }
 
-    fn reply_to(&self, who: Identity, beat: Heartbeat) -> ServiceReply {
+    fn reply_to(
+        &self,
+        who: Identity,
+        mut beat: Heartbeat,
+        orders: bool,
+        turn: Turn,
+    ) -> (ServiceReply, Option<Order>, Vec<VerdictAck>) {
         let now = (self.clock)();
         let legacy = self.legacy.as_deref();
         let announced = beat.services.clone().unwrap_or_default();
@@ -526,7 +559,19 @@ impl Coordinator {
         // The halts are noted under the fleet's lock, which every decision and order below is
         // made under: a halt is never raised between another heartbeat's decision to order and
         // its order. The lock order is the fleet's, then the ops store's, as everywhere.
-        let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut fleet = self.lock_fleet();
+        // An agent acknowledged its verdicts is read as still reporting the last one, so every
+        // rule below reads what it read while the agent resent it.
+        let acking =
+            verdict_file::asks(&beat) && self.features.iter().any(|f| f == verdict_file::FEATURE);
+        let mut heard = if acking {
+            verdict_file::fill(&self.verdicts, legacy, &who.host_id, &mut beat)
+        } else {
+            Vec::new()
+        };
+        let announced = beat.services.clone().unwrap_or_default();
+        // A halt whose write failed is written again at every heartbeat until it lands.
+        self.ops.retry_unwritten(now);
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
         let platform = beat.platform;
         let ops = self.ops.state();
@@ -541,6 +586,11 @@ impl Coordinator {
         // occupies, so an update it was ordered before it left holds its slot until it ends.
         let dropped =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Dropped;
+        // Only a verdict the fleet takes in is stored and acknowledged.
+        heard.retain(|(name, _)| match self.services.get(name) {
+            Some(def) => counted(def) || dropped(def),
+            None => Some(name.as_str()) == legacy,
+        });
         if let Some(name) = legacy {
             match self.services.get(name) {
                 Some(def) if dropped(def) => {
@@ -572,6 +622,9 @@ impl Coordinator {
             }
         }
         fleet.note_node(who.host_id.clone(), node);
+        if turn == Turn::Hold {
+            return (ServiceReply::Nothing, None, Vec::new());
+        }
         let mut names: Vec<&str> = legacy
             .into_iter()
             .chain(announced.iter().map(|one| one.name.as_str()))
@@ -581,7 +634,26 @@ impl Coordinator {
         // The hosts' words are in: record the last good versions and roll back what failed,
         // before the orders below read the desired states.
         for def in names.iter().filter_map(|name| self.services.get(name)) {
+            // Only the verdicts about the desired version count, and not those an override
+            // acknowledged; the others are forgotten.
+            if let Some(want) = self.desired.get(&def.name) {
+                let acked = self.ops.marks(&def.name).failure_acked;
+                fleet.keep_verdicts_of(&def.name, &want.version, &acked);
+            }
             reconcile(def, &self.ops, &self.desired, &fleet, now);
+            self.ops.read(|state| {
+                alert_on_bad_version(&mut fleet, state, &def.name, &who.host_id);
+            });
+        }
+        // The verdicts are durable before the answer acknowledges them, and before any order.
+        let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);
+        // The operator's orders go first, past the gate, to a transport that carries them.
+        if orders
+            && let Some(order) = self
+                .ops
+                .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))
+        {
+            return (ServiceReply::Nothing, Some(order), acks);
         }
         let desired = self.desired.all();
         for name in names {
@@ -603,23 +675,23 @@ impl Coordinator {
                     continue;
                 }
                 fleet.order(name, who.host_id.clone(), version.clone(), now);
-                return ServiceReply::Update {
-                    service: (Some(name) != legacy).then(|| name.to_owned()),
-                    version,
-                };
+                let service = (Some(name) != legacy).then(|| name.to_owned());
+                return (ServiceReply::Update { service, version }, None, acks);
             }
         }
-        ServiceReply::Nothing
+        (ServiceReply::Nothing, None, acks)
     }
 
     /// The CI token in `bearer`, checked by the verifier.
-    async fn ci(&self, bearer: Option<&str>) -> Result<Verified, CiRefused> {
+    pub(crate) async fn ci(&self, bearer: Option<&str>) -> Result<Verified, CiRefused> {
         let token = bearer
             .filter(|t| t.len() <= MAX_BEARER_BYTES)
             .ok_or(CiRefused::Unauthorized("missing"))?;
         match self.verifier.verify(token).await {
             Ok(verified) => Ok(verified),
-            Err(Refusal::KeysUnavailable) => Err(CiRefused::Unavailable),
+            Err(Refusal::KeysUnavailable | Refusal::ReplayCacheUnavailable) => {
+                Err(CiRefused::Unavailable)
+            }
             Err(refusal) => Err(CiRefused::Unauthorized(refusal.name())),
         }
     }
@@ -627,6 +699,15 @@ impl Coordinator {
     /// Sets the desired state from `body`, if `bearer` is a GitHub Actions OIDC token the
     /// allow-list accepts. The token is checked before the body is parsed or any state is touched
     /// (the transport has already read the body, at most [`crate::http::MAX_DESIRED_BYTES`]).
+    ///
+    /// The version is refused, before anything changes, when it is below the service's
+    /// `min_version`, when the service's `version_scheme` cannot read it, when it is marked bad
+    /// (only the operator's unmark or a force lifts a mark; CI does not), and when CI set it
+    /// before with another package digest. A body that names a digest (`release_digest`) records
+    /// the version and the digest in the service's registry in the same write as the state
+    /// ([`DesiredStore::record`]); setting the same version with the same digest again changes
+    /// nothing. A set of a version other than the target of a halt the updater raised lifts that
+    /// halt ([`halt::lift_by_ci`]); a hook's halt stays.
     ///
     /// # Errors
     /// [`SetError`].
@@ -667,15 +748,36 @@ impl Coordinator {
             );
             return Err(SetError::Forbidden);
         }
-        // CI naming a version by hand lifts its mark. The mark goes first: a set that fails
-        // after it leaves nothing blocked, and the reverse would leave a wanted version that
-        // the next beat rolls back. The fleet's lock is held to the end of the set: a heartbeat
-        // plans a rollback and writes it under that lock, so it cannot write a rollback from
-        // the state it read over the version CI stores meanwhile.
+        // The fleet's lock is held to the end of the set: a heartbeat plans a rollback and
+        // writes it under that lock, so it cannot write a rollback from the state it read over
+        // the version CI stores meanwhile, and the refusals below are decided on the marks and
+        // the registry the set is made over. The desired state goes first and the lift of an
+        // updater's halt after it: a lift that fails leaves the service halted (the safe side),
+        // and the reverse would order the halted target again.
         {
-            let fleet = self.lock_fleet_for_set();
-            clear_bad(&self.ops, &fleet, &service, &desired.version)?;
-            self.desired.set(&service, desired.clone())?;
+            let _fleet = self.lock_fleet_for_set();
+            let def = self
+                .services
+                .get(&service)
+                .ok_or(SetError::Invalid(DesiredError::UnknownService))?;
+            self.refuse(def, &desired)?;
+            let marks = self.ops.marks(&service);
+            self.desired
+                .record(&service, desired.clone(), |v| kept(&marks, v))?;
+            // CI's set of another version ends a force that stands ([`crate::force`]), before
+            // the lift: a lift that fails then leaves no force ordering the old version.
+            end_by_ci(
+                &self.ops,
+                &service,
+                &desired.version,
+                &verified.job_workflow_ref,
+            )?;
+            halt::lift_by_ci(
+                &self.ops,
+                &service,
+                &desired.version,
+                &verified.job_workflow_ref,
+            )?;
         }
         tracing::info!(
             workflow = %verified.job_workflow_ref,
@@ -687,6 +789,32 @@ impl Coordinator {
             desired,
             dropped_roles,
         })
+    }
+
+    /// Why CI may not set `desired` for `service`, if it may not: the refusals of
+    /// [`Self::set_desired`], in that order.
+    fn refuse(&self, def: &ServiceDef, desired: &Desired) -> Result<(), SetError> {
+        let (service, version) = (def.name.as_str(), &desired.version);
+        if !def.version_scheme.parses(version) {
+            return Err(SetError::UnparseableVersion);
+        }
+        if def
+            .min_version
+            .as_ref()
+            .is_some_and(|floor| !version.at_least(floor))
+        {
+            return Err(SetError::BelowMinVersion);
+        }
+        if self.ops.marks(service).bad.contains(version) {
+            return Err(SetError::BadVersion);
+        }
+        let registered = self.desired.digests(service).get(version).cloned();
+        if let (Some(before), Some(now)) = (registered, desired.release_digest.as_ref())
+            && before != *now
+        {
+            return Err(SetError::DigestConflict);
+        }
+        Ok(())
     }
 
     /// The name of the operator token in `bearer`: the token is compared by its SHA-256 in
@@ -721,7 +849,7 @@ impl Coordinator {
     fn reconcile(&self) {
         let now = (self.clock)();
         let ops = self.ops.state();
-        let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut fleet = self.lock_fleet();
         let dropped: Vec<(String, hostkeeper_wire::HostId)> = self
             .services
             .defs()
@@ -745,7 +873,7 @@ impl Coordinator {
     pub fn status(&self, bearer: Option<&str>) -> Result<Status, Unauthorized> {
         self.operator(bearer)?;
         let now = (self.clock)();
-        let fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        let fleet = self.lock_fleet();
         let hosts = self
             .legacy
             .iter()
@@ -778,6 +906,7 @@ impl Coordinator {
                             now,
                         )
                         .why(),
+                        held_on_bad_version: on_bad_version(&fleet, &ops, &def.name, id),
                     })
                     .collect();
                 let up = hosts.iter().filter(|h| h.host.up).count();
@@ -835,52 +964,19 @@ impl Coordinator {
             .get(service)
             .ok_or(ConvergenceError::UnknownService)?;
         let now = (self.clock)();
-        let fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        let fleet = self.lock_fleet();
         let desired = self.desired.get(service);
         let ops = self.ops.state();
         Ok(convergence_of(def, desired.as_ref(), &fleet, &ops, now))
     }
 }
 
-/// The host `id` as the status shows it for `service`: whether it is up and holds a slot
-/// counted for that service.
-fn host_status(
-    fleet: &Fleet,
-    service: &str,
-    id: &hostkeeper_wire::HostId,
-    host: &Host,
-    now: Duration,
-) -> HostStatus {
-    // The flattened heartbeat carries no `agent` of its own: the status says it as `agent`.
-    let mut beat = host.beat.clone();
-    beat.agent = None;
-    HostStatus {
-        node_id: id.to_string(),
-        agent: AgentStatus::of(fleet.node(id).and_then(|node| node.agent.as_ref())),
-        role: host.role_name().to_owned(),
-        live: host.is_live(now),
-        up: fleet.is_up(service, id, host, now),
-        holds_slot: fleet.holds_slot(service, id, host, now),
-        silent_secs: now.saturating_sub(host.seen).as_secs(),
-        beat,
-    }
+/// Whether the registry of digests keeps `version` at its cap, whatever its age: the service's
+/// last good version and the versions marked bad, which `marks` holds ([`crate::registry`]).
+pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
+    marks.last_good.as_ref() == Some(version) || marks.bad.contains(version)
 }
 
-/// Where the hosts of `def` stand: the one answer both `GET /v1/convergence` and the status
-/// give. Every service is counted by [`converge_service`]: every live host at the desired
-/// version and none updating. A halted service is `halted` whatever its hosts say.
-pub(crate) fn convergence_of(
-    def: &ServiceDef,
-    desired: Option<&Desired>,
-    fleet: &Fleet,
-    ops: &OpsState,
-    now: Duration,
-) -> Convergence {
-    let convergence = converge_service(def, desired, fleet, now);
-    let deferred = deferred_count(def, fleet, convergence.desired.as_ref(), now);
-    let convergence = account(convergence, def, &members(def, fleet, ops, now), deferred);
-    match halt::standing(ops, &def.name) {
-        Some(halt) => convergence.halted(halt),
-        None => convergence,
-    }
-}
+/// The calls of the heartbeat path that ask enrollment.
+#[path = "service_enrollment.rs"]
+mod enrollment_calls;

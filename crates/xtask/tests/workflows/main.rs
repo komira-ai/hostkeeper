@@ -5,6 +5,10 @@
 mod lint;
 mod release;
 mod release_tests;
+mod set_desired;
+mod set_desired_tests;
+mod verify_doc;
+mod verify_doc_tests;
 mod yaml;
 
 use std::path::PathBuf;
@@ -585,5 +589,21 @@ fn a_matrix_include_the_lint_cannot_read_is_refused_and_a_static_one_passes() {
             ),
         ),
         &[],
+    );
+}
+
+#[test]
+fn the_deny_self_hosted_runners_flag_is_not_a_self_hosted_runner() {
+    // Catches: the self-hosted rule refusing `gh attestation verify --deny-self-hosted-runners`,
+    // which refuses self-hosted runners, and the word passing beside that flag.
+    let step = "      - run: cargo test --workspace --locked\n";
+    let flag = "      - run: gh attestation verify x.tar.gz --deny-self-hosted-runners\n";
+    assert_problems(&with(step, flag), &[]);
+    assert_problems(
+        &with(
+            step,
+            "      - run: gh attestation verify x.tar.gz --deny-self-hosted-runners self-hosted\n",
+        ),
+        &["the document names self-hosted"],
     );
 }

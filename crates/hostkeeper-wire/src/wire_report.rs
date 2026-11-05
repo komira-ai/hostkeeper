@@ -68,6 +68,48 @@ impl From<Token> for String {
     }
 }
 
+/// The most bytes of an [`OrderId`].
+pub const MAX_ORDER_ID: usize = 64;
+
+/// The id of the order a verdict ends, as the coordinator named it: 1 to [`MAX_ORDER_ID`] bytes
+/// of ASCII letters, digits, `.`, `_` and `-`. The coordinator counts a verdict once per host,
+/// order id and try ([`crate::wire::UpdateResult::order_try`]).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct OrderId(String);
+
+impl OrderId {
+    /// `text` as an order id, if it is one.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let ok = (1..=MAX_ORDER_ID).contains(&text.len())
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+        ok.then(|| Self(text.to_owned()))
+    }
+
+    /// The text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for OrderId {
+    type Error = &'static str;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::parse(&text).ok_or("not an order id: [A-Za-z0-9._-], 1 to 64 bytes")
+    }
+}
+
+impl From<OrderId> for String {
+    fn from(id: OrderId) -> Self {
+        id.0
+    }
+}
+
 /// Whether `text` is 1 to `max` bytes of lowercase letters, digits and `_`.
 fn is_word(text: &str, max: usize) -> bool {
     (1..=max).contains(&text.len())
@@ -231,6 +273,22 @@ fn check_halts(halts: &BTreeMap<String, u64>) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The acks of an answer: at most [`MAX_ACKS`], each of a service name, none twice.
+fn check_acks(acks: &[VerdictAck]) -> Result<(), &'static str> {
+    if acks.len() > MAX_ACKS {
+        return Err("too many acks");
+    }
+    for (i, ack) in acks.iter().enumerate() {
+        if !is_service_name(&ack.service) {
+            return Err("an ack's service is not a service name");
+        }
+        if acks[..i].contains(ack) {
+            return Err("an ack is listed twice");
+        }
+    }
+    Ok(())
+}
+
 /// The step durations of a beat: at most [`MAX_STEP_SECS`] steps.
 pub(crate) fn step_secs_text<'de, D: Deserializer<'de>>(
     d: D,
@@ -251,11 +309,11 @@ pub(crate) fn is_false(flag: &bool) -> bool {
 /// The coordinator's answer to a heartbeat: the reply, and, to an agent that announced
 /// `agent_features`, the features the coordinator supports.
 ///
-/// Written flat: the reply's keys, then `features` when there is one, then `halts` when
-/// there are any. An agent that never announced features reads only
+/// Written flat: the reply's keys, then `features` when there is one, then `halts` and `acks`
+/// when there are any. An agent that never announced features reads only
 /// [`Reply`](crate::wire::Reply) or [`ServiceReply`], both of which refuse an unknown field,
-/// so `features` is `None` and `halts` empty for it and the bytes are those of the reply
-/// alone. Equality with a reply compares the reply and ignores `features`.
+/// so `features` is `None` and `halts` and `acks` empty for it and the bytes are those of the
+/// reply alone. Equality with a reply compares the reply and ignores the rest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Answer {
     /// What to do.
@@ -270,6 +328,10 @@ pub struct Answer {
     /// a clear is not lost with a heartbeat and a coordinator restart does not forget it.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub halts: BTreeMap<String, u64>,
+    /// The verdicts of the heartbeat that the coordinator has stored: the agent sends none of
+    /// them again. Only for an agent that announced [`VERDICT_ACKS_FEATURE`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub acks: Vec<VerdictAck>,
 }
 
 impl Answer {
@@ -280,8 +342,32 @@ impl Answer {
             reply,
             features: None,
             halts: BTreeMap::new(),
+            acks: Vec::new(),
         }
     }
+}
+
+/// The feature an agent announces to be acknowledged its verdicts ([`Answer::acks`]); one that
+/// does not is answered as before, and resends each verdict until it reports another.
+pub const VERDICT_ACKS_FEATURE: &str = "verdict-acks-v1";
+
+/// The most acks of an answer: one verdict of each service a heartbeat lists, at most
+/// [`MAX_SERVICES`], and the legacy service's.
+pub const MAX_ACKS: usize = MAX_SERVICES + 1;
+
+/// A verdict the coordinator acknowledges: the service it is about, and the order id and try
+/// it ends ([`crate::wire::UpdateResult::order_id`], [`crate::wire::UpdateResult::order_try`]).
+/// The service is named because an order id is the coordinator's per service: two services
+/// may each have a `force-1`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerdictAck {
+    /// The service the verdict is about.
+    pub service: String,
+    /// The order the verdict ends.
+    pub order_id: OrderId,
+    /// The try of the order, from 1.
+    pub order_try: u64,
 }
 
 impl PartialEq<ServiceReply> for Answer {
@@ -296,7 +382,8 @@ impl PartialEq<crate::wire::Reply> for Answer {
     }
 }
 
-/// An answer as it is read: [`ServiceReply`]'s fields and `features`, and no other.
+/// An answer as it is read: [`ServiceReply`]'s fields, `features`, `halts` and `acks`, and no
+/// other.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawAnswer {
@@ -306,6 +393,8 @@ struct RawAnswer {
     features: Option<Vec<String>>,
     #[serde(default)]
     halts: BTreeMap<String, u64>,
+    #[serde(default)]
+    acks: Vec<VerdictAck>,
 }
 
 impl<'de> Deserialize<'de> for Answer {
@@ -316,12 +405,14 @@ impl<'de> Deserialize<'de> for Answer {
             check_features(names).map_err(D::Error::custom)?;
         }
         check_halts(&raw.halts).map_err(D::Error::custom)?;
+        check_acks(&raw.acks).map_err(D::Error::custom)?;
         let reply = ServiceReply::from_parts(raw.reply, raw.service, raw.version)
             .map_err(D::Error::custom)?;
         Ok(Self {
             reply,
             features: raw.features,
             halts: raw.halts,
+            acks: raw.acks,
         })
     }
 }

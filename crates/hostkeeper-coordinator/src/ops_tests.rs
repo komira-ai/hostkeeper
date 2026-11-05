@@ -173,6 +173,7 @@ fn the_file_reads_and_writes_every_field_of_the_schema() {
                 check: "tainted".to_owned(),
                 target: version("2.0"),
                 report: Some(halt_report("2.0")),
+                origin: crate::ops::HaltOrigin::Hook,
             }),
             halt_acked: vec![HaltAck {
                 node_id: "n4".to_owned(),
@@ -188,6 +189,9 @@ fn the_file_reads_and_writes_every_field_of_the_schema() {
             last_good: Some(version("1.0")),
             bad: vec![version("1.9")],
             failure_acked: Vec::new(),
+            force: None,
+            force_generation: 0,
+            bad_by_force: Vec::new(),
         },
     );
     let mut seven = entry("exclude");

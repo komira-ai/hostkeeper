@@ -15,9 +15,11 @@ use hostkeeper_daemon::halt::HaltStore;
 use hostkeeper_daemon::testing::Counted;
 use hostkeeper_daemon::{Daemon, Dirs};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
+use hostkeeper_observe::{HealthView, Observation, ServiceState as Observed, VersionView};
 use hostkeeper_proto::hostkeeper::agent::v1::{FailureClass, FailurePhase};
 use hostkeeper_proto::hostkeeper::local::v1::{
-    AbortRequest, ClearRecordRequest, RecordProblem, StatusRequest, StepOutcome, StepRecord,
+    AbortRequest, ClearRecordRequest, Liveness, RecordProblem, ServiceState, StatusRequest,
+    StepOutcome, StepRecord, Unhealthy,
 };
 use hostkeeper_steps::record::RECORD_FILE;
 use support::{OWN, Rig, client, config, d, update};
@@ -115,7 +117,7 @@ async fn status_reports_running_version_last_result_and_held_halt() {
     );
     assert_eq!(
         done.running_version.as_ref().map(|v| v.as_str()),
-        Some("2.0.0")
+        Some("2.1.0")
     );
     assert_eq!(
         done.last_result().map(|f| f.verdict),
@@ -128,13 +130,27 @@ async fn status_reports_running_version_last_result_and_held_halt() {
     assert_eq!(busy.last_result(), None);
     assert_eq!(
         busy.running_version.as_ref().map(|v| v.as_str()),
-        Some(support::BASE)
+        Some("2.0.0"),
+        "the switch to the target comes before the cutover that is held"
     );
     assert_eq!(halted.last_result().map(|f| f.verdict), Some(Verdict::Halt));
     assert_eq!(halted.held_halt, Some(3));
     assert!(matches!(broken.record, RecordState::Unreadable(_)));
     assert!(!broken.step_running());
     assert_eq!(newer.record, RecordState::Newer(9));
+    assert_eq!(
+        done.observation,
+        Some(Observation {
+            service: "done".to_owned(),
+            state: Observed::Unmonitored,
+            version: VersionView::NotLive,
+            health: HealthView::NotProbed,
+            recorded: Some("2.1.0".to_owned()),
+        })
+    );
+    for unobserved in [idle, broken, newer] {
+        assert_eq!(unobserved.observation, None, "{}", unobserved.service);
+    }
 
     let (mut client, _) = connect(Arc::clone(&daemon), Peer { uid: Some(0) });
     let wire = client
@@ -179,7 +195,19 @@ async fn status_reports_running_version_last_result_and_held_halt() {
         (StepOutcome::Failed as i32, FailurePhase::Halt as i32)
     );
     assert_eq!(done.record_problem, RecordProblem::Unspecified as i32);
-    assert!(done.state.is_none());
+    assert_eq!(
+        done.state,
+        Some(ServiceState {
+            liveness: Liveness::Unmonitored as i32,
+            version: None,
+            healthy: false,
+            unhealthy: Unhealthy::Unspecified as i32,
+            unit: String::new(),
+        })
+    );
+    for unobserved in [idle, broken, newer] {
+        assert_eq!(unobserved.state, None, "{}", unobserved.service);
+    }
 
     gate.release();
     running.join().expect("the running order");

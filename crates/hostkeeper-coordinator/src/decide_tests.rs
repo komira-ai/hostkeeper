@@ -196,7 +196,7 @@ fn min_up_is_kept_and_holds_no_order() {
 #[test]
 fn no_order_is_given_within_thirty_seconds_of_starting() {
     let d = desired("2.0", 1, 1);
-    let mut f = Fleet::new(secs(1_000));
+    let mut f = Fleet::new(secs(1_000), crate::fleet::QUIET_START);
     f.record_in(LEGACY, id("d1"), role("daemon"), beat("1.0"), secs(1_029));
     assert_eq!(decide(&d, &f, &id("d1"), secs(1_000)), Reply::Nothing);
     assert_eq!(decide(&d, &f, &id("d1"), secs(1_029)), Reply::Nothing);
@@ -386,7 +386,7 @@ fn pool_wants(text: &str) -> BTreeMap<String, Desired> {
 const POOL_PLAIN: &str = r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#;
 
 fn builders(hosts: &[&str]) -> Fleet {
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for host in hosts {
         fleet.record_named_in("pool", id(host), "builder", beat("1.0"), NOW);
     }
@@ -423,7 +423,7 @@ fn a_host_whose_role_no_definition_names_is_never_ordered() {
 
     let other =
         Services::parse("[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n").expect("services");
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     fleet.record_in("other", id("s1"), role("storage"), beat("1.0"), NOW);
     fleet.record_in("other", id("d1"), role("daemon"), beat("1.0"), NOW);
     let all = BTreeMap::from([(

@@ -1161,7 +1161,26 @@ name = "hostkeeper"
 version = "0.1.0"
 dependencies = [
  "hostkeeper-daemon",
+ "hostkeeper-proto",
  "hostkeeper-testkit",
+]
+
+[[package]]
+name = "hostkeeper-ci"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "hostkeeper-ctl",
+ "hostkeeper-proto",
+ "hostkeeper-testkit",
+ "prost",
+ "rcgen",
+ "rustls-pki-types",
+ "serde_json",
+ "thiserror",
+ "tonic",
+ "ureq",
 ]
 
 [[package]]
@@ -1178,16 +1197,22 @@ dependencies = [
 name = "hostkeeper-coordinator"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "bytes",
  "clap",
  "futures",
+ "getrandom 0.4.3",
+ "hostkeeper-enrollment",
  "hostkeeper-oidc",
+ "hostkeeper-proto",
  "hostkeeper-testkit",
  "hostkeeper-tls",
  "hostkeeper-wire",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "prost",
+ "prost-types",
  "rcgen",
  "rustls",
  "serde",
@@ -1198,8 +1223,10 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml",
+ "tonic",
  "tracing",
  "tracing-subscriber",
+ "x509-parser",
 ]
 
 [[package]]
@@ -1226,18 +1253,35 @@ dependencies = [
 name = "hostkeeper-daemon"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
+ "bytes",
  "clap",
+ "hex",
+ "hostkeeper-ci",
  "hostkeeper-config",
+ "hostkeeper-coordinator",
+ "hostkeeper-ctl",
  "hostkeeper-daemon",
+ "hostkeeper-enroll",
  "hostkeeper-hook",
+ "hostkeeper-link",
+ "hostkeeper-observe",
+ "hostkeeper-oidc",
+ "hostkeeper-package",
  "hostkeeper-placed",
  "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",
+ "hostkeeper-unpack",
+ "hostkeeper-wire",
+ "http-body-util",
+ "hyper",
  "hyper-util",
  "libc",
  "rustix",
+ "rustls-pki-types",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -1253,12 +1297,18 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "hostkeeper-config",
+ "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "p256",
+ "rcgen",
  "rustix",
+ "rustls",
  "sha2",
  "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
  "x509-cert",
 ]
 
@@ -3771,6 +3821,7 @@ dependencies = [
  "flate2",
  "hex",
  "hostkeeper-config",
+ "hostkeeper-daemon",
  "saphyr-parser",
  "serde_json",
  "sha2",

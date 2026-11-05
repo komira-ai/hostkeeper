@@ -64,6 +64,39 @@ pub enum VersionScheme {
     Semver,
 }
 
+impl VersionScheme {
+    /// Whether the scheme can order `version`, which [`Version::parse`] has accepted already.
+    ///
+    /// `semver`: the version starts with its release numbers, one or more decimal numbers split
+    /// by single dots, each fitting 64 bits and without a leading zero (`0` itself is one), and
+    /// then ends or goes on with `-`, `+` or `~` (a pre-release, a build, a Debian revision):
+    /// `1.0`, `0.1.10+g0123456789ab-8` and `1.2.3~rc1-1` are read; `1..2`, `1.`, `1.0a`,
+    /// `01.2` and a number past 64 bits are not, since [`Version::release_numbers`] would order
+    /// them by a guess.
+    #[must_use]
+    pub fn parses(self, version: &Version) -> bool {
+        match self {
+            Self::Semver => {
+                let text = version.as_str();
+                let end = text
+                    .find(|c: char| !c.is_ascii_digit() && c != '.')
+                    .unwrap_or(text.len());
+                let (numbers, rest) = text.split_at(end);
+                let number = |part: &str| {
+                    !part.is_empty()
+                        && (part == "0" || !part.starts_with('0'))
+                        && part.parse::<u64>().is_ok()
+                };
+                numbers.split('.').all(number)
+                    && rest
+                        .chars()
+                        .next()
+                        .is_none_or(|c| matches!(c, '-' | '+' | '~'))
+            }
+        }
+    }
+}
+
 /// A service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceDef {

@@ -126,12 +126,13 @@ pub fn desired(target: &str, storage: u32, frontend: u32) -> Desired {
         version: version(target),
         max_updating: RoleLimits::max_updating_default(),
         min_up: RoleLimits::from([("storage", storage), ("frontend", frontend)]),
+        release_digest: None,
     }
 }
 
 /// A fleet started at time zero whose hosts all heartbeated at `seen`.
 pub fn fleet(seen: Duration, hosts: &[(&str, RoleName, Heartbeat)]) -> Fleet {
-    let mut fleet = Fleet::new(Duration::ZERO);
+    let mut fleet = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     for (name, role, b) in hosts {
         fleet.record_in(LEGACY, id(name), role.clone(), b.clone(), seen);
     }
@@ -153,6 +154,7 @@ use hostkeeper_oidc::{AllowList, FetchCause, FetchError, KeySource, OidcConfig, 
 use crate::desired::DesiredStore;
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
+use crate::verdict_file::{VerdictFile, verdicts_path};
 
 /// The operator token of the tests.
 pub const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
@@ -160,6 +162,11 @@ pub const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
 /// The ops file of a rig's directory: the default of `--ops-file` beside `desired.json`.
 pub fn ops_of(dir: &Scratch) -> OpsStore {
     OpsStore::open(&dir.path().join("desired.json.ops")).expect("an ops store")
+}
+
+/// The file of verdicts of a rig's directory, beside `desired.json`.
+pub fn verdicts_of(dir: &Scratch) -> VerdictFile {
+    VerdictFile::open(&verdicts_path(&dir.path().join("desired.json"))).expect("a verdict file")
 }
 
 /// A coordinator whose clock the test sets, over a state file in a directory of its own.
@@ -202,6 +209,7 @@ pub fn unreachable_verifier() -> Arc<Verifier> {
         Arc::new(Unreachable),
         Duration::from_secs(30),
         issuer_now,
+        hostkeeper_oidc::testkit::spent(),
     ))
 }
 
@@ -260,6 +268,7 @@ impl Rig {
             .with_legacy_service(Some(LEGACY.to_owned()))
             .with_prefixes(kbf_prefixes())
             .with_ops(ops_of(dir))
+            .with_verdicts(verdicts_of(dir))
     }
 
     /// A coordinator on the same state file whose CI tokens are checked against the
@@ -273,6 +282,7 @@ impl Rig {
             Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
             Duration::from_secs(30),
             oidc_now,
+            hostkeeper_oidc::testkit::spent(),
         );
         Coordinator::new(
             store,
@@ -284,6 +294,7 @@ impl Rig {
         .with_legacy_service(Some(LEGACY.to_owned()))
         .with_prefixes(kbf_prefixes())
         .with_ops(ops_of(dir))
+        .with_verdicts(verdicts_of(dir))
     }
 
     pub fn restart(&mut self) {

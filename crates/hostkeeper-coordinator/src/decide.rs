@@ -6,7 +6,8 @@
 //! every rule below holds, checked in this order (the role is the host's role in that service's
 //! definition):
 //!
-//! 1. the coordinator has been up for [`crate::fleet::QUIET_START`];
+//! 1. the coordinator has been up for its quiet start (`--quiet-secs`, by default
+//!    [`crate::fleet::QUIET_START`]);
 //! 2. the host is not already updating, and no other service updates on it or has an order
 //!    outstanding for it (a host does one update at a time);
 //! 3. the host is behind: it does not run the desired version (a rollback is a desired
@@ -31,9 +32,18 @@
 //!    ([`Fleet::occupants_of`]).
 //!
 //! A version marked bad ([`crate::reconcile`]) is ordered to nobody, whatever the rules above
-//! say, and is held at [`Gate::Bad`] after the quiet start.
+//! say, and is held at [`Gate::Bad`] after the quiet start; so is a desired version below the
+//! service's `min_version` ([`Gate::BelowMinVersion`]), however it got into the state file: CI's
+//! set refuses one, and a hand edit of the file does not reach a host.
 //! A host that reports the service `absent` (declared, never registered) is held back before
 //! all of these but the first, unless the definition says `install_when_absent` ([`Skip::Absent`]).
+//!
+//! A pair an operator holds ([`crate::holds`]: the host, its role at the time of the decision,
+//! or the whole fleet) is told nothing, after a halt and the membership check and before every
+//! numbered rule above ([`Gate::Held`]): no update, however far behind it is. It takes no slot
+//! of rule 7 and never bakes; an update it was running, or an order it was given, when the hold
+//! was set still counts until it ends. The pairs a standing force orders
+//! ([`crate::force`]) take no slot either.
 //!
 //! The decision records nothing: the caller notes an `Update` it returns with
 //! [`Fleet::order`], under the same lock, so the next host's decision sees it. A host that
@@ -87,15 +97,20 @@ pub enum Gate {
     /// The service is halted: a host reported a failure no version can repair and an operator
     /// has not cleared it. Checked before every other rule ([`crate::halt::decide`]).
     Halted,
+    /// An operator holds the pair ([`crate::holds`]): it is ordered nothing until the hold is
+    /// released. Checked right after the host is found a member of the service.
+    Held,
     /// The desired version is marked bad ([`crate::reconcile`]).
     Bad,
+    /// The desired version is below the service's `min_version`: no order goes below the floor.
+    BelowMinVersion,
     /// The host is updating this service.
     Updating,
     /// The host is updating another service or has an order outstanding for one.
     BusyElsewhere,
     /// A host, of any role, holds an update slot for some service (one live update at a time).
     NoSlot,
-    /// The coordinator started less than [`crate::fleet::QUIET_START`] ago.
+    /// The coordinator started less than its quiet start (`--quiet-secs`) ago.
     Quiet,
     /// The service's canary gate is closed and the host is not one of the canaries.
     CanaryWait,
@@ -233,8 +248,15 @@ fn first_hold(
         .is_some_and(|r| r.outcome == Outcome::Failed && r.target == desired.version);
     let live = live(services, all, fleet, service, id, now);
     let rules = [
+        (fleet.is_held(service, id), Decision::Gate(Gate::Held)),
         (fleet.is_quiet(now), Decision::Gate(Gate::Quiet)),
         (bad.contains(&desired.version), Decision::Gate(Gate::Bad)),
+        (
+            def.min_version
+                .as_ref()
+                .is_some_and(|floor| !desired.version.at_least(floor)),
+            Decision::Gate(Gate::BelowMinVersion),
+        ),
         (
             host.beat.health == Health::Absent && !def.install_when_absent,
             Decision::Skip(Skip::Absent),
@@ -279,7 +301,9 @@ struct Live {
 }
 
 /// The updates live across every service the coordinator manages and every role, leaving out
-/// only the asking host `id`'s own slot for the asked `service`. A service with no desired
+/// the asking host `id`'s own slot for the asked `service` and the pairs a standing force orders
+/// ([`crate::force`]: a force takes no slot). A pair an operator holds counts only while it runs
+/// an update or has an order outstanding ([`crate::holds`]). A service with no desired
 /// state has nothing to bake, so only its slots count.
 fn live(
     services: &Services,
@@ -297,11 +321,21 @@ fn live(
         for (o, h) in fleet
             .occupants_of(name)
             .filter(|(o, _)| !(name == service && *o == id))
+            .filter(|(o, _)| !fleet.is_forced(name, o))
         {
-            if fleet.holds_slot(name, o, h, now) {
+            // A held pair takes no slot and never bakes: only an update it was already running,
+            // or an order it was given, when the hold was set counts, until it ends.
+            let held = fleet.is_held(name, o);
+            let slot = if held {
+                h.beat.updating.is_some() || fleet.is_ordered(name, o, now)
+            } else {
+                fleet.holds_slot(name, o, h, now)
+            };
+            if slot {
                 holding.insert(o);
-            } else if want
-                .is_some_and(|w| fleet.is_baking(name, o, h, &w.version, def.bake_beats, now))
+            } else if !held
+                && want
+                    .is_some_and(|w| fleet.is_baking(name, o, h, &w.version, def.bake_beats, now))
             {
                 baking.insert(o);
             }

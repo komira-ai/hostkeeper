@@ -8,7 +8,9 @@
 //! limit on `exp - iat`), `repository_id`, `job_workflow_ref`, `ref` and `environment`,
 //! `event_name`, `runner_environment`, and last the `jti`, which is remembered until the
 //! token's `exp` so a second use is refused. Nothing in a token is read before its
-//! signature holds. `sub` is not matched: it is a string of several parts that GitHub can
+//! signature holds. The spent `jti`s are kept by the caller's [`SpentJtis`] too, so that a
+//! restart of the caller opens no window to replay a token: an id is recorded there before the
+//! token is accepted, and one that cannot be recorded refuses the token. `sub` is not matched: it is a string of several parts that GitHub can
 //! change the form of; `repository_id` and `job_workflow_ref` say the same exactly.
 
 mod config;
@@ -17,6 +19,7 @@ mod jwt;
 mod keys;
 
 use std::collections::BTreeMap;
+use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -31,6 +34,22 @@ pub use keys::{KeyCache, KeySource};
 
 /// The most `jti`s remembered. A full cache refuses new tokens rather than forget one.
 pub const MAX_REMEMBERED_JTIS: usize = 10_000;
+
+/// Where the spent `jti`s are kept beyond the verifier's memory, so that a restart does not
+/// forget them: the caller's port (the coordinator keeps them in a file).
+pub trait SpentJtis: Send + Sync {
+    /// Every id spent before, each with the second (since the epoch) until which it is
+    /// refused. The verifier reads it once, when it is made, and drops the ids already
+    /// expired.
+    fn load(&self) -> Vec<(String, u64)>;
+
+    /// Records that `jti` is spent until `until`, durably, before the token is accepted.
+    ///
+    /// # Errors
+    /// The id could not be recorded: the verifier refuses the token
+    /// ([`Refusal::ReplayCacheUnavailable`]).
+    fn record(&self, jti: &str, until: u64) -> io::Result<()>;
+}
 
 /// Why a token is refused. [`Refusal::name`] is what the caller is told; the claim values
 /// are never repeated back.
@@ -99,6 +118,10 @@ pub enum Refusal {
     /// The replay cache is full of live entries.
     #[error("too many live tokens")]
     ReplayCacheFull,
+    /// The `jti` could not be recorded as spent ([`SpentJtis::record`]): the token is refused
+    /// rather than accepted without a record a restart would keep.
+    #[error("the spent token ids cannot be recorded")]
+    ReplayCacheUnavailable,
 }
 
 impl Refusal {
@@ -127,6 +150,7 @@ impl Refusal {
             Self::Runner => "runner",
             Self::Replayed => "replayed",
             Self::ReplayCacheFull => "replay_cache_full",
+            Self::ReplayCacheUnavailable => "replay_cache_unavailable",
         }
     }
 }
@@ -169,6 +193,7 @@ pub struct Verifier {
     config: AllowList,
     keys: KeyCache,
     seen: Mutex<BTreeMap<String, u64>>,
+    spent: Arc<dyn SpentJtis>,
     clock: Clock,
 }
 
@@ -200,19 +225,30 @@ fn is_one_of(list: &[String], value: &str) -> bool {
 
 impl Verifier {
     /// A verifier for `config` (an [`AllowList`], or one [`OidcConfig`]) that reads keys from
-    /// `source`, refetching for an unknown `kid` at most once per `refetch_interval`, and
-    /// reads time from `clock`.
+    /// `source`, refetching for an unknown `kid` at most once per `refetch_interval`, reads
+    /// time from `clock`, and keeps the spent `jti`s in `spent` as well as in memory. The ids
+    /// `spent` holds are refused from the start, but for those already expired by `clock`,
+    /// which are dropped; none is dropped to make room, so a cache loaded full refuses new
+    /// tokens.
     #[must_use]
     pub fn new(
         config: impl Into<AllowList>,
         source: Arc<dyn KeySource>,
         refetch_interval: Duration,
         clock: Clock,
+        spent: Arc<dyn SpentJtis>,
     ) -> Self {
+        let now = clock();
+        let seen = spent
+            .load()
+            .into_iter()
+            .filter(|(_, until)| *until > now)
+            .collect();
         Self {
             config: config.into(),
             keys: KeyCache::new(source, refetch_interval),
-            seen: Mutex::new(BTreeMap::new()),
+            seen: Mutex::new(seen),
+            spent,
             clock,
         }
     }
@@ -327,7 +363,9 @@ impl Verifier {
         Ok(exp)
     }
 
-    /// Remembers `jti` until `exp` (plus the leeway the token is still accepted for).
+    /// Remembers `jti` until `exp` (plus the leeway the token is still accepted for): recorded
+    /// in [`SpentJtis`] first, and in memory only once it is recorded there. The memory's lock
+    /// is held across both, so the same id presented twice at once is spent once.
     fn spend(&self, jti: &str, exp: i64, now: u64) -> Result<(), Refusal> {
         let until = u64::try_from(exp).unwrap_or(0).saturating_add(LEEWAY_SECS);
         let mut seen = self
@@ -340,6 +378,10 @@ impl Verifier {
         }
         if seen.len() >= MAX_REMEMBERED_JTIS {
             return Err(Refusal::ReplayCacheFull);
+        }
+        if let Err(why) = self.spent.record(jti, until) {
+            tracing::error!(%why, "a spent token id could not be recorded: the token is refused");
+            return Err(Refusal::ReplayCacheUnavailable);
         }
         seen.insert(jti.to_owned(), until);
         Ok(())
@@ -366,3 +408,5 @@ mod tests;
 mod tests_edges;
 #[cfg(test)]
 mod tests_entries;
+#[cfg(test)]
+mod tests_spent;

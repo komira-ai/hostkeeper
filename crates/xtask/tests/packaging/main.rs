@@ -5,6 +5,7 @@
 //! defect on an altered text. Nothing here runs systemd, nfpm or a package manager.
 
 mod config_template;
+mod daemon_flags;
 mod directories;
 mod nfpm;
 mod overlay;

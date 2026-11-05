@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 use crate::names::Platform;
 use crate::version::Version;
 pub use crate::wire_report::{
-    Answer, Class, CommitState, DeferredReport, MAX_FEATURES, MAX_STEP_NAME, MAX_STEP_SECS,
-    MAX_TOKEN, Phase, StepName, StepRun, Token,
+    Answer, Class, CommitState, DeferredReport, MAX_ACKS, MAX_FEATURES, MAX_ORDER_ID,
+    MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, OrderId, Phase, StepName, StepRun, Token,
+    VERDICT_ACKS_FEATURE, VerdictAck,
 };
 use crate::wire_report::{features_text, is_false, lenient, or_default, step_secs_text};
 
@@ -85,10 +86,27 @@ pub struct UpdateResult {
         deserialize_with = "lenient"
     )]
     pub reason: Option<Token>,
+    /// The order this verdict ends ([`OrderId`]). Absent from an updater that predates it; a
+    /// value that is no order id reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub order_id: Option<OrderId>,
+    /// Which try of the order this verdict ends, from 1: a resend of the verdict keeps it and a
+    /// new try of the same order raises it. Absent from an updater that predates it; a value
+    /// that is no whole number reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub order_try: Option<u64>,
 }
 
 impl UpdateResult {
-    /// A result with no phase, class or reason: what an updater without them reports.
+    /// A result with no phase, class, reason or order: what an updater without them reports.
     #[must_use]
     pub fn new(target: Version, outcome: Outcome) -> Self {
         Self {
@@ -97,6 +115,8 @@ impl UpdateResult {
             phase: None,
             class: None,
             reason: None,
+            order_id: None,
+            order_try: None,
         }
     }
 }
