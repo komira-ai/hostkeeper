@@ -48,7 +48,7 @@ yet (see [Running the daemon](#running-the-daemon)), and the update coordinator,
 | [`hostkeeper-observe`](crates/hostkeeper-observe) | the service observer: liveness from the service manager, the version confirmed by the running executable, and the health URL |
 | [`hostkeeper-link`](crates/hostkeeper-link) | the daemon's heartbeat loop over ports: facts out, orders to the executor, verdicts resent until acknowledged; gRPC over mutual TLS |
 | [`hostkeeper-enroll`](crates/hostkeeper-enroll) | how a daemon gets and keeps its host certificate: the P-256 key, the request, the signed poll, and renewal at half life |
-| [`hostkeeper-launchd`](crates/hostkeeper-launchd) | the macOS side behind existing ports: launchd labels and plists, the `launchctl` port, service manager, unit control and process probe ([macOS](docs/macos.md)) |
+| [`hostkeeper-launchd`](crates/hostkeeper-launchd) | the macOS side behind existing ports: launchd labels and plists, the `launchctl` port, service manager, unit control, process probe and the step launcher (`LaunchdLauncher`) ([macOS](docs/macos.md)) |
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of the daemon's local admin socket (`hostkeeper.local.v1`), the command table of `hostkeeper ctl`, and the compatibility test |
 | [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, over gRPC or the coordinator's HTTP/JSON gateway |

@@ -10,9 +10,11 @@ use crate::check::{
     LAYERS, Layer, NOT_ABOVE, check, metadata_of, reaches_in, read_lock, rows_cover,
 };
 use crate::{
-    CONFIG_DEP, HOOK_DEP, PLACED_DEP, PROTO_DEP, TESTKIT_DEP, bare_crate, fixture, layered,
-    manifest_of, refused, steps_through_shim, vendored_dep,
+    CONFIG_DEP, HOOK_DEP, PLACED_DEP, PROTO_DEP, STEPS_DEP, TESTKIT_DEP, bare_crate, fixture,
+    layered, manifest_of, refused, steps_through_shim, vendored_dep,
 };
+
+const OBSERVE_DEP: &str = "hostkeeper-observe = { path = \"../hostkeeper-observe\" }\n";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -189,48 +191,89 @@ fn launchd_stays_above_steps_and_observe_in_the_rows() {
     }
 }
 
+/// The launchd crate's manifest without its edge to `cut`, which a fixture that points `cut` at
+/// launchd must drop: Cargo refuses the cycle.
+fn launchd_without(cut: &str) -> (String, String) {
+    let deps: String = [
+        ("hostkeeper-hook", HOOK_DEP),
+        ("hostkeeper-observe", OBSERVE_DEP),
+        ("hostkeeper-placed", PLACED_DEP),
+        ("hostkeeper-steps", STEPS_DEP),
+    ]
+    .iter()
+    .filter(|(name, _)| *name != cut)
+    .map(|(_, dep)| *dep)
+    .collect();
+    manifest_of(
+        "hostkeeper-launchd",
+        layered("hostkeeper-launchd", &deps, "", TESTKIT_DEP),
+    )
+}
+
+/// What the launchd row reports when its manifest left out `cut`.
+fn launchd_row_without(cut: &str) -> String {
+    let all = [
+        "hostkeeper-hook",
+        "hostkeeper-observe",
+        "hostkeeper-placed",
+        "hostkeeper-steps",
+    ];
+    let kept: Vec<&str> = all.iter().copied().filter(|name| *name != cut).collect();
+    format!(
+        "hostkeeper-launchd depends (normal or build) on the workspace crates {{{}}}, \
+         but must depend on exactly {{{}}}",
+        kept.join(", "),
+        all.join(", ")
+    )
+}
+
 /// Catches: the step runner or the observer (which every platform builds) gaining a normal or
 /// build dependency on the launchd crate, directly or through a crate outside the workspace, so
-/// that the macOS code would be linked into the shared layers. The launchd crate depends on the
-/// observer, so for the observer's case it leaves the observer out (Cargo refuses the cycle),
-/// and its own row is reported too.
+/// that the macOS code would be linked into the shared layers. The launchd crate depends on both,
+/// so each fixture drops that edge (Cargo refuses the cycle), and the launchd row is reported too.
 #[test]
 fn hostkeeper_steps_and_observe_do_not_depend_on_launchd() {
     let launchd_dep = "hostkeeper-launchd = { path = \"../hostkeeper-launchd\" }\n";
+    let steps_row = "hostkeeper-steps depends (normal or build) on the workspace crates \
+                     {hostkeeper-config, hostkeeper-hook, hostkeeper-launchd}, but must depend \
+                     on exactly {hostkeeper-config, hostkeeper-hook}";
     let dir = fixture(
         "clean",
-        vec![manifest_of(
-            "hostkeeper-steps",
-            layered(
+        vec![
+            launchd_without("hostkeeper-steps"),
+            manifest_of(
                 "hostkeeper-steps",
-                &format!("{CONFIG_DEP}{HOOK_DEP}{launchd_dep}"),
-                "",
-                TESTKIT_DEP,
+                layered(
+                    "hostkeeper-steps",
+                    &format!("{CONFIG_DEP}{HOOK_DEP}{launchd_dep}"),
+                    "",
+                    TESTKIT_DEP,
+                ),
             ),
-        )],
+        ],
     );
     assert_eq!(
         check(&dir),
-        refused(
-            "hostkeeper-steps depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-launchd}, but must depend on exactly \
-             {hostkeeper-config, hostkeeper-hook}"
-        )
+        Err(format!(
+            "{}\n{steps_row}",
+            launchd_row_without("hostkeeper-steps")
+        ))
     );
-    let dir = fixture("clean", steps_through_shim("hostkeeper-launchd"));
+    let mut through = steps_through_shim("hostkeeper-launchd");
+    through.push(launchd_without("hostkeeper-steps"));
+    let dir = fixture("clean", through);
     assert_eq!(
         check(&dir),
-        refused(
-            "hostkeeper-steps depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-launchd}, but must depend on exactly \
-             {hostkeeper-config, hostkeeper-hook}\n\
-             hostkeeper-steps reaches the workspace crate hostkeeper-launchd through \
-             hostkeeper-steps -> shim -> hostkeeper-launchd"
-        )
+        Err(format!(
+            "{}\n{steps_row}\nhostkeeper-steps reaches the workspace crate hostkeeper-launchd \
+             through hostkeeper-steps -> shim -> hostkeeper-launchd",
+            launchd_row_without("hostkeeper-steps")
+        ))
     );
     let dir = fixture(
         "clean",
         vec![
+            launchd_without("hostkeeper-observe"),
             manifest_of(
                 "hostkeeper-observe",
                 layered(
@@ -240,26 +283,36 @@ fn hostkeeper_steps_and_observe_do_not_depend_on_launchd() {
                     TESTKIT_DEP,
                 ),
             ),
-            manifest_of(
-                "hostkeeper-launchd",
-                layered(
-                    "hostkeeper-launchd",
-                    &format!("{HOOK_DEP}{PLACED_DEP}"),
-                    "",
-                    TESTKIT_DEP,
-                ),
-            ),
         ],
     );
     assert_eq!(
         check(&dir),
-        refused(
-            "hostkeeper-launchd depends (normal or build) on the workspace crates \
-             {hostkeeper-hook, hostkeeper-placed}, but must depend on exactly \
-             {hostkeeper-hook, hostkeeper-observe, hostkeeper-placed}\n\
-             hostkeeper-observe depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-launchd, hostkeeper-proto}, but must depend on exactly \
-             {hostkeeper-config, hostkeeper-proto}"
-        )
+        Err(format!(
+            "{}\nhostkeeper-observe depends (normal or build) on the workspace crates \
+             {{hostkeeper-config, hostkeeper-launchd, hostkeeper-proto}}, but must depend on \
+             exactly {{hostkeeper-config, hostkeeper-proto}}",
+            launchd_row_without("hostkeeper-observe")
+        ))
     );
+}
+
+/// Catches: a check that refuses the edge the macOS crate needs, `hostkeeper-launchd` on the
+/// step runner (its step launcher implements `StepLauncher`), or a row of the launchd crate that
+/// leaves it out (the launchd crate without it is refused by its row); the edge runs down only,
+/// and the runner and the observer still reach nothing of launchd.
+#[test]
+fn the_launchd_crate_may_depend_on_the_step_runner() {
+    assert_eq!(check(&fixture("clean", vec![])), Ok(()));
+    assert_eq!(
+        reaches_in(&LAYERS, "hostkeeper-launchd", "hostkeeper-steps"),
+        Some(vec![
+            "hostkeeper-launchd".to_string(),
+            "hostkeeper-steps".to_string()
+        ])
+    );
+    let dir = fixture("clean", vec![launchd_without("hostkeeper-steps")]);
+    assert_eq!(check(&dir), Err(launchd_row_without("hostkeeper-steps")));
+    for (from, to) in NOT_ABOVE {
+        assert_eq!(reaches_in(&LAYERS, from, to), None, "{from}");
+    }
 }

@@ -15,6 +15,9 @@
 //!   on wire, oidc, tls, enrollment and proto;
 //! - `hostkeeper-steps` and `hostkeeper-observe` reach `hostkeeper-launchd` through no chain of
 //!   rows (`NOT_ABOVE`);
+//! - `hostkeeper-launchd` may depend on `hostkeeper-steps` (its step launcher implements the
+//!   runner's `StepLauncher`): the edge runs from the macOS crate down to the shared layer, never
+//!   back;
 //! - `hostkeeper-testkit` depends on no workspace crate, and no crate has it but as a
 //!   dev-dependency;
 //! - no non-test source file under `crates/*/src` brings back a closed set of roles (the enum

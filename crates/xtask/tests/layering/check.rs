@@ -69,7 +69,7 @@ pub const LAYERS: [Layer; 21] = [
     (ENROLL, &[CONFIG, PROTO, STEPS], &[]),
     (ENROLLMENT, &[], &[]),
     (HOOK, &[], &[]),
-    (LAUNCHD, &[HOOK, OBSERVE, PLACED], &[]),
+    (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (
         LINK,
         &[CONFIG, HOOK, PROTO, STEPS, WIRE],

@@ -1355,8 +1355,10 @@ dependencies = [
  "hostkeeper-hook",
  "hostkeeper-observe",
  "hostkeeper-placed",
+ "hostkeeper-steps",
  "hostkeeper-testkit",
  "libproc",
+ "plist",
  "sha2",
  "thiserror",
 ]
