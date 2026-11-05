@@ -1,0 +1,11 @@
+[package]
+name = "hostkeeper-observe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

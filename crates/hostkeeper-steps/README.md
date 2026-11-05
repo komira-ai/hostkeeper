@@ -1,12 +1,14 @@
 # hostkeeper-steps
 
-The step runner of the generic host updater: the root part's engine for one update of one service.
-Why it is shaped this way: [docs/design/host-updates.md](../../docs/design/host-updates.md) (3.2 to
-3.5). This page states what the code holds.
+The step runner of the generic host updater: the daemon's engine for one update of one service.
+Why it is shaped this way:
+[docs/design/hostkeeper-design.md](../../docs/design/hostkeeper-design.md) (5.3 and 6.2 to 6.6). This
+page states what the code holds.
 
-The crate names no service and reads no manifest. It runs every step through a `StepLauncher`;
-`SystemdLauncher` (`systemd.rs`) is the launcher of the host, one transient systemd unit per step
-(design `docs/design/hostkeeper-design.md`, section 5.3). The contract types (steps, exit codes, the JSON last line, the
+The crate names no service and reads no manifest or daemon config; the loaders of both are in
+`hostkeeper-config`. It runs every step through a `StepLauncher`; `SystemdLauncher` (`systemd.rs`)
+is in this crate and is the launcher of the host, one transient systemd unit per step (design
+section 5.3). The contract types (steps, exit codes, the JSON last line, the
 params table, the next-step table) are those of `hostkeeper-hook`.
 
 | module | what it holds |
@@ -57,8 +59,8 @@ with it.
   dead-man, and runs with `RuntimeMaxSec=infinity`: only the hook's own end ends it. A `0` for any
   other step, or a `verify` whose window is used up, is a step not started and failed.
 
-What is not here: the unprivileged agent that talks to the coordinator, and wiring a binary. The
-registration socket of kbf's step runner was not carried over (MIGRATION.md): the state of a
+What is not here: the heartbeat link to the coordinator (`hostkeeper-link`), and wiring a
+binary (`hostkeeper-daemon`). The registration socket of kbf's step runner was not carried over (MIGRATION.md): the state of a
 service is read from the service manager instead. The root-only checks (the real systemd restart
 limit) need root and are not part of this crate's fast tests.
 

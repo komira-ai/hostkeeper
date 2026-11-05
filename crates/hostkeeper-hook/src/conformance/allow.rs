@@ -153,7 +153,7 @@ mod tests {
 
     /// Catches a window that opens on a cordon that was already there (renewed or not, its
     /// bytes from another sandbox or not), that went away, whose ownership is recorded, or whose
-    /// ownership the declaration cannot see.
+    /// ownership the allowance lists no path for.
     #[test]
     fn the_window_is_the_kill_right_after_an_unrecorded_cordon_appeared() {
         let none = tree(&[]);

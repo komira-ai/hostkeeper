@@ -1,10 +1,10 @@
 //! The step runner: one update of one service, from `prepare` to its verdict, through a
 //! [`StepLauncher`], with every move written to the step record first.
 //!
-//! The runner is the root part of the updater (docs/design/host-updates.md, 3.4 and 3.5). It
-//! asks [`hostkeeper_hook::next`] what follows each step, it runs nothing that is not in a staged
-//! release it has checked against the digest the updater verified, and a crash at any point
-//! leaves a record that [`StepRunner::run`] picks up: a step found `running` has its unit
+//! The runner runs inside the daemon, the one root process of the host
+//! (docs/design/hostkeeper-design.md, 6.2). It asks [`hostkeeper_hook::next`] what follows each
+//! step, it runs nothing that is not in a staged release it has checked against the digest the
+//! updater verified, and a crash at any point leaves a record that [`StepRunner::run`] picks up: a step found `running` has its unit
 //! stopped by name and is run again, a step found `done` is not.
 //!
 //! The daemon's own moves around the hook's steps, `current` and the placed links switched to
@@ -39,7 +39,7 @@ use crate::launcher::{Bound, LaunchError, StepCall, StepExit, StepLauncher};
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
 use crate::systemd::unit_name;
 
-/// The protocol version of this updater: a declaration's `min_updater_protocol` above it is
+/// The protocol version of this updater: an order's `min_updater_protocol` above it is
 /// `Deferred` with the reason `updater_old` until the updater has updated itself.
 pub const UPDATER_PROTOCOL: u32 = 1;
 /// How often a deferred `rollback` is run again before it is read as a failure.
@@ -57,7 +57,7 @@ pub const REASON_HALT_CLEARED: &str = "halt_cleared";
 /// The reason of a `Deferred` for a hook that needs a newer updater.
 pub const REASON_UPDATER_OLD: &str = "updater_old";
 /// The reason of a `rollback` that declines a first install: there is no previous release to go
-/// back to (design section 5.7, step 6; docs/design/host-updates.md, section 9, C3).
+/// back to (design section 5.7, step 6).
 pub const REASON_NO_PREVIOUS_RELEASE: &str = "no_previous_release";
 
 /// Which way the daemon switches a service around a step of the hook.
@@ -80,7 +80,8 @@ pub enum Toward {
 /// `Confirmed`, the verdict is not written), and the runner stops with [`RunError::Switch`].
 pub type Switch = Arc<dyn Fn(Toward, &UpdateOrder) -> Result<(), String> + Send + Sync>;
 
-/// The bounds of the declaration the runner reads (and no other key of it).
+/// The bounds of the manifest's `hook.timeout_secs` and the other hook keys the runner reads (and
+/// no other key of it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bounds {
     /// `0` is no bound ([`Bound::Unbounded`]); `0` for any other step is a step not started.
@@ -144,12 +145,12 @@ pub struct UpdateOrder {
     /// The release being replaced, kept staged until `cleanup` has succeeded; `None` on the first
     /// install.
     pub previous: Option<Staged>,
-    /// The declaration's `binary`: the hook executable within a release.
+    /// The hook executable within a release: the program of the manifest's `[hook] command`.
     pub hook_binary: PathBuf,
     pub bounds: Bounds,
-    /// The declaration's `[hook.params]`.
+    /// The manifest's `[params]` table.
     pub declared_params: Params,
-    /// The declaration's `min_updater_protocol`.
+    /// The lowest updater protocol the release asks for; `None` asks for none.
     pub min_updater_protocol: Option<u32>,
     /// The coordinator's try of the order (`Order.try`), kept in the record as `order_try`;
     /// `None` for an update that came without one.
@@ -591,8 +592,8 @@ impl StepRunner {
         self.switch_for(order, rec.step)?;
         let started = Stamp::now(&*self.clock);
         // Nothing is left of the bound (the verify window has passed): the step is not started,
-        // and never as unbounded, which only a `prepare` declared with 0 is. It ends as a
-        // failure.
+        // and never as unbounded, which only a `prepare` whose manifest timeout is 0
+        // is. It ends as a failure.
         let Some(bound) = self.bound(order, rec) else {
             return Ok(Some(Ran::Exit(StepExit {
                 code: None,
