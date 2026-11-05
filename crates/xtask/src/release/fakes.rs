@@ -1,5 +1,6 @@
 //! The fakes the release tests run the verbs against: a git history held in memory, GitHub runs
-//! and issues, a release store, a verifier, a binary's `--version` and a scripted [`Exec`]. Each
+//! and issues, a release store, a verifier, a binary's `--version`, `pkgbuild` and a scripted
+//! [`Exec`]. Each
 //! records the writes it was asked for, so a test can assert that nothing was written.
 
 use std::cell::{Cell, RefCell};
@@ -13,10 +14,11 @@ use super::contract::{
 use super::file_sha256;
 use super::index::ReleaseIndex;
 use super::ports::{
-    Adapters, Attestation, Exec, GitHistory, GitHubRuns, Issue, PortError, Ports, Ran, Release,
-    ReleaseStore, Run, RunVersion, Said, StoredAsset, Verifier,
+    Adapters, Attestation, BuildPkg, Exec, GitHistory, GitHubRuns, Issue, PortError, Ports, Ran,
+    Release, ReleaseStore, Run, RunVersion, Said, StoredAsset, Verifier,
 };
 use crate::testdir::TestDir;
+use std::path::PathBuf;
 
 /// An empty directory of its own for one test, removed when it drops.
 pub(crate) fn scratch(name: &str) -> TestDir {
@@ -440,6 +442,79 @@ impl RunVersion for FakeRunVersion {
     }
 }
 
+/// One call of [`FakePkgbuild`]: the tree, the identifier, the version and the pkg asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PkgCall {
+    pub(crate) root: PathBuf,
+    pub(crate) identifier: String,
+    pub(crate) version: Version,
+    pub(crate) pkg: PathBuf,
+}
+
+/// A `pkgbuild` that writes [`FakePkgbuild::BYTES`] as the pkg, or fails with `fail` when it is
+/// set. Each call is recorded, with the tree as it was then (every path under the root, with
+/// `/` after a directory's, sorted).
+#[derive(Default)]
+pub(crate) struct FakePkgbuild {
+    pub(crate) fail: Option<PortError>,
+    pub(crate) calls: RefCell<Vec<PkgCall>>,
+    pub(crate) trees: RefCell<Vec<Vec<String>>>,
+}
+
+impl FakePkgbuild {
+    /// What the fake writes as the pkg.
+    pub(crate) const BYTES: &'static [u8] = b"a flat pkg";
+}
+
+/// Every path under `root`, relative to it, a directory's with a `/` after it, sorted.
+pub(crate) fn tree_of(root: &Path) -> Vec<String> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read a directory") {
+            let path = entry.expect("an entry").path();
+            let name = path
+                .strip_prefix(root)
+                .expect("under the root")
+                .to_string_lossy()
+                .into_owned();
+            if path.is_dir() {
+                out.push(format!("{name}/"));
+                walk(root, &path, out);
+            } else {
+                out.push(name);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+impl BuildPkg for FakePkgbuild {
+    fn build_pkg(
+        &self,
+        root: &Path,
+        identifier: &str,
+        version: &Version,
+        pkg: &Path,
+    ) -> Result<(), PortError> {
+        self.calls.borrow_mut().push(PkgCall {
+            root: root.to_owned(),
+            identifier: identifier.to_owned(),
+            version: *version,
+            pkg: pkg.to_owned(),
+        });
+        self.trees.borrow_mut().push(tree_of(root));
+        match &self.fail {
+            Some(e) => Err(e.clone()),
+            None => {
+                std::fs::write(pkg, Self::BYTES).expect("write the pkg");
+                Ok(())
+            }
+        }
+    }
+}
+
 /// An [`Exec`] that answers from a script: each entry is a command line (the program, then the
 /// arguments) and what it prints. A command not in the script fails to start. Each call is
 /// recorded.
@@ -490,6 +565,7 @@ pub(crate) struct Fakes {
     pub(crate) store: FakeStore,
     pub(crate) verifier: FakeVerifier,
     pub(crate) run_version: FakeRunVersion,
+    pub(crate) pkgbuild: FakePkgbuild,
 }
 
 impl Fakes {
@@ -510,6 +586,7 @@ impl Fakes {
                     stderr: String::new(),
                 },
             },
+            pkgbuild: FakePkgbuild::default(),
         }
     }
 }
@@ -522,6 +599,7 @@ impl Adapters for Fakes {
             store: &self.store,
             verifier: &self.verifier,
             run_version: &self.run_version,
+            pkgbuild: &self.pkgbuild,
         }
     }
 }

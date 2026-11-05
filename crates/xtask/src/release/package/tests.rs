@@ -34,7 +34,8 @@ fn history() -> (FakeHistory, Commit) {
     (history, commit)
 }
 
-/// A request over a binary and the given unit text written under `dir`, writing to `out`.
+/// A request over a binary and the given unit text written under `dir`, writing to `out`. The
+/// unit is passed for a Linux platform, and not for macos-arm64, which takes none.
 fn request(dir: &Path, unit: &[u8], commit: &Commit, platform: Platform, out: &str) -> Request {
     std::fs::write(dir.join("hostkeeper"), BINARY).expect("write the binary");
     std::fs::write(dir.join("hostkeeper.service"), unit).expect("write the unit");
@@ -43,7 +44,7 @@ fn request(dir: &Path, unit: &[u8], commit: &Commit, platform: Platform, out: &s
         version: version(),
         commit: commit.clone(),
         binary: dir.join("hostkeeper"),
-        unit: dir.join("hostkeeper.service"),
+        unit: (platform != Platform::MacosArm64).then(|| dir.join("hostkeeper.service")),
         out: dir.join(out),
     }
 }
@@ -322,7 +323,7 @@ fn the_manifest_text_is_exact() {
     // Catches: a changed key or value of the manifest that no loader check notices, or a hook
     // table that no longer says the daemon does not run it for its own package.
     assert_eq!(
-        manifest(&version(), Platform::LinuxX86_64),
+        manifest(&version(), Platform::LinuxX86_64, true),
         "schema = 1\nname = \"hostkeeper\"\nversion = \"0.1.5\"\nplatform = \"linux-x86_64\"\nmin_hostkeeper = \"0.1.5\"\n\n\
          # The daemon does not run this hook for its own package: hostkeeper's self-update is\n\
          # compiled into the daemon. The table is here because every manifest has a bounded hook.\n\
@@ -330,6 +331,14 @@ fn the_manifest_text_is_exact() {
          [hook.timeout_secs]\nprepare = 300\ncutover = 300\nverify = 300\nrollback = 300\n\
          cleanup = 300\n\n[units]\nrun = [\"hostkeeper.service\"]\n"
     );
+    // Without units, the same text up to the hook table's end, and no `[units]`.
+    let with_units = manifest(&version(), Platform::LinuxX86_64, true);
+    let without = manifest(&version(), Platform::LinuxX86_64, false);
+    assert_eq!(
+        format!("{without}\n[units]\nrun = [\"hostkeeper.service\"]\n"),
+        with_units
+    );
+    assert!(without.ends_with("cleanup = 300\n") & !without.contains("units"));
 }
 
 #[test]
@@ -350,7 +359,7 @@ fn the_archive_holds_the_binary_the_manifest_and_the_unit_bytes() {
     assert_eq!(by_name("units/hostkeeper.service"), UNIT.as_bytes());
     assert_eq!(
         by_name("manifest.toml"),
-        manifest(&version(), Platform::LinuxX86_64).into_bytes()
+        manifest(&version(), Platform::LinuxX86_64, true).into_bytes()
     );
     assert_eq!(by_name("bin/"), Vec::<u8>::new());
 }
@@ -401,11 +410,11 @@ fn the_digest_file_holds_the_sha256_and_platforms_differ_only_by_name_and_manife
             "manifest.toml" => {
                 assert_eq!(
                     x.data,
-                    manifest(&version(), Platform::LinuxX86_64).into_bytes()
+                    manifest(&version(), Platform::LinuxX86_64, true).into_bytes()
                 );
                 assert_eq!(
                     a.data,
-                    manifest(&version(), Platform::LinuxArm64).into_bytes()
+                    manifest(&version(), Platform::LinuxArm64, true).into_bytes()
                 );
             }
             _ => assert_eq!(x.data, a.data, "{}", x.name),
@@ -477,12 +486,13 @@ fn a_missing_binary_or_unit_is_an_io_error_naming_the_path() {
         })
     );
     r.binary = dir.join("hostkeeper");
-    r.unit = dir.join("absent-unit");
-    let why = std::fs::read(&r.unit).expect_err("absent").to_string();
+    let absent = dir.join("absent-unit");
+    r.unit = Some(absent.clone());
+    let why = std::fs::read(&absent).expect_err("absent").to_string();
     assert_eq!(
         package(&history, &r),
         Err(Error::Io {
-            what: format!("read {}", r.unit.display()),
+            what: format!("read {}", absent.display()),
             why
         })
     );
@@ -605,8 +615,12 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
             &version(),
             Platform::LinuxX86_64,
             Vec::new(),
-            Vec::new()
+            Some(Vec::new())
         )),
+        Ok(())
+    );
+    assert_eq!(
+        check_entries(&entries(&version(), Platform::MacosArm64, Vec::new(), None)),
         Ok(())
     );
 }
@@ -633,20 +647,23 @@ impl Drop for Unseal {
     }
 }
 
-#[test]
-fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() {
-    // Catches: a package the daemon's unpacker (design 5.5 steps 3 and 4, hostkeeper-unpack)
-    // refuses: an entry outside the four top-level names, a link or other kind, a mode bit it
-    // does not allow, a digest that is not the archive's, or a manifest it cannot load.
-    let dir = scratch("package-daemon-unpack");
+/// Builds the package of `platform` at the running daemon's own version (so `min_hostkeeper`
+/// admits it) with `binary` as its binary, and unpacks it with the daemon's unpacker for
+/// `unpack_on`; the manifest's run units and the unpacked binary's bytes.
+fn unpack_as_the_daemon(
+    name: &str,
+    platform: Platform,
+    binary: &[u8],
+    unpack_on: hostkeeper_unpack::Platform<'_>,
+) -> (Vec<String>, Vec<u8>) {
+    let dir = scratch(name);
     let (history, commit) = history();
-    // The package of the running daemon's own version, so `min_hostkeeper` admits it.
     let running = hostkeeper_unpack::running_hostkeeper().to_string();
-    let mut req = request(&dir, UNIT.as_bytes(), &commit, Platform::LinuxX86_64, "out");
+    let mut req = request(&dir, UNIT.as_bytes(), &commit, platform, "out");
+    std::fs::write(&req.binary, binary).expect("write the binary");
     req.version = running.parse().expect("the workspace version");
     package(&history, &req).expect("package");
-    let name = package_name(&req.version, Platform::LinuxX86_64);
-    let archive = req.out.join(&name);
+    let archive = req.out.join(package_name(&req.version, platform));
     let packages = dir.join("packages");
     std::fs::create_dir(&packages).expect("the packages directory");
     let unseal = Unseal(packages.clone());
@@ -659,7 +676,7 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
     let order = hostkeeper_unpack::UnpackOrder {
         service: ServiceName::new("hostkeeper").expect("a service name"),
         version: ConfigVersion::new(&running).expect("a version"),
-        platform: hostkeeper_config::platform::Platform::LinuxX86_64,
+        platform: platform.name().parse().expect("a platform"),
         package_digest: hostkeeper_config::daemon::Sha256Hex::parse(
             &file_sha256(&archive).expect("hash the package"),
         )
@@ -669,39 +686,168 @@ fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() 
         max_unpacked_bytes: 1 << 30,
         max_entries: 1000,
     };
-    let unpacked = hostkeeper_unpack::unpack(
-        &archive,
-        &order,
-        &limits,
-        &fs,
-        hostkeeper_unpack::Platform::Linux,
-    )
-    .expect("unpack");
+    let unpacked =
+        hostkeeper_unpack::unpack(&archive, &order, &limits, &fs, unpack_on).expect("unpack");
     assert!(unpacked.fresh);
-    assert_eq!(unpacked.manifest.run, ["hostkeeper.service"]);
-    assert_eq!(
-        std::fs::read(
-            packages
-                .join("hostkeeper")
-                .join(&running)
-                .join("bin/hostkeeper")
-        )
-        .expect("the unpacked binary"),
-        BINARY
-    );
+    let bytes = std::fs::read(
+        packages
+            .join("hostkeeper")
+            .join(&running)
+            .join("bin/hostkeeper"),
+    )
+    .expect("the unpacked binary");
     drop(unseal);
     assert!(!packages.exists(), "the unpacked tree is removed");
+    (unpacked.manifest.run, bytes)
 }
 
 #[test]
-fn a_macos_package_is_refused_until_the_macos_daemon_defines_its_units() {
-    // Catches: a macos-arm64 package that carries a systemd unit, which a Mac cannot run.
+fn package_unpacks_with_the_daemons_unpacker_under_its_bounds_and_shape_rules() {
+    // Catches: a package the daemon's unpacker (design 5.5 steps 3 and 4, hostkeeper-unpack)
+    // refuses: an entry outside the four top-level names, a link or other kind, a mode bit it
+    // does not allow, a digest that is not the archive's, or a manifest it cannot load.
+    let (run, bytes) = unpack_as_the_daemon(
+        "package-daemon-unpack",
+        Platform::LinuxX86_64,
+        BINARY,
+        hostkeeper_unpack::Platform::Linux,
+    );
+    assert_eq!(run, ["hostkeeper.service"]);
+    assert_eq!(bytes, BINARY);
+}
+
+/// The Mach-O magic of a 64-bit binary, so the macOS unpack sends the file to the signature
+/// check.
+const MACHO: [u8; 4] = [0xcf, 0xfa, 0xed, 0xfe];
+
+/// The macOS checks as the daemon makes them, answering "no quarantine" and "valid
+/// signature", and recording what each was asked of (the last path components).
+#[derive(Default)]
+struct MacChecks {
+    quarantine: std::cell::RefCell<Vec<String>>,
+    signature: std::cell::RefCell<Vec<String>>,
+}
+
+/// The last two components of `path`.
+fn tail(path: &Path) -> String {
+    let parts: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    parts[parts.len().saturating_sub(2)..].join("/")
+}
+
+impl hostkeeper_unpack::MacVerify for MacChecks {
+    fn quarantine(&self, path: &Path) -> Result<bool, hostkeeper_unpack::VerifyIoError> {
+        self.quarantine.borrow_mut().push(tail(path));
+        Ok(false)
+    }
+
+    fn signature(
+        &self,
+        binary: &Path,
+    ) -> Result<hostkeeper_unpack::SignatureVerdict, hostkeeper_unpack::VerifyIoError> {
+        self.signature.borrow_mut().push(tail(binary));
+        Ok(hostkeeper_unpack::SignatureVerdict::Valid)
+    }
+}
+
+#[test]
+fn a_macos_package_holds_the_binary_and_a_manifest_without_units() {
+    // Catches: a macos-arm64 package that carries the systemd unit (which a Mac cannot run), a
+    // units/ directory or a [units] table, or a package that is not the deterministic archive of
+    // the Linux ones with the units left out.
     let dir = scratch("package-macos");
     let (history, commit) = history();
     let r = request(&dir, UNIT.as_bytes(), &commit, Platform::MacosArm64, "out");
+    assert_eq!(r.unit, None);
+    let lines = package(&history, &r).expect("package");
+    let bytes = built(&r);
+    assert_eq!(shape_problems(&bytes, time_of(1)), Vec::<String>::new());
+    let seen = read_back(&bytes);
+    let names: Vec<&str> = seen.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["bin/", "bin/hostkeeper", "manifest.toml"]);
+    assert_eq!(seen[1].data, BINARY);
+    assert_eq!(
+        seen[2].data,
+        manifest(&version(), Platform::MacosArm64, false).into_bytes()
+    );
+    let name = "hostkeeper-0.1.5-macos-arm64.tar.zst";
+    let hex = hex::encode(Sha256::digest(&bytes));
+    assert_eq!(
+        lines,
+        [format!("{name}: sha256 {hex}"), format!("sha256={hex}")]
+    );
+    assert_eq!(
+        std::fs::read_to_string(r.out.join(format!("{name}.sha256"))).expect("the digest file"),
+        format!("{hex}  {name}\n")
+    );
+    // The same bytes again, and the macOS bytes are the Linux package's without its units.
+    package(&history, &r).expect("package again");
+    assert_eq!(built(&r), bytes);
+    let version_dir = scratch("package-macos-unpacked");
+    unpack(&bytes, &version_dir);
+    let mac = Expected {
+        platform: hostkeeper_config::platform::Platform::MacosArm64,
+        ..expected()
+    };
+    let manifest = Manifest::load(&version_dir, &mac, &host(5)).expect("the manifest loads");
+    assert_eq!(
+        manifest.platform,
+        hostkeeper_config::platform::Platform::MacosArm64
+    );
+    assert_eq!(manifest.run, Vec::<String>::new());
+    assert_eq!(manifest.unit_files, BTreeSet::new());
+    assert_eq!(manifest.hook.command, ["bin/hostkeeper", "update-hook"]);
+}
+
+#[test]
+fn a_linux_package_needs_a_unit_and_a_macos_package_takes_none() {
+    // Catches: a Linux package built without its unit, or a systemd unit put into the macOS
+    // package; neither writes anything.
+    let dir = scratch("package-unit-flag");
+    let (history, commit) = history();
+    for platform in [Platform::LinuxX86_64, Platform::LinuxArm64] {
+        let mut r = request(&dir, UNIT.as_bytes(), &commit, platform, "linux");
+        r.unit = None;
+        assert_eq!(
+            package(&history, &r),
+            Err(Error::Failed(LINUX_NEEDS_UNIT.to_owned())),
+            "{}",
+            platform.name()
+        );
+        assert!(!r.out.exists());
+    }
+    let mut r = request(&dir, UNIT.as_bytes(), &commit, Platform::MacosArm64, "mac");
+    r.unit = Some(dir.join("hostkeeper.service"));
     assert_eq!(
         package(&history, &r),
-        Err(Error::Failed(MACOS_LATER.to_owned()))
+        Err(Error::Failed(MACOS_TAKES_NO_UNIT.to_owned()))
     );
     assert!(!r.out.exists());
+}
+
+#[test]
+fn a_macos_package_unpacks_with_the_daemons_macos_unpacker() {
+    // Catches: a macOS package the daemon's unpacker refuses on a Mac (its shape, its manifest
+    // without units), or one whose binary is not sent to the code signature check.
+    let checks = MacChecks::default();
+    let binary = [MACHO.as_slice(), b" a Mach-O hostkeeper"].concat();
+    let (run, bytes) = unpack_as_the_daemon(
+        "package-daemon-unpack-macos",
+        Platform::MacosArm64,
+        &binary,
+        hostkeeper_unpack::Platform::MacOs(&checks),
+    );
+    assert_eq!(run, Vec::<String>::new());
+    assert_eq!(bytes, binary);
+    assert_eq!(*checks.signature.borrow(), ["bin/hostkeeper"]);
+    let mut asked = checks.quarantine.borrow().clone();
+    asked.sort();
+    assert!(
+        ["bin/hostkeeper", "manifest.toml"]
+            .iter()
+            .all(|n| asked.iter().any(|a| a.ends_with(n))),
+        "{asked:?}"
+    );
 }

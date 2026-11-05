@@ -1,6 +1,6 @@
 //! The `--params <file>` table.
 //!
-//! The declaration's `[hook.params]` table is opaque to the updater: it checks that every value
+//! The manifest's `[params]` table is opaque to the updater: it checks that every value
 //! is a scalar, writes the table to a file and passes the file's path. The file is TOML, a flat
 //! table of scalars. The updater adds one reserved key, [`PROMOTION_CEILING_KEY`], the one
 //! ceiling on a pending promotion, which the hook must not itself fail for.
@@ -10,10 +10,10 @@
 //! [`TARGET_VERSION_KEY`], [`PREVIOUS_VERSION_KEY`] (absent on a first install) and
 //! [`ARTIFACT_DIGEST_KEY`], the `sha256:<64 lowercase hex>` identity of the verified artifact: a
 //! hook keys its record on it and does not use it to verify the artifact again. The staged
-//! release equals the argument of `prepare`. A declaration's own `[hook.params]` may not set any
+//! release equals the argument of `prepare`. The manifest's own `[params]` may not set any
 //! `updater.*` key: [`Params::parse_declared`] refuses it. **A hook still validates every one of
-//! these values against its own record directory and its declaration**: they come from a file,
-//! and a value read from a file is untrusted input.
+//! these values against its own record directory and the manifest it
+//! shipped with**: they come from a file, and a value read from a file is untrusted input.
 //!
 //! The reserved key contains a dot, so in the file it is a quoted key:
 //! `"updater.promotion_ceiling_secs" = 3600`. Written bare, TOML makes it a table `updater`, which
@@ -25,7 +25,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-/// The reserved key the updater sets from the declaration's `promotion_ceiling_secs`.
+/// The reserved key the updater sets from `promotion_ceiling_secs` in the manifest's `[hook]`
+/// table.
 pub const PROMOTION_CEILING_KEY: &str = "updater.promotion_ceiling_secs";
 
 /// The absolute path of the verified staged release tree.
@@ -94,7 +95,7 @@ impl Params {
         Params::parse(&std::fs::read_to_string(path)?)
     }
 
-    /// Reads a declaration's own `[hook.params]` table, which may not set any `updater.*` key.
+    /// Reads the manifest's own `[params]` table, which may not set any `updater.*` key.
     pub fn parse_declared(text: &str) -> Result<Params, ParamsError> {
         let params = Params::parse(text)?;
         match params.0.keys().find(|key| key.starts_with(RESERVED_PREFIX)) {

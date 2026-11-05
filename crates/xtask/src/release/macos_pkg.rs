@@ -1,0 +1,552 @@
+//! `release macos-pkg` and `release check-macos-pkg`: the installer pkg of a Mac's first install
+//! (design sections 4.6 and 5.9), `hostkeeper-<v>-macos-arm64.pkg` ([`installer_name`]).
+//!
+//! The pkg installs at `/` exactly two files, and the directories that hold them:
+//!
+//! - the daemon binary at `hostkeeper_launchd::DAEMON_PROGRAM` (`/usr/local/bin/hostkeeper`),
+//!   mode 0755;
+//! - the daemon's launchd plist, `/Library/LaunchDaemons/<label>.plist` with the label
+//!   `hostkeeper_launchd::Label::daemon` (`dev.hostkeeper.hostkeeper`), mode 0644, the text
+//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`.
+//!
+//! Every entry is owned by root and wheel (uid 0, gid 0) and every directory is 0755, the modes
+//! macOS gives `/`, `/Library`, `/usr` and `/usr/local`, so installing the pkg changes no system
+//! directory. The pkg has no scripts: nothing runs at install, the daemon is not started, and the
+//! config is not written (the operator's bootstrap places `hostkeeper.toml` and loads the job).
+//!
+//! The pkg is not signed: an installer signature needs an Apple Developer ID Installer
+//! identity. It is attested like every other asset (build provenance by the artifacts
+//! workflow), and an MDM installs it by its digest (design section 5.9). The binary in it keeps
+//! the ad-hoc code signature the linker gives it, which the macOS unpack check accepts.
+//!
+//! [`build`] lays the tree out in a new directory and runs `pkgbuild` over it through the
+//! [`BuildPkg`] port ([`PkgbuildCli`] is its adapter). [`check`] reads a pkg that
+//! `pkgutil --expand` has expanded into a directory: the directory holds exactly `Bom`,
+//! `PackageInfo` and `Payload`; `PackageInfo` names the identifier, the version and the install
+//! location and no script; and `Payload`, a gzip-compressed cpio archive (the portable `odc`
+//! format), holds exactly the entries above with their modes, owners and bytes, the plist
+//! parsing as a launchd plist that names the daemon's label and binary.
+
+use std::collections::BTreeMap;
+use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+use hostkeeper_launchd::plist::DAEMON_PROGRAM;
+use hostkeeper_launchd::{DaemonJob, Label, Platform as Launchd, daemon_plist};
+
+use super::contract::{Version, installer_name};
+use super::ports::{BuildPkg, Exec, PortError};
+use super::{Error, file_sha256};
+
+/// The mode of each directory of the payload.
+const DIR_MODE: u32 = 0o755;
+
+/// The mode of the binary.
+const BINARY_MODE: u32 = 0o755;
+
+/// The mode of the plist: launchd refuses a plist that its group or others may write.
+const PLIST_MODE: u32 = 0o644;
+
+/// The file-type bits of a cpio mode, and the two types a payload may hold.
+const TYPE_BITS: u32 = 0o170_000;
+const TYPE_DIR: u32 = 0o040_000;
+const TYPE_FILE: u32 = 0o100_000;
+
+/// Where the pkg installs its payload.
+const INSTALL_LOCATION: &str = "/";
+
+/// The files of an expanded pkg, sorted: a flat component package with no `Scripts`.
+const EXPANDED: [&str; 3] = ["Bom", "PackageInfo", "Payload"];
+
+/// The magic of a portable (`odc`) cpio header, its size, and the name of the last entry.
+const ODC_MAGIC: &[u8; 6] = b"070707";
+const ODC_HEADER: usize = 76;
+const TRAILER: &str = "TRAILER!!!";
+
+/// The pkg's identifier: the daemon's launchd label, a reverse-DNS name.
+fn identifier() -> String {
+    Label::daemon().as_str().to_owned()
+}
+
+/// The path of the binary from the install location: `usr/local/bin/hostkeeper`.
+fn binary_path() -> String {
+    DAEMON_PROGRAM.trim_start_matches('/').to_owned()
+}
+
+/// The path of the plist from the install location:
+/// `Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`.
+fn plist_path() -> String {
+    let mac = Launchd::macos();
+    let dir = mac.unit_dir.to_string_lossy().into_owned();
+    format!(
+        "{}/{}{}",
+        dir.trim_start_matches('/'),
+        Label::daemon(),
+        mac.unit_suffix
+    )
+}
+
+/// The text of the daemon's plist, as hostkeeper-launchd writes it. The standard job's paths and
+/// label are constants that the writer accepts, so the error is built eagerly and no code path
+/// exists only for it.
+fn plist_text() -> Result<String, Error> {
+    let unwritable =
+        Error::Failed("the daemon plist of DaemonJob::standard cannot be written".to_owned());
+    daemon_plist(&DaemonJob::standard()).ok().ok_or(unwritable)
+}
+
+/// What one entry of the payload must be.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Want {
+    Dir,
+    File { mode: u32, bytes: Vec<u8> },
+}
+
+/// Every entry of the payload by its path from the install location (`""` is the install
+/// location itself): the two files and each directory that holds them.
+fn payload(binary: Vec<u8>, plist: Vec<u8>) -> BTreeMap<String, Want> {
+    let mut want = BTreeMap::new();
+    let files = [
+        (binary_path(), BINARY_MODE, binary),
+        (plist_path(), PLIST_MODE, plist),
+    ];
+    for (path, mode, bytes) in files {
+        let mut parent = path.as_str();
+        while let Some((dir, _)) = parent.rsplit_once('/') {
+            want.insert(dir.to_owned(), Want::Dir);
+            parent = dir;
+        }
+        want.insert(path.clone(), Want::File { mode, bytes });
+    }
+    want.insert(String::new(), Want::Dir);
+    want
+}
+
+/// What `release macos-pkg` builds the pkg from.
+pub(crate) struct Request {
+    pub(crate) version: Version,
+    /// The macos-arm64 hostkeeper binary.
+    pub(crate) binary: PathBuf,
+    /// The directory the pkg's tree is laid out in; it must not exist.
+    pub(crate) stage: PathBuf,
+    /// The directory the pkg is written to.
+    pub(crate) out: PathBuf,
+}
+
+/// Lays the payload out under `request.stage` and builds the pkg from it into `request.out`;
+/// the lines to print.
+pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<String>, Error> {
+    let plist = plist_text()?;
+    let binary = std::fs::read(&request.binary)
+        .map_err(Error::io(format!("read {}", request.binary.display())))?;
+    let stage = &request.stage;
+    if std::fs::symlink_metadata(stage).is_ok() {
+        return Err(Error::Failed(format!(
+            "{} exists: the pkg's tree is laid out in a new directory, so it holds nothing else",
+            stage.display()
+        )));
+    }
+    // In path order, so each directory is made before what it holds; `""` is the stage itself
+    // (the components drop the `/` that joining an empty path leaves).
+    for (path, want) in payload(binary, plist.into_bytes()) {
+        let at: PathBuf = stage.join(&path).components().collect();
+        let mode = match &want {
+            Want::Dir => {
+                std::fs::create_dir(&at).map_err(Error::io(format!("create {}", at.display())))?;
+                DIR_MODE
+            }
+            Want::File { mode, bytes } => {
+                std::fs::write(&at, bytes).map_err(Error::io(format!("write {}", at.display())))?;
+                *mode
+            }
+        };
+        std::fs::set_permissions(&at, std::fs::Permissions::from_mode(mode))
+            .map_err(Error::io(format!("set the mode of {}", at.display())))?;
+    }
+    std::fs::create_dir_all(&request.out)
+        .map_err(Error::io(format!("create {}", request.out.display())))?;
+    let name = installer_name(&request.version);
+    let pkg = request.out.join(&name);
+    pkgbuild.build_pkg(stage, &identifier(), &request.version, &pkg)?;
+    let hex = file_sha256(&pkg)?;
+    Ok(vec![format!("{name}: sha256 {hex}")])
+}
+
+/// Runs `pkgbuild` through an [`Exec`].
+pub(crate) struct PkgbuildCli<E> {
+    exec: E,
+}
+
+impl<E> PkgbuildCli<E> {
+    /// The adapter running `pkgbuild` through `exec`.
+    pub(crate) fn new(exec: E) -> PkgbuildCli<E> {
+        PkgbuildCli { exec }
+    }
+}
+
+/// `path` as UTF-8, for a command line.
+fn utf8(path: &Path) -> Result<String, PortError> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        PortError::new(
+            format!("pkgbuild {}", path.display()),
+            "the path is not UTF-8",
+        )
+    })
+}
+
+impl<E: Exec> BuildPkg for PkgbuildCli<E> {
+    fn build_pkg(
+        &self,
+        root: &Path,
+        identifier: &str,
+        version: &Version,
+        pkg: &Path,
+    ) -> Result<(), PortError> {
+        let args = vec![
+            "--root".to_owned(),
+            utf8(root)?,
+            "--identifier".to_owned(),
+            identifier.to_owned(),
+            "--version".to_owned(),
+            version.to_string(),
+            "--install-location".to_owned(),
+            INSTALL_LOCATION.to_owned(),
+            "--ownership".to_owned(),
+            "recommended".to_owned(),
+            utf8(pkg)?,
+        ];
+        let what = format!("pkgbuild {}", args.join(" "));
+        let ran = self
+            .exec
+            .spawn("pkgbuild", &args)
+            .map_err(|e| PortError::new(&what, e.to_string()))?;
+        if ran.success {
+            Ok(())
+        } else {
+            Err(PortError::new(
+                what,
+                String::from_utf8_lossy(&ran.stderr).trim().to_owned(),
+            ))
+        }
+    }
+}
+
+/// One entry of a cpio archive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CpioEntry {
+    pub(crate) name: String,
+    pub(crate) mode: u32,
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+    pub(crate) data: Vec<u8>,
+}
+
+/// The number written as `len` octal digits at `at` of `bytes`, which holds them.
+fn octal(bytes: &[u8], at: usize, len: usize) -> Result<u64, String> {
+    let field = &bytes[at..at + len];
+    let digits = field.iter().all(|b| matches!(b, b'0'..=b'7'));
+    let text = std::str::from_utf8(field).ok().filter(|_| digits);
+    text.and_then(|t| u64::from_str_radix(t, 8).ok())
+        .ok_or_else(|| format!("the header field at byte {at} is not {len} octal digits"))
+}
+
+/// The bytes `bytes[at..at + len]`, or why the archive ends before them.
+fn take(bytes: &[u8], at: usize, len: u64, what: &str) -> Result<Vec<u8>, String> {
+    usize::try_from(len)
+        .ok()
+        .and_then(|len| at.checked_add(len))
+        .and_then(|end| bytes.get(at..end))
+        .map(<[u8]>::to_vec)
+        .ok_or_else(|| format!("the archive ends inside the {what} that starts at byte {at}"))
+}
+
+/// The entries of the portable (`odc`) cpio archive `bytes`, up to its trailer; anything after
+/// the trailer (the padding of a block) is not read.
+pub(crate) fn read_odc(bytes: &[u8]) -> Result<Vec<CpioEntry>, String> {
+    let mut entries = Vec::new();
+    let mut at = 0;
+    loop {
+        if bytes.len() - at < ODC_HEADER {
+            return Err(format!(
+                "the archive ends at byte {} without its trailer",
+                bytes.len()
+            ));
+        }
+        if &bytes[at..at + 6] != ODC_MAGIC {
+            return Err(format!(
+                "the header at byte {at} starts {:?}, not the odc magic 070707",
+                String::from_utf8_lossy(&bytes[at..at + 6])
+            ));
+        }
+        let field = |offset: usize, len: usize| octal(bytes, at + offset, len);
+        let mode = field(18, 6)?;
+        let uid = field(24, 6)?;
+        let gid = field(30, 6)?;
+        let name_size = field(59, 6)?;
+        let file_size = field(65, 11)?;
+        let name_at = at + ODC_HEADER;
+        let name = take(bytes, name_at, name_size, "name")?;
+        let name = match name.split_last() {
+            Some((0, name)) => String::from_utf8(name.to_vec())
+                .map_err(|_| format!("the name at byte {name_at} is not UTF-8"))?,
+            _ => return Err(format!("the name at byte {name_at} does not end in NUL")),
+        };
+        if name == TRAILER {
+            return Ok(entries);
+        }
+        let data_at = name_at + name.len() + 1;
+        let data = take(bytes, data_at, file_size, "data")?;
+        at = data_at + data.len();
+        // Six octal digits hold at most 0o777777, so each fits a u32.
+        let small = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
+        entries.push(CpioEntry {
+            name,
+            mode: small(mode),
+            uid: small(uid),
+            gid: small(gid),
+            data,
+        });
+    }
+}
+
+/// The path of a payload entry from the install location: `.` is `""`, `./x` is `x`; any other
+/// name is kept, and so matches no entry of the payload.
+fn payload_path(name: &str) -> &str {
+    match name {
+        "." => "",
+        _ => name.strip_prefix("./").unwrap_or(name),
+    }
+}
+
+/// How a payload path is shown: from `/`.
+fn shown(path: &str) -> String {
+    format!("/{path}")
+}
+
+/// The attributes of the `<pkg-info ...>` element of `text`, or none when it has no such
+/// element or its attributes are not `name="value"` pairs.
+fn pkg_info_attributes(text: &str) -> Option<BTreeMap<String, String>> {
+    let start = text.find("<pkg-info")? + "<pkg-info".len();
+    let mut rest = &text[start..];
+    let mut found = BTreeMap::new();
+    loop {
+        rest = rest.trim_start();
+        if rest.starts_with('>') | rest.starts_with("/>") {
+            return Some(found);
+        }
+        let (name, after) = rest.split_once("=\"")?;
+        let (value, after) = after.split_once('"')?;
+        let name = name.trim();
+        let well_formed = !name.is_empty()
+            & name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() | matches!(b, b'-' | b'_' | b':'));
+        if !well_formed {
+            return None;
+        }
+        found.insert(name.to_owned(), value.to_owned());
+        rest = after;
+    }
+}
+
+/// What is wrong with the `PackageInfo` text `text` of the pkg of `version`, one line each.
+fn package_info_problems(text: &str, version: &Version, problems: &mut Vec<String>) {
+    let Some(attributes) = pkg_info_attributes(text) else {
+        return problems.push("PackageInfo has no readable <pkg-info> element".to_owned());
+    };
+    let wanted = [
+        ("identifier", identifier()),
+        ("version", version.to_string()),
+        ("install-location", INSTALL_LOCATION.to_owned()),
+    ];
+    for (name, want) in wanted {
+        match attributes.get(name) {
+            Some(value) if *value == want => {}
+            Some(value) => {
+                problems.push(format!("PackageInfo: {name} is {value:?}, not {want:?}"));
+            }
+            None => problems.push(format!("PackageInfo has no {name}")),
+        }
+    }
+    let action = attributes.get("postinstall-action").map(String::as_str);
+    if action.is_some_and(|a| a != "none") {
+        problems.push(format!(
+            "PackageInfo: postinstall-action is {:?}, not \"none\"",
+            action.unwrap_or_default()
+        ));
+    }
+    for script in ["<preinstall", "<postinstall"] {
+        if text.contains(script) {
+            problems.push(format!(
+                "PackageInfo names a script ({script}>): the pkg runs nothing at install"
+            ));
+        }
+    }
+}
+
+/// What is wrong with the launchd plist `bytes` of the payload, one line each: it must parse as
+/// a plist dictionary naming the daemon's label and running the binary of the payload.
+fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
+    let what = shown(&plist_path());
+    let value = match plist::Value::from_reader_xml(bytes) {
+        Ok(value) => value,
+        Err(e) => return problems.push(format!("{what} does not parse as a plist: {e}")),
+    };
+    let Some(dict) = value.as_dictionary() else {
+        return problems.push(format!("{what} is not a plist dictionary"));
+    };
+    let label = dict.get("Label").and_then(plist::Value::as_string);
+    if label != Some(Label::daemon().as_str()) {
+        problems.push(format!(
+            "{what}: the label is {label:?}, not {:?}",
+            Label::daemon().as_str()
+        ));
+    }
+    let program = dict
+        .get("ProgramArguments")
+        .and_then(plist::Value::as_array)
+        .and_then(|a| a.first())
+        .and_then(plist::Value::as_string);
+    if program != Some(DAEMON_PROGRAM) {
+        problems.push(format!(
+            "{what}: the job runs {program:?}, not the pkg's binary {DAEMON_PROGRAM:?}"
+        ));
+    }
+}
+
+/// What is wrong with the entries of the payload against `want`, one line each.
+fn payload_problems(
+    entries: &[CpioEntry],
+    mut want: BTreeMap<String, Want>,
+    binary: &Path,
+    problems: &mut Vec<String>,
+) {
+    for entry in entries {
+        let path = payload_path(&entry.name);
+        let what = shown(path);
+        let Some(wanted) = want.remove(path) else {
+            problems.push(format!(
+                "{what} ({:?}) is in the payload, which holds only the binary, the plist and \
+                 their directories, each once",
+                entry.name
+            ));
+            continue;
+        };
+        if (entry.uid, entry.gid) != (0, 0) {
+            problems.push(format!(
+                "{what}: owned by uid {} and gid {}, not root and wheel (0 and 0)",
+                entry.uid, entry.gid
+            ));
+        }
+        let (kind, mode) = (entry.mode & TYPE_BITS, entry.mode & !TYPE_BITS);
+        let (want_kind, want_mode) = match &wanted {
+            Want::Dir => (TYPE_DIR, DIR_MODE),
+            Want::File { mode, .. } => (TYPE_FILE, *mode),
+        };
+        if kind != want_kind {
+            let want_word = if want_kind == TYPE_DIR {
+                "a directory"
+            } else {
+                "a regular file"
+            };
+            problems.push(format!("{what}: of type {kind:o}, not {want_word}"));
+            continue;
+        }
+        if mode != want_mode {
+            problems.push(format!("{what}: mode {mode:o}, not {want_mode:o}"));
+        }
+        if let Want::File { bytes, .. } = &wanted
+            && entry.data != *bytes
+        {
+            let source = if path == binary_path() {
+                format!("the bytes of {}", binary.display())
+            } else {
+                "the daemon plist hostkeeper-launchd writes".to_owned()
+            };
+            problems.push(format!("{what}: not {source}"));
+        }
+    }
+    problems.extend(
+        want.keys()
+            .map(|path| format!("missing {} in the payload", shown(path))),
+    );
+}
+
+/// The `release check-macos-pkg <expanded> --version V --binary B` verb: checks the pkg that
+/// `pkgutil --expand` expanded into `expanded` against `version` and the binary `binary`, and
+/// lists every problem it finds.
+pub(crate) fn check(
+    expanded: &Path,
+    version: &Version,
+    binary: &Path,
+) -> Result<Vec<String>, Error> {
+    let what = format!("read {}", expanded.display());
+    let mut names: Vec<(String, bool)> = std::fs::read_dir(expanded)
+        .and_then(|read| read.collect::<Result<Vec<_>, _>>())
+        .map_err(Error::io(&what))?
+        .iter()
+        .map(|e| {
+            let file = e.file_type().is_ok_and(|kind| kind.is_file());
+            (e.file_name().to_string_lossy().into_owned(), file)
+        })
+        .collect();
+    names.sort();
+    let mut problems = Vec::new();
+    for (name, file) in &names {
+        if !EXPANDED.contains(&name.as_str()) | !file {
+            problems.push(format!(
+                "{name}: an expanded pkg of hostkeeper holds only the files Bom, PackageInfo and \
+                 Payload (no Scripts)"
+            ));
+        }
+    }
+    let present = |want: &str| names.iter().any(|(name, file)| (name == want) & file);
+    for missing in EXPANDED.iter().filter(|n| !present(n)) {
+        problems.push(format!("missing {missing}"));
+    }
+    if present("PackageInfo") {
+        let path = expanded.join("PackageInfo");
+        let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
+        package_info_problems(&String::from_utf8_lossy(&bytes), version, &mut problems);
+    }
+    if present("Payload") {
+        let path = expanded.join("Payload");
+        let file =
+            std::fs::File::open(&path).map_err(Error::io(format!("read {}", path.display())))?;
+        let mut cpio = Vec::new();
+        let read = flate2::read::GzDecoder::new(file)
+            .read_to_end(&mut cpio)
+            .map_err(|e| format!("Payload is not gzip data: {e}"))
+            .and_then(|_| read_odc(&cpio).map_err(|e| format!("Payload: {e}")));
+        match read {
+            Err(why) => problems.push(why),
+            Ok(entries) => {
+                let bytes = std::fs::read(binary)
+                    .map_err(Error::io(format!("read {}", binary.display())))?;
+                let plist = plist_text()?.into_bytes();
+                if let Some(entry) = entries
+                    .iter()
+                    .find(|e| payload_path(&e.name) == plist_path())
+                {
+                    plist_problems(&entry.data, &mut problems);
+                }
+                payload_problems(&entries, payload(bytes, plist), binary, &mut problems);
+            }
+        }
+    }
+    if !problems.is_empty() {
+        return Err(Error::Refused(problems));
+    }
+    Ok(vec![format!(
+        "check-macos-pkg: {} installs exactly {} ({BINARY_MODE:o}) and {} ({PLIST_MODE:o}), \
+         owned by root and wheel, with the label {}, version {version} and no scripts",
+        expanded.display(),
+        shown(&binary_path()),
+        shown(&plist_path()),
+        Label::daemon()
+    )])
+}
+
+#[cfg(test)]
+mod tests;

@@ -1,8 +1,8 @@
 //! The five steps of an update, the `uninstall` step, and the command line a hook is run with.
 //!
-//! The updater runs `<executable> <hook_args> <step> [args]`. `hook_args` is declared (default
-//! `["update-hook"]`, the convention of our own services); everything from the step on is what
-//! [`Invocation`] parses and prints: `prepare <artifact> [--params <file>]` and
+//! The updater runs `<executable> <hook_args> <step> [args]`. `hook_args` are the elements of the
+//! manifest's `[hook] command` after the executable (our own services use `["update-hook"]`);
+//! everything from the step on is what [`Invocation`] parses and prints: `prepare <artifact> [--params <file>]` and
 //! `<cutover|verify|rollback|cleanup|uninstall> [--params <file>]`.
 
 use std::ffi::OsString;
@@ -95,7 +95,7 @@ pub struct Invocation {
     pub step: Step,
     /// The staged release directory: given to `prepare` and to no other step.
     pub artifact: Option<PathBuf>,
-    /// The file of the `[hook.params]` table (see [`crate::Params`]).
+    /// The file of the manifest's `[params]` table (see [`crate::Params`]).
     pub params: Option<PathBuf>,
 }
 

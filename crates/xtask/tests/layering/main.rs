@@ -1,34 +1,36 @@
-//! The layers of the host updater crates, held on the dependency graph.
+//! The layers of the workspace crates, held on the dependency graph.
 //!
 //! - no package anywhere in the graph (any kind, any platform) is named `kbf`, `kbf-*` or
 //!   `kbf_*`;
-//! - `hostkeeper-hook` and `hostkeeper-config` depend on no other crate of this workspace (their
-//!   dev-dependencies hold only themselves and `hostkeeper-testkit`);
-//! - `hostkeeper-steps` and `hostkeeper-rights` depend on `hostkeeper-config` and
-//!   `hostkeeper-hook`, and `hostkeeper-unpack` on `hostkeeper-config`,
-//!   `hostkeeper-hook` and `hostkeeper-steps`, and on no other workspace crate
-//!   (dev-dependencies: themselves and `hostkeeper-testkit`);
-//! - `hostkeeper-wire`, `hostkeeper-oidc` and `hostkeeper-tls` depend on no workspace crate;
-//!   `hostkeeper-coordinator` depends on exactly those three, `hostkeeper-enrollment` (its CA
-//!   and enrollment store) and `hostkeeper-proto` (the messages of `Enroll`, `Poll` and
-//!   `Renew`) (dev-dependencies: itself, `hostkeeper-testkit`, `hostkeeper-oidc`, whose
-//!   `testkit` feature its tests use, and `hostkeeper-ctl`, which its tests run against it);
-//! - `hostkeeper-enrollment` (the coordinator's CA and enrollment store) depends on no other
-//!   crate of this workspace (dev-dependencies: itself and `hostkeeper-testkit`);
-//! - `hostkeeper-steps` and `hostkeeper-observe` reach `hostkeeper-launchd` through no normal or
-//!   build dependency, direct or through any chain (a fixture without `hostkeeper-observe` has
-//!   nothing to check for it);
+//! - no package anywhere in the graph is a crate of this product (`hostkeeper` or
+//!   `hostkeeper-*`) that is not a workspace member, so a crate cannot leave the workspace (and
+//!   its rules and coverage) while another still depends on it;
+//! - every crate of the workspace but `coverage-gate`, `xtask` and `hostkeeper-testkit` has a
+//!   row in `LAYERS` (`check.rs`), and no row names a crate that is not one: the workspace
+//!   crates its normal and build dependencies must be exactly, followed through crates outside
+//!   the workspace, and the workspace crates its dev-dependencies may hold besides itself and
+//!   the testkit. Among them: `hostkeeper-hook`, `hostkeeper-config`, `hostkeeper-wire`,
+//!   `hostkeeper-oidc`, `hostkeeper-tls`, `hostkeeper-enrollment` and `hostkeeper-proto` depend
+//!   on no workspace crate; `hostkeeper-steps` on the config crate and the hook; the coordinator
+//!   on wire, oidc, tls, enrollment and proto;
+//! - `hostkeeper-steps` and `hostkeeper-observe` reach `hostkeeper-launchd` through no chain of
+//!   rows (`NOT_ABOVE`);
+//! - `hostkeeper-launchd` may depend on `hostkeeper-steps` (its step launcher implements the
+//!   runner's `StepLauncher`): the edge runs from the macOS crate down to the shared layer, never
+//!   back;
 //! - `hostkeeper-testkit` depends on no workspace crate, and no crate has it but as a
 //!   dev-dependency;
 //! - no non-test source file under `crates/*/src` brings back a closed set of roles (the enum
 //!   `HostRole`, an enum named `...Role`, a `const` or `static` of `RoleName`, a function
 //!   returning an array of `RoleName`): roles are open strings.
 //!
-//! The rules are in `check.rs`. The fixture workspaces under `fixtures/` are copied to a
-//! scratch directory, locked offline and checked; each failing one has an exact expected
-//! message.
+//! The rules are in `check.rs`. The fixture workspace under `fixtures/clean` (one crate per
+//! row, with the row's normal dependencies) is copied to a scratch directory, edited, locked
+//! offline and checked; each failing edit has an exact expected message. The tests of the
+//! table itself are in `rows.rs`.
 
 mod check;
+mod rows;
 #[path = "../../src/testdir.rs"]
 mod testdir;
 
@@ -41,7 +43,8 @@ use testdir::TestDir;
 
 const HOOK_DEP: &str = "hostkeeper-hook = { path = \"../hostkeeper-hook\" }\n";
 const CONFIG_DEP: &str = "hostkeeper-config = { path = \"../hostkeeper-config\" }\n";
-const RIGHTS_DEP: &str = "hostkeeper-rights = { path = \"../hostkeeper-rights\" }\n";
+const STEPS_DEP: &str = "hostkeeper-steps = { path = \"../hostkeeper-steps\" }\n";
+const PLACED_DEP: &str = "hostkeeper-placed = { path = \"../hostkeeper-placed\" }\n";
 const TESTKIT_DEP: &str = "hostkeeper-testkit = { path = \"../hostkeeper-testkit\" }\n";
 const WIRE_DEP: &str = "hostkeeper-wire = { path = \"../hostkeeper-wire\" }\n";
 const OIDC_DEP: &str = "hostkeeper-oidc = { path = \"../hostkeeper-oidc\" }\n";
@@ -119,7 +122,18 @@ fn refused(message: &str) -> Result<(), String> {
 /// unseen, or the error not naming the chain from the member to the kbf package.
 #[test]
 fn layering_refuses_a_kbf_dependency() {
-    let dir = fixture("kbf-dependency", vec![]);
+    let mut edits = bare_crate("vendored", "kbf-types");
+    edits.extend(shim("kbf-types", "../kbf-types"));
+    edits.push(manifest_of(
+        "hostkeeper-hook",
+        layered(
+            "hostkeeper-hook",
+            &vendored_dep("shim"),
+            "",
+            &format!("hostkeeper-hook = {{ path = \".\" }}\n{TESTKIT_DEP}"),
+        ),
+    ));
+    let dir = fixture("clean", edits);
     assert_eq!(
         check(&dir),
         refused(&format!("{KBF_CHAIN} hostkeeper-hook -> shim -> kbf-types"))
@@ -131,7 +145,19 @@ fn layering_refuses_a_kbf_dependency() {
 /// longer depends on the contract being accepted.
 #[test]
 fn layering_refuses_hook_depending_on_steps() {
-    let dir = fixture("hook-depends-on-steps", vec![]);
+    let dir = fixture(
+        "clean",
+        vec![
+            manifest_of(
+                "hostkeeper-hook",
+                layered("hostkeeper-hook", STEPS_DEP, "", TESTKIT_DEP),
+            ),
+            manifest_of(
+                "hostkeeper-steps",
+                layered("hostkeeper-steps", "", "", TESTKIT_DEP),
+            ),
+        ],
+    );
     assert_eq!(
         check(&dir),
         refused(
@@ -153,54 +179,60 @@ fn the_workspace_keeps_its_layers() {
 }
 
 /// Catches: a check that refuses the shape the real workspace has (self dev-dependencies, the
-/// testkit as a dev-dependency, steps and rights on the config crate and the hook).
+/// testkit as a dev-dependency, every crate with the normal dependencies of its row).
 #[test]
 fn a_clean_fixture_passes() {
     let dir = fixture("clean", vec![]);
     assert_eq!(check(&dir), Ok(()));
 }
 
-/// A crate `shim` under the fixture's `vendored/` (outside the members) that depends on the
-/// workspace crate `target`, and `hostkeeper-steps` depending on the config crate, the hook and
-/// `shim`.
-fn steps_through_shim(target: &str) -> Vec<(String, String)> {
+/// The two files of a crate `shim` under the fixture's `vendored/` (outside the members) that
+/// depends on `target` at `path`, relative to the shim's directory.
+fn shim(target: &str, path: &str) -> Vec<(String, String)> {
     vec![
         (
             "vendored/shim/Cargo.toml".to_string(),
             layered(
                 "shim",
-                &format!("{target} = {{ path = \"../../crates/{target}\" }}\n"),
+                &format!("{target} = {{ path = \"{path}\" }}\n"),
                 "",
                 "",
             ),
         ),
         ("vendored/shim/src/lib.rs".to_string(), String::new()),
-        manifest_of(
-            "hostkeeper-steps",
-            layered(
-                "hostkeeper-steps",
-                &format!("{CONFIG_DEP}{HOOK_DEP}{}", vendored_dep("shim")),
-                "",
-                TESTKIT_DEP,
-            ),
-        ),
     ]
 }
 
+/// The crate `shim` depending on the workspace crate `target`, and `hostkeeper-steps` depending
+/// on the config crate, the hook and `shim`.
+fn steps_through_shim(target: &str) -> Vec<(String, String)> {
+    let mut edits = shim(target, &format!("../../crates/{target}"));
+    edits.push(manifest_of(
+        "hostkeeper-steps",
+        layered(
+            "hostkeeper-steps",
+            &format!("{CONFIG_DEP}{HOOK_DEP}{}", vendored_dep("shim")),
+            "",
+            TESTKIT_DEP,
+        ),
+    ));
+    edits
+}
+
 /// Catches: a layer rule that looks only at direct dependencies, so that the step runner
-/// reaches the rights crate through a crate outside the workspace and goes unseen; the refusal
-/// must name the chain.
+/// reaches a workspace crate it must not (here the placed-path crate) through a crate outside
+/// the workspace and goes unseen; the refusal must name the chain.
 #[test]
-fn layering_refuses_a_layer_reached_through_an_excluded_crate() {
-    let dir = fixture("clean", steps_through_shim("hostkeeper-rights"));
+fn steps_through_a_shim_crate_is_refused() {
+    let dir = fixture("clean", steps_through_shim("hostkeeper-placed"));
     assert_eq!(
         check(&dir),
         refused(
             "hostkeeper-steps depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-rights}, but must depend on exactly \
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-placed}, but must depend on exactly \
              {hostkeeper-config, hostkeeper-hook}\n\
-             hostkeeper-steps reaches the workspace crate hostkeeper-rights through \
-             hostkeeper-steps -> shim -> hostkeeper-rights"
+             hostkeeper-steps reaches the workspace crate hostkeeper-placed through \
+             hostkeeper-steps -> shim -> hostkeeper-placed"
         )
     );
 }
@@ -305,18 +337,43 @@ fn a_dev_only_kbf_dependency_is_refused() {
 fn a_build_only_kbf_dependency_is_refused() {
     let mut edits = bare_crate("vendored", "kbf-types");
     edits.push(manifest_of(
-        "hostkeeper-rights",
+        "hostkeeper-config",
         layered(
-            "hostkeeper-rights",
-            &format!("{CONFIG_DEP}{HOOK_DEP}"),
+            "hostkeeper-config",
+            "",
             &vendored_dep("kbf-types"),
-            &format!("hostkeeper-rights = {{ path = \".\" }}\n{TESTKIT_DEP}"),
+            &format!("hostkeeper-config = {{ path = \".\" }}\n{TESTKIT_DEP}"),
         ),
     ));
     let dir = fixture("clean", edits);
     assert_eq!(
         check(&dir),
-        refused(&format!("{KBF_CHAIN} hostkeeper-rights -> kbf-types"))
+        refused(&format!("{KBF_CHAIN} hostkeeper-config -> kbf-types"))
+    );
+}
+
+/// Catches: a kbf crate reached by a member only through a crate outside the workspace (here
+/// the placed-path crate through `shim`) going unseen; the refusal names the chain from the
+/// member.
+#[test]
+fn kbf_crate_in_the_chain_is_refused() {
+    let mut edits = bare_crate("vendored", "kbf-types");
+    edits.extend(shim("kbf-types", "../kbf-types"));
+    edits.push(manifest_of(
+        "hostkeeper-placed",
+        layered(
+            "hostkeeper-placed",
+            &format!("{CONFIG_DEP}{}", vendored_dep("shim")),
+            "",
+            TESTKIT_DEP,
+        ),
+    ));
+    let dir = fixture("clean", edits);
+    assert_eq!(
+        check(&dir),
+        refused(&format!(
+            "{KBF_CHAIN} hostkeeper-placed -> shim -> kbf-types"
+        ))
     );
 }
 
@@ -347,22 +404,16 @@ fn the_testkit_as_a_normal_dependency_is_refused() {
     let dir = fixture(
         "clean",
         vec![manifest_of(
-            "hostkeeper-rights",
-            layered(
-                "hostkeeper-rights",
-                &format!("{CONFIG_DEP}{HOOK_DEP}{TESTKIT_DEP}"),
-                "",
-                "",
-            ),
+            "hostkeeper-config",
+            layered("hostkeeper-config", TESTKIT_DEP, "", ""),
         )],
     );
     assert_eq!(
         check(&dir),
         refused(
-            "hostkeeper-rights depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-testkit}, but must depend on exactly \
-             {hostkeeper-config, hostkeeper-hook}\n\
-             hostkeeper-rights has a normal or build dependency on hostkeeper-testkit, \
+            "hostkeeper-config depends (normal or build) on the workspace crates \
+             {hostkeeper-testkit}, but must depend on exactly {}\n\
+             hostkeeper-config has a normal or build dependency on hostkeeper-testkit, \
              which is a dev-dependency only"
         )
     );
@@ -396,7 +447,7 @@ fn the_testkit_as_a_build_dependency_is_refused() {
 }
 
 /// Catches: the step runner gaining a normal dependency on another workspace crate (here the
-/// rights crate) beside the config crate and the hook contract.
+/// placed-path crate) beside the config crate and the hook contract.
 #[test]
 fn steps_with_an_extra_workspace_dependency_is_refused() {
     let dir = fixture(
@@ -405,7 +456,7 @@ fn steps_with_an_extra_workspace_dependency_is_refused() {
             "hostkeeper-steps",
             layered(
                 "hostkeeper-steps",
-                &format!("{CONFIG_DEP}{HOOK_DEP}{RIGHTS_DEP}"),
+                &format!("{CONFIG_DEP}{HOOK_DEP}{PLACED_DEP}"),
                 "",
                 TESTKIT_DEP,
             ),
@@ -415,16 +466,14 @@ fn steps_with_an_extra_workspace_dependency_is_refused() {
         check(&dir),
         refused(
             "hostkeeper-steps depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-rights}, but must depend on exactly \
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-placed}, but must depend on exactly \
              {hostkeeper-config, hostkeeper-hook}"
         )
     );
 }
 
-const STEPS_DEP: &str = "hostkeeper-steps = { path = \"../hostkeeper-steps\" }\n";
-
 /// Catches: the unpack crate gaining a normal dependency on a workspace crate beside its three
-/// (here the rights crate), or losing one (here the step runner, whose layout and seal it
+/// (here the placed-path crate), or losing one (here the step runner, whose layout and seal it
 /// uses); either is refused with the set it has and the set it must have.
 #[test]
 fn unpack_with_another_set_of_workspace_dependencies_is_refused() {
@@ -434,7 +483,7 @@ fn unpack_with_another_set_of_workspace_dependencies_is_refused() {
             "hostkeeper-unpack",
             layered(
                 "hostkeeper-unpack",
-                &format!("{CONFIG_DEP}{HOOK_DEP}{STEPS_DEP}{RIGHTS_DEP}"),
+                &format!("{CONFIG_DEP}{HOOK_DEP}{STEPS_DEP}{PLACED_DEP}"),
                 "",
                 TESTKIT_DEP,
             ),
@@ -444,7 +493,7 @@ fn unpack_with_another_set_of_workspace_dependencies_is_refused() {
         check(&extra),
         refused(
             "hostkeeper-unpack depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-rights, hostkeeper-steps}, \
+             {hostkeeper-config, hostkeeper-hook, hostkeeper-placed, hostkeeper-steps}, \
              but must depend on exactly {hostkeeper-config, hostkeeper-hook, hostkeeper-steps}"
         )
     );
@@ -470,29 +519,9 @@ fn unpack_with_another_set_of_workspace_dependencies_is_refused() {
     );
 }
 
-/// Catches: the rights crate losing its dependency on the hook contract or on the config crate
-/// (the set must be exactly the two, not merely a subset of them).
-#[test]
-fn rights_without_the_hook_is_refused() {
-    let dir = fixture(
-        "clean",
-        vec![manifest_of(
-            "hostkeeper-rights",
-            layered("hostkeeper-rights", CONFIG_DEP, "", TESTKIT_DEP),
-        )],
-    );
-    assert_eq!(
-        check(&dir),
-        refused(
-            "hostkeeper-rights depends (normal or build) on the workspace crates \
-             {hostkeeper-config}, but must depend on exactly {hostkeeper-config, hostkeeper-hook}"
-        )
-    );
-}
-
-/// Catches: the config crate depending on a workspace crate. It holds the loaders the rights
-/// crate builds on, so a dependency on the rights crate would turn the layers around, and one on
-/// the hook contract would tie the file formats to the hook's.
+/// Catches: the config crate depending on a workspace crate. It holds the loaders and the
+/// grammars the other crates build on, so a dependency on one of them would turn the layers
+/// around, and one on the hook contract would tie the file formats to the hook's.
 #[test]
 fn config_depending_on_a_workspace_crate_is_refused() {
     let dir = fixture(
@@ -511,8 +540,37 @@ fn config_depending_on_a_workspace_crate_is_refused() {
     );
 }
 
-/// Catches: the config crate as a dev-dependency of the hook contract or the step runner, which
-/// may hold only themselves and the testkit.
+/// Catches: the config crate gaining a normal dependency on the step runner, which is built on
+/// it. Cargo refuses the cycle, so the step runner leaves the config crate out here, and both
+/// rows are reported.
+#[test]
+fn config_with_a_normal_dependency_on_steps_is_refused() {
+    let dir = fixture(
+        "clean",
+        vec![
+            manifest_of(
+                "hostkeeper-config",
+                layered("hostkeeper-config", STEPS_DEP, "", TESTKIT_DEP),
+            ),
+            manifest_of(
+                "hostkeeper-steps",
+                layered("hostkeeper-steps", HOOK_DEP, "", TESTKIT_DEP),
+            ),
+        ],
+    );
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-config depends (normal or build) on the workspace crates \
+             {hostkeeper-steps}, but must depend on exactly {}\n\
+             hostkeeper-steps depends (normal or build) on the workspace crates \
+             {hostkeeper-hook}, but must depend on exactly {hostkeeper-config, hostkeeper-hook}"
+        )
+    );
+}
+
+/// Catches: the config crate as a dev-dependency of the step runner, which may hold only itself
+/// and the testkit: a dev-dependency is counted although the same crate is a normal one.
 #[test]
 fn steps_with_a_dev_dependency_on_config_is_refused() {
     let dir = fixture(
@@ -536,35 +594,10 @@ fn steps_with_a_dev_dependency_on_config_is_refused() {
     );
 }
 
-/// Catches: a dev-dependency of the step runner on a workspace crate other than the testkit.
+/// Catches: a dev-dependency of the hook contract on a workspace crate (here the config crate),
+/// which the contract's tests may not have: nothing but itself and the testkit.
 #[test]
-fn steps_with_a_dev_dependency_on_rights_is_refused() {
-    let dir = fixture(
-        "clean",
-        vec![manifest_of(
-            "hostkeeper-steps",
-            layered(
-                "hostkeeper-steps",
-                &format!("{CONFIG_DEP}{HOOK_DEP}"),
-                "",
-                &format!("{TESTKIT_DEP}{RIGHTS_DEP}"),
-            ),
-        )],
-    );
-    assert_eq!(
-        check(&dir),
-        refused(
-            "hostkeeper-steps has a dev-dependency on the workspace crate hostkeeper-rights, \
-             which is neither itself nor hostkeeper-testkit"
-        )
-    );
-}
-
-/// Catches: a dev-dependency of the hook contract on the rights crate (which depends on the
-/// hook in turn: a cycle through a dev-dependency, which Cargo allows), and a graph walk that
-/// loops on the cycle.
-#[test]
-fn the_hook_with_a_dev_dependency_on_rights_is_refused() {
+fn the_hook_with_a_dev_dependency_on_config_is_refused() {
     let dir = fixture(
         "clean",
         vec![manifest_of(
@@ -573,14 +606,40 @@ fn the_hook_with_a_dev_dependency_on_rights_is_refused() {
                 "hostkeeper-hook",
                 "",
                 "",
-                &format!("hostkeeper-hook = {{ path = \".\" }}\n{TESTKIT_DEP}{RIGHTS_DEP}"),
+                &format!("hostkeeper-hook = {{ path = \".\" }}\n{TESTKIT_DEP}{CONFIG_DEP}"),
             ),
         )],
     );
     assert_eq!(
         check(&dir),
         refused(
-            "hostkeeper-hook has a dev-dependency on the workspace crate hostkeeper-rights, \
+            "hostkeeper-hook has a dev-dependency on the workspace crate hostkeeper-config, \
+             which is neither itself nor hostkeeper-testkit"
+        )
+    );
+}
+
+/// Catches: a dev-dependency of the hook contract on the step runner (which depends on the hook
+/// in turn: a cycle through a dev-dependency, which Cargo allows), and a graph walk that loops
+/// on the cycle.
+#[test]
+fn the_hook_with_a_dev_dependency_on_steps_is_refused() {
+    let dir = fixture(
+        "clean",
+        vec![manifest_of(
+            "hostkeeper-hook",
+            layered(
+                "hostkeeper-hook",
+                "",
+                "",
+                &format!("hostkeeper-hook = {{ path = \".\" }}\n{TESTKIT_DEP}{STEPS_DEP}"),
+            ),
+        )],
+    );
+    assert_eq!(
+        check(&dir),
+        refused(
+            "hostkeeper-hook has a dev-dependency on the workspace crate hostkeeper-steps, \
              which is neither itself nor hostkeeper-testkit"
         )
     );
@@ -602,25 +661,21 @@ fn the_testkit_depending_on_a_workspace_crate_is_refused() {
     );
 }
 
-/// Catches: a layer crate that is missing from the workspace passing for lack of anything to
-/// check.
+/// Catches: a crate of the table that is missing from the workspace passing for lack of
+/// anything to check (here the web app's tests, which no crate depends on, left out of the
+/// members).
 #[test]
 fn a_missing_layer_crate_is_refused() {
     let root = (
         "Cargo.toml".to_string(),
-        "[workspace]\nresolver = \"3\"\nexclude = [\"vendored\"]\nmembers = [\n    \
-         \"crates/hostkeeper-config\",\n    \"crates/hostkeeper-enrollment\",\n    \
-         \"crates/hostkeeper-hook\",\n    \"crates/hostkeeper-steps\",\n    \
-         \"crates/hostkeeper-wire\",\n    \"crates/hostkeeper-oidc\",\n    \
-         \"crates/hostkeeper-tls\",\n    \"crates/hostkeeper-coordinator\",\n    \
-         \"crates/hostkeeper-testkit\",\n    \"crates/hostkeeper-unpack\",\n    \
-         \"crates/hostkeeper-proto\",\n]\n"
+        "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n\
+         exclude = [\"vendored\", \"crates/hostkeeper-ui-tests\"]\n"
             .to_string(),
     );
     let dir = fixture("clean", vec![root]);
     assert_eq!(
         check(&dir),
-        refused("hostkeeper-rights is not a workspace member")
+        refused("hostkeeper-ui-tests is not a workspace member")
     );
 }
 
@@ -850,7 +905,7 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
         "clean",
         vec![manifest_of(
             "hostkeeper-enrollment",
-            layered("hostkeeper-enrollment", HOOK_DEP, CONFIG_DEP, RIGHTS_DEP),
+            layered("hostkeeper-enrollment", HOOK_DEP, CONFIG_DEP, STEPS_DEP),
         )],
     );
     assert_eq!(
@@ -859,7 +914,7 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
             "hostkeeper-enrollment depends (normal or build) on the workspace crates \
              {hostkeeper-config, hostkeeper-hook}, but must depend on exactly {}\n\
              hostkeeper-enrollment has a dev-dependency on the workspace crate \
-             hostkeeper-rights, which is neither itself nor hostkeeper-testkit"
+             hostkeeper-steps, which is neither itself nor hostkeeper-testkit"
         )
     );
     // The coordinator depends on the enrollment crate, so it loses the dependency with it.
@@ -875,50 +930,5 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              but must depend on exactly {COORDINATOR_DEPS}\n\
              hostkeeper-enrollment is not a workspace member"
         ))
-    );
-}
-
-/// Catches: the step runner or the observer (which every platform builds) gaining a normal or
-/// build dependency on the launchd crate, directly or through a crate outside the workspace, so
-/// that the macOS code would be linked into the shared layers; and a fixture without the observer
-/// being refused for lack of it.
-#[test]
-fn hostkeeper_steps_and_observe_do_not_depend_on_launchd() {
-    let launchd_dep = "hostkeeper-launchd = { path = \"../hostkeeper-launchd\" }\n";
-    let mut with_launchd = bare_crate("crates", "hostkeeper-launchd");
-    with_launchd.extend(bare_crate("crates", "hostkeeper-observe"));
-    let mut direct = with_launchd.clone();
-    direct.push(manifest_of(
-        "hostkeeper-observe",
-        layered("hostkeeper-observe", launchd_dep, "", ""),
-    ));
-    let dir = fixture("clean", direct);
-    assert_eq!(
-        check(&dir),
-        refused(
-            "hostkeeper-observe must not depend (normal or build) on hostkeeper-launchd, \
-             but reaches it through hostkeeper-observe -> hostkeeper-launchd"
-        )
-    );
-    let mut through = with_launchd.clone();
-    through.extend(steps_through_shim("hostkeeper-launchd"));
-    through.push(manifest_of(
-        "hostkeeper-observe",
-        layered("hostkeeper-observe", &vendored_dep("shim"), "", ""),
-    ));
-    let dir = fixture("clean", through);
-    assert_eq!(
-        check(&dir),
-        refused(
-            "hostkeeper-steps depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-launchd}, but must depend on exactly \
-             {hostkeeper-config, hostkeeper-hook}\n\
-             hostkeeper-steps reaches the workspace crate hostkeeper-launchd through \
-             hostkeeper-steps -> shim -> hostkeeper-launchd\n\
-             hostkeeper-steps must not depend (normal or build) on hostkeeper-launchd, \
-             but reaches it through hostkeeper-steps -> shim -> hostkeeper-launchd\n\
-             hostkeeper-observe must not depend (normal or build) on hostkeeper-launchd, \
-             but reaches it through hostkeeper-observe -> shim -> hostkeeper-launchd"
-        )
     );
 }

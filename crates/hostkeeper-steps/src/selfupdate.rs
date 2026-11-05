@@ -1,4 +1,4 @@
-//! The updater's own update (docs/design/host-updates.md, 3.5, "Updating the updater itself").
+//! The updater's own update (docs/design/hostkeeper-design.md, 6.6).
 //!
 //! The updater is updated like any service, but never inside the trial it guards. After the
 //! update of the release has run its steps and `verify` has succeeded, a follow-on step
@@ -17,10 +17,12 @@
 //! commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], and adds the version to the local
 //! list of bad versions ([`crate::bad`]).
 //!
-//! On macOS the daemon runs from a LaunchDaemons plist ([`launchd_main_plist`]) that launchd keeps
-//! alive, and the fallback is a timer job ([`launchd_fallback_job`]) that runs the previous
-//! binary's `self-update-fallback` verb every interval, since launchd has neither a start limit
-//! nor `OnFailure=`.
+//! On macOS the daemon runs from its LaunchDaemons plist, which `hostkeeper-launchd` renders
+//! (`hostkeeper_launchd::plist::daemon_plist`: `KeepAlive` plain `true`, the counterpart of
+//! `Restart=always`, so the clean exit that [`follow_on`] asks for starts the new binary), and
+//! the fallback is a timer job ([`launchd_fallback_job`]) that runs the previous binary's
+//! `self-update-fallback` verb every interval, since launchd has neither a start limit nor
+//! `OnFailure=`.
 //!
 //! Two kinds of [`Layout`] share the switch:
 //!
@@ -683,38 +685,6 @@ pub fn fallback_unit(layout: &Layout, main_unit: &str) -> String {
     let dir = layout.dir().display();
     format!(
         "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart={dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
-    )
-}
-
-/// The plist of the updater's own daemon on macOS, for `/Library/LaunchDaemons`: it runs
-/// `<dir>/current`, starts at load, and is started again whenever it exits, with launchd waiting
-/// `throttle_secs` between starts.
-///
-/// `KeepAlive` is plain `true`, the counterpart of the unit's `Restart=always`: [`follow_on`]
-/// tells the caller to exit with status 0 so that the supervisor starts the new binary, and a
-/// `SuccessfulExit=false` condition would leave the daemon stopped after that clean exit.
-/// `label` and the directory are XML-escaped; the text is the same for the same arguments.
-pub fn launchd_main_plist(layout: &Layout, label: &str, throttle_secs: u32) -> String {
-    let dir = xml_escape(&layout.dir().display().to_string());
-    let label = xml_escape(label);
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <plist version=\"1.0\">\n\
-         <dict>\n\
-         \x20 <key>KeepAlive</key>\n\
-         \x20 <true/>\n\
-         \x20 <key>Label</key>\n\
-         \x20 <string>{label}</string>\n\
-         \x20 <key>ProgramArguments</key>\n\
-         \x20 <array>\n\
-         \x20   <string>{dir}/current</string>\n\
-         \x20 </array>\n\
-         \x20 <key>RunAtLoad</key>\n\
-         \x20 <true/>\n\
-         \x20 <key>ThrottleInterval</key>\n\
-         \x20 <integer>{throttle_secs}</integer>\n\
-         </dict>\n\
-         </plist>\n"
     )
 }
 

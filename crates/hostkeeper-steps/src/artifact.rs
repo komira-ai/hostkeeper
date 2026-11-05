@@ -1,8 +1,8 @@
 //! The verified artifact: a staged release tree and the digest it had when the updater verified
 //! it. Nothing from the tree runs unless it still has that digest, and the check is made again
-//! before every step, resumed ones included (docs/design/host-updates.md, 3.3 and 3.5).
+//! before every step, resumed ones included (docs/design/hostkeeper-design.md, 5.5 and 6.2).
 //!
-//! The staged tree is root-owned and read-only in root-owned parents (3.4.1), so it cannot be
+//! The staged tree is root-owned and read-only in root-owned parents (design section 4.7), so it cannot be
 //! swapped between this check and the exec; the check is what notices a tree that was changed
 //! anyway (a bad restore, a disk fault, a root that was tricked), and the runner treats it as a
 //! `halt`.
@@ -135,8 +135,9 @@ impl Staged {
     /// parents, so the digest and the place together mean the file cannot be swapped before the
     /// exec. A launcher that runs the path must run it from here, not from a path it built.
     ///
-    /// `hook` is the declaration's `binary`: relative, plain names only, a regular file of the
-    /// tree reached without passing a link at any component, so it cannot lead out of the tree.
+    /// `hook` is the program of the manifest's `[hook] command`: relative, plain names only, a
+    /// regular file of the tree reached without passing a link at any component, so it cannot lead
+    /// out of the tree.
     pub fn check(&self, hook: &Path) -> Result<PathBuf, ArtifactError> {
         self.check_as(hook, &trusted_owners(), &host_owner)
     }
