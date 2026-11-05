@@ -475,7 +475,10 @@ impl Coordinator {
     /// [`Self::heartbeat`] for a transport that carries typed orders (the `Order` of
     /// `hostkeeper.agent.v1`): with the answer, the operator's order for the host when one is
     /// due ([`crate::orders`]: an `abort` queued for it, or the `force` of a standing force),
-    /// which is sent instead of an update; the answer's reply is then `nothing`.
+    /// which is sent instead of an update, and the answer's reply is then `nothing`. When the
+    /// rollout gate orders an update with its terms (an agent that announced `order-v1`, a
+    /// registered digest), the update is the typed order ([`Order::Update`]): the order id, try
+    /// and package digest of the answer's terms, which the answer carries too.
     ///
     /// # Errors
     /// [`HeartbeatRefused`], as for [`Self::heartbeat`].
@@ -517,6 +520,23 @@ impl Coordinator {
         // The terms only to an agent that announced `order-v1` and a coordinator that
         // advertises it.
         let terms = terms.filter(|_| sends("order_id", features.as_deref()));
+        // On a transport that carries typed orders, the update is one too, with the same terms.
+        let order = order.or_else(|| match (&reply, &terms) {
+            (
+                ServiceReply::Update {
+                    service: Some(service),
+                    version,
+                },
+                Some(terms),
+            ) if orders => Some(Order::Update {
+                service: service.clone(),
+                version: version.clone(),
+                digest: terms.package_digest.clone(),
+                order_id: terms.order_id.as_str().to_owned(),
+                order_try: terms.order_try,
+            }),
+            _ => None,
+        });
         let answer = Answer {
             reply,
             order_id: terms.as_ref().map(|t| t.order_id.clone()),
