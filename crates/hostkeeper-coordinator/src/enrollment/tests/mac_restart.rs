@@ -60,11 +60,12 @@ fn state_of(enrollment: &Enrollment, key: &HostKey) -> RequestState {
         .state
 }
 
-/// What a second Mac request presenting `nonce` gets from `enrollment`.
-fn second_try(enrollment: &Enrollment, nonce: &[u8]) -> MacOutcome {
+/// What another Mac request, from the machine `machine_id`, presenting `nonce` gets from
+/// `enrollment`. Each try names a machine of its own, so none is a duplicate claim.
+fn second_try(enrollment: &Enrollment, machine_id: &str, nonce: &[u8]) -> MacOutcome {
     let key = HostKey::new();
     enrollment
-        .enroll(mac_request(&key, "machine-second", SERIAL, nonce))
+        .enroll(mac_request(&key, machine_id, SERIAL, nonce))
         .expect("enrolled");
     enrollment.mac_auto_approve(&key.key_hash(), nonce)
 }
@@ -107,7 +108,7 @@ fn a_nonce_is_consumed_with_the_approval_across_a_restart() {
     assert_eq!(state_of(&rig.enrollment, &key), RequestState::Approved);
     let restarted = rig.restart_with(|e| e.with_mac(policy()));
     assert_eq!(
-        second_try(&restarted, &nonce),
+        second_try(&restarted, "machine-restarted", &nonce),
         MacOutcome::Declined(MacDecline::NonceUsed)
     );
     assert_eq!(state_of(&restarted, &key), RequestState::Approved);
@@ -161,13 +162,13 @@ fn a_nonce_is_consumed_with_the_approval_across_a_restart() {
         .expect("answered");
     assert_eq!(state_of(&run.enrollment, &key), RequestState::Approved);
     assert_eq!(
-        second_try(&run.enrollment, &nonce),
+        second_try(&run.enrollment, "machine-before-restart", &nonce),
         MacOutcome::Declined(MacDecline::NonceUsed)
     );
     let restarted = run.restart_with(|e| e.with_mac(policy()));
     assert_eq!(state_of(&restarted, &key), RequestState::Approved);
     assert_eq!(
-        second_try(&restarted, &nonce),
+        second_try(&restarted, "machine-restarted", &nonce),
         MacOutcome::Declined(MacDecline::NonceUsed)
     );
 }
