@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 description = "The CI steps of this repository (cargo xtask <verb>)."
+# `cargo xtask` (the alias in .cargo/config.toml) runs this binary; the crate's other one is a
+# program of its tests.
+default-run = "xtask"
 
 [dependencies]
 clap.workspace = true
