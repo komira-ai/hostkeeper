@@ -4,6 +4,7 @@
 #![allow(dead_code, reason = "each test binary uses part of the shared support")]
 
 pub mod force;
+pub mod selfupdate;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

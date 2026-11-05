@@ -67,9 +67,20 @@ where
     S: Stream<Item = io::Result<(IO, Peer)>> + Send + 'static,
     IO: AsyncRead + AsyncWrite + Connected + Unpin + Send + 'static,
 {
+    serve_until(daemon, incoming, std::future::pending()).await
+}
+
+/// [`serve`], until `stop` completes: then no connection is taken any more, the requests in
+/// flight are answered, and it returns.
+pub async fn serve_until<S, IO, F>(daemon: Arc<Daemon>, incoming: S, stop: F) -> Result<(), Error>
+where
+    S: Stream<Item = io::Result<(IO, Peer)>> + Send + 'static,
+    IO: AsyncRead + AsyncWrite + Connected + Unpin + Send + 'static,
+    F: std::future::Future<Output = ()>,
+{
     let admitted = incoming.filter_map(admit);
     Server::builder()
-        .serve_with_incoming(AdminServer::new(AdminService { daemon }), admitted)
+        .serve_with_incoming_shutdown(AdminServer::new(AdminService { daemon }), admitted, stop)
         .await
 }
 

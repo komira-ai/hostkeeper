@@ -316,6 +316,9 @@ pub struct BootReport {
     pub reconciled: Option<Result<ReconcileReport, String>>,
     /// How the readiness notice went: `None` before it was sent.
     pub ready: Option<Result<(), String>>,
+    /// What the start settled of the update of hostkeeper itself that waited for the restart
+    /// ([`Daemon::settle_self_update`]), or why it could not: `None` before the start did it.
+    pub self_update: Option<Result<hostkeeper_steps::Settled, String>>,
 }
 
 /// Why the start pass could not run: the state directory cannot be listed.

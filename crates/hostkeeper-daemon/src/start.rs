@@ -5,8 +5,14 @@
 //! file, no socket); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a
 //! second daemon on the same state directory gets [`StartError::Locked`]); remove the
 //! registration socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is
-//! touched; [`before_records`] and [`boot_pass`]; bind the admin socket, removing a stale socket
-//! only now that the lock is held; [`after_boot`]. [`serve`] then serves the admin socket.
+//! touched; [`settle_self_update`]; [`before_records`] and [`boot_pass`]; bind the admin socket,
+//! removing a stale socket only now that the lock is held; [`after_boot`]. [`serve`] then serves
+//! the admin socket, until the daemon is asked to exit for its own update
+//! ([`crate::selfupdate::Restart`]).
+//!
+//! [`settle_self_update`] settles the update of hostkeeper itself that waits for this start
+//! (design section 6.6), before any step record is read by the boot pass: the new binary
+//! confirms it, any other records it failed.
 //!
 //! [`before_records`], [`boot_pass`] and [`after_boot`] are the boot work of design section 6.5.
 //! [`before_records`] removes what a crashed package fetch or unpack left, for every service
@@ -222,6 +228,7 @@ pub fn startup_notifying(
         packages: settings.packages_dir.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
+    settle_self_update(&daemon, &mut report);
     before_records(&daemon, &mut report);
     boot_pass(&daemon, &mut report)?;
     let listener = socket::bind(&settings.admin_socket).map_err(io_at(&settings.admin_socket))?;
@@ -233,6 +240,21 @@ pub fn startup_notifying(
         report,
         _lock: lock,
     })
+}
+
+/// The update of hostkeeper itself that waits for the restart, settled by this binary
+/// ([`Daemon::settle_self_update`]); one that cannot be settled is an alert, and the start goes
+/// on: the record keeps waiting, and the boot pass leaves it alone.
+fn settle_self_update(daemon: &Daemon, report: &mut BootReport) {
+    let settled = daemon
+        .settle_self_update()
+        .map_err(|error| error.to_string());
+    if let Err(error) = &settled {
+        daemon
+            .ctx()
+            .alert(crate::selfupdate::ALERT_SELF_UPDATE, error);
+    }
+    report.self_update = Some(settled);
 }
 
 /// Before the step records are read: remove what a crashed package fetch or unpack left under
@@ -289,12 +311,16 @@ fn after_boot(daemon: &Daemon, report: &mut BootReport, notifier: &dyn ReadyNoti
     daemon.after_boot(report, notifier);
 }
 
-/// Serves the admin socket of a started daemon, holding its lock, until the socket fails.
+/// Serves the admin socket of a started daemon, holding its lock, until the socket fails or the
+/// daemon is asked to exit for its own update: then the requests in flight are answered, and
+/// this returns `Ok`, for the binary to exit with status 0.
 pub async fn serve(started: Started) -> Result<(), StartError> {
     let path = &started.socket_path;
     let incoming = socket::incoming(started.listener).map_err(io_at(path))?;
+    let daemon = Arc::clone(&started.daemon);
+    let restart = async move { daemon.ctx().restart().wait().await };
     // `started._lock` stays held until this returns.
-    admin::serve(Arc::clone(&started.daemon), incoming)
+    admin::serve_until(Arc::clone(&started.daemon), incoming, restart)
         .await
         .map_err(StartError::from)
 }

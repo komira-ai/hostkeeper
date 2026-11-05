@@ -33,9 +33,7 @@ fn parse_flags(words: &[String]) -> Result<DaemonFlags, String> {
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
     match cli.command {
         Command::Daemon(flags) => Ok(flags),
-        Command::Ci(_) => {
-            Err("the line runs the CI client (`hostkeeper ci`), not the daemon".to_owned())
-        }
+        other => Err(format!("the line runs {other:?}, not the daemon")),
     }
 }
 

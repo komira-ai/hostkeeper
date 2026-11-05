@@ -1,8 +1,11 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
 //! `hostkeeper ci`, the CI client a service's release job runs once it has verified this binary
-//! (`hostkeeper_ci`, docs/deploy/ci-client.md). Configuration
-//! comes in as flags only, never from the environment (AGENTS.md S2); every default is a
-//! constant here.
+//! (`hostkeeper_ci`, docs/deploy/ci-client.md), and the two plumbing verbs of hostkeeper's own
+//! update (design section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir
+//! <dir>`, what the generated fallback unit runs ([`crate::fallback`]), and
+//! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
+//! nothing else ([`crate::selfupdate::protocol_line`]). Configuration comes in as flags only,
+//! never from the environment (AGENTS.md S2); every default is a constant here.
 //!
 //! The one value read from the environment is the address of systemd's notify socket, a
 //! platform-set marker, and only `--notify-systemd` makes the daemon use it.
@@ -79,6 +82,21 @@ pub enum Command {
     /// fleet (docs/deploy/ci-client.md).
     #[command(subcommand)]
     Ci(hostkeeper_ci::CiCommand),
+    /// Put the previous hostkeeper binary back after the new one failed to start, and record the
+    /// update failed and its version bad (run by the generated fallback unit).
+    SelfUpdateFallback(FallbackFlags),
+    /// Print this binary's self-update protocol and nothing else (run by the daemon before it
+    /// stages a new binary).
+    SelfUpdateProtocol,
+}
+
+/// The flags of `hostkeeper self-update-fallback`.
+#[derive(Clone, Debug, PartialEq, Eq, Args)]
+pub struct FallbackFlags {
+    /// The binary directory: `versions/`, `current` and `previous`, in the state directory of
+    /// the service `hostkeeper`.
+    #[arg(long)]
+    pub dir: PathBuf,
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -140,6 +158,11 @@ pub fn run(cli: Cli) -> ExitCode {
 pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
     let flags = match cli.command {
         Command::Daemon(flags) => flags,
+        Command::SelfUpdateFallback(flags) => return crate::fallback::main(&flags.dir),
+        Command::SelfUpdateProtocol => {
+            print!("{}", crate::selfupdate::protocol_line());
+            return ExitCode::SUCCESS;
+        }
         Command::Ci(command) => return hostkeeper_ci::run(command),
     };
     let started = notifier(&flags, notify_socket)

@@ -18,6 +18,11 @@
 //!   its lock alone, through the placed-path linker of `hostkeeper-placed` ([`verbs::force`]).
 //!   `uninstall` runs the sequence of design section 4.7 ([`uninstall`]), resumed from its
 //!   tombstone in `placed.json`.
+//! - [`selfupdate`]: the update of hostkeeper itself (design section 6.6): an `update` of the
+//!   service `hostkeeper` refused while another service's update is unfinished, its new binary's
+//!   protocol checked, its steps run under the step lock, then the follow-on that switches the
+//!   binary and asks the daemon to exit; at start, the update settled by the binary that runs.
+//!   [`fallback`] is the verb `self-update-fallback` the fallback unit runs.
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
 //!   `current`), the service's version directories but `current` and `previous` are deleted,
 //!   under the lock the order already holds.
@@ -27,7 +32,8 @@
 //!   [`refusal`]), and [`installed`] what the host runs.
 //! - [`observer`]: what the admin `Status` reports of a running service.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
-//! - [`cli`]: `hostkeeper daemon` and its flags; the binary only forwards to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ci`, and the plumbing verbs
+//!   `self-update-fallback` and `self-update-protocol`; the binary only forwards to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //!
@@ -42,6 +48,7 @@ pub mod boot;
 pub mod checks;
 pub mod cli;
 pub mod executor;
+pub mod fallback;
 mod files;
 pub mod halt;
 pub mod installed;
@@ -53,6 +60,7 @@ pub mod place;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
+pub mod selfupdate;
 pub mod socket;
 pub mod stamp;
 pub mod start;
