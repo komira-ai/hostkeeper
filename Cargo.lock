@@ -1258,16 +1258,20 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "hostkeeper-config",
+ "hostkeeper-enroll",
  "hostkeeper-hook",
  "hostkeeper-link",
  "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",
+ "p256",
+ "rcgen",
  "rustix",
  "serde",
  "serde_json",
  "thiserror",
  "toml",
+ "x509-cert",
 ]
 
 [[package]]
