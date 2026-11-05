@@ -9,11 +9,12 @@ import {
 
 const PAGE_SIZE = 50;
 // The grammars of operator.proto: a host id is a node id (1 to 63 of `[a-z0-9-]`, not starting
-// or ending with `-`), a role 1 to 32 of `[a-z0-9-]` with a letter first, a MAC six pairs of hex
+// or ending with `-`), a role 1 to 32 of `[a-z0-9-]` with a letter first, not ending with `-` and
+// with no `--`, a MAC six pairs of hex
 // digits separated all by `:` or all by `-`, or twelve hex digits, and a serial 1 to 64 of
 // `A-Za-z0-9._-`.
 const HOST_ID = /^(?=.{1,63}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-const ROLE = /^[a-z][a-z0-9-]{0,31}$/;
+const ROLE = /^(?!.*--)[a-z]([a-z0-9-]{0,30}[a-z0-9])?$/;
 const MAC = /^([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{2}(-[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{12})$/;
 const SERIAL = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_DATA_MACS = 16;
@@ -34,7 +35,7 @@ export function recordRequest(form) {
     return "A host id is 1 to 63 of a-z, 0-9 and -, not starting or ending with -.";
   }
   if (role !== "" && !ROLE.test(role)) {
-    return "A role is 1 to 32 of a-z, 0-9 and -, a letter first.";
+    return "A role is 1 to 32 of a-z, 0-9 and -, a letter first, not ending with - and with no --.";
   }
   const badMac = dataMacs.concat(bmcMac === "" ? [] : [bmcMac]).find((m) => !MAC.test(m));
   if (badMac !== undefined) {

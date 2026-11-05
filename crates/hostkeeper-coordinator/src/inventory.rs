@@ -32,7 +32,7 @@ pub const MAX_RECORDS: usize = 10_000;
 /// The most data MACs one record holds.
 pub const MAX_DATA_MACS: usize = 16;
 
-/// The most records or requests one page answers: a `limit` of 0, or above it, is this.
+/// The most records or requests one page answers: a `limit` of 0, or one above this, is this.
 pub const MAX_PAGE: usize = 256;
 
 /// The longest serial a record holds.
@@ -219,7 +219,7 @@ fn record_of(
     })
 }
 
-/// The page `limit` asks for: [`MAX_PAGE`] for 0 or more.
+/// The page `limit` asks for: [`MAX_PAGE`] for 0 or for a limit above it.
 fn page_size(limit: u32) -> usize {
     match usize::try_from(limit) {
         Ok(0) | Err(_) => MAX_PAGE,
@@ -339,7 +339,7 @@ impl Coordinator {
     }
 
     /// `Enrollment.ListRecords`: the records by host id, after the host id `page_token` names,
-    /// at most `limit` ([`MAX_PAGE`] for 0 or more). Changes nothing.
+    /// at most `limit` ([`MAX_PAGE`] for 0 or above it). Changes nothing.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a page token that is no host id).
@@ -414,7 +414,7 @@ impl Coordinator {
 
     /// `Enrollment.List`: the requests waiting for an operator, duplicate claims included,
     /// oldest first, after the request `page_token` names, at most `limit` ([`MAX_PAGE`] for 0
-    /// or more), each with its match against the records. A coordinator without enrollment has
+    /// or above it), each with its match against the records. A coordinator without enrollment has
     /// none. Changes nothing.
     ///
     /// # Errors
