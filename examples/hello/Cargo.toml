@@ -1,0 +1,23 @@
+[package]
+name = "hello"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "hello: the smallest real service a hostkeeper package carries, an HTTP server on loopback with an update hook, built to prove an install, an update and a rollback on the farm."
+
+# Standard library only at run time: no [dependencies]. The binary only forwards to the
+# library's `main`, so everything it does is measured (AGENTS.md T4).
+
+[dev-dependencies]
+# The hook contract the daemon reads a step with: the strict and lenient last-line readers, the
+# exit outcomes, what runs next, and the params file the daemon writes.
+hostkeeper-hook = { path = "../../crates/hostkeeper-hook" }
+# The manifest loader, which the tests load the committed package goldens with.
+hostkeeper-config = { path = "../../crates/hostkeeper-config" }
+hostkeeper-testkit = { path = "../../crates/hostkeeper-testkit" }
+
+[lints]
+workspace = true

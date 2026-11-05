@@ -34,19 +34,26 @@ Linux platforms; the installer pkg is for `macos-arm64`.
 | `hostkeeper-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-<version>-<platform>.tar.zst` | the hostkeeper self-update package: `manifest.toml`, `bin/hostkeeper` and, on Linux, `units/hostkeeper.service` (the macOS package has no unit) |
 | `hostkeeper-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
+| `hello-<version>-<platform>.tar.zst` | the package of `hello`, the example service of `examples/hello`: `manifest.toml`, `bin/hello` and, on Linux, `units/hello@.service`, on macOS `units/hello.a.plist` and `units/hello.b.plist` |
+| `hello-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
+| `hello-<version>-fail-ready-<platform>.tar.zst` | hello's failing build: the same package at the version `<version>-fail-ready`, whose unit (or plists) start `hello` with `--fail-ready`, so that it never reports ready (the build a host is rolled back from); it differs from the hello package only in the manifest's `version` and the command line its unit or plists start it with |
+| `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hostkeeper_<version>_<deb-arch>.deb` | the deb package |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package |
 | `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755) and `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), owned by root and wheel, no scripts; not signed, attested |
-| `index.json` | the release index: for each of the three platforms the package file, its SHA-256 and size |
+| `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
+| `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
+| `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
 | `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm` and `.pkg` |
 
-`index.json` is a lookup, not a trust anchor: it has no bundle of its own, and a host trusts a
-package for its own attestation and manifest, never for its entry in the index. (`SHA256SUMS`
-lists `index.json`, so the provenance of a release covers its bytes too.)
+Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
+own, and a host trusts a package for its own attestation and manifest, never for its entry in the
+index. (`SHA256SUMS` lists every index, so the provenance of a release covers their bytes too.)
+Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
 
 A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
-lacks any of them, and `index.json` lists the package of each. The pkg carries no installer
+lacks any of them, and each index lists the package of each. The pkg carries no installer
 signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
 verify it by its attestation, steps 3 and 4, like any other asset. The coordinator's assets
 (`hostkeeper-coordinator-<version>-<platform>.tar.gz`, `.cdx.json` and `.image.tar`, each attested)

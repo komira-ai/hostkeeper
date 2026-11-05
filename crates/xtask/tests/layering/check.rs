@@ -33,6 +33,7 @@ const PACKAGE: &str = "hostkeeper-package";
 const PLACED: &str = "hostkeeper-placed";
 const UI_TESTS: &str = "hostkeeper-ui-tests";
 const BINARY: &str = "hostkeeper";
+const HELLO: &str = "hello";
 
 /// One row of the layers: a crate, the workspace crates its normal and build dependencies must
 /// be exactly, and the workspace crates its dev-dependencies may hold besides itself and the
@@ -47,9 +48,11 @@ pub type Layer = (
 /// each crate's tests use: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature
 /// (a fake issuer), which a dev-dependency can do and a normal dependency must not, and run
 /// `hostkeeper-ctl` against an in-process coordinator; the daemon's and the link's tests run a
-/// coordinator in process; the observer's tests run hooks through the step runner; the CLI
+/// coordinator in process, and the daemon's run the example service hello's hook in process;
+/// hello's tests read its output with the hook contract and load its package with the
+/// manifest loader; the observer's tests run hooks through the step runner; the CLI
 /// crates' and the web app's tests read the protobuf descriptors.
-pub const LAYERS: [Layer; 21] = [
+pub const LAYERS: [Layer; 22] = [
     (BINARY, &[DAEMON], &[PROTO]),
     (CI, &[CTL], &[PROTO]),
     (CONFIG, &[], &[]),
@@ -64,10 +67,11 @@ pub const LAYERS: [Layer; 21] = [
         &[
             CI, CONFIG, CTL, ENROLL, HOOK, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS, UNPACK,
         ],
-        &[COORDINATOR, OIDC, WIRE],
+        &[COORDINATOR, HELLO, OIDC, WIRE],
     ),
     (ENROLL, &[CONFIG, PROTO, STEPS], &[]),
     (ENROLLMENT, &[], &[]),
+    (HELLO, &[], &[CONFIG, HOOK]),
     (HOOK, &[], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (

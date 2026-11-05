@@ -44,7 +44,7 @@ enum Error {
     #[error("list crates under {path}: {source}")]
     List {
         path: PathBuf,
-        source: std::io::Error,
+        source: gate::ListError,
     },
     #[error("--root {path}: {source}")]
     Root {
