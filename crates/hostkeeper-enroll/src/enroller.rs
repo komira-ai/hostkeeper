@@ -14,7 +14,8 @@
 //! coordinator: first the coordinator's CA, against the pinned `ca_sha256` (a mismatch is
 //! [`Error::UntrustedCoordinator`]: nothing is sent, and no key is made); then the key, which for a
 //! host not yet enrolled is read from the pending key or made and written durably, and only after
-//! that write returned is the request built and posted. A failed write posts nothing.
+//! that write returned is the request built and posted. A failed write posts nothing, and neither
+//! do claims the host cannot give ([`Error::Claims`]).
 //!
 //! A posted request is polled: an unsigned poll gets a nonce, a poll signed by the request key
 //! gets the answer. An issued certificate is checked (`verify.rs`) and stored as a new
@@ -27,7 +28,7 @@ use hostkeeper_steps::Clock;
 use x509_cert::Certificate;
 use x509_cert::der::DecodePem;
 
-use crate::claims::ClaimsSource;
+use crate::claims::{ClaimsError, ClaimsSource};
 use crate::key::{Entropy, HostKey, KeyError};
 use crate::store::{KeyFrom, Store, StoreError, StoreLock, Stored};
 use crate::validity::{self, WallClock};
@@ -118,6 +119,8 @@ pub enum Error {
     Store(#[from] StoreError),
     #[error("the host key: {0}")]
     Key(#[from] KeyError),
+    #[error("the host's claims: {0}")]
+    Claims(#[from] ClaimsError),
     #[error("the pki directory's generation {0} is not a certificate and key of this host")]
     Corrupt(u64),
     #[error("enrollment denied: {0}")]
@@ -263,7 +266,7 @@ impl Enroller {
         if self.posted.as_ref() != Some(&wanted) {
             let request = EnrollRequest {
                 csr_der: key.csr_der()?,
-                claims: self.ports.claims.claims(),
+                claims: self.ports.claims.claims()?,
                 image: self.settings.image.clone(),
                 renewal_of: renewal_of.clone(),
             };

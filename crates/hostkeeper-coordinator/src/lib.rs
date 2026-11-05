@@ -24,6 +24,7 @@
 //!   token, the status read by the operator token;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
+//! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
 //! - [`config`]: the flags and the start.
 //!
 //! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
@@ -54,6 +55,7 @@ pub mod reconcile;
 pub mod service;
 pub mod services;
 pub mod tokens;
+pub mod ui;
 
 #[cfg(test)]
 mod audit_file_tests;

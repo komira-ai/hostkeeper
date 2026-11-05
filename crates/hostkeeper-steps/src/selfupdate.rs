@@ -9,6 +9,11 @@
 //! *previous* binary's `self-update-fallback` verb, which calls [`Layout::flip_back`]: `current`
 //! points at the previous binary again and the unit is started.
 //!
+//! On macOS the daemon runs from a LaunchDaemons plist ([`launchd_main_plist`]) that launchd keeps
+//! alive, and the fallback is a timer job ([`launchd_fallback_job`]) that runs the previous
+//! binary's `self-update-fallback` verb every interval, since launchd has neither a start limit
+//! nor `OnFailure=`.
+//!
 //! Two kinds of [`Layout`] share the switch:
 //!
 //! The updater's binary directory ([`Layout::new`]):
@@ -505,4 +510,85 @@ pub fn fallback_unit(layout: &Layout, main_unit: &str) -> String {
     format!(
         "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart={dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
     )
+}
+
+/// The plist of the updater's own daemon on macOS, for `/Library/LaunchDaemons`: it runs
+/// `<dir>/current`, starts at load, and is started again whenever it exits, with launchd waiting
+/// `throttle_secs` between starts.
+///
+/// `KeepAlive` is plain `true`, the counterpart of the unit's `Restart=always`: [`follow_on`]
+/// tells the caller to exit with status 0 so that the supervisor starts the new binary, and a
+/// `SuccessfulExit=false` condition would leave the daemon stopped after that clean exit.
+/// `label` and the directory are XML-escaped; the text is the same for the same arguments.
+pub fn launchd_main_plist(layout: &Layout, label: &str, throttle_secs: u32) -> String {
+    let dir = xml_escape(&layout.dir().display().to_string());
+    let label = xml_escape(label);
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \x20 <key>KeepAlive</key>\n\
+         \x20 <true/>\n\
+         \x20 <key>Label</key>\n\
+         \x20 <string>{label}</string>\n\
+         \x20 <key>ProgramArguments</key>\n\
+         \x20 <array>\n\
+         \x20   <string>{dir}/current</string>\n\
+         \x20 </array>\n\
+         \x20 <key>RunAtLoad</key>\n\
+         \x20 <true/>\n\
+         \x20 <key>ThrottleInterval</key>\n\
+         \x20 <integer>{throttle_secs}</integer>\n\
+         </dict>\n\
+         </plist>\n"
+    )
+}
+
+/// The plist of the fallback timer job on macOS, labelled `<label>.fallback`: every
+/// `interval_secs` it runs the previous binary's `self-update-fallback` verb, the command
+/// [`fallback_unit`] runs, so the verb is the same code on both systems.
+///
+/// launchd has no start limit and no `OnFailure=` to run the job when the daemon fails its
+/// burst, so the job runs on a timer. What the verb does when it runs, such as flipping
+/// `current` back ([`Layout::flip_back`]), is the verb's; this function only produces the text.
+/// The job does not run at load.
+pub fn launchd_fallback_job(layout: &Layout, label: &str, interval_secs: u32) -> String {
+    let dir = xml_escape(&layout.dir().display().to_string());
+    let label = xml_escape(label);
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \x20 <key>Label</key>\n\
+         \x20 <string>{label}.fallback</string>\n\
+         \x20 <key>ProgramArguments</key>\n\
+         \x20 <array>\n\
+         \x20   <string>{dir}/previous</string>\n\
+         \x20   <string>self-update-fallback</string>\n\
+         \x20   <string>--dir</string>\n\
+         \x20   <string>{dir}</string>\n\
+         \x20 </array>\n\
+         \x20 <key>RunAtLoad</key>\n\
+         \x20 <false/>\n\
+         \x20 <key>StartInterval</key>\n\
+         \x20 <integer>{interval_secs}</integer>\n\
+         </dict>\n\
+         </plist>\n"
+    )
+}
+
+/// `text` for the inside of an XML element: `&`, `<`, `>`, `"` and `'` become entities.
+fn xml_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            other => out.push(other),
+        }
+    }
+    out
 }

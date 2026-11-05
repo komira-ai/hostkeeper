@@ -44,8 +44,9 @@ tooling:
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
 no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
-the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. No
-coordinator serves it yet.
+the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. The
+coordinator serves it under `/ui/` of its private listener when started with `--ui-dir`
+([docs/ui-serving.md](docs/ui-serving.md)).
 
 The design is [docs/design/host-updates.md](docs/design/host-updates.md).
 

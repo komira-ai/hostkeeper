@@ -52,8 +52,13 @@ pub enum LineError {
 /// The longest `reason` token.
 pub const MAX_REASON_LEN: usize = 64;
 
+/// The `reason` a hook gives with exit `75` (class `environment`) when the host holds live
+/// leases it will not cut: a Mac with live leases defers (design 5.9). The hook decides it in
+/// `prepare`, after undoing what it placed; the updater never decides it.
+pub const REASON_LEASES_LIVE: &str = "leases_live";
+
 /// Whether `reason` is a machine-readable token: lowercase letters, digits and `_`, at most
-/// [`MAX_REASON_LEN`] bytes, not empty (`state_invalid`, `drain_bound`).
+/// [`MAX_REASON_LEN`] bytes, not empty (`state_invalid`, `drain_bound`, `leases_live`).
 pub fn is_reason_token(reason: &str) -> bool {
     (1..=MAX_REASON_LEN).contains(&reason.len())
         && reason
