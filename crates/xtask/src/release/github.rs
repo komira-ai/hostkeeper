@@ -16,6 +16,9 @@ use super::ports::{
     Verifier,
 };
 
+/// What `gh api` prints on stderr for a path GitHub does not have.
+const NOT_FOUND: &str = "(HTTP 404)";
+
 /// The start of the URI a signing certificate names the workflow by.
 const SIGNER_URI_START: &str = "https://github.com/";
 
@@ -170,11 +173,18 @@ impl<E: Exec> Gh<E> {
 }
 
 impl<E: Exec> GitHubRuns for Gh<E> {
+    /// A workflow file that is not on the default branch has no runs: GitHub answers the path
+    /// with 404 Not Found, read here as an empty list, so that the plan waits for the workflow
+    /// (a required one that is not there yet) instead of failing. That only ever holds a
+    /// release back: no run, no release.
     fn runs(&self, repo: &Repo, workflow: &str, commit: &Commit) -> Result<Vec<Run>, PortError> {
         let path = format!(
             "repos/{repo}/actions/workflows/{workflow}/runs?head_sha={commit}&per_page=100"
         );
-        let (value, what) = self.api(&path)?;
+        let (value, what) = match self.api(&path) {
+            Err(e) if e.why.contains(NOT_FOUND) => return Ok(Vec::new()),
+            answer => answer?,
+        };
         let r = Reader { what: &what };
         r.list(&value["workflow_runs"], "workflow_runs")?
             .iter()
@@ -281,25 +291,37 @@ impl<E: Exec> ReleaseStore for Gh<E> {
 }
 
 impl<E: Exec> Verifier for Gh<E> {
-    fn verify(&self, file: &Path, bundle: Option<&Path>) -> Result<Vec<Attestation>, PortError> {
+    /// Runs the commands of docs/deploy/verify-a-release.md: step 3 online, step 4 with the
+    /// bundle (without its `--custom-trusted-root`: the runner fetches the trusted root), each
+    /// with `--format json` so that the attestations it verified are read back and checked again.
+    fn verify(
+        &self,
+        file: &Path,
+        bundle: Option<&Path>,
+        commit: &Commit,
+    ) -> Result<Vec<Attestation>, PortError> {
         let mut args = vec![
             "attestation",
             "verify",
             utf8_path("gh attestation verify", file)?,
+        ];
+        if let Some(bundle) = bundle {
+            args.push("--bundle");
+            args.push(utf8_path("gh attestation verify", bundle)?);
+        }
+        args.extend([
             "--repo",
             REPO,
             "--signer-workflow",
             SIGNER_WORKFLOW,
             "--source-ref",
             SIGNER_REF,
+            "--source-digest",
+            commit.as_str(),
             "--deny-self-hosted-runners",
             "--format",
             "json",
-        ];
-        if let Some(bundle) = bundle {
-            args.push("--bundle");
-            args.push(utf8_path("gh attestation verify", bundle)?);
-        }
+        ]);
         let (value, what) = self.json(&args)?;
         let r = Reader { what: &what };
         r.list(&value, "the reply")?

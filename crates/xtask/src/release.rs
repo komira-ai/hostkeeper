@@ -7,7 +7,7 @@
 //! - `set-version` ([`set_version`]): writes a version into the workspace manifest and the lock
 //!   file before a build.
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
-//!   ([`contract::stamp_string`]) and the check that a built binary prints exactly it.
+//!   ([`contract::stamp_of`]) and the check that a built binary prints exactly it.
 //! - `package` ([`package`]): the deterministic hostkeeper package, `.tar.zst`, and its SHA-256.
 //! - `index` ([`index`]): the release index, `index.json`: which package serves each platform.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
@@ -26,6 +26,8 @@ mod check;
 mod check_binary;
 mod compare_images;
 pub(crate) mod contract;
+#[cfg(test)]
+mod doc_tests;
 #[cfg(test)]
 mod fakes;
 mod git;
@@ -114,9 +116,10 @@ pub(crate) enum Verb {
         commit: Commit,
     },
     /// Run a binary with `--version` and refuse it unless it prints exactly the stamp of this
-    /// version and commit.
+    /// version and commit: `<file name> X.Y.Z+<12 hex>`, for a file named `hostkeeper` or
+    /// `hostkeeper-coordinator`.
     CheckBinary {
-        /// The binary to run.
+        /// The binary to run, under the name it ships with.
         binary: PathBuf,
         /// The version, `X.Y.Z`.
         version: Version,

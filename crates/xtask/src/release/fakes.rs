@@ -419,7 +419,12 @@ pub(crate) fn name_of(path: &Path) -> String {
 }
 
 impl Verifier for FakeVerifier {
-    fn verify(&self, file: &Path, bundle: Option<&Path>) -> Result<Vec<Attestation>, PortError> {
+    fn verify(
+        &self,
+        file: &Path,
+        bundle: Option<&Path>,
+        _commit: &Commit,
+    ) -> Result<Vec<Attestation>, PortError> {
         let call = match bundle {
             Some(b) => format!("offline {} {}", name_of(file), name_of(b)),
             None => format!("online {}", name_of(file)),

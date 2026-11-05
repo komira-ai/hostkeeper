@@ -20,6 +20,10 @@ sigstore.dev
 # declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
 apple.com
 
+# The registry of the distroless base image of the coordinator's container image
+# (packaging/container/Dockerfile, gcr.io/distroless/cc-debian13).
+gcr.io
+
 # Licence texts.
 apache.org
 developercertificate.org

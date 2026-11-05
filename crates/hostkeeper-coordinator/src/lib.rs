@@ -42,6 +42,7 @@
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
 //!   token, the status read by the operator token;
 //! - [`status`]: what an operator reads, and the convergence of a service;
+//! - [`stamp`]: the commit and the version `--version` prints;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
 //! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
@@ -51,9 +52,10 @@
 //! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
 
 /// The commit this coordinator was built from: the 12 digits `--version` shows after the
-/// `+`, or `unknown` where the build had no git checkout. `GET /v1/status` and
-/// `GET /v1/convergence` say it as `commit`.
-pub const BUILD_COMMIT: &str = env!("HOSTKEEPER_BUILD_COMMIT");
+/// `+` (from a release build's `RELEASE_COMMIT`, else from the checkout), or `unknown` where
+/// the build had neither (see [`stamp`]). `GET /v1/status` and `GET /v1/convergence` say it as
+/// `commit`.
+pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
 pub mod acks;
 pub(crate) mod audit_file;
@@ -86,6 +88,7 @@ pub mod reconcile;
 pub mod registry;
 pub mod service;
 pub mod services;
+pub mod stamp;
 pub mod status;
 pub mod tokens;
 pub mod ui;

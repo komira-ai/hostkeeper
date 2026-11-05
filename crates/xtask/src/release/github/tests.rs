@@ -165,11 +165,33 @@ fn a_reply_that_is_not_json_is_an_error() {
 fn a_failing_gh_reports_its_trimmed_stderr() {
     // Catches: a failed request whose stdout is parsed anyway, or whose reason is dropped.
     let path = runs_path("ci.yml");
-    let api = failing(&["gh", "api", &path], "gh: HTTP 404\n");
+    let api = failing(&["gh", "api", &path], "gh: Server Error (HTTP 500)\n");
     assert_eq!(
         api.runs(&repo(), "ci.yml", &commit()),
-        Err(failure(&format!("gh api {path}"), "gh: HTTP 404"))
+        Err(failure(
+            &format!("gh api {path}"),
+            "gh: Server Error (HTTP 500)"
+        ))
     );
+}
+
+#[test]
+fn a_workflow_that_is_not_on_main_has_no_runs() {
+    // Catches: a required workflow that does not exist yet failing every plan (GitHub answers
+    // its runs with 404), or any other failure read as no runs.
+    let path = runs_path("privileged.yml");
+    let api = failing(&["gh", "api", &path], "gh: Not Found (HTTP 404)\n");
+    assert_eq!(
+        api.runs(&repo(), "privileged.yml", &commit()),
+        Ok(Vec::new())
+    );
+    for stderr in ["gh: Forbidden (HTTP 403)\n", "gh: HTTP 404 page\n"] {
+        let api = failing(&["gh", "api", &path], stderr);
+        assert_eq!(
+            api.runs(&repo(), "privileged.yml", &commit()),
+            Err(failure(&format!("gh api {path}"), stderr.trim()))
+        );
+    }
 }
 
 #[test]
@@ -536,25 +558,24 @@ fn publish_turns_the_draft_into_a_published_release() {
 }
 
 fn verify_line(file: &str, bundle: Option<&str>) -> Vec<String> {
-    let mut line = words(&[
-        "gh",
-        "attestation",
-        "verify",
-        file,
+    let mut line = words(&["gh", "attestation", "verify", file]);
+    if let Some(bundle) = bundle {
+        line.push("--bundle".to_owned());
+        line.push(bundle.to_owned());
+    }
+    line.extend(words(&[
         "--repo",
         REPO,
         "--signer-workflow",
         SIGNER_WORKFLOW,
         "--source-ref",
         SIGNER_REF,
+        "--source-digest",
+        commit().as_str(),
         "--deny-self-hosted-runners",
         "--format",
         "json",
-    ]);
-    if let Some(bundle) = bundle {
-        line.push("--bundle".to_owned());
-        line.push(bundle.to_owned());
-    }
+    ]));
     line
 }
 
@@ -589,13 +610,14 @@ fn attestation() -> Attestation {
 }
 
 #[test]
-fn verify_online_pins_the_repository_signer_and_ref() {
-    // Catches: a verification that accepts any signer, any ref, or a self-hosted runner.
+fn verify_online_pins_the_repository_signer_ref_and_commit() {
+    // Catches: a verification that accepts any signer, any ref, any source commit, or a
+    // self-hosted runner.
     let line = verify_line("/x/asset", None);
     let reply = json!([element(SIGNER_URI)]).to_string();
     let api = scripted(&line, &reply);
     assert_eq!(
-        api.verify(Path::new("/x/asset"), None),
+        api.verify(Path::new("/x/asset"), None, &commit()),
         Ok(vec![attestation()])
     );
     assert_eq!(calls(&api), vec![line]);
@@ -610,7 +632,8 @@ fn verify_offline_adds_the_bundle() {
     assert_eq!(
         api.verify(
             Path::new("/x/asset"),
-            Some(Path::new("/x/asset.sigstore.json"))
+            Some(Path::new("/x/asset.sigstore.json")),
+            &commit()
         ),
         Ok(vec![attestation(), attestation()])
     );
@@ -622,7 +645,10 @@ fn verify_with_no_attestation_in_the_reply_is_an_empty_list() {
     // Catches: an empty reply turned into an error here, hiding the caller's own wording.
     let line = verify_line("/x/asset", None);
     let api = scripted(&line, "[]");
-    assert_eq!(api.verify(Path::new("/x/asset"), None), Ok(Vec::new()));
+    assert_eq!(
+        api.verify(Path::new("/x/asset"), None, &commit()),
+        Ok(Vec::new())
+    );
 }
 
 #[test]
@@ -632,7 +658,7 @@ fn verify_reports_a_failed_verification_with_gh_stderr() {
     let refs: Vec<&str> = line.iter().map(String::as_str).collect();
     let api = failing(&refs, "Error: verification failed\n");
     assert_eq!(
-        api.verify(Path::new("/x/asset"), None),
+        api.verify(Path::new("/x/asset"), None, &commit()),
         Err(failure(&line.join(" "), "Error: verification failed"))
     );
 }
@@ -649,7 +675,7 @@ fn verify_refuses_a_malformed_signer_uri() {
         let reply = json!([element(uri)]).to_string();
         let api = scripted(&line, &reply);
         assert_eq!(
-            api.verify(Path::new("/x/asset"), None),
+            api.verify(Path::new("/x/asset"), None, &commit()),
             Err(failure(
                 &line.join(" "),
                 &format!("buildSignerURI {uri:?} is not https://github.com/<workflow>@<ref>")
@@ -690,13 +716,13 @@ fn verify_refuses_an_element_that_lacks_a_field() {
         let reply = without(json!([element(SIGNER_URI)]), &pointer).to_string();
         let api = scripted(&line, &reply);
         assert_eq!(
-            api.verify(Path::new("/x/asset"), None),
+            api.verify(Path::new("/x/asset"), None, &commit()),
             Err(failure(&line.join(" "), why))
         );
     }
     let object = scripted(&line, "{}");
     assert_eq!(
-        object.verify(Path::new("/x/asset"), None),
+        object.verify(Path::new("/x/asset"), None, &commit()),
         Err(failure(
             &line.join(" "),
             "the reply is missing or not a list"
@@ -713,7 +739,10 @@ fn verify_refuses_a_file_or_bundle_path_that_is_not_utf8() {
         "gh attestation verify",
         "the path /x/a\u{fffd}b is not UTF-8",
     );
-    assert_eq!(api.verify(bad, None), Err(expected.clone()));
-    assert_eq!(api.verify(Path::new("/x/asset"), Some(bad)), Err(expected));
+    assert_eq!(api.verify(bad, None, &commit()), Err(expected.clone()));
+    assert_eq!(
+        api.verify(Path::new("/x/asset"), Some(bad), &commit()),
+        Err(expected)
+    );
     assert_eq!(calls(&api), Vec::<Vec<String>>::new());
 }

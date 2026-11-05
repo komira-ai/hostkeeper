@@ -139,9 +139,15 @@ pub(crate) struct Attestation {
 /// Verifies the attestations of a file: online (the verifier fetches them), or offline from a
 /// bundle file.
 pub(crate) trait Verifier {
-    /// The attestations of `file` that verify, read from `bundle` when one is given. An error is
-    /// a file with no attestation that verifies, or a verifier that could not run.
-    fn verify(&self, file: &Path, bundle: Option<&Path>) -> Result<Vec<Attestation>, PortError>;
+    /// The attestations of `file` that verify as attestations of the source commit `commit`,
+    /// read from `bundle` when one is given. An error is a file with no attestation that
+    /// verifies, or a verifier that could not run.
+    fn verify(
+        &self,
+        file: &Path,
+        bundle: Option<&Path>,
+        commit: &Commit,
+    ) -> Result<Vec<Attestation>, PortError>;
 }
 
 /// What a program printed and how it ended.

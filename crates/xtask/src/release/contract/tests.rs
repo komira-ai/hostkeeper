@@ -1,4 +1,5 @@
 use super::*;
+use crate::release::doc_tests::{DOC, documented_names};
 
 const BASELINE: &str = include_str!("../../../tests/release/asset_names.baseline");
 
@@ -35,11 +36,21 @@ fn missing_from(baseline: &[String], current: &[String]) -> Vec<String> {
 
 #[test]
 fn asset_names_are_the_documented_contract() {
-    // Catches: a name added, removed or renamed in `asset_names` without the baseline file
-    // changing with it, or a platform added or dropped.
+    // Catches: a name added, removed or renamed in `asset_names` without the baseline file and
+    // the list of every name in docs/deploy/verify-a-release.md changing with it, or either of
+    // those two changing alone, or a platform added or dropped.
     let v = version("7.8.9");
-    assert_eq!(asset_names(&v, &Platform::RELEASED), baseline_for(&v));
-    assert_eq!(asset_names(&v, &Platform::RELEASED).len(), 32);
+    let names = asset_names(&v, &Platform::RELEASED);
+    assert_eq!(names, baseline_for(&v));
+    assert_eq!(names.len(), 32);
+    assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
+    // The document changed alone: a name dropped, or one renamed.
+    let image = "hostkeeper-coordinator-<version>-<platform>.image.tar\n";
+    for to in ["", "hostkeeper-coordinator-<version>-<platform>.oci.tar\n"] {
+        assert_eq!(DOC.matches(image).count(), 1);
+        let doc = DOC.replacen(image, to, 1);
+        assert_ne!(documented_names(&doc, &v), Ok(names.clone()), "{to:?}");
+    }
 }
 
 #[test]

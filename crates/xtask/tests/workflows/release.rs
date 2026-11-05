@@ -6,12 +6,14 @@
 //!   the repository).
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
 //!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
-//!   `plan`, `verify` and `publish` under their exact `if:`, checks the binary in `verify`, and
+//!   `plan`, `verify` and `publish` under their exact `if:`, checks both shipped binaries
+//!   ([`SHIPPED_BINARIES`]) in `verify`, and
 //!   has no step that builds or signs ([`build_problems`]).
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
-//!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, and its
-//!   `attest` job, under its exact `if:`, runs no repository code: no checkout, and no `run:` but
-//!   the checks of [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`].
+//!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
+//!   the coordinator's image twice and compares the two ([`IMAGE_BUILD`], [`IMAGE_COMPARE`]), and
+//!   its `attest` job, under its exact `if:`, runs no repository code: no checkout, and no `run:`
+//!   but the checks of [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`].
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
@@ -47,6 +49,16 @@ pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workf
 
 /// The workflows whose completion starts release.yml, sorted: the three a release requires.
 pub const REQUIRED_WORKFLOWS: [&str; 3] = ["artifacts", "ci", "privileged"];
+
+/// The binaries a release ships, each of which the verify job of release.yml runs.
+pub const SHIPPED_BINARIES: [&str; 2] = ["hostkeeper", "hostkeeper-coordinator"];
+
+/// How each of the two builds of the coordinator's image in the image job of artifacts.yml
+/// starts; each must also pass `--no-cache`.
+pub const IMAGE_BUILD: &str = "docker buildx build --builder image-";
+
+/// How the image job's check that the two builds are byte for byte equal starts.
+pub const IMAGE_COMPARE: &str = "cargo xtask release compare-images ";
 
 /// The triggers artifacts.yml may have.
 pub const ARTIFACTS_TRIGGERS: [&str; 2] = ["push", "workflow_dispatch"];
@@ -260,12 +272,16 @@ fn release_problems(doc: &Node) -> Vec<String> {
             ));
         }
     }
-    let checks_binary = step_values(job(doc, "verify"), "run")
-        .iter()
-        .any(|r| r.contains("cargo xtask release check-binary"));
-    if !checks_binary {
-        problems
-            .push("release.yml: job verify runs no `cargo xtask release check-binary`".to_owned());
+    let verify_runs = step_values(job(doc, "verify"), "run");
+    for program in SHIPPED_BINARIES {
+        let checks = verify_runs.iter().any(|r| {
+            r.contains("cargo xtask release check-binary") && r.contains(&format!("/{program}\""))
+        });
+        if !checks {
+            problems.push(format!(
+                "release.yml: job verify runs no `cargo xtask release check-binary` of {program}"
+            ));
+        }
     }
     for (name, j) in entry(doc, "jobs").map_or(&[][..], entries) {
         let name = name.as_str().unwrap_or_default();
@@ -357,6 +373,19 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
     });
     if !computes || !whole {
         problems.push("artifacts.yml: job version must check out the whole history (`fetch-depth: 0`) and run `cargo xtask release version --commit \"$GITHUB_SHA\" --version-file VERSION`".to_owned());
+    }
+    let image_runs = step_values(job(doc, "image"), "run");
+    let builds: Vec<&&str> = image_runs
+        .iter()
+        .filter(|r| r.starts_with(IMAGE_BUILD))
+        .collect();
+    let fresh = builds.iter().all(|r| r.contains(" --no-cache "));
+    let compares = image_runs.iter().any(|r| r.starts_with(IMAGE_COMPARE));
+    if builds.len() != 2 || !fresh || !compares {
+        problems.push(format!(
+            "artifacts.yml: job image must build the image twice (`{IMAGE_BUILD}...` with \
+             `--no-cache`, two steps) and run `{IMAGE_COMPARE}`"
+        ));
     }
     let attest = job(doc, "attest");
     if text_of(attest, "if") != Some(SIGN_IF) {
