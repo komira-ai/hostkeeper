@@ -190,7 +190,8 @@ fn padded(len: usize) -> String {
 }
 
 /// Catches a reply read loosely or without a bound: a key the wire does not have, at the top
-/// level, is refused as an unknown key; a body over [`REPLY_MAX`] (by its length or by what was
+/// level, is refused as an unknown key, and one inside an acknowledgement makes the answer
+/// malformed, while an empty list of acknowledgements is read; a body over [`REPLY_MAX`] (by its length or by what was
 /// sent), a head over [`HEAD_MAX`], or more bytes than both is over the bound, and a body of
 /// exactly [`REPLY_MAX`] is read; an answer that is not one HTTP response with one length and a
 /// body of that length, or not one wire answer, is malformed; the coordinator's refusal is
@@ -219,9 +220,17 @@ fn the_mtls_link_refuses_a_reply_with_an_unknown_key_or_over_the_bound() {
             unknown.clone(),
         ),
         (
-            "an acknowledgement",
+            "an empty list of acknowledgements",
             http(200, r#"{"reply":"nothing","acks":[]}"#),
-            unknown,
+            nothing.clone(),
+        ),
+        (
+            "an acknowledgement with a key the wire does not have",
+            http(
+                200,
+                r#"{"reply":"nothing","acks":[{"service":"web","order_id":"o-1","order_try":1,"extra":1}]}"#,
+            ),
+            malformed.clone(),
         ),
         (
             "an order id without its try and digest",

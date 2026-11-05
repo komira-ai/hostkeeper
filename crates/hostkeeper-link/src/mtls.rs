@@ -18,11 +18,11 @@
 //!   wire's [`MAX_HEARTBEAT_BYTES`], which the coordinator reads no more of.
 //! - **What it takes back.** A 200 whose body is exactly an `Answer` of the wire: read strictly
 //!   (a key other than `reply`, `service`, `version`, `order_id`, `order_try`,
-//!   `package_digest`, `features` and `halts` is
-//!   [`ReplyFault::UnknownKey`]) and bounded (a body over [`REPLY_MAX`] or a head over
+//!   `package_digest`, `features`, `halts` and `acks` is [`ReplyFault::UnknownKey`]) and bounded (a body over [`REPLY_MAX`] or a head over
 //!   [`HEAD_MAX`] is [`ReplyFault::OverBound`]). An answer of another status whose body is the
 //!   coordinator's `{"error": <code>}` is [`LinkError::Refused`] by that code. An update with
-//!   its order terms (`order-v1`) is the loop's update order; one the loop cannot be given (no
+//!   its order terms (`order-v1`) is the loop's update order, and its `acks` are the loop's
+//!   acknowledgements; an update the loop cannot be given (no
 //!   service, no terms, or words the daemon cannot read) is logged once with why, and again
 //!   when it changes.
 //!
@@ -58,7 +58,7 @@ pub const REPLY_MAX: usize = 16 * 1024;
 pub const HEAD_MAX: usize = 8 * 1024;
 
 /// The keys of an answer of the JSON route.
-const ANSWER_KEYS: [&str; 8] = [
+const ANSWER_KEYS: [&str; 9] = [
     "reply",
     "service",
     "version",
@@ -67,6 +67,7 @@ const ANSWER_KEYS: [&str; 8] = [
     "package_digest",
     "features",
     "halts",
+    "acks",
 ];
 
 /// A byte stream to the coordinator.
