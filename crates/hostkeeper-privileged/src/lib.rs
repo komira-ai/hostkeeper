@@ -1,0 +1,31 @@
+//! What the privileged tests share, and the part of them that can be tested without root.
+//!
+//! The privileged tests (`tests/transient_unit.rs`, `tests/observer.rs`) run as root against the
+//! real systemd of a host, in `.github/workflows/privileged.yml` only, after a merge to main.
+//! Each file starts with `#![cfg(feature = "privileged")]`; the feature is off by default, so the
+//! pull-request set compiles none of them ([`PRIVILEGED`]). They drive the production adapters
+//! (`hostkeeper_steps::SystemdLauncher`, `hostkeeper_steps::DeadMan`, the observer's
+//! `SystemdManager` and `ProcProbe`), never a copy of them.
+//!
+//! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
+//!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its
+//!   interface is stable: the end-to-end tests drive it too.
+//! - [`host`]: the check a privileged test makes before it acts: root, and systemd as the
+//!   service manager.
+//! - [`rig`]: the names and files of one test: a unique unit name per unit, the params files of
+//!   the fixture, the unit file of `serve`, and the `systemctl` lines that tear every unit down.
+
+pub mod fixture;
+pub mod host;
+pub mod rig;
+
+pub use fixture::{Ending, FixtureError, Me, Mode, PidFile, Run, StepRun};
+pub use host::{HostError, SYSTEMD_RUNTIME_DIR, check_host};
+pub use rig::{Rig, RigError, SERVICE, UNIT_PREFIX};
+
+/// Whether this build has the feature `privileged`, which compiles the privileged tests. False in
+/// every build of the workspace's own test run; true only in privileged.yml's.
+pub const PRIVILEGED: bool = cfg!(feature = "privileged");
+
+#[cfg(test)]
+mod tests;

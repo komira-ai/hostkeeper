@@ -42,6 +42,7 @@ tooling:
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services it manages and the roles they run on (a rollout file), the desired version of each service, the heartbeat endpoint and the private endpoint of CI and the operator (named operator tokens), the convergence of a fleet; run as `hostkeeper-coordinator serve` |
 | [`hostkeeper-launchd`](crates/hostkeeper-launchd) | the macOS side behind existing ports: labels and plists, the `launchctl` port and its reader of `launchctl print`, the observer's service manager and process probe, and the unit control of the linking side, tested against fakes ([macOS](docs/macos.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
+| [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` only, after a merge to main (the step launcher's transient units, the dead-man's stop by name, the observer's systemd and `/proc` adapters), and the workload fixture `hostkeeper-fixture-hook` they drive; not shipped |
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui): every call it makes is a method of the protobuf descriptors, its sources keep no token and load nothing from another origin, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; not shipped |
 | `coverage-gate`, `xtask` | the 99% coverage gate and the CI steps |
 

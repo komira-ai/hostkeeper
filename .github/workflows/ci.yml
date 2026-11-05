@@ -2,13 +2,17 @@
 # lint (crates/xtask/tests/workflows) holds every workflow of this repository to commit-SHA
 # pinned actions with a version comment, to a top-level `permissions: {}`, to no
 # `pull_request_target`, to GitHub-hosted runners, to write scopes that only the jobs named
-# there may hold, and to no privileged or macOS job in a workflow that runs on pull requests.
+# there may hold, to no privileged or macOS job in a workflow that runs on pull requests, and to
+# no job as root (`sudo`, a privileged container) outside privileged.yml, which runs the tests of
+# crates/hostkeeper-privileged as root after a merge to main and by hand only.
 #
 # `lint` is the format, cargo-deny (licences, bans and sources), clippy, the build of the hook
 # SDK without its test feature, actionlint and the workflow lint. `test` runs every test under
 # cargo-llvm-cov with branch coverage and applies the 99% gate: every crate of the workspace
 # must reach 99.00% of its lines and 99.00% of its branches (crates/coverage-gate). Every crate
-# is judged, the tooling included, with no exclusion.
+# is judged, the tooling included, with no exclusion. The privileged tests of
+# crates/hostkeeper-privileged are behind its feature `privileged`, which this workflow never
+# turns on: they are neither built nor run here, and count toward no gate.
 #
 # The pull request and the push to main run the same jobs. A push to main also saves the Cargo
 # cache; a pull request only restores it.
