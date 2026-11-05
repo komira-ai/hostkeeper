@@ -73,7 +73,7 @@ What the host runs and how it is, and the coordinator's answer: at most one orde
 | flag | value | meaning |
 |---|---|---|
 | `--platform` | VALUE | The platform the host's releases are built for. |
-| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
+| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, and `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
 
 Through `--request` only: `agent` (hostkeeper.agent.v1.AgentInfo), `services` (repeated hostkeeper.agent.v1.ServiceBeat).
 

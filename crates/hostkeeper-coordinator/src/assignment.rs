@@ -356,7 +356,7 @@ pub fn roles_of(def: &ServiceDef, entries: Option<&ServiceAssignments>) -> Vec<S
     let base = def
         .role_names()
         .into_iter()
-        .filter(|role| entry(*role) != Some(Entry::Exclude))
+        .filter(|role| entry(role) != Some(Entry::Exclude))
         .map(str::to_owned);
     let added = entries
         .into_iter()
