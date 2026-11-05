@@ -75,7 +75,7 @@ pub enum LaunchctlError {
         /// The system's reason.
         why: String,
     },
-    /// The command was still running at its deadline.
+    /// The command's output had not ended by its deadline.
     #[error("launchctl {args} did not finish within its deadline and was killed")]
     TimedOut {
         /// The arguments, joined by spaces.
@@ -90,8 +90,11 @@ pub trait Launchctl: Send + Sync {
 }
 
 /// Runs a `launchctl` program as a child process with an empty environment, no standard input,
-/// and its standard output and standard error each kept to [`OUTPUT_MAX`] bytes. A child still
-/// running at the deadline is killed.
+/// and its standard output and standard error each kept to [`OUTPUT_MAX`] bytes. The deadline
+/// bounds the wait for both output streams to end, which for `launchctl` is its exit: a child
+/// whose output has not ended by then is killed and reaped. Once both streams have ended the
+/// child is waited for without a bound, as `hostkeeper-observe`'s `ProcessRunner` does, so a
+/// program that closes its output and keeps running would hold the call.
 #[derive(Clone, Debug)]
 pub struct LaunchctlProcess {
     program: PathBuf,
@@ -99,12 +102,14 @@ pub struct LaunchctlProcess {
 }
 
 impl LaunchctlProcess {
-    /// The system's `launchctl` ([`LAUNCHCTL`]), each command ended at `deadline`.
+    /// The system's `launchctl` ([`LAUNCHCTL`]), each command's output waited for at most
+    /// `deadline`.
     pub fn system(deadline: Duration) -> LaunchctlProcess {
         LaunchctlProcess::new(Path::new(LAUNCHCTL), deadline)
     }
 
-    /// `program` in the place of `launchctl`, each command ended at `deadline`.
+    /// `program` in the place of `launchctl`, each command's output waited for at most
+    /// `deadline`.
     pub fn new(program: &Path, deadline: Duration) -> LaunchctlProcess {
         LaunchctlProcess {
             program: program.to_owned(),
