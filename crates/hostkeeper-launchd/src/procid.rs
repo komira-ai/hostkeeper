@@ -110,14 +110,27 @@ impl<P: PidInfo, F: FileIdentity> ProcessProbe for LaunchdProcessProbe<P, F> {
             .files
             .device_inode_of(&file)
             .map_err(because(pid, &path))?;
-        if before != after {
-            return Err(ObserveError::Process {
-                pid,
-                why: format!("{} was replaced while it was read", path.display()),
-            });
-        }
+        same_file(pid, &path, before, after)?;
         Ok(digest)
     }
+}
+
+/// `Ok` when the path and the open descriptor name the same (device, inode); otherwise the file
+/// at `path` was replaced between the lookup and the read. Not generic, so its two outcomes are
+/// one function's, whatever ports the probe is built with.
+fn same_file(
+    pid: u32,
+    path: &Path,
+    before: (u64, u64),
+    after: (u64, u64),
+) -> Result<(), ObserveError> {
+    if before != after {
+        return Err(ObserveError::Process {
+            pid,
+            why: format!("{} was replaced while it was read", path.display()),
+        });
+    }
+    Ok(())
 }
 
 /// `DarwinPidInfo`: `PidInfo` over `proc_pidpath` and `proc_pidinfo` of the `libproc` crate;

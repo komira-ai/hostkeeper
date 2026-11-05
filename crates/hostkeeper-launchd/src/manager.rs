@@ -30,8 +30,15 @@ fn loaded(info: &JobInfo) -> Result<UnitState, String> {
     let (active, main_pid) = match &info.state {
         JobState::Running => (ActiveState::Active, info.pid),
         JobState::SpawnScheduled => (ActiveState::Activating, None),
-        JobState::Waiting | JobState::NotRunning if failed => (ActiveState::Failed, None),
-        JobState::Waiting | JobState::NotRunning => (ActiveState::Inactive, None),
+        // One arm and one `if`: a guard on an or-pattern is a branch per alternative.
+        JobState::Waiting | JobState::NotRunning => {
+            let active = if failed {
+                ActiveState::Failed
+            } else {
+                ActiveState::Inactive
+            };
+            (active, None)
+        }
         JobState::Other(word) => return Err(format!("the job state {word:?} is not known")),
     };
     Ok(UnitState {
