@@ -273,6 +273,22 @@ fn check_halts(halts: &BTreeMap<String, u64>) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The acks of an answer: at most [`MAX_ACKS`], each of a service name, none twice.
+fn check_acks(acks: &[VerdictAck]) -> Result<(), &'static str> {
+    if acks.len() > MAX_ACKS {
+        return Err("too many acks");
+    }
+    for (i, ack) in acks.iter().enumerate() {
+        if !is_service_name(&ack.service) {
+            return Err("an ack's service is not a service name");
+        }
+        if acks[..i].contains(ack) {
+            return Err("an ack is listed twice");
+        }
+    }
+    Ok(())
+}
+
 /// The step durations of a beat: at most [`MAX_STEP_SECS`] steps.
 pub(crate) fn step_secs_text<'de, D: Deserializer<'de>>(
     d: D,
@@ -293,11 +309,11 @@ pub(crate) fn is_false(flag: &bool) -> bool {
 /// The coordinator's answer to a heartbeat: the reply, and, to an agent that announced
 /// `agent_features`, the features the coordinator supports.
 ///
-/// Written flat: the reply's keys, then `features` when there is one, then `halts` when
-/// there are any. An agent that never announced features reads only
+/// Written flat: the reply's keys, then `features` when there is one, then `halts` and `acks`
+/// when there are any. An agent that never announced features reads only
 /// [`Reply`](crate::wire::Reply) or [`ServiceReply`], both of which refuse an unknown field,
-/// so `features` is `None` and `halts` empty for it and the bytes are those of the reply
-/// alone. Equality with a reply compares the reply and ignores `features`.
+/// so `features` is `None` and `halts` and `acks` empty for it and the bytes are those of the
+/// reply alone. Equality with a reply compares the reply and ignores the rest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Answer {
     /// What to do.
@@ -312,6 +328,10 @@ pub struct Answer {
     /// a clear is not lost with a heartbeat and a coordinator restart does not forget it.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub halts: BTreeMap<String, u64>,
+    /// The verdicts of the heartbeat that the coordinator has stored: the agent sends none of
+    /// them again. Only for an agent that announced [`VERDICT_ACKS_FEATURE`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub acks: Vec<VerdictAck>,
 }
 
 impl Answer {
@@ -322,8 +342,32 @@ impl Answer {
             reply,
             features: None,
             halts: BTreeMap::new(),
+            acks: Vec::new(),
         }
     }
+}
+
+/// The feature an agent announces to be acknowledged its verdicts ([`Answer::acks`]); one that
+/// does not is answered as before, and resends each verdict until it reports another.
+pub const VERDICT_ACKS_FEATURE: &str = "verdict-acks-v1";
+
+/// The most acks of an answer: one verdict of each service a heartbeat lists, at most
+/// [`MAX_SERVICES`], and the legacy service's.
+pub const MAX_ACKS: usize = MAX_SERVICES + 1;
+
+/// A verdict the coordinator acknowledges: the service it is about, and the order id and try
+/// it ends ([`crate::wire::UpdateResult::order_id`], [`crate::wire::UpdateResult::order_try`]).
+/// The service is named because an order id is the coordinator's per service: two services
+/// may each have a `force-1`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerdictAck {
+    /// The service the verdict is about.
+    pub service: String,
+    /// The order the verdict ends.
+    pub order_id: OrderId,
+    /// The try of the order, from 1.
+    pub order_try: u64,
 }
 
 impl PartialEq<ServiceReply> for Answer {
@@ -338,7 +382,8 @@ impl PartialEq<crate::wire::Reply> for Answer {
     }
 }
 
-/// An answer as it is read: [`ServiceReply`]'s fields and `features`, and no other.
+/// An answer as it is read: [`ServiceReply`]'s fields, `features`, `halts` and `acks`, and no
+/// other.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawAnswer {
@@ -348,6 +393,8 @@ struct RawAnswer {
     features: Option<Vec<String>>,
     #[serde(default)]
     halts: BTreeMap<String, u64>,
+    #[serde(default)]
+    acks: Vec<VerdictAck>,
 }
 
 impl<'de> Deserialize<'de> for Answer {
@@ -358,12 +405,14 @@ impl<'de> Deserialize<'de> for Answer {
             check_features(names).map_err(D::Error::custom)?;
         }
         check_halts(&raw.halts).map_err(D::Error::custom)?;
+        check_acks(&raw.acks).map_err(D::Error::custom)?;
         let reply = ServiceReply::from_parts(raw.reply, raw.service, raw.version)
             .map_err(D::Error::custom)?;
         Ok(Self {
             reply,
             features: raw.features,
             halts: raw.halts,
+            acks: raw.acks,
         })
     }
 }

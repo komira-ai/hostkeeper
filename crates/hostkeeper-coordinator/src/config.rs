@@ -56,6 +56,7 @@ use crate::service::{Clock, Coordinator};
 use crate::services::{Services, ServicesError};
 use crate::tokens::{OperatorTokens, TokensError};
 use crate::ui::{UiDir, UiDirError};
+use crate::verdict_file::{VerdictFile, VerdictsError, verdicts_path};
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -163,6 +164,9 @@ pub enum StartError {
     /// The file of spent token ids is refused.
     #[error(transparent)]
     Jti(#[from] JtiError),
+    /// The file of verdicts is refused.
+    #[error(transparent)]
+    Verdicts(#[from] VerdictsError),
 }
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
@@ -413,6 +417,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     );
     let desired = DesiredStore::open(&flags.state_file, legacy)?;
     let ops = OpsStore::open(&ops_path)?;
+    let verdicts = VerdictFile::open(&verdicts_path(&flags.state_file))?;
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
     let files = |client_ca| TlsFiles {
@@ -428,6 +433,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_quiet(Duration::from_secs(flags.quiet_secs))
         .with_prefixes(prefixes)
         .with_ops(ops)
+        .with_verdicts(verdicts)
         .with_ui(ui);
     let heartbeat_tls = match (
         &flags.enrollment_dir,

@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 use crate::names::Platform;
 use crate::version::Version;
 pub use crate::wire_report::{
-    Answer, Class, CommitState, DeferredReport, MAX_FEATURES, MAX_ORDER_ID, MAX_STEP_NAME,
-    MAX_STEP_SECS, MAX_TOKEN, OrderId, Phase, StepName, StepRun, Token,
+    Answer, Class, CommitState, DeferredReport, MAX_ACKS, MAX_FEATURES, MAX_ORDER_ID,
+    MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, OrderId, Phase, StepName, StepRun, Token,
+    VERDICT_ACKS_FEATURE, VerdictAck,
 };
 use crate::wire_report::{features_text, is_false, lenient, or_default, step_secs_text};
 

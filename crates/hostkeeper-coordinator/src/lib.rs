@@ -11,7 +11,9 @@
 //!   with the [`registry`] of every version CI has set and the digest of its package;
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
-//! - [`verdicts`]: the release failures heard, each counted once per host, order id and try;
+//! - [`verdicts`]: the release failures heard, each counted once per host, order id and try,
+//!   and the [`verdict_file`] that stores them with the verdict each host was last acknowledged,
+//!   before an answer acknowledges it;
 //! - [`bake`] and [`canary`]: how long an updated host holds its slot, and the hosts that go
 //!   alone first;
 //! - [`converge`]: whether the farm has reached the desired version, for CI to wait on;
@@ -82,6 +84,7 @@ pub mod services;
 pub mod status;
 pub mod tokens;
 pub mod ui;
+pub mod verdict_file;
 pub mod verdicts;
 
 #[cfg(test)]
@@ -180,3 +183,7 @@ mod testutil;
 mod tierstore_service_tests;
 #[cfg(test)]
 mod tokens_tests;
+#[cfg(test)]
+mod verdict_acks_tests;
+#[cfg(test)]
+mod verdict_file_tests;

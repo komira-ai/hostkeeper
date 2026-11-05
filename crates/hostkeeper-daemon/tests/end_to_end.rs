@@ -13,7 +13,7 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -32,9 +32,10 @@ use hostkeeper_link::testing::{
     FakeCerts, FakeLink, FakeSink, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
 };
 use hostkeeper_link::{
-    ANNOUNCED, BeatOutcome, CertState, ClientIdentity, CoordinatorLink, DEFAULT_HEARTBEAT_SECS,
-    Feature, Health, Heartbeat, Heartbeater, LinkError, LoopConfig, Order, OrderId, OrderResult,
-    Outcome, PackageDigest, Ports, Reason, Reply, ServiceFacts, StopFlag, Target, Verb,
+    ANNOUNCED, Acknowledged, BeatOutcome, CertState, ClientIdentity, CoordinatorLink,
+    DEFAULT_HEARTBEAT_SECS, Feature, Health, Heartbeat, Heartbeater, LinkError, LoopConfig, Order,
+    OrderId, OrderRef, OrderResult, Outcome, PackageDigest, Ports, Reason, Reply, ServiceFacts,
+    StopFlag, Target, Verb,
 };
 use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
@@ -150,6 +151,7 @@ fn update_result(result: &OrderResult) -> UpdateResult {
         Outcome::Failed | Outcome::Deferred { .. } => wire::Outcome::Failed,
     };
     UpdateResult {
+        order_id: wire::OrderId::parse(result.order.id.as_str()),
         order_try: Some(result.order.order_try),
         ..UpdateResult::new(wire_version(result.target.as_str()), outcome)
     }
@@ -230,7 +232,17 @@ fn reply_of(answer: &Answer, digest: &str) -> Reply {
                 (ServiceName::new(service).expect("a service"), *generation)
             })
             .collect(),
-        acknowledged: Vec::new(),
+        acknowledged: answer
+            .acks
+            .iter()
+            .map(|ack| Acknowledged {
+                service: ServiceName::new(&ack.service).expect("a service"),
+                order: OrderRef {
+                    id: OrderId::new(ack.order_id.as_str()).expect("an id"),
+                    order_try: ack.order_try,
+                },
+            })
+            .collect(),
     }
 }
 
@@ -239,6 +251,16 @@ fn reply_of(answer: &Answer, digest: &str) -> Reply {
 struct InProcess {
     coordinator: Arc<Coordinator>,
     digest: String,
+    /// What each heartbeat said of the service and what its answer ordered, in order.
+    seen: Arc<Mutex<Vec<Seen>>>,
+}
+
+/// One heartbeat of the scenario: whether it carried a verdict for the service, and whether the
+/// coordinator's answer ordered anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Seen {
+    verdict: bool,
+    ordered: bool,
 }
 
 impl CoordinatorLink for InProcess {
@@ -247,10 +269,19 @@ impl CoordinatorLink for InProcess {
             host_id: "host-1".parse().expect("a host id"),
             role: "daemon".parse().expect("a role"),
         };
-        self.coordinator
+        let reply = self
+            .coordinator
             .heartbeat(who, wire_beat(beat))
             .map(|answer| reply_of(&answer, &self.digest))
-            .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))
+            .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))?;
+        self.seen
+            .lock()
+            .expect("the log is not poisoned")
+            .push(Seen {
+                verdict: beat.services.iter().any(|s| s.last_update.is_some()),
+                ordered: reply.order.is_some(),
+            });
+        Ok(reply)
     }
 }
 
@@ -273,6 +304,8 @@ enum Stub {
 struct Ran {
     state: String,
     steps: Vec<Step>,
+    /// The heartbeats that reached the coordinator.
+    seen: Vec<Seen>,
 }
 
 /// The host as it starts: `web` at 0.0.0, healthy, nothing running.
@@ -343,11 +376,13 @@ fn scenario(name: &str, stub: Stub) -> Ran {
     let (status, body) = ci_call(&coordinator, "POST", DESIRED_PATH, &desired);
     assert_eq!(status, 200, "{body}");
 
+    let seen = Arc::new(Mutex::new(Vec::new()));
     let link: Arc<dyn CoordinatorLink> = match stub {
         Stub::Coordinator => Arc::new(FakeLink::default()),
         _ => Arc::new(InProcess {
             coordinator: Arc::clone(&coordinator),
             digest: d(),
+            seen: Arc::clone(&seen),
         }),
     };
     let dispatch = Arc::new(ManualDispatch::default());
@@ -375,6 +410,7 @@ fn scenario(name: &str, stub: Stub) -> Ran {
     let ran = Ran {
         state: convergence(&coordinator),
         steps: rig.launcher.steps(SERVICE),
+        seen: seen.lock().expect("the log is not poisoned").clone(),
     };
     drop(started);
     ran
@@ -432,4 +468,32 @@ fn the_end_to_end_fails_when_the_executor_is_stubbed() {
     let ran = scenario("e2e-no-executor", Stub::Executor);
     assert!(ran.steps.is_empty(), "{:?}", ran.steps);
     assert_ne!(ran.state, "converged");
+}
+
+/// Catches a verdict that is not acknowledged end to end, or an acknowledgement that does not
+/// reach the daemon's loop: the first heartbeat orders the update, the second carries the
+/// daemon's verdict, the coordinator stores it and names it in its answer, and the third carries
+/// no verdict for the service while the coordinator, still reading the acknowledged verdict,
+/// orders nothing.
+#[test]
+fn the_daemons_verdict_is_acknowledged_and_not_sent_or_reordered_again() {
+    let ran = scenario("e2e-ack", Stub::Nothing);
+    assert_eq!(
+        ran.seen,
+        [
+            Seen {
+                verdict: false,
+                ordered: true
+            },
+            Seen {
+                verdict: true,
+                ordered: false
+            },
+            Seen {
+                verdict: false,
+                ordered: false
+            },
+        ]
+    );
+    assert_eq!(ran.state, "converged");
 }
