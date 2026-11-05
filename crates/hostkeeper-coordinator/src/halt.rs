@@ -8,9 +8,16 @@
 //! which is what an operator alert watches.
 //!
 //! The halt is kept in the ops store ([`crate::ops`]). Raising it is written *after* it is in
-//! memory, so a halt that could not be written still stops the service; clearing it, which
-//! only an operator does (`clear_halt` on `/v1/operator`), is written *first*, so a clear
-//! that could not be written leaves it standing.
+//! memory, so a halt that could not be written still stops the service, and under a marker
+//! file ([`crate::ops::Write::Halt`]): a write that fails is tried again at every heartbeat
+//! until it lands, and a coordinator started over the marker refuses to start. Clearing it is
+//! written *first*, so a clear that could not be written leaves it standing.
+//!
+//! Who raised a halt says what lifts it ([`HaltOrigin`], design section 5.4). A halt the
+//! updater raised itself (a report whose reason is one of [`UPDATER_HALT_REASONS`]) is lifted
+//! by the operator's `clear_halt` and also by CI's set of a desired version other than its
+//! target ([`lift_by_ci`]): a fix-forward release is the remedy. A halt a hook raised (its exit
+//! 76; any other reason) is lifted only by `clear_halt`.
 //!
 //! The halted host keeps reporting the same `last_update` until it updates again, so a clear
 //! also records `(node, target)` as acknowledged, and a report for an acknowledged pair is
@@ -49,6 +56,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use hostkeeper_wire::HostId;
+use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Heartbeat, Outcome, Phase, Token, UpdateResult};
 
 use crate::decide::{Decision, Gate, decide_marked};
@@ -56,7 +64,7 @@ use crate::desired::Desired;
 use crate::fleet::{Fleet, Node};
 use crate::identity::Identity;
 use crate::membership::{self, Standing};
-use crate::ops::{AuditEntry, Halt, HaltAck, OpsError, OpsState, OpsStore, Write};
+use crate::ops::{AuditEntry, Halt, HaltAck, HaltOrigin, OpsError, OpsState, OpsStore, Write};
 use crate::services::Services;
 
 /// The feature an agent announces to be told the clear generations.
@@ -67,6 +75,23 @@ pub const COORDINATOR: &str = "coordinator";
 
 /// The check of a halt whose report named none.
 pub const UNSPECIFIED: &str = "unspecified";
+
+/// The reasons of the halts the updater raises itself, rather than a hook's check: a staged
+/// release whose digest changed after it was verified. A halt of any other reason, or of none,
+/// is a hook's.
+pub const UPDATER_HALT_REASONS: &[&str] = &["artifact_changed"];
+
+/// Who raised the halt `report` reports: the updater for one of [`UPDATER_HALT_REASONS`], a hook
+/// for any other, and for none.
+#[must_use]
+pub fn origin_of(report: Option<&UpdateResult>) -> HaltOrigin {
+    let reason = report.and_then(|r| r.reason.as_ref()).map(Token::as_str);
+    if reason.is_some_and(|reason| UPDATER_HALT_REASONS.contains(&reason)) {
+        HaltOrigin::Updater
+    } else {
+        HaltOrigin::Hook
+    }
+}
 
 /// The halt `last` reports for the node `id`, if it reports one: a failed update in the
 /// `halt` phase. The check is the report's reason.
@@ -85,6 +110,7 @@ fn reported(last: Option<&UpdateResult>, id: &HostId) -> Option<Halt> {
             .to_owned(),
         target: last.target.clone(),
         report: Some(last.clone()),
+        origin: origin_of(Some(last)),
     })
 }
 
@@ -203,18 +229,19 @@ fn end_ack(ops: &OpsStore, service: &str, id: &HostId, report: Option<&Halt>) ->
 }
 
 /// Raises `halt` for `service`, or keeps it for the clear when the service is halted already,
-/// unless an operator cleared exactly this report: in memory first, then written. Which of
-/// these it is is decided under the writers' lock, on the state the change is applied to, so a
-/// clear or another host's halt that got there first is seen. A failed write is logged and the
-/// change stands in memory (a restart before the next write forgets it, and the host's next
-/// report makes it again).
+/// unless an operator cleared exactly this report: in memory first, then written under the
+/// unfinished-halt marker ([`Write::Halt`]). Which of these it is is decided under the writers'
+/// lock, on the state the change is applied to, so a clear or another host's halt that got there
+/// first is seen. A failed write is logged and the change stands in memory; the write is tried
+/// again at every heartbeat until it lands ([`OpsStore::retry_unwritten`]), and the marker
+/// stops a restart before then.
 ///
 /// A report made while the halt stands is kept once per host, with the halt (`halt_seen`), for
 /// the clear to acknowledge: a report the halt itself holds, or one kept already, is not kept
 /// again.
 fn raise(ops: &OpsStore, service: &str, halt: Halt) {
     let node_id = halt.node_id.clone();
-    let changed = ops.decide_change(Write::AfterMemory, |state| {
+    let changed = ops.decide_change(Write::Halt, |state| {
         let marks = state.services.entry(service.to_owned()).or_default();
         let acked = halt.report.as_ref().is_some_and(|report| {
             marks
@@ -261,8 +288,66 @@ fn raise(ops: &OpsStore, service: &str, halt: Halt) {
             service,
             %node_id,
             %why,
-            "a halt or a halt report could not be written to the ops file: it stands in memory"
+            "a halt or a halt report could not be written to the ops file: it stands in memory, and the write is tried again at every heartbeat"
         ),
+    }
+}
+
+/// What CI's set of `version` for `service` did to its halt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lifted {
+    /// There is no halt, or it stays: a hook raised it, or it is of `version` itself.
+    Nothing,
+    /// The halt the updater raised was lifted, and its generation counted.
+    Lifted,
+}
+
+/// Lifts the halt of `service` when the updater raised it and CI has set a version other than
+/// its target, `version`, in the run of `workflow`: written first, like the operator's clear,
+/// and audited as CI's (`lift_halt`). As a clear does, it acknowledges the halt's report and
+/// every report kept while it stood, and counts the generation, so the agents lift their hold.
+/// A halt with a report kept while it stood that a hook raised is not lifted: that report is a
+/// hook's halt of the service, which only `clear_halt` lifts.
+///
+/// # Errors
+/// [`OpsError`]: the ops file could not be written; the halt stands.
+pub fn lift_by_ci(
+    ops: &OpsStore,
+    service: &str,
+    version: &Version,
+    workflow: &str,
+) -> Result<Lifted, OpsError> {
+    let lifted = ops.decide_change(Write::BeforeMemory, |state| {
+        let Some(marks) = state.services.get_mut(service) else {
+            return Err(Unchanged::Known);
+        };
+        let liftable = marks.halt.as_ref().is_some_and(|halt| {
+            halt.origin == HaltOrigin::Updater
+                && halt.target != *version
+                && marks
+                    .halt_seen
+                    .iter()
+                    .all(|seen| origin_of(seen.report.as_ref()) == HaltOrigin::Updater)
+        });
+        let Some(halt) = marks.halt.take().filter(|_| liftable) else {
+            return Err(Unchanged::Known);
+        };
+        let mut entry = AuditEntry::new(crate::reconcile::CI, "lift_halt");
+        entry.service = Some(service.to_owned());
+        entry.node_id = Some(halt.node_id.clone());
+        entry.reason = Some(format!("{version} set by {workflow}"));
+        let seen = std::mem::take(&mut marks.halt_seen);
+        for report in std::iter::once(HaltAck::from(halt)).chain(seen) {
+            marks.halt_acked.retain(|ack| ack.node_id != report.node_id);
+            marks.halt_acked.push(report);
+        }
+        marks.halt_generation = marks.halt_generation.saturating_add(1);
+        Ok(entry)
+    });
+    match lifted {
+        Ok(_) => Ok(Lifted::Lifted),
+        Err(Unchanged::Store(why)) => Err(why),
+        Err(Unchanged::Known | Unchanged::Acked | Unchanged::NoAck) => Ok(Lifted::Nothing),
     }
 }
 

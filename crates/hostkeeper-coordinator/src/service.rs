@@ -13,11 +13,11 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Agent, Answer, Heartbeat, LEGACY_AGENT_NAME, ServiceReply};
 use serde::Serialize;
 
-use crate::acks::{clear_bad, release_ack};
+use crate::acks::release_ack;
 use crate::converge::{Convergence, RoleCounts, converge_service, role_counts};
 use crate::decide::{Decision, Why};
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
-use crate::fleet::{Fleet, Host, Node};
+use crate::fleet::{Fleet, Host, Node, QUIET_START};
 use crate::halt;
 use crate::identity::Identity;
 use crate::membership::{Member, Standing, account, deferred_count, members, standing};
@@ -39,7 +39,8 @@ pub const MAX_BEARER_BYTES: usize = 8192;
 #[error("it lists no services and no legacy service is set")]
 pub struct HeartbeatRefused;
 
-/// Why the desired state was not set.
+/// Why the desired state was not set. Every refusal is decided before anything changes: a
+/// refused set leaves the state file, the ops file and memory as they were.
 #[derive(Debug, thiserror::Error)]
 pub enum SetError {
     /// The caller has no valid CI token: no bearer, or the verifier refused it (the name is
@@ -55,12 +56,47 @@ pub enum SetError {
     /// The state file could not be written.
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// The ops file could not be written (the bad mark of the version could not be cleared).
+    /// The ops file could not be written: the desired state is set, and the halt the updater
+    /// raised, which the set lifts, stands. Setting the same state again is safe and tries the
+    /// lift again.
     #[error(transparent)]
     Ops(#[from] OpsError),
     /// The allow-list entry that admitted the token does not name this service.
     #[error("the token may not set this service")]
     Forbidden,
+    /// The version is below the service's `min_version`.
+    #[error("below_min_version: the version is below the service's min_version")]
+    BelowMinVersion,
+    /// The service's `version_scheme` cannot order the version.
+    #[error("unparseable_version: the service's version scheme cannot read the version")]
+    UnparseableVersion,
+    /// The version is marked bad: only the operator's unmark or a force lifts the mark.
+    #[error("bad_version: the version is marked bad")]
+    BadVersion,
+    /// CI set the version before with another package digest: a changed artifact for a version.
+    #[error("digest_conflict: the version was set before with another package digest")]
+    DigestConflict,
+}
+
+impl SetError {
+    /// The closed reason token of a refusal of the version itself (`below_min_version`,
+    /// `unparseable_version`, `bad_version`, `digest_conflict`), which the answer says; `None`
+    /// for every other error.
+    #[must_use]
+    pub const fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::BelowMinVersion => Some("below_min_version"),
+            Self::UnparseableVersion => Some("unparseable_version"),
+            Self::BadVersion => Some("bad_version"),
+            Self::DigestConflict => Some("digest_conflict"),
+            Self::Unauthorized(_)
+            | Self::Unavailable
+            | Self::Invalid(_)
+            | Self::Store(_)
+            | Self::Ops(_)
+            | Self::Forbidden => None,
+        }
+    }
 }
 
 /// Why a CI token was not accepted.
@@ -241,6 +277,24 @@ pub const FEATURES: &[&str] = &[
     crate::membership::HEARTBEAT_V2,
 ];
 
+/// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
+/// each with the feature: the one place that says which. An older agent reads the answer
+/// strictly and refuses a field it does not know, so a field listed here is left out of the
+/// answer to an agent that did not announce its feature, and to every agent while this
+/// coordinator does not advertise it ([`FEATURES`]). A field not listed is sent to every agent.
+pub const GATED_FIELDS: &[(&str, &str)] = &[("halts", halt::FEATURE)];
+
+/// Whether the answer field `field` goes to an agent whose announced features this coordinator
+/// also advertises are `agreed` (none for an agent that announced none): yes for a field
+/// [`GATED_FIELDS`] does not list, and for one it lists only when its feature is agreed.
+#[must_use]
+pub fn sends(field: &str, agreed: Option<&[String]>) -> bool {
+    GATED_FIELDS
+        .iter()
+        .find(|(name, _)| *name == field)
+        .is_none_or(|(_, feature)| agreed.is_some_and(|names| names.iter().any(|n| n == feature)))
+}
+
 /// How long a host's warn about one dropped fact is silent after it was logged.
 const EXTRAS_LOG_EVERY: Duration = Duration::from_secs(3600);
 
@@ -302,7 +356,7 @@ impl Coordinator {
     ) -> Self {
         let started = clock();
         Self {
-            fleet: Mutex::new(Fleet::new(started)),
+            fleet: Mutex::new(Fleet::new(started, QUIET_START)),
             desired,
             services: Services::default(),
             legacy: None,
@@ -318,6 +372,15 @@ impl Coordinator {
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
+    }
+
+    /// The same coordinator ordering nothing for `quiet` after its start instead of
+    /// [`QUIET_START`] (`--quiet-secs`, whose floor [`crate::config::build`] checks).
+    #[must_use]
+    pub fn with_quiet(mut self, quiet: Duration) -> Self {
+        let fleet = self.fleet.get_mut().unwrap_or_else(PoisonError::into_inner);
+        *fleet = Fleet::new(fleet.started(), quiet);
+        self
     }
 
     /// The same coordinator over `services` instead of none.
@@ -495,12 +558,11 @@ impl Coordinator {
         });
         // The generations only to an agent that announced `halt-v1` and a coordinator that
         // advertises it: an older agent's strict reader refuses the field.
-        let halts = features
-            .as_ref()
-            .filter(|names| names.iter().any(|name| name == halt::FEATURE))
-            .map_or_else(BTreeMap::new, |_| {
-                halt::generations(&self.ops, &self.services)
-            });
+        let halts = if sends("halts", features.as_deref()) {
+            halt::generations(&self.ops, &self.services)
+        } else {
+            BTreeMap::new()
+        };
         Ok(Answer {
             reply,
             features,
@@ -527,6 +589,8 @@ impl Coordinator {
         // made under: a halt is never raised between another heartbeat's decision to order and
         // its order. The lock order is the fleet's, then the ops store's, as everywhere.
         let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        // A halt whose write failed is written again at every heartbeat until it lands.
+        self.ops.retry_unwritten(now);
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
         let platform = beat.platform;
         let ops = self.ops.state();
@@ -581,6 +645,12 @@ impl Coordinator {
         // The hosts' words are in: record the last good versions and roll back what failed,
         // before the orders below read the desired states.
         for def in names.iter().filter_map(|name| self.services.get(name)) {
+            // Only the verdicts about the desired version count, and not those an override
+            // acknowledged; the others are forgotten.
+            if let Some(want) = self.desired.get(&def.name) {
+                let acked = self.ops.marks(&def.name).failure_acked;
+                fleet.keep_verdicts_of(&def.name, &want.version, &acked);
+            }
             reconcile(def, &self.ops, &self.desired, &fleet, now);
         }
         let desired = self.desired.all();
@@ -619,7 +689,9 @@ impl Coordinator {
             .ok_or(CiRefused::Unauthorized("missing"))?;
         match self.verifier.verify(token).await {
             Ok(verified) => Ok(verified),
-            Err(Refusal::KeysUnavailable) => Err(CiRefused::Unavailable),
+            Err(Refusal::KeysUnavailable | Refusal::ReplayCacheUnavailable) => {
+                Err(CiRefused::Unavailable)
+            }
             Err(refusal) => Err(CiRefused::Unauthorized(refusal.name())),
         }
     }
@@ -627,6 +699,15 @@ impl Coordinator {
     /// Sets the desired state from `body`, if `bearer` is a GitHub Actions OIDC token the
     /// allow-list accepts. The token is checked before the body is parsed or any state is touched
     /// (the transport has already read the body, at most [`crate::http::MAX_DESIRED_BYTES`]).
+    ///
+    /// The version is refused, before anything changes, when it is below the service's
+    /// `min_version`, when the service's `version_scheme` cannot read it, when it is marked bad
+    /// (only the operator's unmark or a force lifts a mark; CI does not), and when CI set it
+    /// before with another package digest. A body that names a digest (`release_digest`) records
+    /// the version and the digest in the service's registry in the same write as the state
+    /// ([`DesiredStore::record`]); setting the same version with the same digest again changes
+    /// nothing. A set of a version other than the target of a halt the updater raised lifts that
+    /// halt ([`halt::lift_by_ci`]); a hook's halt stays.
     ///
     /// # Errors
     /// [`SetError`].
@@ -667,15 +748,28 @@ impl Coordinator {
             );
             return Err(SetError::Forbidden);
         }
-        // CI naming a version by hand lifts its mark. The mark goes first: a set that fails
-        // after it leaves nothing blocked, and the reverse would leave a wanted version that
-        // the next beat rolls back. The fleet's lock is held to the end of the set: a heartbeat
-        // plans a rollback and writes it under that lock, so it cannot write a rollback from
-        // the state it read over the version CI stores meanwhile.
+        // The fleet's lock is held to the end of the set: a heartbeat plans a rollback and
+        // writes it under that lock, so it cannot write a rollback from the state it read over
+        // the version CI stores meanwhile, and the refusals below are decided on the marks and
+        // the registry the set is made over. The desired state goes first and the lift of an
+        // updater's halt after it: a lift that fails leaves the service halted (the safe side),
+        // and the reverse would order the halted target again.
         {
-            let fleet = self.lock_fleet_for_set();
-            clear_bad(&self.ops, &fleet, &service, &desired.version)?;
-            self.desired.set(&service, desired.clone())?;
+            let _fleet = self.lock_fleet_for_set();
+            let def = self
+                .services
+                .get(&service)
+                .ok_or(SetError::Invalid(DesiredError::UnknownService))?;
+            self.refuse(def, &desired)?;
+            let marks = self.ops.marks(&service);
+            self.desired
+                .record(&service, desired.clone(), |v| kept(&marks, v))?;
+            halt::lift_by_ci(
+                &self.ops,
+                &service,
+                &desired.version,
+                &verified.job_workflow_ref,
+            )?;
         }
         tracing::info!(
             workflow = %verified.job_workflow_ref,
@@ -687,6 +781,32 @@ impl Coordinator {
             desired,
             dropped_roles,
         })
+    }
+
+    /// Why CI may not set `desired` for `service`, if it may not: the refusals of
+    /// [`Self::set_desired`], in that order.
+    fn refuse(&self, def: &ServiceDef, desired: &Desired) -> Result<(), SetError> {
+        let (service, version) = (def.name.as_str(), &desired.version);
+        if !def.version_scheme.parses(version) {
+            return Err(SetError::UnparseableVersion);
+        }
+        if def
+            .min_version
+            .as_ref()
+            .is_some_and(|floor| !version.at_least(floor))
+        {
+            return Err(SetError::BelowMinVersion);
+        }
+        if self.ops.marks(service).bad.contains(version) {
+            return Err(SetError::BadVersion);
+        }
+        let registered = self.desired.digests(service).get(version).cloned();
+        if let (Some(before), Some(now)) = (registered, desired.release_digest.as_ref())
+            && before != *now
+        {
+            return Err(SetError::DigestConflict);
+        }
+        Ok(())
     }
 
     /// The name of the operator token in `bearer`: the token is compared by its SHA-256 in
@@ -840,6 +960,12 @@ impl Coordinator {
         let ops = self.ops.state();
         Ok(convergence_of(def, desired.as_ref(), &fleet, &ops, now))
     }
+}
+
+/// Whether the registry of digests keeps `version` at its cap, whatever its age: the service's
+/// last good version and the versions marked bad, which `marks` holds ([`crate::registry`]).
+pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
+    marks.last_good.as_ref() == Some(version) || marks.bad.contains(version)
 }
 
 /// The host `id` as the status shows it for `service`: whether it is up and holds a slot

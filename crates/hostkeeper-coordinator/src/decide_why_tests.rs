@@ -116,7 +116,7 @@ fn a_host_that_has_not_heartbeated_holds_as_not_a_member() {
 fn a_host_whose_role_the_service_does_not_run_on_holds_as_not_a_member() {
     let want = desired("2.0", 0, 0);
     let (services, all) = two(&want);
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     f.record_in("server", id("s1"), role("storage"), beat("1.0"), NOW);
     assert_eq!(
         why(&services, &all, "server", &f, "s1", NOW),
@@ -129,7 +129,7 @@ fn a_host_whose_role_the_service_does_not_run_on_holds_as_not_a_member() {
 #[test]
 fn the_first_thirty_seconds_hold_as_quiet() {
     let d = desired("2.0", 1, 1);
-    let mut f = Fleet::new(secs(1_000));
+    let mut f = Fleet::new(secs(1_000), crate::fleet::QUIET_START);
     f.record_in(LEGACY, id("d1"), role("daemon"), beat("1.0"), secs(1_029));
     assert_eq!(kbf(&d, &f, "d1", secs(1_000)), gate(Gate::Quiet));
     assert_eq!(kbf(&d, &f, "d1", secs(1_029)), gate(Gate::Quiet));
@@ -152,7 +152,7 @@ fn a_host_that_is_updating_holds_as_updating() {
 fn a_host_busy_with_another_service_holds_as_busy_elsewhere() {
     let want = desired("2.0", 0, 0);
     let (services, all) = two(&want);
-    let mut f = Fleet::new(Duration::ZERO);
+    let mut f = Fleet::new(Duration::ZERO, crate::fleet::QUIET_START);
     f.record_in("server", id("h"), role("daemon"), beat("1.0"), NOW);
     f.record_in("agent", id("h"), role("daemon"), beat("1.0"), NOW);
     f.order("server", id("h"), version("2.0"), NOW);
@@ -222,7 +222,7 @@ fn the_first_failing_rule_is_the_one_named() {
     );
     let d = desired("2.0", 0, 0);
     assert_eq!(kbf(&d, &f, "s2", NOW), skip(Skip::UpToDate));
-    let mut quiet = Fleet::new(secs(1_000));
+    let mut quiet = Fleet::new(secs(1_000), crate::fleet::QUIET_START);
     quiet.record_in(
         LEGACY,
         id("s1"),

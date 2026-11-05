@@ -48,7 +48,7 @@ impl Farm {
         Self {
             services: Services::parse(SERVICES).expect("services"),
             all: all(),
-            fleet: Fleet::new(Duration::ZERO),
+            fleet: Fleet::new(Duration::ZERO, crate::fleet::QUIET_START),
         }
     }
 
