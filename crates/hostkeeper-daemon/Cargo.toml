@@ -61,6 +61,8 @@ tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["server"] }
 
 [dev-dependencies]
+# tests/hello.rs: the example service's real hook, run in process by a step launcher of the test.
+hello = { path = "../../examples/hello" }
 # The fixture package of the package pipeline's test: its attestation bundle and digest.
 base64.workspace = true
 hex.workspace = true
