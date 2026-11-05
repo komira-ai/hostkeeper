@@ -1,5 +1,5 @@
-//! The names enrollment deals in: host ids, roles, service names, and the SHA-256 of a public
-//! key, which is also a request's id.
+//! The names enrollment deals in: host ids, roles, service names, the SHA-256 of a public key
+//! (which is also a request's id), and MAC addresses.
 
 use std::fmt;
 
@@ -190,5 +190,86 @@ impl fmt::Display for KeyHash {
 impl fmt::Debug for KeyHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "KeyHash({})", self.to_hex())
+    }
+}
+
+/// A MAC address: six octets. It reads as six pairs of hex digits separated all by `:` or all by
+/// `-`, or as twelve hex digits with no separator, in either case (`AA-BB-CC-DD-EE-FF`,
+/// `aa:bb:cc:dd:ee:ff`, `aabbccddeeff`), and is written in one spelling, lower-case and
+/// colon-separated, so two spellings of one address compare equal.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MacAddress([u8; 6]);
+
+impl MacAddress {
+    /// The grammar, as the refusal states it.
+    pub const GRAMMAR: &'static str =
+        "six pairs of hex digits separated all by : or all by -, or twelve hex digits";
+
+    /// `text` as a MAC address.
+    ///
+    /// # Errors
+    /// [`BadName`] when `text` does not match [`MacAddress::GRAMMAR`].
+    pub fn parse(text: &str) -> Result<MacAddress, BadName> {
+        Self::read(text).ok_or_else(|| BadName {
+            what: "MAC address",
+            value: text.to_owned(),
+            grammar: Self::GRAMMAR,
+        })
+    }
+
+    fn read(text: &str) -> Option<MacAddress> {
+        let bytes = text.as_bytes();
+        let digits: Vec<u8> = match bytes.get(2) {
+            Some(&separator) if bytes.len() == 17 && matches!(separator, b':' | b'-') => {
+                let separators_ok = bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &b)| (i % 3 == 2) == (b == separator));
+                if !separators_ok {
+                    return None;
+                }
+                bytes.iter().copied().filter(|&b| b != separator).collect()
+            }
+            _ => bytes.to_vec(),
+        };
+        if digits.len() != 12 || !digits.iter().all(u8::is_ascii_hexdigit) {
+            return None;
+        }
+        let nibbles: Vec<u8> = digits
+            .iter()
+            .filter_map(|&b| char::from(b).to_digit(16))
+            .filter_map(|d| u8::try_from(d).ok())
+            .collect();
+        let mut octets = [0u8; 6];
+        for (octet, pair) in octets.iter_mut().zip(nibbles.chunks(2)) {
+            *octet = pair.iter().fold(0, |high, low| (high << 4) | low);
+        }
+        Some(MacAddress(octets))
+    }
+
+    /// The six octets.
+    pub fn octets(&self) -> [u8; 6] {
+        self.0
+    }
+
+    /// Whether the address was assigned by the maker of the interface: a unicast address
+    /// (the low bit of the first octet clear) that is universally administered (the next bit
+    /// clear). A locally administered address (a bridge, a veth, a virtual machine's) is made up
+    /// on the host and may repeat on another, so it binds no host.
+    pub fn is_universal_unicast(&self) -> bool {
+        self.0[0] & 0b11 == 0 && self.0 != [0; 6]
+    }
+}
+
+impl fmt::Display for MacAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [a, b, c, d, e, g] = self.0;
+        write!(f, "{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{g:02x}")
+    }
+}
+
+impl fmt::Debug for MacAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MacAddress({self})")
     }
 }

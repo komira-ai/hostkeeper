@@ -49,6 +49,7 @@ fn claims_proto(claims: Claims) -> agent::Claims {
         addresses: claims.addresses,
         mac_serial: claims.mac_serial,
         platform_uuid: claims.mac_platform_uuid,
+        bmc_mac: claims.bmc_mac,
     }
 }
 
@@ -66,6 +67,7 @@ fn pending_proto(view: RequestView) -> proto::PendingEnrollment {
             .unwrap_or_default(),
         duplicate_claim: view.state == RequestState::DuplicateClaim,
         mac_nonce_presented: view.mac_nonce_presented,
+        ..proto::PendingEnrollment::default()
     }
 }
 

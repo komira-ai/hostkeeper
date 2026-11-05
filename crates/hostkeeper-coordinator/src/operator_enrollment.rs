@@ -13,11 +13,13 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 
 use crate::enrollment::Enrollment;
+use crate::inventory::show_match;
 use crate::operator::{Caller, entry_proto};
 use crate::service::Coordinator;
 
 impl Coordinator {
-    /// `Enrollment.List`: the requests waiting for an operator ([`Enrollment::list`]).
+    /// `Enrollment.List`: the requests waiting for an operator ([`Enrollment::list`]), each
+    /// with its match against the host inventory ([`crate::inventory::show_match`]).
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a page token), `store_failed`.
@@ -27,10 +29,15 @@ impl Coordinator {
         request: &proto::ListPendingRequest,
     ) -> Result<proto::ListPendingResponse, EnrollmentRefusal> {
         caller.operator()?;
-        match self.enrollment() {
-            Some(enrollment) => enrollment.list(request),
-            None => Ok(proto::ListPendingResponse::default()),
+        let Some(enrollment) = self.enrollment() else {
+            return Ok(proto::ListPendingResponse::default());
+        };
+        let mut listed = enrollment.list(request)?;
+        let records = self.ops.read(|state| state.inventory.clone());
+        for pending in &mut listed.requests {
+            show_match(pending, &records);
         }
+        Ok(listed)
     }
 
     /// `Enrollment.Approve`: approves a pending request as the host id, role and services it

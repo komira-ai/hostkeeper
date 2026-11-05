@@ -1,8 +1,9 @@
 //! The operator's calls that mark or steer the rollout, as plain functions over the messages of
 //! `hostkeeper.operator.v1`: `Releases.MarkBad` and `Releases.Halt`, `Hosts.Abort` and
 //! `Hosts.Exclude` (with `abandon`), `Services.Hold`, `Services.Unhold` and `Services.List`, and
-//! `Audit.List`; `Releases.Force` is in [`crate::force`], and `Enrollment.List` and
-//! `Enrollment.Approve` in [`crate::operator_enrollment`]. A transport (the gRPC services, or a
+//! `Audit.List`; `Releases.Force` is in [`crate::force`], `Enrollment.List` and
+//! `Enrollment.Approve` in [`crate::operator_enrollment`], and the inventory's calls in
+//! [`crate::inventory`]. A transport (the gRPC services, or a
 //! JSON gateway) authenticates the bearer ([`Coordinator::caller`]) and hands the call here.
 //!
 //! Every one of them takes the operator token only: a valid CI token is `forbidden` and no

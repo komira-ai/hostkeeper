@@ -8,7 +8,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     Claims, CoordinatorRefusal, EnrollRequest, EnrollState,
 };
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    EnrollmentRefusal, ListPendingRequest, ListPendingResponse, PendingEnrollment,
+    EnrollmentRefusal, InventoryMatch, ListPendingRequest, ListPendingResponse, PendingEnrollment,
 };
 use prost::Message;
 use tonic::Code;
@@ -101,6 +101,9 @@ async fn list_reports_claims_key_hash_and_flags_without_secrets() {
         renewal_of: String::new(),
         duplicate_claim: false,
         mac_nonce_presented: false,
+        // No inventory record is held: every request reads unmatched.
+        inventory_match: InventoryMatch::Unmatched.into(),
+        ..PendingEnrollment::default()
     };
     let mut third = [
         entry(&plain, plain_request.claims.clone(), 3),

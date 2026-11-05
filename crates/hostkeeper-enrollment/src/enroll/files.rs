@@ -211,6 +211,7 @@ pub(crate) fn claims_to_pb(claims: &Claims) -> pb::Claims {
         addresses: claims.addresses.clone(),
         mac_serial: claims.mac_serial.clone(),
         mac_platform_uuid: claims.mac_platform_uuid.clone(),
+        bmc_mac: claims.bmc_mac.clone(),
     }
 }
 
@@ -222,6 +223,7 @@ pub(crate) fn claims_of_pb(claims: Option<&pb::Claims>) -> Claims {
         addresses: claims.addresses.clone(),
         mac_serial: claims.mac_serial.clone(),
         mac_platform_uuid: claims.mac_platform_uuid.clone(),
+        bmc_mac: claims.bmc_mac.clone(),
     })
 }
 

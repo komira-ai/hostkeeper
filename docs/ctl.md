@@ -146,6 +146,45 @@ id, role and services the approval names.
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. |
 | `--reason` | STRING |  |
 
+#### `hostkeeper ctl enrollment add-record`
+
+`/hostkeeper.operator.v1.Enrollment/AddRecord`
+
+Record a server the operator built, before it first boots: its host id, optional role, data
+MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
+holds, is refused; remove the record first.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING |  |
+| `--role` | STRING | Empty for none. |
+| `--data-macs` | STRING, repeated | At least one, or a `serial`. |
+| `--bmc-mac` | STRING | Empty for none. |
+| `--serial` | STRING | Empty for none. |
+| `--notes` | STRING | Empty for none. |
+
+#### `hostkeeper ctl enrollment list-records`
+
+`/hostkeeper.operator.v1.Enrollment/ListRecords`
+
+The records, by host id, a page at a time.
+
+| flag | value | meaning |
+|---|---|---|
+| `--limit` | UINT32 | The most records to return; capped at 256, and 0 means the cap. |
+| `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
+
+#### `hostkeeper ctl enrollment remove-record`
+
+`/hostkeeper.operator.v1.Enrollment/RemoveRecord`
+
+Remove the record of a host id. An enrolled host keeps its certificate.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING |  |
+| `--reason` | STRING |  |
+
 ### `hosts`
 
 The service `Hosts` of the package `hostkeeper.operator.v1`. The hosts the coordinator has heard from, and what an operator decides about them.

@@ -7,6 +7,7 @@
 mod approve;
 mod approve_refusals;
 mod heartbeat;
+mod inventory;
 mod list;
 mod mac;
 mod mac_restart;

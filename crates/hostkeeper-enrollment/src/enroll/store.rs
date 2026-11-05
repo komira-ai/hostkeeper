@@ -15,12 +15,12 @@ use super::files::{
 };
 use super::mac_nonce::{MAC_NONCES, MacNonceHash};
 use super::{
-    Approval, ApprovalRecord, ApproveError, Decision, NewRequest, PostError, PostOutcome,
+    Approval, ApprovalRecord, ApproveError, Claims, Decision, NewRequest, PostError, PostOutcome,
     RecordedApproval, RequestState, RequestView, StoreError,
 };
 use crate::ca::check_request;
 use crate::fs::{FileLock, Fs, write_atomic};
-use crate::names::{HostId, KeyHash};
+use crate::names::{HostId, KeyHash, MacAddress};
 
 /// Two daemons reporting one host id with different machine ids within this many seconds of
 /// each other make the host a duplicate.
@@ -273,7 +273,8 @@ impl EnrollmentStore {
     /// The id is the SHA-256 of the CSR's key, computed here. The same key posted again is the
     /// same request: no new row and no new place in the queue. A key that comes back with
     /// another machine id while its request is pending flags that request as a duplicate
-    /// claim. A new request whose machine id is another request's is a duplicate claim. A
+    /// claim. A new request whose machine id is another request's, or that claims a MAC bound to
+    /// an enrolled host ([`EnrollmentStore::bound_macs`]), is a duplicate claim. A
     /// `renewal_of` must name an approved host that is not denied and holds this key; it then
     /// waits for one approval like any request, and when the key's certificate was already
     /// issued it starts the next round. Every duplicate claim emits a warn event
@@ -311,7 +312,10 @@ impl EnrollmentStore {
         let reason = match &host {
             Some(host) => (host.pb.machine_id != request.claims.machine_id)
                 .then_some("the renewal's machine id is not the host's"),
-            None => machine_id_taken(&all, &request.claims.machine_id),
+            None => match machine_id_taken(&all, &request.claims.machine_id) {
+                Some(reason) => Some(reason),
+                None => self.mac_bound(&request.claims)?,
+            },
         };
         let state = reason.map_or(RequestState::Pending, |_| RequestState::DuplicateClaim);
         let row = RequestRow {
@@ -358,6 +362,58 @@ impl EnrollmentStore {
         self.load_host(host)?
             .filter(|row| row.key == *id && !denied)
             .ok_or(PostError::RenewalNotAllowed)
+    }
+
+    /// Why a new request is a duplicate claim for the MACs it claims: one of them is bound to an
+    /// enrolled host. Only universally administered unicast MACs count
+    /// ([`MacAddress::is_universal_unicast`]).
+    fn mac_bound(&self, claims: &Claims) -> Result<Option<&'static str>, StoreError> {
+        let claimed: Vec<MacAddress> = claims
+            .all_macs()
+            .into_iter()
+            .filter(MacAddress::is_universal_unicast)
+            .collect();
+        if claimed.is_empty() {
+            return Ok(None);
+        }
+        let bound = self.bound_macs()?;
+        let taken = claimed.iter().any(|mac| bound.contains(mac));
+        Ok(taken.then_some("a MAC is bound to an enrolled host"))
+    }
+
+    /// The MACs bound to enrolled hosts: the universally administered unicast MACs (data and
+    /// BMC) claimed by the request each approved host's key came from, for every host that is
+    /// not denied.
+    ///
+    /// # Errors
+    /// [`StoreError`] when a file cannot be read, or a host's request is missing.
+    pub fn bound_macs(&self) -> Result<BTreeSet<MacAddress>, StoreError> {
+        let dir = self.dir.join(HOSTS);
+        let names = self.fs.list(&dir).map_err(io_at(&dir))?;
+        let mut rows = Vec::new();
+        for host in names
+            .iter()
+            .filter_map(|name| name.strip_suffix(".pb"))
+            .filter_map(|name| HostId::parse(name).ok())
+        {
+            if !self.denied(&host)? {
+                rows.extend(self.load_host(&host)?.map(|row| (host, row)));
+            }
+        }
+        let mut bound = BTreeSet::new();
+        for (host, row) in rows {
+            let request = self.load_request(&row.key)?.ok_or_else(|| {
+                super::files::corrupt(&self.host_path(&host), "the host's request is missing")
+            })?;
+            let claims = claims_of_pb(request.pb.claims.as_ref());
+            bound.extend(
+                claims
+                    .all_macs()
+                    .into_iter()
+                    .filter(MacAddress::is_universal_unicast),
+            );
+        }
+        Ok(bound)
     }
 
     /// The same key posted again: the same request, flagged when its machine id changed, and

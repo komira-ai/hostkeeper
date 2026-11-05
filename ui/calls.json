@@ -1,8 +1,11 @@
 {
   "calls": [
     { "method": "hostkeeper.operator.v1.Audit/List", "pages": ["audit"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/AddRecord", "pages": ["inventory"] },
     { "method": "hostkeeper.operator.v1.Enrollment/Approve", "pages": ["enrollment"] },
     { "method": "hostkeeper.operator.v1.Enrollment/List", "pages": ["enrollment"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/ListRecords", "pages": ["inventory"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/RemoveRecord", "pages": ["inventory"] },
     { "method": "hostkeeper.operator.v1.Hosts/Abort", "pages": ["host"] },
     { "method": "hostkeeper.operator.v1.Hosts/Exclude", "pages": ["host"] },
     { "method": "hostkeeper.operator.v1.Hosts/Get", "pages": ["host"] },
