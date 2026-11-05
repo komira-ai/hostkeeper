@@ -107,7 +107,7 @@ fn service<'a>(services: &Services, name: &'a str) -> Result<&'a str, OperateErr
         ))
 }
 
-fn reason(text: &str) -> Result<String, OperateError> {
+pub(crate) fn reason(text: &str) -> Result<String, OperateError> {
     let text = text.trim();
     if text.is_empty() || text.len() > MAX_REASON_BYTES || text.chars().any(char::is_control) {
         return Err(OperateError::Invalid(
@@ -115,6 +115,32 @@ fn reason(text: &str) -> Result<String, OperateError> {
         ));
     }
     Ok(text.to_owned())
+}
+
+/// Writes `exclusion`, audited as `entry`: it replaces an exclusion of the same host and
+/// service, and is refused with `capped` when the file holds [`MAX_EXCLUDED`] others.
+///
+/// # Errors
+/// `capped`, or the store's error as `E`.
+pub(crate) fn exclude<E: From<OpsError>>(
+    store: &OpsStore,
+    exclusion: Exclusion,
+    entry: AuditEntry,
+    capped: E,
+) -> Result<AuditEntry, E> {
+    store.try_change(Write::BeforeMemory, entry, |state| {
+        let before = state.excluded.len();
+        state.excluded.retain(|e| {
+            (e.service.as_str(), e.node_id.as_str())
+                != (exclusion.service.as_str(), exclusion.node_id.as_str())
+        });
+        let known = state.excluded.len() < before;
+        if !known && before >= MAX_EXCLUDED {
+            return Err(capped);
+        }
+        state.excluded.push(exclusion);
+        Ok(())
+    })
 }
 
 pub(crate) fn label(text: &str) -> bool {
@@ -153,22 +179,11 @@ pub fn operate(
             entry.service = Some(exclusion.service.clone());
             entry.node_id = Some(exclusion.node_id.clone());
             entry.reason = Some(exclusion.reason.clone());
-            store.try_change(Write::BeforeMemory, entry, |state| {
-                let before = state.excluded.len();
-                state.excluded.retain(|e| {
-                    (e.service.as_str(), e.node_id.as_str())
-                        != (exclusion.service.as_str(), exclusion.node_id.as_str())
-                });
-                let known = state.excluded.len() < before;
-                if !known && before >= MAX_EXCLUDED {
-                    return Err(OperateError::Capped {
-                        what: "exclusions (MAX_EXCLUDED)",
-                        max: MAX_EXCLUDED,
-                    });
-                }
-                state.excluded.push(exclusion);
-                Ok(())
-            })?
+            let capped = OperateError::Capped {
+                what: "exclusions (MAX_EXCLUDED)",
+                max: MAX_EXCLUDED,
+            };
+            exclude(store, exclusion, entry, capped)?
         }
         Action::Include {
             service: name,

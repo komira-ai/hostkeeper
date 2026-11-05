@@ -18,10 +18,13 @@ use crate::converge::{Convergence, role_counts};
 use crate::decide::Decision;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::fleet::{Fleet, Node, QUIET_START};
+use crate::force::end_by_ci;
 use crate::halt;
+use crate::holds::{alert_on_bad_version, marks_of, on_bad_version};
 use crate::identity::Identity;
 use crate::membership::{Standing, members, standing};
 use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
+use crate::orders::Order;
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
 use crate::status::host_status;
@@ -198,15 +201,15 @@ struct ExtrasDropped {
 
 /// The coordinator.
 pub struct Coordinator {
-    fleet: Mutex<Fleet>,
-    desired: DesiredStore,
-    services: Services,
+    pub(crate) fleet: Mutex<Fleet>,
+    pub(crate) desired: DesiredStore,
+    pub(crate) services: Services,
     legacy: Option<String>,
     prefixes: SanPrefixes,
-    ops: OpsStore,
+    pub(crate) ops: OpsStore,
     verifier: Arc<Verifier>,
     tokens: OperatorTokens,
-    clock: Clock,
+    pub(crate) clock: Clock,
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
     features: Vec<String>,
@@ -375,7 +378,16 @@ impl Coordinator {
             .for_each(|waits| {
                 let _ = waits.send(SetProgress::Waits);
             });
-        self.fleet.lock().unwrap_or_else(PoisonError::into_inner)
+        self.lock_fleet()
+    }
+
+    /// The fleet's lock, which every decision and order is made under, with the operator's
+    /// marks the decisions read refreshed from the ops store ([`crate::holds::marks_of`]). The
+    /// lock order is the fleet's, then the ops store's.
+    pub(crate) fn lock_fleet(&self) -> std::sync::MutexGuard<'_, Fleet> {
+        let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        fleet.set_marks(self.ops.read(marks_of));
+        fleet
     }
 
     /// The ops store.
@@ -432,11 +444,35 @@ impl Coordinator {
     /// [`HeartbeatRefused`]: the heartbeat lists no services (none, or a list that was bad and
     /// dropped) and no legacy service is set.
     pub fn heartbeat(&self, who: Identity, beat: Heartbeat) -> Result<Answer, HeartbeatRefused> {
+        self.answer(who, beat, false).map(|(answer, _)| answer)
+    }
+
+    /// [`Self::heartbeat`] for a transport that carries typed orders (the `Order` of
+    /// `hostkeeper.agent.v1`): with the answer, the operator's order for the host when one is
+    /// due ([`crate::orders`]: an `abort` queued for it, or the `force` of a standing force),
+    /// which is sent instead of an update; the answer's reply is then `nothing`.
+    ///
+    /// # Errors
+    /// [`HeartbeatRefused`], as for [`Self::heartbeat`].
+    pub fn heartbeat_with_orders(
+        &self,
+        who: Identity,
+        beat: Heartbeat,
+    ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
+        self.answer(who, beat, true)
+    }
+
+    fn answer(
+        &self,
+        who: Identity,
+        beat: Heartbeat,
+        orders: bool,
+    ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
         if self.legacy.is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
         let asked = beat.agent_features.clone();
-        let reply = self.reply_to(who, beat);
+        let (reply, order) = self.reply_to(who, beat, orders);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -453,14 +489,20 @@ impl Coordinator {
         } else {
             BTreeMap::new()
         };
-        Ok(Answer {
+        let answer = Answer {
             reply,
             features,
             halts,
-        })
+        };
+        Ok((answer, order))
     }
 
-    fn reply_to(&self, who: Identity, beat: Heartbeat) -> ServiceReply {
+    fn reply_to(
+        &self,
+        who: Identity,
+        beat: Heartbeat,
+        orders: bool,
+    ) -> (ServiceReply, Option<Order>) {
         let now = (self.clock)();
         let legacy = self.legacy.as_deref();
         let announced = beat.services.clone().unwrap_or_default();
@@ -478,7 +520,7 @@ impl Coordinator {
         // The halts are noted under the fleet's lock, which every decision and order below is
         // made under: a halt is never raised between another heartbeat's decision to order and
         // its order. The lock order is the fleet's, then the ops store's, as everywhere.
-        let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut fleet = self.lock_fleet();
         // A halt whose write failed is written again at every heartbeat until it lands.
         self.ops.retry_unwritten(now);
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
@@ -542,6 +584,17 @@ impl Coordinator {
                 fleet.keep_verdicts_of(&def.name, &want.version, &acked);
             }
             reconcile(def, &self.ops, &self.desired, &fleet, now);
+            self.ops.read(|state| {
+                alert_on_bad_version(&mut fleet, state, &def.name, &who.host_id);
+            });
+        }
+        // The operator's orders go first, past the gate, to a transport that carries them.
+        if orders
+            && let Some(order) = self
+                .ops
+                .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))
+        {
+            return (ServiceReply::Nothing, Some(order));
         }
         let desired = self.desired.all();
         for name in names {
@@ -563,17 +616,15 @@ impl Coordinator {
                     continue;
                 }
                 fleet.order(name, who.host_id.clone(), version.clone(), now);
-                return ServiceReply::Update {
-                    service: (Some(name) != legacy).then(|| name.to_owned()),
-                    version,
-                };
+                let service = (Some(name) != legacy).then(|| name.to_owned());
+                return (ServiceReply::Update { service, version }, None);
             }
         }
-        ServiceReply::Nothing
+        (ServiceReply::Nothing, None)
     }
 
     /// The CI token in `bearer`, checked by the verifier.
-    async fn ci(&self, bearer: Option<&str>) -> Result<Verified, CiRefused> {
+    pub(crate) async fn ci(&self, bearer: Option<&str>) -> Result<Verified, CiRefused> {
         let token = bearer
             .filter(|t| t.len() <= MAX_BEARER_BYTES)
             .ok_or(CiRefused::Unauthorized("missing"))?;
@@ -660,6 +711,13 @@ impl Coordinator {
                 &desired.version,
                 &verified.job_workflow_ref,
             )?;
+            // CI's set of another version ends a force that stands ([`crate::force`]).
+            end_by_ci(
+                &self.ops,
+                &service,
+                &desired.version,
+                &verified.job_workflow_ref,
+            )?;
         }
         tracing::info!(
             workflow = %verified.job_workflow_ref,
@@ -731,7 +789,7 @@ impl Coordinator {
     fn reconcile(&self) {
         let now = (self.clock)();
         let ops = self.ops.state();
-        let mut fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut fleet = self.lock_fleet();
         let dropped: Vec<(String, hostkeeper_wire::HostId)> = self
             .services
             .defs()
@@ -755,7 +813,7 @@ impl Coordinator {
     pub fn status(&self, bearer: Option<&str>) -> Result<Status, Unauthorized> {
         self.operator(bearer)?;
         let now = (self.clock)();
-        let fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        let fleet = self.lock_fleet();
         let hosts = self
             .legacy
             .iter()
@@ -788,6 +846,7 @@ impl Coordinator {
                             now,
                         )
                         .why(),
+                        held_on_bad_version: on_bad_version(&fleet, &ops, &def.name, id),
                     })
                     .collect();
                 let up = hosts.iter().filter(|h| h.host.up).count();
@@ -845,7 +904,7 @@ impl Coordinator {
             .get(service)
             .ok_or(ConvergenceError::UnknownService)?;
         let now = (self.clock)();
-        let fleet = self.fleet.lock().unwrap_or_else(PoisonError::into_inner);
+        let fleet = self.lock_fleet();
         let desired = self.desired.get(service);
         let ops = self.ops.state();
         Ok(convergence_of(def, desired.as_ref(), &fleet, &ops, now))
@@ -857,4 +916,3 @@ impl Coordinator {
 pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
     marks.last_good.as_ref() == Some(version) || marks.bad.contains(version)
 }
-

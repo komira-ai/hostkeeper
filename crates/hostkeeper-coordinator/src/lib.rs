@@ -14,6 +14,12 @@
 //! - [`decide`]: the decision as a pure function of the desired state, the fleet, the host
 //!   and the time;
 //! - [`reconcile`]: the last good version, the bad ones, and the automatic rollback;
+//! - [`holds`]: the operator's holds of a service on a host, a role or the fleet, which the
+//!   gate orders nothing and the counts leave out;
+//! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the one live update,
+//!   and [`orders`], the operator's orders (`force`, `abort`) a typed heartbeat answer carries;
+//! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
+//!   halts, aborts, exclusions, holds, the audit log);
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
 //!   last good versions and the audit ring, in the operations file, and every change as a line of
 //!   the audit file beside it (`audit_file`); the halt reports and clear generations in the halts
@@ -50,7 +56,9 @@ pub mod decide;
 pub mod defer;
 pub mod desired;
 pub mod fleet;
+pub mod force;
 pub mod halt;
+pub mod holds;
 pub mod http;
 pub mod identity;
 pub mod jti_file;
@@ -58,8 +66,10 @@ pub mod listen;
 pub mod lock;
 pub mod membership;
 pub mod operate;
+pub mod operator;
 pub mod ops;
 pub(crate) mod ops_file;
+pub mod orders;
 pub mod reconcile;
 pub mod registry;
 pub mod service;
@@ -94,11 +104,23 @@ mod desired_tests;
 #[cfg(test)]
 mod extras_dropped_tests;
 #[cfg(test)]
+mod force_targets_tests;
+#[cfg(test)]
+mod force_tests;
+#[cfg(test)]
 mod halt_membership_tests;
 #[cfg(test)]
 mod halt_race_tests;
 #[cfg(test)]
+mod holds_calls_tests;
+#[cfg(test)]
+mod holds_tests;
+#[cfg(test)]
 mod http_tests;
+#[cfg(test)]
+mod marks_support;
+#[cfg(test)]
+mod marks_tests;
 #[cfg(test)]
 mod membership_tests;
 #[cfg(test)]

@@ -1156,6 +1156,7 @@ dependencies = [
  "clap",
  "futures",
  "hostkeeper-oidc",
+ "hostkeeper-proto",
  "hostkeeper-testkit",
  "hostkeeper-tls",
  "hostkeeper-wire",

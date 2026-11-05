@@ -17,7 +17,8 @@
 //! updater raised itself (a report whose reason is one of [`UPDATER_HALT_REASONS`]) is lifted
 //! by the operator's `clear_halt` and also by CI's set of a desired version other than its
 //! target ([`lift_by_ci`]): a fix-forward release is the remedy. A halt a hook raised (its exit
-//! 76; any other reason) is lifted only by `clear_halt`.
+//! 76; any other reason) is lifted only by `clear_halt`, and so is a halt an operator raised
+//! (`Releases.Halt`, [`raise_by_operator`]). A force lifts any of them ([`crate::force`]).
 //!
 //! The halted host keeps reporting the same `last_update` until it updates again, so a clear
 //! also records `(node, target)` as acknowledged, and a report for an acknowledged pair is
@@ -291,6 +292,54 @@ fn raise(ops: &OpsStore, service: &str, halt: Halt) {
             "a halt or a halt report could not be written to the ops file: it stands in memory, and the write is tried again at every heartbeat"
         ),
     }
+}
+
+/// The check of a halt an operator raised (`Releases.Halt`).
+pub const OPERATOR_CHECK: &str = "operator";
+
+/// Raises a halt of `service` for the operator `by`, with `reason`, as a host's halt report
+/// raises one ([`raise`]): in memory first, then written under the unfinished-halt marker
+/// ([`Write::Halt`]), and logged as an alert. The halt names no host, the check
+/// [`OPERATOR_CHECK`] and the desired version `target`; its origin is [`HaltOrigin::Operator`],
+/// so only `clear_halt`, or a force, lifts it. Decided under the writers' lock: `already` is
+/// answered, and nothing changes, when a halt stands.
+///
+/// # Errors
+/// `already`; or `E` from [`OpsError`] when the write failed, the halt then standing in memory
+/// and its write tried again at every heartbeat.
+pub(crate) fn raise_by_operator<E: From<OpsError>>(
+    ops: &OpsStore,
+    service: &str,
+    target: &Version,
+    by: &str,
+    reason: &str,
+    already: E,
+) -> Result<AuditEntry, E> {
+    ops.decide_change(Write::Halt, |state| {
+        let marks = state.services.entry(service.to_owned()).or_default();
+        if marks.halt.is_some() {
+            return Err(already);
+        }
+        tracing::error!(
+            alert = "halt",
+            service,
+            by,
+            reason,
+            target = %target,
+            "an operator halted the service: nothing is ordered for it until the halt is cleared"
+        );
+        marks.halt = Some(Halt {
+            node_id: String::new(),
+            check: OPERATOR_CHECK.to_owned(),
+            target: target.clone(),
+            report: None,
+            origin: HaltOrigin::Operator,
+        });
+        let mut entry = AuditEntry::new(by, "halt");
+        entry.service = Some(service.to_owned());
+        entry.reason = Some(reason.to_owned());
+        Ok(entry)
+    })
 }
 
 /// What CI's set of `version` for `service` did to its halt.

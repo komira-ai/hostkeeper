@@ -2,8 +2,11 @@
 //! desired state (`docs/design/host-updates.md`, sections 3.8 and 5).
 //!
 //! It holds the hosts an operator excluded from a service, the labels an operator put on a
-//! host, the per-service marks later changes fill (a halt, the last good version, the bad
-//! versions), and a ring of the last changes made. It is one JSON file, `--ops-file`, kept
+//! host, the operator's holds ([`crate::holds`]), the per-service marks later changes fill (a
+//! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), and
+//! a ring of the last changes made. A key this build added is written only when it holds
+//! something, so a file that never held one keeps the shape the release before reads; once it
+//! does, the release before refuses the file, as it should: it would ignore a hold or a force. It is one JSON file, `--ops-file`, kept
 //! apart from `desired.json` so that an earlier coordinator, which refuses a key it does not
 //! know there, still reads the desired state. The file is created by the first change (a
 //! farm that never uses it keeps its files as they are) and replaced whole after that, like
@@ -58,6 +61,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit_file::{self, AuditLine, AuditLog, UnixClock, wall_clock};
 use crate::desired::StoreError;
+use crate::force::ForceRecord;
+use crate::holds::HoldMark;
 use crate::ops_file;
 
 pub use crate::operate::{OperateError, operate};
@@ -118,6 +123,9 @@ pub enum HaltOrigin {
     /// set of a desired version other than the halt's target lifts it too, since a fix-forward
     /// release is the remedy.
     Updater,
+    /// An operator (`Releases.Halt`): only `clear_halt`, or a force, lifts it. A release that
+    /// does not know it reads it as [`HaltOrigin::Hook`], which is lifted the same way.
+    Operator,
 }
 
 impl HaltOrigin {
@@ -229,6 +237,15 @@ pub struct ServiceOps {
     /// report that is acked, whole, does not count towards an automatic rollback.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failure_acked: Vec<FailureAck>,
+    /// The force that stands ([`crate::force`]); written only while one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force: Option<ForceRecord>,
+    /// How many times the service was forced; written only once it is not zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub force_generation: u64,
+    /// Of `bad`, the versions a force left; written only when there are any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bad_by_force: Vec<Version>,
 }
 
 /// One change, as the ring and the log say it.
@@ -240,9 +257,11 @@ pub struct AuditEntry {
     /// Who made it: the name of the operator's token (`operator` for `--operator-token-file`),
     /// `coordinator` for the coordinator's own changes, `ci` for CI's.
     pub by: String,
-    /// What it was (`exclude`, `include`, `set_labels`, `clear_halt`, `halt`; the
-    /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`; CI's: `lift_halt`, and
-    /// `unmark_bad` in a file an earlier build wrote).
+    /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`,
+    /// `halt`, `mark_bad`, `abort`, `hold`, `unhold`, `force` with the `unmark_bad`, `mark_bad`
+    /// and `clear_halt` it made; the coordinator's own: `last_good`, `clear_last_good`,
+    /// `mark_bad`; CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an earlier build
+    /// wrote).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,6 +306,10 @@ pub struct OpsState {
     /// The last [`AUDIT_RING`] changes, oldest first.
     #[serde(default)]
     pub audit: Vec<AuditEntry>,
+    /// The operator's holds ([`crate::holds`]); written only when there are any, so a file
+    /// with none keeps the shape the release before reads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holds: Vec<HoldMark>,
 }
 
 impl Default for OpsState {
@@ -297,6 +320,7 @@ impl Default for OpsState {
             excluded: Vec::new(),
             services: BTreeMap::new(),
             audit: Vec::new(),
+            holds: Vec::new(),
         }
     }
 }
@@ -550,39 +574,77 @@ impl OpsStore {
         write: Write,
         edit: impl FnOnce(&mut OpsState) -> Result<AuditEntry, E>,
     ) -> Result<AuditEntry, E> {
+        let mut entries =
+            self.decide_changes(write, |state| edit(state).map(|entry| vec![entry]))?;
+        Ok(entries.swap_remove(0))
+    }
+
+    /// [`Self::decide_change`] for a change that is several entries, numbered and audited in
+    /// order, in one write of the file (a force: [`crate::force`]). The edit answers at least
+    /// one entry.
+    ///
+    /// # Errors
+    /// The edit's own error, or [`OpsError`] as for [`Self::change`].
+    pub(crate) fn decide_changes<E: From<OpsError>>(
+        &self,
+        write: Write,
+        edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
+    ) -> Result<Vec<AuditEntry>, E> {
         let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         #[cfg(test)]
         self.interleaved();
         let mut next = self.state();
-        let mut entry = edit(&mut next)?;
+        let mut entries = edit(&mut next)?;
         let filed = self.audit.as_ref().map_or(0, AuditLog::last_seq);
         let ringed = next.audit.last().map_or(0, |last| last.seq);
-        entry.seq = filed.max(ringed) + 1;
-        next.audit.push(entry.clone());
+        let mut seq = filed.max(ringed);
+        for entry in &mut entries {
+            seq += 1;
+            entry.seq = seq;
+        }
+        next.audit.extend(entries.iter().cloned());
         let surplus = next.audit.len().saturating_sub(AUDIT_RING);
         next.audit.drain(..surplus);
         match write {
             Write::AfterMemory => {
                 *self.lock() = next.clone();
-                self.record(&entry);
+                self.record_all(&entries);
                 (self.write)(&next)?;
             }
             Write::Halt => {
                 *self.lock() = next.clone();
-                self.record(&entry);
+                self.record_all(&entries);
                 self.mark_unwritten();
                 (self.write)(&next)?;
             }
             Write::BeforeMemory => {
                 (self.write)(&next)?;
                 *self.lock() = next;
-                self.record(&entry);
+                self.record_all(&entries);
             }
         }
         // The state just written holds every halt in memory: one whose write had failed has
         // landed with it.
         self.written();
-        Ok(entry)
+        Ok(entries)
+    }
+
+    /// Every change the audit file holds, oldest first; for a store with no audit file, the
+    /// ring.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`]: the audit file exists and cannot be read.
+    pub(crate) fn audit_log(&self) -> Result<Vec<AuditEntry>, OpsError> {
+        let Some(log) = &self.audit else {
+            return Ok(self.lock().audit.clone());
+        };
+        let read = audit_file::read(log.path())?;
+        Ok(read.lines.into_iter().map(AuditLine::into_entry).collect())
+    }
+
+    /// Seconds since the epoch by the clock of the audit file: the time a hold records.
+    pub(crate) fn unix_now(&self) -> u64 {
+        (self.unix)()
     }
 
     /// Whether a halt is in memory and not yet in the file: its write failed and no write has
@@ -679,6 +741,13 @@ impl OpsStore {
             }
         }
         *unwritten = Unwritten::default();
+    }
+
+    /// [`Self::record`] for each of `entries`, in order.
+    fn record_all(&self, entries: &[AuditEntry]) {
+        for entry in entries {
+            self.record(entry);
+        }
     }
 
     /// Logs `entry` and appends it to the audit file, if the store has one. A line that cannot be
