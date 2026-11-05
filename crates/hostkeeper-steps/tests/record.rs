@@ -27,6 +27,7 @@ fn record() -> Record {
         state: State::Running {
             started: Stamp::now(&*clock),
             deadline_secs: 1600,
+            unbounded: false,
         },
         hook: HookSel::Previous,
         progress: Progress {
@@ -267,6 +268,7 @@ fn the_record_on_disk_has_this_shape() {
             State::Running {
                 started: stamp(),
                 deadline_secs: 9,
+                unbounded: false,
             },
             r#"{"state":"running","started":{"boot_id":"b","mono_secs":7},"deadline_secs":9}"#,
         ),
@@ -359,6 +361,37 @@ fn every_variant_name_in_the_record_is_pinned() {
         (Class::Release, "release"),
         (Class::Environment, "environment"),
     ]);
+}
+
+/// Catches the `unbounded` field of a running step being required on read, or written for a
+/// bounded step in bytes kbf's records do not have: a record from before the field reads as
+/// bounded and writes back the same bytes, and an unbounded step writes and reads the field.
+#[test]
+fn an_old_running_record_without_the_unbounded_field_reads_as_bounded() {
+    let started = || hostkeeper_steps::Stamp {
+        boot_id: "b".to_owned(),
+        mono_secs: 7,
+    };
+    let old = r#"{"state":"running","started":{"boot_id":"b","mono_secs":7},"deadline_secs":9}"#;
+    let state: State = serde_json::from_str(old).unwrap();
+    assert_eq!(
+        state,
+        State::Running {
+            started: started(),
+            deadline_secs: 9,
+            unbounded: false,
+        }
+    );
+    assert_eq!(serde_json::to_string(&state).unwrap(), old);
+
+    let unbounded = State::Running {
+        started: started(),
+        deadline_secs: 7,
+        unbounded: true,
+    };
+    let json = r#"{"state":"running","started":{"boot_id":"b","mono_secs":7},"deadline_secs":7,"unbounded":true}"#;
+    assert_eq!(serde_json::to_string(&unbounded).unwrap(), json);
+    assert_eq!(serde_json::from_str::<State>(json).unwrap(), unbounded);
 }
 
 /// The record a fixture of `tests/fixtures/before-order-try` holds.
