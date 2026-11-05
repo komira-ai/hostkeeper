@@ -12,7 +12,7 @@
 //!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, and its
 //!   `attest` job, under its exact `if:`, runs no repository code: no checkout, and no `run:` but
 //!   the checks of [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every
-//!   package of [`PACKAGES`] for both Linux platforms and copies the bundle of each beside it
+//!   package of [`PACKAGES`] for every platform of [`PLATFORMS`] and copies the bundle of each beside it
 //!   ([`package_problems`]): a host trusts only attested packages, so a release asset list that
 //!   names a package's bundle needs the steps that make it.
 //!
@@ -71,7 +71,7 @@ pub const PACKAGES: [(&str, &str); 3] =
     [("hostkeeper", ""), ("hello", ""), ("hello", "-fail-ready")];
 
 /// The platforms the release ships packages for.
-pub const PLATFORMS: [&str; 2] = ["linux-x86_64", "linux-arm64"];
+pub const PLATFORMS: [&str; 3] = ["linux-x86_64", "linux-arm64", "macos-arm64"];
 
 /// Whether the attest job may run `run`: one of [`ATTEST_RUNS`], or a [`BUNDLE_COPY`].
 fn attest_may_run(run: &str) -> bool {

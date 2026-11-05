@@ -12,8 +12,9 @@
 //!
 //! There are exactly three platforms, linux-x86_64, linux-arm64 and macos-arm64
 //! ([`Platform::ALL`]): one package per OS and CPU family, listed in the release index of its
-//! package (see `index`). A release ships the platforms of [`Platform::RELEASED`], the two Linux
-//! ones until the macOS daemon exists. A release carries three kinds of package ([`Package`]):
+//! package (see `index`). A release ships every one of them ([`Platform::RELEASED`]), and a
+//! release missing one is refused. macos-arm64 also ships the installer pkg of a Mac's first
+//! install ([`installer_name`]). A release carries three kinds of package ([`Package`]):
 //! hostkeeper's own (`index.json`), `hello`, the example service of `examples/hello`
 //! (`hello-index.json`), and hello's failing build (`hello-fail-ready-index.json`).
 
@@ -81,6 +82,9 @@ pub(crate) const PACKAGE_SUFFIX: &str = ".tar.zst";
 
 /// What the file holding the package's SHA-256 adds to the package's name.
 pub(crate) const DIGEST_SUFFIX: &str = ".sha256";
+
+/// What the file name of the macOS installer ends in: a flat installer package.
+pub(crate) const INSTALLER_SUFFIX: &str = ".pkg";
 
 /// How many hex digits of the commit a binary prints in [`stamp_string`].
 pub(crate) const SHORT_COMMIT: usize = 12;
@@ -276,9 +280,13 @@ impl Platform {
         Platform::MacosArm64,
     ];
 
-    /// The platforms a release ships today: the Linux ones. The macOS artifacts wait for the
-    /// macOS daemon (design build item B18), which adds macos-arm64 here.
-    pub(crate) const RELEASED: [Platform; 2] = [Platform::LinuxX86_64, Platform::LinuxArm64];
+    /// The platforms a release ships: all three. A release that lacks the assets of one of them
+    /// is refused (`check`), and so is an index without its package (`index`).
+    pub(crate) const RELEASED: [Platform; 3] = [
+        Platform::LinuxX86_64,
+        Platform::LinuxArm64,
+        Platform::MacosArm64,
+    ];
 
     /// The platform's name, in asset names, the release index and a manifest.
     pub(crate) fn name(self) -> &'static str {
@@ -397,6 +405,15 @@ impl Package {
     }
 }
 
+/// The file name of the installer pkg of `version`, the first install of a Mac (design section
+/// 5.9): `hostkeeper-<v>-macos-arm64.pkg`.
+pub(crate) fn installer_name(version: &Version) -> String {
+    format!(
+        "{PROGRAM}-{version}-{}{INSTALLER_SUFFIX}",
+        Platform::MacosArm64.name()
+    )
+}
+
 /// The file name of the bundle of the asset `name`.
 pub(crate) fn bundle_of(name: &str) -> String {
     format!("{name}{BUNDLE_SUFFIX}")
@@ -424,10 +441,12 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
 ///
-/// the bundle of each binary tarball, Linux package, hostkeeper package, hello package, hello's
-/// failing build and image; and once, [`INDEX`] (the release index of the hostkeeper packages),
-/// [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`] (that of the failing
-/// build) and `SHA256SUMS`.
+/// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
+///
+/// the bundle of each binary tarball, Linux package, installer, hostkeeper package, hello package,
+/// hello's failing build and image; and once, [`INDEX`] (the release index of the hostkeeper
+/// packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`] (that of the
+/// failing build) and `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
     let mut names = vec![SUMS.to_owned()];
     names.extend(Package::ALL.map(|p| p.index_name().to_owned()));
@@ -448,6 +467,9 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
                 format!("{COORDINATOR}-{version}-{p}.image.tar"),
             ]);
             names.push(format!("{COORDINATOR}-{version}-{p}.cdx.json"));
+        }
+        if platform == Platform::MacosArm64 {
+            attested.push(installer_name(version));
         }
         names.extend(attested.iter().map(|a| bundle_of(a)));
         names.extend(attested);

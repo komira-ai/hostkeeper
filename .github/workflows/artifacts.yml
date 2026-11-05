@@ -1,18 +1,21 @@
-# The release files of one commit: for linux-x86_64 and linux-arm64, the `hostkeeper` binary as a
-# tarball with its CycloneDX SBOM, the deb and the rpm, and hostkeeper's own package (`.tar.zst`
-# with its `.sha256`); the package of `hello`, the example service of examples/hello, and of its
-# failing build (the same package started with `--fail-ready`, which a host can be rolled back
-# from), each with its `.sha256`; the release indexes `index.json`, `hello-index.json` and
-# `hello-fail-ready-index.json`; one SHA256SUMS over them; and, on a push to main, the
-# build-provenance and SBOM attestations of this repository with a bundle per signed file. A host
-# trusts only packages this workflow attested, so hello's packages are signed like hostkeeper's.
-# The names are the release contract (docs/deploy/verify-a-release.md):
+# The release files of one commit: for linux-x86_64, linux-arm64 and macos-arm64, the `hostkeeper`
+# binary as a tarball with its CycloneDX SBOM and hostkeeper's own package (`.tar.zst` with its
+# `.sha256`); the package of `hello`, the example service of examples/hello, and of its failing
+# build (the same package started with `--fail-ready`, which a host can be rolled back from), each
+# with its `.sha256`, for each of the three platforms; for each Linux platform the deb and the rpm;
+# for macos-arm64 the installer pkg of a Mac's first install; the release indexes `index.json`,
+# `hello-index.json` and `hello-fail-ready-index.json` over the three packages each; one SHA256SUMS
+# over them; and, on a push to main, the build-provenance and SBOM attestations of this repository
+# with a bundle per signed file. A host trusts only packages this workflow attested, so hello's
+# packages are signed like hostkeeper's. The names are the release contract
+# (docs/deploy/verify-a-release.md):
 #
 #   hostkeeper-<version>-<platform>.tar.gz          hostkeeper-<version>-<platform>.cdx.json
 #   hostkeeper-<version>-<platform>.tar.zst         hostkeeper-<version>-<platform>.tar.zst.sha256
 #   hello-<version>-<platform>.tar.zst              hello-<version>-<platform>.tar.zst.sha256
 #   hello-<version>-fail-ready-<platform>.tar.zst   hello-<version>-fail-ready-<platform>.tar.zst.sha256
 #   hostkeeper_<version>_<deb-arch>.deb             hostkeeper-<version>-1.<rpm-arch>.rpm
+#   hostkeeper-<version>-macos-arm64.pkg
 #   index.json   hello-index.json   hello-fail-ready-index.json   SHA256SUMS
 #   <signed file>.sigstore.json
 #
@@ -22,8 +25,7 @@
 # `hostkeeper --version` prints `hostkeeper X.Y.Z+<12 hex>`, and `release check-binary` refuses a
 # binary that prints anything else. `hello` is built from the same workspace, so it carries the
 # release version (`hello --version` prints `hello X.Y.Z`); its failing build is named
-# `<version>-fail-ready` in its manifest and index. No macOS job builds yet: the hello package of
-# macos-arm64 is built by the same verb when the macOS release job lands.
+# `<version>-fail-ready` in its manifest and index.
 #
 # The attest job is in THIS file for one reason: the signer identity of an attestation is the
 # workflow file that ran the signing step, and every consumer verifies exactly
@@ -36,7 +38,8 @@
 # job published (their digest is a job output) and then files that differ from the sums.
 #
 # No pull request runs this workflow (AGENTS.md B9: a pull request runs only build and unit tests
-# with coverage). A push to main builds, sums, signs and checks what it signed (`verify`); a run
+# with coverage, and never a macOS job: the macOS build is here, run by hand until the push
+# trigger below lands). A push to main builds, sums, signs and checks what it signed (`verify`); a run
 # by hand on a branch builds and sums and signs nothing.
 #
 # Triggers: only `workflow_dispatch` for now. The coordinator's files (its tarball, SBOM and
@@ -211,12 +214,109 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+  # macos-arm64 on a GitHub-hosted Apple silicon runner, so the binary runs where it is built: the
+  # binary tarball, its SBOM and hostkeeper's own package as for Linux (the package has no unit:
+  # the daemon's launchd job is the plist of the installer), hello's two packages (their units
+  # are the plists of its two slots), and the installer pkg of a Mac's first
+  # install, read back from the built pkg and checked here. No deb, rpm or coordinator on macOS.
+  # The pkg is not signed (that needs an Apple Developer ID Installer identity); it is attested
+  # with every other file. The runner's `gtar` is GNU tar, so the tarball is made as on Linux.
+  build-macos:
+    name: macos-arm64
+    needs: [version]
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      PLATFORM: macos-arm64
+      TARGET: aarch64-apple-darwin
+      CYCLONEDX_SHA256: 4c53dfa21e70b65bf7f8d2592aadde3bcb02c1a40b6ec63b877e5ca65a29e180
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Download cargo-cyclonedx (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      - name: Check cargo-cyclonedx (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/cyclonedx.tar.xz" --sha256 "$CYCLONEDX_SHA256" --out "$RUNNER_TEMP/cyclonedx-checked.tar.xz"
+      # The macOS image keeps cargo outside $HOME/.cargo/bin, so the tool goes into a directory of
+      # its own on the PATH.
+      - run: mkdir "$RUNNER_TEMP/bin"
+      - name: Install cargo-cyclonedx
+        run: tar -xJf "$RUNNER_TEMP/cyclonedx-checked.tar.xz" -C "$RUNNER_TEMP/bin" --strip-components 1 "cargo-cyclonedx-$TARGET/cargo-cyclonedx"
+      - name: Put the tool directory on the PATH
+        run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: cargo cyclonedx --version
+      - run: gtar --version
+      - name: The workspace takes the version of the release
+        run: cargo xtask release set-version --version "$RELEASE_VERSION"
+      - name: Keep the lock file as written
+        run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
+      - name: Build hostkeeper
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release -p hostkeeper --bin hostkeeper
+      # hello takes its version from the workspace, so it needs no RELEASE_COMMIT.
+      - name: Build hello
+        run: cargo build --locked --release -p hello --bin hello
+      - name: hostkeeper says the version and the commit
+        run: cargo xtask release check-binary target/release/hostkeeper "$RELEASE_VERSION" "$GITHUB_SHA"
+      # The macOS unpack refuses a Mach-O without a valid code signature of its own bytes; the
+      # linker signs the binary ad hoc, and this checks it as the unpack does.
+      - name: hostkeeper has a valid code signature
+        run: codesign --verify --strict --verbose=2 target/release/hostkeeper
+      # hello is a Mach-O in a macOS package too, so it is held to the same signature.
+      - name: hello has a valid code signature
+        run: codesign --verify --strict --verbose=2 target/release/hello
+      - name: SBOM
+        run: cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target "$TARGET"
+      - name: The SBOM step left Cargo.lock unchanged
+        run: cmp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
+      - run: mkdir dist
+      - name: Name the SBOM
+        run: cp crates/hostkeeper/hostkeeper_bin.cdx.json "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.cdx.json"
+      - name: The commit time
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
+      - name: Tarball of the binary
+        run: gtar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper | gzip -n > "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      - name: hostkeeper's own package and its SHA-256
+        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --out dist
+      - name: hello's package and its SHA-256
+        run: cargo xtask release package --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
+      # The same binary and plists, started with --fail-ready (see the Linux build job).
+      - name: hello's failing build and its SHA-256
+        run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
+      - name: The installer pkg
+        run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --stage "$RUNNER_TEMP/pkg-root" --out dist
+      # Read back from the built pkg: its payload holds exactly the binary and the daemon's plist,
+      # with their paths, modes, owners and bytes, the plist names the daemon's label, and the pkg
+      # has no scripts.
+      - name: Expand the installer pkg
+        run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
+      - name: The installer pkg installs exactly the binary and the plist
+        run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/pkg-expanded" --version "$RELEASE_VERSION" --binary target/release/hostkeeper
+      - run: mkdir "$RUNNER_TEMP/unpacked"
+      - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper
+      - name: The packaged hostkeeper says the version and the commit
+        run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper" "$RELEASE_VERSION" "$GITHUB_SHA"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assets-${{ env.PLATFORM }}
+          path: dist/
+          retention-days: 90
+          if-no-files-found: error
+
   # The release indexes (index.json of the hostkeeper packages, hello-index.json of hello's and
-  # hello-fail-ready-index.json of its failing build) over the packages of both platforms, then
-  # SHA256SUMS over every file but itself (the bundles come later, from attest). The attest job signs these sums, so they are the one
-  # list of what a release holds.
+  # hello-fail-ready-index.json of its failing build) over the packages of the three platforms
+  # (each refused unless every platform is there), then SHA256SUMS over every file but itself (the
+  # bundles come later, from attest). The attest job signs these sums, so they are the one list of
+  # what a release holds.
   sums:
-    needs: [version, build]
+    needs: [version, build, build-macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -307,6 +407,10 @@ jobs:
         with:
           subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
           sbom-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.gz
+          sbom-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.cdx.json
       - id: tarball-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -403,6 +507,46 @@ jobs:
         env:
           BUNDLE: ${{ steps.rpm-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.aarch64.rpm.sigstore.json"
+      - id: tarball-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.gz
+      - name: Name the bundle of the tarball for macos-arm64
+        env:
+          BUNDLE: ${{ steps.tarball-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.tar.gz.sigstore.json"
+      - id: package-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.zst
+      - name: Name the bundle of the package for macos-arm64
+        env:
+          BUNDLE: ${{ steps.package-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.tar.zst.sigstore.json"
+      - id: hello-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hello-${{ needs.version.outputs.version }}-macos-arm64.tar.zst
+      - name: Name the bundle of the hello package for macos-arm64
+        env:
+          BUNDLE: ${{ steps.hello-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello-${V}-macos-arm64.tar.zst.sigstore.json"
+      - id: hello-fail-ready-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hello-${{ needs.version.outputs.version }}-fail-ready-macos-arm64.tar.zst
+      - name: Name the bundle of the failing build of hello for macos-arm64
+        env:
+          BUNDLE: ${{ steps.hello-fail-ready-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello-${V}-fail-ready-macos-arm64.tar.zst.sigstore.json"
+      - id: pkg-macos-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.pkg
+      - name: Name the bundle of the installer pkg for macos-arm64
+        env:
+          BUNDLE: ${{ steps.pkg-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.pkg.sigstore.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bundles

@@ -539,7 +539,7 @@ fn attest_steps(id: &str, name: &str, file: &str, subject: &str) -> String {
 }
 
 #[test]
-fn attest_job_attests_every_package_for_both_platforms_and_copies_each_bundle() {
+fn attest_job_attests_every_package_for_every_platform_and_copies_each_bundle() {
     // Catches: a release asset list that names the bundle of a hello package (or of its failing
     // build) while artifacts.yml has no step that signs it, one that signs it without copying the
     // bundle beside it, or one that copies the bundle of another step. A host trusts only
@@ -595,6 +595,29 @@ fn attest_job_attests_every_package_for_both_platforms_and_copies_each_bundle() 
         "artifacts.yml",
         &text,
         "job attest does not copy the bundle of hello-<version>-linux-x86_64.tar.zst from the step hello-linux-x86_64",
+    );
+    // The macOS packages of hello are attested and their bundles copied like the others.
+    let hello_mac = attest_steps(
+        "hello-macos-arm64",
+        "Name the bundle of the hello package for macos-arm64",
+        "hello-${V}-macos-arm64.tar.zst",
+        "hello-${{ needs.version.outputs.version }}-macos-arm64.tar.zst",
+    );
+    let text = workflow("artifacts.yml");
+    assert!(text.contains(&hello_mac));
+    assert_refused(
+        "artifacts.yml",
+        &with_in(&text, &hello_mac, ""),
+        "artifacts.yml: job attest does not attest hello-<version>-macos-arm64.tar.zst",
+    );
+    let copy = "        run: cp \"$BUNDLE\" \"dist/hello-${V}-fail-ready-macos-arm64.tar.zst.sigstore.json\"\n";
+    let text = with_in(&text, copy, "        run: echo\n");
+    let found = all_problems("artifacts.yml", &text);
+    assert!(
+        found.iter().any(|p| p.contains(
+            "job attest does not copy the bundle of hello-<version>-fail-ready-macos-arm64.tar.zst"
+        )),
+        "{found:?}"
     );
     // A package attested under the name of another file.
     let text = with_in(

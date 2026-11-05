@@ -60,12 +60,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 46 assets of v0.1.5 match SHA256SUMS, and 32 attestations of \
+            "release check: the 60 assets of v0.1.5 match SHA256SUMS, and 42 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 32);
+    assert_eq!(calls.len(), 42);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -245,7 +245,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 32);
+    assert_eq!(everything.len(), 42);
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 32);
+    assert_eq!(lines.len(), 42);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
@@ -447,7 +447,7 @@ fn the_hello_packages_are_verified_online_and_from_their_bundles() {
     let verifier = FakeVerifier::good(&commit);
     run(&verifier, &dir, &commit).expect("a good directory");
     let calls = verifier.calls.borrow();
-    for platform in ["linux-x86_64", "linux-arm64"] {
+    for platform in ["linux-x86_64", "linux-arm64", "macos-arm64"] {
         let name = format!("hello-0.1.5-{platform}.tar.zst");
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -568,7 +568,7 @@ fn the_failing_build_packages_are_verified_online_and_from_their_bundles() {
     let verifier = FakeVerifier::good(&commit);
     run(&verifier, &dir, &commit).expect("a good directory");
     let calls = verifier.calls.borrow();
-    for platform in ["linux-x86_64", "linux-arm64"] {
+    for platform in ["linux-x86_64", "linux-arm64", "macos-arm64"] {
         let name = format!("hello-0.1.5-fail-ready-{platform}.tar.zst");
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -645,5 +645,64 @@ fn the_failing_build_index_is_the_index_of_hello_at_the_failing_version() {
     assert_eq!(
         refused(run(&FakeVerifier::good(&commit), &dir, &commit)),
         vec![format!("missing {FAIL_READY_INDEX}")]
+    );
+}
+
+#[test]
+fn a_release_without_its_macos_assets_is_refused_naming_each() {
+    // Catches: a release that ships the Linux platforms only, the macOS binary, package, SBOM,
+    // installer and their bundles missing, passing the check as a complete release.
+    let (dir, commit) = assets("check-no-macos");
+    let mac: Vec<String> = asset_names(&version(), &[Platform::MacosArm64])
+        .into_iter()
+        .filter(|n| n.contains("macos-arm64"))
+        .collect();
+    assert_eq!(mac.len(), 14);
+    for name in &mac {
+        std::fs::remove_file(dir.join(name)).expect("remove a macOS asset");
+    }
+    let mut sums = String::new();
+    for name in summed_names(&version()).iter().filter(|n| !mac.contains(n)) {
+        let digest = file_sha256(&dir.join(name)).expect("hash");
+        sums.push_str(&format!("{digest}  {name}\n"));
+    }
+    std::fs::write(dir.join(SUMS), sums).expect("write the sums");
+    let mut want: Vec<String> = mac.iter().map(|n| format!("missing {n}")).collect();
+    want.extend(
+        mac.iter()
+            .filter(|n| summed_names(&version()).contains(n))
+            .map(|n| format!("{SUMS} does not list {n}")),
+    );
+    assert_eq!(
+        refused(run(&FakeVerifier::good(&commit), &dir, &commit)),
+        want
+    );
+}
+
+#[test]
+fn an_index_that_leaves_out_the_macos_package_is_listed() {
+    // Catches: an index of the Linux packages only beside a macOS package, so that a Mac finds
+    // no package in the release index.
+    let (dir, commit) = assets("check-index-no-macos");
+    let mut index = good_index(&dir);
+    assert_eq!(
+        index
+            .packages
+            .iter()
+            .map(|e| e.platform)
+            .collect::<Vec<_>>(),
+        Platform::ALL
+    );
+    index
+        .packages
+        .retain(|e| e.platform != Platform::MacosArm64);
+    replace_index(&dir, &index.to_json());
+    assert_eq!(
+        refused(run(&FakeVerifier::good(&commit), &dir, &commit)),
+        vec![
+            "index.json does not list exactly the packages of the directory with their sizes and \
+             SHA-256 digests"
+                .to_owned()
+        ]
     );
 }

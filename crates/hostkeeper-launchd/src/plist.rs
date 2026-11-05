@@ -100,7 +100,11 @@ pub enum PlistError {
 }
 
 /// The daemon job's plist: `Label`, `ProgramArguments`, `RunAtLoad` and `KeepAlive` true, and
-/// the two output paths.
+/// the two output paths. It is the one plist of the daemon, the one its own update relies on
+/// too: `KeepAlive` is plain `true`, the counterpart of the systemd unit's `Restart=always`, so
+/// that the clean exit the updater makes after it switched to a new binary
+/// (`hostkeeper_steps::selfupdate::follow_on`) starts that binary; a `SuccessfulExit` condition
+/// would leave the daemon stopped after that exit.
 pub fn daemon_plist(job: &DaemonJob) -> Result<String, PlistError> {
     let argv = vec![utf8(job.program.as_os_str())?, "daemon".to_owned()];
     job_plist(

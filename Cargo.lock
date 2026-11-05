@@ -1365,8 +1365,10 @@ dependencies = [
  "hostkeeper-hook",
  "hostkeeper-observe",
  "hostkeeper-placed",
+ "hostkeeper-steps",
  "hostkeeper-testkit",
  "libproc",
+ "plist",
  "sha2",
  "thiserror",
 ]
@@ -3852,6 +3854,7 @@ dependencies = [
  "hostkeeper-daemon",
  "hostkeeper-launchd",
  "hostkeeper-unpack",
+ "plist",
  "ruzstd",
  "saphyr-parser",
  "serde_json",

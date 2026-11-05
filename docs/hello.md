@@ -14,8 +14,9 @@ marked **specified, not built**, with the pull request that builds it.
 
 | Needed for | Built | Specified, not built |
 |---|---|---|
-| the package, its hook, its units and its release assets | `examples/hello`, `cargo xtask release package --service hello`, `artifacts.yml` | the macos-arm64 assets (the verb builds the package; the macOS release job adds it to the release) |
-| running a hook step on a host | the step launcher `SystemdLauncher` (`hostkeeper-steps`) | the daemon running its steps through it, komira-ai/hostkeeper#52 (until then the daemon refuses every step) |
+| the package, its hook, its units and its release assets | `examples/hello`, `cargo xtask release package --service hello`, `artifacts.yml`, for linux-x86_64, linux-arm64 and macos-arm64 | — |
+| running a hook step on a Linux host | the daemon runs each step through `SystemdLauncher` | — |
+| running a hook step on a Mac | `LaunchdLauncher` (`hostkeeper-launchd`) | the daemon running its steps through it (`docs/macos.md`) |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
 | assigning to a role | the rollout file's `roles` and `install_when_absent` | `Services.Assign` per host, komira-ai/hostkeeper#45 |
 | setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow | a UI control: the Rollout page shows the desired version and does not set it |
@@ -52,12 +53,16 @@ restart, and clients see a short gap.
 | `cleanup` | refuses unless `verify` succeeded; records the new slot as the serving one |
 | `uninstall` | stops both slots and removes the hook's record |
 
-The commit is the success of `cutover`. A failed `verify` is therefore a failure after the
-commit, which is what the coordinator's automatic rollback counts.
+No step reports `reversible: false`, because `rollback` can always start the old slot again.
+A failed `verify` is therefore a failed update in the phase `gate_release`, class `release`.
+The coordinator's automatic rollback counts that phase, as it counts `after_commit`.
+
+The hook keeps its record in `/var/lib/updater/hooks/hello` (the manifest's `[params]`), and
+makes that directory, owner only, on its first step.
 
 ## Before you start
 
-1. **Releases.** Each release of this repository carries, per Linux platform,
+1. **Releases.** Each release of this repository carries, per platform,
    `hello-<version>-<platform>.tar.zst` and its attestation, and `hello-index.json`. It also
    carries the failing build, version `<version>-fail-ready`, with
    `hello-fail-ready-index.json`. Copy each index to the channel as
@@ -82,7 +87,8 @@ ordered until a desired version is set.
 A host enrolled after this joins the role through its approval:
 `hostkeeper ctl enrollment approve ... --role <role>`.
 
-**Watch:** Fleet, Hosts table. Each host of the role shows `hello not installed`.
+**Watch:** nothing is ordered yet. The Rollout page's section `hello` shows `Desired` as
+`none set`.
 
 ## 2. Set v1 and watch it converge
 
@@ -118,11 +124,12 @@ that served `<v1>` is stopped. When the hosts have baked, `<v2>` is the last goo
 ## 4. A failing build: watch the automatic rollback
 
 Set the desired version to `<v2>-fail-ready`, with the digest of its package. That build runs
-the server with `--fail-ready`, so `/readyz` answers 503.
+the server with `--fail-ready`, so `/readyz` answers 503. (Its `/version` answers `<v2>`: `verify`
+stops at the 503 and never compares it.)
 
 **Watch:**
 
-- Host, `Last update` of the canary: `Verdict` failed, `Phase` after the commit, `Reason`
+- Host, `Last update` of the canary: `Verdict` failed, `Phase` gate release, `Reason`
   `not_ready`. The host's own hook rolled it back: the slot of `<v2>` serves again, and Fleet
   shows `hello <v2>, healthy`.
 - Rollout, section `hello`: `Bad versions` lists `<v2>-fail-ready`, and `Desired` is back at
@@ -152,5 +159,5 @@ Remove the entry from the rollout file afterwards.
 
 - A hand-off without a gap: hello restarts. tierstore's port forward is its own (design
   `docs/design/host-updates.md`, section 4.1).
-- The macOS hosts: the daemon does not run launchd jobs yet (`docs/macos.md`).
+- The macOS hosts: the daemon does not run its steps through launchd yet (`docs/macos.md`).
 - More than one platform in one rollout: see "One platform" above.

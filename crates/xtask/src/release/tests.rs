@@ -168,7 +168,18 @@ fn verbs_that_read_no_port_run_with_the_ports_lent_back() {
     assert!(run_with(compare, &ports).is_ok());
 
     let index = verb(&["index", "--version", "0.1.9", "--dir", text(&d)]);
-    assert!(matches!(run_with(index, &ports), Err(Error::Failed(_))));
+    assert!(matches!(run_with(index, &ports), Err(Error::Refused(_))));
+
+    let absent = d.join("absent");
+    let check = verb(&[
+        "check-macos-pkg",
+        text(&absent),
+        "--version",
+        "0.1.9",
+        "--binary",
+        text(&d.join("a")),
+    ]);
+    assert!(matches!(run_with(check, &ports), Err(Error::Io { .. })));
 }
 
 #[test]
@@ -176,12 +187,15 @@ fn index_writes_the_release_index_without_asking_for_adapters() {
     // Catches: `--version` or `--dir` not reaching the index verb, or the verb building the real
     // adapters though it reads no port.
     let d = scratch("release-index-verb");
-    std::fs::write(d.join("hostkeeper-0.1.9-linux-arm64.tar.zst"), b"arm").expect("write");
+    for p in Platform::RELEASED {
+        let file = format!("hostkeeper-0.1.9-{}.tar.zst", p.name());
+        std::fs::write(d.join(file), p.name()).expect("write");
+    }
     let (out, connected) = connects(verb(&["index", "--version", "0.1.9", "--dir", text(&d)]));
     assert_eq!(
         out,
         Ok(vec![format!(
-            "{}: the packages of hostkeeper 0.1.9 for linux-arm64",
+            "{}: the packages of hostkeeper 0.1.9 for linux-arm64, linux-x86_64, macos-arm64",
             d.join("index.json").display()
         )])
     );
@@ -194,8 +208,10 @@ fn index_for_hello_writes_hello_index_json_from_the_hello_packages_only() {
     // `index.json` (or the hostkeeper ones in `hello-index.json`), or a hello index that names
     // another service.
     let d = scratch("release-index-hello");
-    std::fs::write(d.join("hello-0.1.9-linux-arm64.tar.zst"), b"hello arm").expect("write");
-    std::fs::write(d.join("hello-0.1.9-macos-arm64.tar.zst"), b"hello mac").expect("write");
+    for p in Platform::RELEASED {
+        let file = format!("hello-0.1.9-{}.tar.zst", p.name());
+        std::fs::write(d.join(file), b"hello pkg").expect("write");
+    }
     std::fs::write(d.join("hostkeeper-0.1.9-linux-x86_64.tar.zst"), b"hk x86").expect("write");
     let (out, connected) = connects(verb(&[
         "index",
@@ -209,7 +225,7 @@ fn index_for_hello_writes_hello_index_json_from_the_hello_packages_only() {
     assert_eq!(
         out,
         Ok(vec![format!(
-            "{}: the packages of hello 0.1.9 for linux-arm64, macos-arm64",
+            "{}: the packages of hello 0.1.9 for linux-arm64, linux-x86_64, macos-arm64",
             d.join("hello-index.json").display()
         )])
     );
@@ -222,21 +238,28 @@ fn index_for_hello_writes_hello_index_json_from_the_hello_packages_only() {
         format!(
             "{{\"packages\":[\
              {{\"bytes\":9,\"file\":\"hello-0.1.9-linux-arm64.tar.zst\",\"platform\":\"linux-arm64\",\"sha256\":\"{}\"}},\
+             {{\"bytes\":9,\"file\":\"hello-0.1.9-linux-x86_64.tar.zst\",\"platform\":\"linux-x86_64\",\"sha256\":\"{}\"}},\
              {{\"bytes\":9,\"file\":\"hello-0.1.9-macos-arm64.tar.zst\",\"platform\":\"macos-arm64\",\"sha256\":\"{}\"}}\
              ],\"schema\":1,\"service\":\"hello\",\"version\":\"0.1.9\"}}",
             digest("hello-0.1.9-linux-arm64.tar.zst"),
+            digest("hello-0.1.9-linux-x86_64.tar.zst"),
             digest("hello-0.1.9-macos-arm64.tar.zst"),
         )
     );
-    // The same directory, with no `--service`, indexes the hostkeeper package alone.
+    // The same directory, with no `--service`, has only one hostkeeper package: refused, and
+    // no `index.json` is written.
     let (out, _) = connects(verb(&["index", "--version", "0.1.9", "--dir", text(&d)]));
     assert_eq!(
         out,
-        Ok(vec![format!(
-            "{}: the packages of hostkeeper 0.1.9 for linux-x86_64",
-            d.join("index.json").display()
-        )])
+        Err(Error::Refused(
+            ["linux-arm64", "macos-arm64"]
+                .map(|p| format!(
+                    "missing hostkeeper-0.1.9-{p}.tar.zst: a release has the package of every platform"
+                ))
+                .to_vec()
+        ))
     );
+    assert!(!d.join("index.json").exists());
 }
 
 #[test]
@@ -245,17 +268,15 @@ fn index_for_the_failing_build_writes_its_own_index_from_its_packages_only() {
     // are listed in `hello-index.json` (or hello's in the failing build's index), an index whose
     // version lacks the `-fail-ready` suffix, or a `--fail-ready` index of hostkeeper.
     let d = scratch("release-index-fail-ready");
-    std::fs::write(d.join("hello-0.1.9-linux-arm64.tar.zst"), b"hello arm").expect("write");
-    std::fs::write(
-        d.join("hello-0.1.9-fail-ready-linux-arm64.tar.zst"),
-        b"failing arm",
-    )
-    .expect("write");
-    std::fs::write(
-        d.join("hello-0.1.9-fail-ready-linux-x86_64.tar.zst"),
-        b"failing x86",
-    )
-    .expect("write");
+    for p in Platform::RELEASED {
+        let n = p.name();
+        std::fs::write(d.join(format!("hello-0.1.9-{n}.tar.zst")), b"hello pkg").expect("write");
+        std::fs::write(
+            d.join(format!("hello-0.1.9-fail-ready-{n}.tar.zst")),
+            b"failing pkg",
+        )
+        .expect("write");
+    }
     let index = |extra: &[&str]| {
         let mut args = vec!["index", "--version", "0.1.9", "--dir", text(&d)];
         args.extend_from_slice(extra);
@@ -265,7 +286,7 @@ fn index_for_the_failing_build_writes_its_own_index_from_its_packages_only() {
     assert_eq!(
         out,
         Ok(vec![format!(
-            "{}: the packages of hello 0.1.9-fail-ready for linux-arm64, linux-x86_64",
+            "{}: the packages of hello 0.1.9-fail-ready for linux-arm64, linux-x86_64, macos-arm64",
             d.join("hello-fail-ready-index.json").display()
         )])
     );
@@ -277,10 +298,12 @@ fn index_for_the_failing_build_writes_its_own_index_from_its_packages_only() {
         format!(
             "{{\"packages\":[\
              {{\"bytes\":11,\"file\":\"hello-0.1.9-fail-ready-linux-arm64.tar.zst\",\"platform\":\"linux-arm64\",\"sha256\":\"{}\"}},\
-             {{\"bytes\":11,\"file\":\"hello-0.1.9-fail-ready-linux-x86_64.tar.zst\",\"platform\":\"linux-x86_64\",\"sha256\":\"{}\"}}\
+             {{\"bytes\":11,\"file\":\"hello-0.1.9-fail-ready-linux-x86_64.tar.zst\",\"platform\":\"linux-x86_64\",\"sha256\":\"{}\"}},\
+             {{\"bytes\":11,\"file\":\"hello-0.1.9-fail-ready-macos-arm64.tar.zst\",\"platform\":\"macos-arm64\",\"sha256\":\"{}\"}}\
              ],\"schema\":1,\"service\":\"hello\",\"version\":\"0.1.9-fail-ready\"}}",
             digest("hello-0.1.9-fail-ready-linux-arm64.tar.zst"),
             digest("hello-0.1.9-fail-ready-linux-x86_64.tar.zst"),
+            digest("hello-0.1.9-fail-ready-macos-arm64.tar.zst"),
         )
     );
     // Hello's own index lists the plain package alone.
@@ -288,7 +311,7 @@ fn index_for_the_failing_build_writes_its_own_index_from_its_packages_only() {
     assert_eq!(
         out,
         Ok(vec![format!(
-            "{}: the packages of hello 0.1.9 for linux-arm64",
+            "{}: the packages of hello 0.1.9 for linux-arm64, linux-x86_64, macos-arm64",
             d.join("hello-index.json").display()
         )])
     );
@@ -344,12 +367,19 @@ fn package_builds_the_package_of_the_service_asked_for_and_hostkeeper_by_default
         assert!(!d.join("out").join(other).exists(), "{other}");
     }
 
-    // Without `--service` the package is hostkeeper's: it needs a unit, and not for macOS.
+    // Without `--service` the package is hostkeeper's: for macOS it has no unit, and no
+    // `--fail-ready`.
     let (h, _) = one_commit();
     let out = run(parse(&[]), || Fakes::over(h));
     assert!(
-        matches!(&out, Err(Error::Failed(why)) if why.contains("macos-arm64 package waits")),
+        matches!(&out, Ok(lines) if lines[0].starts_with("hostkeeper-0.1.2-macos-arm64.tar.zst:")),
         "{out:?}"
+    );
+    let (h, _) = one_commit();
+    let out = run(parse(&["--fail-ready"]), || Fakes::over(h));
+    assert_eq!(
+        out,
+        Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned()))
     );
     let (h, _) = one_commit();
     let unit = d.join("hostkeeper.service");
@@ -796,6 +826,7 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
             store: &fakes.store,
             verifier: &verifier,
             run_version: &fakes.run_version,
+            pkgbuild: &fakes.pkgbuild,
         };
         run_with(publish_verb(&dir, &ver, &commit), &ports).expect("publish");
         assert_eq!(fakes.store.all()[i + 1].commit, commit.to_string());
@@ -864,5 +895,103 @@ fn the_wired_adapters_route_each_port_to_its_program() {
     assert_eq!(
         ports.run_version.version_of(Path::new("bin/x")),
         Err(PortError::new("bin/x --version", why("bin/x")))
+    );
+}
+
+#[test]
+fn check_macos_pkg_reads_the_expanded_pkg_without_asking_for_adapters() {
+    // Catches: the expanded directory, `--version` or `--binary` not reaching the check, or the
+    // verb building the real adapters though it reads no port.
+    let d = scratch("release-check-macos-pkg-verb");
+    let absent = d.join("expanded");
+    let (out, connected) = connects(verb(&[
+        "check-macos-pkg",
+        text(&absent),
+        "--version",
+        "0.1.9",
+        "--binary",
+        text(&d.join("hostkeeper")),
+    ]));
+    assert!(
+        matches!(&out, Err(Error::Io { what, .. }) if *what == format!("read {}", absent.display())),
+        "{out:?}"
+    );
+    assert!(!connected);
+}
+
+#[test]
+fn macos_pkg_builds_through_the_pkgbuild_port_with_its_flags() {
+    // Catches: `--version`, `--binary`, `--stage` or `--out` not reaching the pkg builder, or the
+    // builder run without the pkgbuild port.
+    let d = scratch("release-macos-pkg-verb");
+    std::fs::write(d.join("hostkeeper"), b"bin").expect("write the binary");
+    let fakes = empty();
+    let stage = d.join("root");
+    let out = d.join("dist");
+    let build = verb(&[
+        "macos-pkg",
+        "--version",
+        "0.1.9",
+        "--binary",
+        text(&d.join("hostkeeper")),
+        "--stage",
+        text(&stage),
+        "--out",
+        text(&out),
+    ]);
+    let lines = run_with(build, &fakes.ports()).expect("build");
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with("hostkeeper-0.1.9-macos-arm64.pkg: sha256 "));
+    let calls = fakes.pkgbuild.calls.borrow();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        (
+            calls[0].root.as_path(),
+            calls[0].pkg.as_path(),
+            calls[0].version.to_string()
+        ),
+        (
+            stage.as_path(),
+            out.join("hostkeeper-0.1.9-macos-arm64.pkg").as_path(),
+            "0.1.9".to_owned()
+        )
+    );
+    assert_eq!(
+        std::fs::read(stage.join("usr/local/bin/hostkeeper")).expect("the staged binary"),
+        b"bin"
+    );
+}
+
+#[test]
+fn package_takes_a_unit_for_linux_and_none_for_macos() {
+    // Catches: `--unit` still required on the command line (so the macOS package cannot be
+    // asked for), or a given unit lost on the way to the builder.
+    let common = [
+        "--version",
+        "0.1.9",
+        "--commit",
+        COMMIT,
+        "--binary",
+        "b",
+        "--out",
+        "o",
+    ];
+    let mac: Vec<&str> = ["package", "--platform", "macos-arm64"]
+        .into_iter()
+        .chain(common)
+        .collect();
+    assert!(matches!(verb(&mac), Verb::Package { unit: None, .. }));
+    let linux: Vec<&str> = [
+        "package",
+        "--platform",
+        "linux-arm64",
+        "--unit",
+        "u.service",
+    ]
+    .into_iter()
+    .chain(common)
+    .collect();
+    assert!(
+        matches!(verb(&linux), Verb::Package { unit: Some(u), .. } if u == Path::new("u.service"))
     );
 }

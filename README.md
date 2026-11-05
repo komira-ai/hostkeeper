@@ -85,9 +85,12 @@ a request an operator approves, renewal at half life) and keeps it under `/etc/u
 heartbeat loop reads the certificate under that directory's `current` link at every heartbeat,
 and while there is none it says once what it waits for and sends nothing. It then serves the
 admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
-new binary. This build fetches, verifies and unpacks packages, and observes each service for
-`Status`, but has no step launcher or service manager wired in and no coordinator link for its
-heartbeats yet, so it serves the admin socket's `Status` and runs no order.
+new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
+transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
+the unit's name), and observes each service for `Status`. It has no service manager wired in,
+its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
+protocol probe (each fails without starting), and it has no coordinator link for its heartbeats yet, so no order
+reaches it from the coordinator.
 
 | exit status | meaning |
 |---|---|

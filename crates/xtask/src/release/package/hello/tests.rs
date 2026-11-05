@@ -12,7 +12,8 @@ use crate::release::package::tests::{
     Unseal, built, history, host, read_back, shape_problems, unpack,
 };
 use crate::release::package::{
-    FAIL_READY_ONLY_HELLO, MACOS_LATER, Request, UNIT_REFUSED, UNIT_REQUIRED, check_unit, package,
+    FAIL_READY_ONLY_HELLO, LINUX_NEEDS_UNIT, MACOS_TAKES_NO_UNIT, Request, UNIT_REFUSED,
+    check_unit, package,
 };
 
 /// The packaged binary; nothing reads it as a program.
@@ -583,7 +584,7 @@ fn the_failing_build_manifest_loads_for_its_own_version_and_not_for_the_plain_on
 }
 
 #[test]
-fn hello_takes_no_unit_and_hostkeeper_takes_no_fail_ready_and_needs_its_unit() {
+fn hello_takes_no_unit_and_hostkeeper_takes_no_fail_ready_and_needs_its_unit_on_linux_only() {
     // Catches: a hello package built from a unit file given on the command line (its units are
     // rendered), a hostkeeper package given a flag only hello has, one built without its unit, or
     // a refusal that still writes a package.
@@ -610,12 +611,16 @@ fn hello_takes_no_unit_and_hostkeeper_takes_no_fail_ready_and_needs_its_unit() {
     );
     refuse(
         hostkeeper(Platform::LinuxX86_64, false, false, "o3"),
-        UNIT_REQUIRED,
+        LINUX_NEEDS_UNIT,
     );
-    // macOS is refused for hostkeeper first, whatever else is wrong with the request.
+    // The failing build is refused for hostkeeper on every platform, whatever else is wrong.
     refuse(
         hostkeeper(Platform::MacosArm64, false, true, "o4"),
-        MACOS_LATER,
+        FAIL_READY_ONLY_HELLO,
+    );
+    refuse(
+        hostkeeper(Platform::MacosArm64, true, false, "o5"),
+        MACOS_TAKES_NO_UNIT,
     );
 }
 
