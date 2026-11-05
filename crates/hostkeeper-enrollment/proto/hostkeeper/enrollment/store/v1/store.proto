@@ -33,6 +33,8 @@ message Claims {
   // A Mac's serial number and platform UUID.
   string mac_serial = 5;
   string mac_platform_uuid = 6;
+  // The MAC address of the host's BMC, as the host claimed it; empty when it claimed none.
+  string bmc_mac = 7;
 }
 
 enum RequestState {

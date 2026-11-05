@@ -4,7 +4,8 @@
 //!
 //! - [`EnrollmentStore::post`] records a request. Its id is the SHA-256 of the CSR's
 //!   SubjectPublicKeyInfo, computed here; no caller supplies one. Posting the same key again is
-//!   the same request.
+//!   the same request. A request claiming a machine id another request has, or a MAC bound to
+//!   an enrolled host, is a duplicate claim.
 //! - [`EnrollmentStore::approve`] is the operator's decision, as a plain function: the
 //!   operator names the key hash, and the host id is checked unique under the store lock that
 //!   records the approval.
@@ -32,10 +33,10 @@ pub use poll::{MAX_NONCE_BYTES, MIN_NONCE_BYTES, POLL_DOMAIN, poll_message};
 pub use store::{EnrollmentStore, FIRST_SERIAL, LIVE_WINDOW_SECS};
 
 use crate::ca::{ProfileError, SignError};
-use crate::names::{HostId, KeyHash, Role, ServiceName};
+use crate::names::{HostId, KeyHash, MacAddress, Role, ServiceName};
 
 /// What a host says about itself when it asks to join: what an operator recognises a machine
-/// by. Claims authorise nothing; the store compares machine ids to flag duplicates.
+/// by. Claims authorise nothing; the store compares machine ids and MACs to flag duplicates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Claims {
     pub machine_id: String,
@@ -46,6 +47,38 @@ pub struct Claims {
     pub mac_serial: String,
     /// A Mac's platform UUID.
     pub mac_platform_uuid: String,
+    /// The MAC address of the host's BMC; empty when the host claimed none.
+    pub bmc_mac: String,
+}
+
+impl Claims {
+    /// The claimed addresses that read as MAC addresses ([`MacAddress::parse`]), in their one
+    /// spelling, sorted, without duplicates. An address of another shape (an InfiniBand
+    /// address) is left out.
+    pub fn data_macs(&self) -> Vec<MacAddress> {
+        let mut macs: Vec<MacAddress> = self
+            .addresses
+            .iter()
+            .filter_map(|text| MacAddress::parse(text).ok())
+            .collect();
+        macs.sort();
+        macs.dedup();
+        macs
+    }
+
+    /// The claimed BMC MAC, when there is one that reads as a MAC address.
+    pub fn bmc(&self) -> Option<MacAddress> {
+        MacAddress::parse(&self.bmc_mac).ok()
+    }
+
+    /// Every MAC the host claims: its data MACs and its BMC MAC.
+    pub fn all_macs(&self) -> Vec<MacAddress> {
+        let mut macs = self.data_macs();
+        macs.extend(self.bmc());
+        macs.sort();
+        macs.dedup();
+        macs
+    }
 }
 
 /// A request as the coordinator received it.
