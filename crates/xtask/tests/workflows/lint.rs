@@ -16,7 +16,7 @@
 //!   or an `include` the lint cannot read, such as an expression, is refused);
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
-//!   one the table gives (the table is empty: no job of this repository writes yet);
+//!   one the table gives;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
 //!   `merge_group`) and a job of it is privileged or macOS, whatever its `if:` says, or what
 //!   sits beside `jobs` (`env`, `defaults`, ...) is, so that nothing of the kind runs on a pull
@@ -26,9 +26,15 @@
 //!   job holds a `write` scope. macOS: a value of the job names `macos` or `darwin`, in any case
 //!   (a runner, a matrix value, a `--target aarch64-apple-darwin`).
 //!
+//! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
+//!   ([`release::release_rules`]).
+//!
+//! A workflow that tags or publishes is also held to [`release::publish_problems`].
+//!
 //! Keys are matched exactly. What this does not evaluate it refuses: a YAML tag, a second
 //! document, an alias to an unfinished node, a document that does not parse.
 
+use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
 use super::yaml::{self, Node, Value};
 
 /// A write permission a job may hold: the workflow file, the job, the scope, and the `if:` of
@@ -40,9 +46,39 @@ pub struct Allowed {
     pub condition: &'static str,
 }
 
-/// The write scopes jobs may hold. None yet: the release workflows that sign and publish come
-/// with their own entries.
-pub const WRITE_ALLOWED: &[Allowed] = &[];
+/// The write scopes jobs may hold, each in one job of one file under one exact `if:`.
+///
+/// - `artifacts.yml` / `attest`: `id-token` and `attestations`, to sign, on a push to main. It
+///   is the one job that can sign: the signer identity every consumer checks is that file.
+/// - `release.yml` / `publish`: `contents`, to create the release and its tag.
+/// - `release.yml` / `plan`: `issues`, to open or update the one issue that tracks a release
+///   held by a failed privileged run.
+pub const WRITE_ALLOWED: &[Allowed] = &[
+    Allowed {
+        file: "artifacts.yml",
+        job: "attest",
+        scope: "id-token",
+        condition: SIGN_IF,
+    },
+    Allowed {
+        file: "artifacts.yml",
+        job: "attest",
+        scope: "attestations",
+        condition: SIGN_IF,
+    },
+    Allowed {
+        file: "release.yml",
+        job: "publish",
+        scope: "contents",
+        condition: RELEASE_IF,
+    },
+    Allowed {
+        file: "release.yml",
+        job: "plan",
+        scope: "issues",
+        condition: PLAN_IF,
+    },
+];
 
 /// The runner labels of GitHub's standard hosted runners, free for a public repository. Any
 /// other label is a self-hosted runner or a paid larger runner.
@@ -72,7 +108,7 @@ pub fn entries(map: &Node) -> &[(Node, Node)] {
 }
 
 /// The names of the triggers `on` lists, in any of the three shapes GitHub reads.
-fn triggers(on: &Node) -> Vec<String> {
+pub fn triggers(on: &Node) -> Vec<String> {
     match &on.value {
         Value::Scalar { .. } => on.as_str().map(str::to_owned).into_iter().collect(),
         Value::Seq(items) => items
@@ -210,6 +246,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
             problems.extend(pull_request_problems(name, job));
         }
     }
+    problems.extend(release::release_rules(file, text));
     problems
 }
 
@@ -350,7 +387,7 @@ fn first_line<'a>(values: &[&'a str], found: impl Fn(&str) -> bool) -> Option<&'
 
 /// Whether the trigger `name` runs the workflow for a pull request: `pull_request` and its
 /// review events, and the merge queue (`pull_request_target` is refused on its own).
-fn runs_on_pull_requests(name: &str) -> bool {
+pub fn runs_on_pull_requests(name: &str) -> bool {
     name.starts_with("pull_request") || name == "merge_group"
 }
 
