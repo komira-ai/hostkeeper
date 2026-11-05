@@ -208,6 +208,8 @@ pub struct StepRunner {
     watch: Arc<Watch>,
     fault: Option<CheckFault>,
     switch: Option<Switch>,
+    /// [`StepRunner::with_held_success`].
+    held_success: bool,
 }
 
 impl StepRunner {
@@ -223,7 +225,19 @@ impl StepRunner {
             watch: Watch::new(),
             fault: None,
             switch: None,
+            held_success: false,
         }
+    }
+
+    /// The same runner, the `Succeeded` of an update that replaces a release (one with a
+    /// previous release) returned and never written: the record stays at the step that reached
+    /// it (`done` at `cleanup`), unfinished, for the caller to finish. This is the updater's own
+    /// update (design section 6.6), which only its new binary may record as succeeded, once it
+    /// has run ([`crate::selfupdate::follow_on`], [`crate::selfupdate::settle`]). A run of the
+    /// same order again recomputes the same verdict from the record and launches nothing.
+    pub fn with_held_success(mut self) -> StepRunner {
+        self.held_success = true;
+        self
     }
 
     /// The same runner, `switch` called before every run of `cutover` and of `rollback`.
@@ -610,6 +624,17 @@ impl StepRunner {
         let _held = self.store.hold();
         if self.flagged(rec)? {
             rec.close_forced_over();
+        }
+        let succeeded = matches!(
+            rec.state,
+            State::Finished {
+                verdict: Verdict::Succeeded { .. },
+                ..
+            }
+        );
+        // The updater's own update: its success is the new binary's to write.
+        if self.held_success & succeeded & rec.previous_digest.is_some() {
+            return Ok(());
         }
         Ok(self.store.save(rec)?)
     }

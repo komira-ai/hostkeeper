@@ -9,11 +9,12 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use hostkeeper_hook::{Class, Phase, Verdict};
+use hostkeeper_hook::{Class, Phase, Step, Verdict};
+use hostkeeper_steps::record::{HookSel, Progress, SCHEMA, State};
 use hostkeeper_steps::selfupdate::{
-    FollowOn, Layout, START_LIMIT_BURST, fallback_unit, follow_on, main_dropin,
+    FollowOn, Layout, START_LIMIT_BURST, SelfUpdateError, fallback_unit, follow_on, main_dropin,
 };
-use hostkeeper_steps::{ArtifactError, Finished, Staged};
+use hostkeeper_steps::{ArtifactError, Finished, Record, RecordStore, Staged};
 use support::Scratch;
 
 fn binary(dir: &Path, name: &str, text: &str) -> PathBuf {
@@ -44,6 +45,45 @@ fn ok() -> Finished {
     done(Verdict::Succeeded {
         promotion_pending: false,
     })
+}
+
+/// The step record of the updater's own update to `version` whose steps ran, as the runner leaves
+/// it when it holds the success back: `done` at `cleanup`, unfinished.
+fn steps_ran(version: &str) -> Record {
+    Record {
+        schema: SCHEMA,
+        service: "hostkeeper".to_owned(),
+        target_version: version.to_owned(),
+        artifact_digest: "ab".repeat(32),
+        tarball_digest: "cd".repeat(32),
+        previous_digest: Some("ef".repeat(32)),
+        generation: 1,
+        params: "/state/hostkeeper/params.toml".into(),
+        step: Step::Cleanup,
+        attempt: 1,
+        state: State::Done {
+            code: Some(0),
+            last_line: None,
+        },
+        hook: HookSel::New,
+        progress: Progress {
+            committed: true,
+            ..Progress::default()
+        },
+        order_try: Some(1),
+        forced: false,
+        force: None,
+    }
+}
+
+/// The step record store of the scratch directory `s` (`<s>/state`), holding the updater's own
+/// update to `version` whose steps ran ([`steps_ran`]).
+fn updating(s: &Scratch, version: &str) -> RecordStore {
+    let dir = s.path().join("state");
+    fs::create_dir_all(&dir).unwrap();
+    let store = RecordStore::new(&dir);
+    store.save(&steps_ran(version)).unwrap();
+    store
 }
 
 /// Catches a staged binary that is not whole, not executable, or that moves a link: staging puts
@@ -162,23 +202,59 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
         Verdict::Halt,
     ] {
         assert_eq!(
-            follow_on(&done(verdict), &layout, "v1", "v2", &v2, updater).unwrap(),
+            follow_on(
+                &done(verdict),
+                &updating(&s, "v2"),
+                &layout,
+                "v1",
+                "v2",
+                &v2,
+                updater
+            )
+            .unwrap(),
             FollowOn::NotNeeded
         );
         assert_eq!(layout.current().unwrap(), Some("v1".to_owned()));
     }
     assert_eq!(
-        follow_on(&ok(), &layout, "v2", "v2", &v2, updater).unwrap(),
+        follow_on(
+            &ok(),
+            &updating(&s, "v2"),
+            &layout,
+            "v2",
+            "v2",
+            &v2,
+            updater
+        )
+        .unwrap(),
         FollowOn::NotNeeded
     );
     assert!(!layout.dir().join("versions/v2").exists());
 
     assert_eq!(
-        follow_on(&ok(), &layout, "v1", "v2", &v2, updater).unwrap(),
+        follow_on(
+            &ok(),
+            &updating(&s, "v2"),
+            &layout,
+            "v1",
+            "v2",
+            &v2,
+            updater
+        )
+        .unwrap(),
         FollowOn::Restart
     );
     assert_eq!(
-        follow_on(&ok(), &layout, "v1", "v2", &v2, updater).unwrap(),
+        follow_on(
+            &ok(),
+            &updating(&s, "v2"),
+            &layout,
+            "v1",
+            "v2",
+            &v2,
+            updater
+        )
+        .unwrap(),
         FollowOn::Restart
     );
     assert_eq!(
@@ -189,10 +265,30 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
         promotion_pending: true,
     });
     assert_eq!(
-        follow_on(&pending, &layout, "v2", "v2", &v2, updater).unwrap(),
+        follow_on(
+            &pending,
+            &updating(&s, "v2"),
+            &layout,
+            "v2",
+            "v2",
+            &v2,
+            updater
+        )
+        .unwrap(),
         FollowOn::NotNeeded
     );
-    assert!(follow_on(&ok(), &layout, "v2", "v3", &v2, Path::new("bin/absent")).is_err());
+    assert!(
+        follow_on(
+            &ok(),
+            &updating(&s, "v3"),
+            &layout,
+            "v2",
+            "v3",
+            &v2,
+            Path::new("bin/absent")
+        )
+        .is_err()
+    );
 }
 
 fn system_binary(name: &str) -> PathBuf {
@@ -217,7 +313,16 @@ fn a_binary_that_exits_at_start_is_replaced_by_the_previous() {
 
     let new = release(s.path(), "bad", &system_binary("false"));
     assert_eq!(
-        follow_on(&ok(), &layout, "good", "bad", &new, Path::new(UPDATER)).unwrap(),
+        follow_on(
+            &ok(),
+            &updating(&s, "bad"),
+            &layout,
+            "good",
+            "bad",
+            &new,
+            Path::new(UPDATER)
+        )
+        .unwrap(),
         FollowOn::Restart
     );
     for _ in 0..START_LIMIT_BURST {
@@ -319,14 +424,44 @@ fn the_follow_on_stages_only_a_binary_of_the_verified_release() {
 
     let changed = release(s.path(), "v2", &binary(s.path(), "b", "b"));
     fs::write(changed.dir().join(UPDATER), "swapped").unwrap();
-    let err = follow_on(&ok(), &layout, "v1", "v2", &changed, Path::new(UPDATER)).unwrap_err();
-    assert!(matches!(err, ArtifactError::Changed { .. }), "{err:?}");
+    let err = follow_on(
+        &ok(),
+        &updating(&s, "v2"),
+        &layout,
+        "v1",
+        "v2",
+        &changed,
+        Path::new(UPDATER),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SelfUpdateError::Artifact(ArtifactError::Changed { .. })
+        ),
+        "{err:?}"
+    );
 
     let sound = release(s.path(), "v3", &binary(s.path(), "c", "c"));
     let outside = system_binary("true");
     for path in [Path::new("../release-v2/bin/updater"), outside.as_path()] {
-        let err = follow_on(&ok(), &layout, "v1", "v3", &sound, path).unwrap_err();
-        assert!(matches!(err, ArtifactError::BadHookPath(_)), "{err:?}");
+        let err = follow_on(
+            &ok(),
+            &updating(&s, "v3"),
+            &layout,
+            "v1",
+            "v3",
+            &sound,
+            path,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SelfUpdateError::Artifact(ArtifactError::BadHookPath(_))
+            ),
+            "{err:?}"
+        );
     }
     assert!(!layout.dir().join("versions/v2").exists());
     assert!(!layout.dir().join("versions/v3").exists());
@@ -347,22 +482,49 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
     let updater = Path::new(UPDATER);
     let v2 = release(s.path(), "v2", &binary(s.path(), "b", "b"));
     assert_eq!(
-        follow_on(&ok(), &layout, "v1", "v2", &v2, updater).unwrap(),
+        follow_on(
+            &ok(),
+            &updating(&s, "v2"),
+            &layout,
+            "v1",
+            "v2",
+            &v2,
+            updater
+        )
+        .unwrap(),
         FollowOn::Restart
     );
     // Back to the binary before, which `previous` names.
     let v1 = release(s.path(), "v1", &a);
     assert_eq!(
-        follow_on(&ok(), &layout, "v2", "v1", &v1, updater).unwrap(),
+        follow_on(
+            &ok(),
+            &updating(&s, "v1"),
+            &layout,
+            "v2",
+            "v1",
+            &v1,
+            updater
+        )
+        .unwrap(),
         FollowOn::Restart
     );
     assert_eq!(links(&layout), (Some("v1".into()), Some("v2".into())));
     assert_eq!(version_text(&layout, "v1"), "a");
     // A release that calls itself v2 with other bytes than the v2 in place.
     let not_v2 = release(s.path(), "not-v2", &binary(s.path(), "z", "z"));
-    let err = follow_on(&ok(), &layout, "v1", "v2", &not_v2, updater).unwrap_err();
+    let err = follow_on(
+        &ok(),
+        &updating(&s, "v2"),
+        &layout,
+        "v1",
+        "v2",
+        &not_v2,
+        updater,
+    )
+    .unwrap_err();
     assert!(
-        matches!(&err, ArtifactError::Io(e) if e.kind() == io::ErrorKind::AlreadyExists),
+        matches!(&err, SelfUpdateError::Io(e) if e.kind() == io::ErrorKind::AlreadyExists),
         "{err:?}"
     );
     assert_eq!(version_text(&layout, "v2"), "b");

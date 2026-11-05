@@ -10,7 +10,9 @@
 //!   start, after a death of the daemon or a reboot, and [`resume`] rewrites the record for it.
 //! - [`DeadMan`] enforces the bound of the running step on a thread of its own.
 //! - [`selfupdate`] is the updater's own update with its fallback, and [`Layout`] the directory
-//!   of versions with `current` and `previous` that it and every package share.
+//!   of versions with `current` and `previous` that it and every package share. The update waits
+//!   in its step record for the restart until the new binary has run ([`settle`]), and a
+//!   version that fell back is kept in [`bad`], the local list of bad versions.
 //! - [`prune`] deletes the versions of a package directory that a confirmed switch leaves
 //!   behind: all but the ones `current` and `previous` name and the ones the caller protects
 //!   ([`prune_plan`], [`Layout::prune`]).
@@ -24,6 +26,7 @@
 //! rights of a declaration, and the loader of declarations, plug in through [`StepLauncher`].
 
 pub mod artifact;
+pub mod bad;
 pub mod clock;
 pub mod deadman;
 pub mod force;
@@ -36,10 +39,13 @@ pub mod seal;
 pub mod selfupdate;
 
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
+pub use bad::{BAD_VERSIONS_FILE, BadVersions, BadVersionsError, MAX_BAD_VERSIONS};
 pub use clock::{Clock, Stamp, SystemClock};
 pub use deadman::{DeadMan, Watch};
 pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
-pub use launcher::{AdditiveCall, LaunchError, StepCall, StepExit, StepLauncher};
+pub use launcher::{
+    AdditiveCall, LaunchError, ProbeCall, ProbeExit, StepCall, StepExit, StepLauncher,
+};
 pub use prune::{
     PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,
 };
@@ -47,4 +53,4 @@ pub use record::{CrashGate, CrashPoint, Loaded, Record, RecordError, RecordStore
 pub use resume::{REASON_REBOOTED, ResumeAction, resume, resume_action};
 pub use runner::{Bounds, Finished, RunError, StepRunner, Switch, Toward, UpdateOrder};
 pub use seal::{MAX_SEAL_BYTES, SEAL_SCHEMA, Seal, SealError, read_seal};
-pub use selfupdate::Layout;
+pub use selfupdate::{FollowOn, Layout, SelfUpdateError, Settled, follow_on, settle, settle_with};

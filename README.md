@@ -31,7 +31,7 @@ tooling:
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (the P-256 request profile, host and server certificates, the owner-only key file, the CA bundle) and its durable enrollment store (requests, approval, one certificate per request, duplicate claims, deny rows), as a library |
 | [`hostkeeper-unpack`](crates/hostkeeper-unpack) | the unpack of a verified `.tar.zst` package into a sealed version directory, in one streaming pass under the archive bounds ([package format](docs/package-format.md)) |
 | [`hostkeeper-daemon`](crates/hostkeeper-daemon) | the daemon, the one root process of a host: start-up and its lock, the executor of orders with the service and step locks, the daemon's own checks, the try rules and the held halts, and the root-only admin socket |
-| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, and `hostkeeper ci`, the CI client of `hostkeeper-ci`; it only forwards to `hostkeeper-daemon` |
+| [`hostkeeper`](crates/hostkeeper) | the binary: `hostkeeper daemon`, `hostkeeper ci`, the CI client of `hostkeeper-ci`, and the two plumbing verbs of its own update (`self-update-fallback`, `self-update-protocol`); it only forwards to `hostkeeper-daemon` |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the API definitions: the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and of a host's root part (`hostkeeper.local.v1`), the command table of `hostkeeper ctl` generated from them, and the test that keeps them compatible |
 | [`hostkeeper-ctl`](crates/hostkeeper-ctl) | `hostkeeper ctl`, the command line generated from those services: one command per RPC, called over gRPC or the coordinator's HTTP/JSON gateway |
 | [`hostkeeper-ci`](crates/hostkeeper-ci) | `hostkeeper ci set-desired`, the CI client a service's release job runs once it has verified the hostkeeper release: one OIDC token per call, `releases set-desired`, then `releases converge` at most `max_polls` times ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)) |
@@ -62,7 +62,7 @@ only, never from the environment:
 | flag | default | what it is |
 |---|---|---|
 | `--config` | `/etc/hostkeeper/hostkeeper.toml` | the daemon config, owned by root and not writable by group or others |
-| `--state-dir` | `/var/lib/updater/state` | a directory per service with its step record, params file and held halt generation, and the daemon's lock file `lock` |
+| `--state-dir` | `/var/lib/updater/state` | a directory per service with its step record, params file and held halt generation, and the daemon's lock file `lock`; the directory of the service `hostkeeper` also holds its binaries (`bin/`) and its list of bad versions (`bad-versions`), see [Updating hostkeeper itself](#updating-hostkeeper-itself) |
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
 | `--admin-socket` | `/run/hostkeeper/admin.sock` | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
@@ -73,11 +73,13 @@ naming the key, and nothing on the host changes. It then takes the lock on the s
 host's boot id (kept in `.boot-id` in the state directory), runs each update left unfinished by a
 crash or a reboot to its verdict, restarts the post-success watchers, runs each service's
 `[hook] boot` step from `current`, and only then tells systemd it is ready. It then serves the
-admin socket. This build has no step launcher or package store wired in and no order source yet,
+admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
+new binary. This build has no step launcher or package store wired in and no order source yet,
 so it serves the admin socket's `Status` and runs no order.
 
 | exit status | meaning |
 |---|---|
+| 0 | the daemon exited for its own update (see [Updating hostkeeper itself](#updating-hostkeeper-itself)) |
 | 1 | the daemon could not start or serve for another reason (the state directory, the admin socket) |
 | 2 | a usage error: an unknown flag or subcommand |
 | 3 | the daemon config did not load |
@@ -148,6 +150,40 @@ missing or names no version, nothing is deleted. A version is renamed to `.stage
 its seal is removed, then the tree, so a crash never leaves a half-deleted version; the next
 prune, or the unpack's own clean-up, finishes the job. A removal that fails is an alert and
 never changes the verdict; the next confirmed switch tries again.
+
+## Updating hostkeeper itself
+
+hostkeeper updates itself with an `update` of the service named `hostkeeper` (design section
+6.6). A `force` or a `force_rollback` of it is refused (`self_service`). The update goes through
+five states, and the step record of the service `hostkeeper`
+(`<state-dir>/hostkeeper/step-record.json`) says which one it is in:
+
+| state | what is true | what the daemon answers to the order |
+|---|---|---|
+| ordered | the order arrived; nothing is staged | while another service's step record is `pending`, `running`, or between two steps, or cannot be read: `busy`, and nothing is written. Otherwise the daemon waits for the step lock (a running step of another service is never interrupted) and goes on |
+| staged | the new binary's protocol was read, the package's hook steps ran, and the new binary is in `<state-dir>/hostkeeper/bin/versions/<version>` | nothing yet: the old binary never reports the update succeeded |
+| awaiting_restart | the record is `done` at `cleanup` with `awaiting_restart`, written before `<state-dir>/hostkeeper/bin/current` is switched to the new binary; the daemon then exits with status 0 and its unit starts `current` | `Deferred`, reason `awaiting_restart` |
+| confirmed | the new binary started, found the record waiting for itself with `current` naming it, and rewrote it `Succeeded`; the `Deferred` records of other services whose reason is `updater_old` or `daemon_too_old` are removed, so their next order runs | `Succeeded`, from the record |
+| fell back | the new binary did not start: after three failed starts in 300 seconds the fallback unit ran the previous binary's `hostkeeper self-update-fallback --dir <state-dir>/hostkeeper/bin`, which points `current` at the previous binary again, adds the version to the local list of bad versions, and rewrites the record `Failed` after the commit, of class release, reason `self_update_fallback`. A start of any binary that is not the one the record waits for settles it the same way | `Failed` (`self_update_fallback`), from the list, for that version and every later order of it |
+
+The local list of bad versions is `<state-dir>/hostkeeper/bad-versions`, a JSON object
+`{"schema":1,"versions":["1.5.0"]}`, mode 0600, keeping the last 64 versions. hostkeeper never
+removes a version from it; a list that cannot be read refuses every update of hostkeeper
+(`bad_versions_unreadable`) until it can. The coordinator stops ordering a version to a host that
+reported it failed.
+
+Before anything is staged, the daemon runs the new binary's `hostkeeper self-update-protocol`
+(in a transient unit, at most 10 seconds, at most 64 bytes of output read), which prints the
+binary's self-update protocol and nothing else. **For release authors:** a daemon of protocol
+`N` accepts a new binary of protocol `N` or `N + 1` only, because it must be able to fall back
+from it: the previous binary must read every file the new one writes. A release that changes
+what hostkeeper writes therefore goes out in two steps: the release of protocol `N + 1` adds the
+readers and still writes only what protocol `N` reads; only the release after it writes the new
+formats. A binary of another protocol is refused `Failed` before the commit, of class release
+(`protocol_unsupported`); a probe that fails, times out, or prints anything but one line of a
+decimal number is refused `Failed` before the commit, of class environment
+(`protocol_unreadable`); a release without `bin/hostkeeper` is refused `Failed` before the
+commit, of class release (`self_binary_missing`). In each case nothing on the host changes.
 
 hostkeeper is licensed under [Apache-2.0](LICENSE). How to contribute is in
 [CONTRIBUTING.md](CONTRIBUTING.md), and how to report a vulnerability is in

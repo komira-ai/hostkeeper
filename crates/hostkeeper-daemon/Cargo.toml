@@ -37,7 +37,9 @@ libc.workspace = true
 thiserror.workspace = true
 # A manifest's `[params]` table is handed to the hook's params file as TOML text.
 toml.workspace = true
-tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+# `sync` for the notice that ends the admin socket's server when the daemon exits for its own
+# update.
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync"] }
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["server"] }
 

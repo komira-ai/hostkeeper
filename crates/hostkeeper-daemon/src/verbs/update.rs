@@ -48,6 +48,18 @@ pub fn run(ctx: &Ctx, order: Hooked) -> Reply {
 
 /// A hooked order of `verb`.
 pub fn hooked(ctx: &Ctx, verb: HookedVerb, order: Hooked) -> Reply {
+    locked(ctx, verb, &order, |guard| steps(ctx, verb, &order, guard))
+}
+
+/// `steps` of `order` under its service's lock, taken for `verb` and the order's package and
+/// never waited for: another package's order is `busy`, the same package's a resend that runs
+/// nothing. A step that could not be stopped keeps the lock.
+pub(crate) fn locked(
+    ctx: &Ctx,
+    verb: HookedVerb,
+    order: &Hooked,
+    steps: impl FnOnce(&ServiceGuard<'_>) -> Result<Reply, Reply>,
+) -> Reply {
     let package = Package {
         verb,
         version: order.version.clone(),
@@ -58,7 +70,7 @@ pub fn hooked(ctx: &Ctx, verb: HookedVerb, order: Hooked) -> Reply {
         Ok(guard) => guard,
         Err(held) => return while_held(&order.service, &held, &holder),
     };
-    let reply = steps(ctx, verb, &order, &guard).unwrap_or_else(|refused| refused);
+    let reply = steps(&guard).unwrap_or_else(|refused| refused);
     match reply.refusal() {
         // The step could not be stopped: the service stays locked until `abort` clears it.
         Some(Refusal::Unstopped) => guard.keep(),
@@ -104,38 +116,98 @@ fn steps(
         .get(service)
         .map_err(|e| Reply::refused(Refusal::HaltUnreadable, e))?;
     let last = last_record(ctx, service)?;
+    if let Some(answer) = answer(verb, order, last.as_deref())? {
+        return Ok(answer);
+    }
+    let prepared = prepare(ctx, verb, order, last.as_deref())?;
+    files::make_private(&ctx.service_dir(service))
+        .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
+    let runner = ctx.runner(service);
+    let _step = guard.step(&ctx.step_lock);
+    // The runner stops where a pending promotion hands the record to the post-success watcher:
+    // the update has ended `Succeeded` there, and its switch is confirmed before the watcher
+    // runs, so the prune never waits for the promotion. The watcher then runs here, under the
+    // same locks, and its end is the reply.
+    let update = &prepared.update;
+    let ended = runner.run_until_watching(update);
+    if let Ok(Finished {
+        verdict: Verdict::Succeeded { promotion_pending },
+        ..
+    }) = &ended
+    {
+        let watching = *promotion_pending;
+        prune::confirmed_switch(ctx, guard, service, &order.version);
+        if watching {
+            return Ok(ran(runner.run(update)));
+        }
+    }
+    Ok(ran(ended))
+}
+
+/// The try rules ([`checks::try_rule`]) for `order`, given the service's step record `last`:
+/// `Some` reply for a resend of an order that ended, answered from the record, `None` to run it,
+/// and the refusal otherwise.
+pub(crate) fn answer(
+    verb: HookedVerb,
+    order: &Hooked,
+    last: Option<&Record>,
+) -> Result<Option<Reply>, Reply> {
     let key = OrderKey {
         verb,
         version: order.version.clone(),
         digest: order.digest.clone(),
         order_try: order.order_try.get(),
     };
-    match checks::try_rule(last.as_deref(), &key) {
-        TryRule::Run => {}
-        TryRule::Answer(Finished { verdict, reason }) => {
-            return Ok(Reply::Finished {
-                verdict,
-                reason,
-                resent: true,
-            });
-        }
+    match checks::try_rule(last, &key) {
+        TryRule::Run => Ok(None),
+        TryRule::Answer(Finished { verdict, reason }) => Ok(Some(Reply::Finished {
+            verdict,
+            reason,
+            resent: true,
+        })),
         TryRule::Refuse(refusal) => {
-            let held = last.as_ref().map_or(0, |rec| rec.order_try.unwrap_or(0));
-            return Err(Reply::refused(
+            let held = last.map_or(0, |rec| rec.order_try.unwrap_or(0));
+            Err(Reply::refused(
                 refusal,
                 format!(
-                    "{} {} try {} of {service}; the step record holds try {held}",
+                    "{} {} try {} of {}; the step record holds try {held}",
                     verb.name(),
                     order.version,
                     order.order_try,
+                    order.service,
                 ),
-            ));
+            ))
         }
     }
+}
+
+/// An order checked and ready for the step runner: its package's version directory and the
+/// runner's order.
+pub(crate) struct Prepared {
+    pub dir: VersionDir,
+    pub update: UpdateOrder,
+}
+
+/// The checks of `order` that follow the try rules, in order, and the runner's order built from
+/// its package: where the service is in its life, an `update` below the running version, the
+/// package, its manifest, the release it replaces, the paths of a first install and the params.
+/// Writes nothing.
+pub(crate) fn prepare(
+    ctx: &Ctx,
+    verb: HookedVerb,
+    order: &Hooked,
+    last: Option<&Record>,
+) -> Result<Prepared, Reply> {
+    let service = &order.service;
+    let key = OrderKey {
+        verb,
+        version: order.version.clone(),
+        digest: order.digest.clone(),
+        order_try: order.order_try.get(),
+    };
     let running = installed::linked_version(&ctx.dirs.packages, service, CURRENT);
     // An order the record holds unfinished for this package is resumed, whatever `current` says.
     let resuming = last
-        .as_deref()
         .is_some_and(|rec| checks::finished_of(rec).is_none() & checks::same_package(rec, &key));
     let tombstoned = crate::uninstall::tombstoned(ctx, service)
         .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
@@ -180,27 +252,7 @@ fn steps(
     }
     let declared = declared_params(&manifest.params)?;
     let update = update_order(order, &dir, &manifest, previous, declared);
-    files::make_private(&ctx.service_dir(service))
-        .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
-    let runner = ctx.runner(service);
-    let _step = guard.step(&ctx.step_lock);
-    // The runner stops where a pending promotion hands the record to the post-success watcher:
-    // the update has ended `Succeeded` there, and its switch is confirmed before the watcher
-    // runs, so the prune never waits for the promotion. The watcher then runs here, under the
-    // same locks, and its end is the reply.
-    let ended = runner.run_until_watching(&update);
-    if let Ok(Finished {
-        verdict: Verdict::Succeeded { promotion_pending },
-        ..
-    }) = &ended
-    {
-        let watching = *promotion_pending;
-        prune::confirmed_switch(ctx, guard, service, &order.version);
-        if watching {
-            return Ok(ran(runner.run(&update)));
-        }
-    }
-    Ok(ran(ended))
+    Ok(Prepared { dir, update })
 }
 
 /// The paths `manifest` places, checked against `placed.json` and what is on disk: a path
@@ -292,7 +344,7 @@ fn update_order(
 }
 
 /// The reply for how the runner ended.
-fn ran(result: Result<Finished, RunError>) -> Reply {
+pub(crate) fn ran(result: Result<Finished, RunError>) -> Reply {
     match result {
         Ok(Finished { verdict, reason }) => Reply::Finished {
             verdict,
