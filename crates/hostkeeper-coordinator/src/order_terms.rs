@@ -14,11 +14,13 @@
 //! The package digest is the one CI registered with the version ([`crate::registry`]); a version
 //! with none registered has no terms, and an agent that reads terms is not ordered it.
 
+use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{OrderId, PackageDigest, UpdateResult};
+use hostkeeper_wire::wire::{OrderId, PackageDigest, ServiceBeat, ServiceReply, UpdateResult};
 
 use crate::ops_file;
-use crate::registry::Digest;
+use crate::orders::Order;
+use crate::registry::{Digest, Registry};
 
 /// What an update answer carries for an agent that announced `order-v1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,4 +67,54 @@ pub fn terms(
             order_id: id,
             package_digest,
         })
+}
+
+/// The terms of the update of `service` to `version` for a host whose heartbeat lists
+/// `announced`, with the digest `digests` registers for the version. With none registered, none,
+/// and a warning naming the service, the version and the host `id`: such a host is not ordered
+/// the version.
+pub(crate) fn of_beat(
+    digests: &Registry,
+    service: &str,
+    version: &Version,
+    announced: &[ServiceBeat],
+    id: &HostId,
+) -> Option<Terms> {
+    let last = announced
+        .iter()
+        .find(|one| one.name == service)
+        .and_then(|one| one.last_update.as_ref());
+    let made = digests
+        .get(version)
+        .and_then(|digest| terms(service, version, digest, last));
+    if made.is_none() {
+        tracing::warn!(
+            service,
+            version = %version,
+            node_id = %id,
+            "not ordering an agent that reads order terms: no package digest is registered for the version"
+        );
+    }
+    made
+}
+
+/// The update `reply` with its `terms` as a typed order: what a transport that carries typed
+/// orders sends for it. None for any other reply, or without terms.
+pub(crate) fn typed(reply: &ServiceReply, terms: Option<&Terms>) -> Option<Order> {
+    match (reply, terms) {
+        (
+            ServiceReply::Update {
+                service: Some(service),
+                version,
+            },
+            Some(terms),
+        ) => Some(Order::Update {
+            service: service.clone(),
+            version: version.clone(),
+            digest: terms.package_digest.clone(),
+            order_id: terms.order_id.as_str().to_owned(),
+            order_try: terms.order_try,
+        }),
+        _ => None,
+    }
 }

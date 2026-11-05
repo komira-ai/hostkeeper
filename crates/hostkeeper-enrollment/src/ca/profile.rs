@@ -183,7 +183,7 @@ pub fn check_request(csr_der: &[u8]) -> Result<VerifiedRequest, ProfileError> {
 }
 
 /// The id of a subject that is exactly one common name `host:<id>`.
-fn subject_id(name: &X509Name<'_>) -> Option<HostId> {
+pub(crate) fn subject_id(name: &X509Name<'_>) -> Option<HostId> {
     let attributes: Vec<_> = name.iter_attributes().collect();
     let [only] = attributes.as_slice() else {
         return None;
