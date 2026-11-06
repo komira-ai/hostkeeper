@@ -71,3 +71,25 @@ yaml.org
 =default.target
 =multi-user.target
 =network-online.target
+
+# The documentation of other tools that the technical report's comparison cites, one entry per
+# project's own site (docs/report/hostkeeper.html, its Sources).
+ansible.com
+ansible.readthedocs.io
+redhat.com
+saltproject.io
+puppet.com
+chef.io
+nixos.org
+colmena.cli.rs
+cachix.org
+haskell.org
+kubernetes.io
+k3s.io
+fluxcd.io
+hashicorp.com
+freedesktop.org
+mender.io
+balena.io
+jamf.com
+fleetdm.com
