@@ -16,6 +16,8 @@ hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 [dev-dependencies]
 # The command table the `ctl --help` test reads the services from.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The macOS pkg's postinstall script, which tests/postinstall.rs runs against this binary.
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 
 [lints]

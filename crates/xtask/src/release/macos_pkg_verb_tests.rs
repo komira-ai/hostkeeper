@@ -92,16 +92,18 @@ fn macos_pkg_builds_through_the_pkgbuild_port_with_its_flags() {
     assert_eq!(
         (
             calls[0].root.as_path(),
+            calls[0].scripts.as_path(),
             calls[0].pkg.as_path(),
             calls[0].version.to_string()
         ),
         (
-            stage.as_path(),
+            stage.join("root").as_path(),
+            stage.join("scripts").as_path(),
             out.join("hostkeeper-0.1.9-macos-arm64.pkg").as_path(),
             "0.1.9".to_owned()
         )
     );
-    let staged = |path: &str| std::fs::read(stage.join(path)).expect("a staged file");
+    let staged = |path: &str| std::fs::read(stage.join("root").join(path)).expect("a staged file");
     assert_eq!(staged("usr/local/bin/hostkeeper"), b"bin");
     assert_eq!(staged("usr/local/lib/hostkeeper/gh"), b"gh");
     assert_eq!(

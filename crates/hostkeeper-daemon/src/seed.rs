@@ -2,7 +2,9 @@
 //! binary directory of hostkeeper's own update (design section 6.6), which the daemon's unit
 //! starts through `current` (`<state-dir>/hostkeeper/bin/current`, [`binary_dir`]). The unit runs
 //! it before every start (`ExecStartPre=`) with the binary the package installed; a host
-//! that has never updated hostkeeper has no `current` yet, and its first start needs one.
+//! that has never updated hostkeeper has no `current` yet, and its first start needs one. On a
+//! Mac, whose launchd job starts the same `current` and has no step before a start, the pkg's
+//! `postinstall` runs it once, at install, with the binary the pkg installed.
 //!
 //! When `current` starts an executable file, the seed writes nothing, takes no lock and exits 0:
 //! after the first start, and after every self-update, `current` is the update's, and the seed

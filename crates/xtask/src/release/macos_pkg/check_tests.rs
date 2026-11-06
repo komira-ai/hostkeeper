@@ -16,44 +16,153 @@ fn a_good_expanded_pkg_passes_the_check() {
              /private/etc/newsyslog.d/hostkeeper.conf (644), /usr/local/lib/hostkeeper/gh \
              (755), /usr/local/lib/hostkeeper/trusted_root.json (644) and the directory \
              /private/var/log/hostkeeper (755), owned by root and wheel, with the label \
-             dev.hostkeeper.hostkeeper, version 0.1.5 and no scripts",
+             dev.hostkeeper.hostkeeper, version 0.1.5 and the one script postinstall",
             expanded.pkg().display()
         )])
     );
 }
 
 #[test]
-fn a_pkg_with_scripts_or_another_file_or_without_a_part_is_refused() {
-    // Catches: a pkg with a Scripts directory (a preinstall or postinstall that would run as
-    // root at install), a stray file, or a missing bill of materials, payload or info.
-    let expanded = Expanded::good("macos-pkg-check-scripts");
-    std::fs::create_dir(expanded.pkg().join("Scripts")).expect("Scripts");
-    std::fs::write(expanded.pkg().join("Scripts/postinstall"), b"#!/bin/sh\n").expect("write");
+fn a_pkg_with_another_file_or_without_a_part_is_refused() {
+    // Catches: a pkg with a stray file, or a missing bill of materials, payload, info or scripts
+    // (a pkg without its postinstall leaves the daemon's job nothing to start on a first install).
+    let expanded = Expanded::good("macos-pkg-check-parts");
     expanded.write("Distribution", b"<installer-gui-script/>");
     std::fs::remove_file(expanded.pkg().join("Bom")).expect("remove");
-    let only = "an expanded pkg of hostkeeper holds only the files Bom, PackageInfo and Payload \
-                (no Scripts)";
+    std::fs::remove_file(expanded.pkg().join("Scripts")).expect("remove");
+    let only = "an expanded pkg of hostkeeper holds only the files Bom, PackageInfo, Payload and \
+                Scripts";
     assert_eq!(
         expanded.problems(),
         [
             format!("Distribution: {only}"),
-            format!("Scripts: {only}"),
             "missing Bom".to_owned(),
+            "missing Scripts".to_owned(),
         ]
     );
-    // A part that is a directory is not that part, and is not read.
+    // A part that is a directory is not that part, and is not read: `pkgutil --expand` leaves
+    // `Scripts` an archive, as it leaves `Payload` (`--expand-full` would make directories).
     let expanded = Expanded::good("macos-pkg-check-payload-dir");
-    std::fs::remove_file(expanded.pkg().join("Payload")).expect("remove");
-    std::fs::create_dir(expanded.pkg().join("Payload")).expect("a directory");
+    for part in ["Payload", "Scripts"] {
+        std::fs::remove_file(expanded.pkg().join(part)).expect("remove");
+        std::fs::create_dir(expanded.pkg().join(part)).expect("a directory");
+    }
+    std::fs::write(
+        expanded.pkg().join("Scripts/postinstall"),
+        postinstall_text(),
+    )
+    .expect("write");
     std::fs::remove_file(expanded.pkg().join("PackageInfo")).expect("remove");
     assert_eq!(
         expanded.problems(),
         [
             format!("Payload: {only}"),
+            format!("Scripts: {only}"),
             "missing PackageInfo".to_owned(),
             "missing Payload".to_owned(),
+            "missing Scripts".to_owned(),
         ]
     );
+}
+
+#[test]
+fn a_scripts_archive_that_is_not_the_one_postinstall_is_refused() {
+    // Catches: a pkg that runs another script at install, runs a postinstall with other words
+    // than the seed (another state directory, another binary, a command that is not the seed),
+    // holds the postinstall twice or not at all, or holds one the installer cannot run.
+    let text = postinstall_text();
+    let script = |mode: u32, data: &[u8]| odc_entry("./postinstall", mode, 501, 20, data);
+    let top = odc_entry(".", 0o040_755, 501, 20, b"");
+    let other = text.replace(
+        "--state-dir '/var/lib/updater/state'",
+        "--state-dir '/tmp/state'",
+    );
+    let not_ours = "Scripts: ./postinstall is not the postinstall release macos-pkg writes";
+    let cases: [(Vec<Vec<u8>>, Vec<String>); 7] = [
+        (
+            vec![top.clone(), script(0o100_755, other.as_bytes())],
+            vec![not_ours.to_owned()],
+        ),
+        (
+            vec![top.clone(), script(0o100_644, text.as_bytes())],
+            vec!["Scripts: ./postinstall has mode 644, which the installer cannot run".to_owned()],
+        ),
+        (
+            vec![top.clone(), script(0o040_755, b"")],
+            vec![
+                "Scripts: ./postinstall is of type 40000, not a regular file".to_owned(),
+                not_ours.to_owned(),
+            ],
+        ),
+        (
+            vec![
+                top.clone(),
+                script(0o100_755, text.as_bytes()),
+                odc_entry("./preinstall", 0o100_755, 501, 20, b"#!/bin/sh\n"),
+            ],
+            vec![
+                "Scripts holds \"./preinstall\": the pkg's one script is ./postinstall".to_owned(),
+            ],
+        ),
+        (
+            vec![top.clone()],
+            vec!["Scripts holds ./postinstall 0 times, not once".to_owned()],
+        ),
+        (
+            vec![
+                script(0o100_755, text.as_bytes()),
+                script(0o100_755, text.as_bytes()),
+            ],
+            vec!["Scripts holds ./postinstall 2 times, not once".to_owned()],
+        ),
+        // The top directory is not needed: an archive of the postinstall alone is the script.
+        (vec![script(0o100_700, text.as_bytes())], vec![]),
+    ];
+    for (n, (entries, want)) in cases.into_iter().enumerate() {
+        let expanded = Expanded::good(&format!("macos-pkg-check-scripts-{n}"));
+        expanded.write("Scripts", &gzip(&odc(&entries)));
+        let got = match expanded.check() {
+            Ok(_) => Vec::new(),
+            Err(Error::Refused(lines)) => lines,
+            Err(other) => panic!("case {n}: {other:?}"),
+        };
+        assert_eq!(got, want, "case {n}");
+    }
+    let expanded = Expanded::good("macos-pkg-check-scripts-not-gzip");
+    expanded.write("Scripts", b"#!/bin/sh\n");
+    let problems = expanded.problems();
+    assert_eq!(problems.len(), 1);
+    assert!(
+        problems[0].starts_with("Scripts is not gzip data: "),
+        "{problems:?}"
+    );
+    expanded.write("Scripts", &gzip(b"not cpio"));
+    assert_eq!(
+        expanded.problems(),
+        ["Scripts: the archive ends at byte 8 without its trailer"]
+    );
+}
+
+#[test]
+fn the_postinstall_runs_the_installed_binarys_seed_of_the_daemons_state_directory() {
+    // Catches: a postinstall that is not one line running the seed (the counterpart of the Linux
+    // unit's ExecStartPre=), or that runs it from another binary, of another binary, or for
+    // another state directory than the daemon's, which the plist starts `current` of.
+    let text = postinstall_text();
+    assert_eq!(
+        text.lines().last(),
+        Some(
+            "exec '/usr/local/bin/hostkeeper' self-update-seed --state-dir \
+             '/var/lib/updater/state' --binary '/usr/local/bin/hostkeeper'"
+        )
+    );
+    assert!(text.starts_with("#!/bin/sh\n"));
+    let code: Vec<&str> = text
+        .lines()
+        .skip(1)
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    assert_eq!(code.len(), 1, "one command: {code:?}");
 }
 
 #[test]
@@ -86,18 +195,18 @@ fn package_info_of_another_identifier_version_or_location_or_with_a_script_is_re
             vec!["PackageInfo: postinstall-action is \"restart\", not \"none\""],
         ),
         (
-            package_info().replace(
-                "<relocate/>",
-                "<scripts><postinstall file=\"./postinstall\"/></scripts>",
-            ),
-            vec!["PackageInfo names a script (<postinstall>): the pkg runs nothing at install"],
+            package_info().replace("<postinstall file=\"./postinstall\"/>", ""),
+            vec![
+                "PackageInfo names no postinstall script (<postinstall file=\"./postinstall\"/>): \
+                 nothing would give the daemon's job a binary to start",
+            ],
         ),
         (
             package_info().replace(
                 "<relocate/>",
                 "<scripts><preinstall file=\"./preinstall\"/></scripts>",
             ),
-            vec!["PackageInfo names a script (<preinstall>): the pkg runs nothing at install"],
+            vec!["PackageInfo names a preinstall script: the pkg's one script is its postinstall"],
         ),
         (
             "<installer-script/>".to_owned(),

@@ -1297,6 +1297,7 @@ name = "hostkeeper"
 version = "0.1.0"
 dependencies = [
  "hostkeeper-daemon",
+ "hostkeeper-launchd",
  "hostkeeper-proto",
  "hostkeeper-testkit",
 ]

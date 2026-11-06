@@ -26,8 +26,8 @@
 //!   fallback timer job, and the verb then decides the burst from the start log itself), and
 //!   [`selfunits`] the drop-in and fallback unit (on macOS the fallback job) the daemon writes at
 //!   each start where they differ, telling the service manager only then; [`seed`] is the verb
-//!   `self-update-seed` the unit runs before each start, which gives the binary directory its
-//!   first binary.
+//!   `self-update-seed` the unit runs before each start (on macOS the pkg's `postinstall`, at
+//!   install), which gives the binary directory its first binary.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.

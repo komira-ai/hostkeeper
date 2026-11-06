@@ -4,11 +4,13 @@
 //! The pkg installs at `/` exactly five files and one empty directory, and the directories
 //! that hold them:
 //!
-//! - the daemon binary at `hostkeeper_launchd::DAEMON_PROGRAM` (`/usr/local/bin/hostkeeper`),
-//!   mode 0755;
+//! - the daemon binary at `hostkeeper_launchd::plist::INSTALLED_BINARY`
+//!   (`/usr/local/bin/hostkeeper`), mode 0755;
 //! - the daemon's launchd plist, `/Library/LaunchDaemons/<label>.plist` with the label
 //!   `hostkeeper_launchd::Label::daemon` (`dev.hostkeeper.hostkeeper`), mode 0644, the text
-//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`;
+//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`, whose program is
+//!   `current` of the binary directory of hostkeeper's own update
+//!   (`hostkeeper_launchd::plist::DAEMON_PROGRAM`), not the binary above;
 //! - the directory of the daemon's output files, `hostkeeper_launchd::DAEMON_LOG_DIR`
 //!   (`/var/log/hostkeeper`), empty: launchd opens the job's `StandardOutPath` and
 //!   `StandardErrorPath` there but does not make their directory;
@@ -35,36 +37,47 @@
 //! macOS gives `/`, `/Library`, `/usr`, `/usr/local`, `/private`, `/private/etc`,
 //! `/private/etc/newsyslog.d`, `/private/var` and `/private/var/log`, so installing the pkg
 //! changes no system directory; `/usr/local/lib` and `/usr/local/lib/hostkeeper` are made with
-//! that mode when they are not there. The pkg has no scripts: nothing runs at install, the daemon is
-//! not started, and the config is not written (the operator's bootstrap places `hostkeeper.toml`
-//! and loads the job).
+//! that mode when they are not there.
+//!
+//! The pkg has one script, `postinstall` ([`scripts`]): the installed binary's
+//! `self-update-seed`, which points `current` of the binary directory at that binary when
+//! `current` starts nothing, so the job's first start works before any self-update. Nothing else
+//! runs at install: the daemon is not started, and the config is not written (the operator's
+//! bootstrap places `hostkeeper.toml` and loads the job).
 //!
 //! The pkg is not signed: an installer signature needs an Apple Developer ID Installer
 //! identity. It is attested like every other asset (build provenance by the artifacts
 //! workflow), and an MDM installs it by its digest (design section 5.9). The binary in it keeps
 //! the ad-hoc code signature the linker gives it, which the macOS unpack check accepts.
 //!
-//! [`build`] lays the tree out in a new directory and runs `pkgbuild` over it through the
-//! [`BuildPkg`] port ([`PkgbuildCli`] is its adapter). [`check`] reads a pkg that
-//! `pkgutil --expand` has expanded into a directory: the directory holds exactly `Bom`,
-//! `PackageInfo` and `Payload`; `PackageInfo` names the identifier, the version and the install
-//! location and no script; and `Payload`, a gzip-compressed cpio archive (the portable `odc`
-//! format), holds exactly the entries above with their modes, owners and bytes (the binary, `gh`
-//! and the trusted root those of the files it is given), the plist
-//! parsing as a launchd plist that names the daemon's label, binary and output files, and the
-//! newsyslog file rotating exactly those output files.
+//! [`build`] lays the payload's tree and the scripts directory out in a new directory and runs
+//! `pkgbuild` over them through the [`BuildPkg`] port ([`PkgbuildCli`] is its adapter). [`check`]
+//! reads a pkg that `pkgutil --expand` has expanded into a directory: the directory holds exactly
+//! the files `Bom`, `PackageInfo`, `Payload` and `Scripts`; `PackageInfo` names the identifier,
+//! the version, the install location and the `postinstall` and no other script; `Scripts`, a
+//! gzip-compressed cpio archive (the portable `odc` format), holds that `postinstall` alone; and
+//! `Payload`, of the same format, holds exactly the entries above with their modes, owners and
+//! bytes (the binary, `gh` and the trusted root those of the files it is given), the plist
+//! parsing as a launchd plist that names the daemon's label, the program `current` of the binary
+//! directory and the output files, and the newsyslog file rotating exactly those output files.
 
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_launchd::plist::{DAEMON_LOG_DIR, DAEMON_PROGRAM};
+use hostkeeper_launchd::plist::{DAEMON_LOG_DIR, DAEMON_PROGRAM, INSTALLED_BINARY};
 use hostkeeper_launchd::{DaemonJob, Label, Platform as Launchd, daemon_plist};
 
 use super::contract::{Version, installer_name};
 use super::ports::{BuildPkg, Exec, PortError};
 use super::{Error, file_sha256};
+
+mod scripts;
+
+use scripts::{
+    POSTINSTALL, SCRIPT_MODE, package_info_scripts_problems, postinstall_text, scripts_problems,
+};
 
 /// The mode of each directory of the payload.
 const DIR_MODE: u32 = 0o755;
@@ -119,8 +132,12 @@ const TYPE_FILE: u32 = 0o100_000;
 /// Where the pkg installs its payload.
 const INSTALL_LOCATION: &str = "/";
 
-/// The files of an expanded pkg, sorted: a flat component package with no `Scripts`.
-const EXPANDED: [&str; 3] = ["Bom", "PackageInfo", "Payload"];
+/// The files of an expanded pkg, sorted: a flat component package with its `Scripts`.
+const EXPANDED: [&str; 4] = ["Bom", "PackageInfo", "Payload", "Scripts"];
+
+/// The directories of the stage: the payload's tree and the scripts directory.
+const STAGE_ROOT: &str = "root";
+const STAGE_SCRIPTS: &str = "scripts";
 
 /// The magic of a portable (`odc`) cpio header, its size, and the name of the last entry.
 const ODC_MAGIC: &[u8; 6] = b"070707";
@@ -147,7 +164,7 @@ fn payload_of(installed: &str) -> String {
 
 /// The path of the binary from the install location: `usr/local/bin/hostkeeper`.
 fn binary_path() -> String {
-    payload_of(DAEMON_PROGRAM)
+    payload_of(INSTALLED_BINARY)
 }
 
 /// The path of `gh` from the install location: `usr/local/lib/hostkeeper/gh`.
@@ -328,14 +345,22 @@ pub(crate) struct Request {
     pub(crate) version: Version,
     /// The binary, `gh` and the trusted root the pkg installs.
     pub(crate) sources: Sources,
-    /// The directory the pkg's tree is laid out in; it must not exist.
+    /// The directory the pkg is laid out in, which must not exist: the payload's tree in `root`
+    /// and the scripts directory in `scripts`.
     pub(crate) stage: PathBuf,
     /// The directory the pkg is written to.
     pub(crate) out: PathBuf,
 }
 
-/// Lays the payload out under `request.stage` and builds the pkg from it into `request.out`;
-/// the lines to print.
+/// Makes the directory `at` with [`DIR_MODE`].
+fn make_dir(at: &Path) -> Result<(), Error> {
+    std::fs::create_dir(at).map_err(Error::io(format!("create {}", at.display())))?;
+    std::fs::set_permissions(at, std::fs::Permissions::from_mode(DIR_MODE))
+        .map_err(Error::io(format!("set the mode of {}", at.display())))
+}
+
+/// Lays the payload out under `request.stage`'s `root` and the scripts under its `scripts`, and
+/// builds the pkg from them into `request.out`; the lines to print.
 pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<String>, Error> {
     let contents = request.sources.contents()?;
     let stage = &request.stage;
@@ -345,10 +370,19 @@ pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<St
             stage.display()
         )));
     }
-    // In path order, so each directory is made before what it holds; `""` is the stage itself
-    // (the components drop the `/` that joining an empty path leaves).
+    make_dir(stage)?;
+    let root = stage.join(STAGE_ROOT);
+    let scripts = stage.join(STAGE_SCRIPTS);
+    make_dir(&scripts)?;
+    let script = scripts.join(POSTINSTALL);
+    std::fs::write(&script, postinstall_text())
+        .map_err(Error::io(format!("write {}", script.display())))?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(SCRIPT_MODE))
+        .map_err(Error::io(format!("set the mode of {}", script.display())))?;
+    // In path order, so each directory is made before what it holds; `""` is the payload's root
+    // itself (the components drop the `/` that joining an empty path leaves).
     for (path, want) in payload(contents) {
-        let at: PathBuf = stage.join(&path).components().collect();
+        let at: PathBuf = root.join(&path).components().collect();
         let mode = match &want {
             Want::Dir => {
                 std::fs::create_dir(&at).map_err(Error::io(format!("create {}", at.display())))?;
@@ -366,7 +400,7 @@ pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<St
         .map_err(Error::io(format!("create {}", request.out.display())))?;
     let name = installer_name(&request.version);
     let pkg = request.out.join(&name);
-    pkgbuild.build_pkg(stage, &identifier(), &request.version, &pkg)?;
+    pkgbuild.build_pkg(&root, &scripts, &identifier(), &request.version, &pkg)?;
     let hex = file_sha256(&pkg)?;
     Ok(vec![format!("{name}: sha256 {hex}")])
 }
@@ -397,6 +431,7 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
     fn build_pkg(
         &self,
         root: &Path,
+        scripts: &Path,
         identifier: &str,
         version: &Version,
         pkg: &Path,
@@ -404,6 +439,8 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
         let args = vec![
             "--root".to_owned(),
             utf8(root)?,
+            "--scripts".to_owned(),
+            utf8(scripts)?,
             "--identifier".to_owned(),
             identifier.to_owned(),
             "--version".to_owned(),
@@ -574,17 +611,12 @@ fn package_info_problems(text: &str, version: &Version, problems: &mut Vec<Strin
             action.unwrap_or_default()
         ));
     }
-    for script in ["<preinstall", "<postinstall"] {
-        if text.contains(script) {
-            problems.push(format!(
-                "PackageInfo names a script ({script}>): the pkg runs nothing at install"
-            ));
-        }
-    }
+    package_info_scripts_problems(text, problems);
 }
 
 /// What is wrong with the launchd plist `bytes` of the payload, one line each: it must parse as
-/// a plist dictionary naming the daemon's label, running the binary of the payload, and sending
+/// a plist dictionary naming the daemon's label, running `current` of the binary directory of
+/// hostkeeper's own update (which the `postinstall` seeds from the binary of the payload), and sending
 /// its output to the files the newsyslog file rotates, in the log directory of the payload.
 fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
     let what = shown(&plist_path());
@@ -609,7 +641,8 @@ fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
         .and_then(plist::Value::as_string);
     if program != Some(DAEMON_PROGRAM) {
         problems.push(format!(
-            "{what}: the job runs {program:?}, not the pkg's binary {DAEMON_PROGRAM:?}"
+            "{what}: the job runs {program:?}, not {DAEMON_PROGRAM:?}, current of the binary \
+             directory a self-update switches"
         ));
     }
     for (key, want) in outputs() {
@@ -701,6 +734,19 @@ fn payload_problems(
     );
 }
 
+/// The entries of the gzip-compressed portable cpio archive `name` of the expanded pkg
+/// `expanded`; the inner `Err` says why its bytes are not such an archive, the outer one that the
+/// file could not be opened.
+fn read_archive(expanded: &Path, name: &str) -> Result<Result<Vec<CpioEntry>, String>, Error> {
+    let path = expanded.join(name);
+    let file = std::fs::File::open(&path).map_err(Error::io(format!("read {}", path.display())))?;
+    let mut cpio = Vec::new();
+    Ok(flate2::read::GzDecoder::new(file)
+        .read_to_end(&mut cpio)
+        .map_err(|e| format!("{name} is not gzip data: {e}"))
+        .and_then(|_| read_odc(&cpio).map_err(|e| format!("{name}: {e}"))))
+}
+
 /// The `release check-macos-pkg <expanded> --version V --binary B --gh G --trusted-root R`
 /// verb: checks the pkg that `pkgutil --expand` expanded into `expanded` against `version` and
 /// the files of `sources`, and lists every problem it finds.
@@ -724,8 +770,8 @@ pub(crate) fn check(
     for (name, file) in &names {
         if !EXPANDED.contains(&name.as_str()) | !file {
             problems.push(format!(
-                "{name}: an expanded pkg of hostkeeper holds only the files Bom, PackageInfo and \
-                 Payload (no Scripts)"
+                "{name}: an expanded pkg of hostkeeper holds only the files Bom, PackageInfo, \
+                 Payload and Scripts"
             ));
         }
     }
@@ -738,16 +784,14 @@ pub(crate) fn check(
         let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
         package_info_problems(&String::from_utf8_lossy(&bytes), version, &mut problems);
     }
+    if present("Scripts") {
+        match read_archive(expanded, "Scripts")? {
+            Err(why) => problems.push(why),
+            Ok(entries) => scripts_problems(&entries, &mut problems),
+        }
+    }
     if present("Payload") {
-        let path = expanded.join("Payload");
-        let file =
-            std::fs::File::open(&path).map_err(Error::io(format!("read {}", path.display())))?;
-        let mut cpio = Vec::new();
-        let read = flate2::read::GzDecoder::new(file)
-            .read_to_end(&mut cpio)
-            .map_err(|e| format!("Payload is not gzip data: {e}"))
-            .and_then(|_| read_odc(&cpio).map_err(|e| format!("Payload: {e}")));
-        match read {
+        match read_archive(expanded, "Payload")? {
             Err(why) => problems.push(why),
             Ok(entries) => {
                 let contents = sources.contents()?;
@@ -771,7 +815,7 @@ pub(crate) fn check(
         "check-macos-pkg: {} installs exactly {} ({BINARY_MODE:o}), {} ({PLIST_MODE:o}), {} \
          ({NEWSYSLOG_MODE:o}), {GH_PATH} ({GH_MODE:o}), {TRUSTED_ROOT_PATH} \
          ({TRUSTED_ROOT_MODE:o}) and the directory {} ({DIR_MODE:o}), owned by root and wheel, \
-         with the label {}, version {version} and no scripts",
+         with the label {}, version {version} and the one script {POSTINSTALL}",
         expanded.display(),
         shown(&binary_path()),
         shown(&plist_path()),

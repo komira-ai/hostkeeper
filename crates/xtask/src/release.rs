@@ -246,7 +246,8 @@ pub(crate) enum Verb {
     },
     /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary, its
     /// launchd plist, its log directory and newsyslog file, the pinned `gh` and the Sigstore
-    /// trusted root, nothing else, and no scripts.
+    /// trusted root, nothing else, and one script, a postinstall that seeds the binary directory
+    /// the plist starts `current` of.
     MacosPkg {
         #[arg(long)]
         version: Version,
@@ -260,14 +261,15 @@ pub(crate) enum Verb {
         /// `/usr/local/lib/hostkeeper/trusted_root.json` in the pkg.
         #[arg(long)]
         trusted_root: PathBuf,
-        /// A directory to lay the pkg's tree out in; it must not exist.
+        /// A directory to lay the pkg's tree and its scripts out in; it must not exist.
         #[arg(long)]
         stage: PathBuf,
         /// The directory the pkg is written to.
         #[arg(long)]
         out: PathBuf,
     },
-    /// Check a pkg that `pkgutil --expand` expanded into a directory: no scripts, and a payload
+    /// Check a pkg that `pkgutil --expand` expanded into a directory: its one script, the
+    /// postinstall `macos-pkg` writes, and a payload
     /// of exactly the binary, the daemon's plist, its log directory and newsyslog file, `gh` and
     /// the trusted root with their modes, owners and bytes.
     CheckMacosPkg {

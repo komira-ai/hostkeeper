@@ -594,6 +594,7 @@ impl AdvisoryCheck for FakeAdvisories {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PkgCall {
     pub(crate) root: PathBuf,
+    pub(crate) scripts: PathBuf,
     pub(crate) identifier: String,
     pub(crate) version: Version,
     pub(crate) pkg: PathBuf,
@@ -642,12 +643,14 @@ impl BuildPkg for FakePkgbuild {
     fn build_pkg(
         &self,
         root: &Path,
+        scripts: &Path,
         identifier: &str,
         version: &Version,
         pkg: &Path,
     ) -> Result<(), PortError> {
         self.calls.borrow_mut().push(PkgCall {
             root: root.to_owned(),
+            scripts: scripts.to_owned(),
             identifier: identifier.to_owned(),
             version: *version,
             pkg: pkg.to_owned(),
