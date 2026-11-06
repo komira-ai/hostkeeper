@@ -64,7 +64,9 @@ pub type Layer = (
 /// package store and a heartbeat link of its own, so it needs the config, the launchd crate's
 /// platform, the link, the placement roots and the step crate as normal dependencies; and the
 /// first-boot tests start the coordinator and the daemon as child processes (the coordinator is
-/// their program `hostkeeper-privileged-coordinator`, which needs it as a normal dependency).
+/// their program `hostkeeper-privileged-coordinator`, which needs it as a normal dependency); the
+/// end-to-end tests run the coordinator in process with its fake issuer's config, and fetch and
+/// check the fixture's attestation with the package crate.
 pub const LAYERS: [Layer; 23] = [
     (BINARY, &[DAEMON], &[PROTO]),
     (CI, &[CTL], &[PROTO]),
@@ -109,7 +111,7 @@ pub const LAYERS: [Layer; 23] = [
             PLACED,
             STEPS,
         ],
-        &[ENROLL, OBSERVE, PROTO, UNPACK],
+        &[ENROLL, OBSERVE, OIDC, PACKAGE, PROTO, UNPACK],
     ),
     (PROTO, &[], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),

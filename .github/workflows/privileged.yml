@@ -4,10 +4,15 @@
 # request runs proves the daemon against fakes of the host; here the adapters behind those fakes
 # meet the real thing: the step launcher's transient units and their bound, the dead-man's stop
 # by name, the observer's systemctl and /proc adapters, the unit control's systemctl
-# (daemon-reload, start, stop, is-active), and hostkeeper's update of itself as a unit made of
+# (daemon-reload, start, stop, is-active), hostkeeper's update of itself as a unit made of
 # packaging/linux/hostkeeper.service with its drop-in and fallback unit (the restart into the
 # new binary, the start limit, OnFailure=, the fallback's flip back, the settle at start, a
-# SIGKILL before and after the switch while the update waits for its restart); on the Mac the daemon started as a
+# SIGKILL before and after the switch while the update waits for its restart), and, in
+# tierstore_shaped.rs, the whole update path: the real daemon under a Type=notify unit and the
+# real coordinator in process update a tierstore-shaped package fetched from a loopback release
+# channel, checked by the pinned gh against a test trust root, unpacked, switched and run by its
+# hook in step units, roll it back on a failed verify, and force it back to the previous version
+# with the channel down; on the Mac the daemon started as a
 # launchd job and answering on its admin socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
 # quarantine verdicts. In the job first-boot the programs themselves meet: the coordinator and the
@@ -76,7 +81,10 @@ jobs:
     permissions:
       contents: read
     # A bound on the whole job, against a test that hangs; no test depends on it.
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      GH_VERSION: 2.102.1
+      GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,13 +109,33 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      # The gh a host checks every package's attestation with, the one the deb and the rpm install
+      # as /usr/lib/hostkeeper/gh (artifacts.yml pins the same version and SHA-256): Ubuntu 24.04's
+      # own gh has no `gh attestation`. tierstore_shaped.rs installs this file at that path and
+      # checks its fixture's attestation with it, offline, against a test trust root.
+      - name: Download gh (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+      - name: Install gh (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager
+      # The step units the daemon of tierstore_shaped.rs ran its fixture's hook in.
+      - name: The journal of the step units
+        if: failure()
+        run: journalctl --unit 'updater-hostkeeper-ci-*' --no-pager
+      # What a failed end-to-end test kept before its host root was removed: the hook record
+      # directory, the step record and the journal of the daemon and of its units, per test.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: privileged-end-to-end
+          path: target/privileged-artifacts
+          if-no-files-found: ignore
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:

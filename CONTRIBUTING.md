@@ -149,6 +149,43 @@ it ends, failed or not; `journalctl --unit 'hostkeeper-ci-*'` shows what they lo
 first-boot tests also add a CA to the host's CA bundle and write under `/etc`, `/usr/lib` and
 `/var/lib`: run them only on a throwaway VM, never on a host that runs hostkeeper.
 
+### The tierstore-shaped end-to-end tests
+
+`tierstore_shaped.rs` runs the whole update path with nothing faked: the real coordinator (in the
+test process) and the real `hostkeeper daemon` (under a `Type=notify` unit, started with
+`systemctl`) update a package shaped like tierstore, two instantiated run units whose hook drains
+in `prepare` and starts the new release beside the old in `cutover`. The package is fetched from
+a release channel the test serves over HTTPS on loopback, its attestation is checked by the pinned
+`gh` (the job's step `Install gh` puts it at `target/privileged-tools/gh`) against a trust root
+the test makes, and it is unpacked, sealed and switched by the daemon; `hostkeeper ctl` sets the
+desired version and reads the coordinator's answer. The tests:
+
+- `a_tierstore_shaped_package_updates_end_to_end`: from `1.0.0` to `1.1.0`, the old release
+  serving while `prepare` drains, then the new one serving and the host converged;
+- `a_failed_verify_rolls_back_and_the_old_release_serves`: `1.2.0`, whose `verify` fails, is
+  rolled back by its hook, the old release serves again and the coordinator marks `1.2.0` bad;
+- `force_back_to_previous_needs_no_fetch`: a force to the previous version with the release
+  channel stopped fetches nothing, and exactly two versions stay on disk;
+- `the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass`: `systemctl start` of the
+  daemon returns after its boot pass relinked a placed path;
+- `fixture_attestation_is_checked_by_the_production_verifier`: the fixture's attestation passes
+  the production fetch and proof with the pinned `gh`, and another digest or signer does not.
+
+These tests use the host's fixed paths the daemon uses (`/usr/lib/hostkeeper`, `/etc/updater`,
+`/var/lib/hostkeeper`, the CA bundle and the unit directory): what is already there, left by
+another test, is moved aside and put back, and everything the test wrote is removed or restored
+when it ends, failed or not; a failed test
+first copies its hook records, step record and journal to `target/privileged-artifacts/`, which the
+workflow uploads. `tierstore_rig.rs` checks the fixture package against the production unpacker
+and the release channel's log without root, in the pull-request set.
+
+The fixture package is source: `crates/hostkeeper-privileged/fixtures/tierstore-shaped/` (its
+manifest and unit template) and the program `tests/bin/tierstore_like.rs`, built into a
+`.tar.zst` at test time by `PackageBuilder` (`tests/e2e/package.rs`). To add a fixture version,
+add a `FixtureVersion` to `Scenario::start` (`tests/e2e/scenario.rs`): its version, two ports
+(chosen at run time) and whether its `verify` fails; the scenario builds, signs and publishes it
+with the others. Nothing binary is committed.
+
 ## Tests
 
 Tests assert behaviour, cover failure and boundary cases, and are hermetic. A bug fix ships with

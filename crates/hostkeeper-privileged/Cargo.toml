@@ -75,11 +75,33 @@ path = "tests/bin/coordinator.rs"
 name = "hostkeeper-selfupdate-daemon"
 path = "tests/bin/selfupdate_daemon.rs"
 
+# The tierstore-shaped fixture of `tests/tierstore_shaped.rs`: a stand-in service and its update
+# hook in one program, which the tests put at `bin/tierstore-like` of a package they build at
+# test time (`fixtures/tierstore-shaped/` holds the rest of that package as source). A program of
+# the tests, outside the measured set like every file under `tests/` (design question Q9).
+[[bin]]
+name = "tierstore-like"
+path = "tests/bin/tierstore_like.rs"
+
 [features]
 # The tests that run as root against the host's systemd. Only privileged.yml turns it on.
 privileged = []
 
 [dev-dependencies]
+# The end-to-end rig of `tests/tierstore_shaped.rs` and `tests/tierstore_rig.rs` (`tests/e2e/`):
+# the real coordinator in process (a normal dependency, above) with its fake OIDC issuer's
+# config (`testkit`), the production attestation verifier (`gh` with a test trust root) and
+# package fetch, the certificates of the loopback release channel (rcgen, rustls, below; ureq
+# for its test client), the package archive (tar, ruzstd), and the Sigstore bundle of the
+# fixture signer (p256, getrandom, and base64 below).
+getrandom.workspace = true
+hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
+hostkeeper-package = { path = "../hostkeeper-package" }
+p256.workspace = true
+ruzstd.workspace = true
+rustls-pki-types.workspace = true
+tar.workspace = true
+ureq.workspace = true
 # What the privileged tests drive: the production launcher and dead-man (`hostkeeper-steps`,
 # above), and the observer's real adapters; on a Mac the launchd adapters (`hostkeeper-launchd`,
 # above), the process probe over `proc_pidpath`, the package check
@@ -94,11 +116,12 @@ hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 # over a Unix socket.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hyper-util = { workspace = true, features = ["tokio"] }
-tokio = { workspace = true, features = ["net", "rt"] }
+tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tonic = { workspace = true, features = ["channel"] }
 tower = { workspace = true, features = ["util"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-# The first-boot tests: the attestation bundle of the fixture package (base64), the test CA of the coordinator's private listener and of the release
+# The first-boot and end-to-end tests: the attestation bundle of the fixture package (base64),
+# the test CA of the coordinator's private listener and of the release
 # channel (rcgen), the release channel's TLS server (rustls), the JSON the ctl prints (serde_json),
 # and the subject, serial and key of the certificate the daemon was issued (x509-parser).
 base64.workspace = true
@@ -107,7 +130,7 @@ rustls.workspace = true
 serde_json.workspace = true
 x509-parser.workspace = true
 # The effective uid the privileged tests check before they act.
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["fs", "process"] }
 
 [lints]
 workspace = true

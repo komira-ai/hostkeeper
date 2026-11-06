@@ -61,7 +61,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, and each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
 | [`hello`](examples/hello) | the example service: an HTTP server on loopback and its update hook, packaged for each release, which proves an install, an update and a rollback on the farm ([docs/hello.md](docs/hello.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
-| [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` only, after a merge to main, and the workload fixture `hostkeeper-fixture-hook` they drive; not shipped |
+| [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` only, after a merge to main, with the workload fixture `hostkeeper-fixture-hook` they drive, and the end-to-end update of a tierstore-shaped package through the real coordinator and daemon; not shipped |
 | `coverage-gate`, `xtask` | the 99% coverage gate, and the CI steps and release verbs |
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
@@ -107,8 +107,9 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   device run of the daemon under launchd after each merge; no update has run through it on a
   device).
 - **Release.** Partly built: B14 (the release workflows and the release verbs of `xtask`; no
-  release is published). Planned: B12 (the privileged workflow with real systemd), B15 (the
-  privileged end-to-end proof).
+  release is published). Built: B12 (the privileged workflow with real systemd,
+  `privileged.yml`), B15 (the privileged end-to-end proof,
+  `crates/hostkeeper-privileged/tests/tierstore_shaped.rs`).
 - **Clean-up.** Built: B19 (the wall-clock lint). B26 (the removal of the old per-service crate
   and its vocabulary) is this change.
 

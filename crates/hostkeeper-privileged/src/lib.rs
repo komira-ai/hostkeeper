@@ -19,6 +19,12 @@
 //! `hostkeeper-privileged-coordinator`, which forwards to
 //! `hostkeeper_coordinator::config::main`) and the daemon (`hostkeeper-device-daemon`), and drive
 //! them as an operator and a host do.
+//! `tests/tierstore_shaped.rs` runs the whole update path end to end: the real coordinator (in
+//! process) and the real daemon (`hostkeeper-device-daemon`, under a `Type=notify` unit) update a
+//! tierstore-shaped package (the program `tierstore-like` and `fixtures/tierstore-shaped/`),
+//! roll it back on a failed `verify` and force it back with no fetch; its rig is `tests/e2e/`,
+//! test code outside the measured set, whose root-free parts `tests/tierstore_rig.rs` runs in
+//! the pull-request set.
 //!
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its
