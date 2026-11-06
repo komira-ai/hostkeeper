@@ -12,8 +12,9 @@
 //!   has no step that builds or signs ([`build_problems`]).
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
 //!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
-//!   the coordinator's image twice, compares the two and runs the image's entrypoint
-//!   ([`IMAGE_BUILD`], [`IMAGE_COMPARE`], [`IMAGE_RUN`]), and its `attest` job, under its exact
+//!   the coordinator's image twice, compares the two, checks that the image holds the operator
+//!   web app and runs the image's entrypoint ([`IMAGE_BUILD`], [`IMAGE_COMPARE`],
+//!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
 //!   [`PACKAGES`] for every platform of [`PLATFORMS`] and copies the bundle of each beside it
@@ -69,6 +70,10 @@ pub const IMAGE_BUILD: &str = "docker buildx build --builder image-";
 
 /// How the image job's check that the two builds are byte for byte equal starts.
 pub const IMAGE_COMPARE: &str = "cargo xtask release compare-images ";
+
+/// The image job's check that the image holds the operator web app (`ui/` of the commit).
+pub const IMAGE_UI_CHECK: &str =
+    "cargo xtask release check-image-ui \"$RUNNER_TEMP/image-a.tar\" ui";
 
 /// How the image job's run of the image through its entrypoint starts; it ends in `--version`
 /// compared with the coordinator's stamp.
@@ -409,6 +414,11 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
         problems.push(format!(
             "artifacts.yml: job image must build the image twice (`{IMAGE_BUILD}...` with \
              `--no-cache`, two steps) and run `{IMAGE_COMPARE}`"
+        ));
+    }
+    if !image_runs.contains(&IMAGE_UI_CHECK) {
+        problems.push(format!(
+            "artifacts.yml: job image must check that the image holds the web app (`{IMAGE_UI_CHECK}`)"
         ));
     }
     let runs_image = image_runs.iter().any(|r| {

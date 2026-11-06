@@ -57,7 +57,10 @@ index. (`SHA256SUMS` lists every index, so the provenance of a release covers th
 Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
 
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
-distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It is
+distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It
+also holds the operator web app (`ui/` of the commit) at `/usr/share/hostkeeper-coordinator/ui`,
+owned by root, which the coordinator serves under `/ui/` when given no `--ui-dir`; `cargo xtask
+release check-image-ui` refuses an image that does not hold it file for file. It is
 built twice from clean contexts and released only when the two builds are byte for byte equal, so
 anyone can rebuild it from the commit and compare; before it is released it is also loaded and run
 through its entrypoint with `--version`, which must print the coordinator's stamp.

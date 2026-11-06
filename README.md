@@ -67,7 +67,9 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
 no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
 the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. The
-coordinator serves it under `/ui/` of its private listener when started with `--ui-dir`
+coordinator serves it under `/ui/` of its private listener: the coordinator's container image
+holds it at `/usr/share/hostkeeper-coordinator/ui`, which the coordinator serves when started
+without `--ui-dir`, and `--ui-dir` names another directory
 ([docs/ui-serving.md](docs/ui-serving.md)).
 
 The design is [docs/design/hostkeeper-design.md](docs/design/hostkeeper-design.md).

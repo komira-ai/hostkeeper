@@ -30,8 +30,8 @@ message AuditEntry {
   // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
   // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
   // `mac_auto_approve_declined`, `record_add`, `record_remove`, `enroll_requested`,
-  // `enroll_issued`, `cert_renewed`, `enroll_reject`, `host_retire`). Open: a later
-  // coordinator adds actions.
+  // `enroll_issued`, `cert_renewed`, `request_expired`, `enroll_reject`, `host_retire`). Open: a
+  // later coordinator adds actions.
   string action = 3;
   // The service, when the change is about one.
   optional string service = 4;

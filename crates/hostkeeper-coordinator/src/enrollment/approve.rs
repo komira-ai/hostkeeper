@@ -32,6 +32,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 use hostkeeper_wire::RoleName;
 
 use super::Enrollment;
+use super::expiry::ExpiriesAudited;
 use crate::inventory::{InventoryMatch, InventoryRecord, match_claims};
 use crate::operator::valid_reason;
 use crate::ops::{AuditEntry, OpsStore, Write};
@@ -262,21 +263,24 @@ fn audited_request(entry: &AuditEntry) -> Option<&str> {
 }
 
 impl Enrollment {
-    /// From now on, audits into `ops`; and audits there now every approval the store recorded
-    /// whose entry the audit log does not hold (one whose audit did not land before a crash).
-    /// Once the audit file's retention has deleted segments, an approval made before the oldest
-    /// line kept is not audited again: its entry went with its segment.
+    /// From now on, audits into `ops`; and audits there now every approval the store recorded,
+    /// and every expiry, whose entry the audit log does not hold (one whose audit did not land
+    /// before a crash). Once the audit file's retention has deleted segments, an approval made
+    /// (or a request expired) before the oldest line kept is not audited again: its entry went
+    /// with its segment.
     /// Called when a coordinator takes this enrollment, at its start.
     pub fn audit_to(&self, ops: Arc<OpsStore>) {
         let mut audited = BTreeSet::new();
+        let mut expiries = ExpiriesAudited::default();
         let read = ops
             .audit_each(&mut |entry| {
                 if let Some(request) = audited_request(&entry) {
                     audited.insert(request.to_owned());
                 }
+                expiries.see(&entry);
             })
             .and_then(|()| ops.audit_pruned_before());
-        match (self.store.recorded_approvals(), read) {
+        match (self.store.recorded_approvals(), &read) {
             (Ok(approvals), Ok(pruned_before)) => {
                 for approval in approvals
                     .iter()
@@ -296,6 +300,9 @@ impl Enrollment {
             (_, Err(why)) => {
                 tracing::error!(%why, "cannot read the audit log: no approval is audited again");
             }
+        }
+        if let Ok(pruned_before) = read {
+            self.audit_missing_expiries(&ops, &expiries, pruned_before);
         }
         *self.audit.lock().unwrap_or_else(PoisonError::into_inner) = Some(ops);
     }
@@ -443,7 +450,7 @@ impl Enrollment {
 
 /// Writes `entry` to `ops` as a change of nothing but the audit: the entry as numbered, or
 /// `None` when the write failed (logged).
-fn write_entry(ops: &OpsStore, entry: AuditEntry) -> Option<AuditEntry> {
+pub(super) fn write_entry(ops: &OpsStore, entry: AuditEntry) -> Option<AuditEntry> {
     match ops.change(Write::BeforeMemory, entry, |_| {}) {
         Ok(entry) => Some(entry),
         Err(why) => {

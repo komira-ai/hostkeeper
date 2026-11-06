@@ -10,9 +10,9 @@
 
 use std::sync::PoisonError;
 
-use super::files::{DenyState, corrupt};
+use super::files::{DenyState, claims_of_pb, corrupt};
 use super::store::{EnrollmentStore, LIVE_WINDOW_SECS};
-use super::{RequestState, StoreError};
+use super::{EnrolledHost, RequestState, StoreError};
 use crate::names::{HostId, KeyHash, Role};
 
 impl EnrollmentStore {
@@ -96,6 +96,40 @@ impl EnrollmentStore {
             return Ok(None);
         }
         self.host_role(host)
+    }
+
+    /// `host` as enrolled: its host file names the key it was approved for, and the request of
+    /// that key holds what it claimed and when it was approved. `None` for a host id never
+    /// approved, or denied (retiring or retired).
+    ///
+    /// # Errors
+    /// [`StoreError`] when a file cannot be read, or the host's request is missing.
+    pub fn enrolled_host(&self, host: &HostId) -> Result<Option<EnrolledHost>, StoreError> {
+        let Some(row) = self.load_host(host)? else {
+            return Ok(None);
+        };
+        if self.denied(host)? {
+            return Ok(None);
+        }
+        let missing = corrupt(&self.host_path(host), "the host's request is missing");
+        let request = self.load_request(&row.key)?.ok_or(missing)?;
+        Ok(Some(EnrolledHost {
+            host_id: host.clone(),
+            claims: claims_of_pb(request.pb.claims.as_ref()),
+            approved_unix: request.pb.approved.as_ref().map_or(0, |a| a.approved_unix),
+        }))
+    }
+
+    /// Every enrolled host ([`Self::enrolled_host`]), by host id.
+    ///
+    /// # Errors
+    /// [`StoreError`] when a file cannot be read, or a host's request is missing.
+    pub fn enrolled_hosts(&self) -> Result<Vec<EnrolledHost>, StoreError> {
+        let mut enrolled = Vec::new();
+        for host in self.host_ids()? {
+            enrolled.extend(self.enrolled_host(&host)?);
+        }
+        Ok(enrolled)
     }
 
     /// Whether `host` is denied and may still have an update in flight.

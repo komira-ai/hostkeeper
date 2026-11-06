@@ -1,6 +1,7 @@
 //! The coordinator's container build file, `packaging/container/Dockerfile`: a distroless base
-//! pinned by digest, the released binary copied in as the one file, a non-root user, the binary
-//! as the entrypoint, and no environment variable, build argument or default argument (the
+//! pinned by digest, the released binary and the operator web app (`ui/`, at the path the
+//! coordinator serves when given no `--ui-dir`) copied in and nothing else, a non-root user, the
+//! binary as the entrypoint, and no environment variable, build argument or default argument (the
 //! coordinator's configuration is its flags, AGENTS.md S2). The file is read as text; nothing
 //! here builds an image.
 
@@ -13,8 +14,12 @@ use crate::altered;
 /// Rust binary, as the `nonroot` user.
 const BASE: &str = "gcr.io/distroless/cc-debian13:nonroot@sha256:";
 
-/// The one file copied in, and how.
+/// The binary copied in, and how.
 const COPY: &str = "COPY --chmod=0555 hostkeeper-coordinator /usr/bin/hostkeeper-coordinator";
+
+/// The web app copied in: to the coordinator's default UI directory, keeping the modes of the
+/// context (a `--chmod` would set its directories' mode too, and no one could enter them).
+const COPY_UI: &str = "COPY ui /usr/share/hostkeeper-coordinator/ui";
 
 /// The user the coordinator runs as: distroless's `nonroot`.
 const USER: &str = "USER 65532:65532";
@@ -34,8 +39,8 @@ fn is_digest(text: &str) -> bool {
 }
 
 /// Passes when the instructions of `text` (its lines that are neither blank nor comments) are
-/// exactly: `FROM` the [`BASE`] with a digest, [`COPY`], [`USER`] and [`ENTRYPOINT`], in that
-/// order.
+/// exactly: `FROM` the [`BASE`] with a digest, [`COPY`], [`COPY_UI`], [`USER`] and
+/// [`ENTRYPOINT`], in that order.
 fn check_dockerfile(text: &str) -> Result<(), String> {
     let lines: Vec<&str> = text
         .lines()
@@ -52,7 +57,7 @@ fn check_dockerfile(text: &str) -> Result<(), String> {
     if !pinned {
         return Err(format!("`{from}` is not `FROM {BASE}<64 hex digits>`"));
     }
-    let want = [COPY, USER, ENTRYPOINT];
+    let want = [COPY, COPY_UI, USER, ENTRYPOINT];
     if rest != want {
         return Err(format!(
             "the instructions after FROM are {rest:?}, not {want:?}"
@@ -61,7 +66,8 @@ fn check_dockerfile(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches an unpinned or moved base, a base other than distroless, a second file copied in, a
+/// Catches an unpinned or moved base, a base other than distroless, a file copied in other than
+/// the binary and the web app, the web app copied elsewhere or with a mode for its directories, a
 /// root user, an environment variable, a build argument, default arguments, or an entrypoint
 /// other than the binary.
 #[test]
@@ -102,6 +108,27 @@ fn the_coordinator_image_is_the_binary_on_a_pinned_base_as_nonroot_with_flags_on
             "CMD",
         ),
         (altered(&text, COPY, "COPY . /usr/bin/"), "COPY . /usr/bin/"),
+        (
+            altered(&text, COPY_UI, "COPY ui /srv/ui"),
+            "\"COPY ui /srv/ui\"",
+        ),
+        (
+            altered(
+                &text,
+                COPY_UI,
+                "COPY --chmod=0444 ui /usr/share/hostkeeper-coordinator/ui",
+            ),
+            "--chmod=0444 ui",
+        ),
+        (altered(&text, &format!("{COPY_UI}\n"), ""), "not [\""),
+        (
+            altered(
+                &text,
+                COPY_UI,
+                "COPY ui /usr/share/hostkeeper-coordinator/ui\nCOPY secrets /etc/secrets",
+            ),
+            "COPY secrets",
+        ),
         (
             altered(&text, ENTRYPOINT, "ENTRYPOINT [\"/bin/sh\", \"-c\"]"),
             "/bin/sh",

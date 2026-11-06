@@ -432,7 +432,7 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, retire, audit and force-report messages, pinned by name
 /// and number.
-const FIELDS: [(&str, &[(&str, u32)]); 33] = [
+const FIELDS: [(&str, &[(&str, u32)]); 35] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -574,7 +574,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 33] = [
     ),
     (
         "hostkeeper.operator.v1.ListPendingRequest",
-        &[("limit", 1), ("page_token", 2)],
+        &[("limit", 1), ("page_token", 2), ("unenrolled", 3)],
     ),
     (
         "hostkeeper.operator.v1.ListPendingResponse",
@@ -595,6 +595,10 @@ const FIELDS: [(&str, &[(&str, u32)]); 33] = [
             ("record_host_id", 10),
             ("record_role", 11),
             ("candidate_host_ids", 12),
+            ("state", 13),
+            ("unenrolled_reason", 14),
+            ("unenrolled_unix", 15),
+            ("request_ttl_secs", 16),
         ],
     ),
     (
@@ -608,6 +612,29 @@ const FIELDS: [(&str, &[(&str, u32)]); 33] = [
             ("notes", 6),
             ("added_by", 7),
             ("added_unix", 8),
+            ("enrolled", 9),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ListRecordsRequest",
+        &[("limit", 1), ("page_token", 2), ("enrolled", 3)],
+    ),
+    (
+        "hostkeeper.operator.v1.Host",
+        &[
+            ("node_id", 1),
+            ("role", 2),
+            ("live", 3),
+            ("last_heartbeat_unix", 4),
+            ("heartbeat", 5),
+            ("labels", 6),
+            ("exclusions", 7),
+            ("services", 8),
+            ("inventory_record_id", 9),
+            ("data_macs", 10),
+            ("bmc_mac", 11),
+            ("serial", 12),
+            ("enrolled_unix", 13),
         ],
     ),
     (
@@ -709,7 +736,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 12] = [
+    let cases: [(&str, &str, &[&str]); 13] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -824,6 +851,11 @@ fn wire_names_are_pinned() {
             "hostkeeper.operator.v1.InventoryMatch",
             "INVENTORY_MATCH_",
             &["matched", "unmatched", "ambiguous"],
+        ),
+        (
+            "hostkeeper.operator.v1.EnrollmentRequestState",
+            "ENROLLMENT_REQUEST_STATE_",
+            &["pending", "unenrolled"],
         ),
         (
             "hostkeeper.operator.v1.AuditRefusal",

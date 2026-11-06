@@ -61,6 +61,11 @@ pub(crate) const HELLO: &str = "hello";
 /// The coordinator's asset stem, and the name of its binary.
 pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 
+/// Where the coordinator's container image holds the operator web app (`ui/` of the commit):
+/// the destination of the Dockerfile's `COPY ui`, and the default UI directory of the
+/// coordinator's `serve` (`hostkeeper_coordinator::config::DEFAULT_UI_DIR`).
+pub(crate) const IMAGE_UI_DIR: &str = "/usr/share/hostkeeper-coordinator/ui";
+
 /// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
 /// `--version` ([`stamp_of`]).
 pub(crate) const PROGRAMS: [&str; 2] = [PROGRAM, COORDINATOR];

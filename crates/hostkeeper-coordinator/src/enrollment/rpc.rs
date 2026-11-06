@@ -14,7 +14,8 @@
 //! `coordinator` ([`Enrollment::audit_to`]): a new request (`enroll_requested`; a repost of a
 //! request is not one, even one that marks it `duplicate_claim`, which the store alerts on),
 //! its certificate's first issue (`enroll_issued`, once per request and round, as the store
-//! decides under its lock) and a renewal (`cert_renewed`). The entry names the host when there
+//! decides under its lock), a renewal (`cert_renewed`) and a request that expired
+//! (`request_expired`, `expiry`). The entry names the host when there
 //! is one, and its reason holds the request id, the round and the serial: never the CSR, a key,
 //! a nonce or a signature.
 
@@ -46,7 +47,7 @@ pub(crate) const ACTION_ISSUED: &str = "enroll_issued";
 pub(crate) const ACTION_RENEWED: &str = "cert_renewed";
 
 /// The coordinator's audit entry of `action` about `host`, with `reason`.
-fn audit_entry(action: &str, host: Option<&HostId>, reason: String) -> AuditEntry {
+pub(super) fn audit_entry(action: &str, host: Option<&HostId>, reason: String) -> AuditEntry {
     let mut entry = AuditEntry::new(COORDINATOR, action);
     entry.node_id = host.map(HostId::to_string);
     entry.reason = Some(reason);
@@ -196,14 +197,16 @@ impl Enrollment {
                 self.mac_auto_approve(&posted.request_id, &request.mac_nonce),
                 MacOutcome::Approved(_)
             );
-        // A request already approved, issued or denied is polled for where it stands.
+        // A request already approved, issued or denied is polled for where it stands. A post never
+        // answers an expired request: the store starts it over.
         let state = match posted.state {
             _ if approved_by_nonce => EnrollState::Unspecified,
             RequestState::Pending => EnrollState::Pending,
             RequestState::DuplicateClaim => EnrollState::DuplicateClaim,
-            RequestState::Approved | RequestState::Issued | RequestState::Denied => {
-                EnrollState::Unspecified
-            }
+            RequestState::Approved
+            | RequestState::Issued
+            | RequestState::Denied
+            | RequestState::Expired => EnrollState::Unspecified,
         };
         Ok(EnrollResponse {
             request_id: posted.request_id.to_hex(),

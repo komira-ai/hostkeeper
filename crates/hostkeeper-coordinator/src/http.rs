@@ -18,9 +18,10 @@
 //!   service, and is a bad request when there is none); `POST /v1/operator` with an operator
 //!   token as the bearer and an action as JSON (`crate::ops`; CI's token is refused). An
 //!   operator token is one of the named tokens ([`crate::tokens`]); its name is the `by` of the
-//!   change. With `--ui-dir` it also answers `GET` and `HEAD` for `/ui/` and every path below
-//!   from that directory ([`crate::ui`]), with no token read; without it those paths are not
-//!   found. The heartbeat surface never serves them.
+//!   change. With a UI directory (`--ui-dir`, or the binary's default,
+//!   [`crate::config::DEFAULT_UI_DIR`]) it also answers `GET` and `HEAD` for `/ui/` and every
+//!   path below from that directory ([`crate::ui`]), with no token read; without one those paths
+//!   are not found. The heartbeat surface never serves them.
 //!
 //! No answer, on either surface, carries an `Access-Control-*` header: the operator web app is
 //! served from the private listener itself, so its calls are same-origin, and a cross-origin

@@ -210,3 +210,38 @@ fn a_rejection_that_cannot_be_written_changes_nothing() {
     assert_eq!(view.state, RequestState::Pending);
     assert!(s.reject(&id).expect("rejected").first);
 }
+
+/// Proves: a request that expired undecided can be rejected: it is denied, it leaves the
+/// expired list, and a repost of its key, which would make an expired request wait again, is
+/// answered denied instead.
+///
+/// Catches: an expired request answered `not_pending`, so that its host gets back in the queue
+/// at its next post however often the operator turns it away.
+#[test]
+fn an_expired_request_can_be_rejected_and_its_key_stays_out() {
+    let dir = scratch("reject-expired");
+    let s = store(&dir);
+    let key = HostKey::new();
+    let id = s.post(request(&key, "m-1"), NOW).expect("post").request_id;
+    let ttl = 60;
+    let expired = s.expire(NOW + ttl + 1, ttl).expect("expired");
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].state, RequestState::Expired);
+
+    let rejected = s.reject(&id).expect("rejected");
+    assert!(rejected.first);
+    assert_eq!(rejected.request.state, RequestState::Denied);
+    assert!(
+        s.expired().expect("read").is_empty(),
+        "no longer listed expired"
+    );
+    let reposted = s
+        .post(request(&key, "m-1"), NOW + ttl + 2)
+        .expect("answered");
+    assert_eq!(
+        reposted.state,
+        RequestState::Denied,
+        "it does not wait again"
+    );
+    assert!(s.pending().expect("read").is_empty());
+}

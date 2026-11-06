@@ -45,7 +45,10 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 ```
 
 `list-records` lists the records by host id, at most 256 a page; when `next_page_token` is set,
-pass it as `--page-token` for the next page. There is no call that reads one record by host id:
+pass it as `--page-token` for the next page. Each record says `enrolled: true` when a host is
+enrolled against it (the claims of the request the host's key was approved from match this record
+and no other, and the host is not denied); `--enrolled true` lists only those records, and
+`--enrolled false` only the others, which is the list of servers still to come online. There is no call that reads one record by host id:
 list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
 
 ## Bootstrap a Linux node
@@ -143,7 +146,7 @@ same key came back with another machine id. The coordinator logs `duplicate enro
 warn level with the request id, the machine id and which of these it was. A server rebuilt with
 a new key, or a cloned disk, looks like this. Approving it needs `--replace true`. A request
 that is not one of your servers is not approved: [reject it](#reject), which takes it out of the
-queue and refuses its key.
+queue and refuses its key; otherwise it keeps its place in the queue until it expires (below).
 
 ## The Mac path
 
@@ -263,7 +266,10 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
     releases status --service api
 ```
 
-`hosts list` and `hosts get` answer `UNIMPLEMENTED` in this build.
+`hosts get --node-id <host id>` answers the host once it has heartbeated, with the inventory record
+its enrollment matched (`inventory_record_id`, `data_macs`, `bmc_mac`, `serial`; empty when none
+or several match) and when it was approved (`enrolled_unix`); `hosts list` answers every host the
+same way, a page at a time.
 
 ## Renewal
 
@@ -327,10 +333,16 @@ The coordinator holds at most `--max-pending-enrollments` requests waiting for a
 default), `duplicate_claim` ones included. At the cap a new request, and a returning host's
 request, is refused `pending_full` and nothing is written: the requests already pending are kept,
 and a host whose request is already pending is still answered. The refused daemon logs the
-refusal once and posts again every 5 seconds, so it gets in when a place frees. A pending request
-does not expire: an approval or a [rejection](#reject) frees its place. Reject the requests nobody
-will approve; a farm that needs more places at once needs a larger `--max-pending-enrollments`,
-set at the coordinator's next start.
+refusal once and posts again every 5 seconds, so it gets in when a place frees. An approval or a
+[rejection](#reject) frees a pending request's place, and so does its expiry. A request no
+operator approves within `--enrollment-request-ttl` (72 hours by default) of when the coordinator
+first received it expires at the next reload tick, and its host is unenrolled: it is audited
+`request_expired`, it is no longer approved (`not_pending`), and it is listed with
+`enrollment list --unenrolled true` with the reason and when it expired. The host's poll still
+answers pending; once its daemon restarts and posts the same key again, the request waits again,
+from that post; reject an expired request to keep its key out. Reject the requests nobody will
+approve; a queue that still fills needs a larger `--max-pending-enrollments` or a shorter
+`--enrollment-request-ttl`, set at the coordinator's next start.
 
 ## Refusals of the operator calls
 
@@ -352,7 +364,7 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_role` | INVALID_ARGUMENT | the role is missing or breaks its rule | pass `--role`: 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
 | `invalid_service` | INVALID_ARGUMENT | a service name breaks its rule or names no service the rollout file defines | name only services of the rollout file |
 | `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial or notes | correct the field; `--reason` is 1 to 256 bytes |
-| `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied; a `reject` of a request approved or issued | list again; nothing is left to do for it (retire an enrolled host with `hosts retire`) |
+| `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied, or it expired; a `reject` of a request approved or issued | list again; an expired request is approved only after its host posts again (retire an enrolled host with `hosts retire`) |
 | `denied` | FAILED_PRECONDITION | the host id was retired (`hosts retire`) | `--replace true`, or another host id |
 | `store_failed` | INTERNAL | the change could not be written; nothing changed | read the coordinator's log and ask again |
 | `record_exists` | ALREADY_EXISTS | `add-record` for a host id that has a record | remove the record first |

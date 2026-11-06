@@ -5,7 +5,8 @@
 //! has is its key, whose SHA-256 is its id. A rejection marks the request [`RequestState::Denied`]
 //! and keeps its file: a repost of the key is the same request, still denied
 //! ([`EnrollmentStore::post`]), a poll of it is answered denied ([`EnrollmentStore::issue`]),
-//! and an approval of it is `not_pending`. A denied request does not count toward
+//! and an approval of it is `not_pending`. An expired request can be rejected too: no operator
+//! decided it, and a repost of its key would make it wait again. A denied request does not count toward
 //! [`EnrollmentStore::max_pending`], so a rejection makes room in a full queue.
 
 use super::store::{EnrollmentStore, view};
@@ -47,7 +48,8 @@ impl RejectError {
 
 impl EnrollmentStore {
     /// Rejects the request `id` under the store's lock: a pending one (a duplicate claim
-    /// included) is marked denied; one denied without having been approved (rejected before) is
+    /// included), or one that expired undecided ([`Self::expire`], which a repost would make wait
+    /// again), is marked denied; one denied without having been approved (rejected before) is
     /// answered as it is, with nothing written, so a repeat is told apart from the first call.
     ///
     /// # Errors
@@ -57,7 +59,7 @@ impl EnrollmentStore {
         let _held = self.lock()?;
         let mut row = self.load_request(id)?.ok_or(RejectError::UnknownRequest)?;
         let first = match row.state {
-            RequestState::Pending | RequestState::DuplicateClaim => true,
+            RequestState::Pending | RequestState::DuplicateClaim | RequestState::Expired => true,
             RequestState::Denied if row.pb.approved.is_none() => false,
             state => return Err(RejectError::NotPending(state)),
         };

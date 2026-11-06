@@ -1,7 +1,9 @@
 // Enrollment: the hosts waiting for an operator, with what they claim, the inventory record each
-// matches, Approve and Reject. Calls: Enrollment.List; on a button, Enrollment.Approve, which sends
-// back the key hash the list gave for the request, or Enrollment.Reject, after a confirm, which
-// takes the request out of the queue and refuses its key from then on. Claims authorise nothing: they help an operator
+// matches, Approve and Reject; or, with the parameter `unenrolled`, the requests that expired, whose
+// hosts are unenrolled, each with why, and no Approve. Calls: Enrollment.List (with
+// `unenrolled: true` for the second view); on a button, Enrollment.Approve, which sends back the
+// key hash the list gave for the request, or Enrollment.Reject, after a confirm, which takes the
+// request out of the queue and refuses its key from then on. Claims authorise nothing: they help an operator
 // recognise a machine. A match against one record (the Inventory page) fills in the host id and
 // role; it approves nothing, and several matching records fill in nothing. A request (not a
 // renewal) that matches one record is approved as that record's host id: an empty host id is sent
@@ -13,6 +15,7 @@ import {
 } from "../view.js";
 
 const PAGE_SIZE = 50;
+const UNENROLLED = "ENROLLMENT_REQUEST_STATE_UNENROLLED";
 // The grammars of operator.proto: a host id is a node id (1 to 63 of `[a-z0-9-]`, not starting
 // or ending with `-`), a role 1 to 32 of `[a-z0-9-]` with a letter first, a service name 1 to 64
 // of `[a-z0-9-]`.
@@ -180,25 +183,76 @@ function rejectSection(ctx, request) {
     }));
 }
 
+// A request TTL of `secs` seconds, in the largest whole unit.
+export function ttlWords(secs) {
+  const n = Number(secs);
+  if (!Number.isSafeInteger(n) || n <= 0) {
+    return "its time";
+  }
+  const [count, unit] = n % 3600 === 0 ? [n / 3600, "hour"]
+    : n % 60 === 0 ? [n / 60, "minute"]
+      : [n, "second"];
+  return `${count} ${unit}${count === 1 ? "" : "s"}`;
+}
+
+// Why the host of `request` (an unenrolled PendingEnrollment) is unenrolled, in a sentence.
+export function unenrolledLine(request) {
+  return request.unenrolledReason === "request_expired"
+    ? `Unenrolled: the request expired. No operator approved it within ${ttlWords(request.requestTtlSecs)}. `
+      + "It cannot be approved; the host is listed pending again when it posts its key again."
+    : `Unenrolled: ${request.unenrolledReason || "no reason given"}.`;
+}
+
+function unenrolled(request) {
+  return h("section", { class: "service" },
+    h("h3", {}, `Request ${request.requestId}`),
+    h("p", { class: "warning" }, unenrolledLine(request)),
+    table(["", ""], [
+      ["Key SHA-256", request.keySha256 || "-"],
+      ["Image", request.image || "-"],
+      ["First seen", fmtUnix(request.firstSeenUnix)],
+      ["Expired", fmtUnix(request.unenrolledUnix)],
+      ["Renewal of", request.renewalOf || "-"],
+    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    claimTable(request["claims"] || {}));
+}
+
 export async function render(ctx) {
-  const pageToken = ctx.params && typeof ctx.params.pageToken === "string" ? ctx.params.pageToken : "";
+  const params = ctx.params || {};
+  const pageToken = typeof params.pageToken === "string" ? params.pageToken : "";
+  const expired = params.unenrolled === "yes";
+  const body = expired ? { limit: PAGE_SIZE, pageToken, unenrolled: true } : { limit: PAGE_SIZE, pageToken };
   let listed;
   try {
-    listed = await ctx.api.call("hostkeeper.operator.v1.Enrollment/List", { limit: PAGE_SIZE, pageToken });
+    listed = await ctx.api.call("hostkeeper.operator.v1.Enrollment/List", body);
   } catch (error) {
     return errorView("Enrollment", error);
   }
   const requests = listed.requests || [];
   const next = typeof listed.nextPageToken === "string" ? listed.nextPageToken : "";
+  const here = expired ? { unenrolled: "yes" } : {};
+  // A coordinator that does not expire requests ignores `unenrolled` and lists its pending ones:
+  // only a request it says is unenrolled is shown as one.
+  const shown = expired ? requests.filter((request) => request.state === UNENROLLED) : requests;
+  const empty = expired
+    ? h("p", {}, requests.length === 0 ? "No request expired." : "This coordinator does not expire requests.")
+    : h("p", {}, "No host is waiting.");
   return h("section", { class: "page" },
-    h("h2", {}, "Enrollment"),
-    h("p", { class: "note" }, "Claims are what a host says it is; they prove nothing. Approve names the key hash shown."),
-    requests.length === 0 ? h("p", {}, "No host is waiting.") : requests.map((request) => pending(ctx, request)),
+    h("h2", {}, expired ? "Enrollment: expired requests" : "Enrollment"),
+    h("p", { class: "note" }, expired
+      ? "A request no operator approves within the coordinator's request TTL expires, and its host is unenrolled."
+      : "Claims are what a host says it is; they prove nothing. Approve names the key hash shown."),
+    shown.length === 0 ? empty : shown.map((request) => (expired ? unenrolled(request) : pending(ctx, request))),
     h("div", { class: "buttons" },
       pageToken === "" ? null : h("button", {
-        type: "button", name: "first-page", on: { click: () => ctx.navigate("enrollment", {}) },
+        type: "button", name: "first-page", on: { click: () => ctx.navigate("enrollment", here) },
       }, "First page"),
       next === "" ? null : h("button", {
-        type: "button", name: "next-page", on: { click: () => ctx.navigate("enrollment", { pageToken: next }) },
-      }, "Next page")));
+        type: "button", name: "next-page", on: { click: () => ctx.navigate("enrollment", { ...here, pageToken: next }) },
+      }, "Next page"),
+      h("button", {
+        type: "button",
+        name: expired ? "show-pending" : "show-unenrolled",
+        on: { click: () => ctx.navigate("enrollment", expired ? {} : { unenrolled: "yes" }) },
+      }, expired ? "Pending requests" : "Expired requests")));
 }
