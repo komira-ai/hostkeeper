@@ -31,9 +31,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_placed::{PathKind, PlacedError, Placer};
 use hostkeeper_steps::record::{Record, State};
-use hostkeeper_steps::{
-    ForceFailure, ForcePhase, ForceRecord, ForceVerdict, Layout, RecordStore, Stamp,
-};
+use hostkeeper_steps::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict, Layout, RecordStore};
 
 use super::FORCE_POLL_SECS;
 use crate::executor::{Ctx, Reply};
@@ -253,14 +251,16 @@ fn start(ctx: &Ctx, run: &[String]) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
     }
     let bound = ctx.config.bounds.force_start_secs;
-    let began = Stamp::now(&*ctx.clock);
+    // The wait is of this process, so of this boot: the monotonic clock alone measures it, and an
+    // unreadable boot id never makes it endless.
+    let began = ctx.clock.mono_secs();
     let mut waiting: Vec<&String> = run.iter().collect();
     loop {
         waiting.retain(|unit| !ctx.units.is_active(unit).unwrap_or(false));
         if waiting.is_empty() {
             return Ok(());
         }
-        let spent = began.elapsed_secs(&*ctx.clock);
+        let spent = ctx.clock.mono_secs().saturating_sub(began);
         if spent >= bound {
             let names: Vec<&str> = waiting.iter().map(|unit| unit.as_str()).collect();
             return Err(format!(

@@ -105,3 +105,40 @@ fn self_update_protocol_verb_prints_only_the_constant() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
     assert!(out.stderr.is_empty(), "{out:?}");
 }
+
+/// Catches `--trusted-root-max-age-days` not accepted by the real binary, or a limit of 0 let
+/// through to the start: with 30 the daemon gets past its flags to the missing config and exits
+/// 3 naming it; with 0 it is a usage error, exit 2, naming the flag, and nothing is made.
+#[test]
+fn the_trusted_root_age_limit_flag_is_taken_and_zero_is_a_usage_error() {
+    let scratch =
+        hostkeeper_testkit::Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "bin-root-age")
+            .expect("a scratch dir");
+    let config = scratch.path().join("missing.toml");
+    let run = |days: &str| {
+        Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+            .arg("daemon")
+            .arg("--config")
+            .arg(&config)
+            .arg("--state-dir")
+            .arg(scratch.path().join("state"))
+            .arg("--packages-dir")
+            .arg(scratch.path().join("packages"))
+            .arg("--admin-socket")
+            .arg(scratch.path().join("r/a.sock"))
+            .arg("--trusted-root-max-age-days")
+            .arg(days)
+            .output()
+            .expect("run hostkeeper")
+    };
+    let thirty = run("30");
+    assert_eq!(thirty.status.code(), Some(3), "{thirty:?}");
+    let stderr = String::from_utf8_lossy(&thirty.stderr);
+    assert!(stderr.contains(&config.display().to_string()), "{stderr}");
+
+    let zero = run("0");
+    assert_eq!(zero.status.code(), Some(2), "{zero:?}");
+    let stderr = String::from_utf8_lossy(&zero.stderr);
+    assert!(stderr.contains("--trusted-root-max-age-days"), "{stderr}");
+    assert!(!scratch.path().join("state").exists());
+}

@@ -461,9 +461,10 @@ fn world_hooked(name: &str) -> World {
     world
 }
 
-/// Proves: when the ops store cannot be written after the desired state was, the set is
-/// `store_failed` (`INTERNAL`), the desired state stays set, no audit entry stands, and sending
-/// the same set again once the store writes lands exactly one entry.
+/// Proves: when the ops store cannot be written, the operator's set is `store_failed`
+/// (`INTERNAL`) and nothing is set: its audit entry is written before the desired state, so the
+/// desired state is not written and no audit entry stands; sending the same set again once the
+/// store writes lands the state and exactly one entry.
 #[tokio::test]
 async fn a_failed_audit_write_is_store_failed_and_a_resend_lands() {
     let rig = Rig::new("od-store-fails");
@@ -487,44 +488,58 @@ async fn a_failed_audit_write_is_store_failed_and_a_resend_lands() {
         Code::Internal,
         "store_failed",
     );
-    let written = world
-        .file("desired.json")
-        .expect("the desired state was written");
-    assert!(String::from_utf8_lossy(&written).contains("2.0"));
+    let unset = world.file("desired.json");
+    assert!(
+        unset.is_none_or(|text| !String::from_utf8_lossy(&text).contains("2.0")),
+        "the desired state was not written"
+    );
     assert!(audited(&world).is_empty(), "no entry stands");
 
     failing.store(false, Ordering::SeqCst);
     operator_sets(&world, "kbf", "2.0")
         .await
         .expect("the resend");
+    let written = world
+        .file("desired.json")
+        .expect("the desired state was written");
+    assert!(String::from_utf8_lossy(&written).contains("2.0"));
     assert_eq!(audited(&world).len(), 1);
 }
 
-/// Proves: `Converge` stays CI's: the operator's token is `unauthorized` there while CI's is
-/// answered the convergence of the version the operator set; and the operator's `SetDesired`
-/// needs no issuer: with CI's keys unreachable it is answered, while CI's `SetDesired` and
-/// `Converge` are `keys_unavailable`, and the operator's `Converge` is still `unauthorized`.
+/// Proves: `Converge` answers the operator's token and CI's through the router, each with the
+/// convergence of the version the operator set, and refuses a call with no token or a token that
+/// is neither as `unauthorized`; and the operator needs no issuer: with CI's keys unreachable the
+/// operator's `SetDesired` and `Converge` are answered, while CI's are `keys_unavailable`.
 #[tokio::test]
-async fn converge_stays_ci_only_and_an_operator_set_needs_no_issuer() {
+async fn converge_answers_the_operator_and_ci_and_the_operator_needs_no_issuer() {
     let world = world("od-converge");
     operator_sets(&world, "kbf", "2.0").await.expect("a set");
-    let converge = |bearer: String| {
-        let request = grpc_request(CONVERGE, proto::ConvergeRequest::default(), Some(&bearer));
+    let converge = |bearer: Option<String>| {
+        let request = grpc_request(
+            CONVERGE,
+            proto::ConvergeRequest::default(),
+            bearer.as_deref(),
+        );
         let coordinator = world.coordinator.clone();
         async move { call(&coordinator, Surface::Control, &None, request).await }
     };
-    let (code, message, by_operator) = converge(OPERATOR.to_owned()).await;
-    assert_eq!(
-        (code, message.as_str(), by_operator),
-        (Code::Unauthenticated, "unauthorized", None)
-    );
-    let (code, message, by_ci) = converge(ci_token()).await;
-    assert_eq!((code, message.as_str()), (Code::Ok, ""));
-    let by_ci: proto::ConvergeResponse = decode(&by_ci.expect("a message"));
-    assert_eq!(
-        by_ci.convergence.expect("a convergence").desired,
-        Some("2.0".to_owned())
-    );
+    for bearer in [OPERATOR.to_owned(), ci_token()] {
+        let (code, message, body) = converge(Some(bearer.clone())).await;
+        assert_eq!((code, message.as_str()), (Code::Ok, ""), "{bearer}");
+        let reply: proto::ConvergeResponse = decode(&body.expect("a message"));
+        assert_eq!(
+            reply.convergence.expect("a convergence").desired,
+            Some("2.0".to_owned()),
+            "{bearer}"
+        );
+    }
+    for bearer in [None, Some("not-a-token".to_owned())] {
+        assert_eq!(
+            converge(bearer.clone()).await,
+            (Code::Unauthenticated, "unauthorized".to_owned(), None),
+            "{bearer:?}"
+        );
+    }
 
     let served = served_unreachable("od-unreachable");
     let sets = |bearer: String| {
@@ -549,9 +564,74 @@ async fn converge_stays_ci_only_and_an_operator_set_needs_no_issuer() {
         (code, message.as_str()),
         (Code::Unavailable, "keys_unavailable")
     );
-    let (code, message, _) = converge_with(OPERATOR.to_owned()).await;
+    let (code, message, body) = converge_with(OPERATOR.to_owned()).await;
+    assert_eq!((code, message.as_str()), (Code::Ok, ""));
+    let reply: proto::ConvergeResponse = decode(&body.expect("a message"));
     assert_eq!(
-        (code, message.as_str()),
-        (Code::Unauthenticated, "unauthorized")
+        reply.convergence.expect("a convergence").desired,
+        Some("2.0".to_owned())
     );
+}
+
+/// `POST /hostkeeper.operator.v1.Releases/Converge` with `body` and the operator's token, as the
+/// Rollout page's "Check convergence" button sends it: the status and the JSON answer.
+async fn operator_converges_over_the_gateway(world: &World, body: &str) -> (StatusCode, Value) {
+    let request = hyper::Request::builder()
+        .method("POST")
+        .uri(CONVERGE)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {OPERATOR}"))
+        .body(Full::new(Bytes::from(body.to_owned())))
+        .expect("a request");
+    let (status, _, answer) = raw(&world.coordinator, Surface::Control, &None, request).await;
+    (status, serde_json::from_slice(&answer).expect("JSON"))
+}
+
+/// Proves: the gateway call the Rollout page makes, `Releases/Converge` with `{"service": ...}`
+/// and the operator's token, is answered 200 with the convergence of the service the operator
+/// set, and for a service the coordinator does not manage reaches the handler and is 404
+/// `unknown_service`, not refused at the token.
+#[tokio::test]
+async fn converge_over_the_gateway_answers_the_operator_as_the_rollout_page_calls_it() {
+    let world = world("od-converge-gateway");
+    operator_sets(&world, "other", "3.0").await.expect("a set");
+    let (status, answer) =
+        operator_converges_over_the_gateway(&world, r#"{"service":"other"}"#).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["convergence"]["desired"], "3.0");
+
+    let (status, answer) =
+        operator_converges_over_the_gateway(&world, r#"{"service":"nope"}"#).await;
+    assert_eq!(
+        (status, answer),
+        (
+            StatusCode::NOT_FOUND,
+            json!({"code": "NOT_FOUND", "reason": "unknown_service"})
+        )
+    );
+}
+
+/// Proves: the operator's `Converge` changes nothing: after a set, a `Converge` over gRPC and
+/// one over the gateway are answered, and the state file, the ops file, the audit file and the
+/// audit log are exactly what the set left.
+#[tokio::test]
+async fn an_operator_converge_writes_nothing() {
+    let world = world("od-converge-writes-nothing");
+    operator_sets(&world, "kbf", "2.0").await.expect("a set");
+    let before = (files(&world), audited(&world));
+    assert_eq!(before.1.len(), 1, "the set is one audit entry");
+
+    let request = grpc_request(
+        CONVERGE,
+        proto::ConvergeRequest {
+            service: "kbf".to_owned(),
+        },
+        Some(OPERATOR),
+    );
+    let (code, message, _) = call(&world.coordinator, Surface::Control, &None, request).await;
+    assert_eq!((code, message.as_str()), (Code::Ok, ""));
+    let (status, _) = operator_converges_over_the_gateway(&world, r#"{"service":"kbf"}"#).await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!((files(&world), audited(&world)), before);
 }

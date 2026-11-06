@@ -8,9 +8,14 @@
 //! `ProgramArguments`, which gain `--fail-ready`.
 //!
 //! The archive is a ustar tar, compressed by [`compress`], holding exactly these entries in this
-//! order. Hostkeeper: the directory `bin/`, the file `bin/hostkeeper` (mode 0555), the file
-//! `manifest.toml` (0444), and on Linux the directory `units/` and the file
-//! `units/hostkeeper.service` (0444). Hello has `bin/hello`, and under `units/` on Linux
+//! order. Hostkeeper: the directory `bin/`, the file `bin/hostkeeper` (mode 0555), the directory
+//! `files/` and the file `files/trusted_root.json` (0444), the file `manifest.toml` (0444), and on
+//! Linux the directory `units/` and the file `units/hostkeeper.service` (0444). The trusted root
+//! is the Sigstore trusted root given with `--trusted-root`, byte for byte: the release builds
+//! it from the root committed at `packaging/sigstore/trusted_root.json`. The daemon checks every
+//! package's attestation against it where the package is unpacked
+//! (`<packages-dir>/hostkeeper/current/files/trusted_root.json`), so the manifest places no file
+//! and each update of hostkeeper brings the root its release was built with. Hello has `bin/hello`, and under `units/` on Linux
 //! `hello@.service`, on macOS `hello.a.plist` and `hello.b.plist` (a package holds one kind of
 //! unit). Directories are 0555. Hostkeeper's macos-arm64 package has no `units/` and its manifest
 //! no `[units]`: on a Mac the daemon's launchd job is the plist the installer pkg places
@@ -21,11 +26,19 @@
 //! beside it a file of the same name plus [`DIGEST_SUFFIX`] holding `<sha256>  <package name>`
 //! and a line break.
 //!
-//! Hostkeeper's package refuses `--fail-ready`, a missing `--unit` on Linux and any `--unit` on
-//! macOS; hello's refuses `--unit`, and builds for every platform. Before the archive is built,
+//! Hostkeeper's package refuses `--fail-ready`, a missing `--trusted-root`, a missing `--unit` on
+//! Linux and any `--unit` on macOS; hello's refuses `--unit` and `--trusted-root`, and builds for
+//! every platform. Before the archive is built,
 //! every systemd unit is checked (design section 4.7: a unit names package files only through the
-//! service's own `current`) and the entry list is checked against the rules of section 5.5 that
-//! apply to a list this module builds ([`check_entries`]).
+//! service's own `current`; hello's unit starts its binary through that `current`, and
+//! hostkeeper's starts [`SELF_UPDATE_CURRENT`], the binary its own update switches) and the entry
+//! list is checked against the rules of section 5.5 that apply to a list this module builds
+//! ([`check_entries`]).
+//!
+//! The child [`nfpm_stage`] is `release nfpm-stage`: the pinned `gh` and the Sigstore trusted
+//! root, checked and laid out for the deb and the rpm that `packaging/linux/nfpm.yaml` builds;
+//! [`linux_check`] is `release check-linux-pkg`, which reads a built deb or rpm back and checks
+//! that it installs both as staged.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -37,6 +50,8 @@ use super::contract::{Commit, DIGEST_SUFFIX, Package, Platform, Service, Version
 use super::ports::GitHistory;
 
 mod hello;
+pub(super) mod linux_check;
+pub(super) mod nfpm_stage;
 
 /// Why a Linux package of hostkeeper needs `--unit`.
 const LINUX_NEEDS_UNIT: &str =
@@ -54,6 +69,17 @@ pub(super) const FAIL_READY_ONLY_HELLO: &str =
 const UNIT_REFUSED: &str =
     "the hello package takes no --unit: its units are rendered for each platform";
 
+/// Why hostkeeper's package needs `--trusted-root`.
+pub(super) const NEEDS_TRUSTED_ROOT: &str = "the hostkeeper package carries the Sigstore trusted root files/trusted_root.json: pass --trusted-root";
+
+/// Why hello's package takes no `--trusted-root`.
+pub(super) const TRUSTED_ROOT_REFUSED: &str =
+    "the hello package takes no --trusted-root: only hostkeeper's package carries the trusted root";
+
+/// Where hostkeeper's package holds the Sigstore trusted root: the daemon reads it there, under
+/// the version directory `current` names.
+const TRUSTED_ROOT_ENTRY: &str = "files/trusted_root.json";
+
 /// What `release package` builds a package from.
 pub(crate) struct Request {
     pub(crate) service: Service,
@@ -68,6 +94,9 @@ pub(crate) struct Request {
     /// Hello's units start it with `--fail-ready`, so its `/readyz` answers 503 (a build that
     /// fails verify, for the farm's rollback test).
     pub(crate) fail_ready: bool,
+    /// The Sigstore trusted root of the hostkeeper package, as `gh attestation trusted-root`
+    /// prints it: `files/trusted_root.json` in the package. Hello's package carries none.
+    pub(crate) trusted_root: Option<PathBuf>,
     /// The directory the package and its digest file are written to.
     pub(crate) out: PathBuf,
 }
@@ -101,9 +130,25 @@ fn current(service: &str) -> String {
     format!("{service}/current/")
 }
 
-/// The binary the unit of `service` must start.
+/// The binary of `service` in its package, through `current`.
 fn binary_path(service: &str) -> String {
     format!("{PACKAGES}{}bin/{service}", current(service))
+}
+
+/// What hostkeeper's own unit starts: `current` of the binary directory of its own update, under
+/// the daemon's default state directory (`hostkeeper_daemon::selfupdate::binary_dir`, which the
+/// packaging test holds this to). The self-update stages each new binary there and switches this
+/// link, and its fallback switches it back (design section 6.6), so the unit always starts the
+/// binary the update chose; the package's own `bin/hostkeeper` is what the update stages.
+pub(crate) const SELF_UPDATE_CURRENT: &str = "/var/lib/updater/state/hostkeeper/bin/current";
+
+/// The program the unit of `service` must start: [`SELF_UPDATE_CURRENT`] for hostkeeper, the
+/// service's binary through its `current` ([`binary_path`]) for any other.
+fn started_program(service: &str) -> String {
+    match service == Service::Hostkeeper.name() {
+        true => SELF_UPDATE_CURRENT.to_owned(),
+        false => binary_path(service),
+    }
 }
 
 /// The top-level names a package may hold (design section 5.5).
@@ -150,10 +195,13 @@ struct Unit {
     data: Vec<u8>,
 }
 
-/// What a service's package holds besides its binary: no units for hostkeeper on macOS.
+/// What a service's package holds besides its binary: no units for hostkeeper on macOS, and
+/// the trusted root for hostkeeper only.
 struct Contents {
     manifest: String,
     units: Vec<Unit>,
+    /// The bytes of `files/trusted_root.json`.
+    trusted_root: Option<Vec<u8>>,
 }
 
 /// The manifest of hostkeeper's package for `version` built for `platform`: it needs a daemon of
@@ -192,8 +240,11 @@ enum Source<'a> {
 fn source(request: &Request) -> Result<(Package, Source<'_>), Error> {
     let refuse = |why: &str| Err(Error::Failed(why.to_owned()));
     let mac = request.platform == Platform::MacosArm64;
+    let root = request.trusted_root.is_some();
     match (request.service, request.unit.as_deref()) {
         (Service::Hostkeeper, _) if request.fail_ready => refuse(FAIL_READY_ONLY_HELLO),
+        (Service::Hostkeeper, _) if !root => refuse(NEEDS_TRUSTED_ROOT),
+        (Service::Hello, _) if root => refuse(TRUSTED_ROOT_REFUSED),
         (Service::Hostkeeper, Some(_)) if mac => refuse(MACOS_TAKES_NO_UNIT),
         (Service::Hostkeeper, None) if mac => Ok((Package::Hostkeeper, Source::NoUnit)),
         (Service::Hostkeeper, None) => refuse(LINUX_NEEDS_UNIT),
@@ -220,6 +271,7 @@ pub(crate) fn package_dated(
     let (kind, source) = source(request)?;
     let name = request.service.name();
     let binary = read(&request.binary)?;
+    let trusted_root = request.trusted_root.as_deref().map(read).transpose()?;
     let contents = match source {
         Source::File(path) => Contents {
             manifest: manifest(&request.version, request.platform, true),
@@ -228,10 +280,12 @@ pub(crate) fn package_dated(
                 origin: path.display().to_string(),
                 data: read(path)?,
             }],
+            trusted_root,
         },
         Source::NoUnit => Contents {
             manifest: manifest(&request.version, request.platform, false),
             units: Vec::new(),
+            trusted_root,
         },
         Source::Rendered => hello::contents(
             request.platform,
@@ -274,16 +328,18 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     std::fs::write(path, bytes).map_err(Error::io(format!("write {}", path.display())))
 }
 
-/// Refuses a unit of `service` that is not UTF-8 text, does not start the service's binary
-/// through its `current`, or names a package file by any other path (design section 4.7). `origin`
-/// names the unit in the refusal.
+/// Refuses a unit of `service` that is not UTF-8 text, has no `ExecStart=` whose program is the
+/// one it must start ([`started_program`]), or names a package file by any other path than the
+/// service's `current` (design section 4.7). `origin` names the unit in the refusal.
 fn check_unit(service: &str, origin: &str, unit: &[u8]) -> Result<(), Error> {
     let text = std::str::from_utf8(unit)
         .map_err(|_| Error::Failed(format!("{origin} is not UTF-8 text")))?;
-    let binary = binary_path(service);
-    let starts_it = text
-        .lines()
-        .any(|l| l.starts_with("ExecStart") & l.contains(&binary));
+    let binary = started_program(service);
+    let starts_it = text.lines().any(|l| {
+        l.strip_prefix("ExecStart=")
+            .and_then(|command| command.split_whitespace().next())
+            == Some(binary.as_str())
+    });
     if !starts_it {
         return Err(Error::Failed(format!(
             "{origin} has no ExecStart line naming {binary}"
@@ -302,13 +358,18 @@ fn check_unit(service: &str, origin: &str, unit: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// The entries of the package of `service`, sorted by name: `units/` only with a unit.
+/// The entries of the package of `service`, sorted by name: `units/` only with a unit, `files/`
+/// only with a trusted root.
 fn entries(service: &str, binary: Vec<u8>, contents: Contents) -> Vec<Entry> {
     let mut entries = vec![
         Entry::dir("bin/"),
         Entry::file(&format!("bin/{service}"), 0o555, binary),
         Entry::file("manifest.toml", 0o444, contents.manifest.into_bytes()),
     ];
+    if let Some(root) = contents.trusted_root {
+        entries.push(Entry::dir("files/"));
+        entries.push(Entry::file(TRUSTED_ROOT_ENTRY, 0o444, root));
+    }
     if !contents.units.is_empty() {
         entries.push(Entry::dir("units/"));
     }
@@ -394,3 +455,7 @@ fn archive(entries: &[Entry], mtime: u64) -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trusted_root_tests;
+#[cfg(test)]
+mod unit_tests;

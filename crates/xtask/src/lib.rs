@@ -4,14 +4,18 @@
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
 //! - `release <verb>`: the release steps: the version of a commit, the hostkeeper package, the
-//!   release plan, the check and publication of a release's assets, and the staging of one
-//!   version of a service into a release channel's tree (`release`).
+//!   release plan, the check and publication of a release's assets, the staging of one
+//!   version of a service into a release channel's tree, and the sync of new published releases
+//!   into that tree (`release`).
+//! - `advisories`: the security advisories against the dependencies in `Cargo.lock`, kept in
+//!   one GitHub issue that it opens, rewrites and closes (`advisories`).
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
 //! them to the rules of this repository. The crate's one export is [`main`], the entry point of
 //! the binary; with the feature `test-support`, which only this crate's own tests turn on, it
 //! also exports `test_support`, what its integration tests need of its internals.
 
+mod advisories;
 mod install;
 mod release;
 
@@ -36,6 +40,8 @@ enum Error {
     Usage(#[from] install::UnpackFlags),
     #[error(transparent)]
     Release(#[from] release::Error),
+    #[error(transparent)]
+    Advisories(#[from] advisories::Error),
 }
 
 #[derive(Parser)]
@@ -70,6 +76,13 @@ enum Verb {
         #[command(subcommand)]
         verb: release::Verb,
     },
+    /// Run `cargo deny check advisories` and keep its findings in one issue: open it, rewrite
+    /// its body, or comment and close it when none remain. Exits 0 whatever it finds.
+    Advisories {
+        /// The repository of the issue, `<owner>/<repo>` (on Actions, `github.repository`).
+        #[arg(long)]
+        repo: release::contract::Repo,
+    },
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -87,6 +100,11 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
             )?])
         }
         Verb::Release { verb } => Ok(release::run(verb, release::real::connect)?),
+        Verb::Advisories { repo } => {
+            let adapters = release::real::connect();
+            let ports = release::ports::Adapters::ports(&adapters);
+            Ok(advisories::sync(ports.advisories, ports.runs, &repo)?)
+        }
     }
 }
 
@@ -103,7 +121,7 @@ pub fn main() -> ExitCode {
             eprintln!("xtask: {e}");
             match e {
                 Error::Usage(_) => ExitCode::from(2),
-                Error::Install(_) | Error::Release(_) => ExitCode::FAILURE,
+                Error::Install(_) | Error::Release(_) | Error::Advisories(_) => ExitCode::FAILURE,
             }
         }
     }

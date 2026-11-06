@@ -100,17 +100,21 @@ pub fn alert_line(alert: &str, detail: &str) -> String {
     format!("hostkeeper daemon: level=error alert={alert} {detail}")
 }
 
-/// Whether the host booted since the last start pass wrote the boot id: the id in
-/// [`BOOT_ID_FILE`] is not the clock's. A missing or unreadable file counts as a boot.
+/// Whether the host may have booted since the last start pass wrote the boot id: the id in
+/// [`BOOT_ID_FILE`] is not the clock's. A missing or unreadable file counts as a boot, and so
+/// does a clock whose boot id cannot be read: an unknown boot is never the same boot.
 pub fn boot_changed(state_dir: &Path, clock: &dyn Clock) -> bool {
-    match fs::read_to_string(state_dir.join(BOOT_ID_FILE)) {
-        Ok(before) => before.trim() != clock.boot_id(),
-        Err(_) => true,
+    let before = fs::read_to_string(state_dir.join(BOOT_ID_FILE));
+    match (before, clock.boot_id()) {
+        (Ok(before), Ok(now)) => before.trim() != now.as_str(),
+        (Err(_), _) | (_, Err(_)) => true,
     }
 }
 
 /// Writes the clock's boot id, once the start pass has read every record under it: temporary
-/// file made new (never through a link left at its name), fsync, rename, directory fsync.
+/// file made new (never through a link left at its name), fsync, rename, directory fsync. A
+/// boot id that cannot be read is an error and nothing is written: the old id stays, so the next
+/// start too reads the records as after a boot.
 pub fn commit_boot(state_dir: &Path, clock: &dyn Clock) -> io::Result<()> {
     commit_boot_stopping(state_dir, clock, &|_| false)
 }
@@ -122,6 +126,7 @@ pub fn commit_boot_stopping(
     clock: &dyn Clock,
     stop: &dyn Fn(WriteStep) -> bool,
 ) -> io::Result<()> {
+    let id = clock.boot_id().map_err(io::Error::other)?;
     let tmp = state_dir.join(format!("{BOOT_ID_FILE}.tmp"));
     // A stale one goes; one that cannot go makes the create below fail.
     drop(fs::remove_file(&tmp));
@@ -131,7 +136,7 @@ pub fn commit_boot_stopping(
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&tmp)?;
-    file.write_all(clock.boot_id().as_bytes())?;
+    file.write_all(id.as_str().as_bytes())?;
     file.sync_all()?;
     files::crossed(stop, WriteStep::BeforeRename)?;
     fs::rename(&tmp, state_dir.join(BOOT_ID_FILE))?;
@@ -162,6 +167,9 @@ pub enum Stage {
     BootSteps,
     /// The readiness notice is sent.
     Ready,
+    /// The units of hostkeeper's own update are written where they differ
+    /// ([`crate::selfunits`]).
+    SelfUnits,
 }
 
 /// What the start pass did with a service's update.
@@ -320,6 +328,9 @@ pub struct BootReport {
     /// What the start settled of the update of hostkeeper itself that waited for the restart
     /// ([`Daemon::settle_self_update`]), or why it could not: `None` before the start did it.
     pub self_update: Option<Result<hostkeeper_steps::Settled, String>>,
+    /// What the start did with the units of hostkeeper's own update
+    /// ([`Daemon::install_self_units`]), or why it could not: `None` before the start did it.
+    pub self_units: Option<Result<crate::selfunits::Installed, String>>,
 }
 
 /// Why the start pass could not run: the state directory cannot be listed.

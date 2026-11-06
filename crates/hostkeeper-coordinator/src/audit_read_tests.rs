@@ -6,8 +6,11 @@
 use std::fs::File;
 use std::path::Path;
 
+use std::num::{NonZeroU64, NonZeroUsize};
+
 use super::{
-    CHUNK, Logged, MAX_LINE, Query, Reader, backward, forward, line_from, page_in, start_after,
+    AuditLine, AuditLog, CHUNK, Logged, MAX_LINE, Query, Reader, Rotation, backward, forward,
+    line_from, page_in, segment_path, segments, start_after,
 };
 use crate::ops::AuditEntry;
 use crate::testutil::scratch;
@@ -193,7 +196,7 @@ fn bad_long_torn_and_split_lines_are_handled_in_both_directions() {
 
     let path = dir.path().join("audit");
     let mut found = Vec::new();
-    let skipped = super::each(&path, &mut |l| found.push(l.seq)).expect("read");
+    let skipped = super::each_in(&path, &mut |l| found.push(l.seq)).expect("read");
     assert_eq!(found, (1..=400).collect::<Vec<u64>>());
     assert_eq!(skipped, 3, "garbage, the long run and the torn line");
 
@@ -273,4 +276,64 @@ fn a_failed_read_is_an_error() {
     let under = file.join("audit");
     assert!(super::page(&under, &query(0, 5, false)).is_err());
     assert!(super::each(&under, &mut |_| {}).is_err());
+}
+
+/// Proves: a page of a log rotated into many segments is read across them in both directions:
+/// the oldest from the oldest segment on and the newest from the active file back, each
+/// crossing segment boundaries, through a filter, stopping once the page is full; `each` visits
+/// every line in order; and with the active file gone (a rotation sealed it and no line came
+/// after) the segments still page.
+///
+/// Catches: a page cut at a segment boundary, a newest page put together in the wrong order,
+/// an entry repeated or lost between segments, and a missing active file taken as an error.
+#[test]
+fn a_page_spans_segments_in_both_directions() {
+    let dir = scratch("audit-segments-page");
+    let active = dir.path().join("ops.json.audit");
+    let one = line(10, "alice").len() as u64;
+    let rotation = Rotation {
+        max_bytes: NonZeroU64::new(5 * one).expect("not zero"),
+        retained: NonZeroUsize::new(100).expect("not zero"),
+    };
+    let log = AuditLog::open(active.clone(), rotation).expect("opened");
+    for seq in 1..=50 {
+        let by = if seq % 3 == 0 { "bob" } else { "alice" };
+        let parsed: AuditLine = serde_json::from_str(line(seq, by).trim_end()).expect("a line");
+        log.append(&parsed).expect("appended");
+    }
+    assert!(
+        segments(&active).expect("listed").len() > 5,
+        "many segments"
+    );
+    let page =
+        |since_seq, limit, newest| seqs(&log.page(&query(since_seq, limit, newest)).expect("read"));
+
+    assert_eq!(page(0, 25, false), (1..=25).collect::<Vec<u64>>());
+    assert_eq!(page(7, 30, false), (8..=37).collect::<Vec<u64>>());
+    assert!(page(50, 5, false).is_empty());
+    assert_eq!(page(0, 25, true), (26..=50).collect::<Vec<u64>>());
+    assert_eq!(page(0, 3, true), vec![48, 49, 50]);
+    assert_eq!(page(44, 10, true), (45..=50).collect::<Vec<u64>>());
+    assert!(page(50, 5, true).is_empty());
+    let bob = |e: &AuditEntry| e.by == "bob";
+    let bobs = log
+        .page(&Query {
+            since_seq: 0,
+            limit: 6,
+            newest: true,
+            keep: &bob,
+        })
+        .expect("read");
+    assert_eq!(seqs(&bobs), vec![33, 36, 39, 42, 45, 48]);
+    let mut all = Vec::new();
+    log.each(&mut |line| all.push(line.seq)).expect("read");
+    assert_eq!(all, (1..=50).collect::<Vec<u64>>());
+
+    let newest = segments(&active)
+        .expect("listed")
+        .last()
+        .map_or(0, |(n, _)| *n);
+    std::fs::rename(&active, segment_path(&active, newest + 1)).expect("sealed by hand");
+    assert_eq!(page(0, 4, true), vec![47, 48, 49, 50]);
+    assert_eq!(page(45, 50, false), (46..=50).collect::<Vec<u64>>());
 }

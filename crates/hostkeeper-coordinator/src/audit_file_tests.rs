@@ -240,26 +240,51 @@ fn numbers_continue_from_the_larger_of_the_ring_and_the_audit_file() {
     assert_eq!(numbers(&audit), [5]);
 }
 
-/// Proves: a line that cannot be appended is an error in the log on the audit target, and the
-/// change stands: it is answered, in the ring and in the ops file.
+/// Proves: a line that cannot be appended is an error in the log on the audit target. A change
+/// written before memory is then refused, `AuditUnavailable`, and not made: not in the ring, no
+/// ops file written. A change that raises protection (written after memory) stands: it is
+/// answered, in the ring and in the ops file.
 ///
-/// Catches: an audit file that fails the operator's change, or one that fails without saying.
+/// Catches: an operator's change made with no audit line, a raise of protection refused for its
+/// audit, or a failure that goes unsaid.
 #[test]
-fn a_change_stands_when_its_audit_line_cannot_be_appended() {
+fn a_change_is_refused_when_its_audit_line_cannot_be_appended_and_a_raise_stands() {
     let dir = scratch("audit-append-fails");
     let (file, audit) = files(&dir);
     let log = Log::default();
     let _guard = log.install();
     let store = open(&file);
     fs::create_dir(&audit).expect("a directory in its place");
-    let entry = make(&store, "alice", "include");
+    let refused = store
+        .change(
+            Write::BeforeMemory,
+            AuditEntry::new("alice", "include"),
+            |_| {},
+        )
+        .expect_err("refused");
+    assert!(
+        matches!(refused, OpsError::AuditUnavailable(_)),
+        "{refused:?}"
+    );
+    assert_eq!(store.state().audit, []);
+    assert!(!file.exists(), "no ops file is written");
+
+    let entry = store
+        .change(
+            Write::AfterMemory,
+            AuditEntry::new("coordinator", "mark_bad"),
+            |_| {},
+        )
+        .expect("a raise stands");
     assert_eq!(entry.seq, 1);
     assert_eq!(store.state().audit, [entry]);
     let held = fs::read_to_string(&file).expect("read");
-    assert_eq!(held.matches("\"action\": \"include\"").count(), 1);
+    assert_eq!(held.matches("\"action\": \"mark_bad\"").count(), 1);
     let text = log.text();
-    let error = "ERROR hostkeeper_coordinator::audit: the audit file could not be appended to";
-    assert_eq!(text.matches(error).count(), 1);
+    let refusal = "ERROR hostkeeper_coordinator::audit: the audit file could not be appended to: the change is refused";
+    let stands = "ERROR hostkeeper_coordinator::audit: the audit file could not be appended to: the change stands";
+    assert_eq!(text.matches(refusal).count(), 1, "{text}");
+    assert_eq!(text.matches(stands).count(), 1, "{text}");
 }
 
 /// Proves: an audit file that exists and cannot be read stops the open, naming the file.
@@ -304,7 +329,7 @@ fn reading_passes_over_what_is_not_a_line_and_says_so() {
 
     let log = Log::default();
     let _guard = log.install();
-    let opened = AuditLog::open(audit).expect("opened");
+    let opened = AuditLog::open(audit, audit_file::DEFAULT_ROTATION).expect("opened");
     assert_eq!(opened.last_seq(), 5);
     assert_eq!(log.text().matches("passed over").count(), 1);
 }

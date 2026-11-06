@@ -83,6 +83,7 @@ fn status_of(services: Vec<(&str, ServiceStatus)>, ops: OpsState) -> Status {
             .collect(),
         ops,
         commit: COMMIT,
+        server_certificate: None,
     }
 }
 

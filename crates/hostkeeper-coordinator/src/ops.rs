@@ -40,6 +40,16 @@
 //! appends it as one JSON line to the audit file beside the ops file (`<ops-file>.audit`,
 //! [`crate::audit_file`]), which keeps every change; the ring is what `/v1/status` shows.
 //!
+//! The audit file is the durable record, so a [`Write::BeforeMemory`] change appends its lines
+//! first, before the ops file is written, and is refused with [`OpsError::AuditUnavailable`]
+//! when a line cannot be appended (a full disk): nothing of it is made. An audit line can so name
+//! a change whose ops-file write then failed, or, for a change of several entries (a force), the
+//! entries appended before the one that failed; but no change is made without its lines. Two kinds
+//! of change still stand when their line cannot be appended, logged as an error with the entry
+//! in the ring: a change that raises protection ([`Write::AfterMemory`], [`Write::Halt`]: a
+//! halt, a bad mark), and an operator's `abort` ([`OpsStore::escape`]), the operator's way out
+//! when the disk is full.
+//!
 //! The caps on the counts (`MAX_HOSTS`, `MAX_EXCLUDED`) are checked under the same lock as the
 //! write ([`OpsStore::try_change`]), on the state the change is applied to.
 //!
@@ -55,7 +65,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use hostkeeper_wire::version::Version;
@@ -63,7 +73,10 @@ use hostkeeper_wire::wire::UpdateResult;
 use serde::{Deserialize, Serialize};
 
 use crate::assignment::ServiceAssignments;
-use crate::audit_file::{self, AuditLine, AuditLog, Logged, Query, UnixClock, wall_clock};
+use crate::audit_file::{
+    self, Appender, AuditLine, AuditLog, DEFAULT_ROTATION, Logged, Query, Rotation, UnixClock,
+    wall_clock,
+};
 use crate::desired::StoreError;
 use crate::force::ForceRecord;
 use crate::holds::HoldMark;
@@ -363,6 +376,11 @@ pub enum OpsError {
         /// What is wrong with it.
         why: String,
     },
+    /// The audit line of a change could not be appended to the audit file (a full disk, a
+    /// file that cannot be opened): the change is not made. The operator's refusal token is
+    /// `audit_unavailable`.
+    #[error("the audit file could not be appended to, so the change is not made: {0}")]
+    AuditUnavailable(#[source] io::Error),
     /// The file was written by a newer build.
     #[error(
         "{path}: schema {found} is newer than the {SCHEMA} this build reads; starting would \
@@ -398,6 +416,26 @@ type Interleaved = Box<dyn FnOnce(&mut OpsState) + Send>;
 /// What puts a state into the file.
 pub type Writer = Box<dyn Fn(&OpsState) -> Result<(), OpsError> + Send + Sync>;
 
+/// What a change does when one of its audit lines cannot be appended.
+#[derive(Clone, Copy, Debug)]
+enum Audited {
+    /// It is refused, [`OpsError::AuditUnavailable`], before the ops file is written.
+    Required,
+    /// It stands: the failure is logged as an error, and the ring holds the entry.
+    Logged,
+}
+
+impl Audited {
+    /// What a change written in the order `write` does: a change that raises protection stands,
+    /// every other is refused.
+    fn of(write: Write) -> Self {
+        match write {
+            Write::AfterMemory | Write::Halt => Self::Logged,
+            Write::BeforeMemory => Self::Required,
+        }
+    }
+}
+
 /// The ops state, in memory and in its file.
 pub struct OpsStore {
     current: Mutex<OpsState>,
@@ -406,7 +444,10 @@ pub struct OpsStore {
     writing: Mutex<()>,
     write: Writer,
     /// The audit file, for a store over a file; the others have none.
-    audit: Option<AuditLog>,
+    audit: Option<Arc<AuditLog>>,
+    /// What appends a line to the audit file: the audit file's own append, or nothing for a
+    /// store with none.
+    append: Appender,
     /// Seconds since the epoch, for the lines of the audit file.
     unix: UnixClock,
     /// The unfinished-halt marker, for a store over a file; the others have none.
@@ -471,6 +512,14 @@ impl OpsStore {
     /// halts file exists and cannot be read or parsed, or the audit file beside it
     /// ([`crate::audit_file`]) exists and cannot be read.
     pub fn open(path: &Path) -> Result<Self, OpsError> {
+        Self::open_with(path, DEFAULT_ROTATION)
+    }
+
+    /// [`Self::open`], with the audit file rotated by `rotation`.
+    ///
+    /// # Errors
+    /// [`OpsError`], as [`Self::open`].
+    pub(crate) fn open_with(path: &Path, rotation: Rotation) -> Result<Self, OpsError> {
         let state = match fs::read(path) {
             Ok(bytes) => parse(path, &bytes)?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => OpsState::default(),
@@ -483,11 +532,13 @@ impl OpsStore {
             }
         };
         let (state, _skipped) = ops_file::joined(path, state)?;
-        let log = AuditLog::open(audit_file::path_of(path))?;
+        let log = Arc::new(AuditLog::open(audit_file::path_of(path), rotation)?);
         let marker = ops_file::unfinished_path(path);
         let path = path.to_owned();
+        let appends = Arc::clone(&log);
         Ok(Self {
             audit: Some(log),
+            append: Box::new(move |line| appends.append(line)),
             marker: Some(marker),
             ..Self::with_writer(state, Box::new(move |state| ops_file::write(&path, state)))
         })
@@ -501,6 +552,7 @@ impl OpsStore {
             writing: Mutex::new(()),
             write,
             audit: None,
+            append: Box::new(|_| Ok(())),
             unix: wall_clock(),
             marker: None,
             unwritten: Mutex::new(Unwritten::default()),
@@ -606,12 +658,38 @@ impl OpsStore {
         write: Write,
         edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
     ) -> Result<Vec<AuditEntry>, E> {
+        self.audited_changes(write, Audited::of(write), edit)
+    }
+
+    /// The operator's `abort` (`Hosts.Abort`): a change of nothing but the audit, written
+    /// before memory, that stands when its audit line cannot be appended, as a halt does. It is
+    /// the operator's way out when the disk is full; the failure is logged as an error and the
+    /// ring holds the entry.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`]: the ops file could not be replaced; nothing changed.
+    pub(crate) fn escape(&self, entry: AuditEntry) -> Result<AuditEntry, OpsError> {
+        let mut entries = self.audited_changes(Write::BeforeMemory, Audited::Logged, |_| {
+            Ok::<_, OpsError>(vec![entry])
+        })?;
+        Ok(entries.swap_remove(0))
+    }
+
+    /// [`Self::decide_changes`], doing what `audited` says when an audit line cannot be
+    /// appended. A [`Write::BeforeMemory`] change appends its lines first, before the ops file
+    /// is written: a change refused for its audit writes nothing else.
+    fn audited_changes<E: From<OpsError>>(
+        &self,
+        write: Write,
+        audited: Audited,
+        edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
+    ) -> Result<Vec<AuditEntry>, E> {
         let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         #[cfg(test)]
         self.interleaved();
         let mut next = self.state();
         let mut entries = edit(&mut next)?;
-        let filed = self.audit.as_ref().map_or(0, AuditLog::last_seq);
+        let filed = self.audit.as_deref().map_or(0, AuditLog::last_seq);
         let ringed = next.audit.last().map_or(0, |last| last.seq);
         let mut seq = filed.max(ringed);
         for entry in &mut entries {
@@ -624,19 +702,19 @@ impl OpsStore {
         match write {
             Write::AfterMemory => {
                 *self.lock() = next.clone();
-                self.record_all(&entries);
+                self.record_all(&entries, audited)?;
                 (self.write)(&next)?;
             }
             Write::Halt => {
                 *self.lock() = next.clone();
-                self.record_all(&entries);
+                self.record_all(&entries, audited)?;
                 self.mark_unwritten();
                 (self.write)(&next)?;
             }
             Write::BeforeMemory => {
+                self.record_all(&entries, audited)?;
                 (self.write)(&next)?;
                 *self.lock() = next;
-                self.record_all(&entries);
             }
         }
         // The state just written holds every halt in memory: one whose write had failed has
@@ -645,15 +723,14 @@ impl OpsStore {
         Ok(entries)
     }
 
-    /// The page of the audit log `query` asks for, read from the audit file without reading
-    /// the rest of it ([`audit_file::page_in`]); for a store with no audit file, from the ring,
-    /// with no times.
+    /// The page `query` asks for, from the audit files without reading them whole
+    /// ([`AuditLog::page`]), or from the ring, with no times, for a store with no audit file.
     ///
     /// # Errors
     /// [`OpsError::Io`]: the audit file exists and cannot be read.
     pub(crate) fn audit_page(&self, query: &Query<'_>) -> Result<Vec<Logged>, OpsError> {
         if let Some(log) = &self.audit {
-            return audit_file::page(log.path(), query);
+            return log.page(query);
         }
         let mut page: Vec<Logged> = self
             .lock()
@@ -673,19 +750,48 @@ impl OpsStore {
         Ok(page)
     }
 
-    /// Visits every change the audit file holds, oldest first, reading it a chunk at a time; for
-    /// a store with no audit file, the ring.
+    /// Visits every change the audit file and its kept segments hold, oldest first, reading them
+    /// a chunk at a time; for a store with no audit file, the ring.
     ///
     /// # Errors
     /// [`OpsError::Io`]: the audit file exists and cannot be read.
     pub(crate) fn audit_each(&self, visit: &mut dyn FnMut(AuditEntry)) -> Result<(), OpsError> {
         match &self.audit {
-            Some(log) => {
-                audit_file::each(log.path(), &mut |line| visit(line.into_logged().entry))?;
-            }
+            Some(log) => log.each(&mut |line| visit(line.into_logged().entry))?,
             None => self.lock().audit.iter().cloned().for_each(visit),
         }
         Ok(())
+    }
+
+    /// The changes the audit file and its kept segments hold numbered after `since_seq`, oldest
+    /// first, read whole, for the tests; for a store with no audit file, the ring's.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`]: a file of the audit exists and cannot be read.
+    #[cfg(test)]
+    pub(crate) fn audit_after(&self, since_seq: u64) -> Result<Vec<AuditEntry>, OpsError> {
+        let Some(log) = &self.audit else {
+            let ring = self.lock().audit.clone();
+            return Ok(ring.into_iter().filter(|e| e.seq > since_seq).collect());
+        };
+        let read = log.read_after(since_seq)?;
+        Ok(read
+            .lines
+            .into_iter()
+            .map(|line| line.into_logged().entry)
+            .collect())
+    }
+
+    /// When segments of the audit file were deleted by its retention, the time of the oldest
+    /// line kept ([`audit_file::pruned_before`]); `None` when none was, and for a store with no
+    /// audit file.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`]: a file of the audit exists and cannot be read.
+    pub(crate) fn audit_pruned_before(&self) -> Result<Option<u64>, OpsError> {
+        self.audit
+            .as_ref()
+            .map_or(Ok(None), |log| audit_file::pruned_before(log.path()))
     }
 
     /// Seconds since the epoch by the clock of the audit file: the time a hold records.
@@ -789,21 +895,35 @@ impl OpsStore {
         *unwritten = Unwritten::default();
     }
 
-    /// [`Self::record`] for each of `entries`, in order.
-    fn record_all(&self, entries: &[AuditEntry]) {
-        for entry in entries {
-            self.record(entry);
-        }
+    /// [`Self::record`] for each of `entries`, in order; under [`Audited::Required`], none after
+    /// the first that cannot be appended.
+    ///
+    /// # Errors
+    /// [`OpsError::AuditUnavailable`]: under [`Audited::Required`], a line could not be appended.
+    fn record_all(&self, entries: &[AuditEntry], audited: Audited) -> Result<(), OpsError> {
+        entries
+            .iter()
+            .try_for_each(|entry| self.record(entry, audited))
     }
 
-    /// Logs `entry` and appends it to the audit file, if the store has one. A line that cannot be
-    /// appended is an error in the log and the change stands: the ring holds it.
-    fn record(&self, entry: &AuditEntry) {
-        announce(entry);
-        let Some(audit) = &self.audit else {
-            return;
-        };
-        if let Err(why) = audit.append(&AuditLine::of(entry, (self.unix)())) {
+    /// Appends `entry` to the audit file, if the store has one, and logs it. A line that cannot
+    /// be appended is an error in the log; under [`Audited::Logged`] the change stands (the ring
+    /// holds it) and under [`Audited::Required`] it is refused.
+    ///
+    /// # Errors
+    /// [`OpsError::AuditUnavailable`]: under [`Audited::Required`], the line could not be
+    /// appended.
+    fn record(&self, entry: &AuditEntry, audited: Audited) -> Result<(), OpsError> {
+        if let Err(why) = (self.append)(&AuditLine::of(entry, (self.unix)())) {
+            if let Audited::Required = audited {
+                tracing::error!(
+                    target: "hostkeeper_coordinator::audit",
+                    seq = entry.seq,
+                    %why,
+                    "the audit file could not be appended to: the change is refused, audit_unavailable"
+                );
+                return Err(OpsError::AuditUnavailable(why));
+            }
             tracing::error!(
                 target: "hostkeeper_coordinator::audit",
                 seq = entry.seq,
@@ -811,6 +931,8 @@ impl OpsStore {
                 "the audit file could not be appended to: the change stands, and the ring holds it"
             );
         }
+        announce(entry);
+        Ok(())
     }
 }
 
@@ -832,6 +954,13 @@ impl OpsStore {
     /// The store with `write` putting its states into the file instead, its marker kept.
     pub(crate) fn with_write(mut self, write: Writer) -> Self {
         self.write = write;
+        self
+    }
+
+    /// The store with `append` appending its audit lines instead of the audit file, which is
+    /// still what the store reads.
+    pub(crate) fn with_append(mut self, append: Appender) -> Self {
+        self.append = append;
         self
     }
 

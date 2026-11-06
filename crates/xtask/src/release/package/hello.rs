@@ -134,6 +134,7 @@ impl Description {
         Ok(Contents {
             manifest: self.manifest(kind, platform, version),
             units,
+            trusted_root: None,
         })
     }
 

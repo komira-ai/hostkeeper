@@ -105,7 +105,8 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         }
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
-        SetError::Store(_) | SetError::Ops(_) => {
+        SetError::Ops(why) => why.into(),
+        SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");
             proto::ReleasesRefusal::StoreFailed
         }
@@ -305,10 +306,12 @@ impl ReleasesApi for ReleasesService {
         &self,
         request: Request<proto::ConvergeRequest>,
     ) -> Result<Response<proto::ConvergeResponse>, Status> {
-        if !matches!(
+        // CI's token or the operator's: a convergence is a read, and changes nothing.
+        let ci = matches!(
             request.extensions().get::<Admitted>(),
             Some(Admitted::Ci(_))
-        ) {
+        );
+        if !ci && caller_of(&request).operator().is_err() {
             return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
         }
         // No service names the legacy service, as the JSON route's query does.

@@ -6,6 +6,8 @@
 # Where the code and its dependencies live.
 github.com
 crates.io
+# The page of a RustSec advisory, which the advisories issue links each advisory to.
+rustsec.org
 
 # What a package attestation names (hostkeeper-package): the OIDC issuer of GitHub Actions
 # (token.actions.githubusercontent.com), which the coordinator's OIDC allow-list tests name too,
@@ -13,8 +15,12 @@ crates.io
 githubusercontent.com
 slsa.dev
 in-toto.io
-# The Sigstore transparency log a captured attestation bundle's checkpoint names (rekor.sigstore.dev).
+# The Sigstore transparency log a captured attestation bundle's checkpoint names (rekor.sigstore.dev),
+# and the logs and authorities of the public-good trusted root (packaging/sigstore/trusted_root.json).
 sigstore.dev
+# GitHub's own Sigstore certificate and timestamp authorities, which the trusted root names
+# (fulcio.githubapp.com, timestamp.githubapp.com).
+githubapp.com
 
 # The document type of an Apple property list, which every plist hostkeeper-launchd writes
 # declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
@@ -66,11 +72,12 @@ yaml.org
 =hostkeeper.agent.v1.health
 =hostkeeper.agent.v1.claims
 =hostkeeper.operator.v1.services
-# systemd targets in packaging/linux/hostkeeper.service and its test (`target` is a top-level
-# domain), not hosts.
+# systemd targets in packaging/linux/hostkeeper.service and its test, and in the channel sync's
+# units of docs/deploy/channel-sync (`target` is a top-level domain), not hosts.
 =default.target
 =multi-user.target
 =network-online.target
+=timers.target
 
 # The documentation of other tools that the technical report's comparison cites, one entry per
 # project's own site (docs/report/hostkeeper.html, its Sources).

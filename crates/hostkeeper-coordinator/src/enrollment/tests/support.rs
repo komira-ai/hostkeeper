@@ -131,9 +131,26 @@ impl Rig {
         random: Random,
         configure: impl FnOnce(Enrollment) -> Enrollment,
     ) -> Rig {
+        Rig::started(name, fs, random, NOW, configure)
+    }
+
+    /// [`Rig::new`], its clock (and so its CA and server certificate) started at `now`.
+    pub fn at(name: &str, now: u64) -> Rig {
+        Rig::started(name, Arc::new(RealFs), os_random(), now, |enrollment| {
+            enrollment
+        })
+    }
+
+    fn started(
+        name: &str,
+        fs: Arc<dyn Fs>,
+        random: Random,
+        now: u64,
+        configure: impl FnOnce(Enrollment) -> Enrollment,
+    ) -> Rig {
         let dir = scratch(name);
         let files = Files::in_dir(&dir);
-        let clock = FixedClock::at(NOW);
+        let clock = FixedClock::at(now);
         let enrollment = Arc::new(configure(
             files
                 .start(fs, Arc::clone(&clock), random)

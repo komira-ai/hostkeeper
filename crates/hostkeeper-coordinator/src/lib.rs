@@ -59,6 +59,9 @@
 //! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
 //! - [`config`]: the flags and the start, under the [`lock`] of the state files, with CI's spent
 //!   token ids in the [`jti_file`] beside them.
+//! - [`backup`]: `backup` and `restore`, a copy of the state files and the enrollment store
+//!   taken under the same lock, with the SHA-256 of each file in its manifest, and putting one
+//!   back into targets that hold no state.
 //!
 //! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
 
@@ -72,6 +75,7 @@ pub mod acks;
 pub mod assign;
 pub mod assignment;
 pub(crate) mod audit_file;
+pub mod backup;
 pub mod bake;
 pub mod canary;
 pub mod config;
@@ -123,6 +127,14 @@ mod assignment_tests;
 mod audit_file_tests;
 #[cfg(test)]
 mod audit_list_tests;
+#[cfg(test)]
+mod audit_refusal_tests;
+#[cfg(test)]
+mod audit_rotation_tests;
+#[cfg(test)]
+mod backup_refusal_tests;
+#[cfg(test)]
+mod backup_tests;
 #[cfg(test)]
 mod bake_canary_tests;
 #[cfg(test)]

@@ -9,7 +9,9 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     Claims, EnrollRequest, EnrollResponse, EnrollState, HeartbeatResponse, PollRequest,
     PollResponse, PollState, RenewRequest, RenewResponse, VerdictAck,
 };
-use hostkeeper_proto::hostkeeper::local::v1::{Lifecycle, ServiceRecord, StepRecord};
+use hostkeeper_proto::hostkeeper::local::v1::{
+    Lifecycle, ServiceRecord, StatusResponse, StepRecord,
+};
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
 
 /// The descriptor set the last release committed: what a reader of that release knows.
@@ -405,6 +407,46 @@ fn an_older_admin_reader_keeps_the_lifecycle_of_a_service() {
     };
     let read = ServiceRecord::decode(round_trip(&before).as_slice()).expect("decodes");
     assert_eq!(read.lifecycle(), Lifecycle::Unspecified);
+}
+
+/// Catches the trusted root's age and reason in `Status` that an admin client of the release
+/// before cannot read past, or drops, and a status of the release before read as a root of age
+/// 0: a `StatusResponse` with both is read by the baseline's, which has neither, with its
+/// services, and written back with both kept; one without them reads with no age and no reason.
+#[test]
+fn an_older_admin_reader_keeps_the_trusted_roots_age_and_reason() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.StatusResponse")
+        .expect("released");
+    assert!(message.get_field_by_name("trusted_root_age_secs").is_none());
+    assert!(message.get_field_by_name("trusted_root_reason").is_none());
+    let stale = StatusResponse {
+        services: vec![ServiceRecord {
+            service: "web".to_owned(),
+            ..ServiceRecord::default()
+        }],
+        trusted_root_age_secs: Some(91 * 86_400),
+        trusted_root_reason: "trusted_root_stale".to_owned(),
+    };
+    let read = DynamicMessage::decode(message, round_trip(&stale).as_slice()).expect("decodes");
+    let services = read.get_field_by_name("services").expect("the services");
+    assert!(matches!(services.as_ref(), Value::List(list) if list.len() == 1));
+    let back = StatusResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, stale);
+
+    let before = StatusResponse {
+        services: stale.services.clone(),
+        ..StatusResponse::default()
+    };
+    let read = StatusResponse::decode(round_trip(&before).as_slice()).expect("decodes");
+    assert_eq!(
+        (
+            read.trusted_root_age_secs,
+            read.trusted_root_reason.as_str()
+        ),
+        (None, "")
+    );
 }
 
 /// Catches: a field added to a released message of `Services` that the release before drops or

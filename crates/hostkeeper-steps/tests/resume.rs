@@ -13,7 +13,7 @@ use std::sync::atomic::Ordering;
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{HookSel, Progress, State};
 use hostkeeper_steps::{
-    AdditiveCall, Finished, LaunchError, Loaded, REASON_REBOOTED, Record, RecordError,
+    AdditiveCall, BootId, Finished, LaunchError, Loaded, REASON_REBOOTED, Record, RecordError,
     ResumeAction, Stamp, StepLauncher, resume, resume_action,
 };
 use support::{DEFER, FAIL, IRREVERSIBLE_OK, OK, PENDING, Rig};
@@ -26,7 +26,7 @@ use ResumeAction::{
 
 fn stamp(boot_id: &str, mono_secs: u64) -> Stamp {
     Stamp {
-        boot_id: boot_id.to_owned(),
+        boot_id: BootId::new("a test", boot_id).ok(),
         mono_secs,
     }
 }
@@ -297,6 +297,38 @@ fn resume_rewrites_each_reboot_cell_for_the_runner() {
         (rec.step, rec.attempt, rec.state),
         (Step::Rollback, 3, State::Pending)
     );
+}
+
+/// Catches a boot id that cannot be read taken as the same boot: a step running in a known boot,
+/// read on a clock whose boot id is lost, and a step running in an unknown boot, read on any
+/// clock, are both cut off by a boot (a `prepare` is rolled back, `Deferred` `rebooted`), where
+/// the same boot read as such is a death of the daemon; a verify window of an unknown boot begins
+/// again now.
+#[test]
+fn resume_reads_an_unknown_boot_as_after_a_boot() {
+    let same = rewrite(
+        record(Step::Prepare, running("boot-a"), false, false),
+        true,
+        "boot-a",
+        1500,
+    );
+    assert_eq!((same.0, same.1), (StopUnitAndRerun, false));
+    for (started, now) in [("boot-a", ""), ("", "boot-a"), ("", "")] {
+        let (action, changed, rec) = rewrite(
+            record(Step::Prepare, running(started), false, false),
+            true,
+            now,
+            1500,
+        );
+        assert_eq!((action, changed), (DEFERRED, true), "{started:?} {now:?}");
+        assert_eq!(rec.step, Step::Rollback, "{started:?} {now:?}");
+    }
+
+    let mut rec = record(Step::Verify, State::Pending, true, false);
+    rec.progress.verify_started = Some(stamp("", 300));
+    let (action, changed, rec) = rewrite(rec, false, "boot-a", 1500);
+    assert_eq!((action, changed), (RerunStep, true), "{action:?}");
+    assert_eq!(rec.progress.verify_started, Some(stamp("boot-a", 1500)));
 }
 
 /// Catches a rewrite of a record the table leaves to the runner, or of a finished one: a step

@@ -3,7 +3,7 @@
 use std::io;
 use std::sync::Arc;
 
-use hostkeeper_link::testing::{FakeClock, ScriptedSleeper, verdict};
+use hostkeeper_link::testing::{FakeClock, ScriptedSleeper};
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, BeatOutcome, ClockSleeper, Health, Heartbeat, LinkError, Liveness,
     Observation, Observed, OrderResult, Outcome, Platform, RecordedService, Reply, ServiceFacts,
@@ -11,6 +11,7 @@ use hostkeeper_link::{
 };
 use hostkeeper_steps::Clock;
 
+use crate::verdict;
 use crate::{Rig, recorded, service, update, version};
 
 /// Catches a heartbeat whose list of services comes from anywhere but the step records (a
@@ -147,7 +148,7 @@ fn a_clock_sleeper_waits_the_period_on_its_clock_and_stops_when_asked() {
     let sleeper = ClockSleeper::new(clock.clone(), stop.clone());
     assert_eq!(sleeper.sleep(15), Tick::Beat);
     assert_eq!(clock.mono_secs(), 22);
-    assert_eq!(clock.boot_id(), "fake-boot");
+    assert_eq!(clock.boot_id().expect("a boot id").as_str(), "fake-boot");
     assert!(!stop.is_stopped());
     stop.stop();
     assert!(stop.is_stopped());

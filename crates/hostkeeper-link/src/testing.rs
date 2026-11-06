@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_steps::Clock;
+use hostkeeper_steps::{BootId, BootIdError, Clock};
 
 use crate::beat::{Health, Heartbeat, Liveness, Platform};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
@@ -144,11 +144,11 @@ impl ServiceObserver for FakeObserver {
     }
 }
 
-/// The verdict of `order` with `outcome`, and nothing else reported.
-pub fn verdict(order: &Order, outcome: Outcome) -> OrderResult {
+/// The verdict of `order` with `outcome`, naming `target`, and nothing else reported.
+pub fn verdict(order: &Order, target: &Version, outcome: Outcome) -> OrderResult {
     OrderResult {
         order: order.reference(),
-        target: order.target().version.clone(),
+        target: target.clone(),
         outcome,
         phase: None,
         class: None,
@@ -159,16 +159,19 @@ pub fn verdict(order: &Order, outcome: Outcome) -> OrderResult {
 }
 
 /// The answer of a [`FakeSink`].
-type Answer = Box<dyn Fn(&Order) -> OrderResult + Send + Sync>;
+type Answer = Box<dyn Fn(&Order, &Version) -> OrderResult + Send + Sync>;
 
-/// An executor that answers with a function of the order, and records every order it was given.
+/// An executor that answers with a function of the order and the version its verdict names,
+/// and records every order it was given, with that version.
 pub struct FakeSink {
     answer: Answer,
-    orders: Mutex<Vec<Order>>,
+    orders: Mutex<Vec<(Order, Version)>>,
 }
 
 impl FakeSink {
-    pub fn new(answer: impl Fn(&Order) -> OrderResult + Send + Sync + 'static) -> FakeSink {
+    pub fn new(
+        answer: impl Fn(&Order, &Version) -> OrderResult + Send + Sync + 'static,
+    ) -> FakeSink {
         FakeSink {
             answer: Box::new(answer),
             orders: Mutex::new(Vec::new()),
@@ -177,19 +180,30 @@ impl FakeSink {
 
     /// An executor under which every order succeeds.
     pub fn succeeding() -> FakeSink {
-        FakeSink::new(|order| verdict(order, Outcome::Succeeded))
+        FakeSink::new(|order, target| verdict(order, target, Outcome::Succeeded))
     }
 
     /// The orders it ran, in order.
     pub fn orders(&self) -> Vec<Order> {
-        lock(&self.orders).clone()
+        lock(&self.orders)
+            .iter()
+            .map(|(order, _)| order.clone())
+            .collect()
+    }
+
+    /// The versions the loop gave with the orders it ran, in order.
+    pub fn targets(&self) -> Vec<Version> {
+        lock(&self.orders)
+            .iter()
+            .map(|(_, target)| target.clone())
+            .collect()
     }
 }
 
 impl OrderSink for FakeSink {
-    fn execute(&self, order: &Order) -> OrderResult {
-        lock(&self.orders).push(order.clone());
-        (self.answer)(order)
+    fn execute(&self, order: &Order, target: &Version) -> OrderResult {
+        lock(&self.orders).push((order.clone(), target.clone()));
+        (self.answer)(order, target)
     }
 }
 
@@ -314,8 +328,8 @@ impl Clock for FakeClock {
         self.mono.load(Ordering::SeqCst)
     }
 
-    fn boot_id(&self) -> String {
-        "fake-boot".to_owned()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the fake clock", "fake-boot")
     }
 
     fn sleep_secs(&self, secs: u64) {

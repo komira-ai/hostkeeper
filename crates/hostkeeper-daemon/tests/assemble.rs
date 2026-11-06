@@ -6,6 +6,7 @@
 mod support;
 mod support_archive;
 
+use std::cell::RefCell;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -18,16 +19,21 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::adapters::Adapters;
 use hostkeeper_daemon::boot::{ALERT_START, BootReport, BootStep, Stage, alert_line};
 use hostkeeper_daemon::cli::{
-    CA_BUNDLE, DEADMAN_POLL_SECS, GH_BINARY, GH_HOME, HostFiles, HostVerifier, PKI_DIR,
-    SIGSTORE_TRUSTED_ROOT, host_ports, start_with, tls_roots,
+    CA_BUNDLE, CA_BUNDLE_MACOS, CA_BUNDLE_RHEL, DEADMAN_POLL_SECS, GH_BINARY, GH_BINARY_MACOS,
+    GH_HOME, HostFiles, HostVerifier, PKI_DIR, SIGSTORE_TRUSTED_ROOT, SIGSTORE_TRUSTED_ROOT_MACOS,
+    host_ports, start_with, tls_roots,
 };
 use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
 use hostkeeper_daemon::start::{self, EXIT_FAILED, Settings, StartError, before_records};
 use hostkeeper_daemon::testing::{FakeNotifier, FakePackages, Log};
+use hostkeeper_daemon::trusted_root::{
+    PACKAGED_TRUSTED_ROOT, RootProblem, RootReport, TrustedRoot,
+};
 use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_daemon::{NoNotifier, Ports, ReadyNotifier, Refusal};
 use hostkeeper_hook::{Invocation, Step};
-use hostkeeper_launchd::Platform;
+use hostkeeper_launchd::{Platform, PlatformKind};
+use hostkeeper_link::testing::FakeClock as FakeUnixClock;
 use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier, VerifyError};
 use hostkeeper_placed::testing::{Event, FsWrite, Log as PlacedLog, UnitCall};
 use hostkeeper_steps::{Bound, Stamp, StepCall};
@@ -35,6 +41,10 @@ use support::{OWN, Rig, Tap, alerting, config, d, lines, name, update};
 use support_archive::{Answer, Rig as ArchiveRig, SERVICE, VERSION};
 
 const RESTORE: &str = r#"boot = "restore""#;
+
+/// A trusted root, as `gh attestation trusted-root` writes one.
+const ROOT_LINE: &str =
+    "{\"mediaType\":\"application/vnd.dev.sigstore.trustedroot+json;version=0.1\"}\n";
 
 /// The adapters of a Linux host.
 fn linux() -> Adapters {
@@ -158,6 +168,7 @@ fn the_daemon_reaches_ready_only_after_the_boot_pass_and_reconcile() {
             Stage::RestartWatchers,
             Stage::BootSteps,
             Stage::Ready,
+            Stage::SelfUnits,
         ]
     );
     let reconciled = report
@@ -427,6 +438,41 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         swept.err().map(|error| error.refusal()),
         Some(Refusal::PackageIoError)
     );
+    // The store reports the trusted root `gh` is given: none yet, so the host's path, missing;
+    // then the packaged one under `--packages-dir`, aged against `--trusted-root-max-age-days`.
+    let missing = RootReport {
+        path: files.trusted_root.clone(),
+        age_secs: None,
+        problem: Some(RootProblem::Missing),
+    };
+    assert_eq!(ports.packages.trusted_root(), Some(missing));
+    let packaged = rig.packages.join(PACKAGED_TRUSTED_ROOT);
+    fs::create_dir_all(packaged.parent().expect("a parent")).expect("the package's files/");
+    fs::write(&packaged, ROOT_LINE).expect("write the root");
+    // Written in 1970: past the default limit by decades, whatever the host's clock says.
+    fs::File::options()
+        .write(true)
+        .open(&packaged)
+        .and_then(|file| {
+            file.set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000)),
+            )
+        })
+        .expect("date the root");
+    let reported = ports.packages.trusted_root().expect("a report");
+    assert_eq!(
+        (reported.path, reported.problem),
+        (packaged.clone(), Some(RootProblem::Stale))
+    );
+    let lenient = Settings {
+        trusted_root_max_age_days: std::num::NonZeroU64::MAX,
+        ..rig.settings()
+    };
+    let ports_lenient =
+        host_ports(&config(), &lenient, &files, OWN, linux()).expect("the lenient ports");
+    let reported = ports_lenient.packages.trusted_root().expect("a report");
+    assert_eq!((reported.path, reported.problem), (packaged, None));
 
     // The launcher is the host's: a hook that is not there does not start, named by its path
     // (the unwired launcher would answer that it has none), and nothing is spawned for it.
@@ -504,24 +550,112 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
     assert_eq!(notifier.sent(), 0);
 }
 
-/// Catches the host's files moved without the constants: where a host keeps the CA bundle, the
-/// pinned `gh`, the trusted root and the pki directory, and the directory `gh` runs in.
+/// The host files of a host of `kind` on which exactly the paths of `present` exist, and every
+/// path the choice asked about, in order.
+fn files_on(kind: PlatformKind, present: &[&str]) -> (HostFiles, Vec<PathBuf>) {
+    let asked = RefCell::new(Vec::new());
+    let files = HostFiles::for_platform(kind, |path| {
+        asked.borrow_mut().push(path.to_path_buf());
+        present.iter().any(|p| Path::new(p) == path)
+    });
+    (files, asked.into_inner())
+}
+
+/// The host files of Linux with the CA bundle `ca_bundle`.
+fn linux_files(ca_bundle: &str) -> HostFiles {
+    HostFiles {
+        ca_bundle: PathBuf::from(ca_bundle),
+        gh: PathBuf::from("/usr/lib/hostkeeper/gh"),
+        trusted_root: PathBuf::from("/usr/lib/hostkeeper/trusted_root.json"),
+        pki: PathBuf::from("/etc/updater/pki"),
+    }
+}
+
+const DEBIAN: &str = "/etc/ssl/certs/ca-certificates.crt";
+const RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
+
+/// Catches a Mac given the Linux paths, under `/usr`, which is read-only on a Mac, and a CA
+/// bundle a Mac does not have: `gh` and the trusted root are where the installer pkg puts them,
+/// under `/usr/local/lib/hostkeeper`, the CA bundle is macOS's `/etc/ssl/cert.pem`, and no Linux
+/// bundle is looked for.
 #[test]
-fn the_host_files_are_where_the_packaging_puts_them() {
+fn a_mac_keeps_gh_and_the_trusted_root_under_usr_local_and_reads_etc_ssl_cert_pem() {
+    let mac = HostFiles {
+        ca_bundle: PathBuf::from("/etc/ssl/cert.pem"),
+        gh: PathBuf::from("/usr/local/lib/hostkeeper/gh"),
+        trusted_root: PathBuf::from("/usr/local/lib/hostkeeper/trusted_root.json"),
+        pki: PathBuf::from("/etc/updater/pki"),
+    };
+    for present in [&[][..], &[DEBIAN, RHEL][..]] {
+        assert_eq!(
+            files_on(PlatformKind::Macos, present),
+            (mac.clone(), vec![])
+        );
+    }
+    assert_eq!(CA_BUNDLE_MACOS, "/etc/ssl/cert.pem");
+    assert_eq!(GH_BINARY_MACOS, "/usr/local/lib/hostkeeper/gh");
     assert_eq!(
-        HostFiles::host(),
-        HostFiles {
-            ca_bundle: PathBuf::from("/etc/ssl/certs/ca-certificates.crt"),
-            gh: PathBuf::from("/usr/lib/hostkeeper/gh"),
-            trusted_root: PathBuf::from("/usr/lib/hostkeeper/trusted_root.json"),
-            pki: PathBuf::from("/etc/updater/pki"),
-        }
+        SIGSTORE_TRUSTED_ROOT_MACOS,
+        "/usr/local/lib/hostkeeper/trusted_root.json"
     );
-    assert_eq!(CA_BUNDLE, "/etc/ssl/certs/ca-certificates.crt");
+}
+
+/// Catches a Debian-family host reading another bundle than its own: its bundle is asked about
+/// first and chosen, even when the RHEL one exists too, which is then not asked about.
+#[test]
+fn a_debian_host_reads_the_debian_bundle() {
+    for present in [&[DEBIAN][..], &[DEBIAN, RHEL][..]] {
+        assert_eq!(
+            files_on(PlatformKind::Linux, present),
+            (linux_files(DEBIAN), vec![PathBuf::from(DEBIAN)])
+        );
+    }
+    assert_eq!(CA_BUNDLE, DEBIAN);
     assert_eq!(GH_BINARY, "/usr/lib/hostkeeper/gh");
     assert_eq!(
         SIGSTORE_TRUSTED_ROOT,
         "/usr/lib/hostkeeper/trusted_root.json"
+    );
+}
+
+/// Catches a RHEL-family host given the Debian path it does not have, so that its fetch trusts
+/// no root: with only the RHEL bundle there, the RHEL bundle is chosen.
+#[test]
+fn a_rhel_host_reads_the_rhel_bundle() {
+    assert_eq!(
+        files_on(PlatformKind::Linux, &[RHEL]),
+        (
+            linux_files(RHEL),
+            vec![PathBuf::from(DEBIAN), PathBuf::from(RHEL)]
+        )
+    );
+    assert_eq!(CA_BUNDLE_RHEL, RHEL);
+}
+
+/// Catches a Linux host with neither bundle given some third path or none: it is given the
+/// Debian path, so the fetch reads a bundle that is not there, as before, and has no root to
+/// trust.
+#[test]
+fn a_linux_host_with_neither_bundle_is_given_the_debian_path() {
+    for present in [&[][..], &["/etc/ssl/cert.pem"][..]] {
+        assert_eq!(
+            files_on(PlatformKind::Linux, present),
+            (
+                linux_files(DEBIAN),
+                vec![PathBuf::from(DEBIAN), PathBuf::from(RHEL)]
+            )
+        );
+    }
+}
+
+/// Catches the files of this host chosen for another platform than the binary's, or without
+/// asking the filesystem: they are the files of this build's platform over the filesystem, and
+/// the directory `gh` runs in and the pki directory are unchanged.
+#[test]
+fn this_host_has_the_files_of_its_own_platform() {
+    assert_eq!(
+        HostFiles::host(),
+        HostFiles::for_platform(Platform::host().kind, Path::exists)
     );
     assert_eq!(GH_HOME, ".gh");
     assert_eq!(PKI_DIR, "/etc/updater/pki");
@@ -551,9 +685,15 @@ fn the_roots_are_the_certificate_sections_of_the_bundle() {
 fn the_host_verifier_trusts_no_gh_it_cannot_find() {
     let rig = Rig::new("assemble-verifier");
     let clock = rig.clock.clone();
+    let root = TrustedRoot::new(
+        rig.packages.join(PACKAGED_TRUSTED_ROOT),
+        rig.scratch.path().join("trusted_root.json"),
+        90,
+        Arc::new(FakeUnixClock::new(0, 0)),
+    );
     let verifier = HostVerifier::new(
         rig.scratch.path().join("gh"),
-        rig.scratch.path().join("trusted_root.json"),
+        Arc::new(root),
         rig.scratch.path().join("home"),
         clock.clone(),
     );

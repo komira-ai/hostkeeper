@@ -75,7 +75,7 @@ What the host runs and how it is, and the coordinator's answer: at most one orde
 | flag | value | meaning |
 |---|---|---|
 | `--platform` | VALUE | The platform the host's releases are built for. |
-| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, and `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 8, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
+| `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`, which announces that it takes the `Abort` verb, and `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
 
 Through `--request` only: `agent` (hostkeeper.agent.v1.AgentInfo), `services` (repeated hostkeeper.agent.v1.ServiceBeat).
 
@@ -283,7 +283,7 @@ Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState).
 `/hostkeeper.operator.v1.Releases/Converge`
 
 How far a service's hosts are from its desired version. Changes nothing. Takes CI's OIDC
-token only.
+token or the operator token.
 
 | flag | value | meaning |
 |---|---|---|
