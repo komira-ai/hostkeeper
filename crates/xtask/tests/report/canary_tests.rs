@@ -1,11 +1,12 @@
 //! The committed report against the committed results of the first farm canary: which cells the
 //! canary fills and which stay open, and the check failing the real report when a cell and its
-//! result file disagree, from either side.
+//! result file disagree, from either side. The row check is shared with `rollout_tests.rs`.
 
 use std::path::Path;
 
 use crate::cells::{Cell, Kind, result_rows};
 use crate::html::quantities;
+use crate::rollout_tests::{ROLLOUT, ROLLOUT_CELLS};
 use crate::testdir::TestDir;
 use crate::{RESULTS, check_report, check_report_text, repo_root, report_text};
 
@@ -32,18 +33,14 @@ const STILL_OPEN: &[&str] = &[
     "m-coordinator-memory",
 ];
 
-fn canary_text() -> String {
-    std::fs::read_to_string(repo_root().join(RESULTS).join(CANARY)).expect("read the canary")
-}
-
 /// The committed report's cells.
-fn report_cells() -> Vec<Cell> {
+pub fn report_cells() -> Vec<Cell> {
     let (found, problems) = check_report();
     assert!(problems.is_empty(), "{}", problems.join("\n"));
     found
 }
 
-fn cell<'a>(found: &'a [Cell], id: &str) -> &'a Cell {
+pub fn cell<'a>(found: &'a [Cell], id: &str) -> &'a Cell {
     found
         .iter()
         .find(|c| c.id == id)
@@ -51,7 +48,7 @@ fn cell<'a>(found: &'a [Cell], id: &str) -> &'a Cell {
 }
 
 /// The committed report with `from` replaced by `to` inside the element of cell `id` (once).
-fn edit_cell(found: &[Cell], id: &str, from: &str, to: &str) -> String {
+pub fn edit_cell(found: &[Cell], id: &str, from: &str, to: &str) -> String {
     let text = report_text();
     let (start, end) = cell(found, id).span;
     let element = &text[start..end];
@@ -70,8 +67,9 @@ fn scratch(name: &str) -> TestDir {
 
 #[test]
 fn the_canary_fills_its_cells_and_leaves_the_rest_open() {
-    // Catches: a canary cell left open or filled from another file, and a measurement the
-    // canary did not take (first heartbeat, the tierstore force, the six-node fleet) filled.
+    // Catches: a canary cell left open or filled from another file, a measurement the canary did
+    // not take (first heartbeat, the tierstore force, the six-node fleet) filled, and a cell
+    // filled from a result file other than the canary's and the rollout's.
     let found = report_cells();
     let measured: Vec<&str> = found
         .iter()
@@ -90,22 +88,47 @@ fn the_canary_fills_its_cells_and_leaves_the_rest_open() {
         .filter(|c| matches!(&c.kind, Kind::Result(name) if name != CANARY))
         .map(|c| c.id.as_str())
         .collect();
-    assert_eq!(other_results, Vec::<&str>::new());
+    assert_eq!(other_results, ROLLOUT_CELLS);
+    assert!(
+        found
+            .iter()
+            .filter(|c| ROLLOUT_CELLS.contains(&c.id.as_str()))
+            .all(|c| c.kind == Kind::Result(ROLLOUT.to_owned()))
+    );
 }
 
 #[test]
 fn every_row_of_the_canary_is_printed_by_exactly_the_cells_it_names() {
-    // Catches: a row whose `cells` names a cell that does not print its value, or misses one
-    // that does; then, for each row, its value changed under the report fails every cell that
-    // prints it, and nothing else.
+    // Catches: a canary row printed by no cell (every row of the canary is one cell's number),
+    // and what `rows_are_printed_by_exactly_their_cells` catches.
+    let rows = result_rows(
+        &std::fs::read_to_string(repo_root().join(RESULTS).join(CANARY)).expect("read the canary"),
+    )
+    .expect("the canary parses");
+    let unprinted: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.cells.is_empty())
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(unprinted, Vec::<&str>::new());
+    rows_are_printed_by_exactly_their_cells(CANARY);
+}
+
+/// Each row of the committed result file `file` is printed by exactly the cells it names: a row
+/// whose `cells` names a cell that does not print its value, or misses one that does, fails; then,
+/// for each row, its value changed under the report fails every cell that prints it, and nothing
+/// else. A row that names no cell is printed by none, and changing it fails nothing.
+pub fn rows_are_printed_by_exactly_their_cells(file: &str) {
     let found = report_cells();
-    let canary = canary_text();
-    let rows = result_rows(&canary).expect("the canary parses");
-    assert!(!rows.is_empty(), "the canary has no row");
+    let original =
+        std::fs::read_to_string(repo_root().join(RESULTS).join(file)).expect("read a result file");
+    let rows = result_rows(&original).expect("the result file parses");
+    assert!(!rows.is_empty(), "{file} has no row");
+    let mut printed_somewhere = false;
     for row in &rows {
         let printing: Vec<&str> = found
             .iter()
-            .filter(|c| c.kind == Kind::Result(CANARY.to_owned()))
+            .filter(|c| c.kind == Kind::Result(file.to_owned()))
             .filter(|c| {
                 quantities(&c.text)
                     .iter()
@@ -117,10 +140,10 @@ fn every_row_of_the_canary_is_printed_by_exactly_the_cells_it_names() {
         named.sort_unstable();
         let mut printing_sorted = printing.clone();
         printing_sorted.sort_unstable();
-        assert_eq!(printing_sorted, named, "row {}", row.id);
+        assert_eq!(printing_sorted, named, "{file}: row {}", row.id);
 
-        let dir = scratch("report-canary-row");
-        let changed: String = canary
+        let dir = results_copy("report-row");
+        let changed: String = original
             .lines()
             .map(|line| {
                 let mut columns: Vec<&str> = line.split('\t').collect();
@@ -130,7 +153,7 @@ fn every_row_of_the_canary_is_printed_by_exactly_the_cells_it_names() {
                 format!("{}\n", columns.join("\t"))
             })
             .collect();
-        std::fs::write(dir.join(CANARY), changed).expect("write");
+        std::fs::write(dir.join(file), changed).expect("write");
         let (_, problems) = check_report_text(&report_text(), &dir);
         let expected: Vec<String> = found
             .iter()
@@ -141,16 +164,36 @@ fn every_row_of_the_canary_is_printed_by_exactly_the_cells_it_names() {
                     .filter(|(n, _)| (n - row.value).abs() < 1e-9)
                     .map(|(n, _)| {
                         format!(
-                            "line {}: {}: the number {n} is not a value of {CANARY}",
+                            "line {}: {}: the number {n} is not a value of {file}",
                             c.line, c.id
                         )
                     })
                     .collect::<Vec<_>>()
             })
             .collect();
-        assert!(!expected.is_empty(), "row {} is printed nowhere", row.id);
-        assert_eq!(problems, expected, "row {}", row.id);
+        assert_eq!(
+            expected.is_empty(),
+            row.cells.is_empty(),
+            "{file}: row {} names cells that print it nowhere, or prints with no cell named",
+            row.id
+        );
+        printed_somewhere |= !expected.is_empty();
+        assert_eq!(problems, expected, "{file}: row {}", row.id);
     }
+    assert!(printed_somewhere, "no row of {file} is printed");
+}
+
+/// A scratch copy of every committed result file, so that one of them can be changed alone.
+pub fn results_copy(name: &str) -> TestDir {
+    let dir = scratch(name);
+    for entry in std::fs::read_dir(repo_root().join(RESULTS)).expect("read the results") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_some_and(|e| e == "tsv") {
+            let to = dir.join(path.file_name().expect("a file name"));
+            std::fs::copy(&path, to).expect("copy a result file");
+        }
+    }
+    dir
 }
 
 #[test]

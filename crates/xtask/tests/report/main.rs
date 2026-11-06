@@ -32,7 +32,7 @@
 //!
 //! Each rule is shown refusing its defect on a small text in `check_tests.rs` and
 //! `escape_tests.rs`, and on the committed report against the first farm canary's results in
-//! `canary_tests.rs`.
+//! `canary_tests.rs` and against the rollout's to the other Linux nodes in `rollout_tests.rs`.
 //!
 //! Catches: a number edited in the report without its source; a constant changed in the code
 //! without the report; a measurement filled with a number no result holds; a promised
@@ -48,6 +48,7 @@ mod figures;
 mod html;
 mod markdown;
 mod page;
+mod rollout_tests;
 mod rust_value;
 #[path = "../../src/testdir.rs"]
 mod testdir;
@@ -84,7 +85,9 @@ const UI_SHARED_HTML: &[&str] = &["ui/index.html"];
 /// The measurements the report promises: each is a cell, filled from a result or open.
 const MEASUREMENTS: &[&str] = &[
     "m-bootstrap",
+    "m-rollout-bootstrap",
     "m-enroll",
+    "m-rollout-approve-to-ready",
     "m-first-heartbeat",
     "m-converge-install",
     "m-converge-update",

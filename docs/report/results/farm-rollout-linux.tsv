@@ -1,0 +1,28 @@
+# The rollout of hostkeeper to the other five Linux nodes of the lab after the canary of
+# farm-canary-node-5.tsv: node-4, node-3, node-2, node-6 and node-1, in that order, with the
+# coordinator in a container on the lab's development machine. node-5 is not a row here: it was the
+# canary, run step by step with the operator between steps, and its times are in its own file.
+# Each node ran each step once. Times are differences between the stamps, to the millisecond, of
+# the operator's own commands and of an ssh poll of the hello service (its readiness and version
+# routes) every 3 s. A time that ends at a poll is an upper bound: the event happened at most one
+# poll interval earlier. On each of these five nodes kbf and tierstore had the same process and
+# the same executable digest before and after the adoption.
+# A raw row is one node's time and names no cell; a derived row is computed from the raw rows above
+# it, as its how column says, and is what the report prints.
+# kind	id	value	unit	how	cells
+raw	bootstrap-apply-node-4	22.723	s	adopt and bootstrap apply on the operator's machine, start to end: record the host, stop the old updater, install the package, write the config, start the daemon, leave it pending enrollment
+raw	bootstrap-apply-node-3	23.925	s	as bootstrap-apply-node-4
+raw	bootstrap-apply-node-2	24.027	s	as bootstrap-apply-node-4
+raw	bootstrap-apply-node-6	25.624	s	as bootstrap-apply-node-4
+raw	bootstrap-apply-node-1	25.526	s	as bootstrap-apply-node-4
+raw	approve-to-ready-node-4	27.573	s	the operator's approve command to the first poll answering readiness 200 on hello v2: enrollment, the first heartbeat and the install; upper bound
+raw	approve-to-ready-node-3	29.160	s	as approve-to-ready-node-4; approved after komira-ai/hostkeeper#123, since the inventory match first refused node-3, whose record has no BMC MAC
+raw	approve-to-ready-node-2	27.240	s	as approve-to-ready-node-4
+raw	approve-to-ready-node-6	27.346	s	as approve-to-ready-node-4
+raw	approve-to-ready-node-1	27.247	s	as approve-to-ready-node-4
+raw	approve-to-ready-poll	3	s	interval of the ssh poll	m-rollout-approve-to-ready
+derived	nodes	5		the number of bootstrap-apply-node-* rows, and of approve-to-ready-node-* rows	m-rollout-bootstrap,m-rollout-approve-to-ready
+derived	bootstrap-apply-min	22.7	s	the least bootstrap-apply-node-* value, to 0.1 s	m-rollout-bootstrap
+derived	bootstrap-apply-max	25.6	s	the greatest bootstrap-apply-node-* value, to 0.1 s	m-rollout-bootstrap
+derived	approve-to-ready-min	27.2	s	the least approve-to-ready-node-* value, to 0.1 s	m-rollout-approve-to-ready
+derived	approve-to-ready-max	29.2	s	the greatest approve-to-ready-node-* value, to 0.1 s	m-rollout-approve-to-ready
