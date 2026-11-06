@@ -697,8 +697,11 @@ and the coordinator&rsquo;s own server certificate, valid for at most
 <span data-cell="c-server-cert" data-source="crates/hostkeeper-enrollment/src/ca/issue.rs" data-item="SERVER_VALIDITY_CAP_SECS">90 days</span>.
 The server certificate is remade only at a start that finds it missing or in the last third of its
 life; nothing renews it while the coordinator runs, so the coordinator must be restarted within
-that life. Rotating the CA, revocation lists and backups are not built: backup is a written procedure
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/ca-backup.md">docs/operations/ca-backup.md</a>).</p>
+that life. Rotating the CA and revocation lists are not built. The CA's key is backed up by a written
+procedure (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/ca-backup.md">docs/operations/ca-backup.md</a>);
+the rest of the coordinator's state, the enrollment store with it, by <code>hostkeeper-coordinator backup</code>
+and <code>restore</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/coordinator-state.md">docs/operations/coordinator-state.md</a>).</p>
 <figure class="wide" id="fig-enroll"><div class="fig-wrap scroll"><svg viewBox="0 0 980 560" role="img" aria-label="Enrollment as a sequence. The daemon&rsquo;s enrollment loop checks the coordinator&rsquo;s CA against its pinned hash, makes a key and posts Coordinator.Enroll with its request and claims. The coordinator stores a pending request and answers pending. The daemon polls with Coordinator.Poll, signing a fresh nonce, until an operator approves with Enrollment.Approve. At the next signed poll the coordinator issues the certificate once, and the daemon checks it and stores it. From half its life the daemon renews with Coordinator.Renew over mutual TLS, with no operator step."><defs><marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker></defs>
 <rect class="box-acc" x="20" y="14" width="180" height="40" rx="4"/><text x="110" y="39" text-anchor="middle" class="t-s t-b">daemon, enrollment loop</text>
 <rect class="box-blue" x="270" y="14" width="180" height="40" rx="4"/><text x="360" y="39" text-anchor="middle" class="t-s t-b">coordinator, heartbeat listener</text>
