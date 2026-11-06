@@ -798,7 +798,7 @@ by default, and each token is good once. Within the operator API, CI&rsquo;s tok
 <code>Releases.SetDesired</code> and <code>Releases.Converge</code> (and their two frozen JSON routes). An operator uses
 a named bearer token (<code>--tokens-file</code>: names and SHA-256 hashes, re-read while running, so revoking one needs no restart). A token either operates or does
 not, with no per-token grants. An operator&rsquo;s token is also admitted on <code>SetDesired</code>, under every refusal
-CI&rsquo;s set gets, and is refused on <code>Converge</code>, which stays CI&rsquo;s
+CI&rsquo;s set gets, and on <code>Converge</code>, which changes nothing; the frozen JSON routes stay CI&rsquo;s
 (<code>admit</code> in <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/grpc/mod.rs">crates/hostkeeper-coordinator/src/grpc/mod.rs</a>).</p>
 <p><strong><code>hostkeeper ctl</code> is generated from the protos.</strong> The build of <code>hostkeeper-proto</code> writes one
 command per method of every non-local service. <code>hostkeeper ctl</code> builds its command tree from that
@@ -816,8 +816,7 @@ started with <code>--ui-dir</code> (<a href="https://github.com/komira-ai/hostke
 files. The Rollout page sets a service&rsquo;s desired version with the operator&rsquo;s token and assigns or unassigns it
 for a role, and the Host page lists the services assigned to the host from <code>Services.List</code>. Because
 <code>Hosts.List</code> and <code>Hosts.Get</code> are not served, the Fleet page, the rest of the Host page and the Rollout
-page&rsquo;s force dialog get a refusal instead of data. The Rollout page&rsquo;s convergence button sends
-<code>Releases.Converge</code> with the operator&rsquo;s token, which the coordinator refuses, and its unmark button
+page&rsquo;s force dialog get a refusal instead of data. The Rollout page&rsquo;s unmark button
 calls <code>Releases.UnmarkBad</code>, which is not served. The UI tests run the app in a JavaScript engine
 against a fake gateway (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-ui-tests">crates/hostkeeper-ui-tests</a>), so they
 catch none of these. <a href="#ui">The lab section</a> draws each page.</p>
