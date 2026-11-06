@@ -1,6 +1,7 @@
 //! Shared by the privileged tests: the check that they run as root under systemd, a bench (a
 //! scratch directory and a rig whose units are torn down when it is dropped, failed or not), the
-//! host's programs they run, and a clock that moves only when told to.
+//! host's programs they run, and a clock that moves only when told to; and, in [`self_update`],
+//! the host of the self-update tests.
 //!
 //! A wait here polls a state systemd or the fixture reaches (a file written, a unit active) and
 //! sleeps between looks; it never bounds the time it waits and nothing asserts how long it took.
@@ -19,6 +20,8 @@ use hostkeeper_privileged::{Rig, SYSTEMD_RUNTIME_DIR, check_host};
 use hostkeeper_steps::systemd::{SYSTEMCTL, SYSTEMD_RUN};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 use hostkeeper_testkit::Scratch;
+
+pub mod self_update;
 
 /// The fixture program, built by cargo with these tests.
 pub const FIXTURE: &str = env!("CARGO_BIN_EXE_hostkeeper-fixture-hook");
