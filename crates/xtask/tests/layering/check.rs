@@ -53,7 +53,9 @@ pub type Layer = (
 /// example service hello's hook in process;
 /// hello's tests read its output with the hook contract and load its package with the
 /// manifest loader; the observer's tests run hooks through the step runner; the CLI
-/// crates' and the web app's tests read the protobuf descriptors; the privileged tests drive the
+/// crates' and the web app's tests read the protobuf descriptors, and the web app's send each of
+/// its calls to a coordinator built from its flags, whose CI allow-list is `hostkeeper-oidc`'s
+/// testkit issuer's; the privileged tests drive the
 /// step runner's launcher and dead-man and the observer's adapters against the host, and on a
 /// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
 /// normal dependency), the launchd adapters and the package check, call its admin socket, and
@@ -98,7 +100,7 @@ pub const LAYERS: [Layer; 23] = [
     (PROTO, &[], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),
     (TLS, &[], &[]),
-    (UI_TESTS, &[], &[PROTO]),
+    (UI_TESTS, &[], &[COORDINATOR, OIDC, PROTO]),
     (UNPACK, &[CONFIG, HOOK, STEPS], &[]),
     (WIRE, &[], &[]),
 ];
