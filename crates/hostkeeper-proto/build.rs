@@ -19,6 +19,7 @@ const FILES: &[&str] = &[
     "hostkeeper/agent/v1/agent.proto",
     "hostkeeper/operator/v1/operator.proto",
     "hostkeeper/operator/v1/enrollment.proto",
+    "hostkeeper/operator/v1/entry.proto",
     "hostkeeper/local/v1/admin.proto",
 ];
 

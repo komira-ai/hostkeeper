@@ -284,6 +284,17 @@ impl HostsApi for HostsService {
             .map(Response::new)
             .map_err(refusal::hosts)
     }
+
+    async fn retire(
+        &self,
+        request: Request<proto::RetireRequest>,
+    ) -> Result<Response<proto::RetireResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .retire_host(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::hosts)
+    }
 }
 
 /// The service of `Releases`.
@@ -548,6 +559,17 @@ impl EnrollmentApi for EnrollmentService {
         let caller = caller_of(&request);
         self.coordinator
             .enrollment_approve(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
+    }
+
+    async fn reject(
+        &self,
+        request: Request<proto::RejectRequest>,
+    ) -> Result<Response<proto::RejectResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .enrollment_reject(&caller, request.get_ref())
             .map(Response::new)
             .map_err(refusal::enrollment)
     }

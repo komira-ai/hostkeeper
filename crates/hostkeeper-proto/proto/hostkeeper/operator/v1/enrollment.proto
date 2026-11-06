@@ -34,6 +34,10 @@ service Enrollment {
   // Approve a pending request: the host gets its certificate at its next `Poll`, with the host
   // id, role and services the approval names.
   rpc Approve(ApproveRequest) returns (ApproveResponse);
+  // Reject a pending request: it leaves the queue, and its key is refused from then on (its
+  // `Poll` answers `DENIED`, and posting it again changes nothing). A request already rejected
+  // is answered as rejected and audited once.
+  rpc Reject(RejectRequest) returns (RejectResponse);
   // Record a server the operator built, before it first boots: its host id, optional role, data
   // MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
   // holds, is refused; remove the record first.
@@ -75,7 +79,8 @@ enum EnrollmentRefusal {
   // token).
   ENROLLMENT_REFUSAL_INVALID_REQUEST = 11;
   // FAILED_PRECONDITION: the request is no longer pending: it was approved, issued or denied, or it
-  // expired.
+  // expired (`Reject` of a request approved or issued; `Reject` of one already rejected, or of
+  // one that expired, succeeds).
   ENROLLMENT_REFUSAL_NOT_PENDING = 12;
   // FAILED_PRECONDITION: an operator denied the host id, and `replace` is not set.
   ENROLLMENT_REFUSAL_DENIED = 13;
@@ -227,6 +232,19 @@ message ApproveResponse {
   // Always true: the certificate goes to the host at its next `Poll`, never in this answer.
   bool certificate_issued_at_poll = 2;
   AuditEntry entry = 3;
+}
+
+message RejectRequest {
+  // The request to reject, as `PendingEnrollment.request_id` lists it.
+  string request_id = 1;
+  // Why, for the audit log: 1 to 256 bytes with no control character, or empty for none.
+  string reason = 2;
+}
+
+message RejectResponse {
+  // The `enroll_reject` entry; absent when the request was already rejected (nothing is
+  // audited twice), or when the entry could not be written (logged).
+  AuditEntry entry = 1;
 }
 
 message AddRecordRequest {

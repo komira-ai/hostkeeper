@@ -44,6 +44,8 @@ const REQUIRED: &[&str] = &[
     "enrollment remove-record",
     "enrollment list",
     "enrollment approve",
+    "enrollment reject",
+    "hosts retire",
 ];
 
 /// The lines inside fenced blocks, with each line ending in `\` joined to the next. A line still

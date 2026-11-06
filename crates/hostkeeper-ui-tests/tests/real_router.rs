@@ -104,6 +104,11 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"limit": 100, "pageToken": ""}"#,
     ),
     (
+        "hostkeeper.operator.v1.Enrollment/Reject",
+        r#"{"requestId": "1111111111111111111111111111111111111111111111111111111111111111",
+            "reason": "not one of ours"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Enrollment/RemoveRecord",
         r#"{"hostId": "storage-1", "reason": "decommissioned"}"#,
     ),
@@ -124,6 +129,10 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"service": "kbf", "nodeId": "storage-1"}"#,
     ),
     ("hostkeeper.operator.v1.Hosts/List", r#"{}"#),
+    (
+        "hostkeeper.operator.v1.Hosts/Retire",
+        r#"{"nodeId": "storage-1", "reason": "board failed"}"#,
+    ),
     (
         "hostkeeper.operator.v1.Hosts/SetLabels",
         r#"{"nodeId": "storage-1", "labels": {"rack": "r1"}}"#,

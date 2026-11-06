@@ -7,8 +7,9 @@
 // when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
 // cancelled; on
-// a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold and
-// Services.Unhold.
+// a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold,
+// Services.Unhold and, after a confirm, Hosts.Retire. Retire is offered when Hosts.Get fails too,
+// for an enrolled host the coordinator has not heard from since it started (a dead one).
 
 import {
   h, action, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, table,
@@ -339,7 +340,8 @@ export async function render(ctx) {
   const ends = await uninstallEnds(ctx, listing, nodeId);
   if (failure !== null) {
     return h("section", { class: "page" },
-      errorView(`Host ${nodeId}`, failure).children, assignedSection(listing, nodeId, ends));
+      errorView(`Host ${nodeId}`, failure).children, assignedSection(listing, nodeId, ends),
+      retireSection(ctx, nodeId));
   }
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
@@ -377,5 +379,33 @@ export async function render(ctx) {
         return `Labels of ${nodeId} set.`;
       })),
     assignedSection(listing, nodeId, ends),
-    list(host, "services").map((view) => serviceSection(ctx, nodeId, view)));
+    list(host, "services").map((view) => serviceSection(ctx, nodeId, view)),
+    retireSection(ctx, nodeId));
+}
+
+// Retire: the reason is optional; the host is refused from then on, so it asks first. The answer
+// says whether an update in flight still holds the host's slot.
+function retireSection(ctx, nodeId) {
+  const form = { reason: "" };
+  return h("fieldset", {},
+    h("legend", {}, "Retire"),
+    h("p", { class: "warning" },
+      "Retire revokes the host: its heartbeats and renewals are refused, and its own service assignments are "
+      + "dropped. Nothing is uninstalled."),
+    field("Reason (optional)", "retire-reason", form, "reason", { maxlength: 256 }),
+    action(ctx, "Retire this host", "retire", async () => {
+      const reason = trimmed(form.reason);
+      const problem = reason === "" ? null : reasonProblem(reason);
+      if (problem) {
+        return problem;
+      }
+      if (!ctx.confirm(`Retire ${nodeId}? Its heartbeats and renewals are refused from then on.`)) {
+        return "Not retired.";
+      }
+      const reply = await ctx.api.call("hostkeeper.operator.v1.Hosts/Retire", { nodeId, reason });
+      ctx.refresh();
+      return reply.updateInFlight === true
+        ? `Retired ${nodeId}: its update slot is freed when it reports its update final.`
+        : `Retired ${nodeId}.`;
+    }));
 }
