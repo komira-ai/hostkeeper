@@ -16,6 +16,7 @@ mod listeners;
 mod operator;
 mod operator_desired;
 mod pending;
+mod readme_status;
 mod refusal;
 mod report;
 mod support;

@@ -10,7 +10,11 @@
 //!   number, and that number in the unit word after it (`45 s`, `16 KiB`, `7 days`) is the value
 //!   of the declaration ([`crate::rust_value`]);
 //! - `data-open="<what fills it>"`: a measurement not taken yet. The cell prints `open` and no
-//!   digit of any script at all.
+//!   digit of any script at all;
+//! - `data-cite="<url>"`: a fact quoted from another tool's documentation. The URL is an `https:`
+//!   page listed in the report's sources (an `<a>` inside the element with `id="sources"`), and
+//!   the cell prints at least one number. Nothing traces the value to the page: the check runs
+//!   with no network (T12), so it holds only that the page quoted is one the report cites.
 //!
 //! A filled cell prints at least one number. Every attribute of every tag is written in double
 //! quotes, so no cell attribute can hide from these rules by being written another way.
@@ -29,6 +33,7 @@ pub const CELL_ATTRS: &[&str] = &[
     "data-source",
     "data-item",
     "data-open",
+    "data-cite",
 ];
 
 /// Where a cell's value comes from.
@@ -37,6 +42,7 @@ pub enum Kind {
     Result(String),
     Source { path: String, item: String },
     Open(String),
+    Cite(String),
 }
 
 /// One cell: its id, its source, the line of its start tag, its text, and the byte range of the
@@ -80,28 +86,30 @@ pub fn cells(text: &str) -> (Vec<Cell>, Vec<String>) {
             get("data-source"),
             get("data-item"),
             get("data-open"),
+            get("data-cite"),
         ) {
-            (Some(name), None, None, None) => Kind::Result(name.to_owned()),
-            (None, Some(path), Some(item), None) => Kind::Source {
+            (Some(name), None, None, None, None) => Kind::Result(name.to_owned()),
+            (None, Some(path), Some(item), None, None) => Kind::Source {
                 path: path.to_owned(),
                 item: item.to_owned(),
             },
-            (None, None, None, Some(why)) => Kind::Open(why.to_owned()),
-            (None, Some(_), None, None) => {
+            (None, None, None, Some(why), None) => Kind::Open(why.to_owned()),
+            (None, None, None, None, Some(url)) => Kind::Cite(url.to_owned()),
+            (None, Some(_), None, None, None) => {
                 problems.push(format!(
                     "line {line}: cell {id} has data-source but no data-item"
                 ));
                 continue;
             }
-            (None, None, Some(_), None) => {
+            (None, None, Some(_), None, None) => {
                 problems.push(format!(
                     "line {line}: cell {id} has data-item but no data-source"
                 ));
                 continue;
             }
-            (None, None, None, None) => {
+            (None, None, None, None, None) => {
                 problems.push(format!(
-                    "line {line}: cell {id} has no data-result, data-source or data-open"
+                    "line {line}: cell {id} has no data-result, data-source, data-open or data-cite"
                 ));
                 continue;
             }
@@ -404,7 +412,8 @@ pub fn open_problems(cells: &[Cell]) -> Vec<String> {
 }
 
 /// One line per id of `required` that is not a cell, or is a cell whose value comes from the
-/// code: a measurement is measured or open, never a constant.
+/// code or from another tool's documentation: a measurement is measured or open, never a
+/// constant or a quotation.
 pub fn required_problems(cells: &[Cell], required: &[&str]) -> Vec<String> {
     let mut problems = Vec::new();
     for id in required {
@@ -414,8 +423,35 @@ pub fn required_problems(cells: &[Cell], required: &[&str]) -> Vec<String> {
                 "line {}: the measurement cell {id} takes its value from the code, not from a measurement",
                 cell.line
             )),
+            Some(cell) if matches!(cell.kind, Kind::Cite(_)) => problems.push(format!(
+                "line {}: the measurement cell {id} quotes another tool's documentation, not a measurement",
+                cell.line
+            )),
             Some(_) => {}
         }
+    }
+    problems
+}
+
+/// One line per `data-cite` cell whose URL is not an `https:` URL or is not one of `sources` (the
+/// pages the report lists), and per shape problem (no number, a dotted version).
+pub fn cite_problems(cells: &[Cell], sources: &[String]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for cell in cells {
+        let Kind::Cite(url) = &cell.kind else {
+            continue;
+        };
+        let (line, id) = (cell.line, &cell.id);
+        if !url.starts_with("https://") {
+            problems.push(format!(
+                "line {line}: {id}: data-cite {url:?} is not an https URL"
+            ));
+        } else if !sources.iter().any(|s| s == url) {
+            problems.push(format!(
+                "line {line}: {id}: data-cite {url} is not a page of the sources"
+            ));
+        }
+        problems.extend(shape_problems(cell));
     }
     problems
 }

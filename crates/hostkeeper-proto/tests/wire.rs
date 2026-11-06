@@ -622,6 +622,7 @@ fn wire_names_are_pinned() {
     assert_eq!(
         feature_names(),
         [
+            "abort-v1",
             "deferred-v1",
             "forced-v1",
             "halt-v1",

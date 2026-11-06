@@ -1,8 +1,8 @@
 # Result files of the technical report
 
-Each measured cell of [the report](../hostkeeper.md) names a file of this directory in its
-`data-result` attribute, and every number the cell prints is the value of a row of that file that
-names the cell. The check is `cargo test -p xtask --test report`.
+Each measured cell of [the report](https://github.com/komira-ai/hostkeeper/blob/main/docs/report/hostkeeper.html)
+names a file of this directory in its `data-result` attribute, and every number the cell prints is
+the value of a row of that file that names the cell. The check is `cargo test -p xtask --test report`.
 
 A result file is tab-separated text with the columns `kind`, `id`, `value`, `unit`, `how` and
 `cells`. Lines starting with `#` are comments. `value` is a number. `how` says how the row was
