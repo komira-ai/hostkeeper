@@ -35,8 +35,8 @@
 //!   `uninstall`);
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
 //!   halts, aborts, exclusions, holds, the audit log), and [`assign`], its assignment calls
-//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), and [`operator_enrollment`],
-//!   its `Enrollment.List` and `Enrollment.Approve`;
+//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), [`operator_enrollment`], its
+//!   `Enrollment.List` and `Enrollment.Approve`, and [`hosts`], its `Hosts.List` and `Hosts.Get`;
 //! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`),
 //!   kept in the ops file, and the match of each request `Enrollment.List` shows against it;
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
@@ -95,6 +95,7 @@ pub mod force;
 pub mod grpc;
 pub mod halt;
 pub mod holds;
+pub mod hosts;
 pub mod http;
 pub mod identity;
 pub(crate) mod intents;
@@ -185,6 +186,8 @@ mod holds_calls_tests;
 #[cfg(test)]
 mod holds_tests;
 #[cfg(test)]
+mod hosts_tests;
+#[cfg(test)]
 mod http_tests;
 #[cfg(test)]
 mod install_tests;
@@ -258,6 +261,8 @@ mod tierstore_service_tests;
 mod tokens_tests;
 #[cfg(test)]
 mod uninstall_tests;
+#[cfg(test)]
+mod unmark_tests;
 #[cfg(test)]
 mod verdict_acks_tests;
 #[cfg(test)]

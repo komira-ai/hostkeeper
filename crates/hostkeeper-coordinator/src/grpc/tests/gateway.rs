@@ -275,7 +275,7 @@ const EXPECTED: [(Code, &str, u16); 17] = [
 /// Proves: `STATUS_TABLE` is the 17 gRPC codes in number order with the names and HTTP statuses
 /// above; the refusal of a status of each code is that HTTP status with exactly
 /// `{"code":"<NAME>","reason":"<message>"}` as JSON; and a real refusal end to end (an unknown
-/// service, a method with no handler yet) comes out in that shape with its token.
+/// service, a host never heard from) comes out in that shape with its token.
 #[tokio::test]
 async fn gateway_error_body_maps_every_grpc_code() {
     assert_eq!(STATUS_TABLE, EXPECTED);
@@ -309,11 +309,11 @@ async fn gateway_error_body_maps_every_grpc_code() {
         .await;
     assert_eq!(unknown.status, StatusCode::NOT_FOUND);
     assert_eq!(unknown.text(), refused("NOT_FOUND", "unknown_service"));
-    let pending = gateway
-        .operator("/hostkeeper.operator.v1.Hosts/List", "{}")
+    let ghost = gateway
+        .operator("/hostkeeper.operator.v1.Hosts/Get", r#"{"nodeId":"ghost"}"#)
         .await;
-    assert_eq!(pending.status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(pending.text(), refused("UNIMPLEMENTED", ""));
+    assert_eq!(ghost.status, StatusCode::NOT_FOUND);
+    assert_eq!(ghost.text(), refused("NOT_FOUND", "unknown_host"));
 }
 
 /// Proves: no gateway answer carries a header that starts with `access-control-`, whether it

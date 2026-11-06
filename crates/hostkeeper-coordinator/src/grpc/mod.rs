@@ -72,12 +72,9 @@ mod tests;
 pub const GRPC_FEATURE: &str = "grpc-v1";
 
 /// The gRPC path of every method of the operator API that no handler serves yet: each is
-/// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler.
-pub const PENDING: &[&str] = &[
-    "/hostkeeper.operator.v1.Hosts/List",
-    "/hostkeeper.operator.v1.Hosts/Get",
-    "/hostkeeper.operator.v1.Releases/UnmarkBad",
-];
+/// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. None is:
+/// a method added to a proto is listed here until its handler lands.
+pub const PENDING: &[&str] = &[];
 
 /// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response.
 pub type RouteBody = Either<Full<Bytes>, GrpcBody>;

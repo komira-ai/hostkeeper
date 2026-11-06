@@ -97,10 +97,9 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   B7 (holds, halts, abort, exclude, force with targets, set-desired refusals).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
-- **Operator surfaces.** Built: B1 (the protobuf services), B10 (generated `hostkeeper ctl`,
-  gRPC beside the gateway), B24 (the CI client), B25 (the UI). The operator API declares
-  `Hosts.List`, `Hosts.Get` and `Releases.UnmarkBad`, which answer `UNIMPLEMENTED` until a
-  handler serves them.
+- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler:
+  none answers `UNIMPLEMENTED`), B10 (generated `hostkeeper ctl`, gRPC beside the gateway), B24
+  (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a

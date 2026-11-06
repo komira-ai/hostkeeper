@@ -1,7 +1,7 @@
 // Fleet: every host the coordinator has heard from, and the conditions that need a person.
 // Calls: Hosts.List and Releases.Status, nothing else.
 
-import { h, enumLabel, errorView, fmtUnix, list, table } from "../view.js";
+import { h, allPages, enumLabel, errorView, fmtUnix, list, table } from "../view.js";
 
 // The conditions of the design's section 6.7 that the API returns, and a held host on a bad
 // version (section 5.4), as `{kind, text}` in the order found. A failed canary is not listed:
@@ -80,11 +80,17 @@ function serviceLine(view) {
     shown.length > 0 ? h("span", { class: "marks" }, ` [${shown.join(", ")}]`) : null);
 }
 
+// Every host of Hosts.List, a page (at most 256 hosts) at a time.
+function listHosts(api) {
+  return allPages((pageToken) => api.call("hostkeeper.operator.v1.Hosts/List",
+    pageToken === "" ? {} : { pageToken }), "hosts");
+}
+
 export async function render(ctx) {
   let hosts;
   let status;
   try {
-    hosts = (await ctx.api.call("hostkeeper.operator.v1.Hosts/List", {})).hosts || [];
+    hosts = await listHosts(ctx.api);
     status = await ctx.api.call("hostkeeper.operator.v1.Releases/Status", {});
   } catch (error) {
     return errorView("Fleet", error);
