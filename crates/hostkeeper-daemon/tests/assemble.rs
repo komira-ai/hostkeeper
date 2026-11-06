@@ -26,10 +26,14 @@ use hostkeeper_daemon::cli::{
 use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
 use hostkeeper_daemon::start::{self, EXIT_FAILED, Settings, StartError, before_records};
 use hostkeeper_daemon::testing::{FakeNotifier, FakePackages, Log};
+use hostkeeper_daemon::trusted_root::{
+    PACKAGED_TRUSTED_ROOT, RootProblem, RootReport, TrustedRoot,
+};
 use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_daemon::{NoNotifier, Ports, ReadyNotifier, Refusal};
 use hostkeeper_hook::{Invocation, Step};
 use hostkeeper_launchd::{Platform, PlatformKind};
+use hostkeeper_link::testing::FakeClock as FakeUnixClock;
 use hostkeeper_observe::fake::FakeCommandRunner;
 use hostkeeper_observe::{CommandOutput, RunError};
 use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier, VerifyError};
@@ -39,6 +43,10 @@ use support::{OWN, Rig, Tap, alerting, config, d, lines, name, update};
 use support_archive::{Answer, Rig as ArchiveRig, SERVICE, VERSION};
 
 const RESTORE: &str = r#"boot = "restore""#;
+
+/// A trusted root, as `gh attestation trusted-root` writes one.
+const ROOT_LINE: &str =
+    "{\"mediaType\":\"application/vnd.dev.sigstore.trustedroot+json;version=0.1\"}\n";
 
 /// The adapters of a Linux host, the unit control's `systemctl` run through `systemctl` (which
 /// answers what it is told and records each command).
@@ -450,6 +458,41 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         swept.err().map(|error| error.refusal()),
         Some(Refusal::PackageIoError)
     );
+    // The store reports the trusted root `gh` is given: none yet, so the host's path, missing;
+    // then the packaged one under `--packages-dir`, aged against `--trusted-root-max-age-days`.
+    let missing = RootReport {
+        path: files.trusted_root.clone(),
+        age_secs: None,
+        problem: Some(RootProblem::Missing),
+    };
+    assert_eq!(ports.packages.trusted_root(), Some(missing));
+    let packaged = rig.packages.join(PACKAGED_TRUSTED_ROOT);
+    fs::create_dir_all(packaged.parent().expect("a parent")).expect("the package's files/");
+    fs::write(&packaged, ROOT_LINE).expect("write the root");
+    // Written in 1970: past the default limit by decades, whatever the host's clock says.
+    fs::File::options()
+        .write(true)
+        .open(&packaged)
+        .and_then(|file| {
+            file.set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000)),
+            )
+        })
+        .expect("date the root");
+    let reported = ports.packages.trusted_root().expect("a report");
+    assert_eq!(
+        (reported.path, reported.problem),
+        (packaged.clone(), Some(RootProblem::Stale))
+    );
+    let lenient = Settings {
+        trusted_root_max_age_days: std::num::NonZeroU64::MAX,
+        ..rig.settings()
+    };
+    let ports_lenient =
+        host_ports(&config(), &lenient, &files, OWN, linux()).expect("the lenient ports");
+    let reported = ports_lenient.packages.trusted_root().expect("a report");
+    assert_eq!((reported.path, reported.problem), (packaged, None));
 
     // The launcher is the host's: a hook that is not there does not start, named by its path
     // (the unwired launcher would answer that it has none), and nothing is spawned for it.
@@ -688,9 +731,15 @@ fn the_roots_are_the_certificate_sections_of_the_bundle() {
 fn the_host_verifier_trusts_no_gh_it_cannot_find() {
     let rig = Rig::new("assemble-verifier");
     let clock = rig.clock.clone();
+    let root = TrustedRoot::new(
+        rig.packages.join(PACKAGED_TRUSTED_ROOT),
+        rig.scratch.path().join("trusted_root.json"),
+        90,
+        Arc::new(FakeUnixClock::new(0, 0)),
+    );
     let verifier = HostVerifier::new(
         rig.scratch.path().join("gh"),
-        rig.scratch.path().join("trusted_root.json"),
+        Arc::new(root),
         rig.scratch.path().join("home"),
         clock.clone(),
     );
