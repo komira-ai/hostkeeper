@@ -136,6 +136,17 @@ message HeartbeatRequest {
   repeated string features = 3;
   // Every service installed on the host, one entry each, at most 16, none named twice.
   repeated ServiceBeat services = 4;
+  // The host's clock when it made the heartbeat, in seconds since the epoch: what the coordinator
+  // holds against its own clock to count the heartbeats of a host whose clock is off. Absent from
+  // an agent that predates it.
+  optional uint64 sent_unix = 5;
+  // The last second the host's current certificate is valid, in seconds since the epoch. Absent
+  // from an agent that predates it and from a host that holds no certificate.
+  optional uint64 cert_not_after_unix = 6;
+  // Why the host's last step of enrollment or renewal failed, as the host words it, at most 256
+  // bytes (a reader cuts a longer one at a character boundary); absent once a step succeeds, and
+  // from an agent that predates it.
+  optional string last_renew_error = 7;
 }
 
 // The platforms releases are built for.

@@ -73,6 +73,8 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 }),
             },
         ],
+        sent_unix: hostkeeper_link::testing::START_UNIX,
+        renewal: hostkeeper_link::Renewal::default(),
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 
@@ -229,6 +231,65 @@ fn step_records_that_name_a_service_twice_send_nothing() {
         [
             "error: no heartbeat: the installed services cannot be read: the step records name x \
           twice"
+        ]
+    );
+}
+
+/// Catches a heartbeat that says another time than the host's unix clock at the beat, or another
+/// certificate end or error than the enrollment loop's, or that sends an error past the wire's
+/// bound or an empty one: each beat says the clock of its moment and what the loop's state
+/// holds then, the error cut to the bound at a character boundary, and an empty error as none.
+#[test]
+fn a_heartbeat_says_the_host_clock_and_the_enrollment_loops_word_on_the_certificate() {
+    use hostkeeper_link::Renewal;
+    use hostkeeper_wire::wire::MAX_RENEW_ERROR;
+
+    let rig = Rig::new("facts-renewal");
+    rig.install(Vec::new());
+    let mut heartbeater = rig.heartbeater();
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+
+    rig.world.clock.set_unix(1_234_567_890);
+    let long = format!("a{}", "é".repeat(200));
+    rig.world.renewal.set(Renewal {
+        cert_not_after_unix: Some(1_235_000_000),
+        last_renew_error: Some(long),
+    });
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+
+    rig.world.renewal.set(Renewal {
+        cert_not_after_unix: Some(1_235_000_000),
+        last_renew_error: Some(String::new()),
+    });
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+
+    let said: Vec<(u64, Renewal)> = rig
+        .world
+        .link
+        .beats()
+        .into_iter()
+        .map(|beat| (beat.sent_unix, beat.renewal))
+        .collect();
+    let clipped = format!("a{}", "é".repeat(127));
+    assert_eq!(clipped.len(), MAX_RENEW_ERROR - 1);
+    assert_eq!(
+        said,
+        [
+            (hostkeeper_link::testing::START_UNIX, Renewal::default()),
+            (
+                1_234_567_890,
+                Renewal {
+                    cert_not_after_unix: Some(1_235_000_000),
+                    last_renew_error: Some(clipped),
+                }
+            ),
+            (
+                1_234_567_890,
+                Renewal {
+                    cert_not_after_unix: Some(1_235_000_000),
+                    last_renew_error: None,
+                }
+            ),
         ]
     );
 }

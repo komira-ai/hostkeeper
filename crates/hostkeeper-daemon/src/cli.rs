@@ -37,7 +37,7 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_ctl::transport::Network;
 use hostkeeper_ctl::{Connect, Io};
 use hostkeeper_enroll::{
-    Enroller, GrpcEnroll, LinuxClaims, OsEntropy, PkiDir, Settings as EnrollSettings,
+    Enroller, GrpcEnroll, LinuxClaims, OsEntropy, PkiDir, RenewalState, Settings as EnrollSettings,
     SystemWallClock,
 };
 use hostkeeper_launchd::{Platform, PlatformKind};
@@ -368,7 +368,8 @@ async fn start_and_serve(
 /// - the enrollment loop's enroller is made on its own worker ([`host_enroller`]): gRPC with TLS
 ///   to the daemon config's `coordinator`, pinned to its `ca_sha256`, the key and the
 ///   certificate generations in the pki directory, the claims of a host of `kind`
-///   ([`host_claims`]);
+///   ([`host_claims`]); one that cannot be made is made again after a wait on the daemon's
+///   clock, and every heartbeat reports what the loop last said of the certificate;
 /// - the heartbeat loop reads the certificate and key of the pki directory's `current` link at
 ///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock;
 ///   its link ([`HostLink`]) is the JSON route and gRPC over mutual TLS to the same
@@ -399,12 +400,14 @@ pub fn host_links(
         log.clone(),
     );
     Links {
-        enroller: Box::new(move || host_enroller(&endpoint, &pki, settings, kind)),
+        enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
         link: Arc::new(link),
         certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
         clock: Arc::new(SystemUnixClock),
         log,
         sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
+        enroll_sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
+        renewal: RenewalState::default(),
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,

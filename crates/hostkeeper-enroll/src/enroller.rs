@@ -30,6 +30,7 @@ use x509_cert::der::DecodePem;
 
 use crate::claims::{ClaimsError, ClaimsSource};
 use crate::key::{Entropy, HostKey, KeyError};
+use crate::renewal::RenewalState;
 use crate::store::{KeyFrom, Store, StoreError, StoreLock, Stored};
 use crate::validity::{self, WallClock};
 use crate::verify::{self, Refusal};
@@ -212,23 +213,28 @@ impl Enroller {
     /// Runs [`Enroller::run_once`] while `keep_going` says so, sleeping [`RETRY_SECS`] on the
     /// clock after each step. A step's line goes to `log` only when it differs from the line of
     /// the step before: a host waiting for approval logs [`NOT_ENROLLED`] once. After each step,
-    /// before the sleep, `seen` is given the host's enrollment ([`Enroller::enrollment`]).
+    /// before the sleep, `renewal` notes the end of the current certificate and the step's error
+    /// ([`RenewalState`]), and `seen` is given the host's enrollment ([`Enroller::enrollment`]).
     pub fn run_loop(
         &mut self,
         log: &mut dyn FnMut(&str),
         seen: &mut dyn FnMut(Enrollment),
+        renewal: &RenewalState,
         keep_going: &mut dyn FnMut() -> bool,
     ) {
         let mut last: Option<String> = None;
         while keep_going() {
-            let line = describe(&self.run_once());
+            let step = self.run_once();
+            let line = describe(&step);
             if line != last {
                 if let Some(text) = &line {
                     log(text);
                 }
                 last = line;
             }
-            seen(self.enrollment());
+            let enrollment = self.enrollment();
+            renewal.record(&step, &enrollment);
+            seen(enrollment);
             self.ports.clock.sleep_secs(RETRY_SECS);
         }
     }

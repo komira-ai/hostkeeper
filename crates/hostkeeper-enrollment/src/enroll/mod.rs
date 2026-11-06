@@ -21,6 +21,8 @@
 //!   [`RequestState::Expired`]: its host is unenrolled, it is not approved, and it no longer
 //!   counts toward [`EnrollmentStore::max_pending`]. The same key posted again starts it over.
 //! - [`EnrollmentStore::verify_poll`] checks a poll's signed nonce against the request's key.
+//! - [`EnrollmentStore::reject`] is the operator's rejection of a pending request: it is marked
+//!   denied, so its key is refused and it no longer counts toward the pending cap.
 //! - [`EnrollmentStore::deny`], [`EnrollmentStore::retire`], [`EnrollmentStore::report_live`]
 //!   and the questions the heartbeat path asks (`is_denied`, `is_retiring`, `is_duplicate`,
 //!   `renew_allowed`).
@@ -33,6 +35,7 @@ mod hosts;
 mod issue;
 mod mac_nonce;
 mod poll;
+mod reject;
 mod store;
 
 use std::io;
@@ -41,6 +44,7 @@ use std::path::PathBuf;
 pub use issue::IssuedCertificate;
 pub use mac_nonce::{MAC_NONCE_VALID_SECS, MacNonceHash, MacNonceRefusal};
 pub use poll::{MAX_NONCE_BYTES, MIN_NONCE_BYTES, POLL_DOMAIN, poll_message};
+pub use reject::{RejectError, Rejection};
 pub use store::{DEFAULT_MAX_PENDING, EnrollmentStore, FIRST_SERIAL, LIVE_WINDOW_SECS};
 
 use crate::ca::{ProfileError, SignError};

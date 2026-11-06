@@ -398,7 +398,7 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true }});
+  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
 }}"#
@@ -482,7 +482,7 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true }});
+  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
 }}"#
@@ -505,6 +505,7 @@ fn signing_out_forgets_the_token_and_shows_sign_in() {
     let mut ui = Ui::start();
     ui.reply(LIST, json!({"hosts": []}));
     ui.reply("hostkeeper.operator.v1.Releases/Status", json!({}));
+    ui.reply("hostkeeper.operator.v1.Alerts/List", json!({}));
     ui.run(&format!(
         r#"
 import {{ fakeDocument, domNamed, fire }} from "../test/kit.js";
@@ -512,7 +513,7 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true }});
+  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
 }}"#
@@ -540,7 +541,11 @@ export async function main() {
     assert!(!after.contains("refused"), "{after}");
     assert_eq!(
         ui.methods(),
-        [LIST, "hostkeeper.operator.v1.Releases/Status"]
+        [
+            LIST,
+            "hostkeeper.operator.v1.Releases/Status",
+            "hostkeeper.operator.v1.Alerts/List"
+        ]
     );
 }
 

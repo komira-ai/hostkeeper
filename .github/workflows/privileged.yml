@@ -15,7 +15,10 @@
 # with the channel down; on the Mac the daemon started as a
 # launchd job and answering on its admin socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
-# quarantine verdicts.
+# quarantine verdicts. In the job first-boot the programs themselves meet: the coordinator and the
+# daemon, each started by the tests as a child process, through a host's first boot (enrollment,
+# approval, the host certificate, heartbeats over mutual TLS, a restart of each) and a package
+# assigned and installed.
 #
 # It runs after a merge to main and by hand (workflow_dispatch), never on a pull request. The
 # workflow lint (crates/xtask/tests/workflows) allows a privileged job in this file only, holds its
@@ -29,16 +32,23 @@
 # or of target/ is owned by root, and a test writes only its scratch directory under target/ (but
 # the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
 # trees the daemon checks must have root's directories all the way up, and whose drop-in is in
-# /run/systemd/system; and, on the Mac, what the daemon's fixed paths name: the step jobs'
-# directory under /var/run, and the pki directory its enrollment loop opens, on a runner that is
-# thrown away after the job). Each test names its units hostkeeper-ci-<test>-<pid>-<n>, or its
-# launchd jobs
+# /run/systemd/system; on the Mac, what the daemon's fixed paths name: the step jobs' directory
+# under /var/run, and the pki directory its enrollment loop opens; and in first-boot the daemon's
+# fixed paths too: the pki directory /etc/updater, the self-update units under
+# /etc/systemd/system, /var/lib/hostkeeper (with the packages directory the tests give the
+# daemon), and for install_uninstall the fixture service's unit and its wants link and the
+# package check's verifier directory /usr/lib/hostkeeper, each refused if the host already has it
+# and removed when the test ends, and the release channel's CA appended to the host's CA bundle,
+# which is written back as it was; each on a runner that is thrown away after the job). Each test
+# names its units hostkeeper-ci-<test>-<pid>-<n> (the fixture service's unit is
+# hostkeeper-ci-fixture, its steps updater-hostkeeper-ci-fixture-<step>-<n>), or its launchd jobs
 # dev.hostkeeper.ci-<test>-<pid> (a step job by its unit, as the launcher names it), and stops them
-# when it ends, failed or not; the Mac daemon's coordinator is the loopback address, so no test
-# leaves the host. The test targets are
+# when it ends, failed or not; every coordinator and release channel is on the loopback address,
+# so no test leaves the host. The test targets are
 # named, in both steps of each job, so that the run is the privileged tests and nothing else of the
 # crate; the workflow lint holds each job's list to the files that are privileged for it (first
-# line `#![cfg(feature = "privileged")]` for Linux, `#![cfg(all(target_os = "macos", feature =
+# line `#![cfg(feature = "privileged")]` for the job privileged, `#![cfg(all(target_os = "linux",
+# feature = "privileged"))]` for first-boot, `#![cfg(all(target_os = "macos", feature =
 # "privileged"))]` for the Mac).
 #
 # These tests are not counted by the 99% coverage gate (ci.yml judges the pull-request set). A red
@@ -126,6 +136,56 @@ jobs:
           name: privileged-end-to-end
           path: target/privileged-artifacts
           if-no-files-found: ignore
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  # The first boot of a host with the real programs: the coordinator and the daemon started by
+  # the tests as child processes on loopback (first_boot: enrollment, approval, the host
+  # certificate, heartbeats, restarts of each; install_uninstall: an assigned package installed
+  # from a release channel the test serves, kept across restarts, updated and uninstalled, the
+  # last two ignored until komira-ai/hostkeeper#109 and komira-ai/hostkeeper#110 are fixed).
+  # The daemon fixes its pki directory, its self-update units and its package check's CA bundle
+  # and verifier on the host, with no flag. These tests claim the paths they make there (each refused if the host already
+  # has it) and remove them when they end, and write the CA bundle back as it was, so they run in
+  # a job of their own, on a runner thrown away after it.
+  first-boot:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The service manager the tests run against, for the log (evidence, not a gate).
+      - name: systemctl version
+        run: systemctl --version
+      - name: Fail unless systemd is the service manager (/run/systemd/system is a directory)
+        run: test -d /run/systemd/system
+      - run: rustup toolchain install
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      - name: Build the first-boot tests as the runner's user
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test first_boot --test install_uninstall
+      - name: Run the first-boot tests as root
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test first_boot --test install_uninstall -- --test-threads=1
+      - name: The journal of the fixture service's units
+        if: failure()
+        run: journalctl --unit 'hostkeeper-ci-*' --unit 'updater-hostkeeper-ci-*' --no-pager
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:

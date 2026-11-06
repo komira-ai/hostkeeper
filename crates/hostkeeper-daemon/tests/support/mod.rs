@@ -17,13 +17,14 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
 use hostkeeper_daemon::cli::DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS;
-use hostkeeper_daemon::links::Links;
+use hostkeeper_daemon::links::{Links, MakeEnroller};
 use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
 use hostkeeper_daemon::testing::{
     FakeClock, FakePackages, Log, NoPrune, ScriptedLauncher, manifest,
 };
 use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
+use hostkeeper_enroll::{Enroller, RenewalState, Settings as EnrollSettings};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_link::testing::{
     FakeCerts, FakeLink, ManualDispatch, RecordingLog, ScriptedSleeper,
@@ -59,10 +60,24 @@ pub fn idle_links() -> Links {
         clock: Arc::new(hostkeeper_link::testing::FakeClock::new(0, 0)),
         log: Arc::new(RecordingLog::default()),
         sleeper: Box::new(ScriptedSleeper::new(0)),
+        enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
+        renewal: RenewalState::default(),
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),
     }
+}
+
+/// An enroller opened from `settings` and `ports` at the first try; a later try is refused,
+/// since the ports went to the first.
+pub fn open_once(settings: EnrollSettings, ports: hostkeeper_enroll::Ports) -> MakeEnroller {
+    let mut parts = Some((settings, ports));
+    Box::new(move || {
+        let (settings, ports) = parts
+            .take()
+            .ok_or_else(|| "the enroller was opened already".to_owned())?;
+        Enroller::open(settings, ports).map_err(|e| e.to_string())
+    })
 }
 
 /// A directory under the target directory, unique to the test, removed when it is dropped.

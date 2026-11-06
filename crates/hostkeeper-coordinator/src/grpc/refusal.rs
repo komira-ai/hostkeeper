@@ -7,7 +7,7 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -117,4 +117,14 @@ pub(crate) fn audit(refusal: AuditRefusal) -> Status {
         AuditRefusal::InvalidRequest => Code::InvalidArgument,
     };
     refused(code, refusal.as_str_name(), "AUDIT_REFUSAL_")
+}
+
+/// The status of a refusal by `Alerts`.
+pub(crate) fn alerts(refusal: AlertsRefusal) -> Status {
+    let code = match refusal {
+        AlertsRefusal::Unspecified | AlertsRefusal::StoreFailed => Code::Internal,
+        AlertsRefusal::Unauthorized => Code::Unauthenticated,
+        AlertsRefusal::Forbidden => Code::PermissionDenied,
+    };
+    refused(code, refusal.as_str_name(), "ALERTS_REFUSAL_")
 }

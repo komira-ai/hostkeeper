@@ -195,6 +195,8 @@ fn the_heartbeat_json_has_the_wire_names() {
                 version: None,
             }),
         }],
+        sent_unix: 0,
+        renewal: hostkeeper_link::Renewal::default(),
     };
     let expected = serde_json::json!({
         "platform": "darwin-arm64",
@@ -221,6 +223,7 @@ fn the_heartbeat_json_has_the_wire_names() {
             "health_detail": "refused",
             "observed": { "liveness": "transitioning", "version": null },
         }],
+        "sent_unix": 0,
     });
     assert_eq!(beat.to_json(), expected);
     assert_eq!(beat.encoded_len(), expected.to_string().len());

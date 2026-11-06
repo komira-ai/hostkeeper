@@ -55,6 +55,9 @@ fn request(
         agent,
         features: features.iter().map(|name| (*name).to_owned()).collect(),
         services,
+        sent_unix: None,
+        cert_not_after_unix: None,
+        last_renew_error: None,
     }
 }
 
@@ -575,5 +578,35 @@ async fn renew_without_a_certificate_of_the_enrollment_ca_is_forbidden() {
     for who in [None, updater("d1", "daemon")] {
         let reply = call(&farm.coordinator, &who, PATHS[2], &renewal).await;
         assert_eq!(reply.token(), (Code::PermissionDenied, "forbidden"));
+    }
+}
+
+/// Catches the host's clock or certificate lost between the gRPC message and the reader, put
+/// under another key, or made up when the message has none: the three fields are top-level keys
+/// the reader reads back, and an unset one is no key.
+#[test]
+fn the_host_clock_and_certificate_reach_the_reader() {
+    let mut message = request(agent("hostkeeper", "1.0"), &["order-v1"], Vec::new());
+    message.sent_unix = Some(2_000_000_123);
+    message.cert_not_after_unix = Some(2_000_600_000);
+    message.last_renew_error = Some("renewal refused: host_excluded".to_owned());
+    let json = json_of(&message, None);
+    assert_eq!(json["sent_unix"], json!(2_000_000_123_u64));
+    assert_eq!(json["cert_not_after_unix"], json!(2_000_600_000_u64));
+    assert_eq!(
+        json["last_renew_error"],
+        json!("renewal refused: host_excluded")
+    );
+    let read = read_heartbeat(&beat_map::json(&message, None), None).expect("a heartbeat");
+    assert_eq!(read.beat.sent_unix, Some(2_000_000_123));
+    assert_eq!(read.beat.cert_not_after_unix, Some(2_000_600_000));
+    assert_eq!(
+        read.beat.last_renew_error.as_deref(),
+        Some("renewal refused: host_excluded")
+    );
+
+    let bare = json_of(&request(agent("hostkeeper", "1.0"), &[], Vec::new()), None);
+    for key in ["sent_unix", "cert_not_after_unix", "last_renew_error"] {
+        assert_eq!(bare.get(key), None, "{key}");
     }
 }

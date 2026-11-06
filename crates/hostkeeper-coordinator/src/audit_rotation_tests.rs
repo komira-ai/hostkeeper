@@ -494,8 +494,11 @@ fn config_rejects_zero_rotation_values() {
 fn listed_rig(test: &str, rotation: Rotation) -> crate::testutil::Rig {
     use crate::marks_support::{DB, WEB, hold, rig, scope_fleet, scope_host, start, unhold};
     let mut rig = rig(test, "");
+    // A fixed wall clock: the two rigs this builds are compared entry by entry, `at_unix`
+    // included, and the real clock could tick between their writes.
     let ops = OpsStore::open_with(&rig.dir.path().join("desired.json.ops"), rotation)
-        .expect("an ops store");
+        .expect("an ops store")
+        .with_unix(std::sync::Arc::new(|| AT));
     rig.coordinator = start(&rig.dir, &rig.clock, "").with_ops(ops);
     for _ in 0..3 {
         hold(&rig, WEB, scope_fleet()).expect("held");

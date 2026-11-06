@@ -24,6 +24,8 @@ fn beat() -> Heartbeat {
         agent_version: version("0.9.0"),
         features: ANNOUNCED.to_vec(),
         services: Vec::new(),
+        sent_unix: 0,
+        renewal: hostkeeper_link::Renewal::default(),
     }
 }
 

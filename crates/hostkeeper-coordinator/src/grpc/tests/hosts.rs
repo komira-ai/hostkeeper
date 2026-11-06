@@ -1,6 +1,7 @@
-//! `Hosts.List`, `Hosts.Get` and `Releases.UnmarkBad` end to end, through the router as the
-//! private listener serves them: over a coordinator that enrolled a host and heard its
-//! heartbeat on its certificate, by gRPC and by the gateway the UI calls.
+//! `Hosts.List`, `Hosts.Get`, `Hosts.Retire`, `Enrollment.Reject` and `Releases.UnmarkBad` end
+//! to end, through the router as the private listener serves them: over a coordinator that
+//! enrolled a host and heard its heartbeat on its certificate, by gRPC and by the gateway the
+//! UI calls.
 //!
 //! The gateway's answer to `Hosts.List` here is the reply the UI's Fleet page is tested on
 //! (`crates/hostkeeper-ui-tests/tests/fixtures/hosts_list.json`): the test below fails when
@@ -16,9 +17,9 @@ use serde_json::Value;
 use tonic::Code;
 
 use super::heartbeat::{beat, peer_of, proto_message, svc};
-use super::operator::World;
+use super::operator::{AUDIT_UNIX, World};
 use super::support::{call, decode, grpc_request, raw};
-use crate::enrollment::tests::support::{HostKey, Rig as EnrollmentRig, enrolled};
+use crate::enrollment::tests::support::{HostKey, Rig as EnrollmentRig, enroll_request, enrolled};
 use crate::http::Surface;
 use crate::ops::{OpsState, ServiceOps};
 use crate::testutil::{OPERATOR, Rig};
@@ -224,4 +225,137 @@ async fn unmark_bad_after_mark_bad_leaves_the_ops_state_as_it_was() {
         )
     );
     assert_eq!(c.ops.state(), after, "a refused unmark changes nothing");
+}
+
+/// Proves: what a host's gRPC heartbeat says of its certificate and clock reaches `Hosts.Get`
+/// and `Hosts.List` through the router, as protobuf both ways: the certificate's end and the
+/// renewal error of the last heartbeat, and the count of heartbeats whose time was more than the
+/// skew bound from the coordinator's wall clock (one of the two sent here).
+///
+/// Catches: a field dropped between the mounted heartbeat handler and the operator's answer, or
+/// encoded under another number than the one decoded.
+#[tokio::test]
+async fn get_and_list_answer_the_certificate_and_clock_the_grpc_heartbeat_said() {
+    let enrollment = EnrollmentRig::new("grpc-hosts-cert-enrollment");
+    let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
+    let world = world_over("grpc-hosts-cert", &enrollment);
+    let c = &world.coordinator;
+    let mut sent = proto_message(&[svc("kbf", "1.0")]);
+    sent.cert_not_after_unix = Some(AUDIT_UNIX + 86_400);
+    sent.last_renew_error = Some("renewal refused: host_excluded".to_owned());
+    for sent_unix in [AUDIT_UNIX + 3_600, AUDIT_UNIX] {
+        sent.sent_unix = Some(sent_unix);
+        assert_eq!(
+            beat(c, &peer_of(&certificate), &sent).await.token(),
+            (Code::Ok, "")
+        );
+    }
+
+    let get = proto::GetHostRequest {
+        node_id: "s1".to_owned(),
+    };
+    let (code, _, got) =
+        operator_call::<proto::GetHostResponse>(&world, "/hostkeeper.operator.v1.Hosts/Get", get)
+            .await;
+    assert_eq!(code, Code::Ok);
+    let host = got.and_then(|answer| answer.host).expect("the host");
+    let said = |host: &proto::Host| {
+        (
+            host.cert_not_after_unix,
+            host.last_renew_error.clone(),
+            host.clock_skew_beats,
+        )
+    };
+    let expected = (
+        Some(AUDIT_UNIX + 86_400),
+        Some("renewal refused: host_excluded".to_owned()),
+        1,
+    );
+    assert_eq!(said(&host), expected);
+    let (code, _, listed) = operator_call::<proto::ListHostsResponse>(
+        &world,
+        "/hostkeeper.operator.v1.Hosts/List",
+        proto::ListHostsRequest::default(),
+    )
+    .await;
+    assert_eq!(code, Code::Ok);
+    let hosts = listed.expect("a reply").hosts;
+    assert_eq!(hosts.iter().map(said).collect::<Vec<_>>(), [expected]);
+}
+
+/// Proves: `Hosts.Retire` of a host that enrolled and heartbeated answers, by gRPC, its
+/// `host_retire` entry with no update in flight, and the host's next heartbeat on its
+/// certificate is refused `denied` (`PERMISSION_DENIED`); a second `Retire` by the gateway, as
+/// the UI's Host page sends it, is 200 with no entry; `Retire` of a host id never enrolled is
+/// `NOT_FOUND` `unknown_host` (404 at the gateway). `Enrollment.Reject` of a pending request by
+/// the gateway, as the UI's Enrollment page sends it, is 200 with its `enroll_reject` entry,
+/// and of a request nobody made 404 `unknown_request`.
+///
+/// Catches: a method the router does not serve, a gateway body the coordinator does not read
+/// (a field the UI names that the proto does not), and an unknown id answered as success.
+#[tokio::test]
+async fn retire_and_reject_answer_by_grpc_and_the_gateway() {
+    let enrollment = EnrollmentRig::new("grpc-hosts-retire");
+    let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
+    let pending = HostKey::new();
+    enrollment
+        .enrollment
+        .enroll(enroll_request(&pending, "machine-2"))
+        .expect("waits");
+    let world = world_over("grpc-hosts-retire-coordinator", &enrollment);
+    let c = &world.coordinator;
+    let sent = proto_message(&[svc("kbf", "1.0")]);
+    assert_eq!(
+        beat(c, &peer_of(&certificate), &sent).await.token(),
+        (Code::Ok, "")
+    );
+
+    let retire = proto::RetireRequest {
+        node_id: "s1".to_owned(),
+        reason: "board failed".to_owned(),
+    };
+    let (code, said, answer) = operator_call::<proto::RetireResponse>(
+        &world,
+        "/hostkeeper.operator.v1.Hosts/Retire",
+        retire,
+    )
+    .await;
+    assert_eq!((code, said.as_str()), (Code::Ok, ""));
+    let answer = answer.expect("a reply");
+    assert!(!answer.update_in_flight);
+    assert_eq!(
+        answer.entry.map(|entry| entry.action).as_deref(),
+        Some("host_retire")
+    );
+    assert_eq!(
+        beat(c, &peer_of(&certificate), &sent).await.token(),
+        (Code::PermissionDenied, "denied")
+    );
+
+    let path = "/hostkeeper.operator.v1.Hosts/Retire";
+    let (status, json) = gateway(&world, path, r#"{"nodeId":"s1","reason":"again"}"#).await;
+    assert_eq!((status, json), (StatusCode::OK, serde_json::json!({})));
+    let (status, json) = gateway(&world, path, r#"{"nodeId":"ghost"}"#).await;
+    assert_eq!(
+        (status, json),
+        (
+            StatusCode::NOT_FOUND,
+            serde_json::json!({"code": "NOT_FOUND", "reason": "unknown_host"})
+        )
+    );
+
+    let path = "/hostkeeper.operator.v1.Enrollment/Reject";
+    let body = format!(r#"{{"requestId":"{}"}}"#, pending.key_hash());
+    let (status, json) = gateway(&world, path, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["entry"]["action"], "enroll_reject");
+    let body = format!(r#"{{"requestId":"{}"}}"#, HostKey::new().key_hash());
+    let (status, json) = gateway(&world, path, &body).await;
+    assert_eq!(
+        (status, json),
+        (
+            StatusCode::NOT_FOUND,
+            serde_json::json!({"code": "NOT_FOUND", "reason": "unknown_request"})
+        )
+    );
 }

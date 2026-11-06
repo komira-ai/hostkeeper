@@ -1,6 +1,6 @@
 // hostkeeper.operator.v1: what an operator, and CI, ask of the coordinator: the hosts it knows,
-// the releases it rolls, the services each host runs, the hosts waiting to enroll, and the audit
-// log of every change.
+// the releases it rolls, the services each host runs, the hosts waiting to enroll, the audit
+// log of every change, and the conditions that need a person.
 //
 // Served by: the coordinator, on its control listener (gRPC over TCP with TLS, on loopback or
 // behind a tunnel). It replaces the JSON routes `/v1/desired`, `/v1/convergence`, `/v1/status`
@@ -18,7 +18,8 @@
 // before the request is read.
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
-// (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`),
+// (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`,
+// `AlertsRefusal`),
 // written as the value's name without the prefix, in lower case (for example
 // `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
@@ -49,16 +50,23 @@
 // `Audit.List` and paged by `since_seq`, newest last. `Audit` takes the operator token only; no
 // CI token reaches it. Its `limit` follows the units above. Reading changes nothing.
 //
+// Alerts: the conditions that need a person, as `Alert` rows the coordinator derives from what
+// it holds when asked (`Alerts.List`); the same derivation writes the coordinator's error log
+// lines with an `alert=` field, each once when its condition appears. `Alerts` takes the
+// operator token only; no CI token reaches it. Reading changes nothing.
+//
 // Extending: add fields, messages, enum values, RPCs and services; never renumber, rename,
 // retype or remove one, and never reuse a number (the compatibility test in this crate refuses
 // each). A reader treats an enum value it does not know as UNSPECIFIED; none of the enums here is
 // closed. A token in an open string field (`AuditEntry.action`, `SkippedHost.reason`) is added,
-// never respelled. `Enrollment` and `Audit` grow by the same rule.
+// never respelled. `Enrollment`, `Audit` and `Alerts` grow by the same rule.
 syntax = "proto3";
 
 package hostkeeper.operator.v1;
 
 import "hostkeeper/agent/v1/agent.proto";
+// `AuditEntry` and `Actor`, which every service of the package answers.
+import public "hostkeeper/operator/v1/entry.proto";
 
 // The hosts the coordinator has heard from, and what an operator decides about them.
 service Hosts {
@@ -79,6 +87,14 @@ service Hosts {
   // Queue an `abort` order of a service for the host's next heartbeat; it takes no slot. An
   // abort of a host that runs nothing of the service is accepted and changes nothing.
   rpc Abort(AbortRequest) returns (AbortResponse);
+  // Retire an enrolled host: a deny row is written, so its heartbeats and its `Renew` are
+  // refused `denied` at once, and every entry of the host's own in the services' assignments is
+  // dropped: an assignment or exclusion of the host, its minimum version, and an uninstall it was
+  // ordered (which is cancelled); a role's entries stay. An update in flight on it keeps its
+  // slot until the host reports the update's record final; a host with none frees it now. The
+  // host is sent no `uninstall`. Retiring a host already retired is answered as retired and
+  // audited once.
+  rpc Retire(RetireRequest) returns (RetireResponse);
 }
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
@@ -141,6 +157,13 @@ service Audit {
   rpc List(ListAuditRequest) returns (ListAuditResponse);
 }
 
+// The conditions that need a person.
+service Alerts {
+  // Every condition that needs a person now, by kind, then service, host and version. Changes
+  // nothing.
+  rpc List(ListAlertsRequest) returns (ListAlertsResponse);
+}
+
 // Why `Hosts` refused a request. The token is the value's name without the prefix, in lower
 // case.
 enum HostsRefusal {
@@ -153,7 +176,8 @@ enum HostsRefusal {
   HOSTS_REFUSAL_INVALID_REQUEST = 3;
   // NOT_FOUND: the service is not one the coordinator manages.
   HOSTS_REFUSAL_UNKNOWN_SERVICE = 4;
-  // NOT_FOUND: the coordinator has not heard from the host since it started.
+  // NOT_FOUND: the coordinator has not heard from the host since it started (`Retire`: the
+  // coordinator enrolled no host with the id).
   HOSTS_REFUSAL_UNKNOWN_HOST = 5;
   // RESOURCE_EXHAUSTED: the change would hold more than 4096 exclusions, or labels for more than
   // 4096 hosts.
@@ -270,43 +294,17 @@ enum AuditRefusal {
   AUDIT_REFUSAL_STORE_FAILED = 4;
 }
 
-// One change the coordinator made, as its audit ring keeps it (the last 64).
-message AuditEntry {
-  // Its number: one more than the entry before it, for the life of the coordinator's store.
-  uint64 seq = 1;
-  // Who made it.
-  Actor by = 2;
-  // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
-  // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
-  // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
-  // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
-  // `mac_auto_approve_declined`, `record_add`, `record_remove`, `enroll_requested`,
-  // `enroll_issued`, `cert_renewed`, `request_expired`). Open: a later coordinator adds actions.
-  string action = 3;
-  // The service, when the change is about one.
-  optional string service = 4;
-  // The host, when the change is about one.
-  optional string node_id = 5;
-  // Why, when the change has a reason.
-  optional string reason = 6;
-  // When it was made, by the coordinator's clock. `Audit.List` sets it from the audit file; it
-  // is unset in the answer of the call that made the change, and for a coordinator that keeps
-  // no audit file (it lists its ring, which holds no time).
-  optional uint64 at_unix = 7;
-  // Who made it, by name: the name of the operator's token, or `coordinator`, `ci` or
-  // `mdm-nonce` for a change that is not an operator's. `by` says which kind of actor that is.
-  optional string by_name = 8;
-}
-
-// Who made a change.
-enum Actor {
-  ACTOR_UNSPECIFIED = 0;
-  // An operator, with the operator token.
-  ACTOR_OPERATOR = 1;
-  // CI, with its OIDC token.
-  ACTOR_CI = 2;
-  // The coordinator itself: a halt, a rollback, a mark.
-  ACTOR_COORDINATOR = 3;
+// Why `Alerts` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum AlertsRefusal {
+  ALERTS_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no bearer, or not the operator token.
+  ALERTS_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Alerts` does not take.
+  ALERTS_REFUSAL_FORBIDDEN = 2;
+  // INTERNAL: the enrollment store could not be read, so the alerts it holds (hosts waiting for
+  // an operator, duplicate identities and claims) are not known; asking again is safe.
+  ALERTS_REFUSAL_STORE_FAILED = 3;
 }
 
 message ListHostsRequest {
@@ -364,6 +362,15 @@ message Host {
   // When the request of the host's key was approved, in unix seconds; 0 when the host is not
   // enrolled. A renewal approved by an operator moves it to that approval.
   uint64 enrolled_unix = 13;
+  // The last second the host's current certificate is valid, as its last heartbeat said; absent
+  // when it said none (no certificate, or an agent that predates the field).
+  optional uint64 cert_not_after_unix = 14;
+  // Why the host's last step of enrollment or renewal failed, as its last heartbeat said; absent
+  // when that step succeeded.
+  optional string last_renew_error = 15;
+  // How many of its heartbeats since the coordinator started said a time further from the
+  // coordinator's clock than `--clock-skew-secs`, either way.
+  uint64 clock_skew_beats = 16;
 }
 
 // A host taken out of a service.
@@ -515,6 +522,22 @@ message AbortResponse {
   // The `abort` order waits for the host's next heartbeat.
   bool queued = 1;
   AuditEntry entry = 2;
+}
+
+message RetireRequest {
+  // The host id the host was enrolled as.
+  string node_id = 1;
+  // Why, for the audit log: 1 to 256 bytes with no control character, or empty for none.
+  string reason = 2;
+}
+
+message RetireResponse {
+  // The `host_retire` entry; absent when the host was already retired (nothing is audited
+  // twice).
+  AuditEntry entry = 1;
+  // An update is in flight on the host: its slot is freed when the host reports the update's
+  // record final, or by `Exclude` with `abandon` if the host is gone.
+  bool update_in_flight = 2;
 }
 
 // What a service's hosts should run, and how fast they get there.
@@ -1041,4 +1064,78 @@ message ListAuditResponse {
   // The `since_seq` of the next page: the `seq` of the last entry returned, or the request's
   // `since_seq` when none was.
   uint64 next_seq = 2;
+}
+
+message ListAlertsRequest {}
+
+message ListAlertsResponse {
+  // By kind (in the order of `AlertKind`), then service, host id, version and request id.
+  repeated Alert alerts = 1;
+}
+
+// A condition that needs a person, as the coordinator derives it from what it holds.
+message Alert {
+  AlertKind kind = 1;
+  AlertSeverity severity = 2;
+  // The host it concerns; empty for a condition of the fleet or of a service.
+  string host_id = 3;
+  // The service it concerns; empty for one of no service.
+  string service = 4;
+  // The version it concerns (the halted, failed or held version); empty for none.
+  string version = 5;
+  // What happened and what a person does about it, in plain words.
+  string message = 6;
+  // When this coordinator first saw the condition, by its own clock: unix seconds. A condition
+  // that ends and comes back is seen anew; a restarted coordinator sees every condition anew.
+  uint64 first_observed_unix = 7;
+  // For `ALERT_KIND_WAITING_FOR_OPERATOR` and `ALERT_KIND_DUPLICATE_CLAIM_PENDING`: the pending
+  // request (`PendingEnrollment.request_id`); empty otherwise.
+  string request_id = 8;
+  // For `ALERT_KIND_DUPLICATE_CLAIM_PENDING`: the enrolled host whose identity the request also
+  // claims; empty when that is another pending request, or not known.
+  string other_host_id = 9;
+}
+
+// What an `Alert` is about. These spellings are public; the `alert=` field of the coordinator's
+// log line of each is its log token, named per value.
+enum AlertKind {
+  ALERT_KIND_UNSPECIFIED = 0;
+  // A service is halted: nothing is ordered for it until an operator clears the halt. Its host is
+  // the one that reported it (none for an operator's halt). Log token `halt`.
+  ALERT_KIND_HALT = 1;
+  // A host asked to enroll and waits for an operator's approval (`Enrollment.Approve`). Log token
+  // `waiting_for_operator`.
+  ALERT_KIND_WAITING_FOR_OPERATOR = 2;
+  // Two live daemons report the host's identity (a cloned disk): it is ordered nothing. Log
+  // token `duplicate`.
+  ALERT_KIND_DUPLICATE = 3;
+  // A pending request claims an identity another host or request has (its machine id, a bound
+  // MAC, or a renewal from another machine): it is approved only with `replace`. Log token
+  // `duplicate_claim`.
+  ALERT_KIND_DUPLICATE_CLAIM_PENDING = 4;
+  // The host, a canary of the service, failed the release of the version: the version is marked
+  // bad and rolled back. Listed while the version stays marked bad. Log token `canary_failed`.
+  ALERT_KIND_FAILED_CANARY = 5;
+  // An operator holds the host on a version of the service that is marked bad: it is not ordered
+  // off it until the hold is released. Log token `held_on_bad_version`.
+  ALERT_KIND_HELD_ON_BAD_VERSION = 6;
+  // An operator excluded the host from the service with `abandon`, which freed the update slot it
+  // may hold mid-update. Listed while the host stays excluded and the change is among the last 64
+  // the coordinator keeps. Log token `exclude_abandon`.
+  ALERT_KIND_ABANDONED_WHILE_UPDATING = 7;
+  // The host has not heartbeated for the coordinator's silent-host threshold or longer. Log token
+  // `silent_host`.
+  ALERT_KIND_SILENT_HOST = 8;
+  // The certificate the coordinator serves its hosts expires within the coordinator's window, or
+  // has expired: its renewal is failing. Log token `cert_near_expiry`.
+  ALERT_KIND_CERT_NEAR_EXPIRY = 9;
+}
+
+// How soon an `Alert` needs a person.
+enum AlertSeverity {
+  ALERT_SEVERITY_UNSPECIFIED = 0;
+  // Something is stopped or at risk now: a halt, a duplicate identity, a failed canary.
+  ALERT_SEVERITY_CRITICAL = 1;
+  // Something waits for a person, or will go wrong if left.
+  ALERT_SEVERITY_WARNING = 2;
 }

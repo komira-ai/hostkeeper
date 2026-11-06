@@ -1,12 +1,15 @@
 // Host: one host's services, holds, marks and last update, the host-inventory record its
 // enrollment matched (linked to the Inventory page) with that record's data MACs, BMC MAC and
-// serial, when it enrolled, and what an operator may do to it.
+// serial, when it enrolled, its certificate as its last heartbeat said it, and what an operator
+// may do to it. The page reads the time from `ctx.now()` (unix seconds), once per rendering, to
+// say how soon the certificate ends.
 // Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
 // when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
 // cancelled; on
-// a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold and
-// Services.Unhold.
+// a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold,
+// Services.Unhold and, after a confirm, Hosts.Retire. Retire is offered when Hosts.Get fails too,
+// for an enrolled host the coordinator has not heard from since it started (a dead one).
 
 import {
   h, action, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, table,
@@ -42,6 +45,51 @@ export function parseLabels(text) {
     return { problem: `A host has at most ${MAX_LABELS} labels, not ${count}.` };
   }
   return { labels };
+}
+
+// Less than this many seconds of a certificate left is a warning: 48 hours.
+export const CERT_WARN_SECS = 48 * 3600;
+
+// The state of a certificate whose last valid second is `notAfter` (unix seconds, a string or a
+// number as Hosts.Get answers it; absent when the host said none) when the clock reads `now`
+// (unix seconds): "unknown" without an end, "expired" once `now` is past the end, "soon" while
+// less than CERT_WARN_SECS are left, and "ok" otherwise.
+export function certState(notAfter, now) {
+  const end = Number(notAfter);
+  if (notAfter === undefined || notAfter === null || notAfter === "" || !Number.isFinite(end) || end <= 0) {
+    return "unknown";
+  }
+  if (now > end) {
+    return "expired";
+  }
+  return end - now < CERT_WARN_SECS ? "soon" : "ok";
+}
+
+// The certificate of `host` as its last heartbeat said it, at `now`: its end, the last renewal
+// error, the count of heartbeats whose clock was off, and a warning when the end is near or past
+// or a renewal error is reported.
+function certificate(host, now) {
+  const state = certState(host.certNotAfterUnix, now);
+  const error = typeof host.lastRenewError === "string" && host.lastRenewError !== "" ? host.lastRenewError : null;
+  const ends = fmtUnix(host.certNotAfterUnix);
+  const warnings = [];
+  if (state === "expired") {
+    warnings.push(`The certificate expired at ${ends}.`);
+  } else if (state === "soon") {
+    warnings.push(`The certificate ends in less than 48 hours, at ${ends}.`);
+  }
+  if (error !== null) {
+    warnings.push(`The last renewal failed: ${error}`);
+  }
+  const skewed = host.clockSkewBeats === undefined ? "0" : String(host.clockSkewBeats);
+  return h("section", { class: "certificate" },
+    h("h3", {}, "Certificate"),
+    table(["", ""], [
+      ["Ends", state === "unknown" ? "not reported" : ends],
+      ["Last renewal error", error || "-"],
+      ["Heartbeats with the clock off", skewed],
+    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    warnings.map((text) => h("p", { class: "warning", role: "alert" }, text)));
 }
 
 function lastUpdate(result) {
@@ -292,8 +340,10 @@ export async function render(ctx) {
   const ends = await uninstallEnds(ctx, listing, nodeId);
   if (failure !== null) {
     return h("section", { class: "page" },
-      errorView(`Host ${nodeId}`, failure).children, assignedSection(listing, nodeId, ends));
+      errorView(`Host ${nodeId}`, failure).children, assignedSection(listing, nodeId, ends),
+      retireSection(ctx, nodeId));
   }
+  const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
   const labelsForm = {
     labels: Object.entries(host.labels || {}).map(([k, v]) => `${k}=${v}`).join(", "),
@@ -309,6 +359,7 @@ export async function render(ctx) {
       ["Excluded from", (host.exclusions || []).map((x) => `${x.service} (${x.reason || "-"})`).join(", ") || "-"],
       ...inventoryFacts(ctx, host),
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    certificate(host, now),
     h("fieldset", {},
       h("legend", {}, "Labels"),
       field("Labels (key=value, separated by commas)", "labels", labelsForm, "labels"),
@@ -328,5 +379,33 @@ export async function render(ctx) {
         return `Labels of ${nodeId} set.`;
       })),
     assignedSection(listing, nodeId, ends),
-    list(host, "services").map((view) => serviceSection(ctx, nodeId, view)));
+    list(host, "services").map((view) => serviceSection(ctx, nodeId, view)),
+    retireSection(ctx, nodeId));
+}
+
+// Retire: the reason is optional; the host is refused from then on, so it asks first. The answer
+// says whether an update in flight still holds the host's slot.
+function retireSection(ctx, nodeId) {
+  const form = { reason: "" };
+  return h("fieldset", {},
+    h("legend", {}, "Retire"),
+    h("p", { class: "warning" },
+      "Retire revokes the host: its heartbeats and renewals are refused, and its own service assignments are "
+      + "dropped. Nothing is uninstalled."),
+    field("Reason (optional)", "retire-reason", form, "reason", { maxlength: 256 }),
+    action(ctx, "Retire this host", "retire", async () => {
+      const reason = trimmed(form.reason);
+      const problem = reason === "" ? null : reasonProblem(reason);
+      if (problem) {
+        return problem;
+      }
+      if (!ctx.confirm(`Retire ${nodeId}? Its heartbeats and renewals are refused from then on.`)) {
+        return "Not retired.";
+      }
+      const reply = await ctx.api.call("hostkeeper.operator.v1.Hosts/Retire", { nodeId, reason });
+      ctx.refresh();
+      return reply.updateInFlight === true
+        ? `Retired ${nodeId}: its update slot is freed when it reports its update final.`
+        : `Retired ${nodeId}.`;
+    }));
 }

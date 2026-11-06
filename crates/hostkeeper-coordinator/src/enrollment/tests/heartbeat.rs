@@ -24,7 +24,7 @@ use crate::service::Coordinator;
 use crate::testutil::{Log, beat, id, role, secs, updating, version};
 
 /// The order of the legacy service to 2.0.
-fn order() -> ServiceReply {
+pub(super) fn order() -> ServiceReply {
     ServiceReply::Update {
         service: None,
         version: version("2.0"),
@@ -32,7 +32,11 @@ fn order() -> ServiceReply {
 }
 
 /// A heartbeat of `body` through the heartbeat route, from the holder of `peer`.
-async fn beat_json(coordinator: &Coordinator, peer: &Peer, body: &str) -> (StatusCode, Value) {
+pub(super) async fn beat_json(
+    coordinator: &Coordinator,
+    peer: &Peer,
+    body: &str,
+) -> (StatusCode, Value) {
     let request = Request::post(HEARTBEAT_PATH)
         .body(Full::new(Bytes::from(body.to_owned())))
         .expect("a request");
@@ -47,15 +51,15 @@ async fn beat_json(coordinator: &Coordinator, peer: &Peer, body: &str) -> (Statu
     (status, serde_json::from_slice(&bytes).expect("JSON"))
 }
 
-const UPDATING: &str =
+pub(super) const UPDATING: &str =
     r#"{"platform":"linux-x86_64","version":"1.0","health":"healthy","updating":"2.0"}"#;
-const DONE: &str = r#"{"platform":"linux-x86_64","version":"2.0","health":"healthy"}"#;
+pub(super) const DONE: &str = r#"{"platform":"linux-x86_64","version":"2.0","health":"healthy"}"#;
 
-fn denied() -> (StatusCode, Value) {
+pub(super) fn denied() -> (StatusCode, Value) {
     (StatusCode::FORBIDDEN, json!({"error": "denied"}))
 }
 
-fn peer_of(der: &[u8]) -> Peer {
+pub(super) fn peer_of(der: &[u8]) -> Peer {
     Some(Arc::from(der))
 }
 

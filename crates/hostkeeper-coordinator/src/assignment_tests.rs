@@ -313,3 +313,30 @@ fn the_roles_listed_are_the_rollout_files_with_the_operators_entries_on_top() {
     entries.roles.insert("daemon".to_owned(), Entry::Include);
     assert_eq!(roles_of(&def, Some(&entries)), ["daemon", "builder"]);
 }
+
+/// Proves: forgetting a host drops each kind of entry of its own (an assignment or exclusion, a
+/// minimum version, an uninstall it is ordered), while another host's entries and every role's
+/// stay.
+///
+/// Catches: a retired host whose minimum version or uninstall intent is left behind, and a
+/// retirement that drops a role's entry, which other hosts of the role follow.
+#[test]
+fn forgetting_a_host_drops_only_its_own_entries() {
+    let mut entries = ServiceAssignments::default();
+    for node in ["s1", "s2"] {
+        entries.hosts.insert(node.to_owned(), Entry::Include);
+        entries
+            .host_min_versions
+            .insert(node.to_owned(), version("1.0"));
+        entries.uninstall.insert(node.to_owned(), 2);
+    }
+    entries.roles.insert("storage".to_owned(), Entry::Include);
+    entries.forget_host("s1");
+    let mut kept = ServiceAssignments::default();
+    kept.hosts.insert("s2".to_owned(), Entry::Include);
+    kept.host_min_versions
+        .insert("s2".to_owned(), version("1.0"));
+    kept.uninstall.insert("s2".to_owned(), 2);
+    kept.roles.insert("storage".to_owned(), Entry::Include);
+    assert_eq!(entries, kept);
+}

@@ -19,7 +19,7 @@ use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
 use crate::halt;
-use crate::holds::{alert_on_bad_version, marks_of, on_bad_version};
+use crate::holds::{marks_of, on_bad_version};
 use crate::identity::Identity;
 use crate::membership::{Standing, members, standing};
 use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
@@ -240,6 +240,8 @@ pub struct Coordinator {
     /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
     enrollment: Option<Arc<Enrollment>>,
     ui: Option<UiDir>,
+    /// The alerts the last observation found ([`crate::alerts`]).
+    pub(crate) alerts: crate::alerts::Book,
     /// The release channel a set's version must be in (`--release-channel`); `None`: no set is
     /// checked against one.
     pub(crate) channel: Option<ReleaseChannel>,
@@ -293,6 +295,7 @@ impl Coordinator {
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
             enrollment: None,
             ui: None,
+            alerts: crate::alerts::Book::default(),
             channel: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
@@ -605,6 +608,10 @@ impl Coordinator {
                 .into_iter()
                 .chain(announced.iter().map(|one| (one.name.clone(), one.health)))
                 .collect(),
+            sent_unix: beat.sent_unix,
+            cert_not_after_unix: beat.cert_not_after_unix,
+            last_renew_error: beat.last_renew_error.clone(),
+            skewed_beats: 0,
         };
         // The halts are noted under the fleet's lock, which every decision and order below is
         // made under: a halt is never raised between another heartbeat's decision to order and
@@ -686,7 +693,7 @@ impl Coordinator {
                 _ => {}
             }
         }
-        fleet.note_node(who.host_id.clone(), node);
+        fleet.note_node(who.host_id.clone(), node, self.ops.unix_now());
         if turn == Turn::Hold {
             return (ServiceReply::Nothing, None, None, Vec::new());
         }
@@ -706,10 +713,7 @@ impl Coordinator {
                 let acked = self.ops.marks(&def.name).failure_acked;
                 fleet.keep_verdicts_of(&def.name, &want.version, &acked);
             }
-            reconcile(def, &self.ops, &self.desired, &fleet, now);
-            self.ops.read(|state| {
-                alert_on_bad_version(&mut fleet, state, &def.name, &who.host_id);
-            });
+            reconcile(def, &self.ops, &self.desired, &mut fleet, now);
         }
         // The verdicts are durable before the answer acknowledges them, and before any order.
         let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);

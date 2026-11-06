@@ -20,9 +20,13 @@ export function api(token) {
   });
 }
 
+// The time a page context reads, in unix seconds, unless a test gives another.
+export const NOW = 1800000000;
+
 // A page context over `client` that records what the page does. `answers` are the operator's
-// replies to the page's questions, in order; a question beyond them is answered no.
-export function recorder(client, params, answers) {
+// replies to the page's questions, in order; a question beyond them is answered no. Its clock
+// reads `now` (NOW when absent).
+export function recorder(client, params, answers, now) {
   const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [] };
   const left = (answers || []).slice();
   const ctx = {
@@ -31,6 +35,9 @@ export function recorder(client, params, answers) {
     confirm(question) {
       seen.questions.push(question);
       return left.shift() === true;
+    },
+    now() {
+      return now === undefined ? NOW : now;
     },
     navigate(name, to) {
       seen.navigations.push({ name, params: to || {} });
