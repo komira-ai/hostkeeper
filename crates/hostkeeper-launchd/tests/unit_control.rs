@@ -190,10 +190,11 @@ fn a_new_link_whose_job_is_loaded_is_bootstrapped() {
     assert_eq!(fake.calls(), expected);
 }
 
-/// Catches a job that launchd does not hold being loaded by a reload: a new link whose job is not
-/// loaded costs one print and nothing else, because `start_unit` loads it.
+/// Catches a newly placed plist left unloaded, so that a hook's `launchctl kickstart` of its job
+/// finds nothing (the first install of a package): a new link whose job is not loaded is
+/// printed and bootstrapped from its link, and not booted out.
 #[test]
-fn a_new_link_whose_job_is_not_loaded_costs_one_print() {
+fn a_new_link_whose_job_is_not_loaded_is_bootstrapped() {
     let rig = rig();
     let fake = FakeLaunchctl::new();
     let control = rig.control(&fake);
@@ -201,10 +202,58 @@ fn a_new_link_whose_job_is_not_loaded_costs_one_print() {
     std::fs::write(rig.v1.join(format!("{extra}.plist")), extra).expect("a plist");
     symlink(rig.v1.join(format!("{extra}.plist")), rig.link(extra)).expect("a link");
     not_loaded(&fake, extra);
+    bootstrap_ok(&fake, &rig, extra);
 
     control.daemon_reload().expect("the reload");
 
-    assert_eq!(fake.calls(), vec![print_call(extra)]);
+    assert_eq!(fake.calls(), vec![print_call(extra), rig.bootstrap(extra)]);
+}
+
+/// Catches a re-pointed link whose job is not loaded being left so (the slot an update does not
+/// serve from, unloaded by hand): it is bootstrapped from its link, and a failed bootstrap of it
+/// is an error naming the command, after which the next reload tries it again.
+#[test]
+fn a_repointed_link_whose_job_is_not_loaded_is_bootstrapped() {
+    let rig = rig();
+    let fake = FakeLaunchctl::new();
+    let control = rig.control(&fake);
+    not_loaded(&fake, WEB);
+    fake.then(
+        &rig.bootstrap(WEB),
+        Ok(LaunchctlOutput {
+            code: Some(5),
+            stdout: Vec::new(),
+            stderr: b"Bootstrap failed: 5: Input/output error".to_vec(),
+        }),
+    );
+    rig.repoint(WEB, &rig.v2);
+
+    let failed = control.daemon_reload().expect_err("the bootstrap failed");
+    assert_eq!(
+        failed,
+        error(
+            &format!("launchctl bootstrap system {}", rig.link(WEB).display()),
+            "exit 5: Bootstrap failed: 5: Input/output error"
+        )
+    );
+    bootstrap_ok(&fake, &rig, WEB);
+    control.daemon_reload().expect("the reload tried again");
+
+    assert_eq!(
+        fake.calls(),
+        vec![
+            print_call(WEB),
+            rig.bootstrap(WEB),
+            print_call(WEB),
+            rig.bootstrap(WEB),
+        ]
+    );
+    control.daemon_reload().expect("nothing changed since");
+    assert_eq!(
+        fake.calls().len(),
+        4,
+        "a reload with nothing changed issues nothing"
+    );
 }
 
 /// Catches a removed link being bootstrapped again: the job is booted out and nothing is loaded.

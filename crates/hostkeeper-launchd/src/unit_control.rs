@@ -7,8 +7,12 @@
 //! loaded again that way. `daemon_reload` has no launchd counterpart, so
 //! the control keeps a snapshot of those links, each with the device and inode of the file it
 //! resolves to, and acts on what differs from the snapshot of the last successful reload: a job
-//! that is loaded and whose link is new, re-pointed or gone is booted out, and bootstrapped again
-//! unless its link is gone. A job that is not loaded is left for `start_unit`.
+//! whose link is new or re-pointed is booted out when it is loaded and then bootstrapped from its
+//! link, and a loaded job whose link is gone is booted out. After a reload launchd holds the job
+//! of every link that changed, as it holds every plist of the directory after a boot; loading a
+//! job is not starting it (a plist's `RunAtLoad` and `KeepAlive` say whether launchd runs it), so
+//! the hook that `kickstart`s a job finds it loaded, as a systemd hook finds a unit file known
+//! after `daemon-reload`.
 //!
 //! The first snapshot is taken at construction: a link that was there before the daemon started
 //! is taken to have been loaded by launchd at boot.
@@ -125,19 +129,15 @@ impl<L: Launchctl> LaunchdUnitControl<L> {
         bootout(&self.launchctl, label).map_err(|e| failure(&bootout_args(label), e.to_string()))
     }
 
-    /// Loads `label` again from its link when it is loaded, or only unloads it when `relink` is
-    /// false. A job that is not loaded stays so.
+    /// Loads `label` from its link when `relink` is set, booting it out first when it is
+    /// loaded; when `relink` is not set (its link is gone) only boots it out, if it is loaded.
     fn reload_one(&self, label: &Label, relink: bool) -> Result<(), UnitControlError> {
-        match self.status(label)? {
-            JobStatus::NotLoaded => Ok(()),
-            JobStatus::Loaded(_) => {
-                self.stop(label)?;
-                if relink {
-                    self.bootstrap(label)
-                } else {
-                    Ok(())
-                }
-            }
+        if let JobStatus::Loaded(_) = self.status(label)? {
+            self.stop(label)?;
+        }
+        match relink {
+            true => self.bootstrap(label),
+            false => Ok(()),
         }
     }
 }

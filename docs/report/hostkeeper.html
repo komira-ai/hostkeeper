@@ -207,7 +207,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <tr><td>Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune</td><td>Built; reachable only through an order</td></tr>
 <tr><td>Daemon heartbeat to the coordinator</td><td>Built and running in the shipped binary: JSON, then gRPC once the coordinator advertises it, over mutual TLS; the coordinator&rsquo;s orders reach an enrolled host</td></tr>
 <tr><td>Linux unit control (daemon-reload, start, stop) for linked units</td><td>Built: the Linux adapter set runs <code>systemctl</code> for each call; a privileged run starts, reloads and stops a real unit through it; the step launcher is wired</td></tr>
-<tr><td>macOS daemon under launchd</td><td>Built; a device run starts it under launchd and asks its status; no update has run on a Mac</td></tr>
+<tr><td>macOS daemon under launchd</td><td>Built; a device run starts it under launchd and asks its status, and a device run of hello's package installs, updates, rolls back a failed verify and uninstalls it under launchd</td></tr>
 <tr><td>Releases</td><td>Published from <code>main</code> as GitHub releases by <code>release.yml</code>; no hosted release channel</td></tr>
 </tbody></table></div>
 <p>This report is about hostkeeper, its design and the evidence for it. Our lab is the worked example, so <a href="#lab">its section</a> is a case study and carries a Case study label. The sections run from the problem, through a comparison with the tools that exist and the design as it is on <code>main</code>, to the lab, correctness and testing, what is not built and what we have not measured.</p>
@@ -403,7 +403,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 
 <details class="method" open><summary>Notes to the matrix: hostkeeper (h-marks) and the other tools (letters)</summary>
 <ul>
-<li id="n-h1"><strong>h1.</strong> A daemon runs under launchd on a Mac: a device test starts it and asks its status. No update, linked unit or enrollment has run on a Mac. On Linux the unit control runs <code>systemctl</code>; a privileged run starts, reloads and stops a real unit through it.</li>
+<li id="n-h1"><strong>h1.</strong> A daemon runs under launchd on a Mac: a device test starts it and asks its status, and an end-to-end device test enrolls it with a coordinator and installs, updates, rolls back and uninstalls hello&rsquo;s package, its plists linked into <code>/Library/LaunchDaemons</code> and loaded by launchd. On Linux the unit control runs <code>systemctl</code>; a privileged run starts, reloads and stops a real unit through it.</li>
 <li id="n-h2"><strong>h2.</strong> CI authenticates to the coordinator with a GitHub Actions OIDC token on <code>Releases.SetDesired</code> and <code>Releases.Converge</code>, and an operator&rsquo;s token may also set the desired version. Packages are attested in CI, and hosts only dial out. CI needs network reach to the coordinator&rsquo;s private listener, not to any host. Releases are published from <code>main</code> as GitHub releases, but no release channel that the daemon reads is hosted: the operator stages and serves one. The shipped daemon&rsquo;s heartbeat reaches the coordinator over mutual TLS once the host is enrolled, so a desired version reaches it in the reply.</li>
 <li id="n-h3"><strong>h3.</strong> The step contract (prepare, cutover, verify, cleanup, rollback), the rollback after a failed verify and the dead-man are built and tested in process. The service&rsquo;s hook does the hand-off; the daemon does not enforce zero dropped requests.</li>
 <li id="n-h4"><strong>h4.</strong> The one-at-a-time gate, the canary, the bake, holds and force are built in the coordinator. <code>Hosts.Abort</code> does not reach the shipped daemon; an abort is done on the host through the admin socket. The group sizes <code>max_updating</code> and <code>min_up</code> are stored but no decision reads them.</li>
@@ -426,7 +426,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <h3 id="g1">G1: macOS as a first-class host</h3>
 <p>A mixed fleet of Linux and Mac hosts should be kept by one tool and one model. A second tool for the Macs doubles the update path to learn and audit.</p>
 <ul>
-<li>hostkeeper runs one binary on both systems, with a systemd launcher and a launchd launcher. On a Mac only the daemon&rsquo;s start under launchd is exercised today.</li>
+<li>hostkeeper runs one binary on both systems, with a systemd launcher and a launchd launcher. On a Mac the daemon&rsquo;s start under launchd, its step jobs, and the linking, loading, rollback and uninstall of a package&rsquo;s plists are exercised on a hosted Mac after each merge.</li>
 <li>Salt, Puppet, Chef and Fleet document macOS agents under launchd, in the same model as Linux. Chef lists <span data-cell="x-chef-macos" data-cite="https://docs.chef.io/platforms/">macOS 14, 15 and 26</span>, Puppet lists <span data-cell="x-puppet-macos" data-cite="https://help.puppet.com/osp/current/Content/PuppetCore/supported_operating_systems.htm">macOS 14, 15 and 26</span> on x86_64 and ARM, and Fleet lists <span data-cell="x-fleet-macos" data-cite="https://fleetdm.com/docs/using-fleet/supported-host-operating-systems">macOS 15</span> and later.</li>
 <li>Ansible manages launchd services through a module of <code>community.general</code>, a collection separate from <code>ansible-core</code>, and needs Python on the managed host. Its install guide names macOS only as a control node.</li>
 <li>Nomad ships macOS binaries and its <code>raw_exec</code> driver runs natively, but its production requirements are Linux-specific and no launchd management was found.</li>
@@ -1108,7 +1108,7 @@ that is <code>hostkeeper-placed</code>&rsquo;s <code>Systemctl</code>, each call
 process of the daemon, as root, bounded by
 <span data-cell="c-systemctl-deadline" data-source="crates/hostkeeper-daemon/src/adapters.rs" data-item="SYSTEMCTL_DEADLINE">300 s</span>
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/adapters.rs">crates/hostkeeper-daemon/src/adapters.rs</a>).
-The macOS adapter set has a launchd unit control.</p>
+The macOS adapter set has a launchd unit control: a reload bootstraps the job of each placed plist link that is new or re-pointed, booting it out first when it is loaded, and boots out the job of a link that is gone.</p>
 <p><strong>The example service.</strong> <a href="https://github.com/komira-ai/hostkeeper/tree/main/examples/hello">examples/hello</a> is a loopback HTTP server with an
 update hook and two unit slots that it swaps at <code>cutover</code> (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/hello.md">docs/hello.md</a>). Its
 <code>-fail-ready</code> build answers its readiness check with an error, so its <code>verify</code> fails and its
@@ -1141,8 +1141,9 @@ newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root, with n
 <p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine
 verdicts, the process identity check, launchd job states, a fixture hook stopped at its bound, and
-the daemon started under launchd answering <code>Status</code>. No update, no linked unit and no enrollment has
-run on a Mac. Not built for Macs: MDM, the boot id that tells a reboot from a daemon restart (it is
+the daemon started under launchd answering <code>Status</code>, and, end to end, hello&rsquo;s package installed,
+updated, rolled back on a failed <code>verify</code> and uninstalled by the daemon under launchd, enrolled with and
+ordered by a coordinator in the test. Not built for Macs: MDM, the boot id that tells a reboot from a daemon restart (it is
 read from a Linux path), version confirmation by executable digest, and support files at macOS
 paths (the CA bundle, <code>gh</code> and the trusted root use their Linux paths).</p>
 </section>

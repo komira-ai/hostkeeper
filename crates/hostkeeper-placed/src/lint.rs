@@ -15,10 +15,13 @@
 //!   each word, and the value of a `--flag=<path>` word, is judged after its `.`, `..` and empty
 //!   components are resolved. A launchd plist's first `ProgramArguments` element is held to the
 //!   same rule, with XML comments skipped and character references decoded.
-//! - Every `run` unit's file has an `[Install] WantedBy=` naming at least one unit (see
+//! - Every systemd `run` unit's file has an `[Install] WantedBy=` naming at least one unit (see
 //!   [`wanted_by`]), each a plain unit name of a known type ([`is_unit_name`]). The accepted
 //!   syntax is narrower than systemd's: no quotes, escapes or `%` specifiers in `WantedBy=`;
-//!   such a value is refused, never guessed at.
+//!   such a value is refused, never guessed at. A `run` entry with no systemd suffix is a
+//!   launchd label of the service whose `<label>.plist` is a file of `units/`: it has no
+//!   `WantedBy=` and gets no `WantedBy=` link, because launchd loads every plist of its
+//!   directory at boot, so the placed plist link is all that enables it.
 //!
 //! The plist reader is shared with the daemon, which finds a launchd job's sealed executable
 //! with [`plist_program`] (its `Program`, else its first `ProgramArguments` element); the lint
@@ -30,7 +33,7 @@ use std::path::{Component, Path};
 use std::str::Chars;
 
 use hostkeeper_config::manifest::{Class, Manifest};
-use hostkeeper_config::names::UnitName;
+use hostkeeper_config::names::{PLIST_SUFFIX, UNIT_SUFFIXES, UnitName, launchd_label};
 
 use crate::fs::Fs;
 use crate::roots::Roots;
@@ -476,13 +479,35 @@ pub(crate) fn unit_texts(
         .collect()
 }
 
-/// The `WantedBy=` units of the `run` unit `unit`, read from `texts` (by [`unit_texts`]): at
-/// least one, each a unit name.
+/// The plist a launchd `run` entry is loaded from: `None` for an entry with a systemd suffix;
+/// for any other, `<label>.plist`, which must be a file of `units/` and whose label is the
+/// service's, else [`LintError::RunUnit`].
+fn plist_of(manifest: &Manifest, unit: &str) -> Result<Option<String>, LintError> {
+    if UNIT_SUFFIXES.iter().any(|suffix| unit.ends_with(suffix)) {
+        return Ok(None);
+    }
+    let refuse = || LintError::RunUnit {
+        unit: unit.to_owned(),
+    };
+    let label = launchd_label(manifest.name.as_str(), unit).map_err(|_| refuse())?;
+    let file = format!("{label}{PLIST_SUFFIX}");
+    match manifest.unit_files.contains(&file) {
+        true => Ok(Some(file)),
+        false => Err(refuse()),
+    }
+}
+
+/// The unit file of the `run` unit `unit` and its `WantedBy=` units, read from `texts` (by
+/// [`unit_texts`]): for a systemd unit at least one, each a unit name; for a launchd label its
+/// plist and none.
 pub(crate) fn run_targets(
     manifest: &Manifest,
     texts: &BTreeMap<String, String>,
     unit: &str,
 ) -> Result<(String, Vec<String>), LintError> {
+    if let Some(plist) = plist_of(manifest, unit)? {
+        return Ok((plist, Vec::new()));
+    }
     let file = unit_file_of(manifest, unit)?;
     let targets = texts
         .get(&file)

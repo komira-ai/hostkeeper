@@ -66,7 +66,9 @@ pub type Layer = (
 /// first-boot tests start the coordinator and the daemon as child processes (the coordinator is
 /// their program `hostkeeper-privileged-coordinator`, which needs it as a normal dependency); the
 /// end-to-end tests run the coordinator in process with its fake issuer's config, and fetch and
-/// check the fixture's attestation with the package crate.
+/// check the fixture's attestation with the package crate; the Mac's end-to-end test packages
+/// hello with their program `hello-e2e`, which runs hello's hook and server and so needs hello
+/// as a normal dependency.
 pub const LAYERS: [Layer; 23] = [
     (BINARY, &[DAEMON], &[PROTO]),
     (CI, &[CTL], &[PROTO]),
@@ -105,6 +107,7 @@ pub const LAYERS: [Layer; 23] = [
             CONFIG,
             COORDINATOR,
             DAEMON,
+            HELLO,
             HOOK,
             LAUNCHD,
             LINK,

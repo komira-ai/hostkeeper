@@ -216,6 +216,30 @@ fn render(template: &str, values: &[(&str, String)]) -> String {
     text
 }
 
+/// One entry of a package archive: a directory when its name ends with `/`, else a regular file
+/// with `data`.
+#[derive(Clone, Debug)]
+pub struct ArchiveEntry<'a> {
+    pub name: &'a str,
+    pub mode: u32,
+    pub data: &'a [u8],
+}
+
+/// The package archive of `entries`, in their order: a ustar tar of headers owned by root and
+/// dated 0 in one zstd frame, as [`PackageBuilder::build`] writes its own. The caller orders the
+/// entries as the unpacker needs them (a directory before what is in it).
+pub fn compressed_archive(entries: &[ArchiveEntry<'_>]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for entry in entries {
+        let directory = entry.name.ends_with('/');
+        append(&mut builder, entry.name, entry.mode, directory, entry.data);
+    }
+    let tar = builder
+        .into_inner()
+        .expect("the tar archive is written to memory");
+    ruzstd::encoding::compress_to_vec(&tar[..], ruzstd::encoding::CompressionLevel::Fastest)
+}
+
 /// A header owned by root, dated 0.
 fn header(kind: tar::EntryType, mode: u32) -> tar::Header {
     let mut header = tar::Header::new_ustar();

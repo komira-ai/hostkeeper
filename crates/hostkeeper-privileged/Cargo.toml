@@ -45,6 +45,9 @@ hostkeeper-steps = { path = "../hostkeeper-steps" }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
+# hello's update hook and server (`examples/hello`), for the program `hello-e2e` below.
+hello = { path = "../../examples/hello" }
+
 # The workload fixture (`hostkeeper_privileged::fixture` says what it does). Built by cargo with
 # the crate's tests, nothing prebuilt or checked in; a program of the tests, not shipped. Its
 # decisions and the start of its child are in the library, measured; the program only forwards
@@ -82,6 +85,13 @@ path = "tests/bin/selfupdate_daemon.rs"
 [[bin]]
 name = "tierstore-like"
 path = "tests/bin/tierstore_like.rs"
+
+# The `bin/hello` of the hello packages of `tests/device_mac_e2e.rs`: hello's hook and server,
+# its `/version` the version of the manifest it is unpacked with (the program says why). A
+# program of the tests, outside the measured set like every file under `tests/`.
+[[bin]]
+name = "hello-e2e"
+path = "tests/bin/hello_e2e.rs"
 
 [features]
 # The tests that run as root against the host's systemd. Only privileged.yml turns it on.

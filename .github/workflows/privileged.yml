@@ -15,7 +15,10 @@
 # with the channel down; on the Mac the daemon started as a
 # launchd job and answering on its admin socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
-# quarantine verdicts. In the job first-boot the programs themselves meet: the coordinator and the
+# quarantine verdicts, and in device_mac_e2e.rs hello's macOS package installed, updated, rolled
+# back and uninstalled by the real daemon and coordinator, its plists linked into
+# /Library/LaunchDaemons and loaded by launchd. In the job first-boot the programs themselves
+# meet: the coordinator and the
 # daemon, each started by the tests as a child process, through a host's first boot (enrollment,
 # approval, the host certificate, heartbeats over mutual TLS, a restart of each) and a package
 # assigned and installed.
@@ -33,8 +36,12 @@
 # the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
 # trees the daemon checks must have root's directories all the way up, and whose drop-in is in
 # /run/systemd/system; on the Mac, what the daemon's fixed paths name: the step jobs' directory
-# under /var/run, and the pki directory its enrollment loop opens; and in first-boot the daemon's
-# fixed paths too: the pki directory /etc/updater, the self-update units under
+# under /var/run, and the pki directory its enrollment loop opens, and for device_mac_e2e a tree
+# under /private/var, gh and the trusted root in /usr/local/lib/hostkeeper, the placed state in
+# /var/lib/hostkeeper, hello's plists and the daemon's fallback job in /Library/LaunchDaemons
+# (each moved aside if the host already has it and put back when the test ends) and the release
+# channel's CA appended to /etc/ssl/cert.pem, which is written back as it was; and in first-boot
+# the daemon's fixed paths too: the pki directory /etc/updater, the self-update units under
 # /etc/systemd/system, /var/lib/hostkeeper (with the packages directory the tests give the
 # daemon), and for install_uninstall the fixture service's unit and its wants link and the
 # package check's verifier directory /usr/lib/hostkeeper, each refused if the host already has it
@@ -42,7 +49,8 @@
 # which is written back as it was; each on a runner that is thrown away after the job). Each test
 # names its units hostkeeper-ci-<test>-<pid>-<n> (the fixture service's unit is
 # hostkeeper-ci-fixture, its steps updater-hostkeeper-ci-fixture-<step>-<n>), or its launchd jobs
-# dev.hostkeeper.ci-<test>-<pid> (a step job by its unit, as the launcher names it), and stops them
+# dev.hostkeeper.ci-<test>-<pid> (a step job by its unit, as the launcher names it; hello's slots
+# hello.a and hello.b as its package names them), and stops them
 # when it ends, failed or not; every coordinator and release channel is on the loopback address,
 # so no test leaves the host. The test targets are
 # named, in both steps of each job, so that the run is the privileged tests and nothing else of the
@@ -196,14 +204,24 @@ jobs:
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # The device run on a Mac (design section 5.9): the launchd adapters, the process probe and the
-  # package check against a GitHub-hosted arm64 macOS runner (passwordless sudo, launchd). The
-  # tests print what they find (the proc_pidpath table, the verdicts of codesign) to the log.
+  # package check against a GitHub-hosted arm64 macOS runner (passwordless sudo, launchd), and, in
+  # device_mac_e2e.rs, hello's macOS package installed, updated, rolled back on a failed verify
+  # and uninstalled by the real daemon under launchd, ordered by the real coordinator in process
+  # and fetched from a loopback release channel checked by the pinned gh against a test trust
+  # root. The tests print what they find (the proc_pidpath table, the verdicts of codesign, the
+  # daemon's Status) to the log, and a failing end-to-end test what the Mac held.
   macos-device:
     runs-on: macos-15
     permissions:
       contents: read
     # A bound on the whole job, against a test that hangs; no test depends on it.
-    timeout-minutes: 20
+    timeout-minutes: 45
+    env:
+      # The gh the installer pkg installs at /usr/local/lib/hostkeeper/gh, the same version and
+      # SHA-256 as artifacts.yml's macOS build: device_mac_e2e.rs installs this file at that path
+      # and checks its packages' attestations with it, offline, against a test trust root.
+      GH_VERSION: 2.103.3
+      GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -221,10 +239,17 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      - name: Download gh (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+      - name: Check gh (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
+      - name: Unpack gh where the tests find it
+        run: unzip -o -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d target/privileged-tools
+      # device_mac_e2e runs after device_mac, in the one step that runs as root.
       - name: Build the macOS device tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e
       - name: Run the macOS device tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac -- --test-threads=1 --nocapture
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e -- --test-threads=1 --nocapture
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:

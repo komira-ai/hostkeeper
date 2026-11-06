@@ -526,7 +526,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     );
     assert_eq!(
         targets[MACOS_DEVICE_JOB],
-        BTreeSet::from(["device_mac".to_owned()])
+        BTreeSet::from(["device_mac".to_owned(), "device_mac_e2e".to_owned()])
     );
     assert_eq!(shape_problems(text, &targets), Vec::<String>::new());
     for (file, other) in all.iter().filter(|(file, _)| file != PRIVILEGED_WORKFLOW) {

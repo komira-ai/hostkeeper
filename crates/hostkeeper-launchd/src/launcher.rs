@@ -21,6 +21,10 @@
 //!    the log (if any) is given them, the job is booted out (unloaded, as `--collect` does for a
 //!    systemd unit) and its directory removed.
 //!
+//! [`StepLauncher::run_additive`] (the hook's `uninstall`, or a `[hook] boot` step) runs the same
+//! way: `<executable> <hook_args...> <step> --params <params>` as one job, bounded by its
+//! `timeout_secs` (0 is no bound, as `RuntimeMaxSec=0` is for a systemd unit).
+//!
 //! [`StepLauncher::stop`] is [`bootout`]: a label that is not loaded is stopped already, so a
 //! second stop, or a stop of a step that has ended, is not an error. `launchctl bootout` waits
 //! for the job to end; launchd sends `SIGTERM`, then `SIGKILL` to the job's process group after
@@ -39,14 +43,16 @@
 //! step runs, the job runs until the updater is back, finds the step `running` in its record and
 //! stops it by name (resume stops a unit found running before it runs the step again).
 
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io;
+use std::num::NonZeroU64;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hostkeeper_steps::{
-    Bound, Captured, LaunchError, Ring, StepCall, StepExit, StepLauncher, StepLog,
+    AdditiveCall, Bound, Captured, LaunchError, Ring, StepCall, StepExit, StepLauncher, StepLog,
 };
 
 use crate::label::Label;
@@ -224,24 +230,64 @@ fn bootstrapped(label: &Label, out: &LaunchctlOutput) -> Result<(), LaunchError>
     }
 }
 
-/// The job that runs `call` under `label`, its output in `files`. A relative executable or
+/// One run of a hook as a job: what [`StepCall`] and [`AdditiveCall`] have in common.
+struct Run<'a> {
+    /// The step unit the job is named after.
+    unit: &'a str,
+    /// The hook executable.
+    executable: &'a Path,
+    /// The arguments after it.
+    args: Vec<OsString>,
+    /// The params file the arguments name, if any.
+    params: Option<&'a Path>,
+    bound: Bound,
+}
+
+impl<'a> Run<'a> {
+    fn step(call: &'a StepCall<'a>) -> Run<'a> {
+        Run {
+            unit: call.unit,
+            executable: call.executable,
+            args: call.invocation.to_args(),
+            params: call.invocation.params.as_deref(),
+            bound: call.bound,
+        }
+    }
+
+    /// `<hook_args...> <step> --params <params>`, bounded by `timeout_secs` (0 is no bound).
+    fn additive(call: &'a AdditiveCall<'a>) -> Run<'a> {
+        let mut args: Vec<OsString> = call.hook_args.iter().map(OsString::from).collect();
+        args.push(OsString::from(call.step));
+        args.push(OsString::from("--params"));
+        args.push(call.params.as_os_str().to_owned());
+        Run {
+            unit: call.unit,
+            executable: call.executable,
+            args,
+            params: Some(call.params),
+            bound: NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs),
+        }
+    }
+}
+
+/// The job that runs `run` under `label`, its output in `files`. A relative executable or
 /// params file is refused: the job does not run in the updater's directory.
-fn step_job(call: &StepCall<'_>, label: Label, files: &JobFiles) -> Result<StepJob, LaunchError> {
-    if !call.executable.is_absolute() {
+fn step_job(run: &Run<'_>, label: Label, files: &JobFiles) -> Result<StepJob, LaunchError> {
+    if !run.executable.is_absolute() {
         return Err(LaunchError::Launcher(format!(
             "the hook executable {:?} is not an absolute path",
-            call.executable
+            run.executable
         )));
     }
-    if let Some(params) = call.invocation.params.as_ref().filter(|p| !p.is_absolute()) {
+    if let Some(params) = run.params.filter(|p| !p.is_absolute()) {
         return Err(LaunchError::Launcher(format!(
             "the params file {params:?} is not an absolute path"
         )));
     }
     Ok(StepJob {
         label,
-        program: call.executable.to_owned(),
-        args: call.invocation.to_args(),
+        program: run.executable.to_owned(),
+        args: run.args.clone(),
         stdout: files.stdout.clone(),
         stderr: files.stderr.clone(),
     })
@@ -303,13 +349,13 @@ fn step_exit(log: Option<&StepLog>, unit: &str, captured: &Captured) -> StepExit
     }
 }
 
-impl StepLauncher for LaunchdLauncher {
-    fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
-        let label =
-            Label::from_unit(call.unit).map_err(|e| LaunchError::Launcher(e.to_string()))?;
+impl LaunchdLauncher {
+    /// Runs `run` as one job and waits for its end (the steps in the module documentation).
+    fn run_job(&self, run: &Run<'_>) -> Result<StepExit, LaunchError> {
+        let label = Label::from_unit(run.unit).map_err(|e| LaunchError::Launcher(e.to_string()))?;
         let files = JobFiles::of(&self.jobs_dir, &label);
-        let job = step_job(call, label.clone(), &files)?;
-        executable(call.executable)?;
+        let job = step_job(run, label.clone(), &files)?;
+        executable(run.executable)?;
         let plist = step_plist(&job).map_err(|e| LaunchError::Launcher(e.to_string()))?;
         self.boot_out(&label)?;
         write_job(&files, &plist).map_err(|e| {
@@ -317,7 +363,7 @@ impl StepLauncher for LaunchdLauncher {
         })?;
         let code = self
             .bootstrap(&label, &files.plist)
-            .and_then(|()| self.wait(&label, call.bound))
+            .and_then(|()| self.wait(&label, run.bound))
             .inspect_err(|_| {
                 // The step's end is unknown, and nothing else would bound a job the launcher
                 // can no longer read: it is booted out, once, as is, and its files go. What
@@ -335,7 +381,19 @@ impl StepLauncher for LaunchdLauncher {
         // could not be unloaded is booted out by the next run of its label.
         let _ = self.launchctl.run(&bootout_args(&label));
         let _ = fs::remove_dir_all(&files.dir);
-        Ok(step_exit(self.log.as_ref(), call.unit, &captured))
+        Ok(step_exit(self.log.as_ref(), run.unit, &captured))
+    }
+}
+
+impl StepLauncher for LaunchdLauncher {
+    fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
+        self.run_job(&Run::step(call))
+    }
+
+    /// Runs `<executable> <hook_args...> <step> --params <params>` as [`StepLauncher::run`]
+    /// runs a step, bounded by `timeout_secs`.
+    fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
+        self.run_job(&Run::additive(call))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {
