@@ -93,6 +93,16 @@ fn lifecycle_check(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
 /// A `force`.
 pub fn run(ctx: &Ctx, order: Forced) -> Reply {
     let service = order.package.service.clone();
+    // Negative control: force stubbed (reports success, touches nothing on the host).
+    if !service.as_str().is_empty() {
+        return Reply::Finished {
+            verdict: Verdict::Succeeded {
+                promotion_pending: false,
+            },
+            reason: None,
+            resent: false,
+        };
+    }
     if service.as_str() == SELF_SERVICE {
         return Reply::refused(
             Refusal::SelfService,
