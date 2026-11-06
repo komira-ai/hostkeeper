@@ -10,11 +10,13 @@
 //! certificate through the handshake ([`crate::listen`]); [`call`] refuses a `Renew` without one
 //! (`forbidden`) before it reads the body, as the heartbeat route does a heartbeat.
 //!
-//! Each change of a request's state is audited in the coordinator's ops store under the name
-//! `coordinator` ([`Enrollment::audit_to`]): a new request (`enroll_requested`, not a repost of
-//! one), its certificate's first issue (`enroll_issued`) and a renewal (`cert_renewed`). The
-//! entry names the host when there is one, and its reason holds the request id, the round and
-//! the serial: never the CSR, a key, a nonce or a signature.
+//! The coordinator's own enrollment changes are audited in its ops store under the name
+//! `coordinator` ([`Enrollment::audit_to`]): a new request (`enroll_requested`; a repost of a
+//! request is not one, even one that marks it `duplicate_claim`, which the store alerts on),
+//! its certificate's first issue (`enroll_issued`, once per request and round, as the store
+//! decides under its lock) and a renewal (`cert_renewed`). The entry names the host when there
+//! is one, and its reason holds the request id, the round and the serial: never the CSR, a key,
+//! a nonce or a signature.
 
 use std::time::Duration;
 
@@ -242,13 +244,9 @@ impl Enrollment {
             nonce: nonce.clone(),
             ..PollResponse::default()
         };
-        let issued_before = matches!(
-            self.store.request(&id),
-            Ok(Some(view)) if view.state == RequestState::Issued
-        );
         match self.store.issue(&self.ca, &id) {
             Ok(issued) => {
-                if !issued_before {
+                if issued.first {
                     self.audit(audit_entry(
                         ACTION_ISSUED,
                         Some(&issued.host_id),

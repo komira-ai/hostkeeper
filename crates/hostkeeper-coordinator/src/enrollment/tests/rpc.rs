@@ -412,9 +412,8 @@ fn a_poll_the_coordinator_cannot_answer_is_an_internal_error() {
         .expect("a nonce")
         .nonce;
     let message = hostkeeper_enrollment::enroll::poll_message(&key.key_hash(), &nonce);
-    // The signed poll reads the request (1), reads it again to tell a first issue for the audit
-    // (2), then issuing takes the store's lock (3): it fails.
-    fs.fail_at(fs.count() + 3);
+    // The signed poll reads the request (1), then issuing takes the store's lock (2): it fails.
+    fs.fail_at(fs.count() + 2);
     let signed = PollRequest {
         signature: key.sign(&message),
         nonce,

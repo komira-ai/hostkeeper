@@ -89,6 +89,13 @@ token name, with the request id, role, services and the claims; each refused one
 so its entry is written right after the approval; an approval whose entry did not land is audited
 when the coordinator next starts.
 
+The coordinator's own enrollment changes are audited under `coordinator`: a new request
+(`enroll_requested`, with its request id, round and `pending` or `duplicate_claim`, and the host
+it renews if any), a certificate's first issue at a `Poll` (`enroll_issued`, once per request and
+round, with the serial) and a `Renew` (`cert_renewed`, with the serial). A repost of a request, a
+later poll of an issued one and a refused call write nothing. No reason holds a CSR, a key, a
+nonce or a signature.
+
 | token | when |
 |---|---|
 | `unauthorized` | no bearer, or not an operator token |
