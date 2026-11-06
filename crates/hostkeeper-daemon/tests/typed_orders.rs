@@ -13,7 +13,6 @@ mod support;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
 use hostkeeper_config::names::{ServiceName, Version};
@@ -25,6 +24,7 @@ use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
 use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::start;
+use hostkeeper_daemon::testing::spawn;
 use hostkeeper_hook::{Class, Phase, Step};
 use hostkeeper_link::testing::{
     FakeCerts, FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
@@ -389,9 +389,9 @@ fn an_abort_the_coordinator_queues_stops_the_live_update_and_its_halt_is_reporte
     assert!(matches!(update.verb, Verb::Update(_)), "{update:?}");
     let worker = {
         let dispatch = Arc::clone(&host.dispatch);
-        thread::spawn(move || dispatch.run_next())
+        spawn("the update's worker", move || dispatch.run_next())
     };
-    gate.entered();
+    gate.entered(&worker).expect("the held step is entered");
 
     let operator = Caller::Operator("operator".parse().expect("a token name"));
     let queued = coordinator

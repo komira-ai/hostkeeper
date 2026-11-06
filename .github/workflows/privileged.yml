@@ -3,7 +3,8 @@
 # macos-device, against the real launchd of a GitHub-hosted macOS runner. Everything a pull
 # request runs proves the daemon against fakes of the host; here the adapters behind those fakes
 # meet the real thing: the step launcher's transient units and their bound, the dead-man's stop
-# by name, and the observer's systemctl and /proc adapters; on the Mac the daemon started as a
+# by name, the observer's systemctl and /proc adapters, and the unit control's systemctl
+# (daemon-reload, start, stop, is-active); on the Mac the daemon started as a
 # launchd job and answering on its admin socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
 # quarantine verdicts.
@@ -85,9 +86,9 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager

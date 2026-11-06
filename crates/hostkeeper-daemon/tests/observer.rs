@@ -7,7 +7,6 @@ mod support;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::admin::{self, Peer, service_state};
@@ -15,7 +14,7 @@ use hostkeeper_daemon::observer::{
     STATUS_DEADLINE, SealedExe, host_observer, observe, observer_with, service_health,
     service_input,
 };
-use hostkeeper_daemon::testing::{Counted, manifest};
+use hostkeeper_daemon::testing::{Counted, manifest, spawn};
 use hostkeeper_daemon::{Daemon, Reply};
 use hostkeeper_hook::Step;
 use hostkeeper_observe::{
@@ -208,9 +207,11 @@ fn an_observation_never_waits_for_a_running_step() {
     let daemon = Arc::new(rig.daemon());
     let running = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
+        spawn("the order", move || {
+            daemon.order(&update("web", "2.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&running).expect("the held step is entered");
 
     let status = daemon.status().expect("status");
     let [web] = &status.services[..] else {

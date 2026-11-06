@@ -10,7 +10,7 @@ description = "The tests that run as root against the real service manager of a 
 
 # The one place where the adapters behind the fakes of the pull-request set meet the real host:
 # the step launcher's transient units, the dead-man's stop by name, the observer's systemd and
-# /proc adapters. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
+# /proc adapters, the Linux unit control's systemctl. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
 # the feature is off by default and nothing of the workspace turns it on, so CI's `test` job
 # compiles and runs none of them; privileged.yml builds them as the runner's user and runs them
 # as root, after a merge to main. The library is what they share and what can be tested without

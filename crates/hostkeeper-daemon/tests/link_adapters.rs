@@ -7,13 +7,13 @@ mod support;
 use std::fs;
 use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_config::names::Version;
 use hostkeeper_daemon::link_adapters::{
     DaemonHalts, DaemonOrders, MAX_DETAIL, order_result, wire_order,
 };
 use hostkeeper_daemon::packages::PackageError;
+use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::verb::{Forced, Hooked, NO_TRY, PackageDigest as WireDigest, Unhooked};
 use hostkeeper_daemon::{Refusal, Reply, Verb as Decoded};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -257,9 +257,11 @@ fn a_busy_order_and_a_running_one_are_reported_failed_busy_under_their_own_id_an
     let first = update_order("alpha", "2.0.0", 1);
     let running = {
         let (orders, first) = (Arc::clone(&orders), first.clone());
-        thread::spawn(move || orders.execute(&first, &version_of(&first)))
+        spawn("the order", move || {
+            orders.execute(&first, &version_of(&first))
+        })
     };
-    gate.entered();
+    gate.entered(&running).expect("the held step is entered");
     let other = update_order("alpha", "3.0.0", 2);
     assert_eq!(
         orders.execute(&other, &version_of(&other)),
