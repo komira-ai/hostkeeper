@@ -33,6 +33,9 @@ hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 # claims.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The BMC's MAC address, claimed in a Linux host's enrollment request: `Get LAN Configuration
+# Parameters` sent to `/dev/ipmi0` (`ipmi`).
+ipmi-rs.workspace = true
 # The macOS adapters (`adapters::Adapters::macos`): the launchd step launcher, service manager,
 # unit control and process probe, the `Platform` the host's adapters are chosen by, and the
 # process port `codesign` and `ioreg` run through (`mac`).
@@ -81,6 +84,9 @@ bytes.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The public key of the enrollment request's CSR, whose SHA-256 is the request id the fake
+# coordinator of tests/bmc_claim.rs answers with.
+x509-cert.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 # Its own tests turn on `testing`.
