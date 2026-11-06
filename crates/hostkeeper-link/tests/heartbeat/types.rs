@@ -3,9 +3,9 @@
 
 use std::num::NonZeroU64;
 
+use crate::verdict;
 use clap::Parser;
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_link::testing::verdict;
 use hostkeeper_link::{
     DEFAULT_HEARTBEAT_SECS, DeferredReport, Feature, Health, Heartbeat, LinkError, Liveness,
     LoopFlags, Observed, Order, OrderId, OrderRef, Outcome, Oversize, PackageDigest, Platform,
@@ -39,7 +39,11 @@ fn an_order_cannot_carry_a_command_path_or_url() {
     let _: OrderId = id;
     let _: u64 = order_try;
     let target = match verb {
-        Verb::Update(target) | Verb::Force(target) => target,
+        Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => target,
+        Verb::Uninstall(service) | Verb::Abort(service) => {
+            let _: ServiceName = service;
+            return;
+        }
     };
     let Target {
         service: name,

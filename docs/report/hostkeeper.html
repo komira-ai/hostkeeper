@@ -202,7 +202,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <tbody>
 <tr><td>Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment</td><td>Built and tested in process</td></tr>
 <tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hostkeeper ctl</code>; web UI</td><td>Built; three declared methods answer <code>UNIMPLEMENTED</code> (<a href="#apis">the two APIs</a>)</td></tr>
-<tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator; sent only to a daemon that announces <code>install-v1</code>, which the shipped daemon does not</td></tr>
+<tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both, but has no link (below)</td></tr>
 <tr><td>Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop</td><td>Built and running in the shipped binary; read from the code, the CA refuses the enrollment loop&rsquo;s certificate request (<a href="#n-h5">h5</a>), which has not been run to confirm</td></tr>
 <tr><td>Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune</td><td>Built; reachable only through an order</td></tr>
 <tr><td>Daemon heartbeat to the coordinator</td><td><strong>Not wired</strong>: the shipped daemon gives its heartbeat loop <code>NoLink</code>, so it sends no heartbeat and receives no order</td></tr>
@@ -660,12 +660,12 @@ call fails as unsupported
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>,
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/links.rs">crates/hostkeeper-daemon/src/links.rs</a>). The
 enrollment loop is wired and talks to the coordinator. The heartbeat loop runs but sends nothing,
-so no order from the coordinator reaches a host built from <code>main</code>. Wiring a link would not be
-enough for every order either: the heartbeat loop runs only <code>update</code> and <code>force</code> orders and drops
-the rest, and the daemon announces neither <code>install-v1</code> nor <code>abort-v1</code>, the features the
-coordinator requires before it sends an install, an uninstall or an abort
+so no order from the coordinator reaches a host built from <code>main</code>. The loop itself runs the
+<code>update</code>, <code>force</code>, <code>install</code>, <code>uninstall</code> and <code>abort</code> orders, the abort beside the order it stops,
+and announces <code>install-v1</code> and <code>abort-v1</code>, the features the coordinator requires before it sends
+an install, an uninstall or an abort
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-link/src/beat.rs">crates/hostkeeper-link/src/beat.rs</a>,
-<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-link/src/order.rs">crates/hostkeeper-link/src/order.rs</a>).</p>
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-link/src/heartbeater.rs">crates/hostkeeper-link/src/heartbeater.rs</a>).</p>
 <h3 id="identity">Identity and enrollment</h3>
 <p><strong>What a host&rsquo;s identity is.</strong> A host is named by an <strong>operator-chosen host id</strong> (a DNS label of at
 most
@@ -903,8 +903,9 @@ An enrollment approval assigns the services it names to the new host the same wa
 <code>Services.SetMinVersion</code> sets a floor for a role or a host. A host assigned a service it does not
 run is ordered <code>install</code> of the desired version, under every rule of an update. <code>Unassign</code> with
 <code>uninstall</code> orders the hosts that lose the service to uninstall it. Both orders go only to a daemon
-that announces <code>install-v1</code>, and the shipped daemon does not announce it (its features are in
-<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-link/src/beat.rs">crates/hostkeeper-link/src/beat.rs</a>).</p>
+that announces <code>install-v1</code>, which the daemon&rsquo;s heartbeat loop does (its features are in
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-link/src/beat.rs">crates/hostkeeper-link/src/beat.rs</a>); they reach a host
+once that loop has a link.</p>
 <p><strong>Desired versions.</strong> CI sets a service&rsquo;s desired version with <code>Releases.SetDesired</code> and its OIDC
 token, and an operator may set it the same way with the operator&rsquo;s token. The coordinator keeps it, and the package digest of every version set, in the
 state file. It refuses a version marked bad or below the service&rsquo;s <code>min_version</code>. A new desired
@@ -948,8 +949,9 @@ bake, bad marks and halts. The daemon fetches the package if needed, stops the o
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#56-force-the-fleet-wide-fix">design: Force</a>). A force reaches only
 hosts that have already announced the service in a heartbeat. It is refused for the <code>hostkeeper</code>
 service itself and for a version no set ever registered a digest for. <code>Hosts.Abort</code> is accepted and
-audited. The coordinator sends it only to a daemon that announced <code>abort-v1</code>, and the shipped daemon
-announces no such feature, so today an abort is done on the host through the admin socket.</p>
+audited. The coordinator sends it only to a daemon that announced <code>abort-v1</code>. The daemon&rsquo;s heartbeat
+loop announces it and runs the abort beside the order it stops, whose verdict then reports the
+halt; until the loop has a link, an abort is done on the host through the admin socket.</p>
 <p><strong>The audit trail.</strong> Every change to the ops store is one entry: who (operator token name, <code>ci</code> or
 <code>coordinator</code>), the action, the service, the host and the reason. The entries go to an append-only
 audit file, one JSON line each, fsynced, never rotated. The file is a copy, not a gate: a line
@@ -1214,7 +1216,7 @@ labels = { demo = "yes" }</code></pre>
 <p>With it, tierstore goes first to one canary, which bakes for three healthy heartbeats, and then to the other hosts one at a time, Linux and Mac alike; a failed release on two of them (the default threshold) marks the version bad and sets the desired version back. hello goes only to hosts the operator labels <code>demo=yes</code> (<code>hostkeeper ctl hosts set-labels</code>). The BMC MAC on each server&rsquo;s record is there for the operator and for a future reader: the shipped daemon sends no BMC MAC, so today a server is matched on its data MACs alone.</p>
 <details class="edge"><summary>Edge cases: what the lab cannot do yet on <code>main</code></summary>
 <ul>
-<li>A host is first given a service by an <code>install</code> order, which the coordinator sends only to a daemon that announces <code>install-v1</code>. The shipped daemon announces no such feature and its heartbeat is not wired, so the lab&rsquo;s first deploy of tierstore is planned as a forced one (<code>Releases.Force</code>), which <a href="#open">the measurements</a> time; a force reaches only hosts that already announce the service.</li>
+<li>A host is first given a service by an <code>install</code> order, which the coordinator sends only to a daemon that announces <code>install-v1</code>. The daemon&rsquo;s heartbeat loop announces it and runs the install, but its heartbeat is not wired, so the lab&rsquo;s first deploy of tierstore is planned as a forced one (<code>Releases.Force</code>), which <a href="#open">the measurements</a> time; a force reaches only hosts that already announce the service.</li>
 <li>The daemon&rsquo;s certificate request has an empty subject, which the CA refuses (<a href="#identity">identity and enrollment</a>), so a lab host cannot enroll until that is fixed.</li>
 <li>On the Macs, tierstore&rsquo;s hook restarts its launchd job; the socket hand-off is Linux-only. Every Mac update of tierstore is therefore a short gap in serving.</li>
 <li>The rollout is serial across the eight hosts and every service, so a fleet-wide update of tierstore takes eight bakes.</li>
@@ -1328,11 +1330,10 @@ lint holds each crate&rsquo;s dependencies. This report&rsquo;s own check is als
 <li><strong>The daemon sends no heartbeat to the coordinator</strong> (and, read from the code, the CA refuses its enrollment request: <a href="#n-h5">h5</a>), and on Linux the unit control
 (daemon-reload, start, stop) is not wired; the step launcher is. Together these mean no host
 built from <code>main</code> can be updated by the coordinator.</li>
-<li><strong>Orders the daemon takes:</strong> the coordinator orders <code>install</code> and <code>uninstall</code> for assigned and
-unassigned services, but only to a daemon that announces <code>install-v1</code>. The shipped daemon does
-not, and its heartbeat loop runs only <code>update</code> and <code>force</code>. <code>Hosts.Abort</code> likewise reaches only a
-daemon announcing <code>abort-v1</code>, which the shipped daemon does not. The coordinator never orders
-<code>force_rollback</code> or <code>clear_halt</code>.</li>
+<li><strong>Orders the daemon takes:</strong> the heartbeat loop runs <code>update</code>, <code>force</code>, <code>install</code>, <code>uninstall</code>
+and <code>abort</code>, and announces <code>install-v1</code> and <code>abort-v1</code>, so the coordinator&rsquo;s install, uninstall
+and <code>Hosts.Abort</code> are sent to it; none reaches a host until the loop has a link (above). The loop
+runs no <code>force_rollback</code> or <code>clear_halt</code>, and the coordinator never orders them.</li>
 <li><strong>Host listing and unmarking:</strong> <code>Hosts.List</code>, <code>Hosts.Get</code> and <code>Releases.UnmarkBad</code> answer
 <code>UNIMPLEMENTED</code>.</li>
 <li><strong>Additive steps:</strong> a manifest&rsquo;s <code>boot</code> step, the hook&rsquo;s <code>uninstall</code> step and the self-update
@@ -1388,9 +1389,8 @@ That test asserts behaviour, not time.</p>
 <li>a heartbeat link in the shipped daemon in place of <code>NoLink</code>;</li>
 <li>a systemd unit control in the Linux adapter set in place of <code>Unwired</code>;</li>
 <li>a daemon certificate request the CA accepts (see <a href="#identity">Identity and enrollment</a>);</li>
-<li>a first-install path the daemon takes: the coordinator orders <code>install</code> only to a daemon that
-announces <code>install-v1</code>, the shipped daemon does not, and its heartbeat loop runs only <code>update</code>
-and <code>force</code>; a force reaches only hosts that already announce the service;</li>
+<li>for a first install, the heartbeat link above: the loop announces <code>install-v1</code> and runs the
+<code>install</code> order, and a force reaches only hosts that already announce the service;</li>
 <li>the pinned <code>gh</code> and the Sigstore trusted root on every host, and a staged release channel.</li>
 </ul>
 </section>
