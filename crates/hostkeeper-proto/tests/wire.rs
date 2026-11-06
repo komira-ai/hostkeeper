@@ -712,6 +712,8 @@ fn wire_names_are_pinned() {
                 "already_bad",
                 "already_halted",
                 "unknown_target",
+                "not_in_channel",
+                "channel_digest_mismatch",
             ],
         ),
         (

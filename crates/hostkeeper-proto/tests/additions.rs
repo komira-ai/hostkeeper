@@ -475,3 +475,30 @@ fn an_older_reader_keeps_the_assignments_of_services() {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
     }
 }
+
+/// Catches: a refusal of `Releases.SetDesired` for the release channel taking the number of a
+/// value the release before already gave a meaning, or renumbering one: the baseline knows no
+/// value 18 or 19, and every value it knows keeps its name and number. A caller of the release
+/// before reads the new refusals by their token, the status message, which needs no value.
+#[test]
+fn the_release_channel_refusals_are_new_values_of_releases() {
+    let older = baseline_pool();
+    let refusal = older
+        .get_enum_by_name("hostkeeper.operator.v1.ReleasesRefusal")
+        .expect("released");
+    for (added, number) in [
+        (op::ReleasesRefusal::NotInChannel, 18),
+        (op::ReleasesRefusal::ChannelDigestMismatch, 19),
+    ] {
+        assert_eq!(added as i32, number, "{added:?}");
+        assert!(refusal.get_value(number).is_none(), "{added:?}");
+    }
+    for value in refusal.values() {
+        assert_eq!(
+            op::ReleasesRefusal::try_from(value.number())
+                .expect("a value of the release before")
+                .as_str_name(),
+            value.name()
+        );
+    }
+}

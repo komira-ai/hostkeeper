@@ -65,6 +65,23 @@ The coordinator must hold an allow-list entry for the calling repository and wor
 the service and the audience you pass (design, section 5.1: a CI token sets the desired version
 only of the services its entry names).
 
+## The release channel check
+
+A coordinator started with `--release-channel <base-url>` (an `https://` URL such as
+`https://channel.example/releases`, the same channel the daemon config's `release_channel`
+names) checks every set against it before anything changes: it fetches
+`<base-url>/<service>/<version>/index.json` and refuses the set unless the channel holds that
+version with the package the set names. Without the flag it fetches nothing and refuses nothing
+for the channel. Only `https://` is taken; any other scheme stops the coordinator's start.
+
+| token | when | retry? |
+|---|---|---|
+| `not_in_channel` | The channel has no index for the version (404), or it could not be read: no connection, no answer within the coordinator's deadlines (`--release-channel-connect-secs`, default 10, and `--release-channel-timeout-secs`, default 30), a redirect or another status, an answer over 64 KiB, or an answer that is not an index or lists no package. | Yes. Nothing changed and no host was ordered. Make this job `needs:` the job that publishes the package and syncs the channel, or run the job again once the channel sync has finished. |
+| `channel_digest_mismatch` | The channel's index for the version names another service or version, or lists no package whose SHA-256 is `package_digest`. | No. The channel holds another artifact for this version than the one you are setting; fix the channel or the digest. |
+
+Both are refusals like the others (gRPC `FAILED_PRECONDITION`, the token as the message), so the
+job ends with the token as `reason` and the version is not set.
+
 ## Inputs
 
 | input | type | required | default | meaning |
@@ -86,7 +103,7 @@ only of the services its entry names).
 |---|---|
 | `desired_version` | The desired version the coordinator stored; empty when it stored none. |
 | `converged` | `true` when the fleet converged on the version, `false` otherwise. |
-| `reason` | Why the job ended where it did, one token: `converged`, `not_waited`, `halted`, `superseded`, `not_converged`, `not_stored`, `no_answer`, or the refusal token the coordinator gave (for example `held_bad`). Empty when a verification step failed or a flag was refused (exit 2); `no_answer` also when the client could not get a token or write its files. |
+| `reason` | Why the job ended where it did, one token: `converged`, `not_waited`, `halted`, `superseded`, `not_converged`, `not_stored`, `no_answer`, or the refusal token the coordinator gave (for example `held_bad`, `not_in_channel` or `channel_digest_mismatch`). Empty when a verification step failed or a flag was refused (exit 2); `no_answer` also when the client could not get a token or write its files. |
 
 ## Pinning hostkeeper
 
@@ -144,7 +161,7 @@ counts as one of the `max_polls` reads.
 | Unpack the verified hostkeeper | The verified tarball holds no `hostkeeper`. The version is not set. | Report it. |
 | Check the version of the verified hostkeeper | The program does not say `hostkeeper <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
 | Set the desired version and wait for the fleet: before the call | An input breaks its rule (exit 2): a service name or version with other characters, a digest that is not 64 lower-case hex digits, a URL that is not `https://`, a `max_polls` outside 1 to 1000. Or GitHub issued no token (`reason` is `no_answer`): the calling job does not grant `id-token: write`. The version is not set. | Fix the input, or grant `id-token: write` to the calling job. |
-| Set the desired version and wait for the fleet: the set | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request`, `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later). `no_answer`: the coordinator could not be reached. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `releases converge` before you retry. | Fix what the token names, then run the job again. |
+| Set the desired version and wait for the fleet: the set | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request`, `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `not_in_channel` (the coordinator's release channel does not hold the version yet; retry once the channel sync has finished), `channel_digest_mismatch` (the channel's index of the version does not list `package_digest`; do not retry). `no_answer`: the coordinator could not be reached. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `releases converge` before you retry. | Fix what the token names, then run the job again. |
 | Set the desired version and wait for the fleet: the wait | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt. `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` reads passed and the fleet had not converged; the roll goes on. A refusal token: the read was refused. | Look at the service in the coordinator's UI or with `hostkeeper ctl releases status`. |
 
 ## What it does not do
@@ -152,4 +169,5 @@ counts as one of the `max_polls` reads.
 - It does not change the coordinator's allow-list, the service's definition, holds or marks.
 - It does not build, sign or publish the service's package; the package and its digest come from
   the service's own release job.
-- It does not retry a refused call.
+- It does not retry a refused call, `not_in_channel` included: run the job again once the
+  release channel holds the version.

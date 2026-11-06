@@ -199,6 +199,13 @@ enum ReleasesRefusal {
   RELEASES_REFUSAL_ALREADY_HALTED = 16;
   // INVALID_ARGUMENT: a force target role or host the coordinator does not know.
   RELEASES_REFUSAL_UNKNOWN_TARGET = 17;
+  // FAILED_PRECONDITION: `SetDesired` of a version the coordinator's release channel does not
+  // hold yet, or whose index could not be read. Nothing changed; retry once the channel holds it.
+  RELEASES_REFUSAL_NOT_IN_CHANNEL = 18;
+  // FAILED_PRECONDITION: `SetDesired` of a version whose index in the coordinator's release
+  // channel names another service or version, or no package with the digest the set names.
+  // Nothing changed; the channel holds another artifact, so the same set is refused again.
+  RELEASES_REFUSAL_CHANNEL_DIGEST_MISMATCH = 19;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower

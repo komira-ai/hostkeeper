@@ -4,6 +4,7 @@
 mod acks;
 mod adapters;
 mod agent;
+mod channel;
 mod credentials;
 mod ctl;
 mod enrollment;
