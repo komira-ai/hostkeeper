@@ -247,7 +247,11 @@ fn the_restart_policy_restarts_the_exit_status_of_the_daemon_after_staging() {
 }
 
 /// The keys the unit and the drop-in both set, which must agree.
-const SHARED: [(&str, &str); 2] = [("Service", "Restart"), ("Service", "RestartSec")];
+const SHARED: [(&str, &str); 3] = [
+    ("Service", "Restart"),
+    ("Service", "RestartSec"),
+    ("Service", "RestartMode"),
+];
 
 fn check_agreement(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
@@ -316,6 +320,10 @@ fn the_unit_agrees_with_the_dropin_and_fallback_unit_the_daemon_writes() {
             "the unit sets RestartSec=5 and the drop-in RestartSec=1",
         ),
         (
+            altered(&text, "RestartMode=direct\n", "RestartMode=normal\n"),
+            "the unit sets RestartMode=normal and the drop-in RestartMode=direct",
+        ),
+        (
             altered(
                 &text,
                 "StartLimitIntervalSec=0",
@@ -349,11 +357,17 @@ enum AfterLimit {
 }
 
 /// What follows the daemon's unit `main` failing its start limit, as systemd runs it
-/// (systemd.unit(5) `OnFailure=`, systemd.service(5) `ExecStart=`, `ExecStartPost=`): the
-/// drop-in's `OnFailure=` unit, `fallback`, is started; its `ExecStart=` verb exits `status`;
-/// a failure ends the unit before its `ExecStartPost=` lines unless the line has the `-` prefix;
-/// then each `ExecStartPost=` line runs in order. `systemctl start` of a unit that failed its
-/// start limit is refused until a `systemctl reset-failed` of it has run.
+/// (systemd.unit(5) `OnFailure=`, systemd.service(5) `ExecStart=`, `ExecStartPost=`,
+/// `RestartMode=`), and as the privileged test
+/// `a_unit_that_spends_its_start_limit_with_no_update_waiting_is_started_again` sees it under
+/// the host's systemd: the drop-in's `OnFailure=` unit, `fallback`, is started; its `ExecStart=`
+/// verb exits `status`; a failure ends the unit before its `ExecStartPost=` lines unless the
+/// line has the `-` prefix; then each `ExecStartPost=` line runs in order. `systemctl start` of
+/// a unit that failed its start limit is refused until a `systemctl reset-failed` of it has run.
+/// Without `RestartMode=direct` in the drop-in, `OnFailure=` also runs at every failed start
+/// before the limit; the fallback, run again at each, then spends a start limit of its own
+/// (systemd's default, 5 starts within 10 seconds) unless it has none
+/// (`StartLimitIntervalSec=0`), and once it is refused the unit is left failed.
 fn after_limit(dropin: &str, fallback: &str, main: &str, status: u8) -> Result<AfterLimit, String> {
     let dropin = Unit::parse(dropin)?;
     let on_failure = dropin.single("Unit", "OnFailure")?;
@@ -363,6 +377,11 @@ fn after_limit(dropin: &str, fallback: &str, main: &str, status: u8) -> Result<A
         ));
     }
     let fallback = Unit::parse(fallback)?;
+    let direct = dropin.values("Service", "RestartMode") == ["direct"];
+    let unlimited = fallback.values("Unit", "StartLimitIntervalSec") == ["0"];
+    if !direct & !unlimited {
+        return Ok(AfterLimit::LeftFailed);
+    }
     let ignores_failure = fallback.single("Service", "ExecStart")?.starts_with('-');
     if (status != 0) & !ignores_failure {
         return Ok(AfterLimit::LeftFailed);
@@ -399,7 +418,8 @@ fn written_fallback(text: &str) -> String {
 /// start the fallback, whose verb then puts nothing back and exits [`EXIT_FAILED`]; the daemon's
 /// unit is still reset and started again, as it is when the verb did put the previous binary
 /// back (exit 0). A fallback unit whose verb's failure ends it, that starts the unit before it
-/// resets it, that does not reset it, or that starts another unit, leaves the daemon failed.
+/// resets it, that does not reset it, or that starts another unit, leaves the daemon failed, and
+/// so does a drop-in without `RestartMode=direct` with a fallback that has a start limit.
 #[test]
 fn three_failed_starts_with_no_update_waiting_start_the_daemon_again() {
     let text = read(UNIT);
@@ -419,6 +439,8 @@ fn three_failed_starts_with_no_update_waiting_start_the_daemon_again() {
         &format!("{start}{reset}"),
     );
     let unreset = altered(&fallback, &reset, "");
+    let limited = altered(&fallback, "StartLimitIntervalSec=0\n", "");
+    let normal = altered(&dropin, "RestartMode=direct\n", "");
     let other = altered(
         &fallback,
         &start,
@@ -436,6 +458,14 @@ fn three_failed_starts_with_no_update_waiting_start_the_daemon_again() {
             "{case}"
         );
     }
+    // With both the drop-in's `RestartMode=direct` and the fallback's `StartLimitIntervalSec=0`
+    // gone, the fallback spends its own start limit and the unit is left failed; either alone
+    // keeps it running.
+    let spent = after_limit(&normal, &limited, MAIN_UNIT, EXIT_FAILED);
+    assert_eq!(spent, Ok(AfterLimit::LeftFailed));
+    assert_eq!(after(&limited, EXIT_FAILED), Ok(AfterLimit::StartedAgain));
+    let unlimited_only = after_limit(&normal, &fallback, MAIN_UNIT, EXIT_FAILED);
+    assert_eq!(unlimited_only, Ok(AfterLimit::StartedAgain));
     // Without the failure, the verb that put the previous binary back still starts the unit.
     assert_eq!(after(&unignored, 0), Ok(AfterLimit::StartedAgain));
     let elsewhere = main_dropin("other.service", START_LIMIT_BURST);

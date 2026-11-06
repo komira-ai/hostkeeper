@@ -346,12 +346,12 @@ fn a_binary_that_exits_at_start_is_replaced_by_the_previous() {
 fn the_units_run_the_fallback_after_the_burst() {
     assert_eq!(
         main_dropin("updater-fallback.service", START_LIMIT_BURST),
-        "[Unit]\nOnFailure=updater-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\n"
+        "[Unit]\nOnFailure=updater-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
     );
     let layout = Layout::new(Path::new("/usr/libexec/kbf-updater"));
     assert_eq!(
         fallback_unit(&layout, "kbf-updater.service"),
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart=-/usr/libexec/kbf-updater/previous self-update-fallback --dir /usr/libexec/kbf-updater\nExecStartPost=/usr/bin/systemctl reset-failed kbf-updater.service\nExecStartPost=/usr/bin/systemctl start --no-block kbf-updater.service\n"
+        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-/usr/libexec/kbf-updater/previous self-update-fallback --dir /usr/libexec/kbf-updater\nExecStartPost=/usr/bin/systemctl reset-failed kbf-updater.service\nExecStartPost=/usr/bin/systemctl start --no-block kbf-updater.service\n"
     );
 }
 

@@ -12,12 +12,17 @@
 //! - the version that fell back, offered again, is refused from the bad list and nothing moves;
 //! - a daemon killed with `SIGKILL` while its update waits for the restart is started again by
 //!   systemd, and that start settles the update: `Succeeded` when the kill came after the
-//!   follow-on's switch, `Failed(self_update_fallback)` when it came before it.
+//!   follow-on's switch, `Failed(self_update_fallback)` when it came before it;
+//! - a unit with the drop-in that cannot start, while no update waits, spends its start limit
+//!   before `OnFailure=` runs the fallback unit, whose verb then fails (`ExecStart=-`) and which
+//!   starts the unit again, burst after burst, until it can start; with kbf's text, which lacks
+//!   the `-`, it is left failed.
 //!
-//! Every test is ignored until komira-ai/hostkeeper#102 is fixed: the shipped Linux launcher
-//! has no protocol probe, so the daemon refuses each of these orders `protocol_unreadable`
-//! before anything is staged, and no test can reach what it proves. Run them with
-//! `--include-ignored` once it is fixed.
+//! Every test that orders a self-update is ignored until komira-ai/hostkeeper#102 is fixed: the
+//! shipped Linux launcher has no protocol probe, so the daemon refuses each of these orders
+//! `protocol_unreadable` before anything is staged, and no test can reach what it proves. Run
+//! them with `--include-ignored` once it is fixed. The fallback-unit tests order nothing and
+//! run.
 //!
 //! Every wait polls systemd or the files for a state (`support::wait_until`) and stops at once
 //! when the state can no longer come; no test asserts how long anything took.
@@ -26,13 +31,17 @@ mod support;
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
 
 use hostkeeper_hook::{Class, Phase, Verdict};
+use hostkeeper_privileged::rig::service_unit;
+use hostkeeper_steps::Layout;
 use hostkeeper_steps::record::{Record, State};
-use hostkeeper_steps::selfupdate::START_LIMIT_BURST;
+use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, fallback_unit, main_dropin};
+use hostkeeper_steps::systemd::SYSTEMCTL;
 use rustix::process::{Pid, Signal, kill_process};
 use support::self_update::{FALLBACK_REASON, HK, Host, N, NEXT, Plan, count, refused_line};
-use support::{journal, show, wait_until};
+use support::{Bench, journal, property, run, run_ok, show, wait_until};
 
 /// The record of an update to [`NEXT`] that ended with `verdict` and `reason`, and waits for
 /// nothing.
@@ -317,4 +326,104 @@ fn a_daemon_killed_before_the_switch_is_settled_fell_back_by_the_old_binarys_sta
     assert_finished(&rec, fell_back(), Some(FALLBACK_REASON));
     assert!(host.next_is_bad());
     host.runs(N);
+}
+
+/// The units of a fallback test, linked from the bench's directory, and the file whose absence
+/// keeps the main unit from starting.
+struct Fallback {
+    main: String,
+    fallback: String,
+    gate: PathBuf,
+}
+
+/// The units of a fallback test: `main`, the fixture's `serve` behind an `ExecStartPre=` that
+/// fails until the gate file exists, with the drop-in of `hostkeeper_steps::selfupdate::
+/// main_dropin` naming `fallback`; and `fallback`, the text of `fallback_unit` for `main` over a
+/// binary directory whose `previous` is the fixture program, which refuses the verb's arguments
+/// and exits 1, as the verb does when no update waits for its restart. With `ignores` false the
+/// `-` of `ExecStart=-` is taken out (kbf's text). `main` has been asked to start once.
+fn fallback_rig(bench: &Bench, ignores: bool) -> Fallback {
+    let rig = &bench.rig;
+    let (main, fallback) = (rig.unit(), rig.unit());
+    let bin = bench.scratch().join("bin");
+    fs::create_dir(&bin).expect("the binary directory");
+    std::os::unix::fs::symlink(rig.fixture(), bin.join("previous")).expect("previous");
+    let written = fallback_unit(&Layout::new(&bin), &service_unit(&main));
+    let text = if ignores {
+        written
+    } else {
+        written.replacen("ExecStart=-", "ExecStart=", 1)
+    };
+    let fallback_file = bench.scratch().join(service_unit(&fallback));
+    fs::write(&fallback_file, text).expect("the fallback unit");
+    let gate = bench.scratch().join("gate");
+    let serve = rig.unit_file_text().expect("the fixture's unit").replacen(
+        "[Service]\n",
+        &format!(
+            "[Service]\nExecStartPre=/usr/bin/test -e {}\n",
+            gate.display()
+        ),
+        1,
+    );
+    let dropin = main_dropin(&service_unit(&fallback), START_LIMIT_BURST);
+    let main_file = bench.scratch().join(service_unit(&main));
+    fs::write(&main_file, format!("{serve}\n{dropin}")).expect("the main unit");
+    for file in [&fallback_file, &main_file] {
+        run_ok(
+            SYSTEMCTL,
+            &["link", "--system", file.to_str().expect("UTF-8")],
+        );
+    }
+    // The start fails at its `ExecStartPre=`; systemd's restarts go on from there.
+    let _ = run(
+        SYSTEMCTL,
+        &["start", "--system", service_unit(&main).as_str()],
+    );
+    Fallback {
+        main,
+        fallback,
+        gate,
+    }
+}
+
+/// Catches the dead end of a daemon left failed when it cannot start and no update waits for
+/// its restart, under the host's systemd: the main unit fails [`START_LIMIT_BURST`] starts, and
+/// only then (`RestartMode=direct`) does `OnFailure=` start the fallback unit the daemon writes;
+/// its verb exits 1, and the fallback still resets the main unit and starts it again, burst after
+/// burst (`StartLimitIntervalSec=0` of its own), so that once the main unit can start it is
+/// active.
+#[test]
+fn a_unit_that_spends_its_start_limit_with_no_update_waiting_is_started_again() {
+    let bench = Bench::new("fallback_starts");
+    let units = fallback_rig(&bench, true);
+    wait_until(|| property(&units.fallback, "ExecMainExitTimestampMonotonic") != "0");
+    assert_ne!(
+        property(&units.fallback, "ExecMainStatus"),
+        "0",
+        "the verb failed"
+    );
+    let log = journal(&units.main);
+    let first = log
+        .find("Triggering OnFailure=")
+        .expect("the fallback was started by OnFailure=");
+    assert_eq!(
+        count(&log[..first], "Control process exited"),
+        usize::try_from(START_LIMIT_BURST).expect("a small burst"),
+        "OnFailure= ran once the start limit was spent, not at the first failed start"
+    );
+    fs::write(&units.gate, "").expect("open the gate");
+    wait_until(|| property(&units.main, "ActiveState") == "active");
+}
+
+/// The control of the test above, with kbf's fallback text (no `-`): the verb's exit 1 fails the
+/// fallback unit before its `ExecStartPost=` lines, and the main unit stays failed even once it
+/// could start. Catches a test above that would pass whatever the fallback unit says.
+#[test]
+fn without_the_dash_the_fallback_leaves_the_unit_failed() {
+    let bench = Bench::new("fallback_fails");
+    let units = fallback_rig(&bench, false);
+    wait_until(|| property(&units.fallback, "ActiveState") == "failed");
+    fs::write(&units.gate, "").expect("open the gate");
+    assert_eq!(property(&units.main, "ActiveState"), "failed");
+    assert_ne!(property(&units.fallback, "ExecMainStatus"), "0");
 }

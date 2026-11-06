@@ -45,7 +45,9 @@ start runs the binary the last update chose.
   that start fails later.
   When no update is waiting for its restart (a config that does not load, three restarts for
   another reason), the fallback puts nothing back and still starts the daemon again, so the
-  daemon is retried for good, three starts at a time; before the daemon has first been ready
+  daemon is retried for good, three starts at a time (`RestartMode=direct` keeps systemd from
+  running the fallback before the three starts are spent, and the fallback has no start limit
+  of its own); before the daemon has first been ready
   there is no drop-in, and the unit, which has no start limit of its own, retries it every
   second.
 - Once `current` exists, upgrading the deb or the rpm replaces `/usr/bin/hostkeeper` and does not

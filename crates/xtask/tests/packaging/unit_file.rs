@@ -73,6 +73,7 @@ const UNIT_KEYS: [(&str, &[&str]); 3] = [
             "ExecStart",
             "Restart",
             "RestartSec",
+            "RestartMode",
             "WatchdogSec",
             "RuntimeDirectory",
             "RuntimeDirectoryMode",
@@ -409,6 +410,12 @@ fn check_limits(text: &str) -> Result<(), String> {
             "RestartSec={delay}, not 1, the delay of the self-update drop-in"
         ));
     }
+    let mode = unit.single("Service", "RestartMode")?;
+    if mode != "direct" {
+        return Err(format!(
+            "RestartMode={mode}, not direct: OnFailure= would run the fallback at every failed start, not at the start limit"
+        ));
+    }
     let timeout = unit.single("Service", "TimeoutStartSec")?;
     if timeout != "infinity" {
         return Err(format!(
@@ -493,6 +500,14 @@ fn unit_restarts_always_with_no_start_limit_of_its_own_and_a_watchdog_over_the_h
             "RestartSec=30, not 1",
         ),
         (altered(&text, "RestartSec=1\n", ""), "has no RestartSec="),
+        (
+            altered(&text, "RestartMode=direct\n", "RestartMode=normal\n"),
+            "RestartMode=normal, not direct",
+        ),
+        (
+            altered(&text, "RestartMode=direct\n", ""),
+            "has no RestartMode=",
+        ),
         (
             altered(&text, "WatchdogSec=60\n", ""),
             "has no WatchdogSec=",

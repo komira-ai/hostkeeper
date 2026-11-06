@@ -703,21 +703,25 @@ pub fn settle_with(
 }
 
 /// The drop-in for the updater's own unit: restart when it exits, and run the fallback unit
-/// once it has failed `burst` starts within [`START_LIMIT_WINDOW_SECS`].
+/// once it has failed `burst` starts within [`START_LIMIT_WINDOW_SECS`]. `RestartMode=direct`
+/// (systemd 254 and later) makes an automatic restart skip the failed state, so `OnFailure=` runs
+/// once the restarts end at the start limit, not at every failed start.
 pub fn main_dropin(fallback_unit: &str, burst: u32) -> String {
     format!(
-        "[Unit]\nOnFailure={fallback_unit}\nStartLimitIntervalSec={START_LIMIT_WINDOW_SECS}\nStartLimitBurst={burst}\n\n[Service]\nRestart=always\nRestartSec=1\n"
+        "[Unit]\nOnFailure={fallback_unit}\nStartLimitIntervalSec={START_LIMIT_WINDOW_SECS}\nStartLimitBurst={burst}\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
     )
 }
 
 /// The fallback unit: the previous binary flips `current` back and the main unit is started.
 /// The verb's failure is ignored (`ExecStart=-`): when it puts nothing back (no update waits
 /// for its restart, as when a config does not load), the main unit's failed state is still reset
-/// and the unit started again, so a daemon that fails its start limit is never left failed.
+/// and the unit started again, so a daemon that fails its start limit is never left failed. It
+/// has no start limit of its own (`StartLimitIntervalSec=0`): it runs once per start limit the
+/// main unit spends, for as long as the main unit cannot start.
 pub fn fallback_unit(layout: &Layout, main_unit: &str) -> String {
     let dir = layout.dir().display();
     format!(
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart=-{dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
+        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-{dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
     )
 }
 

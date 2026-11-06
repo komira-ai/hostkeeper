@@ -911,11 +911,11 @@ fn the_generated_dropin_and_fallback_unit_are_unchanged() {
     assert_eq!(START_LIMIT_BURST, 3);
     assert_eq!(
         main_dropin("hostkeeper-fallback.service", START_LIMIT_BURST),
-        "[Unit]\nOnFailure=hostkeeper-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\n"
+        "[Unit]\nOnFailure=hostkeeper-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
     );
     let layout = Layout::new(Path::new("/var/lib/updater/state/hostkeeper/bin"));
     assert_eq!(
         fallback_unit(&layout, "hostkeeper.service"),
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart=-/var/lib/updater/state/hostkeeper/bin/previous self-update-fallback --dir /var/lib/updater/state/hostkeeper/bin\nExecStartPost=/usr/bin/systemctl reset-failed hostkeeper.service\nExecStartPost=/usr/bin/systemctl start --no-block hostkeeper.service\n"
+        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-/var/lib/updater/state/hostkeeper/bin/previous self-update-fallback --dir /var/lib/updater/state/hostkeeper/bin\nExecStartPost=/usr/bin/systemctl reset-failed hostkeeper.service\nExecStartPost=/usr/bin/systemctl start --no-block hostkeeper.service\n"
     );
 }

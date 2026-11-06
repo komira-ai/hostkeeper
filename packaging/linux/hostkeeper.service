@@ -35,9 +35,9 @@ After=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.s
 # No start limit of its own. The start limit is the self-update drop-in's
 # (hostkeeper_steps::selfupdate::main_dropin, which the daemon writes once it is ready, and
 # whose assignments replace these): three starts within 300 seconds, restarts included, start
-# its OnFailure= unit, the fallback of design section 6.6. The fallback puts the previous binary
-# back while an update waits for its restart and, either way, starts this unit again, so the
-# daemon is retried for good, three starts at a time. Before the daemon has first been ready
+# its OnFailure= unit, the fallback of design section 6.6. The fallback, which has no start
+# limit of its own, puts the previous binary back while an update waits for its restart and,
+# either way, starts this unit again, so the daemon is retried for good, three starts at a time. Before the daemon has first been ready
 # there is no drop-in and no fallback, and with no limit here a daemon that cannot start is
 # still retried every RestartSec= rather than left failed.
 StartLimitIntervalSec=0
@@ -51,9 +51,13 @@ TimeoutStartSec=infinity
 ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper
 ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd
 # The daemon exits 0 to be started again after its own update, so a clean exit restarts it too.
-# The drop-in the daemon writes (hostkeeper_steps::selfupdate::main_dropin) sets the same two.
+# An automatic restart goes straight to the next start without the failed state
+# (RestartMode=direct, systemd 254 and later), so the drop-in's OnFailure= runs once the
+# restarts end at the start limit, not at every failed start. The drop-in the daemon writes
+# (hostkeeper_steps::selfupdate::main_dropin) sets the same three.
 Restart=always
 RestartSec=1
+RestartMode=direct
 # The heartbeat loop sends WATCHDOG=1 after each heartbeat and nowhere else
 # (crates/hostkeeper-daemon/src/links.rs): one every 15 seconds, the default of
 # --heartbeat-secs (hostkeeper_link::DEFAULT_HEARTBEAT_SECS), plus the heartbeat's own call, at
