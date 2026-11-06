@@ -131,6 +131,8 @@ the request file because `DesiredState` is a message: see `docs/ctl.md`). With a
 call has no `--package-digest`, and the request file carries the index and its digest in the
 canonical JSON names of the request, the index as one JSON string of its exact text:
 `{"desired":{"version":"<version>"},"releaseIndex":"<text of index.json>","releaseIndexDigest":"<hex>"}`.
+The coordinator takes an operator request of at most 4 KiB, the index included, so an index
+must be well under that (a three-platform index is under 1 KiB); a larger request is refused.
 The client reads the index file before it requests any token (at most 64 KiB, UTF-8), and does
 not hash or parse it: the coordinator does, and refuses a digest that is not the index's
 (`index_digest_mismatch`) or an index that is not this service's at this version

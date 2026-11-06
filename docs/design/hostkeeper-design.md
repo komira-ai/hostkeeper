@@ -774,7 +774,7 @@ The hook drains inside `prepare`; the updater does not cut work at a deadline. T
 |---|---|---|
 | Version directory changed after verification | re-seal before every step; mismatch halts `artifact_changed` | runner tests with a mutated tree |
 | Channel serves other bytes for a version | `package_digest_mismatch` against the index entry, nothing staged | `a_changed_artifact_for_a_version_is_refused` **(to build, B5)** |
-| Channel serves another index than the one CI released | `index_digest_mismatch` against the order's `index_digest`, checked before the index is parsed, nothing further fetched; `Failed`, class `release` | the daemon's order tests (an index whose SHA-256 differs from the order's) |
+| Channel serves another index than the one CI released | `index_digest_mismatch` against the order's `index_digest`, checked before the index is parsed, nothing further fetched; `Failed`, class `release` | `an_index_that_is_not_the_one_the_order_names_is_refused_before_anything_else_is_fetched` (`crates/hostkeeper-daemon/tests/real_packages.rs`) |
 | Index missing the host's platform | `no_package_for_platform`, nothing fetched past the index | `entry_for_finds_a_listed_platform_and_refuses_another` (the lookup); the fetch step **(to build, B5)** |
 | Index malformed, of another schema, service or version, or with a platform twice | `index_invalid`, nothing fetched past the index | one test per refusal in `crates/hostkeeper-config/tests/index.rs`; the fetch step **(to build, B5)** |
 | Fetch or attestation hangs | per-stage deadlines; `Deferred`, slot freed | `a_stalled_fetch_defers_and_frees_the_slot` **(to build, B5)** |
