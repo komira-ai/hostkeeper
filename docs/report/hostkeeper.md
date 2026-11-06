@@ -23,7 +23,7 @@ host. Before anything else, an engineer should know these facts:
 |---|---|
 | Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment | Built and tested in process |
 | Operator API over gRPC and the HTTP/JSON gateway; generated `hostkeeper ctl`; web UI | Built; three declared methods answer `UNIMPLEMENTED` (see [The two APIs](#the-two-apis)) |
-| Assignment of services to roles and hosts; `install` and `uninstall` orders | Built in the coordinator; sent only to a daemon that announces `install-v1`, which the shipped daemon does not |
+| Assignment of services to roles and hosts; `install` and `uninstall` orders | Built in the coordinator, which sends them only to a daemon that announces `install-v1`; the daemon's heartbeat loop announces it and runs both, but has no link (below) |
 | Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop | Built and running in the shipped binary |
 | Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune | Built; reachable only through an order |
 | Daemon heartbeat to the coordinator | **Not wired**: the shipped daemon gives its heartbeat loop `NoLink`, so it sends no heartbeat and receives no order |
@@ -138,12 +138,12 @@ call fails as unsupported
 ([crates/hostkeeper-daemon/src/cli.rs](../../crates/hostkeeper-daemon/src/cli.rs),
 [crates/hostkeeper-daemon/src/links.rs](../../crates/hostkeeper-daemon/src/links.rs)). The
 enrollment loop is wired and talks to the coordinator. The heartbeat loop runs but sends nothing,
-so no order from the coordinator reaches a host built from `main`. Wiring a link would not be
-enough for every order either: the heartbeat loop runs only `update` and `force` orders and drops
-the rest, and the daemon announces neither `install-v1` nor `abort-v1`, the features the
-coordinator requires before it sends an install, an uninstall or an abort
+so no order from the coordinator reaches a host built from `main`. The loop itself runs the
+`update`, `force`, `install`, `uninstall` and `abort` orders, the abort beside the order it stops,
+and announces `install-v1` and `abort-v1`, the features the coordinator requires before it sends
+an install, an uninstall or an abort
 ([crates/hostkeeper-link/src/beat.rs](../../crates/hostkeeper-link/src/beat.rs),
-[crates/hostkeeper-link/src/order.rs](../../crates/hostkeeper-link/src/order.rs)).
+[crates/hostkeeper-link/src/heartbeater.rs](../../crates/hostkeeper-link/src/heartbeater.rs)).
 
 ## Identity and enrollment
 
@@ -402,8 +402,9 @@ An enrollment approval assigns the services it names to the new host the same wa
 `Services.SetMinVersion` sets a floor for a role or a host. A host assigned a service it does not
 run is ordered `install` of the desired version, under every rule of an update. `Unassign` with
 `uninstall` orders the hosts that lose the service to uninstall it. Both orders go only to a daemon
-that announces `install-v1`, and the shipped daemon does not announce it (its features are in
-[crates/hostkeeper-link/src/beat.rs](../../crates/hostkeeper-link/src/beat.rs)).
+that announces `install-v1`, which the daemon's heartbeat loop does (its features are in
+[crates/hostkeeper-link/src/beat.rs](../../crates/hostkeeper-link/src/beat.rs)); they reach a host
+once that loop has a link.
 
 **Desired versions.** CI sets a service's desired version with `Releases.SetDesired` and its OIDC
 token. The coordinator keeps it, and the package digest of every version CI has set, in the
@@ -452,8 +453,9 @@ bake, bad marks and halts. The daemon fetches the package if needed, stops the o
 [design: Force](../design/hostkeeper-design.md#56-force-the-fleet-wide-fix)). A force reaches only
 hosts that have already announced the service in a heartbeat. It is refused for the `hostkeeper`
 service itself and for a version CI never registered a digest for. `Hosts.Abort` is accepted and
-audited. The coordinator sends it only to a daemon that announced `abort-v1`, and the shipped daemon
-announces no such feature, so today an abort is done on the host through the admin socket.
+audited. The coordinator sends it only to a daemon that announced `abort-v1`. The daemon's heartbeat
+loop announces it and runs the abort beside the order it stops, whose verdict then reports the
+halt; until the loop has a link, an abort is done on the host through the admin socket.
 
 **The audit trail.** Every change to the ops store is one entry: who (operator token name, `ci` or
 `coordinator`), the action, the service, the host and the reason. The entries go to an append-only
@@ -733,9 +735,8 @@ That test asserts behaviour, not time.
 - a heartbeat link in the shipped daemon in place of `NoLink`;
 - a systemd unit control in the Linux adapter set in place of `Unwired`;
 - a daemon certificate request the CA accepts (see [Identity and enrollment](#identity-and-enrollment));
-- a first-install path the daemon takes: the coordinator orders `install` only to a daemon that
-  announces `install-v1`, the shipped daemon does not, and its heartbeat loop runs only `update`
-  and `force`; a force reaches only hosts that already announce the service;
+- for a first install, the heartbeat link above: the loop announces `install-v1` and runs the
+  `install` order, and a force reaches only hosts that already announce the service;
 - the pinned `gh` and the Sigstore trusted root on every host, and a staged release channel.
 
 ## Limitations and future work
@@ -745,11 +746,10 @@ What is not built, plainly:
 - **The daemon does not talk to the coordinator after enrollment,** and on Linux the unit control
   (daemon-reload, start, stop) is not wired; the step launcher is. Together these mean no host
   built from `main` can be updated by the coordinator.
-- **Orders the daemon takes:** the coordinator orders `install` and `uninstall` for assigned and
-  unassigned services, but only to a daemon that announces `install-v1`. The shipped daemon does
-  not, and its heartbeat loop runs only `update` and `force`. `Hosts.Abort` likewise reaches only a
-  daemon announcing `abort-v1`, which the shipped daemon does not. The coordinator never orders
-  `force_rollback` or `clear_halt`.
+- **Orders the daemon takes:** the heartbeat loop runs `update`, `force`, `install`, `uninstall`
+  and `abort`, and announces `install-v1` and `abort-v1`, so the coordinator's install, uninstall
+  and `Hosts.Abort` are sent to it; none reaches a host until the loop has a link (above). The loop
+  runs no `force_rollback` or `clear_halt`, and the coordinator never orders them.
 - **Host listing and unmarking:** `Hosts.List`, `Hosts.Get` and `Releases.UnmarkBad` answer
   `UNIMPLEMENTED`.
 - **Additive steps:** a manifest's `boot` step, the hook's `uninstall` step and the self-update

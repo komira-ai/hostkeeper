@@ -1,10 +1,11 @@
 //! The daemon behind four ports of the heartbeat loop (`hostkeeper_link`): the executor, the
 //! held halts, the installed services and the service observer.
 //!
-//! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order as the protobuf
-//! `Order` that [`Daemon::order`] takes ([`wire_order`]), and reads the daemon's [`Reply`] as
-//! the verdict the loop reports ([`order_result`]). It decides nothing about the order: the
-//! checks, the locks and the try rules are the daemon's.
+//! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order (an update, a forced
+//! update, an install, an uninstall or an abort) as the protobuf `Order` that [`Daemon::order`]
+//! takes ([`wire_order`]), and reads the daemon's [`Reply`] as the verdict the loop reports
+//! ([`order_result`]). It decides nothing about the order: the checks, the locks and the try
+//! rules are the daemon's.
 //!
 //! [`DaemonHalts`] is the loop's [`HeldHalts`] over the very store the executor reads
 //! ([`crate::executor::Ctx::halts`]): a generation the loop raises lifts the service's halt as
@@ -22,7 +23,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Phase, Verdict};
 use hostkeeper_link::{
     Health, HeldHalts, Liveness, Observation, Order, OrderResult, OrderSink, Outcome, Reason,
-    RecordedService, ServiceObserver, ServiceRecords, Verb,
+    RecordedService, ServiceObserver, ServiceRecords, Target, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -49,30 +50,54 @@ impl DaemonOrders {
 }
 
 impl OrderSink for DaemonOrders {
-    fn execute(&self, order: &Order) -> OrderResult {
-        order_result(order, &self.daemon.order(&wire_order(order)))
+    fn execute(&self, order: &Order, target: &Version) -> OrderResult {
+        order_result(order, target, &self.daemon.order(&wire_order(order)))
     }
 }
 
-/// `order` as the protobuf `Order` the daemon takes, every field as it is: the id, the try and
-/// the target's service, version and digest. An update is an `update`, a forced update a `force`.
-/// The loop's order has no halt generation, so a `force` carries 0 and lifts no halt.
+/// `order` as the protobuf `Order` the daemon takes, every field as it is: the id, the try, and
+/// the target's service, version and digest, or the service alone. An update is an `update`, a
+/// forced update a `force`, an install an `install`, an uninstall an `uninstall` and an abort an
+/// `abort`. The loop's order has no halt generation, so a `force` carries 0 and lifts no halt.
 pub fn wire_order(order: &Order) -> wire::Order {
-    let target = order.target();
-    let service = target.service.as_str().to_owned();
-    let version = target.version.as_str().to_owned();
-    let package_digest = target.digest.as_str().to_owned();
+    let terms = |target: &Target| {
+        (
+            target.service.as_str().to_owned(),
+            target.version.as_str().to_owned(),
+            target.digest.as_str().to_owned(),
+        )
+    };
     let verb = match &order.verb {
-        Verb::Update(_) => wire::order::Verb::Update(wire::Update {
-            service,
-            version,
-            package_digest,
+        Verb::Update(target) => {
+            let (service, version, package_digest) = terms(target);
+            wire::order::Verb::Update(wire::Update {
+                service,
+                version,
+                package_digest,
+            })
+        }
+        Verb::Force(target) => {
+            let (service, version, package_digest) = terms(target);
+            wire::order::Verb::Force(wire::Force {
+                service,
+                version,
+                package_digest,
+                halt_generation: 0,
+            })
+        }
+        Verb::Install(target) => {
+            let (service, version, package_digest) = terms(target);
+            wire::order::Verb::Install(wire::Install {
+                service,
+                version,
+                package_digest,
+            })
+        }
+        Verb::Uninstall(service) => wire::order::Verb::Uninstall(wire::Uninstall {
+            service: service.as_str().to_owned(),
         }),
-        Verb::Force(_) => wire::order::Verb::Force(wire::Force {
-            service,
-            version,
-            package_digest,
-            halt_generation: 0,
+        Verb::Abort(service) => wire::order::Verb::Abort(wire::Abort {
+            service: service.as_str().to_owned(),
         }),
     };
     wire::Order {
@@ -82,7 +107,7 @@ pub fn wire_order(order: &Order) -> wire::Order {
     }
 }
 
-/// The verdict the loop reports for `order`, from the daemon's `reply`.
+/// The verdict the loop reports for `order`, naming `target`, from the daemon's `reply`.
 ///
 /// - A finished order is its verdict, with its reason when that is a token: a halt is `failed`
 ///   in the phase `halt`; a deferral keeps its retry time, or the runner's default when the hook
@@ -93,12 +118,12 @@ pub fn wire_order(order: &Order) -> wire::Order {
 /// - An order that is already running is not started: it is answered `busy`, as the loop
 ///   answers an order that arrives while another one runs.
 ///
-/// The order's id, try and version, and whether it is forced, are the order's own. The detail
-/// is cut to [`MAX_DETAIL`] bytes.
-pub fn order_result(order: &Order, reply: &Reply) -> OrderResult {
+/// The order's id and try, and whether it is forced, are the order's own; the version is the one
+/// the loop gave. The detail is cut to [`MAX_DETAIL`] bytes.
+pub fn order_result(order: &Order, target: &Version, reply: &Reply) -> OrderResult {
     let base = OrderResult {
         order: order.reference(),
-        target: order.target().version.clone(),
+        target: target.clone(),
         outcome: Outcome::Failed,
         phase: None,
         class: None,
@@ -107,7 +132,7 @@ pub fn order_result(order: &Order, reply: &Reply) -> OrderResult {
         detail: None,
     };
     match reply {
-        Reply::Running => OrderResult::busy(order),
+        Reply::Running => OrderResult::busy(order, target.clone()),
         Reply::Refused { refusal, detail } | Reply::Interrupted { refusal, detail } => {
             OrderResult {
                 reason: Reason::new(refusal.token()).ok(),
