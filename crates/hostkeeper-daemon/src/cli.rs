@@ -473,8 +473,8 @@ impl Verifier for HostVerifier {
 /// the package check). The package store is the real one ([`RealPackages`]: HTTPS over the CA
 /// bundle of `files`, `gh` for the attestation, unpacked into `--packages-dir` as root, each
 /// staged tree judged by the adapters' package check); the observer looks through the adapters
-/// and TCP ([`observer_with`]). On Linux the service manager is not part of this build yet
-/// ([`Unwired`]): an order that reached it is refused there. Placed paths are linked under the
+/// and TCP ([`observer_with`]); the unit control is the adapters' (`systemctl` on Linux,
+/// `launchctl` on macOS). Placed paths are linked under the
 /// host's own directories and the adapters' unit directory, `--packages-dir` being the packages
 /// directory; the prune of step 18 of a force deletes nothing yet. The directory `gh` runs in
 /// (`<state-dir>/.gh`) is made mode 0700 here. `Err` when that directory cannot be made or the
@@ -540,9 +540,8 @@ pub fn host_ports(
     })
 }
 
-/// The service manager of a build that has none, and a step launcher that starts nothing: each
-/// refuses. A Linux host's adapters use it as their service manager ([`Adapters::linux`]); the
-/// tests use it as a launcher that refuses every step.
+/// A service manager and a step launcher that run nothing: each refuses. No platform's adapters
+/// use it; the tests use it as a launcher that refuses every step.
 #[derive(Debug)]
 pub struct Unwired;
 

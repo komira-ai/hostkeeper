@@ -482,20 +482,15 @@ fn a_macos_set_that_cannot_be_built_stops_the_start() {
     ));
 }
 
-/// Catches a Linux set that differs from the host's build before this change: the systemd unit
-/// directory, no service manager yet, no package check, and the systemd launcher (which refuses
-/// a stop of a unit name it cannot pass on with its own words, not the unwired answer).
+/// Catches a Linux set that is not the systemd set: the systemd unit directory and no package
+/// check. Its unit control runs the host's `systemctl`, so it is not asked here
+/// (tests/linux_adapters.rs runs it against a fake, privileged.yml against the host's systemd).
 #[test]
 fn the_linux_adapters_are_the_systemd_set() {
     let adapters = Adapters::for_platform(&Platform::linux()).expect("the Linux set");
     assert_eq!(adapters.kind, PlatformKind::Linux);
     assert_eq!(adapters.unit_dir, Path::new("/etc/systemd/system"));
     assert!(adapters.package_check.is_none());
-    let refused = adapters
-        .units
-        .is_active("web.service")
-        .expect_err("no service manager yet");
-    assert_eq!(refused.why, UNWIRED);
 }
 
 /// Catches an admin socket default that is not the host platform's: the flag's default is where

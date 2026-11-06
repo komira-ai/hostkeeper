@@ -27,7 +27,7 @@ host. Before anything else, an engineer should know these facts:
 | Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop | Built and running in the shipped binary |
 | Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune | Built; reachable only through an order |
 | Daemon heartbeat to the coordinator | **Not wired**: the shipped daemon gives its heartbeat loop `NoLink`, so it sends no heartbeat and receives no order |
-| Linux unit control (daemon-reload, start, stop) for linked units; the step launcher is wired | **Not wired**: the Linux adapter set uses `Unwired`, which refuses every call |
+| Linux unit control (daemon-reload, start, stop) for linked units; the step launcher is wired | Built: the Linux adapter set runs `systemctl` for each call; a privileged run starts, reloads and stops a real unit through it |
 | macOS daemon under launchd | Built; a device run starts it under launchd and asks its status; no update has run on a Mac |
 | Releases | Published from `main` as GitHub releases by `release.yml`; no hosted release channel |
 
@@ -573,12 +573,13 @@ by default, until it passes without the flag. Any other result, or the ceiling, 
 `Failed` after the commit (or a halt), and the watcher never rolls back
 ([design: The post-success watcher](../design/hostkeeper-design.md#64-the-post-success-watcher)).
 
-**On a Linux host built from `main` a hooked update stops before `cutover`.** The switch before
-`cutover` runs `daemon-reload` through the adapter set's unit control, and on Linux that is
-`Unwired`, which refuses every call
+**The unit control on Linux.** The switch before `cutover` runs `daemon-reload` through the
+adapter set's unit control, and a force or a rollback stops and starts units through it. On Linux
+that is `hostkeeper-placed`'s `Systemctl`, each call one `systemctl` command run as a child
+process of the daemon, as root, bounded by
+<span data-cell="c-systemctl-deadline" data-source="crates/hostkeeper-daemon/src/adapters.rs" data-item="SYSTEMCTL_DEADLINE">300 s</span>
 ([crates/hostkeeper-daemon/src/adapters.rs](../../crates/hostkeeper-daemon/src/adapters.rs)).
-`hostkeeper-placed` has a `systemctl` unit control, but the daemon does not use it. The macOS
-adapter set has a real launchd unit control.
+The macOS adapter set has a launchd unit control.
 
 **The example service.** [examples/hello](../../examples/hello) is a loopback HTTP server with an
 update hook and two unit slots that it swaps at `cutover` ([docs/hello.md](../hello.md)). Its
@@ -731,7 +732,6 @@ That test asserts behaviour, not time.
 **What the farm run needs first, from the code on `main`:**
 
 - a heartbeat link in the shipped daemon in place of `NoLink`;
-- a systemd unit control in the Linux adapter set in place of `Unwired`;
 - a daemon certificate request the CA accepts (see [Identity and enrollment](#identity-and-enrollment));
 - a first-install path the daemon takes: the coordinator orders `install` only to a daemon that
   announces `install-v1`, the shipped daemon does not, and its heartbeat loop runs only `update`
@@ -742,9 +742,8 @@ That test asserts behaviour, not time.
 
 What is not built, plainly:
 
-- **The daemon does not talk to the coordinator after enrollment,** and on Linux the unit control
-  (daemon-reload, start, stop) is not wired; the step launcher is. Together these mean no host
-  built from `main` can be updated by the coordinator.
+- **The daemon does not talk to the coordinator after enrollment.** This means no host built
+  from `main` can be updated by the coordinator.
 - **Orders the daemon takes:** the coordinator orders `install` and `uninstall` for assigned and
   unassigned services, but only to a daemon that announces `install-v1`. The shipped daemon does
   not, and its heartbeat loop runs only `update` and `force`. `Hosts.Abort` likewise reaches only a
