@@ -62,46 +62,85 @@ fn an_unknown_argument_is_exit_two_on_standard_error() {
     assert_eq!(ran.err, "hello: unknown argument \"--nope\"\n");
 }
 
+/// Runs the server path with `words` on a listener the test hands in, with one client already
+/// connected that sent `request`; returns the port it was asked to listen on, what the program
+/// did, and the whole answer the client read.
+fn serve_one(words: &[&str], request: &str) -> (u16, Ran, String) {
+    let asked = Cell::new(0u16);
+    let client = Cell::new(None);
+    let listen = |port: u16| {
+        asked.set(port);
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let mut stream = TcpStream::connect(listener.local_addr()?)?;
+        stream.write_all(request.as_bytes())?;
+        client.set(Some(stream));
+        Ok(listener)
+    };
+    let ran = run_with(words, &listen);
+    let mut answer = String::new();
+    client
+        .take()
+        .expect("a client")
+        .read_to_string(&mut answer)
+        .expect("read");
+    (asked.get(), ran, answer)
+}
+
 /// Catches the server path not binding the port it was given, not answering from the version and
-/// the `--fail-ready` flag it was given, and not ending in exit 1 with its reason when it stops.
+/// the `--fail-ready` flag it was given, not naming the version it serves when it starts, and not
+/// ending in exit 1 with its reason when it stops.
 #[test]
 fn the_server_path_serves_on_its_listener_until_it_stops() {
-    for (flag, want) in [
-        (None, "HTTP/1.1 200 OK\r\n"),
-        (Some("--fail-ready"), "HTTP/1.1 503 "),
+    for (flag, want, version) in [
+        (None, "HTTP/1.1 200 OK\r\n", VERSION.to_owned()),
+        (
+            Some("--fail-ready"),
+            "HTTP/1.1 503 ",
+            format!("{VERSION}-fail-ready"),
+        ),
     ] {
-        let asked = Cell::new(0u16);
-        let client = Cell::new(None);
-        let listen = |port: u16| {
-            asked.set(port);
-            let listener = TcpListener::bind("127.0.0.1:0")?;
-            listener.set_nonblocking(true)?;
-            let mut stream = TcpStream::connect(listener.local_addr()?)?;
-            stream.write_all(b"GET /readyz HTTP/1.1\r\n\r\n")?;
-            client.set(Some(stream));
-            Ok(listener)
-        };
         let mut words = vec!["--port", "8123"];
         words.extend(flag);
-        let ran = run_with(&words, &listen);
-        assert_eq!(asked.get(), 8123);
+        let (asked, ran, answer) = serve_one(&words, "GET /readyz HTTP/1.1\r\n\r\n");
+        assert_eq!(asked, 8123);
         assert_eq!(ran.code, 1);
         assert_eq!(ran.out, "");
         assert!(
             ran.err
-                .contains(&format!("hello {VERSION}: serving on 127.0.0.1:8123\n")),
+                .starts_with(&format!("hello {version}: serving on 127.0.0.1:8123\n")),
             "{}",
             ran.err
         );
         assert!(ran.err.contains("hello: stopped serving: "), "{}", ran.err);
-        let mut answer = String::new();
-        client
-            .take()
-            .expect("a client")
-            .read_to_string(&mut answer)
-            .expect("read");
         assert!(answer.starts_with(want), "{flag:?}: {answer:?}");
     }
+}
+
+/// Catches the failing build answering `/version` with the good build's version (so the two can
+/// be told apart only by `/readyz`), a suffix other than the one its package's version carries,
+/// or the suffix leaking into the good build's answer.
+#[test]
+fn version_answers_the_builds_own_version_with_and_without_fail_ready() {
+    let body = |flag: Option<&str>| {
+        let mut words = vec!["--port", "8125"];
+        words.extend(flag);
+        let (_, ran, answer) = serve_one(&words, "GET /version HTTP/1.1\r\n\r\n");
+        assert_eq!(ran.code, 1, "{}", ran.err);
+        let (head, body) = answer.split_once("\r\n\r\n").expect("a head and a body");
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{answer:?}");
+        body.to_owned()
+    };
+    let good = body(None);
+    let failing = body(Some("--fail-ready"));
+    assert_eq!(good, format!("{VERSION}\n"));
+    assert_eq!(failing, format!("{VERSION}-fail-ready\n"));
+    assert_ne!(good, failing);
+    assert_eq!(hello::served_version(false), VERSION);
+    assert_eq!(
+        hello::served_version(true),
+        format!("{VERSION}{}", hello::FAIL_READY_SUFFIX)
+    );
 }
 
 /// Catches a listener that cannot be opened being served anyway, and the reason being lost.

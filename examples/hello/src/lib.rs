@@ -28,6 +28,22 @@ use ports::{Host, HttpProbe, ProcessRunner};
 /// The version this binary reports: the release version `cargo xtask release set-version` wrote.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// What the failing build's version is [`VERSION`] followed by: its package
+/// (`cargo xtask release package --service hello --fail-ready`) carries `<version>-fail-ready` in
+/// its manifest and index, and starts the server with `--fail-ready`.
+pub const FAIL_READY_SUFFIX: &str = "-fail-ready";
+
+/// The version the server answers `GET /version` with: [`VERSION`], or, started with
+/// `--fail-ready`, [`VERSION`] followed by [`FAIL_READY_SUFFIX`], the version of the failing
+/// build's package, so that `/version` tells the two builds apart.
+pub fn served_version(fail_ready: bool) -> String {
+    if fail_ready {
+        format!("{VERSION}{FAIL_READY_SUFFIX}")
+    } else {
+        VERSION.to_owned()
+    }
+}
+
 /// Exit status of a command line the program cannot parse.
 const EXIT_USAGE: i32 = 2;
 /// Exit status of a server that could not start or stopped.
@@ -69,9 +85,10 @@ pub fn run_with(
                 EXIT_SERVER
             }
             Ok(listener) => {
-                let _ = writeln!(err, "hello {VERSION}: serving on 127.0.0.1:{port}");
+                let version = served_version(fail_ready);
+                let _ = writeln!(err, "hello {version}: serving on 127.0.0.1:{port}");
                 let answer = server::Answer {
-                    version: VERSION,
+                    version: &version,
                     fail_ready,
                 };
                 let why = server::serve_forever(listener, &answer);

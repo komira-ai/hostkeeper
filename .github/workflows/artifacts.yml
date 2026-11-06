@@ -30,7 +30,8 @@
 # --version` prints `hostkeeper-coordinator X.Y.Z+<12 hex>`; `release check-binary` refuses a
 # binary that prints anything else. `hello` is built from the same workspace, so it carries the
 # release version (`hello --version` prints `hello X.Y.Z`); its failing build is named
-# `<version>-fail-ready` in its manifest and index.
+# `<version>-fail-ready` in its manifest and index, and its server, started with `--fail-ready`,
+# answers `/version` with that name.
 #
 # The image job builds the coordinator's image twice, each time with a new BuildKit builder from
 # a context that holds the released binary and the operator web app (`ui/` of the commit, files

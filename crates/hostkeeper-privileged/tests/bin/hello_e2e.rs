@@ -1,8 +1,9 @@
 //! `hello-e2e`: the `bin/hello` of the hello packages `tests/device_mac_e2e.rs` builds. It is
 //! hello: the update hook (`update-hook <step>`, or a step as the first word) and every other
 //! command line are `hello::main`, unchanged. Only the server differs, in the version it
-//! answers `/version` with: hello answers the version it was compiled as, which is one version
-//! for every package a test builds from one binary, so its own `verify` would refuse every update
+//! answers `/version` with: hello answers the version it was compiled as (or that followed by
+//! `-fail-ready` when started with `--fail-ready`), which is one version for every good package
+//! a test builds from one binary, so its own `verify` would refuse every update
 //! but one as `wrong_version`. This program answers with the version of the manifest of the
 //! version directory it was started from (`<exe>/../../manifest.toml`, after the `current` link
 //! is resolved), the version the daemon installed, which is what a release build of hello
