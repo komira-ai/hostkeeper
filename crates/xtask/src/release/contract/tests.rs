@@ -350,3 +350,22 @@ fn a_package_is_chosen_by_service_and_fail_ready_and_hostkeeper_has_no_failing_b
     );
     assert_eq!(Package::of(Service::Hostkeeper, true), None);
 }
+
+#[test]
+fn the_signer_of_a_repository_is_its_own_artifacts_workflow_on_main_and_hostkeepers_is_the_contracts()
+ {
+    // Catches: another repository's release checked against hostkeeper's signer (or the other
+    // way round), or a signer of hostkeeper's that drifts from the contract's constants.
+    let tierstore: Repo = "komira-ai/tierstore".parse().expect("a repository");
+    assert_eq!(
+        Signer::of(&tierstore),
+        Signer {
+            repo: "komira-ai/tierstore".to_owned(),
+            workflow: "komira-ai/tierstore/.github/workflows/artifacts.yml".to_owned(),
+            source_ref: "refs/heads/main",
+        }
+    );
+    let hostkeeper: Repo = REPO.parse().expect("a repository");
+    assert_eq!(Signer::of(&hostkeeper), Signer::hostkeeper());
+    assert_eq!(Signer::hostkeeper().workflow, SIGNER_WORKFLOW);
+}

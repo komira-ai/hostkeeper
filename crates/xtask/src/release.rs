@@ -11,6 +11,11 @@
 //! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
 //!   unless it says `hello`; for hello `--fail-ready` builds its failing build), `.tar.zst`, and
 //!   its SHA-256.
+//! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
+//!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
+//!   and staged for the deb and the rpm.
+//! - `check-linux-pkg` ([`package::linux_check`]): a built deb or rpm, read back, installs the
+//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing build: which
 //!   package serves each platform, refused unless it has the package of every released platform.
@@ -27,6 +32,10 @@
 //! - `channel-stage` ([`channel_stage`]): one version of a service from a directory of release
 //!   assets, checked and laid out in a directory as the release channel serves it
 //!   (`S/V/index.json` beside each package and its bundle); copies files only, idempotent.
+//! - `channel-sync` ([`sync`]): every new published release of one or more repositories,
+//!   downloaded, checked (`release check` for hostkeeper's, the sums and the repository's own
+//!   attestations for another's) and staged into a release channel by `channel-stage`, a new
+//!   version renamed into place whole; never changes a version already there.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh` and `pkgbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
@@ -55,6 +64,7 @@ pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
 mod set_version;
+mod sync;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod version;
@@ -172,6 +182,40 @@ pub(crate) enum Verb {
         /// The directory the package and its `.sha256` are written to.
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Stage the pinned `gh` and the Sigstore trusted root for the deb and the rpm: `gh` out of
+    /// its release archive, refused unless the archive has the pinned SHA-256 and `gh` is a
+    /// program of the architecture; the trusted root refused unless each line is one. Writes
+    /// `<out>/gh` (0755) and `<out>/trusted_root.json` (0644) only when both pass.
+    NfpmStage {
+        /// The architecture of the packages, as nfpm's `ARCH`.
+        #[arg(long, value_enum)]
+        arch: package::nfpm_stage::Arch,
+        /// The pinned version of `gh`, `X.Y.Z`.
+        #[arg(long)]
+        gh_version: Version,
+        /// The downloaded `gh_<version>_linux_<arch>.tar.gz`.
+        #[arg(long)]
+        gh_archive: PathBuf,
+        /// The pinned SHA-256 of that archive, 64 lowercase hex digits.
+        #[arg(long)]
+        gh_sha256: crate::install::Sha256,
+        /// The output of `gh attestation trusted-root`.
+        #[arg(long)]
+        trusted_root: PathBuf,
+        /// The directory nfpm.yaml takes the two files from.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Read a built deb or rpm and refuse it unless it installs `/usr/lib/hostkeeper/gh` (a
+    /// regular file, 0755) and `/usr/lib/hostkeeper/trusted_root.json` (0644), both
+    /// root:root, with the bytes of the files `nfpm-stage` wrote.
+    CheckLinuxPkg {
+        /// The `.deb` or `.rpm` nfpm built.
+        package: PathBuf,
+        /// The directory `nfpm-stage` wrote (its `--out`).
+        #[arg(long)]
+        staged: PathBuf,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per released platform, refused when the package of any is missing: `index.json` for
@@ -302,6 +346,29 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Copy every new published release of each repository into the release channel: download
+    /// its assets, check them (`release check` for a hostkeeper release; for another
+    /// repository's, its SHA256SUMS and the attestation of every asset with a bundle by that
+    /// repository's own artifacts.yml on refs/heads/main) and stage each service version it
+    /// carries by `channel-stage`. A version already in the channel is left alone; one there with
+    /// other bytes is refused, and the run goes on with the others and then fails. Reads public
+    /// release assets only.
+    ChannelSync {
+        /// A repository whose releases are synced, `<owner>/<name>`; repeat it (or list several)
+        /// for more, synced in the order given.
+        #[arg(long = "repo", required = true, num_args = 1..)]
+        repos: Vec<Repo>,
+        /// The root of the channel's tree, as `channel-stage --out` names it. It must exist.
+        #[arg(long)]
+        channel_dir: PathBuf,
+        /// Skip every release older than this tag, `v<X.Y.Z>` (the tag itself is synced).
+        #[arg(long, value_parser = sync::parse_tag)]
+        since: Option<Version>,
+        /// Run again and again, this many seconds after each run ends, and never exit (the
+        /// sidecar's loop). Without it the verb runs once.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        every_secs: Option<u64>,
+    },
     /// Publish a checked directory as the release of the version, at the commit.
     Publish {
         dir: PathBuf,
@@ -333,6 +400,22 @@ pub(crate) fn run<A: Adapters>(
             Some(package) => index::write_index(&dir, package, &version),
             None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
         },
+        Verb::NfpmStage {
+            arch,
+            gh_version,
+            gh_archive,
+            gh_sha256,
+            trusted_root,
+            out,
+        } => package::nfpm_stage::stage(&package::nfpm_stage::Request {
+            arch,
+            gh_version,
+            gh_archive,
+            gh_sha256,
+            trusted_root,
+            out,
+        }),
+        Verb::CheckLinuxPkg { package, staged } => package::linux_check::check(&package, &staged),
         Verb::CheckMacosPkg {
             expanded,
             version,
@@ -459,10 +542,33 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => publish::publish(ports, &dir, &repo, &version, &commit),
+        Verb::ChannelSync {
+            repos,
+            channel_dir,
+            since,
+            every_secs,
+        } => {
+            let request = sync::Request {
+                repos,
+                channel: channel_dir,
+                since,
+            };
+            match every_secs {
+                None => sync::sync(ports.source, ports.verifier, &request),
+                Some(secs) => sync::every(
+                    ports.source,
+                    ports.verifier,
+                    &request,
+                    &sync::Sleep(std::time::Duration::from_secs(secs)),
+                ),
+            }
+        }
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
         | Verb::Index { .. }
+        | Verb::NfpmStage { .. }
+        | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
         | Verb::ChannelStage { .. } => run(verb, || Lent(*ports)),
     }
@@ -508,6 +614,7 @@ impl<E: Exec> Adapters for Wired<E> {
             git: &self.git,
             runs: &self.gh,
             store: &self.gh,
+            source: &self.gh,
             verifier: &self.gh,
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,

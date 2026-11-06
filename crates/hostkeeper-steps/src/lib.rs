@@ -49,7 +49,9 @@ pub mod systemd;
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
 pub use bad::{BAD_VERSIONS_FILE, BadVersions, BadVersionsError, MAX_BAD_VERSIONS};
 pub use capture::{LAST_LINE_MAX, RING_BYTES, Ring};
-pub use clock::{Clock, Stamp, SystemClock};
+pub use clock::{
+    BootId, BootIdError, BootIdSource, Clock, PROC_BOOT_ID, ProcBootId, Stamp, SystemClock,
+};
 pub use deadman::{DeadMan, Watch};
 pub use force::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict};
 pub use launcher::{

@@ -20,8 +20,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, Package, Platform, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Version,
-    asset_names, attested_names, bundle_of, summed_names,
+    Commit, DIGEST_SUFFIX, Package, Platform, SUMS, Signer, Version, asset_names, attested_names,
+    bundle_of, summed_names,
 };
 use super::index::ReleaseIndex;
 use super::ports::{Attestation, PortError, Verifier};
@@ -90,7 +90,7 @@ fn check_names(
 
 /// One line of `SHA256SUMS` as its digest and name, none when it is not
 /// `<64 lowercase hex>  <name>`.
-fn sums_line(line: &str) -> Option<(&str, &str)> {
+pub(crate) fn sums_line(line: &str) -> Option<(&str, &str)> {
     let (digest, name) = line.split_once("  ")?;
     let hex = (digest.len() == 64)
         & digest
@@ -217,27 +217,29 @@ fn check_attestations(
 ) -> Result<(), Error> {
     let file = dir.join(name);
     let bundle = dir.join(bundle_of(name));
+    let signer = Signer::hostkeeper();
     let digest = file_sha256(&file)?;
     let forms = [("online", None), ("offline", Some(bundle.as_path()))];
     for (form, bundle) in forms {
         let label = format!("{name} ({form})");
         judge(
             &label,
-            verifier.verify(&file, bundle, commit),
+            verifier.verify(&signer, &file, bundle, commit),
             &digest,
-            commit,
+            (&signer, commit),
             problems,
         );
     }
     Ok(())
 }
 
-/// What is wrong with the answer of the verifier for one form of one asset, one line each.
-fn judge(
+/// What is wrong with the answer of the verifier for one form of one asset, one line each: every
+/// attestation must name `signer`'s workflow and ref, the source commit `commit` and `digest`.
+pub(crate) fn judge(
     label: &str,
     answer: Result<Vec<Attestation>, PortError>,
     digest: &str,
-    commit: &Commit,
+    (signer, commit): (&Signer, &Commit),
     problems: &mut Vec<String>,
 ) {
     let attestations = match answer {
@@ -246,16 +248,16 @@ fn judge(
         Err(e) => return problems.push(format!("{label}: {e}")),
     };
     for a in &attestations {
-        if a.signer_workflow != SIGNER_WORKFLOW {
+        if a.signer_workflow != signer.workflow {
             problems.push(format!(
-                "{label}: signed by {}, not {SIGNER_WORKFLOW}",
-                a.signer_workflow
+                "{label}: signed by {}, not {}",
+                a.signer_workflow, signer.workflow
             ));
         }
-        if a.source_ref != SIGNER_REF {
+        if a.source_ref != signer.source_ref {
             problems.push(format!(
-                "{label}: attests the ref {}, not {SIGNER_REF}",
-                a.source_ref
+                "{label}: attests the ref {}, not {}",
+                a.source_ref, signer.source_ref
             ));
         }
         if a.source_commit != commit.as_str() {

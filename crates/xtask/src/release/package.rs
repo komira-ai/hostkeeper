@@ -28,6 +28,11 @@
 //! hostkeeper's starts [`SELF_UPDATE_CURRENT`], the binary its own update switches) and the entry
 //! list is checked against the rules of section 5.5 that apply to a list this module builds
 //! ([`check_entries`]).
+//!
+//! The child [`nfpm_stage`] is `release nfpm-stage`: the pinned `gh` and the Sigstore trusted
+//! root, checked and laid out for the deb and the rpm that `packaging/linux/nfpm.yaml` builds;
+//! [`linux_check`] is `release check-linux-pkg`, which reads a built deb or rpm back and checks
+//! that it installs both as staged.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -39,6 +44,8 @@ use super::contract::{Commit, DIGEST_SUFFIX, Package, Platform, Service, Version
 use super::ports::GitHistory;
 
 mod hello;
+pub(super) mod linux_check;
+pub(super) mod nfpm_stage;
 
 /// Why a Linux package of hostkeeper needs `--unit`.
 const LINUX_NEEDS_UNIT: &str =

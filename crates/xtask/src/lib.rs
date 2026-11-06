@@ -4,8 +4,9 @@
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
 //! - `release <verb>`: the release steps: the version of a commit, the hostkeeper package, the
-//!   release plan, the check and publication of a release's assets, and the staging of one
-//!   version of a service into a release channel's tree (`release`).
+//!   release plan, the check and publication of a release's assets, the staging of one
+//!   version of a service into a release channel's tree, and the sync of new published releases
+//!   into that tree (`release`).
 //! - `advisories`: the security advisories against the dependencies in `Cargo.lock`, kept in
 //!   one GitHub issue that it opens, rewrites and closes (`advisories`).
 //!

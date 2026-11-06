@@ -308,7 +308,7 @@ CI or an operator token sets the desired version (Q6): the operator through the 
 |---|---|---|
 | Daemon | host client certificate (7 days) | heartbeat, renew, execute the verbs on its own host |
 | Coordinator | server certificate chaining to the CA pinned in the daemon config | order any verb for any enrolled host, assign services; supply no command, path or URL |
-| Operator | personal token | exclude, include, label, hold and unhold, clear halt, force, mark and unmark bad, approve enrollment, assign services, set `min_version`, set the desired version of any managed service |
+| Operator | personal token | exclude, include, label, hold and unhold, clear halt, force, mark and unmark bad, approve enrollment, assign services, set `min_version`, set the desired version of any managed service, read convergence |
 | CI | OIDC token, single-use `jti` | set the desired version and read convergence, only for services its allow-list entry names |
 | Local root | uid 0 on the host | everything, including editing the daemon config |
 | Trusted signer | the organisation's release workflow named in the daemon config | publish packages (binaries and hooks) that run as root on every host the coordinator assigns them to |
@@ -654,7 +654,7 @@ The fields on each page are the fields the API returns (`Hosts.Get`, section 4.8
 - Before each step it writes the record with state `running` and a deadline; after it, `done` with the exit code and last line. Writes are temp file, `fsync`, rename, directory `fsync`.
 - On resume the rule is one table (section 6.5). The unit-name `<generation>` is a count of step runs persisted before the unit is launched, so a resumed run can stop the unit it launched.
 - A finished record answers the same order again without running anything. A `Halt` record holds every later order for that service until cleared by `clear_halt` (an order carrying a higher halt generation than the record's). A corrupt record is cleared only by `clear_record` (local, B20). `Deferred` runs again when the order returns.
-- Time is injected: a `Clock` supplies monotonic seconds, boot id and sleep. Elapsed time across a different boot id counts as zero.
+- Time is injected: a `Clock` supplies monotonic seconds, boot id and sleep. Elapsed time across a different boot id counts as zero. A boot id that cannot be read is an error, never an empty id, and a stamp of an unknown boot is of no boot's: the host may have rebooted.
 
 ### 6.3 The dead-man
 

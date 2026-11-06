@@ -12,11 +12,14 @@
 //!   ([`LaunchdProcessProbe`]), the plists under `/Library/LaunchDaemons`, and the quarantine and
 //!   code-signature checks of every unpacked package ([`HostMacVerify`]).
 //!
+//! The host's clock is chosen here too ([`host_clock`]): the kernel's monotonic clock under the
+//! boot id of the system the daemon was built for.
+//!
 //! [`Adapters::linux`] takes the launcher its unit control runs `systemctl` through, so its
 //! commands are measured against a fake; [`Adapters::for_platform`] gives it the host's
 //! ([`host_systemctl`]). [`Adapters::macos`] assembles the macOS set from the ports it is given,
-//! so it is measured on Linux against fakes; only the host's own `launchctl` clock and `proc_pidpath` are compiled
-//! for macOS alone (`host_macos`). A Linux build asked for the macOS set refuses to start.
+//! so it is measured on Linux against fakes; only the host's own `launchctl` clock and
+//! `proc_pidpath` are compiled for macOS alone (`host_macos`). A Linux build asked for the macOS set refuses to start.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,7 +32,7 @@ use hostkeeper_launchd::{
 };
 use hostkeeper_observe::{CommandRunner, ProcessProbe, ProcessRunner, ServiceManager};
 use hostkeeper_placed::{CommandLauncher, Systemctl, UnitControl};
-use hostkeeper_steps::{StepLauncher, SystemdLauncher};
+use hostkeeper_steps::{BootIdSource, StepLauncher, SystemClock, SystemdLauncher};
 use hostkeeper_unpack::MacVerify;
 
 use crate::hook_log::log_hook_output;
@@ -199,6 +202,24 @@ fn host_macos(platform: &Platform) -> Result<Adapters, StartError> {
 #[cfg(not(target_os = "macos"))]
 fn host_macos(_platform: &Platform) -> Result<Adapters, StartError> {
     Err(StartError::NoAdapters { platform: "macOS" })
+}
+
+/// The host's clock: the kernel's monotonic clock, under the boot id of the system the daemon
+/// was built for ([`host_boot_id`]).
+pub fn host_clock() -> SystemClock {
+    SystemClock::new(host_boot_id())
+}
+
+/// The boot id of a Mac: `kern.bootsessionuuid`.
+#[cfg(target_os = "macos")]
+pub fn host_boot_id() -> Box<dyn BootIdSource> {
+    Box::new(hostkeeper_launchd::SysctlBootId)
+}
+
+/// The boot id of Linux: the kernel's `boot_id` file.
+#[cfg(not(target_os = "macos"))]
+pub fn host_boot_id() -> Box<dyn BootIdSource> {
+    Box::new(hostkeeper_steps::ProcBootId::host())
 }
 
 /// The enrollment claims of a host of `kind`: [`LinuxClaims::host`] on Linux; on macOS the serial

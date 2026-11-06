@@ -13,7 +13,9 @@ use hostkeeper_daemon::verbs::update::interrupted;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_steps::record::{HookSel, Progress, Record, State};
-use hostkeeper_steps::{ArtifactError, Finished, LaunchError, RecordError, RunError, Stamp};
+use hostkeeper_steps::{
+    ArtifactError, BootId, Finished, LaunchError, RecordError, RunError, Stamp,
+};
 
 /// Catches versions compared as text, or parts of digits compared as text: each pair is in the
 /// order given, and each version equals itself.
@@ -167,7 +169,7 @@ fn the_try_rules_in_their_order() {
     let watching = Record {
         progress: Progress {
             watching: Some(Stamp {
-                boot_id: "b".to_owned(),
+                boot_id: BootId::new("a test", "b").ok(),
                 mono_secs: 1,
             }),
             ..Progress::default()

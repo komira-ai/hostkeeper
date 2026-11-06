@@ -20,14 +20,16 @@ hostkeeper-hook = { path = "../hostkeeper-hook" }
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 # `UnitControl`, the write side of the service manager that linking needs.
 hostkeeper-placed = { path = "../hostkeeper-placed" }
-# `StepLauncher` and its values, which the launchd step launcher implements, and the capture
-# `Ring` it keeps a step's output in. The step runner never depends on this crate
+# `StepLauncher` and its values, which the launchd step launcher implements, the capture
+# `Ring` it keeps a step's output in, and `BootIdSource`, which the boot id of a Mac implements. The step runner never depends on this crate
 # (crates/xtask/tests/layering keeps it so).
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libproc.workspace = true
+# `kern.bootsessionuuid`, the boot id of a Mac (`SysctlBootId`).
+sysctl.workspace = true
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
