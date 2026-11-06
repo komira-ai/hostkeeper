@@ -46,8 +46,8 @@ pub(crate) mod contract;
 #[cfg(test)]
 mod doc_tests;
 #[cfg(test)]
-mod fakes;
-mod git;
+pub(crate) mod fakes;
+pub(crate) mod git;
 mod github;
 mod index;
 mod locate;
@@ -68,6 +68,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::advisories::DenyCli;
 use check_binary::VersionOf;
 use contract::{Commit, Package, Platform, Repo, Service, Version};
 use git::GitCli;
@@ -228,14 +229,22 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary and
-    /// its launchd plist, nothing else, and no scripts.
+    /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary, its
+    /// launchd plist, its log directory and newsyslog file, the pinned `gh` and the Sigstore
+    /// trusted root, nothing else, and no scripts.
     MacosPkg {
         #[arg(long)]
         version: Version,
         /// The macos-arm64 hostkeeper binary: `/usr/local/bin/hostkeeper` in the pkg.
         #[arg(long)]
         binary: PathBuf,
+        /// The pinned darwin-arm64 `gh`: `/usr/local/lib/hostkeeper/gh` in the pkg.
+        #[arg(long)]
+        gh: PathBuf,
+        /// The Sigstore trusted root, as the pinned `gh attestation trusted-root` prints it:
+        /// `/usr/local/lib/hostkeeper/trusted_root.json` in the pkg.
+        #[arg(long)]
+        trusted_root: PathBuf,
         /// A directory to lay the pkg's tree out in; it must not exist.
         #[arg(long)]
         stage: PathBuf,
@@ -244,7 +253,8 @@ pub(crate) enum Verb {
         out: PathBuf,
     },
     /// Check a pkg that `pkgutil --expand` expanded into a directory: no scripts, and a payload
-    /// of exactly the binary and the daemon's plist with their modes, owners and bytes.
+    /// of exactly the binary, the daemon's plist, its log directory and newsyslog file, `gh` and
+    /// the trusted root with their modes, owners and bytes.
     CheckMacosPkg {
         /// The directory `pkgutil --expand` wrote.
         expanded: PathBuf,
@@ -253,6 +263,12 @@ pub(crate) enum Verb {
         /// The binary the pkg must hold.
         #[arg(long)]
         binary: PathBuf,
+        /// The `gh` the pkg must hold.
+        #[arg(long)]
+        gh: PathBuf,
+        /// The trusted root the pkg must hold.
+        #[arg(long)]
+        trusted_root: PathBuf,
     },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
@@ -376,7 +392,17 @@ pub(crate) fn run<A: Adapters>(
             expanded,
             version,
             binary,
-        } => macos_pkg::check(&expanded, &version, &binary),
+            gh,
+            trusted_root,
+        } => macos_pkg::check(
+            &expanded,
+            &version,
+            &macos_pkg::Sources {
+                binary,
+                gh,
+                trusted_root,
+            },
+        ),
         Verb::ChannelStage {
             service,
             version,
@@ -437,13 +463,19 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         Verb::MacosPkg {
             version,
             binary,
+            gh,
+            trusted_root,
             stage,
             out,
         } => macos_pkg::build(
             ports.pkgbuild,
             &macos_pkg::Request {
                 version,
-                binary,
+                sources: macos_pkg::Sources {
+                    binary,
+                    gh,
+                    trusted_root,
+                },
                 stage,
                 out,
             },
@@ -504,7 +536,7 @@ impl Adapters for Lent<'_> {
 }
 
 /// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations),
-/// the `--version` of a binary and `pkgbuild`, each running its program through a copy of `exec`. The real
+/// the `--version` of a binary, `pkgbuild` and `cargo deny`, each running its program through a copy of `exec`. The real
 /// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
 /// fake one.
 struct Wired<E> {
@@ -512,6 +544,7 @@ struct Wired<E> {
     gh: Gh<E>,
     version_of: VersionOf<E>,
     pkgbuild: PkgbuildCli<E>,
+    deny: DenyCli<E>,
 }
 
 impl<E: Exec + Clone> Wired<E> {
@@ -520,7 +553,8 @@ impl<E: Exec + Clone> Wired<E> {
             git: GitCli::new(exec.clone()),
             gh: Gh::new(exec.clone()),
             version_of: VersionOf::new(exec.clone()),
-            pkgbuild: PkgbuildCli::new(exec),
+            pkgbuild: PkgbuildCli::new(exec.clone()),
+            deny: DenyCli::new(exec),
         }
     }
 }
@@ -534,6 +568,7 @@ impl<E: Exec> Adapters for Wired<E> {
             verifier: &self.gh,
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,
+            advisories: &self.deny,
         }
     }
 }
@@ -609,5 +644,7 @@ pub(crate) fn state(runs: &[Run], commit: &Commit) -> RunState {
     }
 }
 
+#[cfg(test)]
+mod macos_pkg_verb_tests;
 #[cfg(test)]
 mod tests;

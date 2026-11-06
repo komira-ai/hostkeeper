@@ -302,6 +302,15 @@ jobs:
       PLATFORM: macos-arm64
       TARGET: aarch64-apple-darwin
       CYCLONEDX_SHA256: 4c53dfa21e70b65bf7f8d2592aadde3bcb02c1a40b6ec63b877e5ca65a29e180
+      # The gh the installer pkg installs at /usr/local/lib/hostkeeper/gh: the release archive
+      # gh_<version>_macOS_arm64.zip of cli/cli and its SHA-256 (gh's own checksums file lists it).
+      GH_VERSION: 2.103.3
+      GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
+      # The SHA-256 of what that gh's `gh attestation trusted-root` prints (the Sigstore public-good
+      # and GitHub trusted roots, one compact JSON line each), which the pkg installs at
+      # /usr/local/lib/hostkeeper/trusted_root.json. When either root changes, the check below
+      # fails until this pin is moved by a pull request.
+      TRUSTED_ROOT_SHA256: 65ca537f6ed8a47fd0e560c421baa1f6c1efb8b25fc200d8c5c02c0e92eb2b9c
       RELEASE_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -360,15 +369,27 @@ jobs:
       # The same binary and plists, started with --fail-ready (see the Linux build job).
       - name: hello's failing build and its SHA-256
         run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
+      - name: Download gh (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+      - name: Check gh (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
+      - name: Unpack gh
+        run: unzip -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d "$RUNNER_TEMP/gh-pinned"
+      # gh fetches both roots through TUF and checks their signatures; no token is needed.
+      - name: The Sigstore trusted root, as the pinned gh prints it
+        run: '"$RUNNER_TEMP/gh-pinned/gh" attestation trusted-root > "$RUNNER_TEMP/trusted_root.download"'
+      - name: Check the trusted root (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/trusted_root.download" --sha256 "$TRUSTED_ROOT_SHA256" --out "$RUNNER_TEMP/trusted_root.json"
       - name: The installer pkg
-        run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --stage "$RUNNER_TEMP/pkg-root" --out dist
-      # Read back from the built pkg: its payload holds exactly the binary and the daemon's plist,
-      # with their paths, modes, owners and bytes, the plist names the daemon's label, and the pkg
-      # has no scripts.
+        run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json" --stage "$RUNNER_TEMP/pkg-root" --out dist
+      # Read back from the built pkg: its payload holds exactly the binary, the daemon's plist,
+      # the log directory and the newsyslog file, gh and the trusted root, with their paths, modes,
+      # owners and bytes, the plist names the daemon's label and output files, the newsyslog file
+      # rotates exactly those files, and the pkg has no scripts.
       - name: Expand the installer pkg
         run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
-      - name: The installer pkg installs exactly the binary and the plist
-        run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/pkg-expanded" --version "$RELEASE_VERSION" --binary target/release/hostkeeper
+      - name: The installer pkg installs exactly the binary, the plist, the log directory and its newsyslog file, gh and the trusted root
+        run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/pkg-expanded" --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json"
       - run: mkdir "$RUNNER_TEMP/unpacked"
       - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper
       - name: The packaged hostkeeper says the version and the commit

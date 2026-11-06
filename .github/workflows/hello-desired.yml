@@ -1,0 +1,103 @@
+# The hello proof run of docs/hello.md, from CI: sets the desired version of the example service
+# `hello` on the coordinator through the CI client (set-desired.yml, docs/deploy/ci-client.md),
+# with the OIDC token GitHub issues to this workflow. It is the same path a service's release job
+# takes, run by hand, so that path is proven on hello before a real service depends on it.
+#
+# Run by hand only (`workflow_dispatch`), from main. Three inputs:
+#
+# - `version`: a release of this repository, X.Y.Z, whose assets carry the hello packages;
+# - `variant`: `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose
+#   `/readyz` answers 503, which the hosts fail and the coordinator rolls back;
+# - `platform`: the platform of the hosts that run the proof. The desired state carries one
+#   package digest, which every host checks, so the proof runs on hosts of one platform
+#   (docs/hello.md, "One platform").
+#
+# `digest` reads the SHA-256 of the variant's package for that platform from the release (the
+# `.sha256` file beside the package); it holds no token right but
+# `contents: read` and runs nothing of the release. `set-desired` calls the CI client, pinned
+# like any caller's: the `uses:` commit with its release as the comment, and `hostkeeper_version`
+# and `hostkeeper_commit` of that same release. The coordinator, its CA and the audience are
+# repository variables; the coordinator's allow-list entry for this workflow names `hello`
+# (docs/deploy/ci-client.md, "The allow-list entry").
+#
+# The workflow lint (crates/xtask/tests/workflows, `callers.rs`) holds this file to that shape.
+name: hello-desired
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The hostkeeper release whose hello package is set, X.Y.Z.
+        type: string
+        required: true
+      variant:
+        description: "`hello` sets the version; `fail-ready` sets its failing build, <version>-fail-ready."
+        type: choice
+        required: true
+        default: hello
+        options:
+          - hello
+          - fail-ready
+      platform:
+        description: The platform of the hosts that run the proof; the digest set is that platform's package.
+        type: choice
+        required: true
+        default: linux-x86_64
+        options:
+          - linux-x86_64
+          - linux-arm64
+          - macos-arm64
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  digest:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.digest.outputs.version }}
+      package_digest: ${{ steps.digest.outputs.package_digest }}
+    steps:
+      # A release is X.Y.Z: nothing else reaches the URL or the job's outputs.
+      - name: Refuse a version that is not X.Y.Z
+        env:
+          RELEASE: ${{ inputs.version }}
+        run: '[[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+      # The `.sha256` file is `<64 hex>  <file name>`: its first field is the digest. A download
+      # that fails, or a first field that is not 64 lower-case hex digits, fails the step (the
+      # shell runs with `-e -o pipefail`), so nothing is set. Every host checks the package it
+      # fetches against the digest.
+      - name: The version and the SHA-256 of the variant's package
+        id: digest
+        env:
+          RELEASE: ${{ inputs.version }}
+          VERSION: ${{ inputs.variant == 'fail-ready' && format('{0}-fail-ready', inputs.version) || inputs.version }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          digest=$(curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-$PLATFORM.tar.zst.sha256" | cut -d ' ' -f 1)
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          printf 'version=%s\npackage_digest=%s\n' "$VERSION" "$digest" >> "$GITHUB_OUTPUT"
+
+  set-desired:
+    needs: [digest]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@f04696da7e2bdcbaf9112450ab651a1ab24e61bf # v0.1.35
+    with:
+      service: hello
+      version: ${{ needs.digest.outputs.version }}
+      package_digest: ${{ needs.digest.outputs.package_digest }}
+      hostkeeper_version: 0.1.35
+      hostkeeper_commit: f04696da7e2bdcbaf9112450ab651a1ab24e61bf
+      coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
+      coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
+      audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}
