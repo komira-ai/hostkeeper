@@ -58,6 +58,8 @@ fn beat(platform: Platform, agent: &str, services: Vec<ServiceFacts>) -> Heartbe
         agent_version: version(agent),
         features: ANNOUNCED.to_vec(),
         services,
+        sent_unix: 0,
+        renewal: hostkeeper_link::Renewal::default(),
     }
 }
 
@@ -102,7 +104,7 @@ fn the_wire_service_limit_equals_the_proto_limit() {
 
 /// Catches a drift of the wire shape: for the facts of the recorded heartbeat of kbf's agent
 /// that lists a service (sequence 11, host `d2`), the link sends the recorded bytes, with only
-/// the additive `agent_features` and `agent` after them; and the recorded heartbeat of a service
+/// the additive `agent_features`, `agent` and `sent_unix` after them; and the recorded heartbeat of a service
 /// with a halted verdict (sequence 10, host `d3`) reads as the same wire heartbeat as the link's
 /// without those two. Also the request itself: one POST to the route, its length, and
 /// `Connection: close`.
@@ -119,7 +121,7 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
     );
     let mut expected = recorded.trim_end_matches('}').to_owned();
     expected.push_str(&format!(
-        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}}}}"#
+        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}},"sent_unix":0}}"#
     ));
     assert!(recorded.ends_with("}]}"), "{recorded}");
     assert_eq!(
@@ -163,8 +165,11 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
         ]
     );
     assert_eq!(ours.agent_name(), "hostkeeper");
+    assert_eq!(ours.sent_unix, Some(0));
     ours.agent_features.clear();
     ours.agent = None;
+    // kbf's agent said no time of its own; `sent_unix` is additive, as `agent` is.
+    ours.sent_unix = None;
     // kbf's agent named no order; the order id and try are additive, as `agent` is.
     for entry in ours.services.iter_mut().flatten() {
         if let Some(last) = entry.last_update.as_mut() {
@@ -265,6 +270,7 @@ fn every_word_of_a_heartbeat_is_the_wires() {
             "health": "healthy",
             "last_update": null,
             "updating": null,
+            "sent_unix": 0,
             "services": [
                 {
                     "name": "s-a", "version": "1.0", "health": "healthy",
@@ -452,4 +458,42 @@ fn a_heartbeat_the_json_route_cannot_carry_is_refused_by_name() {
     }
     assert_eq!(transport.dialed(), Vec::<(String, u16)>::new());
     assert_eq!(log.lines(), Vec::<String>::new());
+}
+
+/// Catches the host's clock or certificate left off the JSON route, sent under other names, or
+/// sent when there is nothing to say: a heartbeat says `sent_unix` always, and
+/// `cert_not_after_unix` and `last_renew_error` only when the enrollment loop gave them, and the
+/// coordinator's reader reads back what was sent.
+#[test]
+fn the_host_clock_and_certificate_go_out_on_the_json_route() {
+    let mut full = beat(Platform::LinuxX86_64, "0.9.0", Vec::new());
+    full.sent_unix = 2_000_000_123;
+    full.renewal = hostkeeper_link::Renewal {
+        cert_not_after_unix: Some(2_000_600_000),
+        last_renew_error: Some("renewal refused: host_excluded".to_owned()),
+    };
+    let request = sent("wire-renewal", &full);
+    let body: Value = serde_json::from_slice(&request.body).expect("JSON");
+    assert_eq!(body["sent_unix"], json!(2_000_000_123_u64));
+    assert_eq!(body["cert_not_after_unix"], json!(2_000_600_000_u64));
+    assert_eq!(
+        body["last_renew_error"],
+        json!("renewal refused: host_excluded")
+    );
+    let read: wire::Heartbeat = serde_json::from_slice(&request.body).expect("a heartbeat");
+    assert_eq!(read.sent_unix, Some(2_000_000_123));
+    assert_eq!(read.cert_not_after_unix, Some(2_000_600_000));
+    assert_eq!(
+        read.last_renew_error.as_deref(),
+        Some("renewal refused: host_excluded")
+    );
+
+    let request = sent(
+        "wire-renewal-none",
+        &beat(Platform::LinuxX86_64, "0.9.0", Vec::new()),
+    );
+    let body: Value = serde_json::from_slice(&request.body).expect("JSON");
+    assert_eq!(body["sent_unix"], json!(0));
+    assert_eq!(body.get("cert_not_after_unix"), None);
+    assert_eq!(body.get("last_renew_error"), None);
 }

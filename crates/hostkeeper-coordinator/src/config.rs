@@ -69,7 +69,7 @@ use crate::desired::{DesiredStore, StoreError};
 use crate::enrollment::{
     AllowlistError, MacAllowlist, MacPolicy, NoDeviceState, Setup, SetupError, os_random, setup,
 };
-use crate::fleet::QUIET_START;
+use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::http::Surface;
 use crate::jti_file::{JtiError, JtiFile, jti_path};
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
@@ -383,6 +383,11 @@ pub struct Serve {
     /// intervals (30); a lower value is refused at start.
     #[arg(long, default_value_t = QUIET_START.as_secs())]
     pub quiet_secs: u64,
+    /// How far, in seconds, the time a host's heartbeat says may be from the coordinator's wall
+    /// clock, either way, before the heartbeat counts as skewed: `Hosts.List` and `Hosts.Get`
+    /// answer each host's count since the start (`clock_skew_beats`). Nothing else reads it.
+    #[arg(long, default_value_t = CLOCK_SKEW_AFTER.as_secs())]
+    pub clock_skew_secs: u64,
     /// The release channel the hosts fetch packages from, as `https://<host>[:<port>][/<path>]`
     /// (the daemon config's `release_channel`). With it, a set of the desired state is refused
     /// `not_in_channel` unless `<channel>/<service>/<version>/index.json` is there (retry once
@@ -583,6 +588,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_services(services)
         .with_legacy_service(legacy.map(str::to_owned))
         .with_quiet(Duration::from_secs(flags.quiet_secs))
+        .with_clock_skew(Duration::from_secs(flags.clock_skew_secs))
         .with_prefixes(prefixes)
         .with_ops(ops)
         .with_verdicts(verdicts)

@@ -30,7 +30,7 @@ use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, ClientIdentity, CoordinatorLink, Dispatch, Feature, Heartbeat, Job,
-    LinkError, Platform, TrustFault,
+    LinkError, Platform, Renewal, TrustFault,
 };
 use hostkeeper_testkit::Scratch;
 use hostkeeper_tls::TlsSource;
@@ -404,6 +404,8 @@ fn bare_beat() -> Heartbeat {
         agent_version: hostkeeper_config::names::Version::from(OWN),
         features: ANNOUNCED.to_vec(),
         services: Vec::new(),
+        sent_unix: 0,
+        renewal: Renewal::default(),
     }
 }
 

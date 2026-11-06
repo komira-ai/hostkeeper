@@ -291,7 +291,10 @@ fn member_service(service: &str, member: &Member, ops: &OpsState) -> proto::Host
 /// put back together from what the coordinator keeps: the platform of the first service that
 /// heard it, its agent and features, and one entry per service that heard it (each as
 /// [`service_beat`] says it). The coordinator's clock is not the wall clock, so the time of the
-/// last heartbeat is `unix_now` less the seconds the host has been silent.
+/// last heartbeat is `unix_now` less the seconds the host has been silent. What the last
+/// heartbeat said of the host's clock and certificate is in the host's own fields
+/// (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`), not in the heartbeat put
+/// back together.
 pub(crate) fn host(
     id: &HostId,
     node: &Node,
@@ -326,6 +329,7 @@ pub(crate) fn host(
             }),
             features: node.features.clone(),
             services: beats,
+            ..agent::HeartbeatRequest::default()
         }),
         labels: status
             .ops
@@ -349,6 +353,9 @@ pub(crate) fn host(
             })
             .collect(),
         services,
+        cert_not_after_unix: node.cert_not_after_unix,
+        last_renew_error: node.last_renew_error.clone(),
+        clock_skew_beats: node.skewed_beats,
         role: node.role.clone(),
         node_id,
         // `Hosts.List` and `Hosts.Get` fill these in from the host inventory.

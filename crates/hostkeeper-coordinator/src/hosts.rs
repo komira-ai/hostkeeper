@@ -22,6 +22,9 @@
 //!
 //! All three take the operator token only, as every call of [`crate::operator`] does.
 
+use std::sync::PoisonError;
+use std::time::Duration;
+
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::HostId;
 
@@ -41,6 +44,19 @@ pub const ACTION_RETIRE: &str = "host_retire";
 pub const MAX_HOSTS_PAGE: usize = 256;
 
 impl Coordinator {
+    /// The same coordinator counting a host's heartbeat as skewed when the time it says is
+    /// further than `after` from the coordinator's wall clock, either way (`--clock-skew-secs`),
+    /// instead of [`crate::fleet::CLOCK_SKEW_AFTER`]. `Hosts.List` and `Hosts.Get` answer each
+    /// host's count ([`crate::fleet::Fleet::note_node`]).
+    #[must_use]
+    pub fn with_clock_skew(mut self, after: Duration) -> Self {
+        self.fleet
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_skew_after(after);
+        self
+    }
+
     /// `Hosts.List`: the hosts heard from since the coordinator started, by node id, after the
     /// node id `page_token` names, at most `limit` ([`MAX_HOSTS_PAGE`] for 0 or above it), and
     /// the token of the next page (the last node id of this one; empty on the last page).

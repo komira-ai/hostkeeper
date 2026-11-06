@@ -639,6 +639,9 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
             ("bmc_mac", 11),
             ("serial", 12),
             ("enrolled_unix", 13),
+            ("cert_not_after_unix", 14),
+            ("last_renew_error", 15),
+            ("clock_skew_beats", 16),
         ],
     ),
     (

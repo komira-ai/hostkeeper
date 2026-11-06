@@ -443,6 +443,9 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         }),
         features: ANNOUNCED.iter().map(|name| (*name).to_owned()).collect(),
         services: services.iter().map(proto_service).collect(),
+        sent_unix: None,
+        cert_not_after_unix: None,
+        last_renew_error: None,
     }
 }
 

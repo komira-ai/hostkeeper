@@ -1,7 +1,9 @@
 //! The loop: one line per change of state, and one sleep of `RETRY_SECS` on the monotonic clock
 //! after every step, whatever it did.
 
-use hostkeeper_enroll::{Enroller, Enrollment, HostId, NOT_ENROLLED, RETRY_SECS, RequestId};
+use hostkeeper_enroll::{
+    Enroller, Enrollment, HostId, NOT_ENROLLED, RETRY_SECS, RenewalState, RequestId,
+};
 
 use crate::support::{HOST, T0, WEEK, World, csr_spki};
 
@@ -23,6 +25,7 @@ fn run_seeing(
     enroller.run_loop(
         &mut |line: &str| lines.push(line.to_owned()),
         &mut |enrollment| seen.push(enrollment),
+        &RenewalState::default(),
         &mut || {
             let go = step < steps;
             if go {
