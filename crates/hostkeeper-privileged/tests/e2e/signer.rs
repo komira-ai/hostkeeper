@@ -287,7 +287,7 @@ impl FixtureSigner {
         ]);
 
         // The signed attributes, each `SEQUENCE { type, SET { value } }`, sorted by encoding.
-        let mut attributes = vec![
+        let mut attributes = [
             der::sequence(vec![
                 der::oid(&oids::CONTENT_TYPE),
                 der::set(vec![der::oid(&oids::TST_INFO)]),
@@ -511,7 +511,7 @@ fn statement(subject_name: &str, sha256_hex: &str) -> Vec<u8> {
         "predicateType": PREDICATE_TYPE,
         "predicate": {
             "buildDefinition": {
-                "buildType": "https://actions.github.io/buildtypes/workflow/v1",
+                "buildType": format!("https://github.com/{ORGANISATION}/{REPOSITORY}/build-type/v1"),
                 "externalParameters": {
                     "workflow": {
                         "ref": SOURCE_REF,

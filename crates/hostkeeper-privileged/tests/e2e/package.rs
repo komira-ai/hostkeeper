@@ -26,12 +26,12 @@ use super::{BINARY_NAME, SERVICE, UNIT_TEMPLATE};
 /// The manifest template; the placeholders are listed in `fixtures/tierstore-shaped/README.md`.
 const MANIFEST_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/fixtures/tierstore-shaped/manifest.toml.in"
+    "/fixtures/tierstore-shaped/manifest.toml.tmpl"
 ));
 /// The unit template of the run units.
 const UNIT_TEMPLATE_TEXT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/fixtures/tierstore-shaped/units/hostkeeper-ci-tierstore@.service.in"
+    "/fixtures/tierstore-shaped/units/hostkeeper-ci-tierstore@.service.tmpl"
 ));
 
 /// Mode of a directory and of the executable.

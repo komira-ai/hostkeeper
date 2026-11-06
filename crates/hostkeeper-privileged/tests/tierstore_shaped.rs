@@ -463,6 +463,8 @@ fn fixture_attestation_is_checked_by_the_production_verifier() {
         let order = PackageOrder {
             service: ServiceName::new(SERVICE).expect("a service name"),
             version: Version::new(version).expect("a version"),
+            // An order naming the package by its digest alone, as the scenarios set it.
+            index_digest: None,
         };
         let staged = fetch_package(&fetch, &order).expect("the package is fetched");
         prove(&proof, staged).map(|verified| verified.sha256().as_str().to_owned())

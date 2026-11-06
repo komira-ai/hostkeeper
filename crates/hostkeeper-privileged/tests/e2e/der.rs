@@ -177,7 +177,7 @@ pub fn implicit(number: u8, content: &[u8]) -> Vec<u8> {
 }
 
 /// A certificate `Time`: `UTCTime` for the years 1950 to 2049, else `GeneralizedTime`
-/// (RFC 5280, section 4.1.2.5).
+/// (the `Validity` rule of RFC 5280).
 pub fn time(unix_seconds: i64) -> Vec<u8> {
     let civil = Civil::from_unix(unix_seconds);
     if (1950..2050).contains(&civil.year) {

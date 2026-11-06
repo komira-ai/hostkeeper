@@ -9,7 +9,7 @@ two run units that are instances of one template unit, a loopback health URL wit
 
 Nothing binary is committed. The binary is the `tierstore-like` program of
 `tests/bin/tierstore_like.rs`, built by cargo with the crate's tests. The test renders the two
-templates here (`manifest.toml.in`, `units/hostkeeper-ci-tierstore@.service.in`) with the
+templates here (`manifest.toml.tmpl`, `units/hostkeeper-ci-tierstore@.service.tmpl`) with the
 placeholders `{{service}}`, `{{version}}`, `{{platform}}`, `{{port_a}}`, `{{port_b}}`,
 `{{record_dir}}`, `{{fail_verify}}` and `{{packages}}`, and `tests/e2e/package.rs` packs them with
 the binary into `<service>-<version>-<platform>.tar.zst` in memory, at test time.
