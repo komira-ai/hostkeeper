@@ -160,6 +160,7 @@ fn the_daemon_reaches_ready_only_after_the_boot_pass_and_reconcile() {
             Stage::RestartWatchers,
             Stage::BootSteps,
             Stage::Ready,
+            Stage::SelfUnits,
         ]
     );
     let reconciled = report

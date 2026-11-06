@@ -1,6 +1,6 @@
 //! The packaging of hostkeeper: in `packaging/linux/`, the unit, the tmpfiles rules, the config
-//! template, `nfpm.yaml`, the package scripts, the boot-image overlay and the unit of
-//! hostkeeper's own package (`package/hostkeeper.service`); and the coordinator's container
+//! template, `nfpm.yaml`, the package scripts and the boot-image overlay, with the one unit that
+//! hostkeeper's own package carries too; and the coordinator's container
 //! build file, `packaging/container/Dockerfile`. Each is read from the committed file and held to
 //! docs/design/hostkeeper-design.md (sections 4.1, 4.6, 6.5, 6.6, 10 and 12.3). Each check is a
 //! function of the texts, and each is also shown to refuse its defect on an altered text.
@@ -12,10 +12,11 @@ mod container;
 mod daemon_flags;
 mod directories;
 mod nfpm;
+mod one_unit;
 mod overlay;
 mod package;
-mod package_unit;
 mod script;
+mod self_update;
 mod template;
 #[path = "../../src/testdir.rs"]
 mod testdir;

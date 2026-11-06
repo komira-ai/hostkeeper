@@ -1,6 +1,6 @@
 //! `hostkeeper-coordinator serve`: its flags, its start-up, its refusals and its exit codes,
-//! driven in-process through `config::{Cli, build, run, start, main}`. The binary's one verb is
-//! `serve`; bad flags are exit 2, a refused start is exit 1. Nothing binds a socket: `run` and
+//! driven in-process through `config::{Cli, build, run, start, main}`; bad flags are exit 2, a
+//! refused start is exit 1. The verbs themselves are in `verbs.rs`. Nothing binds a socket: `run` and
 //! `start` take the function that binds, and these tests give them one that binds nothing.
 
 mod support;
@@ -168,7 +168,9 @@ fn build_given(flags: &Serve) -> Result<hostkeeper_coordinator::config::Parts, S
 }
 
 fn flags_of(args: Vec<OsString>) -> Serve {
-    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command;
+    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
+        panic!("serve")
+    };
     flags
 }
 
@@ -237,24 +239,6 @@ fn the_flags_are_parsed_and_refused_as_the_usage_says() {
     let mut args = files.args();
     args.extend([OsString::from("--tls-reload-secs"), OsString::from("0")]);
     assert_eq!(exit_code(args), ExitCode::from(2));
-}
-
-/// Catches: a second verb, or a `serve` that can start without the services it manages:
-/// `serve` is the only verb, and `--rollout-file` is required.
-#[test]
-fn serve_is_the_only_verb_and_the_rollout_file_is_required() {
-    let files = Files::new("config-verb");
-    let mut other = files.args();
-    other[1] = "run".into();
-    assert_eq!(
-        Cli::try_parse_from(other).expect_err("no such verb").kind(),
-        ErrorKind::InvalidSubcommand
-    );
-    let args = without(&files.args(), "--rollout-file");
-    let missing = Cli::try_parse_from(args).expect_err("--rollout-file is required");
-    assert_eq!(missing.kind(), ErrorKind::MissingRequiredArgument);
-    assert!(missing.to_string().contains("--rollout-file"), "{missing}");
-    let Command::Serve(_) = Cli::try_parse_from(files.args()).expect("flags").command;
 }
 
 /// Catches: the certificate namespaces and the legacy service not being flags with the
