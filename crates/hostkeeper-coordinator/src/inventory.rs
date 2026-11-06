@@ -225,7 +225,8 @@ impl<'a> RecordIndex<'a> {
 }
 
 /// Fills in what the host inventory says of `host`, enrolled as `enrolled` (`None` when it is
-/// not): when it was approved, and the record its claims match, if one does.
+/// not): when it was approved, when its first heartbeat since then was accepted, and the
+/// record its claims match, if one does.
 pub fn show_inventory(
     host: &mut proto::Host,
     enrolled: Option<&EnrolledHost>,
@@ -235,6 +236,7 @@ pub fn show_inventory(
         return;
     };
     host.enrolled_unix = enrolled.approved_unix;
+    host.first_heartbeat_unix = enrolled.first_heartbeat_unix;
     if let Some(record) = index.matched(&enrolled.claims) {
         host.inventory_record_id.clone_from(&record.host_id);
         host.data_macs.clone_from(&record.data_macs);

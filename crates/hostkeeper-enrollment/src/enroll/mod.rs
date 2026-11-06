@@ -23,6 +23,8 @@
 //! - [`EnrollmentStore::verify_poll`] checks a poll's signed nonce against the request's key.
 //! - [`EnrollmentStore::reject`] is the operator's rejection of a pending request: it is marked
 //!   denied, so its key is refused and it no longer counts toward the pending cap.
+//! - [`EnrollmentStore::note_heartbeat`] records, once, when an approved host's first heartbeat
+//!   since its approval was accepted; each approval starts it over.
 //! - [`EnrollmentStore::deny`], [`EnrollmentStore::retire`], [`EnrollmentStore::report_live`]
 //!   and the questions the heartbeat path asks (`is_denied`, `is_retiring`, `is_duplicate`,
 //!   `renew_allowed`).
@@ -251,6 +253,9 @@ pub struct EnrolledHost {
     /// When that request was last approved, unix seconds; 0 for an approval recorded without
     /// an approver ([`EnrollmentStore::approve`]).
     pub approved_unix: u64,
+    /// When the coordinator accepted the host's first heartbeat since that approval, unix
+    /// seconds ([`EnrollmentStore::note_heartbeat`]); `None` until it does.
+    pub first_heartbeat_unix: Option<u64>,
 }
 
 /// A recorded approval.

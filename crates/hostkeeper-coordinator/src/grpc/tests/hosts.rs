@@ -19,7 +19,9 @@ use tonic::Code;
 use super::heartbeat::{beat, peer_of, proto_message, svc};
 use super::operator::{AUDIT_UNIX, World};
 use super::support::{call, decode, grpc_request, raw};
-use crate::enrollment::tests::support::{HostKey, Rig as EnrollmentRig, enroll_request, enrolled};
+use crate::enrollment::tests::support::{
+    HostKey, NOW, Rig as EnrollmentRig, enroll_request, enrolled,
+};
 use crate::http::Surface;
 use crate::ops::{OpsState, ServiceOps};
 use crate::testutil::{OPERATOR, Rig};
@@ -64,8 +66,9 @@ async fn gateway(world: &World, path: &str, body: &str) -> (StatusCode, Value) {
 
 /// Proves: a host that enrolled and heartbeated on the certificate it was issued is listed by
 /// `Hosts.List` and answered by `Hosts.Get` as one and the same host: the node id and role of
-/// its certificate, live, its heartbeat as it sent it, the labels the operator set, and kbf's
-/// view of it holding the operator's hold; `Get` of a host never heard is `NOT_FOUND`
+/// its certificate, live, its heartbeat as it sent it, the time that heartbeat arrived by the
+/// enrollment's clock as its first, the labels the operator set, and kbf's view of it holding
+/// the operator's hold; `Get` of a host never heard is `NOT_FOUND`
 /// `unknown_host`; and the gateway's JSON of `Hosts.List` is the reply the UI's Fleet page is
 /// tested on.
 ///
@@ -125,6 +128,7 @@ async fn list_and_get_answer_the_host_that_enrolled_and_heartbeated() {
     );
     assert_eq!(host.heartbeat.as_ref(), Some(&sent), "as it sent it");
     assert_eq!(host.labels, labels_of(&[("rack", "r1")]));
+    assert_eq!(host.first_heartbeat_unix, Some(NOW), "its first heartbeat");
     let [kbf] = host.services.as_slice() else {
         panic!("kbf alone: {:?}", host.services);
     };

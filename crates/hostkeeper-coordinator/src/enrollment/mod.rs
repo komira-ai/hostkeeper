@@ -27,6 +27,7 @@
 //!
 //! The heartbeat path asks [`Enrollment::identity_of`] who a certificate the CA issued names,
 //! [`Enrollment::admission`] whether its host is denied, retiring or neither,
+//! [`Enrollment::note_heartbeat`] to keep the first heartbeat since its approval,
 //! [`Enrollment::report_live`] which machine speaks for it, and [`Enrollment::is_duplicate`]
 //! whether it is ordered nothing ([`crate::service::Coordinator`]).
 
@@ -284,6 +285,18 @@ impl Enrollment {
             store_host(host).map(|host| self.store.report_live(&host, machine_id, now))
         {
             tracing::debug!(%why, host_id = %host, "a live report was not recorded");
+        }
+    }
+
+    /// Records that a heartbeat of `host` was accepted now, by the enrollment's clock: the first
+    /// since its approval is kept with the host ([`EnrollmentStore::note_heartbeat`]) and
+    /// answered as its `first_heartbeat_unix`. A host the store never approved (a certificate
+    /// of the farm CA) is not tracked; a store that cannot be written is logged, and the next
+    /// heartbeat tries again.
+    pub fn note_heartbeat(&self, host: &hostkeeper_wire::HostId) {
+        let now = self.clock.now_unix();
+        if let Some(Err(why)) = store_host(host).map(|host| self.store.note_heartbeat(&host, now)) {
+            tracing::warn!(%why, host_id = %host, "a first heartbeat was not recorded");
         }
     }
 

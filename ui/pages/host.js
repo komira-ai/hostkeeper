@@ -288,19 +288,23 @@ function assignedSection(listing, nodeId, ends) {
 
 // The facts the host inventory gives of `host`: the record its enrollment matched, as a link to
 // the Inventory page's enrolled records with that record marked, the record's MACs and serial,
-// and when the host's approval was made. Each is "-" when there is none.
+// when the host's approval was made, and when the coordinator first heard the host since then
+// ("not yet" for an enrolled host it has not heard since). Each is "-" when there is none.
 function inventoryFacts(ctx, host) {
   const recordId = typeof host.inventoryRecordId === "string" ? host.inventoryRecordId : "";
   const record = recordId === "" ? "none matched" : h("button", {
     type: "button", class: "linklike", name: "open-record",
     on: { click: () => ctx.navigate("inventory", { enrolled: "true", record: recordId }) },
   }, recordId);
+  const enrolled = fmtUnix(host.enrolledUnix) !== "-";
+  const firstHeard = fmtUnix(host.firstHeartbeatUnix);
   return [
     ["Inventory record", record],
     ["Data MACs", list(host, "dataMacs").join(", ") || "-"],
     ["BMC MAC", host.bmcMac || "-"],
     ["Serial", host.serial || "-"],
-    ["Enrolled", fmtUnix(host.enrolledUnix) === "-" ? "not enrolled" : fmtUnix(host.enrolledUnix)],
+    ["Enrolled", enrolled ? fmtUnix(host.enrolledUnix) : "not enrolled"],
+    ["First heartbeat", firstHeard === "-" && enrolled ? "not yet" : firstHeard],
   ];
 }
 

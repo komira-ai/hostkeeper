@@ -56,6 +56,10 @@ pub struct EnrollmentStore {
     /// The Mac nonces an approval consumed: read from the approvals at open and added to by
     /// each approval, so a nonce whose own file was not yet marked is still used.
     pub(super) consumed: Mutex<BTreeSet<MacNonceHash>>,
+    /// The hosts whose host file is known to hold a first heartbeat since its approval, so a
+    /// later heartbeat takes neither the lock nor a read ([`EnrollmentStore::note_heartbeat`]).
+    /// An approval of the host takes it out.
+    pub(super) heard: Mutex<BTreeSet<HostId>>,
 }
 
 impl std::fmt::Debug for EnrollmentStore {
@@ -96,6 +100,7 @@ impl EnrollmentStore {
             live: Mutex::new(BTreeMap::new()),
             max_pending: DEFAULT_MAX_PENDING,
             consumed: Mutex::new(BTreeSet::new()),
+            heard: Mutex::new(BTreeSet::new()),
         };
         store.reconcile_mac_nonces()?;
         Ok(store)
@@ -630,8 +635,14 @@ impl EnrollmentStore {
             services: services.clone(),
             // Only a new key clears a duplicate mark; a renewal keeps the host's.
             duplicate: renewal.is_some() && current.is_some_and(|h| h.pb.duplicate),
+            // Every approval, a renewal's too, waits for its own first heartbeat.
+            first_heartbeat_unix: None,
         })?;
         self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.heard
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);

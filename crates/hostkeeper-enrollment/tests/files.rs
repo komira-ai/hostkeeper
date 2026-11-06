@@ -173,6 +173,34 @@ fn the_store_refuses_a_newer_schema_and_ignores_unknown_fields() {
     );
 }
 
+/// Catches a host file of the release before (no `first_heartbeat_unix`, field 8) read as a
+/// host already heard, or refused; and a first heartbeat written into it that loses what the
+/// file held (its key, its duplicate mark) or does not read back. The release before reads the
+/// file written here as it reads any file with a field it does not know (the test above).
+#[test]
+fn a_host_file_of_the_release_before_takes_its_first_heartbeat() {
+    let ca = TestCa::new("first-beat-fixture-ca");
+    let dir = scratch("first-beat-fixture");
+    let store = store_of(dir.path(), <[u8]>::to_vec);
+    let web = host_id("web-1");
+    let enrolled = |store: &EnrollmentStore| {
+        store
+            .enrolled_host(&web)
+            .expect("read")
+            .expect("enrolled")
+            .first_heartbeat_unix
+    };
+    assert_eq!(enrolled(&store), None);
+    store.note_heartbeat(&web, 1_800_000_500).expect("noted");
+    assert_ne!(
+        std::fs::read(dir.path().join("hosts/web-1.pb")).expect("read"),
+        HOST
+    );
+    let reopened = EnrollmentStore::open(Arc::new(RealFs), dir.path()).expect("open");
+    assert_eq!(enrolled(&reopened), Some(1_800_000_500));
+    assert_fixtures_read(&reopened, &ca);
+}
+
 /// Catches a reader that accepts a file with no schema (field 1 absent or 0), or a deny row
 /// in a state it does not know, instead of refusing it.
 #[test]

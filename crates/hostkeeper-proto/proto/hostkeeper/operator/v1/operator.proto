@@ -371,6 +371,11 @@ message Host {
   // How many of its heartbeats since the coordinator started said a time further from the
   // coordinator's clock than `--clock-skew-secs`, either way.
   uint64 clock_skew_beats = 16;
+  // When the coordinator accepted the host's first heartbeat since the approval `enrolled_unix`
+  // names, in unix seconds by the same clock; absent when the host is not enrolled or has not
+  // heartbeated since that approval. It is kept with the host's enrollment, so a restart of the
+  // coordinator keeps it; the next approval of the host (a new key or a renewal) clears it.
+  optional uint64 first_heartbeat_unix = 17;
 }
 
 // A host taken out of a service.

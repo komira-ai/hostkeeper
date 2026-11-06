@@ -122,6 +122,7 @@ fn the_host_page_shows_a_host_of_the_coordinators_own_reply() {
             ["BMC MAC", "-"],
             ["Serial", "-"],
             ["Enrolled", "not enrolled"],
+            ["First heartbeat", AT],
             ["", ""],
             ["Ends", "not reported"],
             ["Last renewal error", "-"],
@@ -210,6 +211,7 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             "exclusions": [{"service": "metrics", "reason": "noisy"}],
             "inventoryRecordId": "web-2", "dataMacs": ["0c:c4:7a:00:00:02", "0c:c4:7a:00:00:03"],
             "bmcMac": "0c:c4:7a:00:00:01", "serial": "SN-2", "enrolledUnix": "1800000000",
+            "firstHeartbeatUnix": "1800000090",
             "certNotAfterUnix": "1800604800", "lastRenewError": "renewal refused: host_excluded",
             "clockSkewBeats": "2",
             "services": [
@@ -246,6 +248,7 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             ["BMC MAC", "0c:c4:7a:00:00:01"],
             ["Serial", "SN-2"],
             ["Enrolled", AT],
+            ["First heartbeat", "2027-01-15 08:01:30 UTC"],
             ["", ""],
             ["Ends", "2027-01-22 08:00:00 UTC"],
             ["Last renewal error", "renewal refused: host_excluded"],
