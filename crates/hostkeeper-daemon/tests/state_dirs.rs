@@ -83,3 +83,44 @@ fn existing_directories_keep_their_modes_and_contents() {
         assert_eq!(fs::read(dir.join("keep")).expect("kept"), b"kept");
     }
 }
+
+/// Catches a hooks path that is not checked as the packages path is: a file, then a link, there
+/// stops the start naming the hooks path, and the packages directory before it is still made.
+#[test]
+fn a_file_or_a_link_at_the_hooks_path_stops_the_start_naming_it() {
+    let scratch = Scratch::new("state-dirs-hooks-refused");
+    let settings = settings(scratch.path());
+    let hooks = scratch.path().join("var/lib/updater/hooks");
+    fs::create_dir_all(hooks.parent().expect("parent")).expect("parent");
+
+    fs::write(&hooks, b"x").expect("a file");
+    let error = ensure_state_dirs(&settings).expect_err("a file");
+    assert!(
+        matches!(&error, StartError::Io { path, .. } if *path == hooks),
+        "{error}"
+    );
+    assert!(settings.packages_dir.is_dir());
+
+    fs::remove_file(&hooks).expect("remove");
+    symlink(scratch.path(), &hooks).expect("a link");
+    let error = ensure_state_dirs(&settings).expect_err("a link");
+    assert!(
+        matches!(&error, StartError::Io { path, .. } if *path == hooks),
+        "{error}"
+    );
+}
+
+/// Catches an unmakeable path going unreported: a file where a parent directory belongs makes
+/// the creation fail, naming the packages path.
+#[test]
+fn a_file_where_a_parent_directory_belongs_stops_the_start() {
+    let scratch = Scratch::new("state-dirs-parent-file");
+    let settings = settings(scratch.path());
+    fs::create_dir_all(scratch.path().join("var/lib")).expect("parent");
+    fs::write(scratch.path().join("var/lib/hostkeeper"), b"x").expect("a file");
+    let error = ensure_state_dirs(&settings).expect_err("a file parent");
+    assert!(
+        matches!(&error, StartError::Io { path, .. } if *path == settings.packages_dir),
+        "{error}"
+    );
+}

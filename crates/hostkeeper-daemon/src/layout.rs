@@ -38,23 +38,23 @@ fn dirs(settings: &Settings) -> [(PathBuf, u32); 2] {
 }
 
 fn ensure_dir(dir: &Path, mode: u32) -> io::Result<()> {
-    if let Some(parent) = dir.parent() {
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o755)
-            .create(parent)?;
-    }
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o755)
+        .create(dir.parent().unwrap_or(dir))?;
     let made = match DirBuilder::new().mode(mode).create(dir) {
         Ok(()) => true,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
         Err(e) => return Err(e),
     };
-    match fs::symlink_metadata(dir)?.is_dir() {
-        true if made => fs::set_permissions(dir, Permissions::from_mode(mode)),
-        true => Ok(()),
-        false => Err(io::Error::new(
+    if !fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+        return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("{} is not a directory (a file or a link)", dir.display()),
-        )),
+        ));
     }
+    if made {
+        return fs::set_permissions(dir, Permissions::from_mode(mode));
+    }
+    Ok(())
 }
