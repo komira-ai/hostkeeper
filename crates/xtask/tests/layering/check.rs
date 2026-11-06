@@ -74,7 +74,7 @@ pub const LAYERS: [Layer; 23] = [
         ],
         &[COORDINATOR, HELLO, OIDC, WIRE],
     ),
-    (ENROLL, &[CONFIG, PROTO, STEPS], &[]),
+    (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),
     (HELLO, &[], &[CONFIG, HOOK]),
     (HOOK, &[], &[]),

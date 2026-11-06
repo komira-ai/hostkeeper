@@ -1314,6 +1314,8 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "hostkeeper-config",
+ "hostkeeper-coordinator",
+ "hostkeeper-enrollment",
  "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",

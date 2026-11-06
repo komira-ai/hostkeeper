@@ -243,14 +243,17 @@ is built in the coordinator's library. The shipped coordinator wires its device 
 `NoDeviceState` and the daemon never sends a nonce, so a Mac is approved by an operator like any
 host.
 
-**A defect found while writing this report, by reading the code.** The daemon builds its
-certificate request with an empty subject
-([crates/hostkeeper-enroll/src/key.rs](../../crates/hostkeeper-enroll/src/key.rs), `csr_der`).
-The CA's profile accepts only a subject that is exactly one `CN=host:<id>`
+**The daemon's certificate request.** The daemon builds every certificate request, for `Enroll`
+and for `Renew`, with the one subject `CN=host:pending`
+([crates/hostkeeper-enroll/src/key.rs](../../crates/hostkeeper-enroll/src/key.rs), `csr_der`):
+the CA's profile accepts only a subject that is exactly one `CN=host:<id>`
 ([crates/hostkeeper-enrollment/src/ca/profile.rs](../../crates/hostkeeper-enrollment/src/ca/profile.rs),
-`check_request`), and refuses anything else as `bad_csr`. Every coordinator test builds its request
-with `host:pending`, and no test sends the daemon's own request to the CA. Read this way, a real
-daemon's first `Enroll` is refused. It has not been run to confirm.
+`check_request`) and refuses anything else as `bad_csr`. The id is assigned at approval, and the CA
+never takes it from the request: the certificate's subject is always the approved id. An earlier
+daemon sent an empty subject, which the CA refused, so no daemon could finish enrollment. The tests
+in [crates/hostkeeper-enroll/tests/enroll/coordinator.rs](../../crates/hostkeeper-enroll/tests/enroll/coordinator.rs)
+hold the daemon's own requests to the CA's profile, and drive the daemon's enroller against the
+coordinator's own enrollment and CA through approval, the first certificate and its renewal.
 
 ## The two APIs
 
@@ -758,7 +761,7 @@ What is not built, plainly:
 - **Rollout shape:** one ordinary update at a time across the whole fleet, with no groups. Automatic
   rollback cannot move a host back below the version it runs.
 - **Identity:** no BMC reader, no operator call to deny or retire a host, no expiry of pending
-  requests, no CA rotation or revocation lists, and the certificate-request defect above.
+  requests, no CA rotation or revocation lists.
 - **Operations:** a single coordinator with no failover; the rollout file is read only at start; the
   audit file is never rotated; there is no metrics endpoint and no pager (conditions that need a
   person are `alert=` log lines).
