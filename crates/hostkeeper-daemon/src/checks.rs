@@ -294,7 +294,9 @@ pub fn try_rule_with(last: Option<&Record>, key: &OrderKey, checks: Checks) -> T
     if halted & !checks.skips(Check::Halt) {
         return TryRule::Refuse(Refusal::Halted);
     }
-    if same_try {
+    // Scratch check for komira-ai/hostkeeper#115: a finished order's try does not hold a new
+    // package back.
+    if same_try & finished.is_none() {
         return TryRule::Refuse(Refusal::TryConflict);
     }
     if key.order_try < held {
