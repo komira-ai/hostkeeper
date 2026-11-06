@@ -44,7 +44,7 @@ platforms; the installer pkg is for `macos-arm64`.
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-coordinator-<version>-<linux-platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
-| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755) and `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), owned by root and wheel, no scripts; not signed, attested |
+| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), owned by root and wheel, no scripts; not signed, attested |
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
