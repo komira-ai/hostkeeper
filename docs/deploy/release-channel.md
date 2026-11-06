@@ -146,4 +146,5 @@ Two ways to run it, both in [`channel-sync/`](channel-sync/):
 2. `channel-sync` stages it into the channel (within one timer period).
 3. Only then is the desired version set ([ci-client.md](ci-client.md)). A version set before the
    channel holds it leaves every host failing its fetch (`fetch_failed`) and retrying until it
-   arrives.
+   arrives. For hostkeeper's own releases, `release.yml` waits for the channel to serve the
+   release and then sets it ([Deploying hostkeeper from GitHub Actions](github-actions.md)).

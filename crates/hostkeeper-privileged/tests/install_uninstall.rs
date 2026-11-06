@@ -3,9 +3,9 @@
 //! coordinator and the daemon as child processes on loopback (`support::pair`), and a release
 //! channel the test serves over HTTPS (`support::channel`), as root against the host's systemd.
 //! The operator acts through `hostkeeper ctl` only; what the tests read is the coordinator's
-//! `services list` and `releases status`, the daemon's log (each line a hook step wrote, under
-//! its step's unit), and the host: the file the package places, its unit file and the link that
-//! enables it.
+//! `hosts list` (and `services list` for the hosts uninstalling a service), the daemon's log (each
+//! line a hook step wrote, under its step's unit), and the host: the file the package places, its
+//! unit file and the link that enables it.
 //!
 //! What they assert: a host assigned the fixture service is ordered to install it and does, once,
 //! when the coordinator is killed after the assignment, again while the install runs and again
@@ -148,16 +148,13 @@ impl Installed {
         poll(&format!("{NODE} reporting {SERVICE} {version}"), || {
             coordinator.assert_running();
             daemon.assert_running();
-            let host = coordinator.assigned(SERVICE, NODE)?;
-            match host.as_ref().map(|h| &h["installedVersion"]) {
-                Some(Value::String(v)) if v == version => {}
-                _ => return Err(format!("{SERVICE} lists {NODE} as {host:?}")),
-            }
-            let beat = beat(coordinator)?;
-            if beat["updating"].is_null() {
-                Ok(())
-            } else {
-                Err(format!("the host reports an order under way: {beat}"))
+            let host = coordinator
+                .host(NODE)?
+                .ok_or_else(|| format!("hosts list lists no {NODE}"))?;
+            let (seen, beat) = (seen(&host), beat(&host));
+            match seen["installedVersion"].as_str() {
+                Some(v) if v == version && beat["updating"].is_null() => Ok(()),
+                _ => Err(format!("{NODE} reports {SERVICE} as {seen} (beat {beat})")),
             }
         });
     }
@@ -210,16 +207,24 @@ fn wait_steps(daemon: &mut Daemon, step: &str, times: usize) {
     });
 }
 
-/// The host's heartbeat of the fixture service, as `releases status` gives it.
-fn beat(coordinator: &Coordinator) -> Result<Value, String> {
-    let status = coordinator.ctl(&["releases", "status", "--service", SERVICE])?;
-    status["services"]
-        .as_array()
-        .and_then(|all| all.iter().find(|s| s["service"] == SERVICE))
-        .and_then(|s| s["hosts"].as_array())
-        .and_then(|hosts| hosts.iter().find(|h| h["nodeId"] == NODE))
-        .map(|host| host["beat"].clone())
-        .ok_or_else(|| format!("releases status lists no {NODE} under {SERVICE}: {status}"))
+/// How the fixture service sees `host` (the `services` of a `Host`), as `hosts list` gives it:
+/// `null` when it does not count the host.
+fn seen(host: &Value) -> Value {
+    named(&host["services"], "service")
+}
+
+/// The host's heartbeat of the fixture service (the `services` of its `heartbeat`): `null` when
+/// the host listed no such service in its last heartbeat.
+fn beat(host: &Value) -> Value {
+    named(&host["heartbeat"]["services"], "name")
+}
+
+/// The entry of `list` whose `key` is [`SERVICE`], or `null`.
+fn named(list: &Value, key: &str) -> Value {
+    list.as_array()
+        .and_then(|all| all.iter().find(|entry| entry[key] == SERVICE))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 /// Sets the desired version of the fixture service to `package`'s, with its digest.
@@ -254,7 +259,7 @@ fn an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it(
     // as it was, reports it, and runs none of its steps again.
     host.daemon.kill();
     host.coordinator.restart();
-    assert_eq!(host.coordinator.assigned(SERVICE, NODE), Ok(None));
+    assert_eq!(host.coordinator.host(NODE), Ok(None));
     host.daemon.start_again();
     host.wait_settled("1.0.0", 1);
     host.assert_on_host("1.0.0");
@@ -315,7 +320,20 @@ fn an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host() {
             Err(format!("{entry}"))
         }
     });
-    assert_eq!(coordinator.assigned(SERVICE, NODE), Ok(None));
+    let listed = coordinator
+        .host(NODE)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .expect("the host is still heard");
+    assert_eq!(
+        beat(&listed),
+        Value::Null,
+        "the host runs no {SERVICE}: {listed}"
+    );
+    assert_eq!(
+        seen(&listed)["installedVersion"],
+        Value::Null,
+        "the host is listed as running no {SERVICE}: {listed}"
+    );
     assert!(!host.placed.exists(), "the placed file is removed");
     assert!(
         std::fs::symlink_metadata(UNIT_LINK).is_err(),

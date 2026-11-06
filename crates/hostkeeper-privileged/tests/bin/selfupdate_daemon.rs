@@ -1,0 +1,340 @@
+//! `hostkeeper-selfupdate-daemon`: the hostkeeper binary of the privileged self-update tests
+//! (`tests/self_update.rs`), a program of the tests, not shipped.
+//!
+//! Every verb but `daemon` is forwarded to the daemon's command line as the `hostkeeper` binary
+//! forwards it (`hostkeeper_daemon::cli::run_with`): `self-update-protocol`, which the daemon's
+//! probe asks of a new binary, and `self-update-fallback`, which the fallback unit runs with the
+//! previous binary, are the shipped code.
+//!
+//! `daemon` is the shipped daemon (`hostkeeper_daemon::start`: the settle of a waiting
+//! self-update, the boot pass, the readiness notice, the units of its own update, the heartbeat
+//! loop, the executor and its follow-on) on the host's Linux adapters (the step launcher's
+//! transient units, `systemctl`), with two ports that a test cannot have for real put in place:
+//!
+//! - the package store serves the sealed version directories the test made under the packages
+//!   directory, as the real store leaves them once a package is fetched, proven and unpacked (no
+//!   release channel and no attestation, which only a real release has);
+//! - the heartbeat loop's link to the coordinator is files in the fixture's directory: each
+//!   heartbeat is appended to `link/beats.jsonl` as one line of its JSON, and the reply carries
+//!   the order of `link/order.json` when that file is there (no coordinator and no enrollment).
+//!
+//! Its own version is the name of the file it runs from: the binary directory keeps version
+//! `<v>` at `versions/<v>`, which is what `current` and `previous` name, so a copy staged there
+//! runs as that version. (The shipped binary's version is the one it was built with; the tests
+//! need two versions of one build.)
+//!
+//! Its own flags come before the verb, and only `daemon` reads them; it reads no environment
+//! variable but the notify socket systemd sets for a `Type=notify` unit:
+//!
+//! - `--fixture-dir <dir>` (required by `daemon`): `link/` (above), `units/` (the unit directory
+//!   the daemon writes its own units into, `hostkeeper_daemon::selfunits`) and `placed/` (the
+//!   placed-path state directory). The host's own unit and state directories are never written.
+//! - `--fixture-fail-start <version>`: a `daemon` of that version writes one line to standard
+//!   error ([`refused_line`]) and exits 1 before it does anything else: a new binary that cannot
+//!   start. A `daemon` of any other version runs.
+//! - `--fixture-hold-exit <file>`: once the daemon has served and asks to exit with status 0 (its
+//!   own update switched `current`), it creates `<file>` with its pid and blocks, unless `<file>`
+//!   is already there: the moment between the follow-on's switch and the exit it asks for, held
+//!   so that a test can kill it there.
+
+use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::num::NonZeroU64;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::sync::Arc;
+
+use clap::Parser;
+use hostkeeper_config::manifest::HostkeeperVersion;
+use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_daemon::adapters::Adapters;
+use hostkeeper_daemon::cli::{self, Cli, Command, DaemonFlags, HostFiles};
+use hostkeeper_daemon::links::{DaemonLog, Links};
+use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
+use hostkeeper_daemon::start::{self, StartError};
+use hostkeeper_daemon::unix_clock::SystemUnixClock;
+use hostkeeper_daemon::verb::PackageDigest as OrderDigest;
+use hostkeeper_daemon::{Daemon, Ports};
+use hostkeeper_launchd::Platform;
+use hostkeeper_link::{
+    CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Heartbeat, LinkError,
+    Log, Order, OrderId, PackageDigest, Reply, ReplyFault, StopFlag, Target, ThreadDispatch, Verb,
+};
+use hostkeeper_placed::Roots;
+use hostkeeper_steps::Staged;
+use serde_json::Value;
+
+/// The program's name, at the start of what it says on standard error.
+const PROGRAM: &str = "hostkeeper-selfupdate-daemon";
+/// The exit status of a command line this program refuses (`2`, a usage error, as clap's).
+const EXIT_USAGE: u8 = 2;
+/// The exit status of a `daemon` that `--fixture-fail-start` names (the daemon's `EXIT_FAILED`).
+const EXIT_REFUSED: u8 = 1;
+
+/// The fixture's own flags.
+#[derive(Debug, Default)]
+struct Fixture {
+    dir: Option<PathBuf>,
+    fail_start: Option<String>,
+    hold_exit: Option<PathBuf>,
+}
+
+/// The line a `daemon` of `version` writes before it exits at `--fixture-fail-start`.
+fn refused_line(version: &str) -> String {
+    format!("{PROGRAM}: version {version} refuses to start (--fixture-fail-start)")
+}
+
+fn main() -> ExitCode {
+    let (fixture, rest) = match take_fixture_flags(std::env::args_os().skip(1)) {
+        Ok(taken) => taken,
+        Err(why) => return usage(&why),
+    };
+    let cli = match Cli::try_parse_from(std::iter::once(OsString::from("hostkeeper")).chain(rest)) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
+    match cli.command {
+        Command::Daemon(flags) => daemon_verb(&fixture, &flags),
+        command => cli::run_with(Cli { command }, notify_socket()),
+    }
+}
+
+fn usage(why: &str) -> ExitCode {
+    eprintln!("{PROGRAM}: {why}");
+    ExitCode::from(EXIT_USAGE)
+}
+
+/// Takes the fixture's flags from the front of `args`, and gives them and the rest: the verb and
+/// its arguments.
+fn take_fixture_flags(
+    args: impl Iterator<Item = OsString>,
+) -> Result<(Fixture, Vec<OsString>), String> {
+    let mut fixture = Fixture::default();
+    let mut args = args.peekable();
+    while let Some(flag) = args.next_if(|arg| arg.to_string_lossy().starts_with("--fixture-")) {
+        let flag = flag.to_string_lossy().into_owned();
+        let value = args.next().ok_or_else(|| format!("{flag} takes a value"))?;
+        match flag.as_str() {
+            "--fixture-dir" => fixture.dir = Some(PathBuf::from(value)),
+            "--fixture-fail-start" => {
+                fixture.fail_start = Some(value.to_string_lossy().into_owned());
+            }
+            "--fixture-hold-exit" => fixture.hold_exit = Some(PathBuf::from(value)),
+            _ => return Err(format!("unknown flag {flag}")),
+        }
+    }
+    Ok((fixture, args.collect()))
+}
+
+/// The version of a binary run from `exe`: its file name, a `major.minor.patch`.
+fn own_version(exe: &Path) -> Result<HostkeeperVersion, String> {
+    let name = exe
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    HostkeeperVersion::parse(&name).map_err(|_| {
+        format!(
+            "daemon runs from versions/<major.minor.patch> of a binary directory, not from {}",
+            exe.display()
+        )
+    })
+}
+
+/// `daemon`, as the module says.
+fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags) -> ExitCode {
+    let own = match std::env::current_exe()
+        .map_err(|e| format!("its own executable cannot be read: {e}"))
+        .and_then(|exe| own_version(&exe))
+    {
+        Ok(own) => own,
+        Err(why) => return usage(&why),
+    };
+    if fixture.fail_start.as_deref() == Some(own.to_string().as_str()) {
+        eprintln!("{}", refused_line(&own.to_string()));
+        return ExitCode::from(EXIT_REFUSED);
+    }
+    let Some(dir) = fixture.dir.as_deref() else {
+        return usage("daemon needs --fixture-dir");
+    };
+    let served = run_daemon(dir, flags, own);
+    if served.is_ok()
+        && let Some(file) = &fixture.hold_exit
+        && hold(file)
+    {
+        loop {
+            std::thread::park();
+        }
+    }
+    ExitCode::from(cli::exit_status(&served))
+}
+
+/// Whether this process now holds its exit at `file`: it created it, with its pid. `false` when
+/// the file is already there (an earlier start held), or cannot be made.
+fn hold(file: &Path) -> bool {
+    let made = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(file)
+        .and_then(|mut out| {
+            writeln!(out, "{}", std::process::id())?;
+            out.sync_all()
+        });
+    match made {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "{PROGRAM}: the exit is not held at {}: {error}",
+                file.display()
+            );
+            false
+        }
+    }
+}
+
+/// The address of the notify socket systemd set for the process: what `hostkeeper_daemon::cli`
+/// reads for `--notify-systemd`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "NOTIFY_SOCKET is the platform-set marker of a Type=notify unit, which AGENTS.md S2 allows; the shipped binary reads it the same way"
+)]
+fn notify_socket() -> Option<OsString> {
+    std::env::var_os("NOTIFY_SOCKET")
+}
+
+/// Starts the shipped daemon with the fixture's package store and link, and serves it until it
+/// asks to exit for its own update, as `hostkeeper_daemon::cli` does with the host's.
+fn run_daemon(dir: &Path, flags: &DaemonFlags, own: HostkeeperVersion) -> Result<(), StartError> {
+    let notifier = cli::notifier(flags, notify_socket())?;
+    let settings = flags.settings();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(StartError::Runtime)?;
+    runtime.block_on(async {
+        let platform = Platform::host();
+        let config = start::load_config(&settings)?;
+        let adapters = Adapters::for_platform(&platform)?;
+        let mut ports: Ports =
+            cli::host_ports(&config, &settings, &HostFiles::host(), own, adapters)?;
+        ports.packages = Arc::new(MadePackages {
+            root: settings.packages_dir.clone(),
+        });
+        ports.placement.roots = Roots::new(
+            &dir.join("placed"),
+            &dir.join("units"),
+            &settings.packages_dir,
+        );
+        let started = start::startup_notifying(&settings, ports, own, notifier.as_ref())?;
+        let links = file_links(
+            started.daemon(),
+            &dir.join("link"),
+            flags.link.heartbeat_secs,
+        );
+        start::serve(started, links).await
+    })
+}
+
+/// The loops of the daemon with the link of [`FileLink`]: no enrollment, a certificate that
+/// the link never presents, the loop's own clock, sleeper and workers as the shipped daemon's.
+fn file_links(daemon: &Arc<Daemon>, dir: &Path, period: NonZeroU64) -> Links {
+    let stop = StopFlag::default();
+    let log: Arc<dyn Log> = Arc::new(DaemonLog::new(Arc::clone(daemon)));
+    Links {
+        enroller: Box::new(|| {
+            Err("the self-update fixture daemon does not enroll: its coordinator is files".into())
+        }),
+        link: Arc::new(FileLink {
+            dir: dir.to_path_buf(),
+        }),
+        certs: Arc::new(NoCertificate),
+        clock: Arc::new(SystemUnixClock),
+        log,
+        sleeper: Box::new(ClockSleeper::new(
+            Arc::clone(&daemon.ctx().clock),
+            stop.clone(),
+        )),
+        period,
+        dispatch: Arc::new(ThreadDispatch),
+        stop,
+    }
+}
+
+/// The package store of the fixture: `<packages>/<service>/<version>/`, which the test made,
+/// sealed when it is asked for.
+struct MadePackages {
+    root: PathBuf,
+}
+
+impl Packages for MadePackages {
+    fn version_dir(
+        &self,
+        service: &ServiceName,
+        version: &Version,
+        _digest: &OrderDigest,
+        _index_digest: Option<&OrderDigest>,
+    ) -> Result<VersionDir, PackageError> {
+        let dir = self.root.join(service.as_str()).join(version.as_str());
+        Staged::seal(&dir)
+            .map(VersionDir::new)
+            .map_err(|e| PackageError::Other(format!("{}: {e}", dir.display())))
+    }
+}
+
+/// A pair the heartbeat loop reads as enrolled; [`FileLink`] presents it to no one.
+struct NoCertificate;
+
+impl CertSource for NoCertificate {
+    fn current(&self) -> CertState {
+        CertState::Enrolled(ClientIdentity::new(
+            b"fixture".to_vec(),
+            b"fixture".to_vec(),
+        ))
+    }
+}
+
+/// The coordinator as two files of a directory: `beats.jsonl`, to which each heartbeat is
+/// appended, and `order.json`, the order of every reply while it is there:
+/// `{"id": "...", "try": 1, "service": "...", "version": "...", "digest": "<64 hex>"}`, an
+/// `update`. A test replaces `order.json` by a rename, so it is read whole or not at all.
+struct FileLink {
+    dir: PathBuf,
+}
+
+impl CoordinatorLink for FileLink {
+    fn heartbeat(&self, _identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
+        let transport = |e: io::Error| LinkError::Transport(e.kind());
+        let mut beats = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.dir.join("beats.jsonl"))
+            .map_err(transport)?;
+        writeln!(beats, "{}", beat.to_json()).map_err(transport)?;
+        let text = match fs::read_to_string(self.dir.join("order.json")) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Reply::default()),
+            Err(e) => return Err(transport(e)),
+        };
+        let order = read_order(&text).ok_or(LinkError::BadReply(ReplyFault::Malformed))?;
+        Ok(Reply {
+            order: Some(order),
+            ..Reply::default()
+        })
+    }
+}
+
+/// The `update` of an `order.json`.
+fn read_order(text: &str) -> Option<Order> {
+    let json: Value = serde_json::from_str(text).ok()?;
+    let word = |key: &str| json.get(key).and_then(Value::as_str);
+    Some(Order {
+        id: OrderId::new(word("id")?).ok()?,
+        order_try: json.get("try").and_then(Value::as_u64)?,
+        verb: Verb::Update(Target {
+            service: ServiceName::new(word("service")?).ok()?,
+            version: Version::new(word("version")?).ok()?,
+            digest: PackageDigest::new(word("digest")?).ok()?,
+            index_digest: None,
+        }),
+    })
+}

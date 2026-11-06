@@ -3,8 +3,11 @@
 # macos-device, against the real launchd of a GitHub-hosted macOS runner. Everything a pull
 # request runs proves the daemon against fakes of the host; here the adapters behind those fakes
 # meet the real thing: the step launcher's transient units and their bound, the dead-man's stop
-# by name, the observer's systemctl and /proc adapters, and the unit control's systemctl
-# (daemon-reload, start, stop, is-active); on the Mac the daemon started as a
+# by name, the observer's systemctl and /proc adapters, the unit control's systemctl
+# (daemon-reload, start, stop, is-active), and hostkeeper's update of itself as a unit made of
+# packaging/linux/hostkeeper.service with its drop-in and fallback unit (the restart into the
+# new binary, the start limit, OnFailure=, the fallback's flip back, the settle at start, a
+# SIGKILL before and after the switch while the update waits for its restart); on the Mac the daemon started as a
 # launchd job and answering on its admin socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
 # quarantine verdicts. In the job first-boot the programs themselves meet: the coordinator and the
@@ -21,17 +24,19 @@
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
 # through the cargo runner `sudo`, the one use of it in the job. So no file of the Cargo registry
-# or of target/ is owned by root, and a test writes only its scratch directory under target/ (and,
-# on the Mac and in first-boot, what the daemon's fixed paths name: on the Mac the step jobs'
-# directory under /var/run and the pki directory its enrollment loop opens; in first-boot the pki
-# directory /etc/updater, the self-update units under /etc/systemd/system, /var/lib/hostkeeper
-# (with the packages directory the tests give the daemon), and for install_uninstall the fixture
-# service's unit and its wants link and the package check's verifier directory /usr/lib/hostkeeper,
-# each refused if the host already has it and removed when the test ends, and the release
-# channel's CA appended to the host's CA bundle, which is written back as it was; on a runner that
-# is thrown away after the job). Each test names its
-# units hostkeeper-ci-<test>-<pid>-<n> (the fixture service's unit is hostkeeper-ci-fixture, its
-# steps updater-hostkeeper-ci-fixture-<step>-<n>), or its launchd jobs
+# or of target/ is owned by root, and a test writes only its scratch directory under target/ (but
+# the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
+# trees the daemon checks must have root's directories all the way up, and whose drop-in is in
+# /run/systemd/system; on the Mac, what the daemon's fixed paths name: the step jobs' directory
+# under /var/run, and the pki directory its enrollment loop opens; and in first-boot the daemon's
+# fixed paths too: the pki directory /etc/updater, the self-update units under
+# /etc/systemd/system, /var/lib/hostkeeper (with the packages directory the tests give the
+# daemon), and for install_uninstall the fixture service's unit and its wants link and the
+# package check's verifier directory /usr/lib/hostkeeper, each refused if the host already has it
+# and removed when the test ends, and the release channel's CA appended to the host's CA bundle,
+# which is written back as it was; each on a runner that is thrown away after the job). Each test
+# names its units hostkeeper-ci-<test>-<pid>-<n> (the fixture service's unit is
+# hostkeeper-ci-fixture, its steps updater-hostkeeper-ci-fixture-<step>-<n>), or its launchd jobs
 # dev.hostkeeper.ci-<test>-<pid> (a step job by its unit, as the launcher names it), and stops them
 # when it ends, failed or not; every coordinator and release channel is on the loopback address,
 # so no test leaves the host. The test targets are
@@ -97,9 +102,9 @@ jobs:
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager

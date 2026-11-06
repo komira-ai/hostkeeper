@@ -61,6 +61,137 @@ fn the_fleet_table_shows_each_host_in_its_own_row() {
     );
 }
 
+/// The reply to `Hosts.List` the coordinator gives for one enrolled host that heartbeated, with
+/// a label and a hold. The coordinator's test of `Hosts.List` end to end (in
+/// `src/grpc/tests/hosts.rs`) fails when its answer and this file part.
+const HOSTS_LIST: &str = include_str!("fixtures/hosts_list.json");
+
+fn coordinator_hosts() -> Value {
+    serde_json::from_str(HOSTS_LIST).expect("the fixture is JSON")
+}
+
+#[test]
+fn the_fleet_table_shows_a_host_of_the_coordinators_own_reply() {
+    // Catches: a Fleet page that renders only the replies written for it and not the one the
+    // coordinator gives (a field name, a 64-bit time as a string, an enum's spelling).
+    let mut ui = Ui::start();
+    ui.reply(&m("Hosts/List"), coordinator_hosts());
+    ui.reply(&m("Releases/Status"), json!({}));
+    assert_eq!(
+        rows(&mut ui, "fleet", "{}"),
+        json!([
+            ["Host", "Role", "Heartbeat", "Last heartbeat", "Services"],
+            [
+                "s1",
+                "storage",
+                "live",
+                AT,
+                "kbf 1.0, healthy [held, no_desired]"
+            ],
+        ])
+    );
+}
+
+#[test]
+fn the_host_page_shows_a_host_of_the_coordinators_own_reply() {
+    // Catches: a Host page that cannot read the host `Hosts.Get` answers, which is the host
+    // `Hosts.List` lists.
+    let mut ui = Ui::start();
+    let host = coordinator_hosts()["hosts"][0].clone();
+    ui.reply(&m("Hosts/Get"), json!({ "host": host }));
+    ui.reply(&m("Services/List"), json!({}));
+    let all = rows(&mut ui, "host", r#"{ nodeId: "s1" }"#);
+    let pairs: Vec<&Value> = all
+        .as_array()
+        .expect("rows")
+        .iter()
+        .filter(|r| r.as_array().is_some_and(|c| c.len() == 2))
+        .collect();
+    assert_eq!(
+        json!(pairs),
+        json!([
+            ["", ""],
+            ["Role", "storage"],
+            ["Heartbeat", "live"],
+            ["Last heartbeat", AT],
+            ["Agent", "hostkeeper-daemon 1.0"],
+            ["Labels", "rack=r1"],
+            ["Excluded from", "-"],
+            ["Inventory record", "none matched"],
+            ["Data MACs", "-"],
+            ["BMC MAC", "-"],
+            ["Serial", "-"],
+            ["Enrolled", "not enrolled"],
+            ["", ""],
+            ["Installed version", "1.0"],
+            ["Health", "healthy"],
+            ["Up", "yes"],
+            ["Update slot", "-"],
+            ["Gate", "no_desired"],
+            ["Membership", "present"],
+            ["Excluded", "no"],
+        ])
+    );
+}
+
+#[test]
+fn the_fleet_table_shows_every_page_of_the_host_list() {
+    // Catches: a Fleet page that shows the first page of a fleet larger than one page (256
+    // hosts) and leaves the rest out, or that asks for the next page with another token.
+    let mut ui = Ui::start();
+    let one = |id: &str| json!({"nodeId": id, "role": "web", "live": true});
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [one("web-1"), one("web-2")], "nextPageToken": "web-2"}),
+    );
+    ui.reply(&m("Hosts/List"), json!({"hosts": [one("web-3")]}));
+    ui.reply(&m("Releases/Status"), json!({}));
+    let shown = rows(&mut ui, "fleet", "{}");
+    let hosts: Vec<&Value> = shown
+        .as_array()
+        .expect("rows")
+        .iter()
+        .skip(1)
+        .map(|row| &row[0])
+        .collect();
+    assert_eq!(json!(hosts), json!(["web-1", "web-2", "web-3"]));
+    let asked: Vec<Value> = ui
+        .requests()
+        .iter()
+        .filter(|r| r.method() == m("Hosts/List"))
+        .map(|r| r.body())
+        .collect();
+    assert_eq!(asked, vec![json!({}), json!({"pageToken": "web-2"})]);
+}
+
+#[test]
+fn a_next_page_token_that_does_not_move_on_ends_the_host_list() {
+    // Catches: a page that keeps asking for the same page when a reply names the token it was
+    // asked with, or one that goes back.
+    for token in ["web-2", "web-1"] {
+        let mut ui = Ui::start();
+        let one = |id: &str| json!({"nodeId": id, "role": "web"});
+        ui.reply(
+            &m("Hosts/List"),
+            json!({"hosts": [one("web-2")], "nextPageToken": "web-2"}),
+        );
+        ui.reply(
+            &m("Hosts/List"),
+            json!({"hosts": [one("web-3")], "nextPageToken": token}),
+        );
+        ui.reply(&m("Hosts/List"), json!({"hosts": [one("web-9")]}));
+        ui.reply(&m("Releases/Status"), json!({}));
+        let shown = rows(&mut ui, "fleet", "{}");
+        assert_eq!(shown.as_array().expect("rows").len(), 3, "{token}: {shown}");
+        let asked = ui
+            .methods()
+            .iter()
+            .filter(|name| **name == m("Hosts/List"))
+            .count();
+        assert_eq!(asked, 2, "{token}");
+    }
+}
+
 #[test]
 fn the_host_page_shows_each_fact_beside_its_label() {
     // Catches: a fact of the host, of a service or of the last update shown under another label,
@@ -73,6 +204,8 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             "heartbeat": {"agent": {"name": "hostkeeper", "version": "0.4.1"}},
             "labels": {"rack": "r1"},
             "exclusions": [{"service": "metrics", "reason": "noisy"}],
+            "inventoryRecordId": "web-2", "dataMacs": ["0c:c4:7a:00:00:02", "0c:c4:7a:00:00:03"],
+            "bmcMac": "0c:c4:7a:00:00:01", "serial": "SN-2", "enrolledUnix": "1800000000",
             "services": [
                 {"service": "api", "up": false, "holdsSlot": true, "gateReason": "GATE_REASON_HELD",
                  "membership": "MEMBERSHIP_PRESENT", "installedVersion": "1.3.0", "health": "HEALTH_UNHEALTHY",
@@ -102,6 +235,11 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             ["Agent", "hostkeeper 0.4.1"],
             ["Labels", "rack=r1"],
             ["Excluded from", "metrics (noisy)"],
+            ["Inventory record", "web-2"],
+            ["Data MACs", "0c:c4:7a:00:00:02, 0c:c4:7a:00:00:03"],
+            ["BMC MAC", "0c:c4:7a:00:00:01"],
+            ["Serial", "SN-2"],
+            ["Enrolled", AT],
             ["", ""],
             ["Installed version", "1.3.0"],
             ["Health", "unhealthy"],

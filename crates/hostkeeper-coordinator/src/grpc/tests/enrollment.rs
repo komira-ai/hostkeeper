@@ -164,6 +164,7 @@ async fn list_and_approve_answer_what_the_coordinator_answers() {
                 proto::ListPendingRequest {
                     limit: 1,
                     page_token: "not a token".to_owned(),
+                    ..proto::ListPendingRequest::default()
                 },
             )
             .await,
@@ -249,6 +250,7 @@ async fn records_are_added_listed_and_removed_and_each_refusal_has_its_status() 
                 proto::ListRecordsRequest {
                     limit: 1,
                     page_token: "Not A Host!".to_owned(),
+                    enrolled: None,
                 },
             )
             .await,

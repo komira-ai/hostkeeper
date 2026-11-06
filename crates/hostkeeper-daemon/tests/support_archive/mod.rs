@@ -248,7 +248,7 @@ fn bundle(sha: &str) -> String {
 }
 
 /// The release index of `archive` for the host's platform.
-fn index(archive: &[u8]) -> String {
+pub fn index(archive: &[u8]) -> String {
     let platform = Platform::current().name();
     format!(
         "{{\"packages\":[{{\"bytes\":{},\"file\":\"{SERVICE}-{VERSION}-{platform}.tar.zst\",\

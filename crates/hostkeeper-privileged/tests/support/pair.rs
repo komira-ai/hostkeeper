@@ -32,9 +32,9 @@ pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
 pub const PKI_DIR: &str = "/etc/updater/pki";
 /// The role every test host is approved for.
 pub const ROLE: &str = "ci";
-/// The service the rollout file runs on [`ROLE`] and that no test sets a desired version of: a
-/// host that heartbeats is listed under it by `services list`, so it shows that the coordinator
-/// heard the host, and the coordinator never orders anything for it.
+/// The service the rollout file runs on [`ROLE`], which CI's allow-list names (an entry names
+/// services the rollout file defines); no test sets a desired version of it, so the coordinator
+/// orders nothing for it.
 pub const BEACON: &str = "beacon";
 /// The operator's token.
 const OPERATOR_TOKEN: &str = "operator-token-of-the-first-boot-tests-0123456789";
@@ -406,25 +406,24 @@ impl Coordinator {
             .ok_or_else(|| format!("services list has no {service}: {list}"))
     }
 
-    /// The host `node_id` as `services list` lists it under `service`: one the coordinator has
-    /// heard from since it started and that `service` is assigned to, with what it reported.
-    pub fn assigned(&self, service: &str, node_id: &str) -> Result<Option<Value>, String> {
-        let entry = self.service(service)?;
-        Ok(entry["assigned"]
+    /// The host `node_id` as `hosts list` gives it, or `None`: the coordinator lists the hosts it
+    /// has heard from since it started, each with its role, its enrollment, its last heartbeat and
+    /// how each service sees it.
+    pub fn host(&self, node_id: &str) -> Result<Option<Value>, String> {
+        let list = self.ctl(&["hosts", "list"])?;
+        Ok(list["hosts"]
             .as_array()
             .and_then(|hosts| hosts.iter().find(|h| h["nodeId"] == node_id).cloned()))
     }
 
-    /// Waits until the coordinator lists `node_id` under [`BEACON`]: it has heard the host's
-    /// heartbeat since it started. Gives the listing.
+    /// Waits until `hosts list` lists `node_id`: the coordinator has heard the host's heartbeat
+    /// since it started. Gives the host as listed.
     pub fn wait_heard(&mut self, node_id: &str, daemon: &mut Daemon) -> Value {
         poll(&format!("a heartbeat of {node_id}"), || {
             self.assert_running();
             daemon.assert_running();
-            match self.assigned(BEACON, node_id)? {
-                Some(host) => Ok(host),
-                None => Err(format!("{} lists no {node_id}", BEACON)),
-            }
+            self.host(node_id)?
+                .ok_or_else(|| format!("hosts list lists no {node_id}"))
         })
     }
 

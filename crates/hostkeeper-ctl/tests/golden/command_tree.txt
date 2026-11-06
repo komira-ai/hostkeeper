@@ -37,6 +37,8 @@ request-file coordinator heartbeat agent
 flag coordinator heartbeat --features STRING
 request-file coordinator heartbeat services
 command hosts list /hostkeeper.operator.v1.Hosts/List
+flag hosts list --limit UINT32
+flag hosts list --page-token STRING
 command hosts get /hostkeeper.operator.v1.Hosts/Get
 flag hosts get --node-id STRING
 command hosts exclude /hostkeeper.operator.v1.Hosts/Exclude
@@ -109,6 +111,8 @@ flag audit list --actor STRING
 flag audit list --action STRING
 flag audit list --service STRING
 flag audit list --node-id STRING
+flag audit list --by-name STRING
+flag audit list --newest true|false
 command coordinator enroll /hostkeeper.agent.v1.Coordinator/Enroll
 request-file coordinator enroll csr_der
 request-file coordinator enroll claims
@@ -124,6 +128,7 @@ request-file coordinator renew csr_der
 command enrollment list /hostkeeper.operator.v1.Enrollment/List
 flag enrollment list --limit UINT32
 flag enrollment list --page-token STRING
+flag enrollment list --unenrolled true|false
 command enrollment approve /hostkeeper.operator.v1.Enrollment/Approve
 flag enrollment approve --request-id STRING
 flag enrollment approve --key-sha256 STRING
@@ -150,3 +155,6 @@ command hosts abort /hostkeeper.operator.v1.Hosts/Abort
 flag hosts abort --node-id STRING
 flag hosts abort --service STRING
 flag hosts abort --reason STRING
+flag releases set-desired --release-index STRING
+flag releases set-desired --release-index-digest STRING
+flag enrollment list-records --enrolled true|false

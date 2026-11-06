@@ -1,6 +1,6 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! The device run on a Mac (design section 5.9): the launchd adapters, the process probe, the
-//! boot id and the package check against the real launchd, kernel and tools of a GitHub-hosted macOS runner, as
+//! boot id, the enrollment claims read from `ioreg` and the package check against the real launchd, kernel and tools of a GitHub-hosted macOS runner, as
 //! root, in `.github/workflows/privileged.yml`'s job `macos-device` only. Like the Linux
 //! privileged tests these are not counted by the coverage gate; what they drive is measured
 //! against fakes in the pull-request set.
@@ -23,7 +23,8 @@ use std::process::{Child, Command};
 use std::time::Duration;
 
 use hostkeeper_daemon::boot::BOOT_ID_FILE;
-use hostkeeper_daemon::mac::HostMacVerify;
+use hostkeeper_daemon::mac::{HostIoreg, HostMacVerify};
+use hostkeeper_enroll::{Claims, ClaimsSource, MacClaims};
 use hostkeeper_hook::{Invocation, Outcome, Step};
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print};
 use hostkeeper_launchd::procid::darwin::DarwinPidInfo;
@@ -35,7 +36,7 @@ use hostkeeper_observe::{ActiveState, ProcessProbe, ServiceManager, UnitState};
 use hostkeeper_privileged::{Mode, Rig};
 use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
-use hostkeeper_steps::{BootIdSource, Bound, StepCall, StepLauncher};
+use hostkeeper_steps::{BootId, BootIdSource, Bound, StepCall, StepLauncher};
 use hostkeeper_testkit::Scratch;
 use hostkeeper_unpack::{MacVerify, SignatureVerdict};
 use hyper_util::rt::TokioIo;
@@ -447,6 +448,40 @@ fn the_boot_id_of_a_mac_is_a_uuid_the_same_on_two_reads() {
         first
     );
     assert_eq!(second, first);
+}
+
+/// Catches a parser that no longer reads the `ioreg` of a current macOS: the daemon's Mac claims,
+/// [`MacClaims`] over [`HostIoreg::system`] (the real `/usr/sbin/ioreg`, as the daemon runs it),
+/// are a non-empty serial and a platform UUID in the 8-4-4-4-12 form, and nothing else. The
+/// values differ from host to host, so the test prints them and asserts their shape only; the
+/// UUID is judged by `hostkeeper_steps`'s check, not by the parser under test. The canned
+/// output of the pull-request tests cannot show that the live layout still parses.
+#[test]
+fn the_mac_claims_from_the_real_ioreg_are_a_serial_and_a_platform_uuid() {
+    let claims = MacClaims::new(Box::new(HostIoreg::system()))
+        .claims()
+        .expect("the claims of this Mac, from its ioreg");
+    println!(
+        "ioreg: IOPlatformSerialNumber {:?}, IOPlatformUUID {:?}",
+        claims.mac_serial, claims.platform_uuid
+    );
+    let serial = claims.mac_serial.clone().expect("a serial number");
+    let uuid = claims.platform_uuid.clone().expect("a platform UUID");
+    assert!(!serial.trim().is_empty(), "the serial {serial:?} is blank");
+    assert!(
+        !uuid.trim().is_empty(),
+        "the platform UUID {uuid:?} is blank"
+    );
+    let parsed = BootId::uuid("IOPlatformUUID", &uuid).expect("the platform UUID is a UUID");
+    assert_eq!(parsed.as_str(), uuid);
+    assert_eq!(
+        claims,
+        Claims {
+            mac_serial: Some(serial),
+            platform_uuid: Some(uuid),
+            ..Claims::default()
+        }
+    );
 }
 
 /// Catches a daemon that does not start under launchd on a Mac, or starts under no boot id: the

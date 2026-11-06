@@ -9,6 +9,7 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc" }
 hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+hostkeeper-config = { path = "../hostkeeper-config" }
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }

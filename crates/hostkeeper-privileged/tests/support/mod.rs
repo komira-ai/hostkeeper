@@ -1,6 +1,7 @@
 //! Shared by the privileged tests: the check that they run as root under systemd, a bench (a
 //! scratch directory and a rig whose units are torn down when it is dropped, failed or not), the
-//! host's programs they run, and a clock that moves only when told to.
+//! host's programs they run, and a clock that moves only when told to; and, in [`self_update`],
+//! the host of the self-update tests.
 //!
 //! A wait of this module ([`wait_until`], [`wait_for_file`]) polls a state systemd or the fixture
 //! reaches (a file written, a unit active) and sleeps between looks; it never bounds the time it
@@ -29,6 +30,7 @@ use hostkeeper_testkit::Scratch;
 
 pub mod channel;
 pub mod pair;
+pub mod self_update;
 pub mod spawn;
 
 /// The fixture program, built by cargo with these tests.

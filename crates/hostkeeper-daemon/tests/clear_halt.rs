@@ -7,12 +7,12 @@ mod support;
 
 use std::fs;
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::halt::{HELD_HALT_FILE, HaltStore};
 use hostkeeper_daemon::link_adapters::DaemonHalts;
 use hostkeeper_daemon::locks::Holder;
+use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::verbs::clear_halt::Lifted;
 use hostkeeper_daemon::{Daemon, Refusal, Refused, Reply};
 use hostkeeper_hook::{Step, Verdict};
@@ -218,9 +218,11 @@ fn clear_halt_on_a_service_with_a_running_step_is_busy() {
     let daemon = Arc::new(rig.daemon());
     let order = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
+        spawn("the order", move || {
+            daemon.order(&update("web", "2.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&order).expect("the held step is entered");
     let record_before = bytes(&rig, RECORD_FILE);
     let refused = daemon.clear_halt(&name("web"), 1).expect_err("busy");
     let detail = "web is locked by an order to update it to 2.0.0";

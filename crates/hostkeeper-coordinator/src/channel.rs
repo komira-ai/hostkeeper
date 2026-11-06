@@ -13,7 +13,8 @@
 //!   [`NOT_IN_CHANNEL`]. It is retryable: setting the version again once the channel holds it
 //!   succeeds;
 //! - an index of another service or version, or, when the set names a package digest, an index
-//!   none of whose packages has that SHA-256: [`ChannelRefusal::DigestMismatch`], token
+//!   none of whose packages has that SHA-256, or, when the set names a release index, an index
+//!   whose own SHA-256 is not the one the set names: [`ChannelRefusal::DigestMismatch`], token
 //!   [`CHANNEL_DIGEST_MISMATCH`]. It is not retryable: the channel holds another artifact than
 //!   the one CI is setting.
 //!
@@ -128,7 +129,7 @@ pub enum ChannelRefusal {
     )]
     NotInChannel,
     /// The channel's index of the version names another service or version, or no package with
-    /// the digest the set names.
+    /// the digest the set names, or is not the release index the set names.
     #[error(
         "channel_digest_mismatch: the release channel's index of the version does not match the set"
     )]
@@ -178,8 +179,8 @@ impl ReleaseChannel {
         Self { fetcher }
     }
 
-    /// Whether the channel holds `desired.version` of `service`, with the package digest the
-    /// set names, if it names one (the module's rules).
+    /// Whether the channel holds `desired.version` of `service`, with the package digest or the
+    /// release index the set names, if it names one (the module's rules).
     ///
     /// # Errors
     /// [`ChannelRefusal`].
@@ -209,6 +210,13 @@ impl ReleaseChannel {
         }
         if listed.packages.is_empty() {
             return Err(refused(ChannelRefusal::NotInChannel, &"no package"));
+        }
+        // A set over a release index names the very index the channel must hold: its SHA-256.
+        if let Some(record) = &desired.release_index
+            && crate::ops_file::digest(&body) != record.digest.as_str()
+        {
+            let why = format!("the index is not the one of SHA-256 {}", record.digest);
+            return Err(refused(ChannelRefusal::DigestMismatch, &why));
         }
         if let Some(digest) = &desired.release_digest
             && !listed

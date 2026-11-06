@@ -7,9 +7,9 @@ mod support;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_daemon::installed::Lifecycle;
+use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Params, Phase, Step, Verdict};
 use hostkeeper_placed::testing::{Event, FaultFs, UnitCall};
@@ -46,9 +46,11 @@ fn install_runs_the_update_path_with_no_previous_version() {
     let gate = rig.launcher.hold("web", Step::Cutover);
     let running = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&install("web", "1.0.0", &d(), 1)))
+        spawn("the order", move || {
+            daemon.order(&install("web", "1.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&running).expect("the held step is entered");
     let params = Params::read(&rig.state.join("web").join("params.toml")).expect("the params file");
     assert_eq!(params.previous_release(), None);
     assert_eq!(params.previous_version(), None);

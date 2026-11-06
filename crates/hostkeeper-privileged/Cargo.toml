@@ -10,7 +10,8 @@ description = "The tests that run as root against the real service manager of a 
 
 # The one place where the adapters behind the fakes of the pull-request set meet the real host:
 # the step launcher's transient units, the dead-man's stop by name, the observer's systemd and
-# /proc adapters, the Linux unit control's systemctl. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
+# /proc adapters, the Linux unit control's systemctl, and hostkeeper's update of itself under its
+# unit file, drop-in and fallback unit. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
 # the feature is off by default and nothing of the workspace turns it on, so CI's `test` job
 # compiles and runs none of them; privileged.yml builds them as the runner's user and runs them
 # as root, after a merge to main. The library is what they share and what can be tested without
@@ -30,6 +31,19 @@ hostkeeper-hook = { path = "../hostkeeper-hook" }
 hex.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+# The program `hostkeeper-selfupdate-daemon` of the self-update tests: the daemon's command line
+# and start (above), on the Linux adapters and placement roots of the host's platform
+# (`hostkeeper-launchd`, `hostkeeper-placed`), with a package store of sealed trees
+# (`hostkeeper-steps`) and a heartbeat link of files read and written as JSON (`hostkeeper-link`,
+# `hostkeeper-config`'s names, `serde_json`), in a runtime of its own (`tokio`).
+clap.workspace = true
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-launchd = { path = "../hostkeeper-launchd" }
+hostkeeper-link = { path = "../hostkeeper-link" }
+hostkeeper-placed = { path = "../hostkeeper-placed" }
+hostkeeper-steps = { path = "../hostkeeper-steps" }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 # The workload fixture (`hostkeeper_privileged::fixture` says what it does). Built by cargo with
 # the crate's tests, nothing prebuilt or checked in; a program of the tests, not shipped. Its
@@ -54,17 +68,28 @@ path = "tests/bin/device_daemon.rs"
 name = "hostkeeper-privileged-coordinator"
 path = "tests/bin/coordinator.rs"
 
+# The `hostkeeper` binary of the Linux self-update tests (`tests/self_update.rs`): the daemon of
+# `hostkeeper_daemon` with the package store and the coordinator link of the test, its version
+# the name it is staged under. What it does is documented in the program.
+[[bin]]
+name = "hostkeeper-selfupdate-daemon"
+path = "tests/bin/selfupdate_daemon.rs"
+
 [features]
 # The tests that run as root against the host's systemd. Only privileged.yml turns it on.
 privileged = []
 
 [dev-dependencies]
-# What the privileged tests drive: the production launcher and dead-man, and the observer's real
-# adapters; on a Mac the launchd adapters, the process probe over `proc_pidpath`, and the package
-# check (`hostkeeper_unpack::MacVerify`) over `codesign` and `getxattr`.
-hostkeeper-launchd = { path = "../hostkeeper-launchd" }
+# What the privileged tests drive: the production launcher and dead-man (`hostkeeper-steps`,
+# above), and the observer's real adapters; on a Mac the launchd adapters (`hostkeeper-launchd`,
+# above), the process probe over `proc_pidpath`, the package check
+# (`hostkeeper_unpack::MacVerify`) over `codesign` and `getxattr`, and the enrollment claims over
+# `ioreg`.
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+# The macOS device test of the enrollment claims: `MacClaims` over the daemon's `HostIoreg`, the
+# real `ioreg`.
+hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 # The macOS device test's `Status` call to the daemon's admin socket: the admin service's client,
 # over a Unix socket.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
@@ -72,7 +97,6 @@ hyper-util = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["net", "rt"] }
 tonic = { workspace = true, features = ["channel"] }
 tower = { workspace = true, features = ["util"] }
-hostkeeper-steps = { path = "../hostkeeper-steps" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The first-boot tests: the attestation bundle of the fixture package (base64), the test CA of the coordinator's private listener and of the release
 # channel (rcgen), the release channel's TLS server (rustls), the JSON the ctl prints (serde_json),

@@ -6,8 +6,8 @@
 // Services.SetMinVersion, and Hosts.List to count a force's hosts. The desired version is set here or by CI.
 
 import {
-  h, action, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select, table,
-  trimmed, words,
+  h, action, allPages, area, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select,
+  table, trimmed, words,
 } from "../view.js";
 
 function runsService(view) {
@@ -44,12 +44,13 @@ export function forceTargetCount(target, hosts) {
   return count;
 }
 
-// Counts the hosts of `request` over a fresh Hosts.List. `{ok: true, request, count}`, or
-// `{ok: false, error}` when the list could not be read: then no force may be sent.
+// Counts the hosts of `request` over a fresh Hosts.List, every page of it. `{ok: true, request,
+// count}`, or `{ok: false, error}` when a page could not be read: then no force may be sent.
 export async function prepareForce(api, request) {
   try {
-    const listed = await api.call("hostkeeper.operator.v1.Hosts/List", {});
-    return { ok: true, request, count: forceTargetCount(request, listed.hosts || []) };
+    const hosts = await allPages((pageToken) => api.call("hostkeeper.operator.v1.Hosts/List",
+      pageToken === "" ? {} : { pageToken }), "hosts");
+    return { ok: true, request, count: forceTargetCount(request, hosts) };
   } catch (error) {
     return { ok: false, error };
   }
@@ -263,8 +264,13 @@ function setDesired(ctx, svc, form) {
       return "Desired version not changed.";
     }
     const request = { service, desired: Object.assign({ version }, limitsOf(svc.desired)) };
-    if (trimmed(form.digest) !== "") {
-      request.packageDigest = trimmed(form.digest);
+    // The release index and its digest go together or not at all; the API checks the pair. The
+    // index goes as typed, not trimmed: its digest is of its exact bytes, a final newline included.
+    if (trimmed(form.indexDigest) !== "") {
+      request.releaseIndexDigest = trimmed(form.indexDigest);
+    }
+    if (trimmed(form.index) !== "") {
+      request.releaseIndex = form.index;
     }
     const reply = await ctx.api.call("hostkeeper.operator.v1.Releases/SetDesired", request);
     ctx.refresh();
@@ -323,14 +329,16 @@ function minVersionButton(ctx, service, form) {
   });
 }
 
-// The role, version and digest grammar is the API's to check: the form only refuses a blank.
+// The role, version, digest and release index grammar is the API's to check: the form only
+// refuses a blank version and role.
 function assignFieldset(ctx, svc) {
   const service = svc.service;
-  const form = { version: "", digest: "", role: "", uninstall: false, minVersion: "" };
+  const form = { version: "", indexDigest: "", index: "", role: "", uninstall: false, minVersion: "" };
   return h("fieldset", {},
     h("legend", {}, `Assign and set the desired version of ${service}`),
     field("Version", "desired-version", form, "version"),
-    field("Package digest (64 hex characters)", "desired-digest", form, "digest"),
+    field("Release index digest (64 hex characters)", "desired-index-digest", form, "indexDigest"),
+    area("Release index (the text of index.json)", "desired-index", form, "index"),
     h("div", { class: "buttons" }, setDesired(ctx, svc, form)),
     field("Role", "assign-role", form, "role"),
     checkbox("Uninstall from each host that loses its last assignment", "unassign-uninstall", form, "uninstall"),

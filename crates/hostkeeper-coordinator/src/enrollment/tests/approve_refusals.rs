@@ -219,9 +219,16 @@ async fn every_refusal_of_the_store_is_audited_and_changes_nothing() {
         actions,
         [
             "enroll_approve_refused",
+            "enroll_requested",
             "enroll_approve",
             "enroll_approve_refused",
+            "enroll_requested",
+            "enroll_issued",
+            "enroll_requested",
             "enroll_approve_refused",
+            "enroll_requested",
+            "enroll_issued",
+            "enroll_requested",
             "enroll_approve_refused"
         ]
     );

@@ -14,7 +14,16 @@
 //!   <ref> --source-digest <c> ...` prints one attestation of `<file>`'s SHA-256 by `<w>` on
 //!   `<ref>` at `<c>`: every file verifies as signed by whom it is asked about.
 //!
+//! - `gh release list --repo <o>/<n> ... --json tagName --jq <filter>` runs `jq --raw-output
+//!   <filter>` over `releases/<o>/<n>/release-list.json` (`[{"tagName": ...}, ...]`, `[]` when
+//!   there is none) and prints what it prints, as `gh` does with `--jq`.
+//!
 //! Anything else exits 2.
+//!
+//! Started as `curl` (a link named `curl`), it is the fake origin of the release channel test of
+//! release.yml (tests/workflows/channel_run_tests.rs): `curl ... --output <file> https://<rest>`
+//! copies `channel/<rest>` beside its own file to `<file>`, and when there is none fails as curl
+//! does for an HTTP 404 with `--fail` (exit 22). It never waits, whatever retry flags it is given.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -90,19 +99,63 @@ fn answer(data: &Path, args: &[String]) -> ExitCode {
             println!("{reply}");
             ExitCode::SUCCESS
         }
+        ["release", "list", ..] => {
+            let (Some(repo), Some(filter)) = (value(args, "--repo"), value(args, "--jq")) else {
+                return ExitCode::from(2);
+            };
+            let list = std::fs::read(data.join(repo).join("release-list.json"));
+            let list = list.unwrap_or_else(|_| b"[]".to_vec());
+            let child = std::process::Command::new("jq")
+                .args(["--raw-output", filter])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::inherit())
+                .spawn();
+            let Ok(mut child) = child else {
+                return fail("cannot run jq");
+            };
+            let written = child
+                .stdin
+                .take()
+                .is_some_and(|mut stdin| stdin.write_all(&list).is_ok());
+            match child.wait() {
+                Ok(status) if status.success() && written => ExitCode::SUCCESS,
+                _ => fail("jq failed"),
+            }
+        }
         _ => ExitCode::from(2),
+    }
+}
+
+/// The fake `curl` of the channel: see the module's documentation.
+fn curl(dir: &Path, args: &[String]) -> ExitCode {
+    let (Some(output), Some(url)) = (value(args, "--output"), args.last()) else {
+        return ExitCode::from(2);
+    };
+    let Some(rest) = url.strip_prefix("https://") else {
+        eprintln!("curl: (1) Protocol not supported or disabled");
+        return ExitCode::from(1);
+    };
+    match std::fs::copy(dir.join("channel").join(rest), output) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(_) => {
+            eprintln!("curl: (22) The requested URL returned error: 404");
+            ExitCode::from(22)
+        }
     }
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(data) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("releases")))
-    else {
+    let Ok(exe) = std::env::current_exe() else {
+        return fail("no file of its own");
+    };
+    let Some(dir) = exe.parent() else {
         return fail("no directory of its own");
     };
-    let data: PathBuf = data;
+    if exe.file_name().is_some_and(|name| name == "curl") {
+        return curl(dir, &args);
+    }
+    let data: PathBuf = dir.join("releases");
     let logged = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

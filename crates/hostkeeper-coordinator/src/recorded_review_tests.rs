@@ -229,6 +229,7 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
             Skip::Deferred => "deferred",
             Skip::Unsupported => "unsupported",
             Skip::NoDigest => "no_digest",
+            Skip::NoPackageForPlatform => "no_package_for_platform",
         }
     };
     for g in [
@@ -254,6 +255,7 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
         Skip::Deferred,
         Skip::Unsupported,
         Skip::NoDigest,
+        Skip::NoPackageForPlatform,
     ] {
         assert_eq!(json!(s), json!(skip(s)));
         assert_eq!(json!(Why::Skip(s)), json!(skip(s)));

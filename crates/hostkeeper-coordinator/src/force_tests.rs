@@ -141,6 +141,7 @@ fn forced(ver: &str, n: u8, halt_generation: u64, generation: u64) -> Order {
         service: WEB.to_owned(),
         version: version(ver),
         digest: Digest::parse(&digest(n)).expect("a digest"),
+        index_digest: None,
         halt_generation,
         order_id: format!("force-{generation}"),
     }
@@ -741,6 +742,7 @@ async fn force_order_carries_the_registered_digest_and_no_command_field() {
                 version: "2.0".to_owned(),
                 package_digest: digest(7),
                 halt_generation: 1,
+                index_digest: String::new(),
             })),
         }
     );

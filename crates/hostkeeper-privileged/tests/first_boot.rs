@@ -8,9 +8,10 @@
 //! What it asserts: the daemon's enrollment request reaches the coordinator's pending list (the
 //! CA takes its subject, `CN=host:pending`), the operator's approval gives the daemon a
 //! certificate of subject `CN=host:<approved id>` for the key it asked with, and the coordinator
-//! hears its heartbeat over mutual TLS with that identity; a coordinator killed and started
-//! again on the same files hears the same host again with no new request and no new
-//! certificate, and so does a coordinator that a killed and restarted daemon (its boot pass)
+//! hears its heartbeat over mutual TLS with that identity (`hosts list`: the host, its role, its
+//! enrollment and its heartbeat); a coordinator killed and started
+//! again on the same files hears the same host again with no new request, no new certificate and
+//! the same enrollment, and so does a coordinator that a killed and restarted daemon (its boot pass)
 //! comes back to.
 //!
 //! The daemon fixes its pki directory (`/etc/updater/pki`) and installs its self-update units
@@ -26,7 +27,7 @@ mod support;
 
 use serde_json::Value;
 use support::Bench;
-use support::pair::{BEACON, Coordinator, Daemon, HostCertificate, HostPaths, ROLE, rollout};
+use support::pair::{Coordinator, Daemon, HostCertificate, HostPaths, ROLE, rollout};
 use support::spawn::poll;
 
 /// A release channel nothing fetches from: the daemon's config needs one, and no test of this
@@ -47,6 +48,18 @@ fn wait_certificate(coordinator: &mut Coordinator, daemon: &mut Daemon) -> HostC
         daemon.assert_running();
         HostCertificate::current()
     })
+}
+
+/// `hosts list` lists `heard` as the approved host: of [`ROLE`], live, enrolled at `enrolled`
+/// (the unix second of its approval), its heartbeat the daemon's.
+fn assert_heard(heard: &Value, enrolled: &Value) {
+    assert_eq!(heard["role"], ROLE, "{heard}");
+    assert_eq!(heard["live"], true, "{heard}");
+    assert_eq!(
+        &heard["enrolledUnix"], enrolled,
+        "the same enrollment: {heard}"
+    );
+    assert_eq!(heard["heartbeat"]["agent"]["name"], "hostkeeper", "{heard}");
 }
 
 /// No enrollment request is pending.
@@ -102,13 +115,14 @@ fn a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts() {
 
     // 4. The coordinator hears the host's heartbeat, by the identity of its certificate.
     let heard = coordinator.wait_heard(node, &mut daemon);
-    assert_eq!(heard["role"], ROLE, "{heard}");
+    let enrolled = heard["enrolledUnix"].clone();
+    assert!(enrolled.is_string(), "listed as enrolled: {heard}");
+    assert_heard(&heard, &enrolled);
 
     // 5. The coordinator is killed and started again on the same files and ports. It knows
     // nothing of the fleet at a start, so the host listed again is a heartbeat it heard since.
     coordinator.restart();
-    let heard = coordinator.wait_heard(node, &mut daemon);
-    assert_eq!(heard["role"], ROLE, "{heard}");
+    assert_heard(&coordinator.wait_heard(node, &mut daemon), &enrolled);
     assert_eq!(
         HostCertificate::current().as_ref(),
         Ok(&first),
@@ -121,13 +135,12 @@ fn a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts() {
     daemon.kill();
     coordinator.restart();
     assert_eq!(
-        coordinator.assigned(BEACON, node),
+        coordinator.host(node),
         Ok(None),
         "no heartbeat while the daemon is down"
     );
     daemon.start_again();
-    let heard = coordinator.wait_heard(node, &mut daemon);
-    assert_eq!(heard["role"], ROLE, "{heard}");
+    assert_heard(&coordinator.wait_heard(node, &mut daemon), &enrolled);
     assert_eq!(
         HostCertificate::current().as_ref(),
         Ok(&first),

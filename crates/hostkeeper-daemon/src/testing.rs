@@ -5,7 +5,11 @@
 //! connection that counts the bytes read from it, and prunes that delete nothing or record
 //! their calls. The launcher and the notifier can write what
 //! they are asked to one shared [`Log`], so that a test sees the order across both.
-//! Nothing here sleeps or reads the wall clock: a test drives every wait with a channel.
+//! Nothing here sleeps or reads the wall clock: a test drives every wait with a channel, and each
+//! wait names the [`Party`] that would send what it waits for, so that a signal that never comes
+//! fails the test rather than hanging it ([`signal`]).
+
+mod signal;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
@@ -27,11 +31,14 @@ use hostkeeper_steps::{
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tonic::transport::server::Connected;
 
-use crate::locks::ServiceGuard;
+use crate::locks::{ServiceGuard, ServiceLocks};
 use crate::notify::ReadyNotifier;
 use crate::packages::{PackageError, Packages, VersionDir};
 use crate::prune::Prune;
 use crate::verb::PackageDigest;
+use crate::watchers::Watchers;
+
+pub use signal::{Ending, Missed, Notice, Party, Signal, Spawned, Tell, spawn};
 
 /// One log of what the fakes were asked, in order: `run <unit>`, `stop <unit>`,
 /// `additive <unit>` from [`ScriptedLauncher`], `ready` from [`FakeNotifier`].
@@ -48,7 +55,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// A clock that moves only when a test, or something sleeping on it, moves it.
-#[derive(Debug)]
 pub struct FakeClock {
     mono: AtomicU64,
     boot: Mutex<String>,
@@ -56,6 +62,15 @@ pub struct FakeClock {
     frozen: bool,
     /// The next sleep waits here until the test releases it.
     parked: Mutex<Option<Hold>>,
+    /// The sleeps so far, and the parties of [`FakeClock::sleeps`] over at a count.
+    slept: Mutex<Slept>,
+}
+
+/// How many times a [`FakeClock`] was slept on, and the parties over at a count.
+#[derive(Default)]
+struct Slept {
+    count: u64,
+    due: Vec<(u64, Ending)>,
 }
 
 impl FakeClock {
@@ -76,22 +91,28 @@ impl FakeClock {
             boot: Mutex::new("boot-1".to_owned()),
             frozen,
             parked: Mutex::default(),
+            slept: Mutex::default(),
         })
+    }
+
+    /// A party over once the clock has been slept on `times` times more than now. A poller that
+    /// ticks, then sleeps, has run a whole tick after this call once it has slept twice: what that
+    /// tick would send comes before. Every sleep on the clock counts, so it is for a clock one
+    /// poller sleeps on.
+    pub fn sleeps(&self, times: u64) -> Ending {
+        let ending = Ending::default();
+        let mut slept = lock(&self.slept);
+        let at = slept.count + times;
+        slept.due.push((at, ending.clone()));
+        ending
     }
 
     /// Holds the next sleep on this clock until the test releases it: the test sees a waiter
     /// enter its wait.
     pub fn park_next_sleep(&self) -> Gate {
-        let (entered, on_entered) = mpsc::channel();
-        let (release, on_release) = mpsc::channel();
-        *lock(&self.parked) = Some(Hold {
-            entered,
-            release: Mutex::new(on_release),
-        });
-        Gate {
-            entered: on_entered,
-            release,
-        }
+        let (hold, gate) = Hold::new();
+        *lock(&self.parked) = Some(hold);
+        gate
     }
 
     pub fn advance(&self, secs: u64) {
@@ -123,12 +144,25 @@ impl Clock for FakeClock {
     fn sleep_secs(&self, secs: u64) {
         let parked = lock(&self.parked).take();
         if let Some(hold) = parked {
-            hold.entered.send(()).unwrap_or_default();
+            hold.entered.send(());
             lock(&hold.release).recv().unwrap_or_default();
         }
         match self.frozen {
             true => std::thread::yield_now(),
             false => self.advance(secs),
+        }
+        let over: Vec<(u64, Ending)> = {
+            let mut slept = lock(&self.slept);
+            slept.count += 1;
+            let count = slept.count;
+            let (over, due) = std::mem::take(&mut slept.due)
+                .into_iter()
+                .partition(|(at, _)| *at <= count);
+            slept.due = due;
+            over
+        };
+        for (at, ending) in over {
+            ending.over(&format!("the clock was slept on {at} times"));
         }
     }
 }
@@ -145,28 +179,50 @@ pub struct Ran {
 }
 
 /// A step held inside the launcher, or a sleep held on the clock, until the test releases it.
-#[derive(Debug)]
 struct Hold {
-    entered: Sender<()>,
+    entered: Notice<()>,
     release: Mutex<Receiver<()>>,
 }
 
-/// The test's end of a held step: wait for the step to be entered, then release it.
-#[derive(Debug)]
+impl Hold {
+    /// A hold, and the test's end of it.
+    fn new() -> (Hold, Gate) {
+        let (entered, on_entered) = Signal::new();
+        let (release, on_release) = mpsc::channel();
+        let hold = Hold {
+            entered,
+            release: Mutex::new(on_release),
+        };
+        let gate = Gate {
+            entered: on_entered,
+            release,
+        };
+        (hold, gate)
+    }
+}
+
+/// The test's end of a held step: wait for the step to be entered, then release it. A gate let go
+/// of releases its step, so a test that fails leaves nothing held.
 pub struct Gate {
-    entered: Receiver<()>,
+    entered: Signal<()>,
     release: Sender<()>,
 }
 
 impl Gate {
-    /// Waits until the held step is running.
-    pub fn entered(&self) {
-        self.entered.recv().unwrap_or_default();
+    /// Waits until the held step is running, entered by `by`; [`Missed`] when `by` is over first.
+    pub fn entered(&self, by: &dyn Party) -> Result<(), Missed> {
+        self.entered.wait(by)
     }
 
     /// Lets the held step end.
     pub fn release(&self) {
         self.release.send(()).unwrap_or_default();
+    }
+}
+
+impl Drop for Gate {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 
@@ -223,7 +279,7 @@ pub struct ScriptedLauncher {
     ended_by_stop: Mutex<BTreeMap<Key, Sender<()>>>,
     stoppable: Mutex<BTreeMap<String, Sender<()>>>,
     losses: Mutex<BTreeSet<Key>>,
-    stop_seen: Mutex<Vec<Sender<String>>>,
+    stop_seen: Mutex<Vec<Notice<String>>>,
     running: AtomicUsize,
     most_running: AtomicUsize,
 }
@@ -282,17 +338,9 @@ impl ScriptedLauncher {
 
     /// Holds the next run of `step` for `service` until the test releases it.
     pub fn hold(&self, service: &str, step: Step) -> Gate {
-        let (entered, on_entered) = mpsc::channel();
-        let (release, on_release) = mpsc::channel();
-        let hold = Hold {
-            entered,
-            release: Mutex::new(on_release),
-        };
+        let (hold, gate) = Hold::new();
         lock(&self.holds).insert((service.to_owned(), step), hold);
-        Gate {
-            entered: on_entered,
-            release,
-        }
+        gate
     }
 
     /// Holds the next run of `step` for `service` until a stop of its unit works, as a unit
@@ -326,11 +374,11 @@ impl ScriptedLauncher {
         lock(&self.failing_times).remove(service);
     }
 
-    /// A channel that gets the unit of every stop asked for from now on.
-    pub fn stops_seen(&self) -> Receiver<String> {
-        let (tx, rx) = mpsc::channel();
-        lock(&self.stop_seen).push(tx);
-        rx
+    /// A signal of the unit of every stop asked for from now on.
+    pub fn stops_seen(&self) -> Signal<String> {
+        let (notice, signal) = Signal::new();
+        lock(&self.stop_seen).push(notice);
+        signal
     }
 
     /// Every run, in order.
@@ -376,7 +424,7 @@ impl StepLauncher for ScriptedLauncher {
             let ends = lock(&self.ended_by_stop).remove(&key);
             let stoppable = ends.map(|end| (call.unit.to_owned(), end));
             lock(&self.stoppable).extend(stoppable);
-            hold.entered.send(()).unwrap_or_default();
+            hold.entered.send(());
             lock(&hold.release).recv().unwrap_or_default();
             lock(&self.stoppable).remove(call.unit);
         }
@@ -443,7 +491,7 @@ impl StepLauncher for ScriptedLauncher {
         note(&self.log, format!("stop {unit}"));
         lock(&self.stops).push(unit.to_owned());
         for seen in lock(&self.stop_seen).iter() {
-            seen.send(unit.to_owned()).unwrap_or_default();
+            seen.send(unit.to_owned());
         }
         let of = |service: &str| unit.starts_with(&format!("updater-{service}-"));
         let always = lock(&self.failing_stops).iter().any(|s| of(s.as_str()));
@@ -499,8 +547,9 @@ pub struct FakePackages {
     root: PathBuf,
     failures: Mutex<BTreeMap<(String, String), PackageError>>,
     asked: Mutex<Vec<(String, String)>>,
+    index_digests: Mutex<Vec<Option<String>>>,
     swept: Mutex<Vec<String>>,
-    notify: Mutex<Vec<Sender<String>>>,
+    notify: Mutex<Vec<Notice<String>>>,
 }
 
 fn dir_0755(dir: &Path) {
@@ -515,6 +564,7 @@ impl FakePackages {
             root: packages_dir.to_path_buf(),
             failures: Mutex::default(),
             asked: Mutex::default(),
+            index_digests: Mutex::default(),
             swept: Mutex::default(),
             notify: Mutex::default(),
         })
@@ -567,14 +617,22 @@ impl FakePackages {
         lock(&self.asked).clone()
     }
 
+    /// The index digest of every package asked for, in the order of [`FakePackages::asked`]:
+    /// `None` for an order that named none.
+    pub fn index_digests(&self) -> Vec<Option<String>> {
+        lock(&self.index_digests).clone()
+    }
+
     /// Every service whose orphans were asked to be removed, in order.
     pub fn swept(&self) -> Vec<String> {
         lock(&self.swept).clone()
     }
 
-    /// Sends `<service> <version>` of every package asked for from now on to `tx`.
-    pub fn notify(&self, tx: Sender<String>) {
-        lock(&self.notify).push(tx);
+    /// A signal of `<service> <version>` of every package asked for from now on.
+    pub fn notified(&self) -> Signal<String> {
+        let (notice, signal) = Signal::new();
+        lock(&self.notify).push(notice);
+        signal
     }
 }
 
@@ -584,11 +642,13 @@ impl Packages for FakePackages {
         service: &ServiceName,
         version: &Version,
         _digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
     ) -> Result<VersionDir, PackageError> {
         let key = (service.to_string(), version.to_string());
         lock(&self.asked).push(key.clone());
-        for tx in lock(&self.notify).iter() {
-            tx.send(format!("{service} {version}")).unwrap_or_default();
+        lock(&self.index_digests).push(index_digest.map(|d| d.as_str().to_owned()));
+        for notice in lock(&self.notify).iter() {
+            notice.send(format!("{service} {version}"));
         }
         let failure = lock(&self.failures).get(&key).cloned();
         let dir = self.root.join(&key.0).join(&key.1);
@@ -604,6 +664,34 @@ impl Packages for FakePackages {
         lock(&self.swept).push(service.to_string());
         Ok(())
     }
+}
+
+/// A signal of the service of each caller that begins to wait for the lock of a service to be
+/// let go of ([`ServiceLocks::wait_let_go`]): an abort that has asked the runner and waits for
+/// the order. It takes the place of any hook set on `locks` before.
+pub fn lock_waits(locks: &ServiceLocks) -> Signal<String> {
+    let (notice, signal) = Signal::new();
+    locks.on_wait(move |service| notice.send(service.to_string()));
+    signal
+}
+
+/// A signal of the service of each watcher a caller has told to stop ([`Watchers::stop`]), such
+/// as an order that replaces a watcher; the daemon's own end stops its watchers without it. It
+/// takes the place of any `on_stop` hook set on `watchers` before.
+pub fn watcher_stops(watchers: &Watchers) -> Signal<String> {
+    let (notice, signal) = Signal::new();
+    watchers.on_stop(move |service| notice.send(service.to_string()));
+    signal
+}
+
+/// A party over once a watcher has ended, saying whose: the party of a signal a watcher sends,
+/// such as a held `verify` entered, in a test whose watchers are of one service. It takes the
+/// place of any `on_end` hook set on `watchers` before.
+pub fn watcher_ends(watchers: &Watchers) -> Ending {
+    let ending = Ending::default();
+    let over = ending.clone();
+    watchers.on_end(move |service| over.over(&format!("the watcher of {service} ended")));
+    ending
 }
 
 /// A readiness notifier that counts its notices, writes `ready` to its log, and fails when told.

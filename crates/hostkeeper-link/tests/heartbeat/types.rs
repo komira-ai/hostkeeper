@@ -49,10 +49,12 @@ fn an_order_cannot_carry_a_command_path_or_url() {
         service: name,
         version: to,
         digest: package,
+        index_digest: index,
     } = target;
     let _: ServiceName = name;
     let _: Version = to;
     let _: PackageDigest = package;
+    let _: Option<PackageDigest> = index;
     let OrderRef { id, order_try } = crate::reference("o-1", 1);
     let _: (OrderId, u64) = (id, order_try);
 

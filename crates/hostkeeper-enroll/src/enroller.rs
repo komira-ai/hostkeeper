@@ -90,6 +90,24 @@ pub enum Outcome {
     Renewed(Identity),
 }
 
+/// Where the host is in its enrollment, as the pki directory says: what the daemon's admin
+/// `Status` reports ([`Enroller::enrollment`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Enrollment {
+    /// No certificate generation and no pending key: no request was made yet.
+    Unenrolled,
+    /// No certificate generation, and a pending key, whose request id is the `key_sha256` the
+    /// coordinator lists for the request.
+    Pending { key_sha256: RequestId },
+    /// `current` is a certificate of this host: its host id and the last second it is valid
+    /// (earlier than now for an expired one, which the next step enrolls again `renewal_of` the
+    /// host).
+    Enrolled { host_id: HostId, not_after: u64 },
+    /// The pki directory cannot be read, or its `current` generation or pending key is not a
+    /// certificate and key of this host: why, as a step would say it.
+    Unreadable(String),
+}
+
 /// How the coordinator broke the enrollment protocol.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ProtocolError {
@@ -193,8 +211,14 @@ impl Enroller {
 
     /// Runs [`Enroller::run_once`] while `keep_going` says so, sleeping [`RETRY_SECS`] on the
     /// clock after each step. A step's line goes to `log` only when it differs from the line of
-    /// the step before: a host waiting for approval logs [`NOT_ENROLLED`] once.
-    pub fn run_loop(&mut self, log: &mut dyn FnMut(&str), keep_going: &mut dyn FnMut() -> bool) {
+    /// the step before: a host waiting for approval logs [`NOT_ENROLLED`] once. After each step,
+    /// before the sleep, `seen` is given the host's enrollment ([`Enroller::enrollment`]).
+    pub fn run_loop(
+        &mut self,
+        log: &mut dyn FnMut(&str),
+        seen: &mut dyn FnMut(Enrollment),
+        keep_going: &mut dyn FnMut() -> bool,
+    ) {
         let mut last: Option<String> = None;
         while keep_going() {
             let line = describe(&self.run_once());
@@ -204,8 +228,32 @@ impl Enroller {
                 }
                 last = line;
             }
+            seen(self.enrollment());
             self.ports.clock.sleep_secs(RETRY_SECS);
         }
+    }
+
+    /// The host's enrollment, read from the pki directory as a step reads it: the current
+    /// generation as [`Enroller::run_once`] parses it, else the pending key. Changes nothing but
+    /// what reading the pending key makes durable ([`Store::pending_key`]).
+    pub fn enrollment(&self) -> Enrollment {
+        self.read_enrollment()
+            .unwrap_or_else(|error| Enrollment::Unreadable(error.to_string()))
+    }
+
+    fn read_enrollment(&self) -> Result<Enrollment, Error> {
+        if let Some(held) = self.held()? {
+            return Ok(Enrollment::Enrolled {
+                host_id: held.host_id,
+                not_after: held.not_after,
+            });
+        }
+        Ok(match self.ports.store.pending_key()? {
+            None => Enrollment::Unenrolled,
+            Some(der) => Enrollment::Pending {
+                key_sha256: HostKey::from_pkcs8(&der)?.request_id(),
+            },
+        })
     }
 
     /// Removes the generations older than generation `used`, when `used` is still current: to be

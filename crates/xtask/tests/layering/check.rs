@@ -56,7 +56,11 @@ pub type Layer = (
 /// crates' and the web app's tests read the protobuf descriptors; the privileged tests drive the
 /// step runner's launcher and dead-man and the observer's adapters against the host, and on a
 /// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
-/// normal dependency), the launchd adapters and the package check, and call its admin socket; the
+/// normal dependency), the launchd adapters and the package check, call its admin socket, and
+/// read the Mac's enrollment claims (`hostkeeper-enroll`'s `MacClaims`) from the real `ioreg`;
+/// their program `hostkeeper-selfupdate-daemon` runs the daemon on the Linux adapters with a
+/// package store and a heartbeat link of its own, so it needs the config, the launchd crate's
+/// platform, the link, the placement roots and the step crate as normal dependencies; and the
 /// first-boot tests start the coordinator and the daemon as child processes (the coordinator is
 /// their program `hostkeeper-privileged-coordinator`, which needs it as a normal dependency).
 pub const LAYERS: [Layer; 23] = [
@@ -65,7 +69,7 @@ pub const LAYERS: [Layer; 23] = [
     (CONFIG, &[], &[]),
     (
         COORDINATOR,
-        &[ENROLLMENT, OIDC, PROTO, TLS, WIRE],
+        &[CONFIG, ENROLLMENT, OIDC, PROTO, TLS, WIRE],
         &[CTL, OIDC],
     ),
     (CTL, &[PROTO], &[]),
@@ -93,8 +97,17 @@ pub const LAYERS: [Layer; 23] = [
     (PLACED, &[CONFIG], &[]),
     (
         PRIVILEGED,
-        &[COORDINATOR, DAEMON, HOOK],
-        &[LAUNCHD, OBSERVE, PROTO, STEPS, UNPACK],
+        &[
+            CONFIG,
+            COORDINATOR,
+            DAEMON,
+            HOOK,
+            LAUNCHD,
+            LINK,
+            PLACED,
+            STEPS,
+        ],
+        &[ENROLL, OBSERVE, PROTO, UNPACK],
     ),
     (PROTO, &[], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),

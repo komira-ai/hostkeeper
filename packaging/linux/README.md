@@ -100,7 +100,10 @@ placeholder is left, while it is owned by another account or writable by the gro
 or when it holds a key it does not know, and a daemon whose config does not load does not start
 (design section 4.1); systemd then stops trying after three failed starts within 300 seconds
 (`systemctl reset-failed hostkeeper.service` clears that). What the daemon does on a host that
-has a config but no certificate yet, its enrollment, is design section 5.7.
+has a config but no certificate yet, its enrollment, is design section 5.7. The whole procedure
+for one node, from its inventory record through installing, filling the config and starting the
+unit by hand to its approval and first heartbeat, is
+[docs/operations/enrollment.md](../../docs/operations/enrollment.md#bootstrap-a-linux-node).
 
 ## The boot-image overlay
 
@@ -120,3 +123,17 @@ the binary directory at the first start), and
 fills `etc/hostkeeper/hostkeeper.toml.template` into `etc/hostkeeper/hostkeeper.toml` in the
 image, root's, mode 0600, as above. Nothing else. The overlay files are the files of this
 directory, byte for byte; the test above fails when they differ.
+
+## Debugging a wedged node
+
+On the host, as root, `hostkeeper admin status` asks the running daemon over its admin socket
+(`/run/hostkeeper/admin.sock`) what it holds, with the coordinator up or down: whether the host
+is enrolled (and the `key_sha256` of a pending request, to check against
+`hostkeeper ctl enrollment list` before approving it), when its certificate expires
+(`enrollment.not_after_unix`), whether its heartbeats reach the coordinator
+(`link.last_success_unix`, `link.consecutive_failures`), and each service's lifecycle, health
+and step records. `hostkeeper admin abort <service>` stops a hung step and
+`hostkeeper admin clear-record <service>` clears a step record that cannot be read.
+`docs/admin.md` describes each line of the output and the exit codes. When the command cannot
+connect, the daemon is not running: `systemctl status hostkeeper.service` and
+`journalctl -u hostkeeper.service` say why.

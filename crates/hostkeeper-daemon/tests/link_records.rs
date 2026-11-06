@@ -6,10 +6,10 @@ mod support;
 
 use std::fs;
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_config::names::Version;
 use hostkeeper_daemon::link_adapters::{DaemonObserver, DaemonRecords, NOT_OBSERVED, observation};
+use hostkeeper_daemon::testing::spawn;
 use hostkeeper_hook::Step;
 use hostkeeper_link::{
     Health, Liveness, Observation, RecordedService, ServiceObserver, ServiceRecords,
@@ -68,8 +68,10 @@ fn an_unfinished_step_record_is_listed_as_updating_to_its_target() {
     );
     let gate = rig.launcher.hold("web", Step::Verify);
     let running = Arc::clone(&daemon);
-    let order = thread::spawn(move || running.order(&update("web", "2.0.0", &d(), 1)));
-    gate.entered();
+    let order = spawn("the order", move || {
+        running.order(&update("web", "2.0.0", &d(), 1))
+    });
+    gate.entered(&order).expect("the held step is entered");
     assert_eq!(
         records.installed().expect("read"),
         [listed("web", "2.0.0", Some("2.0.0"))]

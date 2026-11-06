@@ -1,10 +1,12 @@
 //! Step 1 of section 5.5, under the release layout of one package per platform: read the release
 //! index of the version an order names, take the entry for this host's platform, download that
 //! package into a staging file, and refuse it unless its size and SHA-256 are the entry's (and its
-//! size is within `max_package_bytes`).
+//! size is within `max_package_bytes`). When the order names the SHA-256 of the index, an index
+//! that hashes to another is refused before it is parsed, and nothing after it is fetched.
 //!
 //! | what happened | outcome, class, reason |
 //! |---|---|
+//! | the order names the SHA-256 of the index and the index received hashes to another (checked before the index is read) | `Failure`, `release`, `index_digest_mismatch` |
 //! | the index is not the index of this version (see [`crate::index`]), or is over 64 KiB | `Failure`, `release`, `index_invalid` |
 //! | the index lists no package for this host's platform | `Failure`, `release`, `no_package_for_platform` |
 //! | the entry's size, the announced length or the bytes received pass `max_package_bytes` or the entry's size (the transfer stops at once) | `Failure`, `release`, `package_digest_mismatch` |
@@ -40,8 +42,8 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::{Clock, Stamp};
 
 use crate::failure::{
-    FETCH_FAILED, INDEX_INVALID, NO_PACKAGE_FOR_PLATFORM, NO_SPACE, PACKAGE_DIGEST_MISMATCH,
-    PackageFailure,
+    FETCH_FAILED, INDEX_DIGEST_MISMATCH, INDEX_INVALID, NO_PACKAGE_FOR_PLATFORM, NO_SPACE,
+    PACKAGE_DIGEST_MISMATCH, PackageFailure,
 };
 use crate::index::{MAX_INDEX_BYTES, Platform, ReleaseIndex, index_url, package_url};
 use crate::ports::{Fetcher, Url, after};
@@ -61,11 +63,14 @@ pub struct FetchEnv<'a> {
 }
 
 /// The package an order names, already checked by the order grammar: a service and a version,
-/// never a platform, a place or a digest.
+/// never a platform or a place, and the SHA-256 of the release index when the order carries one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageOrder {
     pub service: ServiceName,
     pub version: Version,
+    /// The SHA-256 the index's bytes must have; `None` (an order from a coordinator that does not
+    /// send it) checks nothing.
+    pub index_digest: Option<Sha256Hex>,
 }
 
 /// The package for this host's platform, whose size and SHA-256 are the release index's, in a
@@ -147,6 +152,10 @@ pub(crate) fn fetch_with(
         deadline: deadline.clone(),
     };
     let fetched = stage::download(&index_job, writer).map_err(index_failure)?;
+    let named = order.index_digest.as_ref();
+    if named.is_some_and(|expected| fetched.sha256 != expected.as_str()) {
+        return Err(PackageFailure::release(INDEX_DIGEST_MISMATCH));
+    }
     let text = stage::read_back(fetched.file.path(), MAX_INDEX_BYTES)
         .map_err(|e| failure(Fault::Storage(e)))?;
     drop(fetched);

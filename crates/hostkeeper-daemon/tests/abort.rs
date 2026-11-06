@@ -3,19 +3,24 @@
 //! service let go, and a service with nothing running refused and untouched. All on fakes: a
 //! launcher that holds a step until it is stopped or released, a clock that moves when told, an
 //! alert sink, and an in-process admin connection with an explicit peer.
+//!
+//! Every wait here ends: each names the party that would send what it waits for (the thread of an
+//! order or an abort, the dead-man's ticks on the clock), and fails the test, naming what ended,
+//! when that party is over first. An abort is run on a thread of its own and checked once it waits
+//! for the order, so an abort that stops nothing, or a wrong unit, fails rather than waits for an
+//! order whose step is held until it is stopped.
 
 mod support;
 
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::admin::Peer;
 use hostkeeper_daemon::boot::{ALERT_UNSTOPPABLE, alert_line};
 use hostkeeper_daemon::locks::Package;
-use hostkeeper_daemon::testing::{FakeClock, manifest};
+use hostkeeper_daemon::testing::{FakeClock, Spawned, lock_waits, manifest, spawn};
 use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
-use hostkeeper_daemon::verbs::abort::ABORT_STOP_ATTEMPTS;
+use hostkeeper_daemon::verbs::abort::{ABORT_STOP_ATTEMPTS, Aborted};
 use hostkeeper_daemon::{Daemon, Refusal, Refused, Reply};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_proto::hostkeeper::agent::v1::{Abort, Order, order};
@@ -67,6 +72,18 @@ fn abort_order_id(order_id: &str, service: &str, order_try: u64) -> Order {
     }
 }
 
+/// `order` run by `daemon` on a thread of its own, named `name` in what a missed signal says.
+fn run(daemon: &Arc<Daemon>, name: &str, order: Order) -> Spawned<Reply> {
+    let daemon = Arc::clone(daemon);
+    spawn(name, move || daemon.order(&order))
+}
+
+/// The abort of `service` by `daemon`, on a thread of its own.
+fn abort_of(daemon: &Arc<Daemon>, service: &str) -> Spawned<Result<Aborted, Refused>> {
+    let (daemon, service) = (Arc::clone(daemon), name(service));
+    spawn("the abort", move || daemon.abort(&service))
+}
+
 /// `service` at `version` with an unbounded `prepare` (`prepare = 0`), installed over the base.
 fn unbounded(rig: &Rig, service: &str, version: &str) {
     rig.add(service, "0.9.0");
@@ -100,14 +117,14 @@ fn unstopped(rig: &Rig) -> Arc<Daemon> {
         ports,
         support::OWN,
     ));
-    let first = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("alpha", "2.0.0", &d(), 1)))
-    };
-    gate.entered();
+    let first = run(&daemon, "alpha's order", update("alpha", "2.0.0", &d(), 1));
+    gate.entered(&first).expect("alpha's prepare runs");
     clock.advance(601);
+    // The dead-man ticks, then sleeps on the clock: by its second sleep from here, one whole tick
+    // has looked past the bound.
+    let ticked = clock.sleeps(2);
     assert_eq!(
-        stops.recv().expect("the dead-man's stop"),
+        stops.wait(&ticked).expect("the dead-man's stop"),
         "updater-alpha-prepare-1"
     );
     gate.release();
@@ -130,31 +147,41 @@ async fn abort_stops_an_unbounded_prepare_and_halts_the_order() {
     rig.add("beta", "2.0.0");
     let gate = rig.launcher.hold_until_stopped("web", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
-    let order = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
-    };
-    gate.entered();
-    let (asked, waited) = std::sync::mpsc::channel();
-    rig.store.notify(asked);
-    let other = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("beta", "2.0.0", &d(), 1)))
-    };
-    assert_eq!(waited.recv().expect("beta has its package"), "beta 2.0.0");
+    let order = run(&daemon, "web's order", update("web", "2.0.0", &d(), 1));
+    gate.entered(&order).expect("web's prepare runs");
+    let asked = rig.store.notified();
+    let other = run(&daemon, "beta's order", update("beta", "2.0.0", &d(), 1));
+    assert_eq!(
+        asked.wait(&other).expect("beta has its package"),
+        "beta 2.0.0"
+    );
     let unit = record(&rig, "web").unit(Step::Prepare);
 
+    let waits = lock_waits(&daemon.ctx().locks);
     let (mut client, _) = admin_from(Arc::clone(&daemon), Peer { uid: Some(0) });
-    let request = AbortRequest {
-        service: "web".to_owned(),
-    };
-    let aborted = client.abort(request).await.expect("the abort").into_inner();
+    let runtime = tokio::runtime::Handle::current();
+    let abort = spawn("the abort", move || {
+        let request = AbortRequest {
+            service: "web".to_owned(),
+        };
+        runtime.block_on(client.abort(request))
+    });
+    // The abort stops the step's unit, then waits for the order to let go of the lock.
+    assert_eq!(
+        waits.wait(&abort).expect("the abort waits for the order"),
+        "web"
+    );
+    assert_eq!(rig.launcher.stops(), [unit]);
+    let aborted = abort
+        .join()
+        .expect("the abort")
+        .expect("aborted")
+        .into_inner();
 
     assert_eq!(order.join().expect("the order"), halted(REASON_ABORTED));
     let wire = aborted.record.expect("the record");
     assert_eq!(wire.reason, REASON_ABORTED);
     assert_eq!(wire.step, "prepare");
-    assert_eq!(rig.launcher.stops(), [unit]);
     let rec = record(&rig, "web");
     assert_eq!(rec.state, halt_state(REASON_ABORTED));
     assert_eq!(rig.launcher.steps("web"), [Step::Prepare]);
@@ -173,19 +200,18 @@ fn abort_between_two_steps_ends_the_order_before_the_next_step_launches() {
     let rig = Rig::new("abort-between");
     rig.add("web", "2.0.0");
     let gate = rig.launcher.hold("web", Step::Prepare);
-    let stops = rig.launcher.stops_seen();
     let daemon = Arc::new(rig.daemon());
-    let order = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
-    };
-    gate.entered();
-    let abort = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.abort(&name("web")))
-    };
-    // The abort has asked the runner to end the update and stopped the unit; the step returns.
-    assert_eq!(stops.recv().expect("the stop"), "updater-web-prepare-1");
+    let order = run(&daemon, "the order", update("web", "2.0.0", &d(), 1));
+    gate.entered(&order).expect("prepare runs");
+    let waits = lock_waits(&daemon.ctx().locks);
+    let abort = abort_of(&daemon, "web");
+    // The abort has asked the runner to end the update, stopped the unit, and waits for the
+    // order; the step then returns.
+    assert_eq!(
+        waits.wait(&abort).expect("the abort waits for the order"),
+        "web"
+    );
+    assert_eq!(rig.launcher.stops(), ["updater-web-prepare-1"]);
     gate.release();
     let aborted = abort.join().expect("the abort").expect("aborted");
     assert_eq!(order.join().expect("the order"), halted(REASON_ABORTED));
@@ -194,30 +220,47 @@ fn abort_between_two_steps_ends_the_order_before_the_next_step_launches() {
     assert_eq!(aborted.record.state, halt_state(REASON_ABORTED));
 }
 
-/// Catches an abort that waits for a step it cannot see, or stops a unit that is not running:
-/// while the runner waits between two tries of `verify` (it deferred), nothing is stopped, and
-/// the update ends `Halt` before `verify` is launched again.
-#[test]
-fn abort_while_the_runner_waits_between_two_steps_stops_nothing_and_launches_nothing_more() {
-    let rig = Rig::new("abort-waiting");
+/// What a variant of [`abort_while_waiting`] leaves out, so that a signal its waits name never
+/// comes: each variant fails, naming what ended, where the scenario would otherwise wait for good.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Missing {
+    /// The scenario as it is: every signal comes.
+    Nothing,
+    /// The order is refused before it takes the service's lock (its digest is not one), so its
+    /// runner never waits between two tries.
+    OrderReachesTheLock,
+    /// The abort names a service that runs nothing, so it never waits for the order.
+    AbortWaitsForTheOrder,
+}
+
+/// The scenario of [`abort_while_the_runner_waits_between_two_steps_stops_nothing_and_launches_nothing_more`],
+/// with `missing` left out.
+fn abort_while_waiting(rig_name: &str, missing: Missing) {
+    let rig = Rig::new(rig_name);
     rig.add("web", "2.0.0");
     rig.launcher.exits("web", Step::Verify, &[75]);
     let sleep = rig.clock.park_next_sleep();
     let daemon = Arc::new(rig.daemon());
-    let order = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
+    let digest = match missing {
+        Missing::OrderReachesTheLock => "not-a-digest".to_owned(),
+        Missing::Nothing | Missing::AbortWaitsForTheOrder => d(),
     };
-    sleep.entered();
-    let abort = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.abort(&name("web")))
+    let order = run(&daemon, "the order", update("web", "2.0.0", &digest, 1));
+    sleep
+        .entered(&order)
+        .expect("the runner waits between two tries");
+    let waits = lock_waits(&daemon.ctx().locks);
+    let aborted = match missing {
+        Missing::AbortWaitsForTheOrder => "beta",
+        Missing::Nothing | Missing::OrderReachesTheLock => "web",
     };
+    let abort = abort_of(&daemon, aborted);
     // The abort has asked the runner to end the update and waits for the order; then the
     // runner's wait ends. The record says the deferred `verify` is done, no step is running.
-    while daemon.ctx().locks.waiting() == 0 {
-        thread::yield_now();
-    }
+    assert_eq!(
+        waits.wait(&abort).expect("the abort waits for the order"),
+        "web"
+    );
     assert!(matches!(record(&rig, "web").state, State::Done { .. }));
     sleep.release();
     let aborted = abort.join().expect("the abort").expect("aborted");
@@ -226,6 +269,36 @@ fn abort_while_the_runner_waits_between_two_steps_stops_nothing_and_launches_not
     assert!(rig.launcher.stops().is_empty());
     let steps = [Step::Prepare, Step::Cutover, Step::Verify];
     assert_eq!(rig.launcher.steps("web"), steps);
+}
+
+/// Catches an abort that waits for a step it cannot see, or stops a unit that is not running:
+/// while the runner waits between two tries of `verify` (it deferred), nothing is stopped, and
+/// the update ends `Halt` before `verify` is launched again.
+#[test]
+fn abort_while_the_runner_waits_between_two_steps_stops_nothing_and_launches_nothing_more() {
+    abort_while_waiting("abort-waiting", Missing::Nothing);
+}
+
+/// Catches a wait for the runner that does not end when the order never reaches the lock: the
+/// order is refused before it takes the service's lock, and the wait for its runner's sleep fails,
+/// naming the order's refusal, where it waited for good before.
+#[test]
+#[should_panic(
+    expected = r#"the runner waits between two tries: Missed { over: "the order returned Refused { refusal: InvalidOrder"#
+)]
+fn a_wait_for_a_runner_whose_order_never_reaches_the_lock_fails_naming_the_order() {
+    abort_while_waiting("abort-no-lock", Missing::OrderReachesTheLock);
+}
+
+/// Catches a wait for the abort that does not end when the abort never waits for the order (the
+/// spin on a count of waiters, before): an abort of a service that runs nothing is refused, and
+/// the wait fails, naming the abort's refusal.
+#[test]
+#[should_panic(
+    expected = r#"the abort waits for the order: Missed { over: "the abort returned Err(Refused { refusal: NothingRunning"#
+)]
+fn a_wait_for_an_abort_that_never_waits_for_the_order_fails_naming_the_abort() {
+    abort_while_waiting("abort-no-wait", Missing::AbortWaitsForTheOrder);
 }
 
 /// Catches a retry count that is not the constant, an alert missing or doubled, a record that
@@ -359,24 +432,31 @@ async fn abort_by_coordinator_order_and_by_admin_socket_end_in_the_same_state() 
         unbounded(&rig, "web", "2.0.0");
         let gate = rig.launcher.hold_until_stopped("web", Step::Prepare);
         let daemon = Arc::new(rig.daemon());
-        let order = {
-            let daemon = Arc::clone(&daemon);
-            thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
-        };
-        gate.entered();
+        let order = run(&daemon, "the order", update("web", "2.0.0", &d(), 1));
+        gate.entered(&order).expect("prepare runs");
+        let waits = lock_waits(&daemon.ctx().locks);
+        // Either way the abort stops the unit, then waits for the order to let go of the lock.
         match by_order {
             true => {
-                let daemon = Arc::clone(&daemon);
-                let reply =
-                    tokio::task::spawn_blocking(move || daemon.order(&abort_order("web", 1)));
-                assert_eq!(reply.await.expect("the abort"), halted(REASON_ABORTED));
+                let abort = run(&daemon, "the abort", abort_order("web", 1));
+                let waited = waits.wait(&abort).expect("the abort waits for the order");
+                assert_eq!(waited, "web");
+                assert_eq!(rig.launcher.stops(), ["updater-web-prepare-1"]);
+                assert_eq!(abort.join().expect("the abort"), halted(REASON_ABORTED));
             }
             false => {
                 let (mut client, _) = admin_from(Arc::clone(&daemon), Peer { uid: Some(0) });
-                let request = AbortRequest {
-                    service: "web".to_owned(),
-                };
-                client.abort(request).await.expect("the abort");
+                let runtime = tokio::runtime::Handle::current();
+                let abort = spawn("the abort", move || {
+                    let request = AbortRequest {
+                        service: "web".to_owned(),
+                    };
+                    runtime.block_on(client.abort(request))
+                });
+                let waited = waits.wait(&abort).expect("the abort waits for the order");
+                assert_eq!(waited, "web");
+                assert_eq!(rig.launcher.stops(), ["updater-web-prepare-1"]);
+                abort.join().expect("the abort").expect("aborted");
             }
         }
         assert_eq!(order.join().expect("the order"), halted(REASON_ABORTED));
@@ -404,22 +484,29 @@ fn abort_takes_no_step_lock_and_touches_only_its_service() {
     let alpha_gate = rig.launcher.hold_until_stopped("alpha", Step::Prepare);
     let beta_gate = rig.launcher.hold("beta", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
-    let run = |service: &'static str| {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update(service, "2.0.0", &d(), 1)))
-    };
-    let alpha = run("alpha");
-    alpha_gate.entered();
-    let (asked, waited) = std::sync::mpsc::channel();
-    rig.store.notify(asked);
-    let beta = run("beta");
-    assert_eq!(waited.recv().expect("beta has its package"), "beta 2.0.0");
+    let alpha = run(&daemon, "alpha's order", update("alpha", "2.0.0", &d(), 1));
+    alpha_gate.entered(&alpha).expect("alpha's prepare runs");
+    let asked = rig.store.notified();
+    let beta = run(&daemon, "beta's order", update("beta", "2.0.0", &d(), 1));
+    assert_eq!(
+        asked.wait(&beta).expect("beta has its package"),
+        "beta 2.0.0"
+    );
     let refused = daemon.abort(&name("beta")).expect_err("beta runs no step");
     assert_eq!(refused.refusal, Refusal::NothingRunning);
 
-    daemon.abort(&name("alpha")).expect("alpha aborted");
+    let waits = lock_waits(&daemon.ctx().locks);
+    let abort = abort_of(&daemon, "alpha");
+    assert_eq!(
+        waits
+            .wait(&abort)
+            .expect("the abort waits for alpha's order"),
+        "alpha"
+    );
+    assert_eq!(rig.launcher.stops(), ["updater-alpha-prepare-1"]);
+    abort.join().expect("the abort").expect("alpha aborted");
     assert_eq!(alpha.join().expect("alpha"), halted(REASON_ABORTED));
-    beta_gate.entered();
+    beta_gate.entered(&beta).expect("beta's prepare runs");
     assert!(matches!(record(&rig, "beta").state, State::Running { .. }));
     assert_eq!(rig.launcher.stops(), ["updater-alpha-prepare-1"]);
     beta_gate.release();
@@ -436,12 +523,16 @@ fn a_resent_abort_order_is_answered_from_the_first_answer() {
     rig.add("web", "2.0.0");
     let gate = rig.launcher.hold_until_stopped("web", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
-    let order = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
-    };
-    gate.entered();
-    assert_eq!(daemon.order(&abort_order("web", 4)), halted(REASON_ABORTED));
+    let order = run(&daemon, "the order", update("web", "2.0.0", &d(), 1));
+    gate.entered(&order).expect("prepare runs");
+    let waits = lock_waits(&daemon.ctx().locks);
+    let abort = run(&daemon, "the abort", abort_order("web", 4));
+    assert_eq!(
+        waits.wait(&abort).expect("the abort waits for the order"),
+        "web"
+    );
+    assert_eq!(rig.launcher.stops(), ["updater-web-prepare-1"]);
+    assert_eq!(abort.join().expect("the abort"), halted(REASON_ABORTED));
     assert_eq!(order.join().expect("the order"), halted(REASON_ABORTED));
     let resent = Reply::Finished {
         verdict: Verdict::Halt,
@@ -472,11 +563,9 @@ fn abort_of_a_running_step_that_cannot_be_stopped_closes_it_unstoppable_and_the_
     let gate = rig.launcher.hold("web", Step::Prepare);
     let (daemon, log) = alerting(rig.daemon());
     let daemon = Arc::new(daemon);
-    let order = {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
-    };
-    gate.entered();
+    let order = run(&daemon, "the order", update("web", "2.0.0", &d(), 1));
+    gate.entered(&order).expect("prepare runs");
+    // Every stop fails: the abort closes the record and returns without waiting for the order.
     let aborted = daemon.abort(&name("web")).expect("aborted");
     assert_eq!(aborted.record.state, halt_state(REASON_UNSTOPPABLE));
     assert_eq!(lines(&log).len(), 1);
