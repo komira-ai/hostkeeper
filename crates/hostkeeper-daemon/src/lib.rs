@@ -80,6 +80,7 @@ pub mod halt;
 pub mod hook_log;
 pub mod installed;
 pub mod ipmi;
+pub mod layout;
 pub mod link_adapters;
 pub mod links;
 pub mod locks;

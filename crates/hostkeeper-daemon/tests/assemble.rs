@@ -564,9 +564,11 @@ fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
         pki: rig.scratch.path().join("pki"),
     };
     let notifier = FakeNotifier::new(Log::default());
+    fs::write(&rig.packages, b"not a directory").expect("a file where the directory belongs");
     let error = start_with(&rig.settings(), &files, OWN, &*notifier, &Platform::linux())
         .err()
-        .expect("no packages directory");
+        .expect("the packages path is a file");
+    fs::remove_file(&rig.packages).expect("remove it");
     assert!(
         matches!(&error, StartError::Io { path, .. } if *path == rig.packages),
         "{error}"
