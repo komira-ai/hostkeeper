@@ -190,8 +190,8 @@ async fn a_heartbeat_with_every_new_fact_is_accepted_and_ordered_as_without_them
 /// handled, and a name is added in the change that handles it. For each advertised name that
 /// a heartbeat can use, the heartbeat that uses it is answered differently from the same
 /// heartbeat without it; `heartbeat-v2` is not seen in a reply, so its proof is the
-/// membership one. The table of what uses a name has no entry for a name that is not
-/// advertised.
+/// membership one, and `forced-v1`'s is the force's, on the typed heartbeat. The table of what
+/// uses a name has no entry for a name that is not advertised.
 #[tokio::test]
 async fn advertised_features_equal_the_handled_set() {
     let uses = std::collections::BTreeMap::from([
@@ -227,6 +227,9 @@ async fn advertised_features_equal_the_handled_set() {
             order_v1_is_acted_on().await;
         } else if *name == GRPC_FEATURE {
             grpc_v1_is_acted_on().await;
+        } else if *name == crate::force::FEATURE {
+            // The force is a typed order, which only the gRPC route carries.
+            crate::force_tests::forced_v1_is_acted_on().await;
         } else if let Some(extra) = uses.get(name) {
             let without = beat_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
@@ -242,6 +245,7 @@ async fn advertised_features_equal_the_handled_set() {
     handled.push("heartbeat-v2");
     handled.push(ORDER_FEATURE);
     handled.push(GRPC_FEATURE);
+    handled.push(crate::force::FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);
