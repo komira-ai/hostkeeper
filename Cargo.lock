@@ -1630,6 +1630,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "hostkeeper-daemon",
+ "hostkeeper-enroll",
  "hostkeeper-hook",
  "hostkeeper-launchd",
  "hostkeeper-observe",
