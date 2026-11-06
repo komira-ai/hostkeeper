@@ -2,8 +2,8 @@
 
 `hostkeeper admin` calls the daemon on the host it runs on, over the daemon's admin socket
 (`hostkeeper.local.v1.Admin`, `crates/hostkeeper-proto/proto/hostkeeper/local/v1/admin.proto`).
-It works with the coordinator down. It is the home of every call of the `hostkeeper.local`
-services; [`hostkeeper ctl`](ctl.md) calls the coordinator and has none of them.
+It works with the coordinator down. It is the home of every call of the services in the packages
+`hostkeeper.local.v<n>`; [`hostkeeper ctl`](ctl.md) calls the coordinator and has none of them.
 
 ```
 hostkeeper admin status
