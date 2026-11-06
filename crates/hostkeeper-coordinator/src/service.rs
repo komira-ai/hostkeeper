@@ -593,6 +593,7 @@ impl Coordinator {
         turn: Turn,
     ) -> (ServiceReply, Option<Order>, Option<Terms>, Vec<VerdictAck>) {
         let now = (self.clock)();
+        let own = crate::agent_service::own_beat(&self.services, &mut beat);
         let legacy = self.legacy_for(&beat);
         let order_v1 = self.features.iter().any(|name| name == ORDER_FEATURE)
             && beat.agent_features.iter().any(|name| name == ORDER_FEATURE);
@@ -666,7 +667,7 @@ impl Coordinator {
                 _ => {}
             }
         }
-        for one in &announced {
+        for one in announced.iter().chain(&own) {
             match self.services.get(&one.name) {
                 Some(def) if counted(def) => fleet.record_in(
                     &one.name,

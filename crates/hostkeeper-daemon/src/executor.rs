@@ -37,7 +37,7 @@ use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
 use crate::trusted_root::RootReport;
-use crate::verb::Verb;
+use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
 use crate::verbs::abort::Aborted;
 use crate::verbs::clear_halt::Lifted;
@@ -735,7 +735,10 @@ impl Daemon {
         let ctx = &self.ctx;
         match verb {
             Verb::Update(order) if order.service.as_str() == SELF_SERVICE => {
-                selfupdate::run(ctx, order)
+                selfupdate::run(ctx, HookedVerb::Update, order)
+            }
+            Verb::Install(order) if order.service.as_str() == SELF_SERVICE => {
+                selfupdate::run(ctx, HookedVerb::Install, order)
             }
             Verb::Update(order) => verbs::update::run(ctx, order),
             Verb::ForceRollback(order) => verbs::force_rollback::run(ctx, order),

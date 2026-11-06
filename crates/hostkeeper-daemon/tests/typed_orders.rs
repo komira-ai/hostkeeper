@@ -23,10 +23,12 @@ use hostkeeper_coordinator::orders::Order as Ordered;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
 use hostkeeper_coordinator::verdict_file::{VerdictFile, verdicts_path};
+use hostkeeper_daemon::Daemon;
 use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::start;
 use hostkeeper_daemon::testing::spawn;
 use hostkeeper_hook::{Class, Phase, Step};
+use hostkeeper_link::beat::AGENT_NAME;
 use hostkeeper_link::testing::{
     FakeCerts, FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
 };
@@ -43,8 +45,10 @@ use hostkeeper_oidc::testkit::{
 use hostkeeper_oidc::{OidcConfig, Verifier};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1::{AbortRequest, GetHostRequest};
+use hostkeeper_steps::Settled;
 use hostkeeper_wire::identity::Identity;
 use hostkeeper_wire::wire::{self, ServiceBeat, UpdateResult};
+use support::selfupdate::{HK, NEW, OLD, SelfRig};
 use support::{OWN, Rig, Scratch, d};
 
 /// The service of the scenarios and the version the coordinator wants.
@@ -69,13 +73,18 @@ const HOOK_LINES: [(Step, &str); 4] = [
 /// the state file, as `serve` keeps them; it orders from its start (no quiet period), on a clock
 /// that stays at second 1000.
 fn coordinator(dir: &Path) -> Arc<Coordinator> {
+    coordinator_of(dir, SERVICE, TARGET)
+}
+
+/// [`coordinator`] for `service`, wanted at `version`.
+fn coordinator_of(dir: &Path, service: &str, version: &str) -> Arc<Coordinator> {
     let state = dir.join("desired.json");
     // A coordinator started again on the same directory reads the state the first one left.
     if !state.exists() {
         std::fs::write(
             &state,
             format!(
-                r#"{{"services":{{"{SERVICE}":{{"version":"{TARGET}","min_up":{{}},"release_digest":"{0}","digests":{{"{TARGET}":"{0}"}}}}}}}}"#,
+                r#"{{"services":{{"{service}":{{"version":"{version}","min_up":{{}},"release_digest":"{0}","digests":{{"{version}":"{0}"}}}}}}}}"#,
                 d()
             ),
         )
@@ -84,8 +93,8 @@ fn coordinator(dir: &Path) -> Arc<Coordinator> {
     let verdicts = VerdictFile::open(&verdicts_path(&state)).expect("the verdicts file");
     let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
     let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
-    // CI's allow-list admits `web`, so a scenario can set its next version.
-    let allow = format!("{}services = [\"{SERVICE}\"]\n", config_text(STATIC_ISSUER));
+    // CI's allow-list admits the service, so a scenario can set its next version.
+    let allow = format!("{}services = [\"{service}\"]\n", config_text(STATIC_ISSUER));
     let (oidc_now, _) = oidc_clock();
     let verifier = Verifier::new(
         OidcConfig::parse(&allow).expect("the allow-list"),
@@ -95,7 +104,7 @@ fn coordinator(dir: &Path) -> Arc<Coordinator> {
         spent(),
     );
     let clock: Clock = Arc::new(|| Duration::from_secs(1_000));
-    let rollout = format!("[[service]]\nname = \"{SERVICE}\"\nroles = [\"daemon\"]\n");
+    let rollout = format!("[[service]]\nname = \"{service}\"\nroles = [\"daemon\"]\n");
     Arc::new(
         Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
             .with_services(Services::parse(&rollout).expect("the rollout file"))
@@ -122,10 +131,16 @@ fn set_desired(coordinator: &Coordinator, version: &str) {
 
 /// Where the coordinator says `web` stands: `converged`, `in_progress`, `blocked` or `halted`.
 fn convergence(coordinator: &Coordinator) -> String {
+    convergence_of(coordinator, SERVICE)["state"]
+        .as_str()
+        .expect("a state")
+        .to_owned()
+}
+
+/// The convergence the coordinator's status answers for `service`, as JSON.
+fn convergence_of(coordinator: &Coordinator, service: &str) -> serde_json::Value {
     let status = coordinator.status(Some(OPERATOR)).expect("the status");
-    let service = &status.per_service[SERVICE];
-    let read = serde_json::to_value(&service.convergence).expect("JSON");
-    read["state"].as_str().expect("a state").to_owned()
+    serde_json::to_value(&status.per_service[service].convergence).expect("JSON")
 }
 
 fn wire_version(text: &str) -> hostkeeper_wire::version::Version {
@@ -213,7 +228,11 @@ fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
         step_secs: BTreeMap::new(),
         promotion_pending: false,
         deferred: None,
-        agent: None,
+        // The agent, as the coordinator's gRPC route reads it from the loop's `agent`.
+        agent: Some(wire::Agent {
+            name: wire::AgentName::parse(AGENT_NAME).expect("an agent name"),
+            version: wire_version(beat.agent_version.as_str()),
+        }),
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
@@ -315,7 +334,7 @@ struct Host {
     dispatch: Arc<ManualDispatch>,
     log: Arc<RecordingLog>,
     ordered: Arc<Mutex<Vec<Option<Order>>>>,
-    _started: start::Started,
+    _started: Option<start::Started>,
 }
 
 impl Host {
@@ -327,6 +346,16 @@ impl Host {
             "the boot pass ran"
         );
         let daemon = Arc::clone(started.daemon());
+        Host::of(daemon, coordinator, Some(started))
+    }
+
+    /// The host of `daemon`, its loop over the in-process link to `coordinator`; `started` is
+    /// kept while the host lives.
+    fn of(
+        daemon: Arc<Daemon>,
+        coordinator: &Arc<Coordinator>,
+        started: Option<start::Started>,
+    ) -> Host {
         let ordered = Arc::new(Mutex::new(Vec::new()));
         let dispatch = Arc::new(ManualDispatch::default());
         let log = Arc::new(RecordingLog::default());
@@ -718,4 +747,117 @@ fn install_update_restart_update_runs_every_order_one_try_past_the_last() {
     host.beat();
     assert_eq!(host.ordered()[1], None);
     assert_eq!(convergence(&second), "converged");
+}
+
+/// A daemon of `version` on the self-update rig `s`, its probe the rig's, its update of
+/// hostkeeper settled as a start of that binary settles it.
+fn hostkeeper_daemon(s: &SelfRig, version: &str) -> (Arc<Daemon>, Settled) {
+    let daemon = s.daemon_at(version);
+    let settled = daemon.settle_self_update().expect("the start settles");
+    (Arc::new(daemon), settled)
+}
+
+/// hostkeeper at `version`, as an update or an install of the package [`d`] names it.
+fn hostkeeper_at(version: &str) -> Target {
+    Target {
+        service: ServiceName::new(HK).expect("a service"),
+        version: Version::new(version).expect("a version"),
+        digest: PackageDigest::new(&d()).expect("a digest"),
+        index_digest: None,
+    }
+}
+
+/// Catches a fleet built by bootstrap that never updates hostkeeper: a daemon the deb or the pkg
+/// installed lists no service `hostkeeper` in its heartbeat (no package of it is installed), so
+/// the coordinator counted the host `missing`, and the install it ordered placed the package and
+/// left the running binary alone, after which the heartbeat listed hostkeeper at the new version
+/// and the coordinator read it converged while the old binary ran. The coordinator wants
+/// hostkeeper at [`NEW`]; the host's daemon runs [`OLD`] and names itself in the heartbeat's
+/// `agent`. The coordinator counts the host as one of hostkeeper's, behind, not missing; it
+/// orders the install of the release (try 1), which the executor runs as the self-update: the
+/// binary directory's `current` moves to [`NEW`] and the daemon asks to exit. The binary of
+/// [`NEW`] confirms the update at its start, and the coordinator reads hostkeeper converged and
+/// orders nothing more.
+#[test]
+fn a_bootstrapped_daemon_is_installed_its_own_release_updates_itself_and_converges() {
+    let s = SelfRig::bootstrapped("typed-selfupdate-bootstrap");
+    for (step, line) in HOOK_LINES {
+        s.rig.launcher.replies(HK, step, &[(0, line)]);
+    }
+    let dir = Scratch::new("typed-selfupdate-bootstrap-coordinator");
+    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let (daemon, settled) = hostkeeper_daemon(&s, OLD);
+    assert_eq!(settled, Settled::NotPending);
+    let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
+
+    host.beat();
+    assert_eq!(
+        order_and_try(&host, 0),
+        (Verb::Install(hostkeeper_at(NEW)), 1)
+    );
+    let convergence = convergence_of(&coordinator, HK);
+    assert_eq!(convergence["state"], "in_progress", "{convergence}");
+    // No host the convergence leaves out: the host is not missing.
+    assert_eq!(
+        convergence["hosts"],
+        serde_json::Value::Null,
+        "{convergence}"
+    );
+    assert!(host.dispatch.run_next());
+    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert!(daemon.ctx().restart().requested());
+    drop(host);
+
+    let (daemon, settled) = hostkeeper_daemon(&s, NEW);
+    assert_eq!(settled, Settled::Confirmed);
+    let mut host = Host::of(daemon, &coordinator, None);
+    host.beat();
+    host.beat();
+    assert_eq!(host.ordered(), [None, None]);
+    let convergence = convergence_of(&coordinator, HK);
+    assert_eq!(convergence["state"], "converged", "{convergence}");
+    assert_eq!(
+        s.hk_steps(),
+        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
+    );
+}
+
+/// Catches a host that installed hostkeeper's package losing the self-update it had: the daemon
+/// runs [`OLD`] with its package installed, so its heartbeat lists hostkeeper. The coordinator
+/// orders the update to [`NEW`] at its first answer, try 1, with no install before it; the
+/// executor runs it as the self-update, the binary of [`NEW`] confirms it at its start, and the
+/// coordinator reads hostkeeper converged and orders nothing more.
+#[test]
+fn a_daemon_with_its_own_package_updates_itself_and_converges() {
+    let s = SelfRig::new("typed-selfupdate-installed");
+    for (step, line) in HOOK_LINES {
+        s.rig.launcher.replies(HK, step, &[(0, line)]);
+    }
+    let dir = Scratch::new("typed-selfupdate-installed-coordinator");
+    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let (daemon, _) = hostkeeper_daemon(&s, OLD);
+    let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
+
+    host.beat();
+    assert_eq!(
+        order_and_try(&host, 0),
+        (Verb::Update(hostkeeper_at(NEW)), 1)
+    );
+    assert!(host.dispatch.run_next());
+    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert!(daemon.ctx().restart().requested());
+    drop(host);
+
+    let (daemon, settled) = hostkeeper_daemon(&s, NEW);
+    assert_eq!(settled, Settled::Confirmed);
+    let mut host = Host::of(daemon, &coordinator, None);
+    host.beat();
+    host.beat();
+    assert_eq!(host.ordered(), [None, None]);
+    let convergence = convergence_of(&coordinator, HK);
+    assert_eq!(convergence["state"], "converged", "{convergence}");
+    assert_eq!(
+        s.hk_steps(),
+        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
+    );
 }

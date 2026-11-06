@@ -541,7 +541,9 @@ fn an_update_to_the_running_binary_is_finished_at_once() {
 /// Catches the runner recording the updater's own success itself: with the success held, an
 /// update that replaces a release returns `Succeeded` and leaves the record `done` at `cleanup`,
 /// unfinished; a second run answers the same from the record and launches nothing. A failure is
-/// written as always, and so is the success of a first install, which replaces nothing.
+/// written as always. The success of a first install is held as well: the updater's install
+/// swaps the binary that runs as its update does, so only the binary of the version may record
+/// it.
 #[test]
 fn a_held_success_is_returned_and_left_for_the_new_binary() {
     let rig = Rig::new("su-held");
@@ -576,10 +578,14 @@ fn a_held_success_is_returned_and_left_for_the_new_binary() {
         ..rig.order()
     };
     assert_eq!(rig.runner().with_held_success().run(&first).unwrap(), ok());
-    assert!(matches!(
-        rig.store().load().unwrap(),
-        Loaded::Current(rec) if rec.state == confirmed()
-    ));
+    let Loaded::Current(rec) = rig.store().load().unwrap() else {
+        panic!("no record");
+    };
+    assert_eq!(rec.step, Step::Cleanup);
+    assert!(
+        matches!(rec.state, State::Done { code: Some(0), .. }),
+        "{rec:?}"
+    );
 }
 
 /// Catches the start pass resuming an update that waits for the restart (its steps would run

@@ -73,7 +73,8 @@ impl ProtocolProbe for FakeProbe {
 
 /// A rig whose host runs hostkeeper at [`OLD`]: its package installed (`current` names it), its
 /// binary directory with [`OLD`] staged and `current`, and the release of [`NEW`], with its
-/// binary, in the package store.
+/// binary, in the package store ([`SelfRig::new`]); or the same with no package of hostkeeper
+/// installed ([`SelfRig::bootstrapped`]).
 pub struct SelfRig {
     pub rig: Rig,
     pub probe: Arc<FakeProbe>,
@@ -81,8 +82,17 @@ pub struct SelfRig {
 
 impl SelfRig {
     pub fn new(name: &str) -> SelfRig {
+        let s = SelfRig::bootstrapped(name);
+        s.rig.running(HK, OLD);
+        s
+    }
+
+    /// A rig whose host runs hostkeeper at [`OLD`] as the deb or the pkg installs it: its binary
+    /// directory with [`OLD`] staged and `current`, as `self-update-seed` leaves it at the first
+    /// start, and no package of hostkeeper installed (nothing under the packages directory names
+    /// it `current`). The release of [`NEW`], with its binary, is in the package store.
+    pub fn bootstrapped(name: &str) -> SelfRig {
         let rig = Rig::new(name);
-        rig.running(HK, OLD);
         let layout = Layout::new(&binary_dir(&rig.state));
         let old = rig.scratch.path().join("old-binary");
         fs::write(&old, format!("#!hostkeeper {OLD}\n")).expect("the old binary");

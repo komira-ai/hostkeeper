@@ -80,6 +80,7 @@
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
 pub mod acks;
+pub(crate) mod agent_service;
 pub mod alerts;
 pub mod assign;
 pub mod assignment;
@@ -128,6 +129,8 @@ pub mod ui;
 pub mod verdict_file;
 pub mod verdicts;
 
+#[cfg(test)]
+mod agent_service_tests;
 #[cfg(test)]
 mod assign_calls_tests;
 #[cfg(test)]

@@ -324,12 +324,13 @@ impl StepRunner {
         Ok(true)
     }
 
-    /// The same runner, the `Succeeded` of an update that replaces a release (one with a
-    /// previous release) returned and never written: the record stays at the step that reached
-    /// it (`done` at `cleanup`), unfinished, for the caller to finish. This is the updater's own
-    /// update (design section 6.6), which only its new binary may record as succeeded, once it
-    /// has run ([`crate::selfupdate::follow_on`], [`crate::selfupdate::settle`]). A run of the
-    /// same order again recomputes the same verdict from the record and launches nothing.
+    /// The same runner, the `Succeeded` of an update or an install returned and never written:
+    /// the record stays at the step that reached it (`done` at `cleanup`), unfinished, for the
+    /// caller to finish. This is the updater's own update or install (design section 6.6), which
+    /// only its new binary may record as succeeded, once it has run
+    /// ([`crate::selfupdate::follow_on`], [`crate::selfupdate::settle`]), or this one, when it
+    /// already is the version ordered. A run of the same order again recomputes the same verdict
+    /// from the record and launches nothing.
     pub fn with_held_success(mut self) -> StepRunner {
         self.held_success = true;
         self
@@ -758,8 +759,8 @@ impl StepRunner {
                 ..
             }
         );
-        // The updater's own update: its success is the new binary's to write.
-        if self.held_success & succeeded & rec.previous_digest.is_some() {
+        // The updater's own update or install: its success is the new binary's to write.
+        if self.held_success & succeeded {
             return Ok(());
         }
         Ok(self.store.save(rec)?)

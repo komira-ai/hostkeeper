@@ -102,11 +102,13 @@ pub(crate) struct Request {
 }
 
 /// The `[hook]` tables of the manifest: the one place the hook values are set. The manifest
-/// loader requires a hook with bounded steps, so hostkeeper's own package carries one; the daemon
-/// does not run it for its own package, because hostkeeper's self-update is compiled into the
-/// daemon (design section 6.6). The manifest says so in a comment.
-const HOOK: &str = r#"# The daemon does not run this hook for its own package: hostkeeper's self-update is
-# compiled into the daemon. The table is here because every manifest has a bounded hook.
+/// loader requires a hook with bounded steps, so hostkeeper's own package carries one: the
+/// package's own binary, `hostkeeper update-hook` (`hostkeeper_daemon::update_hook`), whose every
+/// step does nothing, because hostkeeper's self-update is compiled into the daemon (design section
+/// 6.6). A daemon runs it for every install and update of hostkeeper. The manifest says so in a
+/// comment.
+const HOOK: &str = r#"# Every step of this hook does nothing: hostkeeper's self-update is compiled into the
+# daemon. The table is here because every manifest has a bounded hook.
 [hook]
 command = ["bin/hostkeeper", "update-hook"]
 verify_deadline_secs = 600
@@ -204,10 +206,23 @@ struct Contents {
     trusted_root: Option<Vec<u8>>,
 }
 
+/// The oldest daemon that takes hostkeeper's own package: the first whose unit starts the binary
+/// its self-update switches to (and which installs a service and updates hostkeeper by its
+/// follow-on). A daemon is always older than the release of hostkeeper it is ordered, so the
+/// package cannot ask for its own version: every daemon would answer the order `daemon_too_old`
+/// and no host would ever update hostkeeper.
+pub(crate) const MIN_HOSTKEEPER: Version = Version {
+    major: 0,
+    minor: 1,
+    patch: 53,
+};
+
 /// The manifest of hostkeeper's package for `version` built for `platform`: it needs a daemon of
-/// its own version, names the platform the daemon checks against its own, and with `units` runs
-/// [`UNIT_FILE`].
+/// [`MIN_HOSTKEEPER`] or later, or of its own version when that is older (a build of the
+/// workspace's unreleased version), names the platform the daemon checks against its own, and
+/// with `units` runs [`UNIT_FILE`].
 fn manifest(version: &Version, platform: Platform, units: bool) -> String {
+    let floor = (*version).min(MIN_HOSTKEEPER);
     let platform = platform.name();
     let units = if units {
         format!("\n[units]\nrun = [\"{UNIT_FILE}\"]\n")
@@ -215,7 +230,7 @@ fn manifest(version: &Version, platform: Platform, units: bool) -> String {
         String::new()
     };
     format!(
-        "schema = 1\nname = \"hostkeeper\"\nversion = \"{version}\"\nplatform = \"{platform}\"\nmin_hostkeeper = \"{version}\"\n\n{HOOK}{units}"
+        "schema = 1\nname = \"hostkeeper\"\nversion = \"{version}\"\nplatform = \"{platform}\"\nmin_hostkeeper = \"{floor}\"\n\n{HOOK}{units}"
     )
 }
 

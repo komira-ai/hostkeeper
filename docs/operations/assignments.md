@@ -41,7 +41,8 @@ one live update slot and frees it as an update does.
 An install goes only to a daemon that announces the `install-v1` feature and lists every
 service it runs (`heartbeat-v2`), and only as a typed order: the JSON heartbeat reply carries
 none. The rollout status says why a host is not told: `unsupported` (its daemon cannot take an
-install), `no_digest` (CI set the desired version without a digest or a release index) or
+install, or, for hostkeeper itself, its daemon installed the desired release without switching
+to it and waits for the next: [hostkeeper's self-update after a bootstrap](self-update-after-bootstrap.md)), `no_digest` (CI set the desired version without a digest or a release index) or
 `no_package_for_platform` (the release index lists no package for the host's platform: the host
 is ordered nothing for this version, and that is not a failed install).
 

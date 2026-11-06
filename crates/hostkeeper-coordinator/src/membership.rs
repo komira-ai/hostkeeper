@@ -22,6 +22,12 @@
 //! 6. otherwise it is [`Membership::Present`] if it announced the service and
 //!    [`Membership::Missing`] if not.
 //!
+//! A node whose agent is the service ([`crate::agent_service`]: it announced `order-v1` and its
+//! heartbeat's `agent` names the service, as every hostkeeper daemon names `hostkeeper`) runs it
+//! whether or not its heartbeat lists it, and is placed as if it had announced it healthy: a
+//! daemon the deb or the pkg installed lists no service `hostkeeper`, and is `Present`, never
+//! `Missing`, for it.
+//!
 //! Only `Present` and `Absent` hosts are in a service's hosts ([`standing`]); the others are
 //! counted in [`HostCounts`], which the convergence shows and which keeps it from reading
 //! converged while a host is missing or absent. Only hosts the coordinator has heard from are
@@ -35,6 +41,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::Health;
 use serde::{Deserialize, Serialize};
 
+use crate::agent_service::runs_itself;
 use crate::assignment::{Placement, assigned};
 use crate::converge::{Convergence, State};
 use crate::desired::Desired;
@@ -149,7 +156,9 @@ pub fn membership(
     {
         return Membership::Excluded;
     }
-    let announced = node.announced.get(&def.name);
+    // A node whose agent is the service runs it, whether or not its heartbeat lists it.
+    let itself = runs_itself(node, &def.name).then_some(&Health::Healthy);
+    let announced = node.announced.get(&def.name).or(itself);
     let host = Placement {
         node_id: &key,
         role: &node.role,

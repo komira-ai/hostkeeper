@@ -105,6 +105,7 @@ pub mod testing;
 pub mod trusted_root;
 pub mod uninstall;
 pub mod unix_clock;
+pub mod update_hook;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;
