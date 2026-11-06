@@ -5,6 +5,8 @@
 //! `advisories.yml`, the advisory monitor, in `advisories.rs`.
 
 mod advisories;
+mod callers;
+mod callers_tests;
 mod lint;
 mod privileged_tests;
 mod release;

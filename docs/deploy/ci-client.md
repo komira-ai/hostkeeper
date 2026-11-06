@@ -68,6 +68,61 @@ The coordinator must hold an allow-list entry for the calling repository and wor
 the service and the audience you pass (design, section 5.1: a CI token sets the desired version
 only of the services its entry names).
 
+## The allow-list entry
+
+The coordinator reads its allow-list at start from the file of `--oidc-config`, one
+`[[remote_operator]]` table per entry (`crates/hostkeeper-oidc`, `config.rs`). The first entry
+that admits a token wins, and the token sets the desired version only of the services that entry
+names.
+
+**`job_workflow_ref` names `set-desired.yml`, not your workflow.** GitHub sets a job's
+`job_workflow_ref` to the reusable workflow the job runs, so every caller's token names
+`komira-ai/hostkeeper/.github/workflows/set-desired.yml@<the commit of your uses: line>`. The
+entry cannot tell two workflows of one repository apart that call the same pin: it admits any
+workflow of the repository that calls that pin from a ref in `refs`. In this repository the workflow
+lint (`cargo test -p xtask --test workflows`, `callers.rs`) holds the callers to a fixed list, so a
+new caller needs a reviewed change to the lint. Change `job_workflow_ref` in the same change as
+the `uses:` pin, or the coordinator refuses the token (`unauthorized`).
+
+The entry for this repository's one caller today, `hello-desired.yml`, the hello proof run
+([docs/hello.md](../hello.md)):
+
+```toml
+[[remote_operator]]
+issuer = "https://token.actions.githubusercontent.com"
+audience = "hostkeeper-ci"
+repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
+repository = "komira-ai/hostkeeper"
+job_workflow_ref = [
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@f04696da7e2bdcbaf9112450ab651a1ab24e61bf",
+]
+refs = ["refs/heads/main"]
+event_names = ["workflow_dispatch"]
+runner_environment = "github-hosted"
+services = ["hello"]
+```
+
+| key | value here | why |
+|---|---|---|
+| `audience` | `hostkeeper-ci` | The caller's `audience` input; the repository variable `HOSTKEEPER_CI_AUDIENCE` holds it for `hello-desired.yml`. |
+| `repository_id` | the repository's number | It does not change when the repository is renamed or moved; `repository` is checked too when given. |
+| `job_workflow_ref` | `set-desired.yml` at the pinned commit | The ref of the `uses:` line, as above. |
+| `refs` | `refs/heads/main` | `hello-desired.yml` sets nothing from another branch: its jobs run only on main, and a token from another ref is refused here as well. |
+| `event_names` | `workflow_dispatch` | `hello-desired.yml` runs by hand only. The default is `push` and `workflow_dispatch`; a `pull_request` event is refused in any entry. |
+| `services` | `hello` | What a token of the entry may set. |
+
+When `release.yml` sets hostkeeper's own desired version (it does not call the client yet), the
+same entry covers it with two changes: `event_names` adds `workflow_run` and `schedule`, the events
+`release.yml` runs on, and `services` adds `hostkeeper`:
+
+```toml
+event_names = ["workflow_dispatch", "workflow_run", "schedule"]
+services = ["hello", "hostkeeper"]
+```
+
+Adding or changing the entry is a change to the coordinator's configuration, made by its operator;
+the coordinator reads the file when it starts, so restart it afterwards. Nothing in CI writes it.
+
 ## Inputs
 
 | input | type | required | default | meaning |
