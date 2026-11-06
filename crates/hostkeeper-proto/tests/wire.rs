@@ -642,6 +642,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
             ("cert_not_after_unix", 14),
             ("last_renew_error", 15),
             ("clock_skew_beats", 16),
+            ("first_heartbeat_unix", 17),
         ],
     ),
     (

@@ -319,7 +319,9 @@ return { rows: rows(tree), marked: marked.map((row) => text(row.children[0])) };
 fn host_page_links_its_record_to_the_inventory_page() {
     // Catches: the record id not offered as a link, a link that opens the Inventory page on
     // another record or without the enrolled filter, and a host with no record shown with an
-    // empty link instead of "none matched" and "not enrolled".
+    // empty link instead of "none matched" and "not enrolled"; and the first heartbeat of an
+    // enrolled host not heard since its approval shown as "-" instead of "not yet", or that of a
+    // host not enrolled as "not yet" instead of "-".
     let mut ui = Ui::start();
     ui.reply(
         &m("Hosts/Get"),
@@ -331,12 +333,13 @@ fn host_page_links_its_record_to_the_inventory_page() {
         "host",
         r#"{ nodeId: "db-1" }"#,
         "[]",
-        r#"await click(tree, "open-record"); return null;"#,
+        r#"await click(tree, "open-record"); return cell(tree, "First heartbeat");"#,
     ));
     assert_eq!(
         out["seen"]["navigations"],
         json!([{"name": "inventory", "params": {"enrolled": "true", "record": "db-1"}}])
     );
+    assert_eq!(out["out"], json!("not yet"));
 
     let mut bare = Ui::start();
     bare.reply(
@@ -349,11 +352,12 @@ fn host_page_links_its_record_to_the_inventory_page() {
         r#"{ nodeId: "web-9" }"#,
         "[]",
         r#"return { record: cell(tree, "Inventory record"), enrolled: cell(tree, "Enrolled"),
+                   first: cell(tree, "First heartbeat"),
                    links: nodes(tree).filter((n) => n.attrs["name"] === "open-record").length };"#,
     ));
     assert_eq!(
         out["out"],
-        json!({"record": "none matched", "enrolled": "not enrolled", "links": 0})
+        json!({"record": "none matched", "enrolled": "not enrolled", "first": "-", "links": 0})
     );
 }
 

@@ -268,8 +268,14 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 
 `hosts get --node-id <host id>` answers the host once it has heartbeated, with the inventory record
 its enrollment matched (`inventory_record_id`, `data_macs`, `bmc_mac`, `serial`; empty when none
-or several match) and when it was approved (`enrolled_unix`); `hosts list` answers every host the
-same way, a page at a time. [Renewal](#renewal) says what they answer of its certificate.
+or several match), when it was approved (`enrolled_unix`), and when the coordinator accepted its
+first heartbeat since that approval (`first_heartbeat_unix`, by the same clock; absent until
+then). The first heartbeat time is kept in the enrollment store with the host, so a coordinator
+restart keeps it, and each later approval of the host (a new key with `--replace`, or a renewal an
+operator approves) clears it until the host is heard again; the time to first heartbeat of an
+install is `first_heartbeat_unix - enrolled_unix`. The Host page of the operator web app shows it
+as First heartbeat ("not yet" for an enrolled host not heard since). `hosts list` answers every
+host the same way, a page at a time. [Renewal](#renewal) says what they answer of its certificate.
 
 ## Renewal
 

@@ -117,6 +117,7 @@ impl EnrollmentStore {
             host_id: host.clone(),
             claims: claims_of_pb(request.pb.claims.as_ref()),
             approved_unix: request.pb.approved.as_ref().map_or(0, |a| a.approved_unix),
+            first_heartbeat_unix: row.pb.first_heartbeat_unix,
         }))
     }
 
@@ -161,6 +162,35 @@ impl EnrollmentStore {
     /// [`StoreError`] when the host file cannot be read.
     pub fn is_duplicate(&self, host: &HostId) -> Result<bool, StoreError> {
         Ok(self.load_host(host)?.is_some_and(|row| row.pb.duplicate))
+    }
+
+    /// The heartbeat path's report that it accepted a heartbeat of `host` at `now`: the first
+    /// since the host's approval is written into its host file, and every later one leaves it
+    /// as it is. An approval writes the host file without it, so a host approved again (a new
+    /// key, or a renewal) records its next heartbeat. A host id never approved has no file and
+    /// nothing is recorded.
+    ///
+    /// Decided under the store's lock, so of two heartbeats at once exactly one is written. A
+    /// host whose file is known to hold the time already (this store wrote or read it) is
+    /// answered from memory, without the lock or a read; an approval of the host forgets it.
+    ///
+    /// # Errors
+    /// [`StoreError`] when the host file cannot be read or written.
+    pub fn note_heartbeat(&self, host: &HostId, now: u64) -> Result<(), StoreError> {
+        let heard = || self.heard.lock().unwrap_or_else(PoisonError::into_inner);
+        if heard().contains(host) {
+            return Ok(());
+        }
+        let _held = self.lock()?;
+        let Some(mut row) = self.load_host(host)? else {
+            return Ok(());
+        };
+        if row.pb.first_heartbeat_unix.is_none() {
+            row.pb.first_heartbeat_unix = Some(now);
+            self.write_host(&row.pb)?;
+        }
+        heard().insert(host.clone());
+        Ok(())
     }
 
     /// The heartbeat path's report that a daemon on machine `machine_id` speaks for `host` at

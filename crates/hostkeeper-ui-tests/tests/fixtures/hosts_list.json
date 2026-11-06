@@ -1,6 +1,7 @@
 {
   "hosts": [
     {
+      "firstHeartbeatUnix": "1800000000",
       "heartbeat": {
         "agent": {
           "name": "hostkeeper-daemon",

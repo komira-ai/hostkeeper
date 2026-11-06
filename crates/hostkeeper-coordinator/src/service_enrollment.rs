@@ -37,10 +37,15 @@ impl Coordinator {
     }
 
     /// The turn of a heartbeat of `host` from the daemon on `machine_id`, if the transport
-    /// said: it is reported live first, and a duplicate host is held.
+    /// said: with enrollment, the heartbeat is noted ([`Enrollment::note_heartbeat`], which
+    /// keeps the first since the host's approval) and the host reported live first, and a
+    /// duplicate host is held.
     pub(super) fn turn_of(&self, host: &hostkeeper_wire::HostId, machine_id: Option<&str>) -> Turn {
-        if let (Some(enrollment), Some(machine_id)) = (&self.enrollment, machine_id) {
-            enrollment.report_live(host, machine_id);
+        if let Some(enrollment) = &self.enrollment {
+            enrollment.note_heartbeat(host);
+            if let Some(machine_id) = machine_id {
+                enrollment.report_live(host, machine_id);
+            }
         }
         if self.host_is_duplicate(host) {
             Turn::Hold

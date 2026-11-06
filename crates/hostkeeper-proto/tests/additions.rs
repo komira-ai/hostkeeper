@@ -897,3 +897,41 @@ fn an_older_reader_keeps_a_hosts_inventory_fields() {
     };
     assert!(!round_trip(&others).is_empty(), "false is written");
 }
+
+/// Catches a host's `first_heartbeat_unix` (field 17) that a reader of the release before drops
+/// or cannot read past, and a host of the release before read as heard: the baseline's `Host`
+/// knows no such field, reads the fields it knows, and writes the time back unchanged; a host it
+/// wrote reads with the time absent, which is not the time 0.
+#[test]
+fn an_older_reader_keeps_a_hosts_first_heartbeat_time() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.operator.v1.Host")
+        .expect("released");
+    assert!(message.get_field_by_name("first_heartbeat_unix").is_none());
+    let host = op::Host {
+        node_id: "db-1".to_owned(),
+        role: "storage".to_owned(),
+        last_heartbeat_unix: 1_800_000_100,
+        first_heartbeat_unix: Some(1_800_000_090),
+        ..op::Host::default()
+    };
+    let read =
+        DynamicMessage::decode(message.clone(), round_trip(&host).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("node_id").as_deref(),
+        Some(&Value::String("db-1".to_owned()))
+    );
+    let back = op::Host::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, host);
+
+    let mut written = DynamicMessage::new(message);
+    written.set_field_by_name("node_id", Value::String("db-1".to_owned()));
+    let read = op::Host::decode(written.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(read.first_heartbeat_unix, None);
+    let at_zero = op::Host {
+        first_heartbeat_unix: Some(0),
+        ..op::Host::default()
+    };
+    assert!(!round_trip(&at_zero).is_empty(), "0 is written");
+}

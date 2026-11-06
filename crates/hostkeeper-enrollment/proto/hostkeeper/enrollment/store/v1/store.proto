@@ -127,6 +127,9 @@ message Host {
   repeated string services = 6;
   // Two live daemons with different machine ids reported this host id within one window.
   bool duplicate = 7;
+  // When the coordinator accepted the first heartbeat of this host since its approval; absent
+  // until then. Written once; an approval writes the file anew without it.
+  optional uint64 first_heartbeat_unix = 8;
 }
 
 enum DenyState {
