@@ -59,6 +59,8 @@ The entries after `since_seq` that match every filter set, newest last. Changes 
 | `--action` | STRING | Only entries of this action (`AuditEntry.action`). |
 | `--service` | STRING |  |
 | `--node-id` | STRING |  |
+| `--by-name` | STRING | Only entries made under this name (`AuditEntry.by_name`), as a token is named: 1 to 32 bytes of `[a-z0-9-]`. A name no entry has lists none. |
+| `--newest` | true\|false | The newest `limit` matching entries after `since_seq`, oldest first, in place of the oldest; `next_seq` goes on from the newest of them. |
 
 ### `coordinator`
 

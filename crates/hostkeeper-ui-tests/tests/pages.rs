@@ -854,6 +854,65 @@ return text(await render(other));
 }
 
 #[test]
+fn audit_rows_show_time_and_who_and_the_who_filter_and_newest_are_passed() {
+    // Catches: a row without the entry's time or the name it was made under, a time that is not
+    // the entry's, the Who filter left out of the request, and the newest page not asked for or
+    // asked for again from itself.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Audit/List"),
+        json!({"entries": [{"seq": "7", "atUnix": "1800000000", "by": "ACTOR_OPERATOR",
+                            "byName": "alice", "action": "hold"}],
+               "nextSeq": "7"}),
+    );
+    ui.reply(&m("Audit/List"), json!({}));
+    let out = ui.run(&page_driver(
+        "audit",
+        r#"{ byName: "alice", sinceSeq: "5" }"#,
+        "[]",
+        r#"
+const rows = nodes(tree).filter((n) => n.tag === "tr").map((r) => r.children.map(text).join("|"));
+await click(tree, "newest-page");
+type(tree, "by-name", " bob ");
+await click(tree, "show");
+const { ctx: other } = recorder(ctx.api, { newest: "1" }, []);
+const newest = await render(other);
+const names = nodes(newest).map((n) => n.attrs["name"]);
+return { rows, again: names.includes("newest-page"), first: names.includes("first-page") };
+"#,
+    ));
+    assert_eq!(
+        bodies(&ui),
+        [
+            (
+                m("Audit/List"),
+                json!({"sinceSeq": "5", "limit": 100, "byName": "alice"})
+            ),
+            (
+                m("Audit/List"),
+                json!({"sinceSeq": "0", "limit": 100, "newest": true})
+            ),
+        ]
+    );
+    assert_eq!(
+        out["out"]["rows"],
+        json!([
+            "Seq|Time|By|Who|Action|Service|Host|Reason",
+            "7|2027-01-15 08:00:00 UTC|operator|alice|hold|-|-|-",
+        ])
+    );
+    assert_eq!(out["out"]["again"], json!(false));
+    assert_eq!(out["out"]["first"], json!(true));
+    assert_eq!(
+        out["seen"]["navigations"],
+        json!([
+            {"name": "audit", "params": {"byName": "alice", "newest": "1"}},
+            {"name": "audit", "params": {"byName": "bob"}},
+        ])
+    );
+}
+
+#[test]
 fn every_page_shows_the_refusal_when_its_call_is_unimplemented() {
     // Catches: a page that shows nothing, or a blank, when the gateway does not serve its method
     // yet (its handler has not merged). A page asks once, except the host page, which also asks

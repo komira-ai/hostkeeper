@@ -6,6 +6,7 @@
 
 mod approve;
 mod approve_refusals;
+mod audit;
 mod heartbeat;
 mod inventory;
 mod list;

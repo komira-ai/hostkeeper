@@ -218,6 +218,8 @@ async fn an_operator_set_writes_the_state_ci_would_and_one_audit_entry() {
         .await
         .expect("the list")
         .into_inner();
+    let at_unix = listed.entries.first().and_then(|entry| entry.at_unix);
+    assert!(at_unix.is_some(), "a listed entry has the time of its line");
     assert_eq!(
         listed.entries,
         [proto::AuditEntry {
@@ -227,6 +229,8 @@ async fn an_operator_set_writes_the_state_ci_would_and_one_audit_entry() {
             service: Some("kbf".to_owned()),
             node_id: None,
             reason: Some("2.0".to_owned()),
+            at_unix,
+            by_name: Some("operator".to_owned()),
         }]
     );
 }

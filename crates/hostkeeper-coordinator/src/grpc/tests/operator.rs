@@ -197,6 +197,8 @@ fn audit(
         service: service.map(str::to_owned),
         node_id: node_id.map(str::to_owned),
         reason: reason.map(str::to_owned),
+        at_unix: None,
+        by_name: Some("operator".to_owned()),
     })
 }
 

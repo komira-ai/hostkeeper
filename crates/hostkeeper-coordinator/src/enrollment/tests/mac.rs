@@ -15,7 +15,7 @@ use prost::Message;
 
 use super::support::{
     Audited, HostKey, NOW, Rig, SERIAL, audit_after, audit_of, audited, coordinator_over, enrolled,
-    host_id, mac_request,
+    host_id, mac_request, requested,
 };
 use crate::enrollment::{
     AllowlistError, DeviceStateError, DeviceStatus, Enrollment, FakeDeviceState, MacAllowlist,
@@ -181,17 +181,20 @@ async fn mac_auto_approve_requires_every_condition() {
                 assert!(recorded[0].mac_nonce);
                 assert_eq!(
                     audit_after(&rig.coordinator, before),
-                    [audited(
-                        "mdm-nonce",
-                        "enroll_approve",
-                        Some(MAC_HOST),
-                        &format!(
-                            "request {}; role build; services kbf; claims machine_id=machine-mac \
+                    [
+                        requested(&key, None, "pending"),
+                        audited(
+                            "mdm-nonce",
+                            "enroll_approve",
+                            Some(MAC_HOST),
+                            &format!(
+                                "request {}; role build; services kbf; claims machine_id=machine-mac \
                              mac_serial={SERIAL} platform_uuid=4C4C4544-0042-5A10-8048-B7C04F4E3332; \
                              approved by its MDM nonce",
-                            key.key_hash()
+                                key.key_hash()
+                            )
                         )
-                    )]
+                    ]
                 );
             }
             Some(why) => {
@@ -199,7 +202,7 @@ async fn mac_auto_approve_requires_every_condition() {
                 assert_eq!(state_of(e, &key), RequestState::Pending, "{change:?}");
                 assert_eq!(
                     audit_after(&rig.coordinator, before),
-                    [declined(why, &key)],
+                    [requested(&key, None, "pending"), declined(why, &key)],
                     "{change:?}"
                 );
             }
@@ -312,15 +315,18 @@ async fn a_mac_path_quotes_its_serial_and_fails_closed() {
         .expect("enrolled");
     assert_eq!(
         audit_after(&rig.coordinator, before),
-        [audited(
-            "mdm-nonce",
-            "mac_auto_approve_declined",
-            None,
-            &format!(
-                "serial_not_allowed; request {}; serial C02?X",
-                odd.key_hash()
+        [
+            requested(&odd, None, "pending"),
+            audited(
+                "mdm-nonce",
+                "mac_auto_approve_declined",
+                None,
+                &format!(
+                    "serial_not_allowed; request {}; serial C02?X",
+                    odd.key_hash()
+                )
             )
-        )]
+        ]
     );
     let key = HostKey::new();
     e.enroll(mac_request(&key, "machine-mac", SERIAL, &[]))
@@ -376,7 +382,10 @@ async fn no_gate_configured_auto_approves_nothing() {
     assert_eq!(answer.state, EnrollState::Pending as i32);
     assert_eq!(
         audit_after(&rig.coordinator, before),
-        [declined(MacDecline::SerialNotAllowed, &key)]
+        [
+            requested(&key, None, "pending"),
+            declined(MacDecline::SerialNotAllowed, &key)
+        ]
     );
 
     let policy = MacPolicy {
@@ -419,7 +428,11 @@ async fn claims_alone_never_approve() {
         .expect("enrolled");
     assert_eq!(answer.state, EnrollState::Pending as i32);
     assert_eq!(state_of(e, &key), RequestState::Pending);
-    assert!(audit_after(&rig.coordinator, before).is_empty());
+    assert_eq!(
+        audit_after(&rig.coordinator, before),
+        [requested(&key, None, "pending")],
+        "the request, and no approval tried"
+    );
     let listed = rig
         .coordinator
         .enrollment_list(
@@ -448,12 +461,15 @@ async fn a_mac_approval_is_refused_as_an_operators_would_be() {
     assert_eq!(state_of(e, &key), RequestState::Pending);
     assert_eq!(
         audit_after(&rig.coordinator, before),
-        [audited(
-            "mdm-nonce",
-            "enroll_approve_refused",
-            Some(MAC_HOST),
-            &format!("host_id_taken; request {}", key.key_hash())
-        )]
+        [
+            requested(&key, None, "pending"),
+            audited(
+                "mdm-nonce",
+                "enroll_approve_refused",
+                Some(MAC_HOST),
+                &format!("host_id_taken; request {}", key.key_hash())
+            )
+        ]
     );
     assert_eq!(
         e.mac_auto_approve(&key.key_hash(), nonce.as_bytes()),

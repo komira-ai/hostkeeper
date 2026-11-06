@@ -202,9 +202,14 @@ impl Enrollment {
     /// whose entry the audit log does not hold (one whose audit did not land before a crash).
     /// Called when a coordinator takes this enrollment, at its start.
     pub fn audit_to(&self, ops: Arc<OpsStore>) {
-        match (self.store.recorded_approvals(), ops.audit_log()) {
-            (Ok(approvals), Ok(log)) => {
-                let audited: BTreeSet<&str> = log.iter().filter_map(audited_request).collect();
+        let mut audited = BTreeSet::new();
+        let read = ops.audit_each(&mut |entry| {
+            if let Some(request) = audited_request(&entry) {
+                audited.insert(request.to_owned());
+            }
+        });
+        match (self.store.recorded_approvals(), read) {
+            (Ok(approvals), Ok(())) => {
                 for approval in approvals
                     .iter()
                     .filter(|approval| !audited.contains(approval.request_id.to_hex().as_str()))

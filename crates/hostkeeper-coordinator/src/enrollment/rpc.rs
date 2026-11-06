@@ -9,6 +9,12 @@
 //! A transport serves them on the heartbeat listener, which lets a connection without a client
 //! certificate through the handshake ([`crate::listen`]); [`call`] refuses a `Renew` without one
 //! (`forbidden`) before it reads the body, as the heartbeat route does a heartbeat.
+//!
+//! Each change of a request's state is audited in the coordinator's ops store under the name
+//! `coordinator` ([`Enrollment::audit_to`]): a new request (`enroll_requested`, not a repost of
+//! one), its certificate's first issue (`enroll_issued`) and a renewal (`cert_renewed`). The
+//! entry names the host when there is one, and its reason holds the request id, the round and
+//! the serial: never the CSR, a key, a nonce or a signature.
 
 use std::time::Duration;
 
@@ -25,6 +31,25 @@ use prost::Message;
 use super::refusal::{RpcError, rpc_error};
 use super::{Enrollment, MacOutcome};
 use crate::http::{BoxError, Peer, read_body};
+use crate::ops::AuditEntry;
+use crate::reconcile::COORDINATOR;
+
+/// The audit action of a new request.
+pub(crate) const ACTION_REQUESTED: &str = "enroll_requested";
+
+/// The audit action of a request's certificate issued for the first time.
+pub(crate) const ACTION_ISSUED: &str = "enroll_issued";
+
+/// The audit action of a host's certificate renewed.
+pub(crate) const ACTION_RENEWED: &str = "cert_renewed";
+
+/// The coordinator's audit entry of `action` about `host`, with `reason`.
+fn audit_entry(action: &str, host: Option<&HostId>, reason: String) -> AuditEntry {
+    let mut entry = AuditEntry::new(COORDINATOR, action);
+    entry.node_id = host.map(HostId::to_string);
+    entry.reason = Some(reason);
+    entry
+}
 
 /// The most bytes of one request message read: a CSR is at most 4096 bytes, and the rest of an
 /// `Enroll` (the claims, the image, a host id) fits in as many again.
@@ -148,6 +173,21 @@ impl Enrollment {
                 self.clock.now_unix(),
             )
             .map_err(rpc_error)?;
+        if !posted.reposted {
+            let state = if posted.state == RequestState::DuplicateClaim {
+                "duplicate_claim"
+            } else {
+                "pending"
+            };
+            self.audit(audit_entry(
+                ACTION_REQUESTED,
+                posted.renewal_of.as_ref(),
+                format!(
+                    "request {}; round {}; {state}",
+                    posted.request_id, posted.round
+                ),
+            ));
+        }
         let approved_by_nonce = !request.mac_nonce.is_empty()
             && posted.state.is_pending()
             && matches!(
@@ -202,14 +242,30 @@ impl Enrollment {
             nonce: nonce.clone(),
             ..PollResponse::default()
         };
+        let issued_before = matches!(
+            self.store.request(&id),
+            Ok(Some(view)) if view.state == RequestState::Issued
+        );
         match self.store.issue(&self.ca, &id) {
-            Ok(issued) => Ok(PollResponse {
-                state: PollState::Issued as i32,
-                certificate_der: issued.certificate_der,
-                host_id: issued.host_id.to_string(),
-                ca_bundle_pem: self.ca_pem(),
-                nonce,
-            }),
+            Ok(issued) => {
+                if !issued_before {
+                    self.audit(audit_entry(
+                        ACTION_ISSUED,
+                        Some(&issued.host_id),
+                        format!(
+                            "request {id}; round {}; serial {}",
+                            issued.round, issued.serial
+                        ),
+                    ));
+                }
+                Ok(PollResponse {
+                    state: PollState::Issued as i32,
+                    certificate_der: issued.certificate_der,
+                    host_id: issued.host_id.to_string(),
+                    ca_bundle_pem: self.ca_pem(),
+                    nonce,
+                })
+            }
             Err(IssueError::NotApproved(_)) => Ok(only(PollState::Pending)),
             Err(IssueError::Denied) => Ok(only(PollState::Denied)),
             Err(other) => Err(rpc_error(other)),
@@ -253,6 +309,11 @@ impl Enrollment {
         let serial = self.store.allocate_serial().map_err(rpc_error)?;
         let certificate = self.ca.issue_host(&host, &key, serial).map_err(rpc_error)?;
         tracing::info!(host_id = %host, serial, "renewed a host certificate");
+        self.audit(audit_entry(
+            ACTION_RENEWED,
+            Some(&host),
+            format!("serial {serial}"),
+        ));
         Ok(RenewResponse {
             certificate_der: certificate.der,
             ca_bundle_pem: self.ca_pem(),

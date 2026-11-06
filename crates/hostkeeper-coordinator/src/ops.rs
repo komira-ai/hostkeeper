@@ -63,7 +63,7 @@ use hostkeeper_wire::wire::UpdateResult;
 use serde::{Deserialize, Serialize};
 
 use crate::assignment::ServiceAssignments;
-use crate::audit_file::{self, AuditLine, AuditLog, UnixClock, wall_clock};
+use crate::audit_file::{self, AuditLine, AuditLog, Logged, Query, UnixClock, wall_clock};
 use crate::desired::StoreError;
 use crate::force::ForceRecord;
 use crate::holds::HoldMark;
@@ -645,17 +645,47 @@ impl OpsStore {
         Ok(entries)
     }
 
-    /// Every change the audit file holds, oldest first; for a store with no audit file, the
-    /// ring.
+    /// The page of the audit log `query` asks for, read from the audit file without reading
+    /// the rest of it ([`audit_file::page_in`]); for a store with no audit file, from the ring,
+    /// with no times.
     ///
     /// # Errors
     /// [`OpsError::Io`]: the audit file exists and cannot be read.
-    pub(crate) fn audit_log(&self) -> Result<Vec<AuditEntry>, OpsError> {
-        let Some(log) = &self.audit else {
-            return Ok(self.lock().audit.clone());
-        };
-        let read = audit_file::read(log.path())?;
-        Ok(read.lines.into_iter().map(AuditLine::into_entry).collect())
+    pub(crate) fn audit_page(&self, query: &Query<'_>) -> Result<Vec<Logged>, OpsError> {
+        if let Some(log) = &self.audit {
+            return audit_file::page(log.path(), query);
+        }
+        let mut page: Vec<Logged> = self
+            .lock()
+            .audit
+            .iter()
+            .filter(|entry| entry.seq > query.since_seq && (query.keep)(entry))
+            .map(|entry| Logged {
+                entry: entry.clone(),
+                at_unix: None,
+            })
+            .collect();
+        if query.newest {
+            page.drain(..page.len().saturating_sub(query.limit));
+        } else {
+            page.truncate(query.limit);
+        }
+        Ok(page)
+    }
+
+    /// Visits every change the audit file holds, oldest first, reading it a chunk at a time; for
+    /// a store with no audit file, the ring.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`]: the audit file exists and cannot be read.
+    pub(crate) fn audit_each(&self, visit: &mut dyn FnMut(AuditEntry)) -> Result<(), OpsError> {
+        match &self.audit {
+            Some(log) => {
+                audit_file::each(log.path(), &mut |line| visit(line.into_logged().entry))?;
+            }
+            None => self.lock().audit.iter().cloned().for_each(visit),
+        }
+        Ok(())
     }
 
     /// Seconds since the epoch by the clock of the audit file: the time a hold records.
@@ -786,6 +816,13 @@ impl OpsStore {
 
 #[cfg(test)]
 impl OpsStore {
+    /// Every change of the audit log, oldest first ([`Self::audit_each`]).
+    pub(crate) fn audit_log(&self) -> Result<Vec<AuditEntry>, OpsError> {
+        let mut all = Vec::new();
+        self.audit_each(&mut |entry| all.push(entry))?;
+        Ok(all)
+    }
+
     /// The store with `unix` as its clock for the audit file.
     pub(crate) fn with_unix(mut self, unix: UnixClock) -> Self {
         self.unix = unix;

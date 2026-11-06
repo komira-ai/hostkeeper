@@ -19,10 +19,11 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::is_service_name;
 use hostkeeper_wire::{HostId, RoleName};
 
+use crate::audit_file::{Logged, Query};
 use crate::halt;
 use crate::holds::{HoldMark, HoldScope, MAX_HOLDS, marks_of};
 use crate::operate::reason;
-use crate::ops::{AuditEntry, Exclusion, OpsError, Write};
+use crate::ops::{AuditEntry, Exclusion, OpsError, Write, label};
 use crate::reconcile::{CI, COORDINATOR};
 use crate::service::Coordinator;
 use crate::tokens::TokenName;
@@ -118,7 +119,8 @@ fn is_action(text: &str) -> bool {
     (1..=64).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
 }
 
-/// `entry` as `hostkeeper.operator.v1` says it.
+/// `entry` as `hostkeeper.operator.v1` says it, without its time: the answer of the call that
+/// made it.
 pub(crate) fn entry_proto(entry: &AuditEntry) -> proto::AuditEntry {
     proto::AuditEntry {
         seq: entry.seq,
@@ -127,6 +129,16 @@ pub(crate) fn entry_proto(entry: &AuditEntry) -> proto::AuditEntry {
         service: entry.service.clone(),
         node_id: entry.node_id.clone(),
         reason: entry.reason.clone(),
+        at_unix: None,
+        by_name: Some(entry.by.clone()),
+    }
+}
+
+/// `logged` as `Audit.List` says it: the entry, with the time the audit file gives it.
+fn logged_proto(logged: &Logged) -> proto::AuditEntry {
+    proto::AuditEntry {
+        at_unix: logged.at_unix,
+        ..entry_proto(&logged.entry)
     }
 }
 
@@ -453,12 +465,14 @@ impl Coordinator {
     }
 
     /// `Audit.List`: the entries of the audit file after `since_seq` that match every filter
-    /// set, oldest first, at most `limit` ([`MAX_AUDIT_PAGE`] for 0 or more), and the `since_seq`
-    /// of the next page. Changes nothing.
+    /// set, oldest first, at most `limit` ([`MAX_AUDIT_PAGE`] for 0 or more): the oldest of
+    /// them, or with `newest` the newest; and the `since_seq` of the next page. Each has the
+    /// time of its line and the name it was made under. The file is read a chunk at a time, not
+    /// whole ([`crate::audit_file::page_in`]). Changes nothing.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a filter that is no actor token, action,
-    /// service name or node id), `store_failed` (the audit file could not be read).
+    /// service name, node id or token name), `store_failed` (the audit file could not be read).
     pub fn audit_list(
         &self,
         caller: &Caller,
@@ -479,27 +493,30 @@ impl Coordinator {
             .node_id
             .as_deref()
             .is_some_and(|n| n.parse::<HostId>().is_err());
-        if bad_action || bad_service || bad_node {
+        let bad_name = request.by_name.as_deref().is_some_and(|n| !label(n));
+        if bad_action || bad_service || bad_node || bad_name {
             return Err(invalid);
         }
         let limit = match request.limit as usize {
             0 => MAX_AUDIT_PAGE,
             limit => limit.min(MAX_AUDIT_PAGE),
         };
-        let page: Vec<AuditEntry> = self
-            .ops
-            .audit_log()?
-            .into_iter()
-            .filter(|e| e.seq > request.since_seq)
-            .filter(|e| actor.is_none_or(|actor| actor_of(&e.by) == actor))
-            .filter(|e| request.action.as_ref().is_none_or(|a| *a == e.action))
-            .filter(|e| request.service.is_none() || e.service == request.service)
-            .filter(|e| request.node_id.is_none() || e.node_id == request.node_id)
-            .take(limit)
-            .collect();
+        let keep = |e: &AuditEntry| {
+            actor.is_none_or(|actor| actor_of(&e.by) == actor)
+                && request.by_name.as_ref().is_none_or(|n| *n == e.by)
+                && request.action.as_ref().is_none_or(|a| *a == e.action)
+                && (request.service.is_none() || e.service == request.service)
+                && (request.node_id.is_none() || e.node_id == request.node_id)
+        };
+        let page = self.ops.audit_page(&Query {
+            since_seq: request.since_seq,
+            limit,
+            newest: request.newest,
+            keep: &keep,
+        })?;
         Ok(proto::ListAuditResponse {
-            next_seq: page.last().map_or(request.since_seq, |e| e.seq),
-            entries: page.iter().map(entry_proto).collect(),
+            next_seq: page.last().map_or(request.since_seq, |l| l.entry.seq),
+            entries: page.iter().map(logged_proto).collect(),
         })
     }
 }
