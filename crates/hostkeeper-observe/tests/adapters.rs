@@ -284,6 +284,93 @@ fn the_real_runner_kills_a_child_at_its_deadline() {
     assert_eq!(result, Err(RunError::TimedOut { program }));
 }
 
+/// The variables systemd sets for the daemon's own process (sd_notify(3), sd_listen_fds(3)),
+/// each with the value the parent of the runner is started with.
+const MANAGER_ONLY: [(&str, &str); 6] = [
+    ("NOTIFY_SOCKET", "@hostkeeper-test-notify"),
+    ("WATCHDOG_USEC", "30000000"),
+    ("WATCHDOG_PID", "1"),
+    ("LISTEN_FDS", "1"),
+    ("LISTEN_PID", "1"),
+    ("LISTEN_FDNAMES", "admin"),
+];
+/// A variable of the parent that is not the service manager's: the child keeps it.
+const KEPT: (&str, &str) = ("HOSTKEEPER_TEST_KEPT", "kept");
+/// The prefix of each line the printing child writes for one variable of its environment.
+const ENV_LINE: &str = "env:";
+
+/// Not a test of its own: the grandchild of
+/// `the_real_runner_gives_its_child_none_of_the_service_managers_variables`, which prints the
+/// environment it was started with, one `env:<name>=<value>` line per variable.
+#[test]
+#[ignore = "the grandchild process of the_real_runner_gives_its_child_none_of_the_service_managers_variables; run only by it"]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test reads what environment reached the runner's child; a process of the tests"
+)]
+fn child_prints_its_environment() {
+    let mut out = std::io::stdout();
+    for (name, value) in std::env::vars_os() {
+        let line = format!("{ENV_LINE}{}={}\n", name.display(), value.display());
+        out.write_all(line.as_bytes()).expect("print a variable");
+    }
+}
+
+/// Not a test of its own: the child of
+/// `the_real_runner_gives_its_child_none_of_the_service_managers_variables`, started with the
+/// service manager's variables as the daemon is; it runs the printing child through the real
+/// runner and prints what that child printed.
+#[test]
+#[ignore = "the child process of the_real_runner_gives_its_child_none_of_the_service_managers_variables; run only by it"]
+fn child_runs_the_printing_child_through_the_real_runner() {
+    let argv = this_binary(&[
+        "child_prints_its_environment",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+    ]);
+    let out = ProcessRunner::new(hostkeeper_observe::command::MAX_STDOUT)
+        .run(&argv, Duration::from_secs(60))
+        .expect("the printing child ran");
+    assert_eq!(out.exit_code, Some(0));
+    std::io::stdout()
+        .write_all(&out.stdout)
+        .expect("print what the printing child printed");
+}
+
+/// Catches the daemon's notify socket, watchdog and passed sockets reaching a program it runs
+/// (`systemctl`), which would then speak to systemd as the daemon: systemd's own tools send
+/// `EXIT_STATUS=` to `NOTIFY_SOCKET` when it is set. A parent started with those variables, and
+/// one more, runs a child through the real runner: the child has the one more, and none of them.
+#[test]
+fn the_real_runner_gives_its_child_none_of_the_service_managers_variables() {
+    let argv = this_binary(&[
+        "child_runs_the_printing_child_through_the_real_runner",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+    ]);
+    let out = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .envs(MANAGER_ONLY)
+        .env(KEPT.0, KEPT.1)
+        .output()
+        .expect("the parent of the runner ran");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let printed = String::from_utf8(out.stdout).expect("UTF-8");
+    let seen: Vec<(&str, &str)> = printed
+        .lines()
+        .filter_map(|line| line.strip_prefix(ENV_LINE))
+        .filter_map(|variable| variable.split_once('='))
+        .filter(|(name, _)| *name == KEPT.0 || MANAGER_ONLY.iter().any(|(m, _)| m == name))
+        .collect();
+    assert_eq!(seen, [KEPT]);
+}
+
 /// Catches a program that cannot start, and an empty argv, being reported as a run.
 #[test]
 fn the_real_runner_reports_what_it_cannot_run() {
