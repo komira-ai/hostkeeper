@@ -7,7 +7,8 @@
 //! - [`observe`] makes one observation of such a service, with [`STATUS_DEADLINE`] for each
 //!   probe. It takes no lock of the daemon's.
 //! - [`SealedExe`] is the observer's [`ExpectedExe`] over the package tree: the digest of the
-//!   executable the first `[units] run` unit of a version starts, found through its unit file.
+//!   executable the first `[units] run` unit of a version starts, found through its unit file
+//!   (`ExecStart=`) or its launchd plist (`Program`, else the first `ProgramArguments` string).
 //! - [`host_observer`] builds the observer of a host over `systemctl`, `/proc` and TCP.
 //! - [`service_health`] is the heartbeat's health of a service's observation.
 //!
@@ -18,14 +19,14 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
-use hostkeeper_config::names::{ServiceName, UnitName, Version};
+use hostkeeper_config::names::{PLIST_SUFFIX, ServiceName, UNIT_SUFFIXES, UnitName, Version};
 use hostkeeper_observe::proc::digest_open_file;
 use hostkeeper_observe::{
     Current, Deadline, ExpectedExe, HttpHealthClient, Observation, ObserveOptions, Observer,
     ProcProbe, ProcessProbe, ProcessRunner, ServiceInput, ServiceManager, SystemdManager,
     TcpConnect, beat_health,
 };
-use hostkeeper_placed::lint::COMMAND_PREFIXES;
+use hostkeeper_placed::lint::{COMMAND_PREFIXES, plist_program};
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
 
 use crate::executor::ServiceStatus;
@@ -87,9 +88,11 @@ pub fn service_health(status: &ServiceStatus) -> Option<(Health, Option<String>)
 
 /// The digests of the executables sealed with each version, read from the package tree at
 /// `packages`: the file the first `[units] run` unit of the version starts, named by the
-/// `ExecStart=` of its unit file (the template's file for an instance), which must go through
-/// `<packages>/<service>/current/` as the host spells the packages directory. The file is the
-/// one at the same place under the version's own directory.
+/// `ExecStart=` of its unit file (the template's file for an instance) for a systemd unit, and
+/// for a launchd label by the `Program` of `units/<label>.plist`, else its first
+/// `ProgramArguments` string ([`plist_program`]). The path must go through
+/// `<packages>/<service>/current/` as the host spells the packages directory, and the rest of it
+/// be plain names. The file is the one at the same place under the version's own directory.
 ///
 /// A version has no digest when it has no seal (`<version>.seal`), its manifest does not load,
 /// it runs no unit, the command is not through `current` or has a `..`, or the file cannot be
@@ -126,15 +129,20 @@ impl SealedExe {
         let dir = service_dir.join(version);
         let manifest = Manifest::load(&dir, &expected, &self.own).ok()?;
         let unit = manifest.run.first()?;
-        let template = UnitName::of(service, unit, false)
-            .ok()
-            .and_then(|name| name.template());
-        let text = std::iter::once(unit.clone())
-            .chain(template)
-            .find_map(|file| fs::read_to_string(dir.join("units").join(file)).ok());
-        let word = text.as_deref().and_then(exec_start)?;
+        let word = if UNIT_SUFFIXES.iter().any(|suffix| unit.ends_with(suffix)) {
+            let template = UnitName::of(service, unit, false)
+                .ok()
+                .and_then(|name| name.template());
+            let text = std::iter::once(unit.clone())
+                .chain(template)
+                .find_map(|file| fs::read_to_string(dir.join("units").join(file)).ok());
+            text.as_deref().and_then(exec_start).map(str::to_owned)?
+        } else {
+            let file = dir.join("units").join(format!("{unit}{PLIST_SUFFIX}"));
+            plist_program(&fs::read_to_string(file).ok()?)?
+        };
         let through = self.host_packages.join(service).join(CURRENT);
-        let rest = Path::new(word)
+        let rest = Path::new(&word)
             .strip_prefix(through)
             .ok()
             .filter(|rest| is_plain(rest))?;

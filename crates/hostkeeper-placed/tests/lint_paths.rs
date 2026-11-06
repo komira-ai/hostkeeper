@@ -9,7 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::{Expected, Manifest};
-use hostkeeper_placed::lint::{LintError, check_unit_text, lint, through_current};
+use hostkeeper_placed::lint::{
+    LintError, check_unit_text, lint, plist_first_argument, plist_program, through_current,
+};
 use hostkeeper_placed::roots::PACKAGES_DIR;
 use hostkeeper_placed::{BootView, PlacedError, Roots};
 use support::{
@@ -539,4 +541,64 @@ fn a_colon_in_a_wantedby_name_is_refused_before_anything_is_written() {
     let report = world.placer().reconcile(&view).expect("reconcile");
     assert!(report.conflicts.is_empty() && report.unresolved.is_empty());
     assert!(!world.record().reload_pending);
+}
+
+/// Catches the daemon hashing a file launchd does not start: `plist_program` gives the
+/// `Program` string when the plist has that key, over a `ProgramArguments` that follows or
+/// precedes it, else the first `ProgramArguments` string; a `Program` key not followed by a
+/// string, or a string never closed, gives nothing rather than the arguments; a commented-out
+/// `Program` is skipped; references are decoded; a plist with neither key gives nothing.
+#[test]
+fn plist_program_is_the_program_key_else_the_first_argument() {
+    let program = |value: &str| format!("<key>Program</key>\n<string>{value}</string>\n");
+    let arguments = plist("", BAD);
+    assert_eq!(plist_program(&arguments), Some(BAD.to_owned()));
+    assert_eq!(plist_program(&program(GOOD)), Some(GOOD.to_owned()));
+    let before = format!("{}{arguments}", program(GOOD));
+    let after = format!("{arguments}{}", program(GOOD));
+    assert_eq!(plist_program(&before), Some(GOOD.to_owned()));
+    assert_eq!(plist_program(&after), Some(GOOD.to_owned()));
+    let not_a_string = format!("<key>Program</key><true/>{arguments}");
+    assert_eq!(plist_program(&not_a_string), None);
+    let unclosed = format!("<key>Program</key><string>{GOOD}");
+    assert_eq!(plist_program(&unclosed), None);
+    let commented = format!("<!-- {} -->{arguments}", program(GOOD));
+    assert_eq!(plist_program(&commented), Some(BAD.to_owned()));
+    assert_eq!(
+        plist_program(&program("&#47;bin&#x2F;a&amp;b")),
+        Some("/bin/a&b".to_owned())
+    );
+    assert_eq!(plist_program("<plist><dict></dict></plist>"), None);
+    assert_eq!(plist_program(""), None);
+}
+
+/// Catches the placed-unit lint judging something other than the first `ProgramArguments`
+/// string once the parser is shared with the daemon: `plist_first_argument` ignores `Program`,
+/// so a plist whose `Program` is good and whose first argument is a version path is still
+/// refused, as before.
+#[test]
+fn the_lint_judges_the_first_argument_not_the_program_key() {
+    let with_program = |program: &str, first: &str| {
+        format!(
+            "<key>Program</key><string>{program}</string>\n{}",
+            plist("", first)
+        )
+    };
+    assert_eq!(
+        plist_first_argument(&with_program(GOOD, BAD)),
+        Some(BAD.to_owned())
+    );
+    assert_eq!(
+        judge_plist(&with_program(GOOD, BAD)),
+        Err(refusal(
+            PACKAGES_DIR,
+            "tierstore.plist",
+            "ProgramArguments",
+            BAD
+        ))
+    );
+    assert_eq!(
+        plist_first_argument(&format!("<key>Program</key><string>{GOOD}</string>")),
+        None
+    );
 }
