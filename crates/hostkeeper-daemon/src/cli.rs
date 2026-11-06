@@ -158,6 +158,15 @@ pub enum Command {
     /// Give the binary directory of hostkeeper's own update its first binary when its `current`
     /// starts none (run by the daemon's unit before each start).
     SelfUpdateSeed(SeedFlags),
+    /// The hook of hostkeeper's own package: every step does nothing and exits 0, since
+    /// hostkeeper replaces itself by the daemon's self-update (run by a daemon that installs or
+    /// updates the service `hostkeeper`).
+    #[command(disable_help_flag = true)]
+    UpdateHook {
+        /// The step and its arguments, as the hook contract gives them.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., value_name = "ARGS")]
+        args: Vec<OsString>,
+    },
 }
 
 /// The flags of `hostkeeper self-update-seed`.
@@ -271,6 +280,7 @@ pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Command::Ci(command) => return hostkeeper_ci::run(command),
+        Command::UpdateHook { args } => return crate::update_hook::main(args),
     };
     let period = flags.link.heartbeat_secs;
     let watchdog = watchdog(&flags, &systemd);

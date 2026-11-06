@@ -293,7 +293,7 @@ fn package_manifest_loads_with_the_b2_loader_and_names_the_hostkeeper_unit() {
     let manifest = Manifest::load(&version_dir, &expected(), &host(5)).expect("the manifest loads");
     assert_eq!(manifest.name.as_str(), "hostkeeper");
     assert_eq!(manifest.version.as_str(), "0.1.5");
-    assert_eq!(manifest.min_hostkeeper, host(5));
+    assert_eq!(manifest.min_hostkeeper, host(53));
     assert_eq!(manifest.run, ["hostkeeper.service"]);
     assert_eq!(
         manifest.unit_files,
@@ -303,17 +303,20 @@ fn package_manifest_loads_with_the_b2_loader_and_names_the_hostkeeper_unit() {
 
 #[test]
 fn package_manifest_loads_with_the_manifest_loader_and_names_the_hostkeeper_unit() {
-    // Catches: a package that a daemon one patch older would accept, a hook command or bound
-    // other than the one the manifest block sets.
+    // Catches: a package that a daemon older than MIN_HOSTKEEPER would accept, one that a daemon
+    // of MIN_HOSTKEEPER refuses, a hook command or bound other than the one the manifest block
+    // sets.
     let (_dir, version_dir) = unpacked("package-manifest-loader");
     assert_eq!(
-        Manifest::load(&version_dir, &expected(), &host(4)),
+        Manifest::load(&version_dir, &expected(), &host(52)),
         Err(ManifestRefusal::DaemonTooOld {
-            needs: host(5),
-            running: host(4)
+            needs: host(53),
+            running: host(52)
         })
     );
-    let manifest = Manifest::load(&version_dir, &expected(), &host(5)).expect("the manifest loads");
+    assert_eq!(MIN_HOSTKEEPER, host(53).to_string());
+    let manifest =
+        Manifest::load(&version_dir, &expected(), &host(53)).expect("the manifest loads");
     assert_eq!(manifest.hook.command, ["bin/hostkeeper", "update-hook"]);
     assert_eq!(manifest.hook.verify_deadline_secs, 600);
     assert_eq!(
@@ -332,13 +335,14 @@ fn package_manifest_loads_with_the_manifest_loader_and_names_the_hostkeeper_unit
 
 #[test]
 fn the_manifest_text_is_exact() {
-    // Catches: a changed key or value of the manifest that no loader check notices, or a hook
-    // table that no longer says the daemon does not run it for its own package.
+    // Catches: a changed key or value of the manifest that no loader check notices, a hook
+    // table that no longer says its steps do nothing, and a floor that follows the release's own
+    // version (no daemon, always older than the release it is ordered, could take it).
     assert_eq!(
         manifest(&version(), Platform::LinuxX86_64, true),
-        "schema = 1\nname = \"hostkeeper\"\nversion = \"0.1.5\"\nplatform = \"linux-x86_64\"\nmin_hostkeeper = \"0.1.5\"\n\n\
-         # The daemon does not run this hook for its own package: hostkeeper's self-update is\n\
-         # compiled into the daemon. The table is here because every manifest has a bounded hook.\n\
+        "schema = 1\nname = \"hostkeeper\"\nversion = \"0.1.5\"\nplatform = \"linux-x86_64\"\nmin_hostkeeper = \"0.1.53\"\n\n\
+         # Every step of this hook does nothing: hostkeeper's self-update is compiled into the\n\
+         # daemon. The table is here because every manifest has a bounded hook.\n\
          [hook]\ncommand = [\"bin/hostkeeper\", \"update-hook\"]\nverify_deadline_secs = 600\n\n\
          [hook.timeout_secs]\nprepare = 300\ncutover = 300\nverify = 300\nrollback = 300\n\
          cleanup = 300\n\n[units]\nrun = [\"hostkeeper.service\"]\n"
@@ -351,6 +355,13 @@ fn the_manifest_text_is_exact() {
         with_units
     );
     assert!(without.ends_with("cleanup = 300\n") & !without.contains("units"));
+    let later = manifest(
+        &"0.9.0".parse().expect("a version"),
+        Platform::LinuxX86_64,
+        true,
+    );
+    assert!(later.contains("version = \"0.9.0\"\n"), "{later}");
+    assert!(later.contains("min_hostkeeper = \"0.1.53\"\n"), "{later}");
 }
 
 #[test]
@@ -884,4 +895,38 @@ fn a_macos_package_unpacks_with_the_daemons_macos_unpacker() {
             .all(|n| asked.iter().any(|a| a.ends_with(n))),
         "{asked:?}"
     );
+}
+
+#[test]
+fn the_hook_command_of_the_manifest_is_answered_by_the_shipped_binary() {
+    // Catches: a manifest whose hook the daemon runs (`bin/hostkeeper update-hook <step> ...`, for
+    // every install and update of hostkeeper) on a binary that has no such verb, so that every
+    // order of hostkeeper fails at `prepare`; and a hook step that does not end in success.
+    use clap::Parser;
+    use hostkeeper_daemon::cli::{Cli, Command};
+    use hostkeeper_hook::{Invocation, Outcome, Step};
+
+    let (_dir, version_dir) = unpacked("package-hook-verb");
+    let manifest = Manifest::load(&version_dir, &expected(), &host(53)).expect("the manifest");
+    let (program, hook_args) = manifest.hook.command.split_first().expect("a program");
+    assert_eq!(program, "bin/hostkeeper");
+    for step in Step::ALL {
+        let invocation = Invocation {
+            step,
+            artifact: (step == Step::Prepare).then(|| version_dir.to_path_buf()),
+            params: Some("/state/hostkeeper/params.toml".into()),
+        };
+        let line = std::iter::once("hostkeeper".into())
+            .chain(hook_args.iter().map(Into::into))
+            .chain(invocation.to_args());
+        let parsed = Cli::try_parse_from(line).expect("the binary parses the hook's line");
+        let Command::UpdateHook { args } = parsed.command else {
+            panic!("the line runs {:?}, not the hook", parsed.command);
+        };
+        assert_eq!(
+            hostkeeper_daemon::update_hook::run(args),
+            Ok(Outcome::Success),
+            "{step}"
+        );
+    }
 }

@@ -41,7 +41,9 @@ fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
 /// another verb, or sends with the wrong service, version, digest, order id or try: a daemon of
 /// the role `other` is assigned to, running only `kbf` at its desired version, is answered
 /// `install` of `other` 3.0 with the package digest CI registered; once it runs it and an
-/// operator unassigns the host with `uninstall`, it is answered `uninstall` of `other`.
+/// operator unassigns the host with `uninstall`, it is answered `uninstall` of `other`, one try
+/// past the install it was given (its heartbeats carry no verdict, and the daemon's step record
+/// holds the install's try 1, so an uninstall at try 1 would be refused `try_conflict`).
 #[tokio::test]
 async fn the_grpc_heartbeat_answers_the_gates_install_and_uninstall() {
     let farm = farm("grpc-install").await;
@@ -84,7 +86,7 @@ async fn the_grpc_heartbeat_answers_the_gates_install_and_uninstall() {
     let response: proto::HeartbeatResponse =
         beat(&farm.coordinator, &who, &installed).await.decode();
     let order = response.order.expect("an uninstall order");
-    assert_eq!((order.order_id.as_str(), order.r#try), ("uninstall-1", 1));
+    assert_eq!((order.order_id.as_str(), order.r#try), ("uninstall-1", 2));
     assert_eq!(
         order.verb,
         Some(proto::order::Verb::Uninstall(proto::Uninstall {

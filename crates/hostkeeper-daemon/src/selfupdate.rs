@@ -1,8 +1,13 @@
-//! The update of hostkeeper itself (design section 6.6): an `update` of the service `hostkeeper`
-//! followed by the self-update follow-on, recorded `Succeeded` only once the new binary has run.
+//! The update of hostkeeper itself (design section 6.6): an `update` or an `install` of the
+//! service `hostkeeper` followed by the self-update follow-on, recorded `Succeeded` only once the
+//! new binary has run.
 //!
-//! [`run`] is the executor's path for an `update` of the service `hostkeeper`; every other
-//! service's update is untouched. Under the service's lock, in this order:
+//! [`run`] is the executor's path for an `update` and an `install` of the service `hostkeeper`;
+//! every other service's orders are untouched. An `install` is what a daemon the deb or the pkg
+//! installed is ordered first: it runs, but no package of it is installed, so an `update` of it
+//! would be refused `not_installed`. The install places the package and, when the release is not
+//! the binary that runs, swaps the binary as an update does; when it is, the install is
+//! `Succeeded` at once. Under the service's lock, in this order:
 //!
 //! 1. the held halt; the step record; the local list of bad versions
 //!    (`<state-dir>/hostkeeper/bad-versions`, [`hostkeeper_steps::bad`]): an order for a version
@@ -11,11 +16,12 @@
 //!    record since. A list that cannot be read refuses the order (`bad_versions_unreadable`);
 //! 2. an update that waits for the restart answers a resend of its own order `Deferred`
 //!    `awaiting_restart`, and any other order `busy`;
-//! 3. the try rules, as for every `update`;
+//! 3. the try rules, as for every `update` and `install`;
 //! 4. the step record of every other service: while any holds an unfinished update (`pending`,
 //!    `running`, or `done` between two steps), or cannot be read, the order is `busy`, and
 //!    nothing is written;
-//! 5. the checks of every `update`, and the package;
+//! 5. the checks of every `update` (or `install`: none of hostkeeper is installed yet), and the
+//!    package;
 //! 6. the step lock, waited for (a running step of another service is never interrupted), and
 //!    the records of step 4 read again under it;
 //! 7. the protocol of the new binary ([`ProtocolProbe`]), asked of the file of the verified
@@ -255,14 +261,17 @@ fn failed(class: Class, reason: &str) -> Reply {
     }
 }
 
-/// An `update` of the service `hostkeeper`.
-pub fn run(ctx: &Ctx, order: Hooked) -> Reply {
-    update::locked(ctx, HookedVerb::Update, &order, |guard| {
-        steps(ctx, &order, guard)
-    })
+/// An `update` or an `install` (`verb`) of the service `hostkeeper`.
+pub fn run(ctx: &Ctx, verb: HookedVerb, order: Hooked) -> Reply {
+    update::locked(ctx, verb, &order, |guard| steps(ctx, verb, &order, guard))
 }
 
-fn steps(ctx: &Ctx, order: &Hooked, guard: &ServiceGuard<'_>) -> Result<Reply, Reply> {
+fn steps(
+    ctx: &Ctx,
+    verb: HookedVerb,
+    order: &Hooked,
+    guard: &ServiceGuard<'_>,
+) -> Result<Reply, Reply> {
     let service = &order.service;
     let version = order.version.as_str();
     ctx.halts
@@ -284,11 +293,11 @@ fn steps(ctx: &Ctx, order: &Hooked, guard: &ServiceGuard<'_>) -> Result<Reply, R
     if let Some(awaiting) = awaiting {
         return waiting_for(awaiting, version);
     }
-    if let Some(answer) = update::answer(HookedVerb::Update, order, last.as_deref())? {
+    if let Some(answer) = update::answer(verb, order, last.as_deref())? {
         return Ok(answer);
     }
     others_idle(ctx, service)?;
-    let prepared = update::prepare(ctx, HookedVerb::Update, order, last.as_deref())?;
+    let prepared = update::prepare(ctx, verb, order, last.as_deref())?;
     files::make_private(&ctx.service_dir(service))
         .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     let runner = ctx.runner(service);

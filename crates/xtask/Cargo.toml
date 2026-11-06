@@ -64,6 +64,9 @@ xtask = { path = ".", features = ["test-support"] }
 # The packaging test (tests/packaging/daemon_flags.rs) parses the unit's command lines with the
 # binary's own flag parser and reads its default paths.
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
+# The package test runs the manifest's hook command line, as the hook contract builds it, through
+# the binary's own parser and its `update-hook` verb.
+hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The packaging test (tests/packaging/unit_file.rs) holds the unit's watchdog to the heartbeat
 # loop's longest call.
 hostkeeper-link = { path = "../hostkeeper-link" }

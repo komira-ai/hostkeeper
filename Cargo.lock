@@ -4195,6 +4195,7 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-ctl",
  "hostkeeper-daemon",
+ "hostkeeper-hook",
  "hostkeeper-launchd",
  "hostkeeper-link",
  "hostkeeper-package",

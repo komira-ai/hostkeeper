@@ -64,6 +64,8 @@ struct Order {
     at: Duration,
     /// The order id of an uninstall; none for an update or an install.
     uninstall: Option<String>,
+    /// The try it was sent at ([`Fleet::order_try`]).
+    order_try: u64,
 }
 
 /// A host, as its last heartbeat and certificate left it.
@@ -204,6 +206,12 @@ pub struct Fleet {
     /// carried (an acknowledged one read back from the verdicts file among them): what
     /// [`Self::next_try`] numbers past. Kept in memory only, never lowered.
     tries: BTreeMap<(HostId, String), u64>,
+    /// The highest try of an order of each host and service the coordinator gave and no longer
+    /// counts as outstanding (it aged out, was replaced, or ended), whether or not the host
+    /// reported it: a host that answers an order with no verdict the coordinator hears (an
+    /// install of a service its heartbeat does not list) may hold that try in its step record
+    /// all the same. Kept in memory only, never lowered.
+    sent: BTreeMap<(HostId, String), u64>,
 }
 
 impl Fleet {
@@ -226,6 +234,7 @@ impl Fleet {
             aborts: BTreeMap::new(),
             canaries: BTreeMap::new(),
             tries: BTreeMap::new(),
+            sent: BTreeMap::new(),
         }
     }
 
@@ -249,21 +258,46 @@ impl Fleet {
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any
-    /// heartbeat of the host has carried for the service, whatever order its verdict ended, and 1
-    /// when none carried one. The daemon keys tries per service (design 8.3): its step record
+    /// heartbeat of the host has carried for the service, whatever order its verdict ended, or
+    /// of any order of it the coordinator gave that is no longer outstanding ([`Self::order_try`]),
+    /// and 1 when there is none. The daemon keys tries per service (design 8.3): its step record
     /// holds the try of the service's last order and refuses the same try of another package
-    /// (`try_conflict`) and a lower one (`stale_try`). The highest is kept, not the last heard, so
-    /// a verdict that stops being sent once acknowledged, one that names no try, or an older one
-    /// heard after a newer never lowers it. A resend before the host reports keeps the try; a
-    /// restarted coordinator rebuilds it from the heartbeats, an acknowledged verdict read back
+    /// (`try_conflict`) and a lower one (`stale_try`). The highest is kept, not the last heard,
+    /// so a verdict that stops being sent once acknowledged, one that names no try, or an older
+    /// one heard after a newer never lowers it. A resend before the host reports keeps the try;
+    /// a restarted coordinator rebuilds it from the heartbeats, an acknowledged verdict read back
     /// from the verdicts file among them (design 8.2).
     #[must_use]
     pub fn next_try(&self, service: &str, id: &HostId) -> u64 {
-        self.tries
-            .get(&(id.clone(), service.to_owned()))
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(1)
+        let key = (id.clone(), service.to_owned());
+        let heard = self.tries.get(&key).copied().unwrap_or(0);
+        let given = self.sent.get(&key).copied().unwrap_or(0);
+        heard.max(given).saturating_add(1)
+    }
+
+    /// The try of the order of `service` to `target` for the host `id` at `now`. The order to
+    /// `target` given within [`ORDER_AGE`] keeps its try until the host reports that try or a
+    /// later one, so a host that asks again before it reports is told the same order again. An
+    /// order given before that aged out with no word of it is followed by one try past it: a
+    /// host that refused it in a way the coordinator does not hear (a `try_conflict` with a try
+    /// its step record holds, for a service its heartbeat does not list) runs the next one.
+    /// Otherwise [`Self::next_try`].
+    #[must_use]
+    pub fn order_try(&self, service: &str, id: &HostId, target: &Version, now: Duration) -> u64 {
+        let key = (id.clone(), service.to_owned());
+        let heard = self.tries.get(&key).copied().unwrap_or(0);
+        let next = self.next_try(service, id);
+        match self.orders.get(&key) {
+            Some(order)
+                if order.target == *target
+                    && now.saturating_sub(order.at) < ORDER_AGE
+                    && order.order_try > heard =>
+            {
+                order.order_try
+            }
+            Some(order) => next.max(order.order_try.saturating_add(1)),
+            None => next,
+        }
     }
 
     /// The release failures of `service` about `version` heard since the start, each once: the
@@ -461,8 +495,10 @@ impl Fleet {
                     .and_then(|r| r.order_id.as_ref())
                     .is_some_and(|reported| reported.as_str() == order_id),
             };
-            if beat.updating.is_some() || ended || deferred_order {
-                self.orders.remove(&key);
+            if (beat.updating.is_some() || ended || deferred_order)
+                && let Some(order) = self.orders.remove(&key)
+            {
+                self.no_longer_outstanding(key.clone(), &order);
             }
         }
         let baking = (key.1.clone(), key.0.clone());
@@ -538,14 +574,23 @@ impl Fleet {
         {
             return;
         }
-        self.orders.insert(
-            key,
-            Order {
-                target,
-                at: now,
-                uninstall,
-            },
-        );
+        let order_try = self.order_try(service, &key.0, &target, now);
+        let order = Order {
+            target,
+            at: now,
+            uninstall,
+            order_try,
+        };
+        if let Some(replaced) = self.orders.insert(key.clone(), order) {
+            self.no_longer_outstanding(key, &replaced);
+        }
+    }
+
+    /// Keeps the try of `order`, which no longer counts as outstanding, as one
+    /// [`Self::next_try`] numbers past.
+    fn no_longer_outstanding(&mut self, key: (HostId, String), order: &Order) {
+        let given = self.sent.entry(key).or_default();
+        *given = (*given).max(order.order_try);
     }
 
     /// When the wait of the host `id` ends, if it declined an update of `service` to `target`.

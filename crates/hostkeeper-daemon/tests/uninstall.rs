@@ -313,16 +313,13 @@ fn uninstall_unsupported_is_refused_before_anything_changes() {
     let daemon = rig.daemon();
     rig.placed("web", "1.0.0", None);
     assert_eq!(daemon.order(&install("web", "1.0.0", &d(), 1)), succeeded());
-    for service in [
-        "hostkeeper",
-        "lost",
-        "halted",
-        "garbled",
-        "altered",
-        "unsealed",
-    ] {
+    for service in ["lost", "halted", "garbled", "altered", "unsealed"] {
         installed(&rig, &daemon, service, "1.0.0");
     }
+    // hostkeeper's install is its self-update, which this package (no binary) cannot run: its
+    // package is put in place as an install leaves it.
+    rig.placed("hostkeeper", "1.0.0", Some(300));
+    rig.store.link("hostkeeper", "current", "1.0.0");
     rig.launcher.lose("lost", hostkeeper_hook::Step::Verify);
     rig.placed("lost", "2.0.0", Some(300));
     let lost = daemon.order(&update("lost", "2.0.0", &d(), 2));

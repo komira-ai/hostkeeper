@@ -83,6 +83,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Health, Outcome, Reply};
 use serde::Serialize;
 
+use crate::agent_service::runs_itself;
 use crate::canary;
 use crate::desired::Desired;
 use crate::fleet::Fleet;
@@ -163,7 +164,10 @@ pub enum Skip {
     /// its wait is not over.
     Deferred,
     /// The pair needs an install or an uninstall, and the host's agent did not announce that it
-    /// takes them ([`crate::orders::INSTALL_FEATURE`]).
+    /// takes them ([`crate::orders::INSTALL_FEATURE`]); or the service is the host's agent
+    /// itself, whose install of the desired version succeeded while the agent kept running
+    /// another, and the agent cannot take an update to the release it installed
+    /// ([`crate::agent_service`]): it is ordered the next version set.
     Unsupported,
     /// The pair needs an install, and the desired version has no package digest to install.
     NoDigest,
@@ -322,6 +326,20 @@ fn order_or_hold(
     let failed_here = beat
         .and_then(|b| b.last_update.as_ref())
         .is_some_and(|r| r.outcome == Outcome::Failed && r.target == desired.version);
+    // The agent's own service, installed at the desired version by an agent that still runs
+    // another: an agent that installs its own release without switching to it (one before the
+    // install of `hostkeeper` ran its self-update) cannot take an update to the release it has
+    // installed, so it waits for the next one ([`crate::agent_service`]).
+    let installed_not_run = installed
+        && fleet
+            .node(id)
+            .is_some_and(|node| runs_itself(node, service))
+        && beat.is_some_and(|b| {
+            b.version != desired.version
+                && b.last_update
+                    .as_ref()
+                    .is_some_and(|r| r.outcome == Outcome::Succeeded && r.target == desired.version)
+        });
     let live = live(services, all, fleet, service, id, now);
     let rules = [
         (fleet.is_held(service, id), Decision::Gate(Gate::Held)),
@@ -346,7 +364,7 @@ fn order_or_hold(
             Decision::Skip(Skip::UpToDate),
         ),
         (
-            !installed && !fleet.announced(id, INSTALL_FEATURE),
+            (!installed && !fleet.announced(id, INSTALL_FEATURE)) || installed_not_run,
             Decision::Skip(Skip::Unsupported),
         ),
         (unlisted, Decision::Skip(Skip::NoPackageForPlatform)),
