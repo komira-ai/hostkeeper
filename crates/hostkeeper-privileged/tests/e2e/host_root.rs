@@ -327,14 +327,20 @@ impl HostRoot {
         DaemonUnit { unit: name, file }
     }
 
+    /// Where a failed test leaves what there is to look at:
+    /// `<target tmpdir>/../privileged-artifacts/<tag>/`, which the workflow uploads.
+    pub fn artifact_dir(&self) -> PathBuf {
+        Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join("..")
+            .join("privileged-artifacts")
+            .join(&self.tag)
+    }
+
     /// Copies what a failed test leaves to look at into
     /// `<target tmpdir>/../privileged-artifacts/<tag>/`, which the workflow uploads. Every
     /// step ignores its errors: this runs while the test is already failing.
     fn save_artifacts(&self) {
-        let out = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("..")
-            .join("privileged-artifacts")
-            .join(&self.tag);
+        let out = self.artifact_dir();
         if fs::create_dir_all(out.join("records")).is_err() {
             return;
         }

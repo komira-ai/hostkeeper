@@ -77,6 +77,38 @@ fn port_pairs(count: usize) -> Vec<[u16; 2]> {
     ports.chunks(2).map(|pair| [pair[0], pair[1]]).collect()
 }
 
+/// A failed test's view of the coordinator: its status and convergence of the service, printed
+/// and kept with the host root's artifacts, while the coordinator still runs (this drop runs
+/// before the fields' drops). It tells which of the coordinator's rules held an order back.
+impl Drop for Scenario {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        let ctl = |args: &[&str]| {
+            let output = self.coordinator.ctl_output(args);
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        };
+        let view = format!(
+            "releases status:\n{}\nreleases converge:\n{}\nrelease channel requests:\n{:#?}\n\
+             step record:\n{:#?}\n",
+            ctl(&["releases", "status", "--service", SERVICE]),
+            ctl(&["releases", "converge", "--service", SERVICE]),
+            self.channel.requests(),
+            self.host.step_record(),
+        );
+        eprintln!("the coordinator's view when the test failed:\n{view}");
+        let dir = self.host.artifact_dir();
+        if fs::create_dir_all(&dir).is_ok() {
+            drop(fs::write(dir.join("coordinator.txt"), view));
+        }
+    }
+}
+
 impl Scenario {
     /// The whole rig up, the daemon enrolled and approved as [`HOST_ID`], nothing installed.
     /// `tag` (a few lowercase letters) names the test's host root and daemon unit.
