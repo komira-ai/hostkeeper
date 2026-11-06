@@ -296,6 +296,8 @@ The operator API is protobuf services (`operator.proto`, PR #3) with an HTTP/JSO
 | `Hosts` | `Abort` (queued as an order for the host's next heartbeat; takes no slot), `Exclude --abandon` | Designed (B7) |
 | `Enrollment` | `List`, `Approve` | Built (`crates/hostkeeper-coordinator/src/enrollment/list.rs`, `approve.rs`) |
 | `Enrollment` | `List` shows each pending request's match against the host inventory; `AddRecord`, `ListRecords`, `RemoveRecord` keep the inventory (section 5.7) | Built (`crates/hostkeeper-coordinator/src/inventory.rs`) |
+| `Enrollment` | `Reject`: a pending request leaves the queue and its key is refused (section 6.1, `pending` -> `unenrolled`) | Built (`crates/hostkeeper-coordinator/src/enrollment/reject.rs`) |
+| `Hosts` | `Retire`: the deny row of an enrolled host, its own assignments dropped, its slot freed when its update is final (section 5.7 step 7, section 6.1) | Built (`crates/hostkeeper-coordinator/src/hosts.rs`) |
 | `Audit` | `List` | Designed (B7) |
 
 CI or an operator token sets the desired version (Q6): the operator through the API, the CLI and the UI's Rollout page.
@@ -620,8 +622,8 @@ The fields on each page are the fields the API returns (`Hosts.Get`, section 4.8
 
 - `unenrolled` -> `pending`: the host posts its request.
 - `pending` -> `enrolled`: the operator approves, naming the key hash; the certificate is issued. An enrolled host renews at half life.
-- `pending` -> `unenrolled`: the request expired.
-- `enrolled` -> `retired`: the operator revokes and a deny row is written. The host is refused at handshake at once and loses its certificate by expiry within 7 days. An update in flight finishes or is aborted locally; its slot is freed when the record is final, or by `Exclude --abandon` if the host is gone (section 8.4).
+- `pending` -> `unenrolled`: the request expired, or the operator rejected it (`Enrollment.Reject`): it leaves the pending queue and its key is refused from then on, so the host enrolls again only under a new key.
+- `enrolled` -> `retired`: the operator revokes (`Hosts.Retire`) and a deny row is written; the host's own service assignments are dropped. The host is refused at handshake at once and loses its certificate by expiry within 7 days. An update in flight finishes or is aborted locally; its slot is freed when the record is final, or by `Exclude --abandon` if the host is gone (section 8.4).
 
 **A service on a host.** Each row is one edge of the diagram.
 
@@ -689,7 +691,7 @@ Never inside the trial it guards. **Built** (`crates/hostkeeper-steps/src/selfup
 
 ### 6.7 Coordinator background work
 
-Reconcile on every heartbeat: advance `last_good`, mark bad, plan automatic rollback. Reload TLS certificate and key every 60 seconds; a bad pair keeps the one in use. The coordinator has no pager and calls out to nothing: every condition that needs a person (`halt`, `waiting_for_operator`, `duplicate`, a failed canary, a host abandoned while updating) is a log line at error level with an `alert=` field, and also shows in the UI.
+Reconcile on every heartbeat: advance `last_good`, mark bad, plan automatic rollback. Reload TLS certificate and key every 60 seconds; a bad pair keeps the one in use. The coordinator has no pager and calls out to nothing: every condition that needs a person (`halt`, `waiting_for_operator`, `duplicate`, `duplicate_claim_pending`, `failed_canary`, `held_on_bad_version`, `abandoned_while_updating`, `silent_host`, `cert_near_expiry`) is derived by one pure function of the coordinator's state and the time (`crates/hostkeeper-coordinator/src/alerts.rs`), answered by `Alerts.List` (which the UI's Fleet page shows) and logged at error level with an `alert=` field once when it appears. The field is the kind's name but for four kinds that keep the tokens they were logged with before `Alerts.List`: `duplicate_claim_pending` is `alert=duplicate_claim`, `failed_canary` is `alert=canary_failed`, `abandoned_while_updating` is `alert=exclude_abandon`, and `halt` stays `alert=halt`. The coordinator observes them every 15 seconds and at every `Alerts.List`; the silent-host threshold and the certificate window are `--alert-silent-host-secs` (300) and `--alert-cert-window-secs` (14 days).
 
 ## 7. Edge cases handled
 

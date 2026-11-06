@@ -161,6 +161,29 @@ again, as it did before it expired.
 | `denied` | the host id is denied and `replace` is not set |
 | `store_failed` | the store could not be read or written; nothing changed |
 
+`Reject` names a pending request and, optionally, a reason. Under the store's lock the request is
+marked denied (its file is kept): it leaves the queue and no longer counts toward the pending cap,
+its `Poll` is answered `DENIED`, a repost of its key changes nothing, and an approval of it is
+`not_pending`. A pending request has no host id, so no deny row names it: its key is the identity
+refused. The first rejection is audited `enroll_reject` with the request id, the claims and the
+reason, about the host a renewal renews; a repeat answers success and audits nothing. A request
+that expired undecided can be rejected too, which keeps its key from waiting again at its next
+post. A request approved or issued, or denied after its approval, is `not_pending`; an unknown id
+`unknown_request`. As for an approval, the audit entry is written right after the request file,
+and one that cannot be written is logged.
+
+`Hosts.Retire` (of the `Hosts` service) names an enrolled host id. Under the fleet's lock it
+writes the host's deny row (retiring), drops the host's own entries from the operator's service
+assignments with the `host_retire` audit entry in one write of the ops file, and frees the host's
+update slot when no update or order of it is in flight, making the row final; otherwise the
+host's final report does that, as below. The host's entries are its assignment or exclusion,
+its minimum version and an uninstall it was ordered, in each service; a role's stay. The deny
+row is the first write, so a retirement cut short by a failed ops write leaves the host refused.
+A repeat of a host already denied is finished unless the audit log holds its retirement (the
+newest of its approvals and retirements is a `host_retire`): its entries are dropped and it is
+audited then. A repeat of a finished retirement audits nothing. A host id the store never approved
+is `unknown_host`.
+
 ## A Mac approved by its nonce
 
 The MDM policy gate (its own component, not in this coordinator) gives each Mac a one-time nonce

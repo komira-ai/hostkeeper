@@ -84,7 +84,7 @@ pub struct ServiceHostStatus {
     /// `no_slot` or a skip such as `up_to_date`.
     pub hold: Option<Why>,
     /// An operator holds the pair and the host runs a version marked bad: an alert
-    /// ([`crate::holds::alert_on_bad_version`]). Left out when it does not.
+    /// ([`crate::alerts`], `held_on_bad_version`). Left out when it does not.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub held_on_bad_version: bool,
 }

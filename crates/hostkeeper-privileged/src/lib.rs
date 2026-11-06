@@ -1,10 +1,11 @@
 //! What the privileged tests share, and the part of them that can be tested without root.
 //!
 //! The privileged tests (`tests/transient_unit.rs`, `tests/observer.rs`, `tests/unit_control.rs`,
-//! `tests/self_update.rs`) run as root against the
-//! real systemd of a host, in `.github/workflows/privileged.yml` only, after a merge to main.
-//! Each file starts with `#![cfg(feature = "privileged")]`; the feature is off by default, so the
-//! pull-request set compiles none of them ([`PRIVILEGED`]). They drive the production adapters
+//! `tests/self_update.rs`) run as root against the real systemd of a host, in
+//! `.github/workflows/privileged.yml` only, after a merge to main. Each of these files starts with
+//! `#![cfg(feature = "privileged")]` (the first-boot and macOS files below with lines of their
+//! own); the feature is off by default, so the pull-request set compiles none of them
+//! ([`PRIVILEGED`]). They drive the production adapters
 //! (`hostkeeper_steps::SystemdLauncher`, `hostkeeper_steps::DeadMan`, the observer's
 //! `SystemdManager` and `ProcProbe`, the Linux unit control, and the daemon's own update under
 //! hostkeeper's unit file, drop-in and fallback unit), never a copy of them. The macOS device tests
@@ -12,8 +13,14 @@
 //! do the same on a Mac, in privileged.yml's job `macos-device`, against launchd: the daemon
 //! (the program `hostkeeper-device-daemon`, which forwards to `hostkeeper_daemon::cli::main`),
 //! `hostkeeper_launchd`'s launcher, service manager and process probe, and the daemon's package
-//! check. `tests/tierstore_shaped.rs` runs the whole update path end to end: the real
-//! coordinator and the real daemon (that same program, under a `Type=notify` unit) update a
+//! check. The first-boot tests (`tests/first_boot.rs`, `tests/install_uninstall.rs`, first line
+//! `#![cfg(all(target_os = "linux", feature = "privileged"))]`, privileged.yml's job `first-boot`)
+//! start the programs themselves as child processes: the coordinator (the program
+//! `hostkeeper-privileged-coordinator`, which forwards to
+//! `hostkeeper_coordinator::config::main`) and the daemon (`hostkeeper-device-daemon`), and drive
+//! them as an operator and a host do.
+//! `tests/tierstore_shaped.rs` runs the whole update path end to end: the real coordinator (in
+//! process) and the real daemon (`hostkeeper-device-daemon`, under a `Type=notify` unit) update a
 //! tierstore-shaped package (the program `tierstore-like` and `fixtures/tierstore-shaped/`),
 //! roll it back on a failed `verify` and force it back with no fetch; its rig is `tests/e2e/`,
 //! test code outside the measured set, whose root-free parts `tests/tierstore_rig.rs` runs in

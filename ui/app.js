@@ -26,10 +26,11 @@ const PAGES = [
   ["audit", "Audit", audit],
 ];
 
-// Starts the app in `root`. `doc` is the document, `fetch` the browser's fetch and `confirm`
-// a yes-or-no question to the operator (the browser's confirm), each injected so tests can fake
-// them. Returns the frame's controls, which the browser does not need.
-export function startApp({ doc, root, fetch, confirm }) {
+// Starts the app in `root`. `doc` is the document, `fetch` the browser's fetch, `confirm` a
+// yes-or-no question to the operator (the browser's confirm) and `now` the time in unix seconds,
+// each injected so tests can fake them. Returns the frame's controls, which the browser does not
+// need.
+export function startApp({ doc, root, fetch, confirm, now }) {
   // Why the coordinator last refused the token, shown on the sign-in form it returns to.
   let refusal = null;
   const api = createApi({
@@ -102,6 +103,7 @@ export function startApp({ doc, root, fetch, confirm }) {
       api,
       params: at.params,
       confirm: (question) => confirm(question) === true,
+      now: () => now(),
       navigate,
       refresh: () => {
         if (here()) {

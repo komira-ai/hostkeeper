@@ -20,12 +20,15 @@
 //!   `validity.rs`, the one file the wall-clock lint allows here);
 //! - `hostkeeper_steps::Clock`: the monotonic clock the retries sleep on.
 //!
-//! [`Enroller::run_once`] is one step; [`Enroller::run_loop`] paces the steps.
+//! [`Enroller::run_once`] is one step; [`Enroller::run_loop`] paces the steps, and after each
+//! notes in a [`RenewalState`] the end of the current certificate and the step's error, which the
+//! daemon's heartbeat reports.
 
 mod claims;
 mod enroller;
 mod grpc;
 mod key;
+mod renewal;
 mod store;
 mod validity;
 mod verify;
@@ -41,6 +44,7 @@ pub use enroller::{
 };
 pub use grpc::{GrpcEnroll, GrpcError};
 pub use key::{Entropy, EntropyError, KEY_DRAWS, KeyError, OsEntropy};
+pub use renewal::{Renewal, RenewalState};
 pub use store::{
     CurrentPaths, Fault, FaultGate, KeyFrom, PkiDir, SCHEMA, Store, StoreError, StoreLock, Stored,
 };

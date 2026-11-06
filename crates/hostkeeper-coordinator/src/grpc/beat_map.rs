@@ -14,7 +14,9 @@
 //! level is the agent itself, as `hostkeeper-link` sends it on the JSON route (the agent's
 //! version, health `healthy`, no update) and every entry is in `services`, which is sent even
 //! when it is empty. A fact that has no field in the JSON (the log tail, the detail and start of
-//! an update, a pin) is left out.
+//! an update, a pin) is left out. The host's clock and certificate (`sent_unix`,
+//! `cert_not_after_unix`, `last_renew_error`) are top-level keys, each only when the request
+//! sets it.
 
 use hostkeeper_proto::hostkeeper::agent::v1 as proto;
 use hostkeeper_wire::wire::ORDER_FEATURE;
@@ -62,6 +64,15 @@ pub(crate) fn json(request: &proto::HeartbeatRequest, legacy: Option<&str>) -> V
             "agent".to_owned(),
             json!({ "name": agent.name, "version": agent.version }),
         );
+    }
+    if let Some(sent) = request.sent_unix {
+        object.insert("sent_unix".to_owned(), sent.into());
+    }
+    if let Some(not_after) = request.cert_not_after_unix {
+        object.insert("cert_not_after_unix".to_owned(), not_after.into());
+    }
+    if let Some(error) = &request.last_renew_error {
+        object.insert("last_renew_error".to_owned(), error.clone().into());
     }
     serde_json::to_vec(&Value::Object(object)).unwrap_or_default()
 }

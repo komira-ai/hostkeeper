@@ -4,8 +4,9 @@
 //! new release cannot fix (a tainted disk, a state no hook can read). The coordinator raises a
 //! halt for the service: every host and role of it is held ([`Gate::Halted`]), a new desired
 //! version does not lift it, the convergence says `halted`, and nothing retries or rolls back.
-//! The coordinator has no pager: the halt is logged at error with the field `alert = "halt"`,
-//! which is what an operator alert watches.
+//! The coordinator has no pager: a standing halt is an alert ([`crate::alerts`]), logged at
+//! error with the field `alert = "halt"` once when it appears, which is what an operator alert
+//! watches.
 //!
 //! The halt is kept in the ops store ([`crate::ops`]). Raising it is written *after* it is in
 //! memory, so a halt that could not be written still stops the service, and under a marker
@@ -258,14 +259,6 @@ fn raise(ops: &OpsStore, service: &str, halt: Halt) {
         entry.node_id = Some(halt.node_id.clone());
         entry.reason = Some(halt.check.clone());
         let Some(standing) = &marks.halt else {
-            tracing::error!(
-                alert = "halt",
-                service,
-                node_id = %halt.node_id,
-                check = %halt.check,
-                target = %halt.target,
-                "a host halted the service: nothing is ordered for it until an operator clears the halt"
-            );
             marks.halt = Some(halt);
             return Ok(entry);
         };
@@ -299,7 +292,7 @@ pub const OPERATOR_CHECK: &str = "operator";
 
 /// Raises a halt of `service` for the operator `by`, with `reason`, as a host's halt report
 /// raises one ([`raise`]): in memory first, then written under the unfinished-halt marker
-/// ([`Write::Halt`]), and logged as an alert. The halt names no host, the check
+/// ([`Write::Halt`]): an alert ([`crate::alerts`]). The halt names no host, the check
 /// [`OPERATOR_CHECK`] and the desired version `target`; its origin is [`HaltOrigin::Operator`],
 /// so only `clear_halt`, or a force, lifts it. Decided under the writers' lock: `already` is
 /// answered, and nothing changes, when a halt stands.
@@ -320,14 +313,6 @@ pub(crate) fn raise_by_operator<E: From<OpsError>>(
         if marks.halt.is_some() {
             return Err(already);
         }
-        tracing::error!(
-            alert = "halt",
-            service,
-            by,
-            reason,
-            target = %target,
-            "an operator halted the service: nothing is ordered for it until the halt is cleared"
-        );
         marks.halt = Some(Halt {
             node_id: String::new(),
             check: OPERATOR_CHECK.to_owned(),

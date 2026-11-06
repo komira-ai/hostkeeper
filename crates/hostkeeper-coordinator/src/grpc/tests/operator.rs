@@ -34,7 +34,7 @@ use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError, Unautho
 use crate::testutil::{OPERATOR, Rig, ci_token, desired, ops_of};
 
 /// The time the audit file of every coordinator of these tests reads.
-const AUDIT_UNIX: u64 = 1_800_000_000;
+pub(super) const AUDIT_UNIX: u64 = 1_800_000_000;
 
 /// The desired state the tests set: version 2.0, one storage and one frontend host up.
 const STATE: &str = r#"{"version":"2.0","min_up":{"storage":1,"frontend":1}}"#;

@@ -101,6 +101,9 @@ pub fn beat(running: &str) -> Heartbeat {
         promotion_pending: false,
         deferred: None,
         agent: None,
+        sent_unix: None,
+        cert_not_after_unix: None,
+        last_renew_error: None,
     }
 }
 

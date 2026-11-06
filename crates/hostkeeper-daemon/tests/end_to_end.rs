@@ -23,7 +23,7 @@ use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
 use hostkeeper_daemon::Daemon;
-use hostkeeper_daemon::link_adapters::{DaemonHalts, DaemonObserver, DaemonRecords};
+use hostkeeper_daemon::link_adapters::{DaemonHalts, DaemonObserver, DaemonRecords, DaemonRenewal};
 use hostkeeper_daemon::links::{Links, PLATFORM};
 use hostkeeper_daemon::start;
 use hostkeeper_hook::Step;
@@ -33,8 +33,8 @@ use hostkeeper_link::testing::{
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, BeatOutcome, CertState, ClientIdentity, CoordinatorLink,
     DEFAULT_HEARTBEAT_SECS, Feature, Health, Heartbeat, Heartbeater, LinkError, LoopConfig, Order,
-    OrderId, OrderRef, OrderResult, Outcome, PackageDigest, Ports, Reason, Reply, ServiceFacts,
-    StopFlag, Target, Verb,
+    OrderId, OrderRef, OrderResult, Outcome, PackageDigest, Ports, Reason, Renewal, Reply,
+    ServiceFacts, StopFlag, Target, Verb,
 };
 use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
@@ -195,6 +195,9 @@ fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
         promotion_pending: false,
         deferred: None,
         agent: None,
+        sent_unix: None,
+        cert_not_after_unix: None,
+        last_renew_error: None,
     }
 }
 
@@ -334,6 +337,8 @@ fn first_beat() -> Heartbeat {
             health_detail: None,
             observed: None,
         }],
+        sent_unix: 0,
+        renewal: Renewal::default(),
     }
 }
 
@@ -356,6 +361,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             halts: Arc::new(DaemonHalts::new(Arc::clone(daemon))),
             clock: Arc::clone(&links.clock),
             log: Arc::clone(&links.log),
+            renewal: Arc::new(DaemonRenewal::new(links.renewal.clone())),
         },
     )
 }
@@ -405,6 +411,8 @@ fn scenario(name: &str, stub: Stub) -> Ran {
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: dispatch.clone(),
         stop: StopFlag::default(),
+        enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
+        renewal: hostkeeper_enroll::RenewalState::default(),
     };
     match stub {
         Stub::Loop => {

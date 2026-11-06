@@ -14,6 +14,10 @@
 //! outstanding orders: the start-up quiet period lets the hosts report first, and a host
 //! that began updating says so.
 //!
+//! A host's clock is held against the coordinator's wall clock, which the caller passes in
+//! ([`Fleet::note_node`]): the count of each host's heartbeats whose clock was off
+//! ([`Node::skewed_beats`]) starts again from zero after a restart.
+//!
 //! The operator's holds and the hosts a standing force orders are kept here as a copy of the ops
 //! store's ([`Marks`]), refreshed under the fleet's lock, so the decisions read them with the
 //! beats; the `abort` orders an operator queued are kept in memory only, like the other orders.
@@ -38,6 +42,12 @@ pub const DOWN_AFTER: Duration = Duration::from_secs(45);
 /// After it starts, the coordinator orders no update for this long, to hear the hosts first:
 /// the default of `--quiet-secs`, and its floor, two heartbeat intervals.
 pub const QUIET_START: Duration = Duration::from_secs(30);
+
+/// How far a host's clock may be from the coordinator's wall clock, either way, before its
+/// heartbeat counts as skewed ([`Fleet::note_node`]): the default of `--clock-skew-secs`. Two
+/// minutes is far beyond the second or two a heartbeat is in flight, and well inside what a host
+/// whose clock was reset (a Mac back from a power cut) is off by, which is what the count is for.
+pub const CLOCK_SKEW_AFTER: Duration = Duration::from_secs(120);
 
 /// How long an update order holds its slot without the host reporting it. A host reports
 /// within one heartbeat interval (15 s) of hearing the order, so this is eight intervals:
@@ -125,6 +135,15 @@ pub struct Node {
     /// The services its last heartbeat named, with the health it gave each (the legacy service: the
     /// top level).
     pub announced: BTreeMap<String, Health>,
+    /// The host's clock when it made its last heartbeat, as the heartbeat said it.
+    pub sent_unix: Option<u64>,
+    /// The last second the host's certificate is valid, as its last heartbeat said it.
+    pub cert_not_after_unix: Option<u64>,
+    /// Why the host's last step of enrollment or renewal failed, as its last heartbeat said it.
+    pub last_renew_error: Option<String>,
+    /// How many of its heartbeats since the coordinator started were skewed: counted by the
+    /// fleet ([`Fleet::note_node`]), which replaces what the node given to it says.
+    pub skewed_beats: u64,
 }
 
 impl Node {
@@ -159,6 +178,8 @@ pub struct Fleet {
     started: Duration,
     /// How long after `started` nothing is ordered.
     quiet: Duration,
+    /// How far a heartbeat's clock may be from the coordinator's before it counts as skewed.
+    skew_after: Duration,
     nodes: BTreeMap<HostId, Node>,
     hosts: BTreeMap<String, BTreeMap<HostId, Host>>,
     /// What hosts the service no longer counts (excluded, or dropped by its selector) last
@@ -176,9 +197,9 @@ pub struct Fleet {
     /// The `abort` orders an operator queued, per host and service, each with its order id: sent
     /// once, at the host's next heartbeat ([`crate::orders`]).
     aborts: BTreeMap<(HostId, String), String>,
-    /// The held hosts on a bad version already alerted, per service, host and version
-    /// ([`crate::holds::alert_on_bad_version`]).
-    alerted: BTreeSet<(String, HostId, String)>,
+    /// The canaries that failed a release, per service and version, by node id
+    /// ([`crate::reconcile::Change::CanaryFailed`]): kept in memory only, like the orders.
+    canaries: BTreeMap<(String, String), String>,
 }
 
 impl Fleet {
@@ -189,6 +210,7 @@ impl Fleet {
         Self {
             started,
             quiet,
+            skew_after: CLOCK_SKEW_AFTER,
             nodes: BTreeMap::new(),
             hosts: BTreeMap::new(),
             outside: BTreeMap::new(),
@@ -198,7 +220,7 @@ impl Fleet {
             verdicts: Verdicts::default(),
             marks: Marks::default(),
             aborts: BTreeMap::new(),
-            alerted: BTreeSet::new(),
+            canaries: BTreeMap::new(),
         }
     }
 
@@ -206,6 +228,12 @@ impl Fleet {
     /// counted before a restart among it) is kept.
     pub(crate) fn set_quiet(&mut self, quiet: Duration) {
         self.quiet = quiet;
+    }
+
+    /// The same fleet counting a heartbeat as skewed when its clock is further than `after` from
+    /// the coordinator's, instead of [`CLOCK_SKEW_AFTER`].
+    pub(crate) fn set_skew_after(&mut self, after: Duration) {
+        self.skew_after = after;
     }
 
     /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the
@@ -252,8 +280,17 @@ impl Fleet {
         self.started
     }
 
-    /// Notes that the host `id` heartbeated, as `node` says.
-    pub fn note_node(&mut self, id: HostId, node: Node) {
+    /// Notes that the host `id` heartbeated, as `node` says, when the coordinator's wall clock
+    /// read `unix_now`. The node's [`Node::skewed_beats`] is the count the host had before, plus
+    /// one when the heartbeat's `sent_unix` is further than the skew bound
+    /// ([`CLOCK_SKEW_AFTER`] by default) from `unix_now`, either way; a heartbeat that says no
+    /// time is not counted.
+    pub fn note_node(&mut self, id: HostId, mut node: Node, unix_now: u64) {
+        let before = self.nodes.get(&id).map_or(0, |known| known.skewed_beats);
+        let skewed = node
+            .sent_unix
+            .is_some_and(|sent| sent.abs_diff(unix_now) > self.skew_after.as_secs());
+        node.skewed_beats = before.saturating_add(u64::from(skewed));
         self.nodes.insert(id, node);
     }
 
@@ -748,10 +785,21 @@ impl Fleet {
         held
     }
 
-    /// Notes the alert of the held host `id` running `version` of `service`, marked bad, and
-    /// answers whether it is the first for them.
-    pub fn first_alert(&mut self, service: &str, id: &HostId, version: &Version) -> bool {
-        self.alerted
-            .insert((service.to_owned(), id.clone(), version.as_str().to_owned()))
+    /// Notes that the canary `node_id` failed the release of `version` of `service`; a later
+    /// canary failing the same version replaces it.
+    pub fn note_failed_canary(&mut self, service: &str, version: &Version, node_id: &str) {
+        self.canaries.insert(
+            (service.to_owned(), version.as_str().to_owned()),
+            node_id.to_owned(),
+        );
+    }
+
+    /// The canaries that failed a release of `service`: each version, by its text, with the node
+    /// id of the canary that failed it.
+    pub fn failed_canaries(&self, service: &str) -> impl Iterator<Item = (&str, &str)> {
+        self.canaries
+            .iter()
+            .filter(move |((s, _), _)| s == service)
+            .map(|((_, version), node)| (version.as_str(), node.as_str()))
     }
 }

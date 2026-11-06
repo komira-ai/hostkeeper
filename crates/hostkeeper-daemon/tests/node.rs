@@ -12,13 +12,13 @@ use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::node::LinkHealth;
 use hostkeeper_enroll::{
-    CoordinatorEnroll, EnrollAnswer, EnrollRequest, Enroller, Enrollment, LinuxClaims, OsEntropy,
-    PkiDir, Poll, PollAnswer, RenewAnswer, RenewRequest, Settings as EnrollSettings,
-    SystemWallClock, TransportError,
+    CoordinatorEnroll, EnrollAnswer, EnrollRequest, Enrollment, LinuxClaims, OsEntropy, PkiDir,
+    Poll, PollAnswer, RenewAnswer, RenewRequest, Settings as EnrollSettings, SystemWallClock,
+    TransportError,
 };
 use hostkeeper_link::testing::{FakeClock, FakeLink, ManualDispatch, ScriptedSleeper, identity};
 use hostkeeper_link::{CertState, LinkError, Reply, StopFlag};
-use support::{Rig, idle_links};
+use support::{Rig, idle_links, open_once};
 
 const NOW: u64 = 1_900_000_000;
 
@@ -106,7 +106,7 @@ fn the_enrollment_loop_writes_the_enrollment_after_its_step() {
     };
     let dispatch = Arc::new(ManualDispatch::default());
     let links = Links {
-        enroller: Box::new(move || Enroller::open(settings, ports).map_err(|e| e.to_string())),
+        enroller: open_once(settings, ports),
         dispatch: dispatch.clone(),
         stop,
         ..idle_links()

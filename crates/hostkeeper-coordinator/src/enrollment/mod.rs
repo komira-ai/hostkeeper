@@ -18,6 +18,8 @@
 //! - `approve` and `list`: `Enrollment.Approve` and `Enrollment.List` of
 //!   `hostkeeper.operator.v1` as plain functions over the store, and the audit of each
 //!   approval in the coordinator's ops store ([`Enrollment::audit_to`]);
+//! - `reject`: `Enrollment.Reject` ([`Enrollment::reject`]), and the deny row `Hosts.Retire`
+//!   writes ([`Enrollment::deny_host`]);
 //! - `expiry`: a request no operator approved within the request TTL expires
 //!   ([`Enrollment::expire_requests`], run by the reload tick), audited `request_expired`;
 //! - `mac_nonce` and `device_state`: the Mac path of design 5.9, a request approved by its MDM
@@ -35,6 +37,7 @@ mod list;
 mod mac_nonce;
 mod nonce;
 mod refusal;
+mod reject;
 mod rpc;
 mod setup;
 
@@ -58,6 +61,7 @@ pub use mac_nonce::{
 };
 pub use nonce::{NONCE_BYTES, NONCES_PER_REQUEST, Nonces, Random, os_random};
 pub use refusal::{RpcError, refusal_of};
+pub use reject::ACTION_REJECT;
 pub use rpc::{MAX_MESSAGE_BYTES, Method, call};
 pub use setup::{
     CA_CERT_SUFFIX, Kept, ServerFile, Setup, SetupError, ca_certificate_path, pem, server_due,

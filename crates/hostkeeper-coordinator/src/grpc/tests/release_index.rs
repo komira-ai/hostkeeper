@@ -201,6 +201,9 @@ fn kbf_beat(platform: agent::Platform, running: &str) -> agent::HeartbeatRequest
             health: agent::Health::Healthy as i32,
             ..agent::ServiceBeat::default()
         }],
+        sent_unix: None,
+        cert_not_after_unix: None,
+        last_renew_error: None,
     }
 }
 

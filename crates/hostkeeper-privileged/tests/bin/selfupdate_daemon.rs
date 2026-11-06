@@ -235,8 +235,8 @@ fn run_daemon(dir: &Path, flags: &DaemonFlags, own: HostkeeperVersion) -> Result
     })
 }
 
-/// The loops of the daemon with the link of [`FileLink`]: no enrollment, a certificate that
-/// the link never presents, the loop's own clock, sleeper and workers as the shipped daemon's.
+/// The loops of the daemon with the link of [`FileLink`]: no enrollment (the loop tries again on
+/// the daemon's clock, as the shipped daemon's does), a certificate that the link never presents, the loop's own clock, sleeper and workers as the shipped daemon's.
 fn file_links(daemon: &Arc<Daemon>, dir: &Path, period: NonZeroU64) -> Links {
     let stop = StopFlag::default();
     let log: Arc<dyn Log> = Arc::new(DaemonLog::new(Arc::clone(daemon)));
@@ -254,6 +254,11 @@ fn file_links(daemon: &Arc<Daemon>, dir: &Path, period: NonZeroU64) -> Links {
             Arc::clone(&daemon.ctx().clock),
             stop.clone(),
         )),
+        enroll_sleeper: Box::new(ClockSleeper::new(
+            Arc::clone(&daemon.ctx().clock),
+            stop.clone(),
+        )),
+        renewal: hostkeeper_daemon::links::RenewalState::default(),
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,

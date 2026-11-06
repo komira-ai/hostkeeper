@@ -41,6 +41,17 @@ The response goes to stdout; diagnostics go to stderr. A refusal prints `refused
 
 ## Commands
 
+### `alerts`
+
+The service `Alerts` of the package `hostkeeper.operator.v1`. The conditions that need a person.
+
+#### `hostkeeper ctl alerts list`
+
+`/hostkeeper.operator.v1.Alerts/List`
+
+Every condition that needs a person now, by kind, then service, host and version. Changes
+nothing.
+
 ### `audit`
 
 The service `Audit` of the package `hostkeeper.operator.v1`. The coordinator's audit log.
@@ -76,6 +87,9 @@ What the host runs and how it is, and the coordinator's answer: at most one orde
 |---|---|---|
 | `--platform` | VALUE | The platform the host's releases are built for. |
 | `--features` | STRING, repeated | What this agent can use of the coordinator's side, by feature name (`deferred-v1`, `halt-v1`, `forced-v1`, which announces that the daemon takes the `Force` verb, `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`, which announces that it takes the `Abort` verb, and `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`): at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent that lists every service it runs in `services` announces `heartbeat-v2`; without it the coordinator counts the host as unmanaged for every service but the legacy one, rather than as missing them. |
+| `--sent-unix` | UINT64 | The host's clock when it made the heartbeat, in seconds since the epoch: what the coordinator holds against its own clock to count the heartbeats of a host whose clock is off. Absent from an agent that predates it. |
+| `--cert-not-after-unix` | UINT64 | The last second the host's current certificate is valid, in seconds since the epoch. Absent from an agent that predates it and from a host that holds no certificate. |
+| `--last-renew-error` | STRING | Why the host's last step of enrollment or renewal failed, as the host words it, at most 256 bytes (a reader cuts a longer one at a character boundary); absent once a step succeeds, and from an agent that predates it. |
 
 Through `--request` only: `agent` (hostkeeper.agent.v1.AgentInfo), `services` (repeated hostkeeper.agent.v1.ServiceBeat).
 
@@ -149,6 +163,19 @@ id, role and services the approval names.
 | `--services` | STRING, repeated | Services to assign to the host; may be empty. |
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. |
 | `--reason` | STRING |  |
+
+#### `hostkeeper ctl enrollment reject`
+
+`/hostkeeper.operator.v1.Enrollment/Reject`
+
+Reject a pending request: it leaves the queue, and its key is refused from then on (its
+`Poll` answers `DENIED`, and posting it again changes nothing). A request already rejected
+is answered as rejected and audited once.
+
+| flag | value | meaning |
+|---|---|---|
+| `--request-id` | STRING | The request to reject, as `PendingEnrollment.request_id` lists it. |
+| `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
 #### `hostkeeper ctl enrollment add-record`
 
@@ -267,6 +294,23 @@ abort of a host that runs nothing of the service is accepted and changes nothing
 | `--node-id` | STRING |  |
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
+
+#### `hostkeeper ctl hosts retire`
+
+`/hostkeeper.operator.v1.Hosts/Retire`
+
+Retire an enrolled host: a deny row is written, so its heartbeats and its `Renew` are
+refused `denied` at once, and every entry of the host's own in the services' assignments is
+dropped: an assignment or exclusion of the host, its minimum version, and an uninstall it was
+ordered (which is cancelled); a role's entries stay. An update in flight on it keeps its
+slot until the host reports the update's record final; a host with none frees it now. The
+host is sent no `uninstall`. Retiring a host already retired is answered as retired and
+audited once.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING | The host id the host was enrolled as. |
+| `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
 ### `releases`
 
