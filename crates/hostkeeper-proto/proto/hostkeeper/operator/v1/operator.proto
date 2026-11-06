@@ -65,6 +65,8 @@ syntax = "proto3";
 package hostkeeper.operator.v1;
 
 import "hostkeeper/agent/v1/agent.proto";
+// `AuditEntry` and `Actor`, which every service of the package answers.
+import public "hostkeeper/operator/v1/entry.proto";
 
 // The hosts the coordinator has heard from, and what an operator decides about them.
 service Hosts {
@@ -85,6 +87,14 @@ service Hosts {
   // Queue an `abort` order of a service for the host's next heartbeat; it takes no slot. An
   // abort of a host that runs nothing of the service is accepted and changes nothing.
   rpc Abort(AbortRequest) returns (AbortResponse);
+  // Retire an enrolled host: a deny row is written, so its heartbeats and its `Renew` are
+  // refused `denied` at once, and every entry of the host's own in the services' assignments is
+  // dropped: an assignment or exclusion of the host, its minimum version, and an uninstall it was
+  // ordered (which is cancelled); a role's entries stay. An update in flight on it keeps its
+  // slot until the host reports the update's record final; a host with none frees it now. The
+  // host is sent no `uninstall`. Retiring a host already retired is answered as retired and
+  // audited once.
+  rpc Retire(RetireRequest) returns (RetireResponse);
 }
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
@@ -166,7 +176,8 @@ enum HostsRefusal {
   HOSTS_REFUSAL_INVALID_REQUEST = 3;
   // NOT_FOUND: the service is not one the coordinator manages.
   HOSTS_REFUSAL_UNKNOWN_SERVICE = 4;
-  // NOT_FOUND: the coordinator has not heard from the host since it started.
+  // NOT_FOUND: the coordinator has not heard from the host since it started (`Retire`: the
+  // coordinator enrolled no host with the id).
   HOSTS_REFUSAL_UNKNOWN_HOST = 5;
   // RESOURCE_EXHAUSTED: the change would hold more than 4096 exclusions, or labels for more than
   // 4096 hosts.
@@ -294,45 +305,6 @@ enum AlertsRefusal {
   // INTERNAL: the enrollment store could not be read, so the alerts it holds (hosts waiting for
   // an operator, duplicate identities and claims) are not known; asking again is safe.
   ALERTS_REFUSAL_STORE_FAILED = 3;
-}
-
-// One change the coordinator made, as its audit ring keeps it (the last 64).
-message AuditEntry {
-  // Its number: one more than the entry before it, for the life of the coordinator's store.
-  uint64 seq = 1;
-  // Who made it.
-  Actor by = 2;
-  // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
-  // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
-  // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
-  // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
-  // `mac_auto_approve_declined`, `record_add`, `record_remove`, `enroll_requested`,
-  // `enroll_issued`, `cert_renewed`, `request_expired`). Open: a later coordinator adds actions.
-  string action = 3;
-  // The service, when the change is about one.
-  optional string service = 4;
-  // The host, when the change is about one.
-  optional string node_id = 5;
-  // Why, when the change has a reason.
-  optional string reason = 6;
-  // When it was made, by the coordinator's clock. `Audit.List` sets it from the audit file; it
-  // is unset in the answer of the call that made the change, and for a coordinator that keeps
-  // no audit file (it lists its ring, which holds no time).
-  optional uint64 at_unix = 7;
-  // Who made it, by name: the name of the operator's token, or `coordinator`, `ci` or
-  // `mdm-nonce` for a change that is not an operator's. `by` says which kind of actor that is.
-  optional string by_name = 8;
-}
-
-// Who made a change.
-enum Actor {
-  ACTOR_UNSPECIFIED = 0;
-  // An operator, with the operator token.
-  ACTOR_OPERATOR = 1;
-  // CI, with its OIDC token.
-  ACTOR_CI = 2;
-  // The coordinator itself: a halt, a rollback, a mark.
-  ACTOR_COORDINATOR = 3;
 }
 
 message ListHostsRequest {
@@ -541,6 +513,22 @@ message AbortResponse {
   // The `abort` order waits for the host's next heartbeat.
   bool queued = 1;
   AuditEntry entry = 2;
+}
+
+message RetireRequest {
+  // The host id the host was enrolled as.
+  string node_id = 1;
+  // Why, for the audit log: 1 to 256 bytes with no control character, or empty for none.
+  string reason = 2;
+}
+
+message RetireResponse {
+  // The `host_retire` entry; absent when the host was already retired (nothing is audited
+  // twice).
+  AuditEntry entry = 1;
+  // An update is in flight on the host: its slot is freed when the host reports the update's
+  // record final, or by `Exclude` with `abandon` if the host is gone.
+  bool update_in_flight = 2;
 }
 
 // What a service's hosts should run, and how fast they get there.

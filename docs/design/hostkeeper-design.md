@@ -296,6 +296,8 @@ The operator API is protobuf services (`operator.proto`, PR #3) with an HTTP/JSO
 | `Hosts` | `Abort` (queued as an order for the host's next heartbeat; takes no slot), `Exclude --abandon` | Designed (B7) |
 | `Enrollment` | `List`, `Approve` | Built (`crates/hostkeeper-coordinator/src/enrollment/list.rs`, `approve.rs`) |
 | `Enrollment` | `List` shows each pending request's match against the host inventory; `AddRecord`, `ListRecords`, `RemoveRecord` keep the inventory (section 5.7) | Built (`crates/hostkeeper-coordinator/src/inventory.rs`) |
+| `Enrollment` | `Reject`: a pending request leaves the queue and its key is refused (section 6.1, `pending` -> `unenrolled`) | Built (`crates/hostkeeper-coordinator/src/enrollment/reject.rs`) |
+| `Hosts` | `Retire`: the deny row of an enrolled host, its own assignments dropped, its slot freed when its update is final (section 5.7 step 7, section 6.1) | Built (`crates/hostkeeper-coordinator/src/hosts.rs`) |
 | `Audit` | `List` | Designed (B7) |
 
 CI or an operator token sets the desired version (Q6): the operator through the API, the CLI and the UI's Rollout page.
@@ -620,8 +622,8 @@ The fields on each page are the fields the API returns (`Hosts.Get`, section 4.8
 
 - `unenrolled` -> `pending`: the host posts its request.
 - `pending` -> `enrolled`: the operator approves, naming the key hash; the certificate is issued. An enrolled host renews at half life.
-- `pending` -> `unenrolled`: the request expired.
-- `enrolled` -> `retired`: the operator revokes and a deny row is written. The host is refused at handshake at once and loses its certificate by expiry within 7 days. An update in flight finishes or is aborted locally; its slot is freed when the record is final, or by `Exclude --abandon` if the host is gone (section 8.4).
+- `pending` -> `unenrolled`: the request expired, or the operator rejected it (`Enrollment.Reject`): it leaves the pending queue and its key is refused from then on, so the host enrolls again only under a new key.
+- `enrolled` -> `retired`: the operator revokes (`Hosts.Retire`) and a deny row is written; the host's own service assignments are dropped. The host is refused at handshake at once and loses its certificate by expiry within 7 days. An update in flight finishes or is aborted locally; its slot is freed when the record is final, or by `Exclude --abandon` if the host is gone (section 8.4).
 
 **A service on a host.** Each row is one edge of the diagram.
 

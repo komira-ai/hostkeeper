@@ -161,6 +161,19 @@ id, role and services the approval names.
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. |
 | `--reason` | STRING |  |
 
+#### `hostkeeper ctl enrollment reject`
+
+`/hostkeeper.operator.v1.Enrollment/Reject`
+
+Reject a pending request: it leaves the queue, and its key is refused from then on (its
+`Poll` answers `DENIED`, and posting it again changes nothing). A request already rejected
+is answered as rejected and audited once.
+
+| flag | value | meaning |
+|---|---|---|
+| `--request-id` | STRING | The request to reject, as `PendingEnrollment.request_id` lists it. |
+| `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
+
 #### `hostkeeper ctl enrollment add-record`
 
 `/hostkeeper.operator.v1.Enrollment/AddRecord`
@@ -278,6 +291,23 @@ abort of a host that runs nothing of the service is accepted and changes nothing
 | `--node-id` | STRING |  |
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
+
+#### `hostkeeper ctl hosts retire`
+
+`/hostkeeper.operator.v1.Hosts/Retire`
+
+Retire an enrolled host: a deny row is written, so its heartbeats and its `Renew` are
+refused `denied` at once, and every entry of the host's own in the services' assignments is
+dropped: an assignment or exclusion of the host, its minimum version, and an uninstall it was
+ordered (which is cancelled); a role's entries stay. An update in flight on it keeps its
+slot until the host reports the update's record final; a host with none frees it now. The
+host is sent no `uninstall`. Retiring a host already retired is answered as retired and
+audited once.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING | The host id the host was enrolled as. |
+| `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
 ### `releases`
 

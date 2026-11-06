@@ -122,6 +122,15 @@ pub(crate) fn valid_reason(text: &str) -> Option<String> {
     reason(text).ok()
 }
 
+/// The reason of a call whose reason may be left out: `None` for `text` empty once trimmed,
+/// else [`valid_reason`], or `invalid` when it is not one.
+pub(crate) fn optional_reason<E>(text: &str, invalid: E) -> Result<Option<String>, E> {
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    valid_reason(text).map(Some).ok_or(invalid)
+}
+
 /// The actor of a change made by `by`: the coordinator, CI, or an operator's token.
 fn actor_of(by: &str) -> proto::Actor {
     match by {
