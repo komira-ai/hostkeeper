@@ -237,6 +237,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
             (EnrollmentRefusal::NoRecord, NotFound, "no_record"),
             (EnrollmentRefusal::Capacity, ResourceExhausted, "capacity"),
+            (
+                EnrollmentRefusal::RecordMismatch,
+                FailedPrecondition,
+                "record_mismatch",
+            ),
         ],
         refusal::enrollment,
     );

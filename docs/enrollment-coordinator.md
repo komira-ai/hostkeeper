@@ -75,7 +75,10 @@ Mac nonce was presented. It never answers a CSR or a nonce.
 
 `Approve` names the request, the SHA-256 of its key as listed (compared whole, in constant time;
 another request's key hash is `key_mismatch`), the host id, the role, the services (each one the
-coordinator manages) and a reason. Under the store's lock it is refused when the request is not
+coordinator manages) and a reason. A request (not a renewal) that matches exactly one record of
+the host inventory is approved as that record's host id: an empty host id is it, and the answer's
+`host_id` names it; another host id is `record_mismatch` unless `replace` is set. Any other request
+names its host id. Under the store's lock it is refused when the request is not
 pending, is a `duplicate_claim`, or names a host id another key holds or an operator denied,
 unless `replace` is set. One write of the request file records the approval: host id, role,
 services (the host's first assignment), the operator's token name, the time and the reason. The
@@ -94,9 +97,10 @@ when the coordinator next starts.
 | `unauthorized` | no bearer, or not an operator token |
 | `forbidden` | a CI token |
 | `invalid_request` | a request id, key hash, reason or page token that breaks its rule |
-| `invalid_host_id`, `invalid_role`, `invalid_service` | that field breaks its rule; a service the coordinator does not manage; a renewal named under another host id |
+| `invalid_host_id`, `invalid_role`, `invalid_service` | that field breaks its rule; a service the coordinator does not manage; a renewal named under another host id; no host id for a request that matches no single record |
 | `unknown_request` | no request has the id |
 | `key_mismatch` | the key hash is not the request's |
+| `record_mismatch` | the request matches one inventory record, the host id is another, and `replace` is not set |
 | `not_pending` | the request was approved, issued or denied already |
 | `duplicate_claim` | the request is a duplicate claim and `replace` is not set |
 | `host_id_taken` | another key holds the host id and `replace` is not set |

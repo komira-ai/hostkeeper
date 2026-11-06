@@ -752,6 +752,7 @@ fn wire_names_are_pinned() {
                 "record_conflict",
                 "no_record",
                 "capacity",
+                "record_mismatch",
             ],
         ),
         (

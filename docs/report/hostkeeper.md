@@ -163,7 +163,8 @@ operator recognise the machine and match it against the inventory, but they auth
 at most
 <span data-cell="c-inventory" data-source="crates/hostkeeper-coordinator/src/inventory.rs" data-item="MAX_RECORDS">10,000</span>
 records. `Enrollment.List` marks each pending request as matched, unmatched or ambiguous against
-it. A match fills the approval form but approves nothing. The daemon has the logic to read the BMC
+it. A match fills the approval form but approves nothing; a request matching one record is approved
+under that record's host id, and another host id needs `replace`. The daemon has the logic to read the BMC
 MAC over IPMI, but no IPMI reader is built, so the shipped daemon never sends a BMC MAC
 ([design: Enrollment and remote install](../design/hostkeeper-design.md#57-enrollment-and-remote-install)).
 

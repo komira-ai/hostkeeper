@@ -2,7 +2,11 @@
 //! of every approval and refused approval.
 //!
 //! [`Enrollment::approve`] checks the request's fields, each against its own refusal, then
-//! the key hash against the pending request's (in constant time), and calls the store's
+//! the key hash against the pending request's (in constant time), then the host id against the
+//! host inventory: a request (not a renewal) that matches exactly one record is approved as that
+//! record's host id, which an empty host id defaults to, and a host id other than the record's is
+//! `record_mismatch` unless the approval replaces. A request that matches no record, or several,
+//! is approved as the host id named, which it must name. Then it calls the store's
 //! [`EnrollmentStore::approve_recorded`], which checks again under its lock: the request is
 //! pending, not a `duplicate_claim` unless the approval replaces, the host id is not held by
 //! another key nor denied unless it replaces. That one write records the approval with the
@@ -28,6 +32,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 use hostkeeper_wire::RoleName;
 
 use super::Enrollment;
+use crate::inventory::{InventoryMatch, InventoryRecord, match_claims};
 use crate::operator::valid_reason;
 use crate::ops::{AuditEntry, OpsStore, Write};
 
@@ -51,6 +56,35 @@ pub struct Approved {
     /// The audit entry, as the ops store numbered it; `None` when it could not be written
     /// (logged; it is written at the coordinator's next start).
     pub entry: Option<AuditEntry>,
+}
+
+/// The fields of an approval as the operator named them, checked: the host id is `None` when
+/// none was named, for the inventory to fill in ([`host_id_for`]).
+struct Asked {
+    request_id: KeyHash,
+    key_sha256: KeyHash,
+    host_id: Option<HostId>,
+    role: Role,
+    services: Vec<ServiceName>,
+    replace: bool,
+    reason: String,
+}
+
+impl Asked {
+    /// The approval asked for, as `host_id`.
+    fn decided(self, host_id: HostId) -> Checked {
+        Checked {
+            request_id: self.request_id,
+            key_sha256: self.key_sha256,
+            decision: Decision {
+                host_id,
+                role: self.role,
+                services: self.services,
+                replace: self.replace,
+            },
+            reason: self.reason,
+        }
+    }
 }
 
 /// The fields of an approval, checked.
@@ -86,30 +120,60 @@ fn services_of(names: &[String], known: &dyn Fn(&str) -> bool) -> Option<Vec<Ser
         .collect()
 }
 
-/// `request`'s fields checked, each against its own refusal.
+/// `request`'s fields checked, each against its own refusal; an empty host id is none named.
 fn check(
     request: proto::ApproveRequest,
     known: &dyn Fn(&str) -> bool,
-) -> Result<Checked, EnrollmentRefusal> {
+) -> Result<Asked, EnrollmentRefusal> {
     let invalid = EnrollmentRefusal::InvalidRequest;
     let request_id = KeyHash::from_hex(&request.request_id).ok_or(invalid)?;
     let key_sha256 = KeyHash::from_hex(&request.key_sha256).ok_or(invalid)?;
-    let host_id = HostId::parse(&request.host_id).map_err(|_| EnrollmentRefusal::InvalidHostId)?;
+    let host_id = match request.host_id.as_str() {
+        "" => None,
+        text => Some(HostId::parse(text).map_err(|_| EnrollmentRefusal::InvalidHostId)?),
+    };
     let role = role_of(&request.role).ok_or(EnrollmentRefusal::InvalidRole)?;
     let services =
         services_of(&request.services, known).ok_or(EnrollmentRefusal::InvalidService)?;
     let reason = valid_reason(&request.reason).ok_or(invalid)?;
-    Ok(Checked {
+    Ok(Asked {
         request_id,
         key_sha256,
-        decision: Decision {
-            host_id,
-            role,
-            services,
-            replace: request.replace,
-        },
+        host_id,
+        role,
+        services,
+        replace: request.replace,
         reason,
     })
+}
+
+/// The host id an approval `asked` of `pending` is made as, by the host inventory `inventory`.
+/// A request that is not a renewal and matches exactly one record ([`match_claims`]) is approved
+/// as that record's host id: an empty host id is it, and another is `record_mismatch` unless the
+/// approval replaces. Any other request (a renewal, which the store holds to the host id it
+/// renews, or one that matches no record or several) is approved as the host id named, and
+/// naming none is `invalid_host_id`.
+fn host_id_for(
+    asked: &Asked,
+    pending: &RequestView,
+    inventory: &[InventoryRecord],
+) -> Result<HostId, EnrollmentRefusal> {
+    let record = match match_claims(&pending.claims, inventory) {
+        InventoryMatch::Matched(record) if pending.renewal_of.is_none() => Some(record),
+        _ => None,
+    };
+    match (&asked.host_id, record) {
+        (None, Some(record)) => {
+            // The ops file holds a record's host id by the same grammar; one edited by hand
+            // to break it names no host.
+            HostId::parse(&record.host_id).map_err(|_| EnrollmentRefusal::InvalidHostId)
+        }
+        (None, None) => Err(EnrollmentRefusal::InvalidHostId),
+        (Some(named), Some(record)) if named.as_str() != record.host_id && !asked.replace => {
+            Err(EnrollmentRefusal::RecordMismatch)
+        }
+        (Some(named), _) => Ok(named.clone()),
+    }
 }
 
 /// The refusal an error of the store's approval is; a failure of the store is logged.
@@ -261,71 +325,75 @@ impl Enrollment {
     }
 
     /// `Enrollment.Approve` by `by` (the name of the operator's token, already checked): the
-    /// pending request it names is approved as the host id, role and services it names, which
-    /// `known` says the coordinator manages. The certificate is made at the host's next `Poll`.
+    /// pending request it names is approved as the role and services it names, which `known`
+    /// says the coordinator manages, and as the host id [`host_id_for`] gives by the host
+    /// inventory `inventory`: the one matching record's when the request matches one, which an
+    /// empty host id defaults to. The certificate is made at the host's next `Poll`.
     ///
     /// # Errors
     /// `invalid_request` (the request id, the key hash or the reason), `invalid_host_id`,
-    /// `invalid_role`, `invalid_service`, `unknown_request`, `key_mismatch`, `not_pending`,
-    /// `duplicate_claim`, `host_id_taken`, `denied`, `store_failed`. Each is audited
-    /// `enroll_approve_refused`, and nothing else changes.
+    /// `invalid_role`, `invalid_service`, `unknown_request`, `key_mismatch`, `record_mismatch`,
+    /// `not_pending`, `duplicate_claim`, `host_id_taken`, `denied`, `store_failed`. Each is
+    /// audited `enroll_approve_refused`, and nothing else changes.
     pub fn approve(
         &self,
         by: &str,
         request: proto::ApproveRequest,
         known: &dyn Fn(&str) -> bool,
+        inventory: &[InventoryRecord],
     ) -> Result<Approved, EnrollmentRefusal> {
         let id = KeyHash::from_hex(&request.request_id);
-        let checked = match check(request, known) {
-            Ok(checked) => checked,
+        let asked = match check(request, known) {
+            Ok(asked) => asked,
             Err(refusal) => {
                 self.audit_refused(by, refusal, id.as_ref(), None);
                 return Err(refusal);
             }
         };
+        let request_id = asked.request_id;
+        let refused = |refusal: EnrollmentRefusal, host_id: Option<&HostId>| {
+            self.audit_refused(by, refusal, Some(&request_id), host_id);
+            refusal
+        };
+        let pending = self
+            .pending_for(&asked.request_id, &asked.key_sha256)
+            .and_then(|pending| Ok((host_id_for(&asked, &pending, inventory)?, pending)));
+        let (host_id, pending) =
+            pending.map_err(|refusal| refused(refusal, asked.host_id.as_ref()))?;
+        let checked = asked.decided(host_id);
         let record = ApprovalRecord {
             approver: by.to_owned(),
             approved_unix: self.clock.now_unix(),
             reason: checked.reason.clone(),
             mac_nonce: None,
         };
-        self.pending_for(&checked)
-            .and_then(|pending| {
-                self.store
-                    .approve_recorded(
-                        &checked.request_id,
-                        &checked.key_sha256,
-                        &checked.decision,
-                        &record,
-                    )
-                    .map_err(|error| refusal_of(&error))?;
-                Ok(self.audited(&checked, &record, pending.claims))
-            })
-            .inspect_err(|refusal| {
-                self.audit_refused(
-                    by,
-                    *refusal,
-                    Some(&checked.request_id),
-                    Some(&checked.decision.host_id),
-                );
-            })
+        self.store
+            .approve_recorded(
+                &checked.request_id,
+                &checked.key_sha256,
+                &checked.decision,
+                &record,
+            )
+            .map_err(|error| refused(refusal_of(&error), Some(&checked.decision.host_id)))?;
+        Ok(self.audited(&checked, &record, pending.claims))
     }
 
-    /// The request `checked` names, when it exists and the key hash `checked` names is its
-    /// key's (compared in constant time). The store checks both again under its lock.
-    pub(super) fn pending_for(&self, checked: &Checked) -> Result<RequestView, EnrollmentRefusal> {
+    /// The request `request_id` names, when it exists and `key_sha256` is its key's hash
+    /// (compared in constant time). The store checks both again under its lock.
+    fn pending_for(
+        &self,
+        request_id: &KeyHash,
+        key_sha256: &KeyHash,
+    ) -> Result<RequestView, EnrollmentRefusal> {
         let pending = self
             .store
-            .request(&checked.request_id)
+            .request(request_id)
             .map_err(|why| {
                 tracing::error!(%why, "cannot read a pending request");
                 EnrollmentRefusal::StoreFailed
             })?
             .ok_or(EnrollmentRefusal::UnknownRequest)?;
-        if !checked
-            .key_sha256
-            .equals_in_constant_time(&checked.request_id)
-        {
+        if !key_sha256.equals_in_constant_time(request_id) {
             return Err(EnrollmentRefusal::KeyMismatch);
         }
         Ok(pending)
