@@ -31,18 +31,18 @@ impl Coordinator {
     ///
     /// # Errors
     /// [`SetError`], other than the refusals of the token itself.
-    pub(crate) fn set_desired_verified(
+    pub(crate) async fn set_desired_verified(
         &self,
         verified: &Verified,
         body: &[u8],
     ) -> Result<Set, SetError> {
-        self.set_desired_by(&Setter::Ci(verified), body)
+        self.set_desired_by(&Setter::Ci(verified), body).await
     }
 
     /// Sets the desired state from `body` for the operator token named `operator`. It is
     /// [`Self::set_desired_verified`] with no allow-list: the operator may set any service the
-    /// coordinator manages. The refusals are the same and in the same order, and nothing changes
-    /// when one is made. Before the state is recorded, one audit entry `set_desired` by
+    /// coordinator manages. The refusals are the same and in the same order (the release channel's
+    /// among them), and nothing changes when one is made. Before the state is recorded, one audit entry `set_desired` by
     /// `operator` is written (the service, and as its reason the version, followed by `with
     /// package digest <digest>` when the body named one); then the state is recorded, a force of
     /// another version ends and a halt the updater raised is lifted, both audited by `operator`.
@@ -53,17 +53,18 @@ impl Coordinator {
     /// set. Any later [`SetError::Ops`] means the desired state is set and the end of a force or
     /// the lift of a halt could not be written; setting the same state again is safe and tries
     /// them again.
-    pub(crate) fn set_desired_operator(
+    pub(crate) async fn set_desired_operator(
         &self,
         operator: &str,
         body: &[u8],
     ) -> Result<Set, SetError> {
-        self.set_desired_by(&Setter::Operator(operator), body)
+        self.set_desired_by(&Setter::Operator(operator), body).await
     }
 
-    /// The set both callers share: parse, admit the service, then under the fleet's lock refuse,
-    /// record, audit (an operator's) and end a force and lift a halt.
-    fn set_desired_by(&self, setter: &Setter<'_>, body: &[u8]) -> Result<Set, SetError> {
+    /// The set both callers share: parse, admit the service, ask the release channel (with
+    /// `--release-channel`), then under the fleet's lock refuse, audit (an operator's), record,
+    /// and end a force and lift a halt.
+    async fn set_desired_by(&self, setter: &Setter<'_>, body: &[u8]) -> Result<Set, SetError> {
         let (service, desired, dropped_roles) =
             Desired::parse_request_noting(body, &self.services, self.legacy.as_deref())?;
         if let Setter::Ci(verified) = setter {
@@ -80,6 +81,11 @@ impl Coordinator {
                 );
                 return Err(SetError::Forbidden);
             }
+        }
+        // The release channel before the fleet's lock, which is never held across a wait on the
+        // network; a refusal here changes nothing.
+        if let Some(channel) = &self.channel {
+            channel.check(&service, &desired).await?;
         }
         let (actor, set_by) = match setter {
             Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),

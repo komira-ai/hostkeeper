@@ -45,7 +45,8 @@ futures.workspace = true
 # The poll nonces.
 getrandom.workspace = true
 http-body-util.workspace = true
-hyper = { workspace = true, features = ["http1", "http2", "server"] }
+# The server of the listeners; the client of the release channel's fetch (`src/channel_https.rs`).
+hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 # `O_NOFOLLOW`, for reading the files of a snapshot without following a link (`src/backup.rs`).
 libc.workspace = true
@@ -54,6 +55,10 @@ prost.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
 # The key of the coordinator's server certificate.
 rcgen.workspace = true
+# The TLS client of the release channel's fetch (`--release-channel`), and the host's roots it
+# trusts.
+rustls.workspace = true
+rustls-native-certs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

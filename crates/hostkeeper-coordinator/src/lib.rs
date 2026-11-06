@@ -49,6 +49,8 @@
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
 //!   token or an operator token, the status read by the operator token;
+//! - [`channel`]: with `--release-channel`, the check that the release channel holds a version
+//!   before it is set, over the HTTPS fetch of [`channel_https`];
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`stamp`]: the commit and the version `--version` prints;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
@@ -78,6 +80,8 @@ pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
 pub mod canary;
+pub mod channel;
+pub mod channel_https;
 pub mod config;
 pub mod converge;
 pub mod decide;
@@ -134,11 +138,19 @@ mod audit_rotation_tests;
 #[cfg(test)]
 mod backup_refusal_tests;
 #[cfg(test)]
+mod backup_segment_tests;
+#[cfg(test)]
 mod backup_tests;
 #[cfg(test)]
 mod bake_canary_tests;
 #[cfg(test)]
 mod bake_review_tests;
+#[cfg(test)]
+mod channel_https_tests;
+#[cfg(test)]
+mod channel_set_tests;
+#[cfg(test)]
+mod channel_tests;
 #[cfg(test)]
 mod converge_tests;
 #[cfg(test)]
