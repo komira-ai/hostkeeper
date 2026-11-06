@@ -109,6 +109,8 @@ flag audit list --actor STRING
 flag audit list --action STRING
 flag audit list --service STRING
 flag audit list --node-id STRING
+flag audit list --by-name STRING
+flag audit list --newest true|false
 command coordinator enroll /hostkeeper.agent.v1.Coordinator/Enroll
 request-file coordinator enroll csr_der
 request-file coordinator enroll claims

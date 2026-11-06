@@ -133,6 +133,8 @@ mod assignment_tests;
 #[cfg(test)]
 mod audit_file_tests;
 #[cfg(test)]
+mod audit_list_tests;
+#[cfg(test)]
 mod audit_refusal_tests;
 #[cfg(test)]
 mod audit_rotation_tests;

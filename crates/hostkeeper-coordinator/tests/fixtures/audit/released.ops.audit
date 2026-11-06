@@ -1,0 +1,4 @@
+{"seq":1,"at_unix":1800000000,"by":"alice","action":"exclude","detail":{"service":"web","node_id":"s2","reason":"bad disk"}}
+{"seq":2,"at_unix":1800000060,"by":"coordinator","action":"last_good","detail":{"service":"web"}}
+{"seq":3,"at_unix":1800000120,"by":"ci","action":"lift_halt","detail":{}}
+{"seq":4,"at_unix":1800000180,"by":"mdm-nonce","action":"enroll_approve","detail":{"node_id":"mac-1","reason":"approved by its MDM nonce"}}

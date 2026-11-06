@@ -242,6 +242,18 @@ pub fn audited(by: &str, action: &str, node: Option<&str>, reason: &str) -> Audi
     )
 }
 
+/// The coordinator's audit entry of a new request of `key`, round 0, in `state` (`pending` or
+/// `duplicate_claim`), renewing `host` if one is named.
+pub fn requested(key: &HostKey, host: Option<&str>, state: &str) -> Audited {
+    let round = u32::from(host.is_some());
+    audited(
+        "coordinator",
+        "enroll_requested",
+        host,
+        &format!("request {}; round {round}; {state}", key.key_hash()),
+    )
+}
+
 /// A host's key, as a daemon makes it.
 pub struct HostKey {
     pub pair: KeyPair,

@@ -268,12 +268,16 @@ impl Enrollment {
     /// line kept is not audited again: its entry went with its segment.
     /// Called when a coordinator takes this enrollment, at its start.
     pub fn audit_to(&self, ops: Arc<OpsStore>) {
-        let kept = ops
-            .audit_log()
-            .and_then(|log| Ok((log, ops.audit_pruned_before()?)));
-        match (self.store.recorded_approvals(), kept) {
-            (Ok(approvals), Ok((log, pruned_before))) => {
-                let audited: BTreeSet<&str> = log.iter().filter_map(audited_request).collect();
+        let mut audited = BTreeSet::new();
+        let read = ops
+            .audit_each(&mut |entry| {
+                if let Some(request) = audited_request(&entry) {
+                    audited.insert(request.to_owned());
+                }
+            })
+            .and_then(|()| ops.audit_pruned_before());
+        match (self.store.recorded_approvals(), read) {
+            (Ok(approvals), Ok(pruned_before)) => {
                 for approval in approvals
                     .iter()
                     .filter(|approval| !audited.contains(approval.request_id.to_hex().as_str()))
