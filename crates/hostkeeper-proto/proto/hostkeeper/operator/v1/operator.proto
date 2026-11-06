@@ -59,6 +59,8 @@ syntax = "proto3";
 package hostkeeper.operator.v1;
 
 import "hostkeeper/agent/v1/agent.proto";
+// `AuditEntry` and `Actor`, which every service of the package answers.
+import public "hostkeeper/operator/v1/entry.proto";
 
 // The hosts the coordinator has heard from, and what an operator decides about them.
 service Hosts {
@@ -268,45 +270,6 @@ enum AuditRefusal {
   AUDIT_REFUSAL_INVALID_REQUEST = 3;
   // INTERNAL: the log could not be read; nothing changed, and asking again is safe.
   AUDIT_REFUSAL_STORE_FAILED = 4;
-}
-
-// One change the coordinator made, as its audit ring keeps it (the last 64).
-message AuditEntry {
-  // Its number: one more than the entry before it, for the life of the coordinator's store.
-  uint64 seq = 1;
-  // Who made it.
-  Actor by = 2;
-  // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
-  // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
-  // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
-  // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
-  // `mac_auto_approve_declined`, `record_add`, `record_remove`, `enroll_requested`,
-  // `enroll_issued`, `cert_renewed`). Open: a later coordinator adds actions.
-  string action = 3;
-  // The service, when the change is about one.
-  optional string service = 4;
-  // The host, when the change is about one.
-  optional string node_id = 5;
-  // Why, when the change has a reason.
-  optional string reason = 6;
-  // When it was made, by the coordinator's clock. `Audit.List` sets it from the audit file; it
-  // is unset in the answer of the call that made the change, and for a coordinator that keeps
-  // no audit file (it lists its ring, which holds no time).
-  optional uint64 at_unix = 7;
-  // Who made it, by name: the name of the operator's token, or `coordinator`, `ci` or
-  // `mdm-nonce` for a change that is not an operator's. `by` says which kind of actor that is.
-  optional string by_name = 8;
-}
-
-// Who made a change.
-enum Actor {
-  ACTOR_UNSPECIFIED = 0;
-  // An operator, with the operator token.
-  ACTOR_OPERATOR = 1;
-  // CI, with its OIDC token.
-  ACTOR_CI = 2;
-  // The coordinator itself: a halt, a rollback, a mark.
-  ACTOR_COORDINATOR = 3;
 }
 
 message ListHostsRequest {

@@ -1,0 +1,59 @@
+// hostkeeper.operator.v1: the audit entry every service of the operator API answers for a
+// change it made (`AuditEntry`), and who made it (`Actor`). The rest of the package is
+// operator.proto (`Hosts`, `Releases`, `Services`, `Audit` and their refusals, `AuditRefusal`
+// among them), which imports this file publicly, and enrollment.proto (`Enrollment` and
+// `EnrollmentRefusal`); this file is the same package and API, kept apart so that each file
+// stays under 1000 lines.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: as operator.proto says; this file declares no service.
+//
+// Refusals: none; this file declares no service.
+//
+// Units: as operator.proto says.
+//
+// Extending: as operator.proto says: add fields, messages and enum values; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+// One change the coordinator made, as its audit ring keeps it (the last 64).
+message AuditEntry {
+  // Its number: one more than the entry before it, for the life of the coordinator's store.
+  uint64 seq = 1;
+  // Who made it.
+  Actor by = 2;
+  // What it was, as a token (`exclude`, `include`, `set_labels`, `clear_halt`, `force`,
+  // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
+  // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
+  // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
+  // `mac_auto_approve_declined`, `record_add`, `record_remove`, `enroll_requested`,
+  // `enroll_issued`, `cert_renewed`). Open: a later coordinator adds actions.
+  string action = 3;
+  // The service, when the change is about one.
+  optional string service = 4;
+  // The host, when the change is about one.
+  optional string node_id = 5;
+  // Why, when the change has a reason.
+  optional string reason = 6;
+  // When it was made, by the coordinator's clock. `Audit.List` sets it from the audit file; it
+  // is unset in the answer of the call that made the change, and for a coordinator that keeps
+  // no audit file (it lists its ring, which holds no time).
+  optional uint64 at_unix = 7;
+  // Who made it, by name: the name of the operator's token, or `coordinator`, `ci` or
+  // `mdm-nonce` for a change that is not an operator's. `by` says which kind of actor that is.
+  optional string by_name = 8;
+}
+
+// Who made a change.
+enum Actor {
+  ACTOR_UNSPECIFIED = 0;
+  // An operator, with the operator token.
+  ACTOR_OPERATOR = 1;
+  // CI, with its OIDC token.
+  ACTOR_CI = 2;
+  // The coordinator itself: a halt, a rollback, a mark.
+  ACTOR_COORDINATOR = 3;
+}
