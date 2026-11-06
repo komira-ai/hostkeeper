@@ -15,9 +15,13 @@
 //!   member of the service as if it had announced it ([`runs_itself`],
 //!   [`crate::membership::membership`]). It is not in the node's announced services, so the
 //!   order path ([`crate::decide`]) still reads the service as not installed and orders the
-//!   install of the desired release first, which the daemon refuses an update for until the
-//!   package is there; once it is, the entry is listed and the update that runs the self-update
-//!   is ordered, since the agent's version is not the desired one.
+//!   install of the desired release, since the daemon refuses an update with no package
+//!   installed. A daemon that runs its install as its self-update restarts into the release;
+//! - a daemon from before that installs the release without switching to it: it then lists the
+//!   entry, its install of the desired version succeeded, and its agent runs another version. It
+//!   is not ordered the update to that release, which it would run without a restart
+//!   ([`crate::decide::Skip::Unsupported`]), and is ordered the next release set as an update,
+//!   which replaces the release it installed and runs its self-update.
 
 use hostkeeper_wire::wire::{Agent, Health, Heartbeat, ORDER_FEATURE, ServiceBeat};
 

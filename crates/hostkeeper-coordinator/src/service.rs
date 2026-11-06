@@ -13,7 +13,6 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
-use crate::agent_service;
 use crate::channel::{ChannelRefusal, ReleaseChannel};
 use crate::converge::{Convergence, role_counts};
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
@@ -594,8 +593,7 @@ impl Coordinator {
         turn: Turn,
     ) -> (ServiceReply, Option<Order>, Option<Terms>, Vec<VerdictAck>) {
         let now = (self.clock)();
-        // The agent's own service runs at the agent's version, listed or not.
-        let own = agent_service::own_beat(&self.services, &mut beat);
+        let own = crate::agent_service::own_beat(&self.services, &mut beat);
         let legacy = self.legacy_for(&beat);
         let order_v1 = self.features.iter().any(|name| name == ORDER_FEATURE)
             && beat.agent_features.iter().any(|name| name == ORDER_FEATURE);
@@ -669,7 +667,7 @@ impl Coordinator {
                 _ => {}
             }
         }
-        for one in &announced {
+        for one in announced.iter().chain(&own) {
             match self.services.get(&one.name) {
                 Some(def) if counted(def) => fleet.record_in(
                     &one.name,
@@ -695,19 +693,6 @@ impl Coordinator {
                 }
                 _ => {}
             }
-        }
-        // A host that runs the agent's own service and lists no entry of it is one of its hosts
-        // all the same, at the agent's version.
-        if let Some(one) = own
-            && self.services.get(&one.name).is_some_and(counted)
-        {
-            fleet.record_in(
-                &one.name,
-                who.host_id.clone(),
-                who.role.clone(),
-                one.as_heartbeat(platform),
-                now,
-            );
         }
         fleet.note_node(who.host_id.clone(), node, self.ops.unix_now());
         if turn == Turn::Hold {

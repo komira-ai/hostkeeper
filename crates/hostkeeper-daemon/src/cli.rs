@@ -41,6 +41,7 @@ use hostkeeper_enroll::{
     Enroller, GrpcEnroll, LinuxClaims, OsEntropy, PkiDir, RenewalState, Settings as EnrollSettings,
     SystemWallClock,
 };
+use hostkeeper_hook::Step;
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
 use hostkeeper_package::gh::{GhVerifier, OwnedBy, SystemRunner};
@@ -162,11 +163,32 @@ pub enum Command {
     /// hostkeeper replaces itself by the daemon's self-update (run by a daemon that installs or
     /// updates the service `hostkeeper`).
     #[command(disable_help_flag = true)]
-    UpdateHook {
-        /// The step and its arguments, as the hook contract gives them.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., value_name = "ARGS")]
-        args: Vec<OsString>,
-    },
+    UpdateHook(HookArgs),
+    /// The hook's steps with the step first, as a daemon's step launcher runs the hook: it passes
+    /// the step's own arguments after the program, without the manifest's `update-hook`.
+    #[command(hide = true, disable_help_flag = true)]
+    Prepare(HookArgs),
+    /// `update-hook cutover`, as a step launcher runs it.
+    #[command(hide = true, disable_help_flag = true)]
+    Cutover(HookArgs),
+    /// `update-hook verify`, as a step launcher runs it.
+    #[command(hide = true, disable_help_flag = true)]
+    Verify(HookArgs),
+    /// `update-hook rollback`, as a step launcher runs it.
+    #[command(hide = true, disable_help_flag = true)]
+    Rollback(HookArgs),
+    /// `update-hook cleanup`, as a step launcher runs it.
+    #[command(hide = true, disable_help_flag = true)]
+    Cleanup(HookArgs),
+}
+
+/// The arguments of the hook of hostkeeper's own package (`hostkeeper_daemon::update_hook`).
+#[derive(Clone, Debug, PartialEq, Eq, Args)]
+pub struct HookArgs {
+    /// The step and its arguments, as the hook contract gives them; after a step's own verb, the
+    /// arguments that follow the step.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., value_name = "ARGS")]
+    pub args: Vec<OsString>,
 }
 
 /// The flags of `hostkeeper self-update-seed`.
@@ -280,7 +302,12 @@ pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Command::Ci(command) => return hostkeeper_ci::run(command),
-        Command::UpdateHook { args } => return crate::update_hook::main(args),
+        Command::UpdateHook(hook) => return crate::update_hook::main(hook.args),
+        Command::Prepare(hook) => return crate::update_hook::main_at(Step::Prepare, hook.args),
+        Command::Cutover(hook) => return crate::update_hook::main_at(Step::Cutover, hook.args),
+        Command::Verify(hook) => return crate::update_hook::main_at(Step::Verify, hook.args),
+        Command::Rollback(hook) => return crate::update_hook::main_at(Step::Rollback, hook.args),
+        Command::Cleanup(hook) => return crate::update_hook::main_at(Step::Cleanup, hook.args),
     };
     let period = flags.link.heartbeat_secs;
     let watchdog = watchdog(&flags, &systemd);

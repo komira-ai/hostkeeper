@@ -360,3 +360,26 @@ async fn an_order_with_no_verdict_is_followed_one_try_past_it() {
     set(&rig, HK, "0.2.1").await;
     assert_eq!(ordered(&rig), Some(install(HK, "0.2.1", 3)));
 }
+
+/// Catches an order given the try of an outstanding order of the other kind to the same version:
+/// an uninstall's target is the version the host runs, so an install of that version given while
+/// the uninstall is outstanding (the service assigned again) would go at the uninstall's try,
+/// which the daemon's step record holds for another order and refuses `try_conflict`. The
+/// uninstall asked again keeps its try; an install or an update of that version takes the next.
+#[test]
+fn an_order_of_the_other_kind_to_the_same_version_takes_the_next_try() {
+    let mut fleet = crate::fleet::Fleet::new(std::time::Duration::ZERO, std::time::Duration::ZERO);
+    let now = std::time::Duration::from_secs(10);
+    let running = version("0.2.0");
+    fleet.order_uninstall(
+        WEB,
+        id("d1"),
+        running.clone(),
+        "uninstall-1".to_owned(),
+        now,
+    );
+    assert_eq!(fleet.order_try(WEB, &id("d1"), &running, true, now), 1);
+    assert_eq!(fleet.order_try(WEB, &id("d1"), &running, false, now), 2);
+    fleet.order(WEB, id("d1"), running.clone(), now);
+    assert_eq!(fleet.order_try(WEB, &id("d1"), &running, false, now), 2);
+}

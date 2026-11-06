@@ -211,12 +211,18 @@ struct Contents {
 /// follow-on). A daemon is always older than the release of hostkeeper it is ordered, so the
 /// package cannot ask for its own version: every daemon would answer the order `daemon_too_old`
 /// and no host would ever update hostkeeper.
-pub(crate) const MIN_HOSTKEEPER: &str = "0.1.53";
+pub(crate) const MIN_HOSTKEEPER: Version = Version {
+    major: 0,
+    minor: 1,
+    patch: 53,
+};
 
 /// The manifest of hostkeeper's package for `version` built for `platform`: it needs a daemon of
-/// [`MIN_HOSTKEEPER`] or later, names the platform the daemon checks against its own, and with
-/// `units` runs [`UNIT_FILE`].
+/// [`MIN_HOSTKEEPER`] or later, or of its own version when that is older (a build of the
+/// workspace's unreleased version), names the platform the daemon checks against its own, and
+/// with `units` runs [`UNIT_FILE`].
 fn manifest(version: &Version, platform: Platform, units: bool) -> String {
+    let floor = (*version).min(MIN_HOSTKEEPER);
     let platform = platform.name();
     let units = if units {
         format!("\n[units]\nrun = [\"{UNIT_FILE}\"]\n")
@@ -224,7 +230,7 @@ fn manifest(version: &Version, platform: Platform, units: bool) -> String {
         String::new()
     };
     format!(
-        "schema = 1\nname = \"hostkeeper\"\nversion = \"{version}\"\nplatform = \"{platform}\"\nmin_hostkeeper = \"{MIN_HOSTKEEPER}\"\n\n{HOOK}{units}"
+        "schema = 1\nname = \"hostkeeper\"\nversion = \"{version}\"\nplatform = \"{platform}\"\nmin_hostkeeper = \"{floor}\"\n\n{HOOK}{units}"
     )
 }
 

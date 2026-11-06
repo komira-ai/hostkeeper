@@ -27,19 +27,19 @@ A daemon of the release that carries this change, or a later one, runs an `insta
 which stages the release's binary, switches the binary directory's `current` and restarts into
 it (design, section 6.6). One order brings a bootstrapped host to the desired release.
 
-The release's hook is `bin/hostkeeper update-hook`, whose every step does nothing, and its
-manifest asks for a daemon of 0.1.53 or later, so that the daemon that runs now, older than the
-release, takes it.
+The release's hook is its own binary, `bin/hostkeeper update-hook`, which a daemon's step
+launcher runs as `bin/hostkeeper <step> ...`; every step does nothing. Its manifest asks for a
+daemon of 0.1.53 or later, so that the daemon that runs now, older than the release, takes it.
 
 ## Daemons before this change
 
 They take an `install` of hostkeeper by the path every service is installed by: the package is
-placed and its unit linked, and the binary that runs stays the one that ran. Such a daemon then
-refuses an `update` to the release it installed (that update replaces no release, so it would be
-written succeeded without restarting), and the coordinator does not order it: the host is told
-nothing for that version, and `Hosts`/`Status` show the gate `unsupported` for it while the
-service stays `in_progress`. The next release CI sets is ordered to it as an `update`, which
-replaces the release installed and runs the self-update. So:
+placed and its unit linked, and the binary that runs stays the one that ran. Such a daemon cannot
+self-update to the release it installed: an `update` to it replaces no release, so the daemon
+would run it and record it succeeded without restarting. The coordinator therefore does not order
+it: the host is told nothing for that version, the rollout status gives `unsupported` as the
+reason it is not told, and the service stays `in_progress`. The next release CI sets is ordered to
+it as an `update`, which replaces the release installed and runs the self-update. So:
 
 | daemon | platform | reached by |
 |---|---|---|

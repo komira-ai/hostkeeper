@@ -275,21 +275,30 @@ impl Fleet {
         heard.max(given).saturating_add(1)
     }
 
-    /// The try of the order of `service` to `target` for the host `id` at `now`. The order to
-    /// `target` given within [`ORDER_AGE`] keeps its try until the host reports that try or a
-    /// later one, so a host that asks again before it reports is told the same order again. An
+    /// The try of the order of `service` to `target` for the host `id` at `now`, an uninstall
+    /// when `uninstall`. The order of the same kind to `target` given within [`ORDER_AGE`] keeps
+    /// its try until the host reports that try or a later one, so a host that asks again before
+    /// it reports is told the same order again; an order of the other kind is a new one. An
     /// order given before that aged out with no word of it is followed by one try past it: a
     /// host that refused it in a way the coordinator does not hear (a `try_conflict` with a try
     /// its step record holds, for a service its heartbeat does not list) runs the next one.
     /// Otherwise [`Self::next_try`].
     #[must_use]
-    pub fn order_try(&self, service: &str, id: &HostId, target: &Version, now: Duration) -> u64 {
+    pub fn order_try(
+        &self,
+        service: &str,
+        id: &HostId,
+        target: &Version,
+        uninstall: bool,
+        now: Duration,
+    ) -> u64 {
         let key = (id.clone(), service.to_owned());
         let heard = self.tries.get(&key).copied().unwrap_or(0);
         let next = self.next_try(service, id);
         match self.orders.get(&key) {
             Some(order)
                 if order.target == *target
+                    && order.uninstall.is_some() == uninstall
                     && now.saturating_sub(order.at) < ORDER_AGE
                     && order.order_try > heard =>
             {
@@ -574,7 +583,7 @@ impl Fleet {
         {
             return;
         }
-        let order_try = self.order_try(service, &key.0, &target, now);
+        let order_try = self.order_try(service, &key.0, &target, uninstall.is_some(), now);
         let order = Order {
             target,
             at: now,

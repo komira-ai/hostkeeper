@@ -72,7 +72,7 @@ impl Coordinator {
                             &digests,
                             name,
                             &version,
-                            fleet.order_try(name, id, &version, now),
+                            fleet.order_try(name, id, &version, false, now),
                             id,
                             asked.platform,
                         )
@@ -97,7 +97,7 @@ impl Coordinator {
                         continue;
                     }
                     let order_id = install_order_id(&digest);
-                    let order_try = fleet.order_try(name, id, &version, now);
+                    let order_try = fleet.order_try(name, id, &version, false, now);
                     fleet.order(name, id.clone(), version.clone(), now);
                     Order::Install {
                         service: name.to_owned(),
@@ -109,7 +109,7 @@ impl Coordinator {
                     }
                 }
                 Decision::Uninstall { order_id, running } if asked.orders => {
-                    let order_try = fleet.order_try(name, id, &running, now);
+                    let order_try = fleet.order_try(name, id, &running, true, now);
                     fleet.order_uninstall(name, id.clone(), running, order_id.clone(), now);
                     Order::Uninstall {
                         service: name.to_owned(),

@@ -132,8 +132,9 @@ fn code(code: ExitCode) -> String {
 }
 
 /// Catches a hook of hostkeeper's package that fails a step, or that takes a command line the
-/// contract does not allow: each of the five steps, as the daemon calls it, succeeds and does
-/// nothing, through the binary's own parser and exit status; a line with no step, an unknown
+/// contract does not allow: each of the five steps, as `update-hook <step>` and as a daemon's step
+/// launcher calls it (`<step>` right after the program), succeeds and does nothing, through the
+/// binary's own parser and exit status; a line with no step, an unknown
 /// step, a `prepare` with no release and an argument too many are refused, and the binary exits
 /// 1 for them.
 #[test]
@@ -152,7 +153,12 @@ fn update_hook_succeeds_at_every_step_and_refuses_what_the_contract_does_not_all
         );
         let cli = Cli::parse_from(["hostkeeper", "update-hook"].iter().chain(line));
         assert_eq!(code(cli::run(cli)), code(ExitCode::SUCCESS), "{line:?}");
+        // As a daemon's step launcher runs it: the step right after the program.
+        let cli = Cli::parse_from(["hostkeeper"].iter().chain(line));
+        assert_eq!(code(cli::run(cli)), code(ExitCode::SUCCESS), "{line:?}");
     }
+    let cli = Cli::parse_from(["hostkeeper", "verify", "extra"]);
+    assert_eq!(code(cli::run(cli)), code(ExitCode::FAILURE));
     for (line, error) in [
         (&[][..], ArgsError::MissingStep),
         (&["promote"], ArgsError::UnknownStep("promote".to_owned())),

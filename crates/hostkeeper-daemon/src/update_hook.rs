@@ -1,5 +1,9 @@
 //! `hostkeeper update-hook <step> [<staged release>] [--params <file>]`: the hook of hostkeeper's
-//! own package, the command its manifest names (`bin/hostkeeper update-hook`).
+//! own package, the command its manifest names (`bin/hostkeeper update-hook`). A daemon's step
+//! launcher runs a step as the program followed by the step's own arguments, without the
+//! manifest's `update-hook` (`hostkeeper_steps::launcher::StepCall` has no field for it), so the
+//! binary answers `hostkeeper <step> ...` too, for each of the five steps ([`main_at`]); the
+//! uninstall step is run with `update-hook` before it.
 //!
 //! A daemon runs the hook of the release it installs or updates to, so this is the hook of the
 //! release ordered, run by the daemon that runs now, which may be older: every daemon runs it for
@@ -13,7 +17,7 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use hostkeeper_hook::{ArgsError, Invocation, Outcome};
+use hostkeeper_hook::{ArgsError, Invocation, Outcome, Step};
 
 /// How the hook ends for the arguments after `update-hook`: [`Outcome::Success`] for a step the
 /// contract allows, whatever the step, and the reason the command line is refused otherwise.
@@ -22,6 +26,15 @@ where
     I: IntoIterator<Item = OsString>,
 {
     Invocation::parse(args).map(|_| Outcome::Success)
+}
+
+/// The step verb `hostkeeper <step> <args>`: [`main`] of `step` followed by `args`.
+pub fn main_at(step: Step, args: Vec<OsString>) -> ExitCode {
+    main(
+        std::iter::once(OsString::from(step.name()))
+            .chain(args)
+            .collect(),
+    )
 }
 
 /// The verb: [`run`] as an exit status, a refused command line said on standard error and ended
