@@ -14,7 +14,7 @@ use crate::testutil::{
     Broken, CALL, Fake, file, fixture, from_json, message, run_fixture, run_on, scratch, with_call,
 };
 use crate::transport::InMemory;
-use crate::{Io, PeerIdentity, TransportKind, codes, exit, run_with, tree};
+use crate::{Io, Parsed, PeerIdentity, TransportKind, codes, exit, parse_with, run_with, tree};
 
 /// The leaf subcommands of a tree, as `service rpc`.
 fn leaves(cli: &clap::Command) -> Vec<String> {
@@ -810,4 +810,70 @@ fn run_calls_the_real_table() {
     );
     assert_eq!(memory.calls(), 1);
     assert_eq!(CALL.len(), 4);
+}
+
+/// Catches `parse_with` disagreeing with what `ctl` does with the same words: a line `ctl` calls
+/// with is a `Call` of that RPC, its help is `Help`, and its usage error is the error `ctl`
+/// prints, exactly; and catches `parse_with` reading a file or needing what only a call needs.
+#[test]
+fn parse_with_reads_a_line_as_ctl_does_and_calls_nothing() {
+    let parse = |args: &[&str]| {
+        parse_with(
+            fixture::COMMANDS,
+            std::iter::once("ctl").chain(args.iter().copied()),
+        )
+    };
+    let make = fixture::COMMANDS
+        .iter()
+        .find(|c| (c.service_command, c.method_command) == ("widgets", "make"))
+        .expect("widgets make");
+    assert_eq!(parse(&["widgets", "make"]), Ok(Parsed::Call(make)));
+    // The token and request files are not there: only a call reads them.
+    assert_eq!(
+        parse(&[
+            "--token-file",
+            "no-such-token",
+            "widgets",
+            "make",
+            "--request",
+            "no-such-request.json"
+        ]),
+        Ok(Parsed::Call(make))
+    );
+    for help in [
+        &["--help"][..],
+        &["widgets", "--help"],
+        &["widgets", "make", "--help"],
+    ] {
+        assert_eq!(parse(help), Ok(Parsed::Help), "{help:?}");
+    }
+    let fake = Fake::answering(&DynamicMessage::new(message("Empty")));
+    for usage in [
+        &[][..],
+        &["widgets"],
+        &["widgts", "make"],
+        &["widgets", "mkae"],
+        &["widgets", "make", "--colour", "purple"],
+        &["widgets", "make", "--no-such-flag", "x"],
+    ] {
+        let ran = run_fixture(usage, &fake, b"");
+        assert_eq!(ran.code, exit::USAGE, "{usage:?}");
+        let error = parse(usage).expect_err("a usage error");
+        assert_eq!(error.to_string(), ran.stderr, "{usage:?}");
+    }
+    assert!(fake.calls().is_empty());
+}
+
+/// Catches `parse_with` repeating a credential typed where none belongs, as clap's message does.
+#[test]
+fn parse_with_never_repeats_a_credential() {
+    let secret = "hunter2-credential";
+    let error = parse_with(
+        fixture::COMMANDS,
+        ["ctl", "widgets", "login", "--token-stdin", secret],
+    )
+    .expect_err("a stray value");
+    let message = error.to_string();
+    assert!(!message.contains(secret), "{message}");
+    assert!(message.contains("<redacted>"), "{message}");
 }

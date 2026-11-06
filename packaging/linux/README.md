@@ -100,7 +100,10 @@ placeholder is left, while it is owned by another account or writable by the gro
 or when it holds a key it does not know, and a daemon whose config does not load does not start
 (design section 4.1); systemd then stops trying after three failed starts within 300 seconds
 (`systemctl reset-failed hostkeeper.service` clears that). What the daemon does on a host that
-has a config but no certificate yet, its enrollment, is design section 5.7.
+has a config but no certificate yet, its enrollment, is design section 5.7. The whole procedure
+for one node, from its inventory record through installing, filling the config and starting the
+unit by hand to its approval and first heartbeat, is
+[docs/operations/enrollment.md](../../docs/operations/enrollment.md#bootstrap-a-linux-node).
 
 ## The boot-image overlay
 
