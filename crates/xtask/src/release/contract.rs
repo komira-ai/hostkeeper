@@ -7,7 +7,7 @@
 //!   ([`stamp_string`]) and `hostkeeper-coordinator X.Y.Z+<12 hex>` ([`stamp_of`]), and
 //!   [`RELEASE_COMMIT`], the build-time input that carries the commit;
 //! - the identity that signs every attestation: [`SIGNER_WORKFLOW`] on [`SIGNER_REF`] of
-//!   [`REPO`];
+//!   [`REPO`], on a hosted runner;
 //! - the asset names of a release ([`asset_names`], the one function that lists them; the
 //!   committed baseline `crates/xtask/tests/release/asset_names.baseline` holds them).
 //!
@@ -21,6 +21,9 @@
 
 use std::fmt;
 use std::str::FromStr;
+
+use hostkeeper_config::channel_trust::{Repository, TrustedService};
+use hostkeeper_config::daemon::TrustedSigners;
 
 /// The repository a release is cut from and attested by.
 pub(crate) const REPO: &str = "komira-ai/hostkeeper";
@@ -244,16 +247,17 @@ impl Repo {
 impl FromStr for Repo {
     type Err = BadValue;
 
+    /// The grammar of the trust list's [`Repository`], so the two cannot differ.
     fn from_str(text: &str) -> Result<Repo, BadValue> {
-        let part = |p: &str| {
-            !p.is_empty()
-                & p.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() | matches!(b, b'-' | b'_' | b'.'))
-        };
-        match text.split_once('/') {
-            Some((owner, name)) if part(owner) & part(name) => Ok(Repo(text.to_owned())),
-            _ => Err(BadValue::Repo(text.to_owned())),
-        }
+        Repository::new(text)
+            .map(|r| Repo::from(&r))
+            .ok_or_else(|| BadValue::Repo(text.to_owned()))
+    }
+}
+
+impl From<&Repository> for Repo {
+    fn from(repository: &Repository) -> Repo {
+        Repo(repository.as_str().to_owned())
     }
 }
 
@@ -263,37 +267,60 @@ impl fmt::Display for Repo {
     }
 }
 
-/// The identity whose attestations a repository's release is checked against: the workflow file
-/// `.github/workflows/artifacts.yml` of the repository, on [`SIGNER_REF`]. Hostkeeper's own is
-/// [`Signer::hostkeeper`], the [`SIGNER_WORKFLOW`] of [`REPO`]; `release channel-sync` holds the
-/// release of any other repository it syncs to that repository's own.
+/// The identity whose attestations a repository's release is checked against: a workflow of the
+/// repository, on the refs and runners of a [`TrustedSigners`], the daemon config's type.
+/// Hostkeeper's own is [`Signer::hostkeeper`], the [`SIGNER_WORKFLOW`] of [`REPO`] on
+/// [`SIGNER_REF`]; `release channel-sync` holds each service it stages to the signer of its
+/// entry in the trust list ([`Signer::of`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Signer {
     /// The repository whose attestations count.
     pub(crate) repo: String,
-    /// The workflow that signs, `<owner>/<repo>/.github/workflows/artifacts.yml`.
+    /// The workflow that signs, `<owner>/<repo>/<path>`.
     pub(crate) workflow: String,
-    /// The ref the signing run ran on.
-    pub(crate) source_ref: &'static str,
+    /// The workflow's path in the repository, the refs it may run on (globs), and whether it must
+    /// run on a hosted runner; `organisation` is the repository's owner.
+    pub(crate) signers: TrustedSigners,
 }
 
 impl Signer {
-    /// The signer of the releases of `repo`: its own `artifacts.yml` on [`SIGNER_REF`].
-    pub(crate) fn of(repo: &Repo) -> Signer {
+    /// The signer of the trust list's entry `trusted`: its workflow in its repository.
+    pub(crate) fn of(trusted: &TrustedService) -> Signer {
         Signer {
-            repo: repo.as_str().to_owned(),
-            workflow: format!("{repo}/.github/workflows/{ARTIFACTS_WORKFLOW}"),
-            source_ref: SIGNER_REF,
+            repo: trusted.repository.to_string(),
+            workflow: format!("{}/{}", trusted.repository, trusted.signers.workflow),
+            signers: trusted.signers.clone(),
         }
     }
 
-    /// The signer of hostkeeper's own releases: [`SIGNER_WORKFLOW`] of [`REPO`].
+    /// The signer of hostkeeper's own releases: [`SIGNER_WORKFLOW`] of [`REPO`] on
+    /// [`SIGNER_REF`], on a hosted runner.
     pub(crate) fn hostkeeper() -> Signer {
         Signer {
             repo: REPO.to_owned(),
             workflow: SIGNER_WORKFLOW.to_owned(),
-            source_ref: SIGNER_REF,
+            signers: TrustedSigners {
+                organisation: REPO.split('/').next().unwrap_or_default().to_owned(),
+                workflow: format!(".github/workflows/{ARTIFACTS_WORKFLOW}"),
+                refs: vec![SIGNER_REF.to_owned()],
+                hosted_runner: true,
+            },
         }
+    }
+
+    /// The one ref the signing run must have run on, when the signer allows exactly one and it
+    /// is not a glob: what `gh attestation verify --source-ref` is given. Otherwise the ref is
+    /// matched against the globs after the verifier answers (`check::judge`).
+    pub(crate) fn exact_ref(&self) -> Option<&str> {
+        match self.signers.refs.as_slice() {
+            [one] if !one.contains('*') => Some(one),
+            _ => None,
+        }
+    }
+
+    /// The refs the signer allows, for a message: `a`, or `a or b`.
+    pub(crate) fn refs_text(&self) -> String {
+        self.signers.refs.join(" or ")
     }
 }
 

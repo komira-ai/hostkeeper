@@ -97,8 +97,9 @@ repository, the federation's subject is
 
 Each of these is a change an operator makes; nothing in CI writes them.
 
-**The channel's sync** runs on the channel's host with `--repo komira-ai/hostkeeper`
-([channel-sync](channel-sync/)).
+**The channel's sync** runs on the channel's host with `--trust-list` naming its trust list,
+which lists hostkeeper's services with their signer, `artifacts.yml` on `refs/heads/main`
+([channel-sync](channel-sync/), [The trust list](release-channel.md#the-trust-list)).
 
 **The coordinator** is started with `--release-channel` naming the channel, so that it checks
 every set against it ([The release channel check](ci-client.md#the-release-channel-check)).

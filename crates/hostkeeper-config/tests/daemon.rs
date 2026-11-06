@@ -6,7 +6,7 @@ mod support;
 use std::os::unix::fs::symlink;
 
 use hostkeeper_config::daemon::{
-    Bounds, ConfigError, DaemonConfig, MIN_FETCH_BYTES_PER_SEC, TrustedSigners,
+    Bounds, ConfigError, DaemonConfig, MIN_FETCH_BYTES_PER_SEC, TrustedSigners, ref_matches,
 };
 use hostkeeper_config::trust::TrustError;
 use support::{Scratch, fifo, my_uid};
@@ -652,4 +652,55 @@ fn a_file_that_is_not_text_or_is_missing_is_refused() {
         DaemonConfig::load(&scratch.path().join("missing.toml"), my_uid()),
         Err(ConfigError::Untrusted(TrustError::Io(_)))
     ));
+}
+
+/// The glob table: `*` stays within one component, matches any run including none, backtracks,
+/// and everything else is literal.
+/// Catches a `*` that crosses a `/`, a missing backtrack and a leftover pattern accepted.
+#[test]
+fn ref_matches_follows_the_glob_rules() {
+    let table = [
+        ("refs/tags/*", "refs/tags/v1.2.3", true),
+        ("refs/tags/*", "refs/tags", false),
+        ("refs/tags/*", "refs/tags/a/b", false),
+        ("refs/tags/*", "refs/heads/main", false),
+        ("refs/tags/v*.3", "refs/tags/v1.2.3", true),
+        ("refs/tags/v*.3", "refs/tags/v1.2.4", false),
+        ("refs/heads/main", "refs/heads/main", true),
+        ("refs/heads/main", "refs/heads/mainx", false),
+        ("a", "b", false),
+        ("a", "", false),
+        ("ab", "a", false),
+        ("a", "ab", false),
+        ("", "", true),
+        ("*", "", true),
+        ("*a", "b", false),
+        ("a*", "a", true),
+        ("**", "x", true),
+        ("a*b*c", "axxbyyc", true),
+        ("a*b*c", "axxbyy", false),
+        ("*.yml", "x.yml.yml", true),
+        ("refs/*/x", "refs/y/x", true),
+        ("refs/*", "refs/", true),
+        ("refs//x", "refs//x", true),
+    ];
+    for (pattern, text, want) in table {
+        assert_eq!(ref_matches(pattern, text), want, "{pattern} against {text}");
+    }
+}
+
+/// A signer allows a ref when any one of its globs matches it, and no other.
+/// Catches a check of the first glob only, or of all of them at once.
+#[test]
+fn a_signer_allows_a_ref_any_of_its_globs_matches() {
+    let signers = TrustedSigners {
+        organisation: "komira-ai".to_owned(),
+        workflow: ".github/workflows/release.yml".to_owned(),
+        refs: vec!["refs/heads/main".to_owned(), "refs/tags/v*".to_owned()],
+        hosted_runner: true,
+    };
+    assert!(signers.allows_ref("refs/heads/main"));
+    assert!(signers.allows_ref("refs/tags/v1.2.3"));
+    assert!(!signers.allows_ref("refs/heads/dev"));
+    assert!(!signers.allows_ref("refs/tags/1.2.3"));
 }

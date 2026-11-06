@@ -234,7 +234,8 @@ fn check_attestations(
 }
 
 /// What is wrong with the answer of the verifier for one form of one asset, one line each: every
-/// attestation must name `signer`'s workflow and ref, the source commit `commit` and `digest`.
+/// attestation must name `signer`'s workflow, a ref one of its globs matches, the source commit
+/// `commit` and `digest`.
 pub(crate) fn judge(
     label: &str,
     answer: Result<Vec<Attestation>, PortError>,
@@ -254,10 +255,11 @@ pub(crate) fn judge(
                 a.signer_workflow, signer.workflow
             ));
         }
-        if a.source_ref != signer.source_ref {
+        if !signer.signers.allows_ref(&a.source_ref) {
             problems.push(format!(
                 "{label}: attests the ref {}, not {}",
-                a.source_ref, signer.source_ref
+                a.source_ref,
+                signer.refs_text()
             ));
         }
         if a.source_commit != commit.as_str() {

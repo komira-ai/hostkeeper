@@ -559,7 +559,7 @@ impl Verifier for FakeVerifier {
         if self.as_asked {
             return Ok(vec![Attestation {
                 signer_workflow: signer.workflow.clone(),
-                source_ref: signer.source_ref.to_owned(),
+                source_ref: signer.signers.refs[0].clone(),
                 source_commit: commit.to_string(),
                 subjects: vec![file_sha256(file).expect("hash the attested file")],
             }]);

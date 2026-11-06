@@ -1,0 +1,42 @@
+# The trust list of the release channel's sync (docs/deploy/release-channel.md, "The trust
+# list"): one [[service]] table per service the channel stages. A release index naming a service
+# not listed here, or listed for another repository, is refused; so is a package whose
+# attestation is not by its entry's signer. Install it as /etc/hostkeeper/channel-sync-trust.toml,
+# owned by root and not writable by anyone else: it decides what the channel serves.
+#
+# workflow, refs and hosted_runner are the keys of the daemon config's [trusted_signers], read
+# by the same code: the signing workflow's path in the repository, the refs its run may be on
+# (globs: `*` matches within one path component), and whether it must run on a hosted runner.
+
+# hostkeeper itself, and the example service its releases carry (hello and hello's failing
+# build, whose version ends in -fail-ready).
+[[service]]
+name          = "hostkeeper"
+repository    = "komira-ai/hostkeeper"
+workflow      = ".github/workflows/artifacts.yml"
+refs          = ["refs/heads/main"]
+hosted_runner = true
+
+[[service]]
+name          = "hello"
+repository    = "komira-ai/hostkeeper"
+workflow      = ".github/workflows/artifacts.yml"
+refs          = ["refs/heads/main"]
+hosted_runner = true
+
+# tierstore, built and signed by its artifacts.yml on each push to main.
+[[service]]
+name          = "tierstore"
+repository    = "komira-ai/tierstore"
+workflow      = ".github/workflows/artifacts.yml"
+refs          = ["refs/heads/main"]
+hosted_runner = true
+
+# js-agent, a service whose name is not its repository's: jobscheduler's release.yml builds,
+# signs and publishes it on each push to main.
+[[service]]
+name          = "js-agent"
+repository    = "komira-ai/jobscheduler"
+workflow      = ".github/workflows/release.yml"
+refs          = ["refs/heads/main"]
+hosted_runner = true

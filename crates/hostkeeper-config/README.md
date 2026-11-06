@@ -9,6 +9,7 @@ loaders yet; the daemon and the package fetch do.
 | module | what it holds |
 |---|---|
 | `daemon` | `DaemonConfig::load(path, trusted_uid)` reads `/etc/hostkeeper/hostkeeper.toml`: a regular file, not a link, owned by `trusted_uid` (root on a host) and not writable by the group or others, checked on the open file. `DaemonConfig::parse(text)` reads the text alone. |
+| `channel_trust` | `ChannelTrust::parse(text)` reads the trust list of `release channel-sync`: one `[[service]]` per service the release channel stages, its `name`, `repository` (`Repository`, `<owner>/<name>`) and signer, whose `workflow`, `refs` and `hosted_runner` are read by the daemon config's code into its `TrustedSigners` (`organisation` is the repository's owner). |
 | `manifest` | `Manifest::load(version_dir, expected, running)` reads `<version_dir>/manifest.toml` (a regular file, not a link, at most 64 KiB) and applies the load rules of design 4.7 for the order `expected`, against the running daemon's version. |
 | `platform` | `Platform`: `linux-x86_64`, `linux-arm64` or `macos-arm64`, a closed set read from exactly those spellings; `Platform::current()` is the platform of the compile target (any other target does not compile). |
 | `index` | `ReleaseIndex`: `index.json` of a version in the release channel, read by a strict parser (`ReleaseIndex::parse(text, service, version)`), written in canonical form (`to_json`), and `entry_for(platform)`; the channel paths `index_path`, `package_path` and `attestation_path`. |
@@ -21,7 +22,8 @@ The crate depends on no crate of this workspace; `crates/xtask/tests/layering` k
 
 Format exactly as design 4.1: `coordinator` and `release_channel` (`https://` URLs),
 `ca_sha256` (64 hex digits), `[trusted_signers]` (`organisation`, `workflow`, `refs`,
-`hosted_runner`) and `[bounds]`. Every key is required except those of `[bounds]`, which default
+`hosted_runner`; `TrustedSigners::allows_ref` matches a ref against its globs, `*` within one
+`/`-separated part) and `[bounds]`. Every key is required except those of `[bounds]`, which default
 to the design's example (`Bounds::default`). A missing `[trusted_signers]` is refused: there is
 no unsigned mode. There is no list of services and no per-service key.
 

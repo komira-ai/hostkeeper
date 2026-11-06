@@ -9,6 +9,8 @@
 # must be able to write the channel's volume. Into it are mounted, read-only:
 #   - bin/xtask, the xtask binary of a hostkeeper checkout (`cargo build --release -p xtask`);
 #   - bin/gh, the GitHub command line tool, which the sync runs to list, download and verify;
+#   - trust-list.toml, the trust list (the one beside this file, with the services the channel
+#     serves), which names each service, its repository and its signer;
 # and its configuration is its flags. channel-sync.env holds one line, `GH_TOKEN=<token>`: a
 # GitHub token that can read public repositories and nothing else, gh's credential.
 #
@@ -20,10 +22,8 @@ services:
     command:
       - release
       - channel-sync
-      - --repo
-      - komira-ai/hostkeeper
-      - --repo
-      - komira-ai/tierstore
+      - --trust-list
+      - /etc/hostkeeper/channel-sync-trust.toml
       - --channel-dir
       - /channel
       - --every-secs
@@ -32,6 +32,7 @@ services:
     volumes:
       - ./bin/xtask:/usr/local/bin/xtask:ro
       - ./bin/gh:/usr/local/bin/gh:ro
+      - ./trust-list.toml:/etc/hostkeeper/channel-sync-trust.toml:ro
       - channel:/channel
     restart: unless-stopped
 

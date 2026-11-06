@@ -134,6 +134,61 @@ pub struct TrustedSigners {
     pub hosted_runner: bool,
 }
 
+impl TrustedSigners {
+    /// Whether one of the signer's ref globs matches `source_ref` ([`ref_matches`]).
+    pub fn allows_ref(&self, source_ref: &str) -> bool {
+        self.refs
+            .iter()
+            .any(|pattern| ref_matches(pattern, source_ref))
+    }
+}
+
+/// Whether `source_ref` matches the glob `pattern`. A `*` matches any run of characters within
+/// one `/`-separated component, none included; every other character matches itself. So
+/// `refs/tags/*` matches `refs/tags/v1.2.3`, and neither `refs/tags` nor `refs/tags/a/b`.
+pub fn ref_matches(pattern: &str, source_ref: &str) -> bool {
+    let patterns: Vec<&str> = pattern.split('/').collect();
+    let parts: Vec<&str> = source_ref.split('/').collect();
+    (patterns.len() == parts.len())
+        & patterns
+            .iter()
+            .zip(&parts)
+            .all(|(pattern, part)| component_matches(pattern.as_bytes(), part.as_bytes()))
+}
+
+/// [`ref_matches`] for one component. On a mismatch after a `*` the `*` takes one more
+/// character and the rest is tried again.
+fn component_matches(pattern: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0, 0);
+    // After the last `*` seen: where the pattern resumes, and where in the text it was tried.
+    let mut star: Option<(usize, usize)> = None;
+    while let Some(&c) = text.get(t) {
+        match pattern.get(p) {
+            Some(b'*') => {
+                star = Some((p + 1, t));
+                p += 1;
+            }
+            Some(&want) if want == c => {
+                p += 1;
+                t += 1;
+            }
+            _ => {
+                let Some((resume, tried)) = star else {
+                    return false;
+                };
+                p = resume;
+                t = tried + 1;
+                star = Some((resume, tried + 1));
+            }
+        }
+    }
+    pattern
+        .get(p..)
+        .unwrap_or_default()
+        .iter()
+        .all(|&c| c == b'*')
+}
+
 /// The bounds of a fetch and an unpack (design section 5.5). Each is from 1 up.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bounds {
@@ -251,7 +306,17 @@ fn signers(top: &Fields<'_>) -> Result<TrustedSigners, Problem> {
         .ok_or_else(|| top.invalid("trusted_signers", "is missing; there is no unsigned mode"))?;
     let fields = Fields::new("trusted_signers", table);
     let organisation = word(&fields, "organisation")?.to_owned();
-    let workflow = word(&fields, "workflow")?.to_owned();
+    signer_keys(&fields, organisation)
+}
+
+/// The signer of `organisation` that the keys `workflow`, `refs` and `hosted_runner` of `fields`
+/// name: the keys of `[trusted_signers]` but its organisation, which the channel-sync trust list
+/// (`channel_trust`) reads too, so that the two read them alike.
+pub(crate) fn signer_keys(
+    fields: &Fields<'_>,
+    organisation: String,
+) -> Result<TrustedSigners, Problem> {
+    let workflow = word(fields, "workflow")?.to_owned();
     let refs = fields.strings("refs")?;
     if refs.is_empty() {
         return Err(fields.invalid("refs", "is empty; at least one ref glob is needed"));

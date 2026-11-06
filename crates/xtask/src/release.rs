@@ -34,10 +34,11 @@
 //! - `channel-stage` ([`channel_stage`]): one version of a service from a directory of release
 //!   assets, checked and laid out in a directory as the release channel serves it
 //!   (`S/V/index.json` beside each package and its bundle); copies files only, idempotent.
-//! - `channel-sync` ([`sync`]): every new published release of one or more repositories,
-//!   downloaded, checked (`release check` for hostkeeper's, the sums and the repository's own
-//!   attestations for another's) and staged into a release channel by `channel-stage`, a new
-//!   version renamed into place whole; never changes a version already there.
+//! - `channel-sync` ([`sync`]): every new published release of the services of a trust list,
+//!   downloaded, checked (`release check` for hostkeeper's, the sums for another's), each
+//!   package's attestation verified by its service's signer in the list, and staged into a
+//!   release channel by `channel-stage`, a new version renamed into place whole; never changes a
+//!   version already there.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh` and `pkgbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
@@ -362,18 +363,19 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Copy every new published release of each repository into the release channel: download
-    /// its assets, check them (`release check` for a hostkeeper release; for another
-    /// repository's, its SHA256SUMS and the attestation of every asset with a bundle by that
-    /// repository's own artifacts.yml on refs/heads/main) and stage each service version it
-    /// carries by `channel-stage`. A version already in the channel is left alone; one there with
-    /// other bytes is refused, and the run goes on with the others and then fails. Reads public
-    /// release assets only.
+    /// Copy every new published release of the trust list's services into the release channel:
+    /// download its assets, check them (`release check` for a hostkeeper release; for another
+    /// repository's, its SHA256SUMS), verify the attestation of every package a version lists by
+    /// the trust list's signer of its service, and stage each version by `channel-stage`. A
+    /// service the list does not trust from the repository is refused. A version already in the
+    /// channel is left alone; one there with other bytes is refused, and the run goes on with the
+    /// others and then fails. Reads public release assets only.
     ChannelSync {
-        /// A repository whose releases are synced, `<owner>/<name>`; repeat it (or list several)
-        /// for more, synced in the order given.
-        #[arg(long = "repo", required = true, num_args = 1..)]
-        repos: Vec<Repo>,
+        /// The trust list: a TOML file with one `[[service]]` table per service the channel
+        /// stages (its `name`, `repository`, and the `workflow`, `refs` and `hosted_runner` of
+        /// its signer). Each repository it names is synced, in the order first named.
+        #[arg(long)]
+        trust_list: PathBuf,
         /// The root of the channel's tree, as `channel-stage --out` names it. It must exist.
         #[arg(long)]
         channel_dir: PathBuf,
@@ -560,13 +562,13 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             commit,
         } => publish::publish(ports, &dir, &repo, &version, &commit),
         Verb::ChannelSync {
-            repos,
+            trust_list,
             channel_dir,
             since,
             every_secs,
         } => {
             let request = sync::Request {
-                repos,
+                trust: sync::load_trust(&trust_list)?,
                 channel: channel_dir,
                 since,
             };

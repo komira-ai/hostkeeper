@@ -60,8 +60,9 @@ fn a_release_with_a_missing_attestation_is_not_staged_and_is_reported() {
     assert_eq!(
         lines[0],
         format!(
-            "refused {TIERSTORE} v0.3.53: tierstore-{TS_V}-macos-arm64.tar.zst (offline): no \
-             attestation"
+            "refused {TIERSTORE} v0.3.53: tierstore {TS_V}: not signed as the trust list requires \
+             of tierstore, by {TIERSTORE_SIGNER} on refs/heads/main: \
+             tierstore-{TS_V}-macos-arm64.tar.zst (offline): no attestation"
         )
     );
 }
@@ -462,8 +463,8 @@ fn an_attestation_answer_for_another_commit_is_refused() {
 }
 
 #[test]
-fn a_release_naming_a_service_its_repository_does_not_ship_is_refused() {
-    // Catches: one repository's release claiming another service's version in the channel
+fn a_release_naming_a_service_the_trust_list_does_not_list_is_refused() {
+    // Catches: one repository's release claiming an unlisted service's version in the channel
     // first, which the channel would then never let the real release replace.
     let c = channel("sync-foreign-service");
     let source = FakeSource::default();
@@ -486,22 +487,11 @@ fn a_release_naming_a_service_its_repository_does_not_ship_is_refused() {
         lines[..2],
         [
             format!(
-                "refused {TIERSTORE} v0.3.53: hostkeeper 9.9.9: index.json is the index of a \
-                 service a release of {TIERSTORE} does not ship"
+                "refused {TIERSTORE} v0.3.53: hostkeeper 9.9.9: index.json is the index of \
+                 hostkeeper, a service the trust list does not list"
             ),
             format!("staged {TIERSTORE} v0.3.53: tierstore {TS_V}"),
         ]
     );
     assert!(!c.dir.join("hostkeeper").exists());
-}
-
-#[test]
-fn a_repository_ships_the_service_it_is_named_for_and_hostkeeper_also_hello() {
-    // Catches: hello refused in hostkeeper's release, or allowed in another repository's.
-    let service = |s: &str| ServiceName::new(s).expect("a service");
-    assert!(ships(&repo(TIERSTORE), &service("tierstore")));
-    assert!(!ships(&repo(TIERSTORE), &service("hello")));
-    assert!(ships(&repo(REPO), &service("hostkeeper")));
-    assert!(ships(&repo(REPO), &service("hello")));
-    assert!(!ships(&repo(REPO), &service("tierstore")));
 }

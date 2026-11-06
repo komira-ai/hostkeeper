@@ -352,20 +352,75 @@ fn a_package_is_chosen_by_service_and_fail_ready_and_hostkeeper_has_no_failing_b
 }
 
 #[test]
-fn the_signer_of_a_repository_is_its_own_artifacts_workflow_on_main_and_hostkeepers_is_the_contracts()
- {
-    // Catches: another repository's release checked against hostkeeper's signer (or the other
-    // way round), or a signer of hostkeeper's that drifts from the contract's constants.
-    let tierstore: Repo = "komira-ai/tierstore".parse().expect("a repository");
+fn the_signer_of_a_trusted_service_is_its_entrys_workflow_and_hostkeepers_is_the_contracts() {
+    // Catches: a service's release checked against another workflow or repository than its
+    // trust list entry's, or a signer of hostkeeper's that drifts from the contract's constants.
+    let trust = hostkeeper_config::channel_trust::ChannelTrust::parse(
+        "[[service]]\nname = \"js-agent\"\nrepository = \"komira-ai/jobscheduler\"\n\
+         workflow = \".github/workflows/release.yml\"\nrefs = [\"refs/tags/v*\"]\n\
+         hosted_runner = false\n",
+    )
+    .expect("a trust list");
+    let agent = Signer::of(&trust.services()[0]);
     assert_eq!(
-        Signer::of(&tierstore),
+        agent,
         Signer {
-            repo: "komira-ai/tierstore".to_owned(),
-            workflow: "komira-ai/tierstore/.github/workflows/artifacts.yml".to_owned(),
-            source_ref: "refs/heads/main",
+            repo: "komira-ai/jobscheduler".to_owned(),
+            workflow: "komira-ai/jobscheduler/.github/workflows/release.yml".to_owned(),
+            signers: TrustedSigners {
+                organisation: "komira-ai".to_owned(),
+                workflow: ".github/workflows/release.yml".to_owned(),
+                refs: vec!["refs/tags/v*".to_owned()],
+                hosted_runner: false,
+            },
         }
     );
-    let hostkeeper: Repo = REPO.parse().expect("a repository");
-    assert_eq!(Signer::of(&hostkeeper), Signer::hostkeeper());
-    assert_eq!(Signer::hostkeeper().workflow, SIGNER_WORKFLOW);
+    assert_eq!(agent.exact_ref(), None);
+    let hostkeeper = Signer::hostkeeper();
+    assert_eq!(hostkeeper.repo, REPO);
+    assert_eq!(hostkeeper.workflow, SIGNER_WORKFLOW);
+    assert_eq!(
+        format!("{}/{}", REPO, hostkeeper.signers.workflow),
+        SIGNER_WORKFLOW
+    );
+    assert_eq!(hostkeeper.signers.organisation, "komira-ai");
+    assert_eq!(hostkeeper.exact_ref(), Some(SIGNER_REF));
+    assert!(hostkeeper.signers.hosted_runner);
+}
+
+#[test]
+fn a_signer_has_an_exact_ref_only_for_one_ref_that_is_not_a_glob() {
+    // Catches: a glob passed to `gh --source-ref`, which matches it literally and refuses every
+    // real ref, or one of several refs passed as if it were the only one.
+    let with = |refs: &[&str]| {
+        let mut signer = Signer::hostkeeper();
+        signer.signers.refs = refs.iter().map(|r| (*r).to_owned()).collect();
+        signer
+    };
+    assert_eq!(
+        with(&["refs/heads/main"]).exact_ref(),
+        Some("refs/heads/main")
+    );
+    assert_eq!(with(&["refs/tags/*"]).exact_ref(), None);
+    let two = with(&["refs/heads/main", "refs/tags/v1"]);
+    assert_eq!(two.exact_ref(), None);
+    assert_eq!(two.refs_text(), "refs/heads/main or refs/tags/v1");
+}
+
+#[test]
+fn a_repository_has_the_trust_lists_grammar() {
+    // Catches: `--repo`-style values and trust list repositories read by two grammars.
+    use hostkeeper_config::channel_trust::Repository;
+    for text in [
+        "komira-ai/tierstore",
+        "a.b/c_d",
+        "x",
+        "a/b/c",
+        "a/",
+        "a b/c",
+    ] {
+        let ours = text.parse::<Repo>().ok().map(|r| r.to_string());
+        let theirs = Repository::new(text).map(|r| r.to_string());
+        assert_eq!(ours, theirs, "{text}");
+    }
 }

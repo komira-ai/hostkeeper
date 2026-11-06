@@ -15,8 +15,9 @@
 //!   and an `@` (`artifacts.yml@other.example`) is a different workflow and is refused;
 //! - `--deny-self-hosted-runners` is passed only when the config's `hosted_runner` is true;
 //! - the config's refs are globs. The ref in the bundle's certificate is matched against them
-//!   here, and a ref no glob matches is rejected without running `gh`; otherwise `gh` is run once,
-//!   with that ref as `--source-ref`;
+//!   ([`TrustedSigners::allows_ref`], which channel-sync's check uses too), and a ref no glob
+//!   matches is rejected without running `gh`; otherwise `gh` is run once, with that ref as
+//!   `--source-ref`;
 //! - the commit is the one the bundle's provenance names (`--source-digest`); `gh` checks it
 //!   against the certificate, so a bundle that lies about it is rejected.
 //!
@@ -64,52 +65,6 @@ const SIGNER_URI_END: &str = "@refs/[^@]+$";
 const REGEX_META: &str = r"\.+*?()|[]{}^$";
 /// The most bytes of `gh`'s standard error that are kept.
 pub const STDERR_BYTES: u64 = 64 * 1024;
-
-/// Whether `source_ref` matches the glob `pattern`. A `*` matches any run of characters within
-/// one `/`-separated component, none included; every other character matches itself. So
-/// `refs/tags/*` matches `refs/tags/v1.2.3`, and neither `refs/tags` nor `refs/tags/a/b`.
-pub(crate) fn ref_matches(pattern: &str, source_ref: &str) -> bool {
-    let patterns: Vec<&str> = pattern.split('/').collect();
-    let parts: Vec<&str> = source_ref.split('/').collect();
-    (patterns.len() == parts.len())
-        & patterns
-            .iter()
-            .zip(&parts)
-            .all(|(pattern, part)| component_matches(pattern.as_bytes(), part.as_bytes()))
-}
-
-/// [`ref_matches`] for one component. On a mismatch after a `*` the `*` takes one more
-/// character and the rest is tried again.
-fn component_matches(pattern: &[u8], text: &[u8]) -> bool {
-    let (mut p, mut t) = (0, 0);
-    // After the last `*` seen: where the pattern resumes, and where in the text it was tried.
-    let mut star: Option<(usize, usize)> = None;
-    while let Some(&c) = text.get(t) {
-        match pattern.get(p) {
-            Some(b'*') => {
-                star = Some((p + 1, t));
-                p += 1;
-            }
-            Some(&want) if want == c => {
-                p += 1;
-                t += 1;
-            }
-            _ => {
-                let Some((resume, tried)) = star else {
-                    return false;
-                };
-                p = resume;
-                t = tried + 1;
-                star = Some((resume, tried + 1));
-            }
-        }
-    }
-    pattern
-        .get(p..)
-        .unwrap_or_default()
-        .iter()
-        .all(|&c| c == b'*')
-}
 
 /// `text` with every character a Go regular expression gives a meaning escaped, as
 /// `regexp.QuoteMeta` does.
@@ -366,12 +321,7 @@ impl Verifier for GhVerifier {
     /// [`VerifyError::Unavailable`].
     fn verify(&self, request: &Attest<'_>) -> Result<Attested, VerifyError> {
         let source_ref = request.source_ref.as_str();
-        if !request
-            .signers
-            .refs
-            .iter()
-            .any(|pattern| ref_matches(pattern, source_ref))
-        {
+        if !request.signers.allows_ref(source_ref) {
             return Err(VerifyError::Rejected(format!(
                 "the ref {source_ref} matches none of the trusted signer's refs"
             )));

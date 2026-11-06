@@ -65,7 +65,7 @@ fn a_two_repository_run_stages_both_without_mixing_their_assets() {
     let other_signer = "komira-ai/other/.github/workflows/artifacts.yml".to_owned();
     assert_eq!(
         *signers,
-        [vec![TIERSTORE_SIGNER.to_owned(); 8], vec![other_signer; 8]].concat()
+        [vec![TIERSTORE_SIGNER.to_owned(); 6], vec![other_signer; 6]].concat()
     );
 }
 
@@ -200,16 +200,11 @@ fn a_work_directory_that_cannot_be_made_or_removed_is_reported() {
 }
 
 #[test]
-fn a_request_with_a_repository_twice_or_no_channel_directory_is_refused_before_any_read() {
-    // Catches: a mistyped channel path made or synced into, or a repository synced twice.
+fn a_request_with_no_channel_directory_is_refused_before_any_read() {
+    // Catches: a mistyped channel path made or synced into.
     let c = channel("sync-request");
     let source = FakeSource::default();
     let verifier = FakeVerifier::attests_as_asked();
-    let twice = request(&c, &[TIERSTORE, OTHER, TIERSTORE]);
-    assert_eq!(
-        sync(&source, &verifier, &twice).map_err(|e| e.to_string()),
-        Err(format!("--repo {TIERSTORE} is named twice"))
-    );
     let file = c.dir.join("a-file");
     std::fs::write(&file, b"x").expect("write");
     let mut not_dir = request(&c, &[TIERSTORE]);
@@ -332,20 +327,17 @@ fn parse(args: &[&str]) -> Result<Verb, clap::Error> {
 }
 
 #[test]
-fn the_flags_take_repositories_a_channel_a_tag_and_a_positive_pause() {
-    // Catches: a second repository dropped, `--since` taking a version without its `v`, or
-    // `--every-secs 0` spinning the loop.
+fn the_flags_take_a_trust_list_a_channel_a_tag_and_a_positive_pause() {
+    // Catches: `--since` taking a version without its `v`, `--every-secs 0` spinning the loop,
+    // or a run without a trust list, which would trust nothing or everything.
     let Ok(Verb::ChannelSync {
-        repos,
+        trust_list,
         channel_dir,
         since,
         every_secs,
     }) = parse(&[
-        "--repo",
-        TIERSTORE,
-        OTHER,
-        "--repo",
-        REPO,
+        "--trust-list",
+        "t.toml",
         "--channel-dir",
         "c",
         "--since",
@@ -356,25 +348,25 @@ fn the_flags_take_repositories_a_channel_a_tag_and_a_positive_pause() {
     else {
         panic!("the flags parse");
     };
-    assert_eq!(repos, [repo(TIERSTORE), repo(OTHER), repo(REPO)]);
+    assert_eq!(trust_list, PathBuf::from("t.toml"));
     assert_eq!(channel_dir, PathBuf::from("c"));
     assert_eq!(since, Some("0.3.9".parse().expect("a version")));
     assert_eq!(every_secs, Some(600));
     for bad in [
         vec!["--channel-dir", "c"],
-        vec!["--repo", "no-slash", "--channel-dir", "c"],
-        vec!["--repo", TIERSTORE],
+        vec!["--trust-list", "t.toml"],
+        vec!["--repo", TIERSTORE, "--channel-dir", "c"],
         vec![
-            "--repo",
-            TIERSTORE,
+            "--trust-list",
+            "t.toml",
             "--channel-dir",
             "c",
             "--since",
             "0.3.9",
         ],
         vec![
-            "--repo",
-            TIERSTORE,
+            "--trust-list",
+            "t.toml",
             "--channel-dir",
             "c",
             "--every-secs",
@@ -387,8 +379,9 @@ fn the_flags_take_repositories_a_channel_a_tag_and_a_positive_pause() {
 
 #[test]
 fn the_verb_runs_once_or_every_through_the_ports() {
-    // Catches: the verb wired to another port than the release source and the verifier, or
-    // `--every-secs` not checking the request before its first round.
+    // Catches: the verb wired to another port than the release source and the verifier, a trust
+    // list not read from its file, or `--every-secs` not checking the request before its first
+    // round.
     let c = channel("sync-verb");
     let fakes = Fakes::over(FakeHistory::default());
     let assets = release_of("tierstore", TS_V, "a");
@@ -397,8 +390,13 @@ fn the_verb_runs_once_or_every_through_the_ports() {
         verifier: FakeVerifier::attests_as_asked(),
         ..fakes
     };
+    let list = c.dir.parent().expect("the scratch").join("trust.toml");
+    let artifacts = ".github/workflows/artifacts.yml";
+    let text = entry("tierstore", TIERSTORE, artifacts, &["refs/heads/main"]);
+    std::fs::write(&list, text).expect("write the trust list");
+    let list = list.to_str().expect("UTF-8");
     let channel_dir = c.dir.to_str().expect("UTF-8");
-    let once = parse(&["--repo", TIERSTORE, "--channel-dir", channel_dir]).expect("flags");
+    let once = parse(&["--trust-list", list, "--channel-dir", channel_dir]).expect("flags");
     run_with(once, &fakes.ports()).expect("synced");
     assert_eq!(
         snapshot(&c.dir),
@@ -408,8 +406,8 @@ fn the_verb_runs_once_or_every_through_the_ports() {
     let missing = c.dir.join("missing");
     let missing = missing.to_str().expect("UTF-8");
     let looped = parse(&[
-        "--repo",
-        TIERSTORE,
+        "--trust-list",
+        list,
         "--channel-dir",
         missing,
         "--every-secs",
@@ -417,6 +415,44 @@ fn the_verb_runs_once_or_every_through_the_ports() {
     ])
     .expect("flags");
     assert!(run_with(looped, &fakes.ports()).is_err());
+}
+
+#[test]
+fn a_trust_list_that_cannot_be_read_or_is_refused_stops_the_verb_naming_its_file() {
+    // Catches: a missing or broken trust list read as an empty one, so the run stages nothing and
+    // succeeds, or a refusal that does not say which file and which key.
+    let c = channel("sync-verb-trust");
+    let fakes = Fakes::over(FakeHistory::default());
+    let channel_dir = c.dir.to_str().expect("UTF-8");
+    let missing = c.dir.join("no-such.toml");
+    let run = |list: &Path| {
+        let list = list.to_str().expect("UTF-8");
+        let verb = parse(&["--trust-list", list, "--channel-dir", channel_dir]).expect("flags");
+        run_with(verb, &fakes.ports()).map_err(|e| e.to_string())
+    };
+    let refused = run(&missing);
+    let start = format!("--trust-list {}: ", missing.display());
+    assert!(
+        refused.as_ref().is_err_and(|e| e.starts_with(&start)),
+        "{refused:?}"
+    );
+    let bad = c.dir.parent().expect("the scratch").join("bad.toml");
+    let text = entry(
+        "tierstore",
+        TIERSTORE,
+        "artifacts.yml",
+        &["refs/heads/main"],
+    );
+    std::fs::write(&bad, text.replace("hosted_runner = true", "")).expect("write");
+    assert_eq!(
+        run(&bad),
+        Err(format!(
+            "--trust-list {}: the trust list's service[0].hosted_runner is missing",
+            bad.display()
+        ))
+    );
+    assert!(fakes.source.downloads.borrow().is_empty());
+    assert!(snapshot(&c.dir).is_empty());
 }
 
 /// An [`Exec`] that starts nothing: every program fails to start, with its name in the error.
@@ -536,7 +572,7 @@ fn a_channel_directory_gone_between_rounds_is_refused_by_the_next_round() {
     let last = every(
         &FakeSource::default(),
         &FakeVerifier::attests_as_asked(),
-        &request(&c, &[]),
+        &request(&c, &[OTHER]),
         &pause,
     );
     let lines = refused_lines(last);

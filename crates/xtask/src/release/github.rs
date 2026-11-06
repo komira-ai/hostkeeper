@@ -359,7 +359,10 @@ impl<E: Exec> Verifier for Gh<E> {
     /// bundle (without its `--custom-trusted-root`: the runner fetches the trusted root), each
     /// with `--format json` so that the attestations it verified are read back and checked again.
     /// For [`Signer::hostkeeper`] these are that page's commands word for word; another signer
-    /// puts its own repository and workflow in place of hostkeeper's.
+    /// puts its own repository and workflow in place of hostkeeper's, its ref as `--source-ref`
+    /// only when it allows one ref that is not a glob (otherwise `check::judge` matches the
+    /// attested ref against its globs), and `--deny-self-hosted-runners` only when it requires a
+    /// hosted runner.
     fn verify(
         &self,
         signer: &Signer,
@@ -381,14 +384,15 @@ impl<E: Exec> Verifier for Gh<E> {
             &signer.repo,
             "--signer-workflow",
             &signer.workflow,
-            "--source-ref",
-            signer.source_ref,
-            "--source-digest",
-            commit.as_str(),
-            "--deny-self-hosted-runners",
-            "--format",
-            "json",
         ]);
+        if let Some(source_ref) = signer.exact_ref() {
+            args.extend(["--source-ref", source_ref]);
+        }
+        args.extend(["--source-digest", commit.as_str()]);
+        if signer.signers.hosted_runner {
+            args.push("--deny-self-hosted-runners");
+        }
+        args.extend(["--format", "json"]);
         let (value, what) = self.json(&args)?;
         let r = Reader { what: &what };
         r.list(&value, "the reply")?

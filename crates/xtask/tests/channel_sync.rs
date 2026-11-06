@@ -1,8 +1,9 @@
 //! The channel sync's committed deployment, run for real: the systemd unit started by its timer
 //! (`docs/deploy/channel-sync/hostkeeper-channel-sync.{timer,service}`) and the compose sidecar
 //! (`docs/deploy/channel-sync/compose.yaml`). Each test reads the committed file, takes the
-//! command it runs, and runs that command as a process with two substitutions only: the xtask
-//! binary of this build for the installed one, and a scratch directory for the channel. `gh` on
+//! command it runs, and runs that command as a process with three substitutions only: the xtask
+//! binary of this build for the installed one, a scratch directory for the channel, and the
+//! committed trust list (`docs/deploy/channel-sync/trust-list.toml`) for the installed one. `gh` on
 //! its `PATH` is the test program `tests/bin/gh_fixture.rs`, which answers from scratch files, so
 //! no test reaches GitHub. What is asserted is what an operator sees: the exit status, the lines
 //! printed, and the bytes in the channel.
@@ -33,6 +34,16 @@ use yaml::{Node, Value};
 const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 const GH: &str = env!("CARGO_BIN_EXE_xtask-gh-fixture");
 const TIERSTORE: &str = "komira-ai/tierstore";
+const JOBSCHEDULER: &str = "komira-ai/jobscheduler";
+/// Where the unit and the sidecar read the trust list.
+const TRUST_LIST: &str = "/etc/hostkeeper/channel-sync-trust.toml";
+
+/// The committed trust list's path in this checkout.
+fn committed_trust_list() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/deploy/channel-sync/trust-list.toml");
+    path.to_str().expect("UTF-8").to_owned()
+}
 
 fn deploy_file(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -70,15 +81,15 @@ fn site(name: &str) -> Site {
     }
 }
 
-/// The assets of tierstore's release of the index version `v`, as a release that ships channel
-/// packages carries them: a package per platform, its bundle (listing its SHA-256), the index,
-/// and `SHA256SUMS` of all but the bundles.
-fn tierstore_release(v: &str) -> BTreeMap<String, Vec<u8>> {
+/// The assets of the release of `service` at the index version `v`, as a release that ships
+/// channel packages carries them: a package per platform, its bundle (listing its SHA-256), the
+/// index, and `SHA256SUMS` of all but the bundles.
+fn release_of(service: &str, v: &str) -> BTreeMap<String, Vec<u8>> {
     let mut assets = BTreeMap::new();
     let mut entries = Vec::new();
     for platform in Platform::ALL {
-        let name = format!("tierstore-{v}-{platform}.tar.zst");
-        let bytes = format!("the {platform} package of tierstore {v}").into_bytes();
+        let name = format!("{service}-{v}-{platform}.tar.zst");
+        let bytes = format!("the {platform} package of {service} {v}").into_bytes();
         let statement = serde_json::json!({"subject": [{"digest": {"sha256": sha256(&bytes)}}]});
         let payload = base64::engine::general_purpose::STANDARD.encode(statement.to_string());
         let bundle = serde_json::json!({"dsseEnvelope": {"payload": payload}}).to_string();
@@ -90,7 +101,7 @@ fn tierstore_release(v: &str) -> BTreeMap<String, Vec<u8>> {
         assets.insert(format!("{name}.sigstore.json"), bundle.into_bytes());
         assets.insert(name, bytes);
     }
-    let service = ServiceName::new("tierstore").expect("a service");
+    let service = ServiceName::new(service).expect("a service");
     let version = Version::new(v).expect("a version");
     let index = ReleaseIndex::new(service, version, entries).expect("an index");
     assets.insert("index.json".to_owned(), index.to_json().into_bytes());
@@ -103,7 +114,7 @@ fn tierstore_release(v: &str) -> BTreeMap<String, Vec<u8>> {
     assets
 }
 
-/// Publishes `releases` (tag, commit, assets) of tierstore to the fake gh: the assets first, then
+/// Publishes `releases` (tag, commit, assets) of `repo` to the fake gh: the assets first, then
 /// the listing, renamed into place, so a run reads a whole listing or the one before it.
 /// The assets of a release, by name.
 type Assets = BTreeMap<String, Vec<u8>>;
@@ -111,8 +122,8 @@ type Assets = BTreeMap<String, Vec<u8>>;
 /// One published release: its tag, its commit and its assets.
 type Published<'a> = (&'a str, &'a str, &'a Assets);
 
-fn publish(site: &Site, releases: &[Published<'_>]) {
-    let repo = site.bin.join("releases").join(TIERSTORE);
+fn publish(site: &Site, repo: &str, releases: &[Published<'_>]) {
+    let repo = site.bin.join("releases").join(repo);
     let mut list = Vec::new();
     for (tag, commit, assets) in releases {
         let dir = repo.join(tag);
@@ -151,13 +162,13 @@ fn files(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     out
 }
 
-/// What staging tierstore's release of `v` puts in the channel.
-fn staged(v: &str, assets: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<u8>> {
+/// What staging the release of `service` at `v` puts in the channel.
+fn staged(service: &str, v: &str, assets: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<u8>> {
     let mut want = BTreeMap::new();
     for (name, bytes) in assets {
         let staged = name.ends_with(".tar.zst") | name.ends_with(".tar.zst.sigstore.json");
         if staged | (name == "index.json") {
-            want.insert(format!("tierstore/{v}/{name}"), bytes.clone());
+            want.insert(format!("{service}/{v}/{name}"), bytes.clone());
         }
     }
     want
@@ -195,12 +206,15 @@ const V1: &str = "0.3.53+0771c30f87f3";
 const C1: &str = "0771c30f87f375ffd8b39e8b4630cd6ea377b764";
 const V2: &str = "0.3.54+1a2b3c4d5e6f";
 const C2: &str = "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b";
+const AGENT_V: &str = "0.1.176";
+const AGENT_C: &str = "96fba9bdb406bb16587469a5ecaf33d9c861d965";
 
 #[test]
 fn the_timer_starts_the_committed_unit_whose_command_stages_a_release_once_and_then_nothing() {
     // Catches: a timer that starts another unit or can start a run while one is going on; a unit
     // whose command does not parse, does not stage a published release, writes outside the one
-    // path its sandbox lets it write, or changes the channel on a run with nothing new.
+    // path its sandbox lets it write, or changes the channel on a run with nothing new; or a
+    // committed trust list that does not stage js-agent from jobscheduler by its release.yml.
     let timer = deploy_file("hostkeeper-channel-sync.timer");
     let service = unit_value(&timer, "Timer", "Unit").unwrap_or("hostkeeper-channel-sync.service");
     assert_eq!(service, "hostkeeper-channel-sync.service");
@@ -221,13 +235,19 @@ fn the_timer_starts_the_committed_unit_whose_command_stages_a_release_once_and_t
     let s = site("channel-sync-unit");
     let channel = s.channel.to_str().expect("UTF-8").to_owned();
     let committed = replace_value(&mut args, "--channel-dir", &channel);
+    let list = replace_value(&mut args, "--trust-list", &committed_trust_list());
+    assert_eq!(list, TRUST_LIST);
     assert_eq!(
         unit_value(&unit, "Service", "ReadWritePaths"),
         Some(committed.as_str()),
         "the sandbox (ProtectSystem=strict) must let the unit write its channel"
     );
-    let release = tierstore_release(V1);
-    publish(&s, &[("v0.3.53", C1, &release)]);
+    let release = release_of("tierstore", V1);
+    publish(&s, TIERSTORE, &[("v0.3.53", C1, &release)]);
+    let agent = release_of("js-agent", AGENT_V);
+    publish(&s, JOBSCHEDULER, &[("v0.1.176", AGENT_C, &agent)]);
+    let mut both = staged("tierstore", V1, &release);
+    both.extend(staged("js-agent", AGENT_V, &agent));
     let run = || {
         Command::new(XTASK)
             .args(&args)
@@ -248,7 +268,13 @@ fn the_timer_starts_the_committed_unit_whose_command_stages_a_release_once_and_t
         out.contains(&format!("staged {TIERSTORE} v0.3.53: tierstore {V1}\n")),
         "{out}"
     );
-    assert_eq!(files(&s.channel), staged(V1, &release));
+    assert!(
+        out.contains(&format!(
+            "staged {JOBSCHEDULER} v0.1.176: js-agent {AGENT_V}\n"
+        )),
+        "{out}"
+    );
+    assert_eq!(files(&s.channel), both);
     // The unit syncs hostkeeper's releases too (none here), through the same gh.
     let calls = std::fs::read_to_string(s.bin.join("releases/calls")).expect("the calls");
     assert!(
@@ -257,6 +283,9 @@ fn the_timer_starts_the_committed_unit_whose_command_stages_a_release_once_and_t
     );
     assert!(
         calls.contains("--signer-workflow komira-ai/tierstore/.github/workflows/artifacts.yml")
+    );
+    assert!(
+        calls.contains("--signer-workflow komira-ai/jobscheduler/.github/workflows/release.yml")
     );
 
     let second = run();
@@ -272,7 +301,7 @@ fn the_timer_starts_the_committed_unit_whose_command_stages_a_release_once_and_t
         "{out}"
     );
     assert!(!out.contains("staged "), "{out}");
-    assert_eq!(files(&s.channel), staged(V1, &release));
+    assert_eq!(files(&s.channel), both);
 }
 
 /// The entry `key` of the mapping `map`.
@@ -332,10 +361,16 @@ fn the_committed_sidecar_stages_a_release_and_the_next_published_one_round_after
     );
     // The committed pause is minutes; the test waits on the rounds' lines, not on time, and a
     // pause of one second keeps it short.
+    let list = replace_value(&mut args, "--trust-list", &committed_trust_list());
+    assert_eq!(list, TRUST_LIST);
+    assert!(
+        volumes.contains(&format!("./trust-list.toml:{TRUST_LIST}:ro")),
+        "{volumes:?}"
+    );
     let pause = replace_value(&mut args, "--every-secs", "1");
     assert!(pause.parse::<u64>().is_ok_and(|secs| secs > 0), "{pause}");
-    let first = tierstore_release(V1);
-    publish(&s, &[("v0.3.53", C1, &first)]);
+    let first = release_of("tierstore", V1);
+    publish(&s, TIERSTORE, &[("v0.3.53", C1, &first)]);
 
     let mut child = Command::new(XTASK)
         .args(&args)
@@ -359,9 +394,13 @@ fn the_committed_sidecar_stages_a_release_and_the_next_published_one_round_after
         next_summary(),
         "channel-sync: 1 versions staged, 0 already in the channel, 0 refused"
     );
-    assert_eq!(files(&s.channel), staged(V1, &first));
-    let second = tierstore_release(V2);
-    publish(&s, &[("v0.3.53", C1, &first), ("v0.3.54", C2, &second)]);
+    assert_eq!(files(&s.channel), staged("tierstore", V1, &first));
+    let second = release_of("tierstore", V2);
+    publish(
+        &s,
+        TIERSTORE,
+        &[("v0.3.53", C1, &first), ("v0.3.54", C2, &second)],
+    );
     // Rounds that ran before the new listing was in place stage nothing; the first after it
     // stages the new release and leaves the first alone.
     loop {
@@ -376,7 +415,35 @@ fn the_committed_sidecar_stages_a_release_and_the_next_published_one_round_after
     }
     let _ = child.kill();
     let _ = child.wait();
-    let mut want = staged(V1, &first);
-    want.extend(staged(V2, &second));
+    let mut want = staged("tierstore", V1, &first);
+    want.extend(staged("tierstore", V2, &second));
     assert_eq!(files(&s.channel), want);
+}
+
+#[test]
+fn the_trust_lists_of_the_runbook_and_the_deployment_load_and_name_the_examples_services() {
+    // Catches: a runbook example or committed trust list the sync refuses at its first run, or
+    // one that lost tierstore or js-agent (staged from a repository with another name).
+    use hostkeeper_config::channel_trust::ChannelTrust;
+    let doc_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/deploy/release-channel.md");
+    let doc = std::fs::read_to_string(&doc_path).expect("read the runbook");
+    let block = doc
+        .split("```toml\n")
+        .nth(1)
+        .and_then(|rest| rest.split("```").next())
+        .expect("the runbook's trust list example");
+    let committed = std::fs::read_to_string(committed_trust_list()).expect("read the trust list");
+    for text in [block, committed.as_str()] {
+        let trust = ChannelTrust::parse(text).expect("the trust list loads");
+        let agent = trust
+            .service(&ServiceName::new("js-agent").expect("a name"))
+            .expect("js-agent is listed");
+        assert_eq!(agent.repository.as_str(), JOBSCHEDULER);
+        assert_eq!(agent.signers.workflow, ".github/workflows/release.yml");
+        let tierstore = trust
+            .service(&ServiceName::new("tierstore").expect("a name"))
+            .expect("tierstore is listed");
+        assert_eq!(tierstore.repository.as_str(), TIERSTORE);
+    }
 }

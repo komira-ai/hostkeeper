@@ -126,9 +126,38 @@ fn channel(name: &str) -> Channel {
     Channel { _root: root, dir }
 }
 
+/// The trust list entry of `service` from `repository`, signed by `workflow` on `refs` on a
+/// hosted runner.
+fn entry(service: &str, repository: &str, workflow: &str, refs: &[&str]) -> String {
+    format!(
+        "[[service]]\nname = {service:?}\nrepository = {repository:?}\nworkflow = {workflow:?}\n\
+         refs = {refs:?}\nhosted_runner = true\n"
+    )
+}
+
+/// The trust list of `entries`.
+fn trust(entries: &[String]) -> ChannelTrust {
+    ChannelTrust::parse(&entries.concat()).expect("a trust list")
+}
+
+/// The trust list of `repos`: each repository's service named for it, and hostkeeper's also
+/// hello, each signed by the repository's `artifacts.yml` on `refs/heads/main`.
+fn trust_of(repos: &[&str]) -> ChannelTrust {
+    let mut entries = Vec::new();
+    for repo in repos {
+        let name = repo.rsplit('/').next().expect("a name");
+        let artifacts = ".github/workflows/artifacts.yml";
+        entries.push(entry(name, repo, artifacts, &["refs/heads/main"]));
+        if *repo == REPO {
+            entries.push(entry("hello", repo, artifacts, &["refs/heads/main"]));
+        }
+    }
+    trust(&entries)
+}
+
 fn request(channel: &Channel, repos: &[&str]) -> Request {
     Request {
-        repos: repos.iter().map(|r| repo(r)).collect(),
+        trust: trust_of(repos),
         channel: channel.dir.clone(),
         since: None,
     }
@@ -180,3 +209,4 @@ const TS_V: &str = "0.3.53+0771c30f87f3";
 mod refuse;
 mod run;
 mod stage;
+mod trust;
