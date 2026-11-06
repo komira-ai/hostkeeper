@@ -101,11 +101,14 @@ pub const JOIN_IF: &str = "${{ inputs.join_tailnet }}";
 /// The action the join step uses, pinned to a commit.
 pub const JOIN_ACTION: &str = "tailscale/github-action";
 /// What the join step's `with:` must give, exactly: the federated identity (from the caller's
-/// inputs; neither is a secret) and the one tag the tailnet's ACL lets reach the coordinator.
-pub const JOIN_WITH: [(&str, &str); 3] = [
+/// inputs; neither is a secret), the one tag the tailnet's ACL lets reach the coordinator, and
+/// the coordinator the join pings before it ends (from the caller's input), so the client's
+/// first call does not race the tailnet's spread of the new node.
+pub const JOIN_WITH: [(&str, &str); 4] = [
     ("oauth-client-id", "${{ inputs.tailnet_client_id }}"),
     ("audience", "${{ inputs.tailnet_audience }}"),
     ("tags", "tag:hk-ci"),
+    ("ping", "${{ inputs.tailnet_coordinator }}"),
 ];
 /// The action's inputs that take a stored credential; the join authenticates with an OIDC token
 /// instead, so it passes none of them.

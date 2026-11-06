@@ -67,6 +67,7 @@ jobs:
           tags: tag:hk-ci
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
+          ping: ${{ inputs.tailnet_coordinator }}
       - id: set-desired
         env:
           MAX_POLLS: ${{ inputs.max_polls }}
@@ -96,6 +97,7 @@ const JOIN_BLOCK: &str = "      - id: tailnet
           tags: tag:hk-ci
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
+          ping: ${{ inputs.tailnet_coordinator }}
 ";
 
 /// The input of [`CLIENT`] that turns the join on.
@@ -861,6 +863,35 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
             "the join step `tailnet` (step 7) does not pass `oauth-client-id: ${{ inputs.tailnet_client_id }}`",
         ],
     );
+    // The coordinator the join waits for is the caller's input, in the real file too.
+    let doc = yaml::load(&real()).expect("parses");
+    let steps = entry(&doc, "jobs")
+        .and_then(|j| entry(j, JOB))
+        .and_then(|j| entry(j, "steps"))
+        .map(|s| &s.value);
+    let Some(Value::Seq(steps)) = steps else {
+        panic!("the job has no steps")
+    };
+    let join = steps
+        .iter()
+        .find(|s| entry(s, "id").and_then(Node::as_str) == Some(JOIN_STEP))
+        .expect("the join step");
+    assert_eq!(
+        entry(join, "with")
+            .and_then(|w| entry(w, "ping"))
+            .and_then(Node::as_str),
+        Some("${{ inputs.tailnet_coordinator }}")
+    );
+    let ping = "          ping: ${{ inputs.tailnet_coordinator }}\n";
+    let no_ping =
+        "the join step `tailnet` (step 7) does not pass `ping: ${{ inputs.tailnet_coordinator }}`";
+    for to in [
+        "",
+        "          ping: hk-coordinator\n",
+        "          ping: ${{ inputs.coordinator_url }}\n",
+    ] {
+        assert_client(&with_in(CLIENT, ping, to), &[no_ping]);
+    }
     let floating = "the join step `tailnet` (step 7) does not pin the Tailscale tarball by an `X.Y.Z` `version` and a 64-digit lowercase `sha256sum`";
     let sha =
         "          sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32\n";
