@@ -189,7 +189,10 @@ pub trait ServiceObserver: Send + Sync {
 /// the loop runs it on a worker of its [`Dispatch`]. The try semantics (a resend answered from
 /// the record, `try_conflict`, `stale_try`) are the executor's.
 pub trait OrderSink: Send + Sync {
-    fn execute(&self, order: &Order) -> OrderResult;
+    /// Runs `order`; its verdict names `target`, the version the loop gives it: the order's own,
+    /// or for an `uninstall` and an `abort`, which name none, the version of the service the loop
+    /// knows (the one it lists, or the target of the order an `abort` stops).
+    fn execute(&self, order: &Order, target: &Version) -> OrderResult;
 }
 
 /// One job for a worker.

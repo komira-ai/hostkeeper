@@ -51,7 +51,7 @@ use rustls_pki_types::pem::PemObject;
 use crate::adapters::{Adapters, host_claims};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
-use crate::links::{DaemonLog, Links, NoLink};
+use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::observer::observer_with;
@@ -308,7 +308,10 @@ async fn start_and_serve(
 ///   ([`host_claims`]);
 /// - the heartbeat loop reads the certificate and key of the pki directory's `current` link at
 ///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock;
-///   this build has no coordinator link yet ([`NoLink`]), so every heartbeat ends unsent;
+///   its link ([`HostLink`]) is the JSON route and gRPC over mutual TLS to the same
+///   `coordinator`, pinned to the same `ca_sha256`, trusting the CA bundle of the pki directory's
+///   `current` generation, its connections bounded on the daemon's clock; the link is made at the
+///   first heartbeat, on the loop's worker, so a host not enrolled yet makes none;
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
 /// - both loops log through the daemon's alert sink ([`DaemonLog`]).
 pub fn host_links(
@@ -326,9 +329,15 @@ pub fn host_links(
         image: image_of(ctx.own_version),
     };
     let pki = files.pki.clone();
+    let link = HostLink::new(
+        ctx.config.clone(),
+        files.pki.clone(),
+        Arc::clone(&ctx.clock),
+        log.clone(),
+    );
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings, kind)),
-        link: Arc::new(NoLink),
+        link: Arc::new(link),
         certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
         clock: Arc::new(SystemUnixClock),
         log,

@@ -6,7 +6,8 @@
 //! and the CA certificate it checks updaters against is a file too. With it, it is also the
 //! hosts' CA ([`crate::enrollment`]): `--ca-key-file` is the CA's key (made with `--ca-init`),
 //! the heartbeat listener serves the server certificate the start keeps in `--server-cert-file`
-//! for the names of `--server-name`, lets a client without a certificate through the handshake,
+//! for the names of `--server-name` (and the reload tick of `--tls-reload-secs` renews while
+//! the coordinator runs), lets a client without a certificate through the handshake,
 //! and admits a client certificate of its own CA as well as one of `--client-ca`. The handlers
 //! of `Enroll`, `Poll` and `Renew` are served as gRPC on the heartbeat listener
 //! ([`crate::grpc`]). The services it manages are the ones `--rollout-file` defines;
@@ -664,6 +665,7 @@ where
         surface: Surface::Control,
     };
     let tokens = parts.coordinator.tokens().clone();
+    let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
     let serving = together(
         serve(
@@ -677,6 +679,7 @@ where
     match together(
         serving,
         reload_every(
+            enrollment,
             vec![parts.heartbeat_tls, parts.control_tls],
             tokens,
             parts.reload,

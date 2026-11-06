@@ -4,12 +4,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use hostkeeper_link::deferral::{DEFERRAL_FILE, FILE_MAX, MAX_RETRY_SECS, TEMP_FILE};
-use hostkeeper_link::testing::{FakeSink, START_MONO, START_UNIX, World, verdict};
+use hostkeeper_link::testing::{FakeSink, START_MONO, START_UNIX, World};
 use hostkeeper_link::{
     Deferral, DeferralError, Deferrals, Feature, Heartbeater, Order, OrderResult, Outcome, Reason,
     RecordedService,
 };
 
+use crate::verdict;
 use crate::{Rig, forced, kbf, recorded, reply, service, update, version};
 
 fn drain_bound() -> Reason {
@@ -30,7 +31,7 @@ fn deferred(order: &Order) -> OrderResult {
 
 /// An executor that defers try 1 of every update, and lets every later try succeed.
 fn deferring_once() -> World {
-    World::with_orders(FakeSink::new(|order| {
+    World::with_orders(FakeSink::new(|order, _| {
         if order.order_try == 1 {
             deferred(order)
         } else {
@@ -162,8 +163,8 @@ fn a_deferral_holds_back_only_an_update_and_only_with_deferred_v1() {
 /// the deferred target is still held back until its retry time.
 #[test]
 fn a_verdict_on_another_target_or_a_forced_one_keeps_the_deferral() {
-    let world = World::with_orders(FakeSink::new(|order| {
-        if order.is_forced() | (order.target().version.as_str() == "2.1") {
+    let world = World::with_orders(FakeSink::new(|order, _| {
+        if order.is_forced() | (order.target().expect("a target").version.as_str() == "2.1") {
             verdict(order, Outcome::Failed)
         } else {
             deferred(order)
@@ -675,7 +676,7 @@ fn a_deferral_is_written_new_beside_and_owner_only() {
 /// outside the grammar kbf's agent reads: it is kept under the reason `deferred`.
 #[test]
 fn a_deferral_with_no_reason_is_kept_under_the_reason_deferred() {
-    let world = World::with_orders(FakeSink::new(|order| {
+    let world = World::with_orders(FakeSink::new(|order, _| {
         verdict(
             order,
             Outcome::Deferred {

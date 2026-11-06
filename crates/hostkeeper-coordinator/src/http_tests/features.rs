@@ -146,14 +146,15 @@ async fn a_coordinator_that_advertises_nothing_answers_an_announcing_agent_with_
 
 /// Catches: a bad announcement costing the host its updates or being answered as a good one:
 /// the heartbeat is still read, the host is still ordered its kbf update, and the answer
-/// carries no `features` (a bad list is no announcement).
+/// carries no `features` (a bad list is no announcement). A list one name over the bound of 16
+/// is bad.
 #[tokio::test]
 async fn a_bad_announcement_is_dropped_and_the_host_is_answered_as_an_old_agent() {
     let rig = rig("http-features-bad", &["halt-v1"]).await;
     let bad = [
         r#","agent_features":["Halt-V1"]"#,
         r#","agent_features":["halt-v1","halt-v1"]"#,
-        r#","agent_features":["a","b","c","d","e","f","g","h","i"]"#,
+        r#","agent_features":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q"]"#,
         r#","agent_features":[""]"#,
     ];
     assert_eq!(
