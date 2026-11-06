@@ -22,11 +22,12 @@
 //! An `abort` ([`StepRunner::abort`]) is read at the same places, from memory: the update is
 //! closed `Halt`, `aborted_by_operator`, with nothing more launched either.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::names::{MAX_UNIT_NAME, is_service_name};
 use hostkeeper_hook::{
@@ -36,7 +37,7 @@ use hostkeeper_hook::{
 };
 
 use crate::artifact::{ArtifactError, Staged};
-use crate::clock::{Clock, Stamp};
+use crate::clock::{BootId, Clock, Stamp};
 use crate::deadman::Watch;
 use crate::launcher::{Bound, LaunchError, StepCall, StepExit, StepLauncher};
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
@@ -240,6 +241,9 @@ pub struct StepRunner {
     held_success: bool,
     /// The generation of the update an abort asked to end ([`StepRunner::abort`]); 0 for none.
     aborted: AtomicU64,
+    /// [`StepRunner::spent`]: each window stamp of another or an unknown boot, and the second on
+    /// the monotonic clock at which this runner first met it.
+    met: Mutex<BTreeMap<(Option<BootId>, u64), u64>>,
 }
 
 impl StepRunner {
@@ -257,6 +261,7 @@ impl StepRunner {
             switch: None,
             held_success: false,
             aborted: AtomicU64::new(0),
+            met: Mutex::default(),
         }
     }
 
@@ -784,10 +789,8 @@ impl StepRunner {
         let own = order.bounds.bound(rec.step)?;
         match (&rec.progress.verify_started, own) {
             (Some(began), Bound::Secs(secs)) if rec.step == Step::Verify => {
-                let left = order
-                    .bounds
-                    .verify_deadline_secs
-                    .saturating_sub(began.elapsed_secs(&*self.clock));
+                let spent = self.spent(began);
+                let left = order.bounds.verify_deadline_secs.saturating_sub(spent);
                 NonZeroU64::new(secs.get().min(left)).map(Bound::Secs)
             }
             _ => Some(own),
@@ -881,13 +884,31 @@ impl StepRunner {
         rec.state = State::Pending;
     }
 
+    /// The seconds spent of the window begun at `began`: on the clock when it is of this boot
+    /// ([`Stamp::elapsed_secs`]). One that may be of another boot, its boot id or the clock's
+    /// being another or unknown, begins again when this runner first meets it, and from then is
+    /// measured on the monotonic clock of this process (which no boot outlives): a boot id that
+    /// stays unreadable restarts the window once, never at every read.
+    fn spent(&self, began: &Stamp) -> u64 {
+        if let Some(secs) = began.elapsed_secs(&*self.clock) {
+            return secs;
+        }
+        let now = self.clock.mono_secs();
+        let mut met = self.met.lock().unwrap_or_else(PoisonError::into_inner);
+        let first = *met
+            .entry((began.boot_id.clone(), began.mono_secs))
+            .or_insert(now);
+        now.saturating_sub(first)
+    }
+
     /// Whether another run of `verify` after the wait would fall outside the verify window.
     fn verify_window_passed(&self, order: &UpdateOrder, rec: &Record, report: &Report) -> bool {
         let Some(began) = &rec.progress.verify_started else {
             return false;
         };
         let wait = wait_secs(report.retry_after_secs, DEFAULT_RETRY_SECS);
-        began.elapsed_secs(&*self.clock).saturating_add(wait) >= order.bounds.verify_deadline_secs
+        let spent = self.spent(began);
+        spent.saturating_add(wait) >= order.bounds.verify_deadline_secs
     }
 
     /// The update is over, or (a pending promotion) the watcher begins.
@@ -913,9 +934,11 @@ impl StepRunner {
             phase: Phase::AfterCommit,
             class: report.class,
         };
-        let over = rec.progress.watching.as_ref().is_some_and(|began| {
-            began.elapsed_secs(&*self.clock) >= order.bounds.promotion_ceiling_secs
-        });
+        let over = rec
+            .progress
+            .watching
+            .as_ref()
+            .is_some_and(|began| self.spent(began) >= order.bounds.promotion_ceiling_secs);
         let verdict = match outcome {
             Outcome::Success if !report.promotion_pending => Verdict::Succeeded {
                 promotion_pending: false,

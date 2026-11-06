@@ -23,10 +23,15 @@
 //!   protocol checked, its steps run under the step lock, then the follow-on that switches the
 //!   binary and asks the daemon to exit; at start, the update settled by the binary that runs.
 //!   [`fallback`] is the verb `self-update-fallback` the fallback unit runs (on macOS the
-//!   fallback timer job, and the verb then decides the burst from the start log itself).
+//!   fallback timer job, and the verb then decides the burst from the start log itself), and
+//!   [`selfunits`] the drop-in and fallback unit (on macOS the fallback job) the daemon writes at
+//!   each start where they differ, telling the service manager only then; [`seed`] is the verb
+//!   `self-update-seed` the unit runs before each start, which gives the binary directory its
+//!   first binary.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
+//! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
@@ -39,6 +44,8 @@
 //!   (fetch, prove, unpack and seal, with the one table that maps their failures onto
 //!   [`refusal`]), and [`installed`] what the host runs.
 //! - [`observer`]: what the admin `Status` reports of a running service.
+//! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason the
+//!   admin `Status` reports of it.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
 //! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ctl`, which it hands to
 //!   `hostkeeper-ctl`, `hostkeeper ci`, and the plumbing verbs `self-update-fallback` and
@@ -69,6 +76,7 @@ mod files;
 pub mod halt;
 pub mod hook_log;
 pub mod installed;
+pub mod ipmi;
 pub mod link_adapters;
 pub mod links;
 pub mod locks;
@@ -80,12 +88,15 @@ pub mod place;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
+pub mod seed;
+pub mod selfunits;
 pub mod selfupdate;
 pub mod socket;
 pub mod stamp;
 pub mod start;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod trusted_root;
 pub mod uninstall;
 pub mod unix_clock;
 pub mod verb;

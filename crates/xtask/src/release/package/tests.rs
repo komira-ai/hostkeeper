@@ -14,16 +14,20 @@ use crate::release::ports::PortError;
 
 /// The packaged binary; nothing reads it as a program.
 pub(super) const BINARY: &[u8] = b"the hostkeeper binary";
-const UNIT: &str = include_str!("../../../tests/release/hostkeeper.service");
-const NAMES: [&str; 5] = [
+pub(super) const UNIT: &str = include_str!("../../../tests/release/hostkeeper.service");
+/// The packaged trusted root; nothing reads it as one here.
+pub(super) const TRUSTED_ROOT: &[u8] = b"{\"mediaType\":\"a trusted root\"}\n";
+const NAMES: [&str; 7] = [
     "bin/",
     "bin/hostkeeper",
+    "files/",
+    "files/trusted_root.json",
     "manifest.toml",
     "units/",
     "units/hostkeeper.service",
 ];
 
-fn version() -> Version {
+pub(super) fn version() -> Version {
     "0.1.5".parse().expect("a version")
 }
 
@@ -36,17 +40,19 @@ pub(super) fn history() -> (FakeHistory, Commit) {
 
 /// A request over a binary and the given unit text written under `dir`, writing to `out`. The
 /// unit is passed for a Linux platform, and not for macos-arm64, which takes none.
-fn request(dir: &Path, unit: &[u8], commit: &Commit, platform: Platform, out: &str) -> Request {
+pub(super) fn request(dir: &Path, unit: &[u8], c: &Commit, p: Platform, out: &str) -> Request {
     std::fs::write(dir.join("hostkeeper"), BINARY).expect("write the binary");
     std::fs::write(dir.join("hostkeeper.service"), unit).expect("write the unit");
+    std::fs::write(dir.join("trusted_root.json"), TRUSTED_ROOT).expect("write the root");
     Request {
         service: Service::Hostkeeper,
-        platform,
+        platform: p,
         version: version(),
-        commit: commit.clone(),
+        commit: c.clone(),
         binary: dir.join("hostkeeper"),
-        unit: (platform != Platform::MacosArm64).then(|| dir.join("hostkeeper.service")),
+        unit: (p != Platform::MacosArm64).then(|| dir.join("hostkeeper.service")),
         fail_ready: false,
+        trusted_root: Some(dir.join("trusted_root.json")),
         out: dir.join(out),
     }
 }
@@ -234,6 +240,8 @@ fn package_is_deterministic_and_has_exactly_the_four_allowed_top_level_names() {
         [
             (true, 0o555),
             (false, 0o555),
+            (true, 0o555),
+            (false, 0o444),
             (false, 0o444),
             (true, 0o555),
             (false, 0o444)
@@ -428,32 +436,41 @@ fn the_digest_file_holds_the_sha256_and_platforms_differ_only_by_name_and_manife
 
 #[test]
 fn a_unit_that_does_not_start_the_binary_through_current_is_refused() {
-    // Catches: a unit naming a version directory, another binary, a foreign package path or
-    // bytes that are not text, which would escape the atomic switch of current.
+    // Catches: a unit starting a staged version, the binary the update left (`previous`), the
+    // package's own binary (which the self-update never switches), a foreign package path or bytes
+    // that are not text, each of which would escape the atomic switch of current.
     let dir = scratch("package-unit-refused");
     let (history, commit) = history();
     let path = dir.join("hostkeeper.service").display().to_string();
-    let binary_path = binary_path("hostkeeper");
     let go = |unit: &[u8], out: &str| {
         let r = request(&dir, unit, &commit, Platform::LinuxX86_64, out);
         let result = package(&history, &r);
         assert!(!r.out.exists(), "nothing is written on a refusal");
         result
     };
-    let versioned = UNIT.replace("hostkeeper/current/", "hostkeeper/0.1.5/");
-    assert_eq!(
-        go(versioned.as_bytes(), "o1"),
-        Err(Error::Failed(format!(
-            "{path} has no ExecStart line naming {binary_path}"
-        )))
+    let not_started = Err(Error::Failed(format!(
+        "{path} has no ExecStart line naming {SELF_UPDATE_CURRENT}"
+    )));
+    let versioned = UNIT.replace("bin/current daemon", "bin/versions/0.1.5 daemon");
+    assert_eq!(go(versioned.as_bytes(), "o1"), not_started);
+    let other = UNIT.replace("bin/current daemon", "bin/previous daemon");
+    assert_eq!(go(other.as_bytes(), "o2"), not_started);
+    let packaged = UNIT.replace(SELF_UPDATE_CURRENT, &binary_path("hostkeeper"));
+    assert_eq!(go(packaged.as_bytes(), "o5"), not_started);
+    // The path in a line before the start, or as an argument, or a longer path that begins
+    // with it, is not the program the unit starts.
+    let before = UNIT.replace(
+        "ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon",
+        "ExecStartPre=/var/lib/updater/state/hostkeeper/bin/current daemon\nExecStart=/usr/bin/hostkeeper daemon",
     );
-    let other = UNIT.replace("current/bin/hostkeeper daemon", "current/bin/other daemon");
-    assert_eq!(
-        go(other.as_bytes(), "o2"),
-        Err(Error::Failed(format!(
-            "{path} has no ExecStart line naming {binary_path}"
-        )))
+    assert_eq!(go(before.as_bytes(), "o6"), not_started);
+    let argument = UNIT.replace(
+        "bin/current daemon",
+        "bin/previous daemon --binary /var/lib/updater/state/hostkeeper/bin/current",
     );
+    assert_eq!(go(argument.as_bytes(), "o7"), not_started);
+    let longer = UNIT.replace("bin/current daemon", "bin/current.old daemon");
+    assert_eq!(go(longer.as_bytes(), "o8"), not_started);
     let foreign = format!("{UNIT}WorkingDirectory=/var/lib/hostkeeper/packages/other/current/\n");
     assert_eq!(
         go(foreign.as_bytes(), "o3"),
@@ -615,26 +632,6 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
             "files/a/: the same name as an earlier entry, ignoring ASCII case".to_owned(),
         ]))
     );
-    let with_unit = Contents {
-        manifest: manifest(&version(), Platform::LinuxX86_64, true),
-        units: vec![Unit {
-            file: UNIT_FILE.to_owned(),
-            origin: String::new(),
-            data: Vec::new(),
-        }],
-    };
-    assert_eq!(
-        check_entries(&entries("hostkeeper", Vec::new(), with_unit)),
-        Ok(())
-    );
-    let without_unit = Contents {
-        manifest: manifest(&version(), Platform::MacosArm64, false),
-        units: Vec::new(),
-    };
-    assert_eq!(
-        check_entries(&entries("hostkeeper", Vec::new(), without_unit)),
-        Ok(())
-    );
 }
 
 /// On drop, makes every directory under its path writable again and removes the path. The
@@ -664,7 +661,7 @@ impl Drop for Unseal {
 /// unpacked by the daemon's unpacker (design 5.5 steps 3 and 4, hostkeeper-unpack) for
 /// `unpack_on`. Returns that directory, the version, the unpacker's answer, and the guard that
 /// removes the sealed tree.
-fn unpacked_tree(
+pub(super) fn unpacked_tree(
     dir: &Path,
     platform: Platform,
     binary: &[u8],
@@ -802,10 +799,11 @@ fn a_macos_package_holds_the_binary_and_a_manifest_without_units() {
     assert_eq!(shape_problems(&bytes, time_of(1)), Vec::<String>::new());
     let seen = read_back(&bytes);
     let names: Vec<&str> = seen.iter().map(|e| e.name.as_str()).collect();
-    assert_eq!(names, ["bin/", "bin/hostkeeper", "manifest.toml"]);
+    assert_eq!(names, NAMES[..5]);
     assert_eq!(seen[1].data, BINARY);
+    assert_eq!(seen[3].data, TRUSTED_ROOT);
     assert_eq!(
-        seen[2].data,
+        seen[4].data,
         manifest(&version(), Platform::MacosArm64, false).into_bytes()
     );
     let name = "hostkeeper-0.1.5-macos-arm64.tar.zst";
@@ -886,107 +884,4 @@ fn a_macos_package_unpacks_with_the_daemons_macos_unpacker() {
             .all(|n| asked.iter().any(|a| a.ends_with(n))),
         "{asked:?}"
     );
-}
-
-/// The unit hostkeeper's own package carries, as committed (the release workflow passes it to
-/// `release package --unit`).
-const PACKAGE_UNIT: &str =
-    include_str!("../../../../../packaging/linux/package/hostkeeper.service");
-
-/// The unit the deb and the rpm install, as committed.
-const DEB_UNIT: &str = include_str!("../../../../../packaging/linux/hostkeeper.service");
-
-/// What a launcher starts for the `ExecStart=` of `unit` on a host whose packages directory is
-/// `packages`: the program, with the unit's own `--packages-dir` rebased onto `packages` and every
-/// link on its path followed, and the arguments. Fails naming what the unit lacks, or when the
-/// program is not under its packages directory or does not resolve to a file.
-fn launched(unit: &str, packages: &Path) -> Result<(std::path::PathBuf, Vec<String>), String> {
-    let line = unit
-        .lines()
-        .find_map(|l| l.strip_prefix("ExecStart="))
-        .ok_or("the unit has no ExecStart=")?;
-    let mut words = line.split_whitespace().map(str::to_owned);
-    let program = words.next().ok_or("ExecStart= names no program")?;
-    let args: Vec<String> = words.collect();
-    let dir = args
-        .windows(2)
-        .find(|w| w[0] == "--packages-dir")
-        .map(|w| format!("{}/", w[1]))
-        .ok_or("ExecStart= has no --packages-dir")?;
-    let inside = program
-        .strip_prefix(&dir)
-        .ok_or_else(|| format!("{program} is not under the --packages-dir {dir}"))?;
-    let path = std::fs::canonicalize(packages.join(inside))
-        .map_err(|e| format!("{program} does not resolve: {e}"))?;
-    Ok((path, args))
-}
-
-#[test]
-fn the_committed_package_unit_launches_the_packaged_binary_through_current() {
-    // Catches: a package unit whose ExecStart does not reach the binary the package carries once
-    // the daemon has unpacked it and `current` names its version (the deb's /usr/bin path, a
-    // path outside --packages-dir, a broken link), or whose arguments the daemon refuses.
-    use clap::Parser;
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = scratch("package-unit-launch");
-    let (packages, running, unpacked, unseal) = unpacked_tree(
-        &dir,
-        Platform::LinuxX86_64,
-        BINARY,
-        PACKAGE_UNIT,
-        hostkeeper_unpack::Platform::Linux,
-    );
-    assert_eq!(unpacked.manifest.run, ["hostkeeper.service"]);
-    let service = packages.join("hostkeeper");
-    let unit = std::fs::read_to_string(service.join(&running).join("units/hostkeeper.service"))
-        .expect("the unpacked unit");
-    assert_eq!(unit, PACKAGE_UNIT);
-
-    // Before `current` names a version, the unit starts nothing.
-    let current = service.join(hostkeeper_daemon::installed::CURRENT);
-    let refused = launched(&unit, &packages).expect_err("no current yet");
-    assert!(refused.contains("does not resolve"), "{refused}");
-
-    std::os::unix::fs::symlink(&running, &current).expect("link current");
-    let (program, args) = launched(&unit, &packages).expect("a launch");
-    let binary = service.join(&running).join("bin/hostkeeper");
-    assert_eq!(program, std::fs::canonicalize(&binary).expect("the binary"));
-    assert_eq!(std::fs::read(&program).expect("the launched file"), BINARY);
-    let mode = std::fs::metadata(&program)
-        .expect("stat")
-        .permissions()
-        .mode();
-    assert_eq!(
-        mode & 0o111,
-        0o111,
-        "the launched file is executable: {mode:o}"
-    );
-    let cli = hostkeeper_daemon::cli::Cli::try_parse_from(
-        std::iter::once("hostkeeper".to_owned()).chain(args),
-    )
-    .expect("the daemon's flags");
-    assert!(matches!(
-        cli.command,
-        hostkeeper_daemon::cli::Command::Daemon(_)
-    ));
-
-    // The deb's unit, and units that lack what the launch needs, are refused by name.
-    let deb = launched(DEB_UNIT, &packages).expect_err("the deb's unit");
-    assert!(
-        deb.starts_with("/usr/bin/hostkeeper is not under the --packages-dir"),
-        "{deb}"
-    );
-    for (text, why) in [
-        ("[Service]\nType=notify\n", "the unit has no ExecStart="),
-        ("[Service]\nExecStart=\n", "ExecStart= names no program"),
-        (
-            "[Service]\nExecStart=/opt/hostkeeper daemon\n",
-            "ExecStart= has no --packages-dir",
-        ),
-    ] {
-        assert_eq!(launched(text, &packages), Err(why.to_owned()));
-    }
-    drop(unseal);
-    assert!(!packages.exists(), "the unpacked tree is removed");
 }

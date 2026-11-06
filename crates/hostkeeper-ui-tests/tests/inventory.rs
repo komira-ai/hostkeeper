@@ -277,3 +277,104 @@ return filled;
         ],
     );
 }
+
+#[test]
+fn enrollment_page_approves_a_matched_request_as_its_record_unless_replace() {
+    // Catches: a matched request's host id not prefilled from its record, an empty host id for it
+    // refused in the page (or sent as anything but empty), the host id the coordinator answers
+    // not reported, a host id other than the record's sent without Replace, Replace not letting
+    // it through, and a renewal or an unmatched request held to a record.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Enrollment/List"),
+        json!({"requests": [
+           {"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32),
+            "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-1", "recordRole": "storage"},
+           {"requestId": "2e".repeat(32), "keySha256": "cd".repeat(32), "renewalOf": "s6",
+            "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-2", "recordRole": "storage"},
+           {"requestId": "3d".repeat(32), "keySha256": "ef".repeat(32),
+            "inventoryMatch": "INVENTORY_MATCH_UNMATCHED"},
+           {"requestId": "4c".repeat(32), "keySha256": "12".repeat(32),
+            "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-4"},
+        ]}),
+    );
+    for host in ["db-1", "db-9", "s6", "web-1"] {
+        ui.reply(
+            &m("Enrollment/Approve"),
+            json!({"hostId": host, "certificateIssuedAtPoll": true}),
+        );
+    }
+    // An answer without a host id: the page reports the record's.
+    ui.reply(
+        &m("Enrollment/Approve"),
+        json!({"certificateIssuedAtPoll": true}),
+    );
+    let out = ui.run(&page_driver(
+        "enrollment",
+        "{}",
+        "[true, true]",
+        r#"
+const filled = [0, 1, 2, 3].map((i) => named(tree, "host-id")[i].attrs.value);
+for (const i of [0, 1, 2, 3]) {
+  type(tree, "role", "storage", i);
+  type(tree, "reason", "built today", i);
+}
+type(tree, "host-id", "", 0);
+await click(tree, "approve", 0);
+type(tree, "host-id", "db-9", 0);
+await click(tree, "approve", 0);
+tick(tree, "replace", true, 0);
+await click(tree, "approve", 0);
+await click(tree, "approve", 1);
+await click(tree, "approve", 2);
+type(tree, "host-id", "web-1", 2);
+await click(tree, "approve", 2);
+type(tree, "host-id", "", 3);
+tick(tree, "replace", true, 3);
+await click(tree, "approve", 3);
+return filled;
+"#,
+    ));
+    assert_eq!(out["out"], json!(["db-1", "s6", "", "db-4"]));
+    let body = |id: &str, key: &str, host: &str, replace: bool| {
+        json!({"requestId": id.repeat(32), "keySha256": key.repeat(32), "hostId": host,
+               "role": "storage", "services": [], "replace": replace, "reason": "built today"})
+    };
+    assert_eq!(
+        bodies(&ui),
+        [
+            (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
+            (m("Enrollment/Approve"), body("1f", "ab", "", false)),
+            (m("Enrollment/Approve"), body("1f", "ab", "db-9", true)),
+            (m("Enrollment/Approve"), body("2e", "cd", "s6", false)),
+            (m("Enrollment/Approve"), body("3d", "ef", "web-1", false)),
+            (m("Enrollment/Approve"), body("4c", "12", "", true)),
+        ]
+    );
+    let seen = &out["seen"];
+    assert_eq!(
+        seen["questions"],
+        json!([
+            format!(
+                "Approve request {} as db-9 and revoke the certificate of any host that holds db-9?",
+                "1f".repeat(32)
+            ),
+            format!(
+                "Approve request {} as db-4 and revoke the certificate of any host that holds db-4?",
+                "4c".repeat(32)
+            ),
+        ])
+    );
+    assert_eq!(
+        seen["reports"],
+        json!([
+            "Approved db-1: the host gets its certificate at its next poll.",
+            "This request matches the record of db-1: approve it as db-1, or tick Replace to approve it as db-9.",
+            "Approved db-9: the host gets its certificate at its next poll.",
+            "Approved s6: the host gets its certificate at its next poll.",
+            "Name the host id.",
+            "Approved web-1: the host gets its certificate at its next poll.",
+            "Approved db-4: the host gets its certificate at its next poll.",
+        ])
+    );
+}

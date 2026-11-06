@@ -38,6 +38,22 @@ no step before step 7 uses an action, and no step before step 7 can request a to
 lint (`cargo test -p xtask --test workflows`) refuses the file otherwise. A version is set only by a
 program the job has proven was built from the commit you pinned.
 
+## Before it runs: the release must be in the channel
+
+A host fetches the version from the release channel (`{release_channel}/S/V/`), not from GitHub.
+The order is:
+
+1. the service's release workflow publishes the signed GitHub release;
+2. `cargo xtask release channel-sync` on the channel's host stages it into the channel
+   ([release-channel.md](release-channel.md#sync-new-releases-into-the-channel)), within one
+   period of its timer;
+3. then this workflow sets the desired version.
+
+A version set before the channel holds it is not refused by the coordinator: every host ordered
+to it fails its fetch (`fetch_failed`) and retries until the channel has it. Call this workflow
+once the version is in the channel: from a job that runs after the sync (by hand, or after a
+check that `S/V/index.json` is served), not straight after the release is published.
+
 ## Calling it
 
 In the service's release workflow, after the job that publishes the package:
@@ -68,6 +84,78 @@ The coordinator must hold an allow-list entry for the calling repository and wor
 the service and the audience you pass (design, section 5.1: a CI token sets the desired version
 only of the services its entry names).
 
+## The release channel check
+
+A coordinator started with `--release-channel <base-url>` (an `https://` URL such as
+`https://channel.example/releases`, the same channel the daemon config's `release_channel`
+names) checks every set against it before anything changes: it fetches
+`<base-url>/<service>/<version>/index.json` and refuses the set unless the channel holds that
+version with the package the set names. Without the flag it fetches nothing and refuses nothing
+for the channel. Only `https://` is taken; any other scheme stops the coordinator's start.
+
+| token | when | retry? |
+|---|---|---|
+| `not_in_channel` | The channel has no index for the version (404), or it could not be read: no connection, no answer within the coordinator's deadlines (`--release-channel-connect-secs`, default 10, and `--release-channel-timeout-secs`, default 30), a redirect or another status, an answer over 64 KiB, or an answer that is not an index or lists no package. | Yes. Nothing changed and no host was ordered. Make this job `needs:` the job that publishes the package and syncs the channel, or run the job again once the channel sync has finished. |
+| `channel_digest_mismatch` | The channel's index for the version names another service or version, or lists no package whose SHA-256 is `package_digest`. | No. The channel holds another artifact for this version than the one you are setting; fix the channel or the digest. |
+
+Both are refusals like the others (gRPC `FAILED_PRECONDITION`, the token as the message), so the
+job ends with the token as `reason` and the version is not set.
+
+## The allow-list entry
+
+The coordinator reads its allow-list at start from the file of `--oidc-config`, one
+`[[remote_operator]]` table per entry (`crates/hostkeeper-oidc`, `config.rs`). The first entry
+that admits a token wins, and the token sets the desired version only of the services that entry
+names.
+
+**`job_workflow_ref` names `set-desired.yml`, not your workflow.** GitHub sets a job's
+`job_workflow_ref` to the reusable workflow the job runs, so every caller's token names
+`komira-ai/hostkeeper/.github/workflows/set-desired.yml@<the commit of your uses: line>`. The
+entry cannot tell two workflows of one repository apart that call the same pin: it admits any
+workflow of the repository that calls that pin from a ref in `refs`. In this repository the workflow
+lint (`cargo test -p xtask --test workflows`, `callers.rs`) holds the callers to a fixed list, so a
+new caller needs a reviewed change to the lint. Change `job_workflow_ref` in the same change as
+the `uses:` pin, or the coordinator refuses the token (`unauthorized`).
+
+The entry for this repository's one caller today, `hello-desired.yml`, the hello proof run
+([docs/hello.md](../hello.md)):
+
+```toml
+[[remote_operator]]
+issuer = "https://token.actions.githubusercontent.com"
+audience = "hostkeeper-ci"
+repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
+repository = "komira-ai/hostkeeper"
+job_workflow_ref = [
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@f04696da7e2bdcbaf9112450ab651a1ab24e61bf",
+]
+refs = ["refs/heads/main"]
+event_names = ["workflow_dispatch"]
+runner_environment = "github-hosted"
+services = ["hello"]
+```
+
+| key | value here | why |
+|---|---|---|
+| `audience` | `hostkeeper-ci` | The caller's `audience` input; the repository variable `HOSTKEEPER_CI_AUDIENCE` holds it for `hello-desired.yml`. |
+| `repository_id` | the repository's number | It does not change when the repository is renamed or moved; `repository` is checked too when given. |
+| `job_workflow_ref` | `set-desired.yml` at the pinned commit | The ref of the `uses:` line, as above. |
+| `refs` | `refs/heads/main` | `hello-desired.yml` sets nothing from another branch: its jobs run only on main, and a token from another ref is refused here as well. |
+| `event_names` | `workflow_dispatch` | `hello-desired.yml` runs by hand only. The default is `push` and `workflow_dispatch`; a `pull_request` event is refused in any entry. |
+| `services` | `hello` | What a token of the entry may set. |
+
+When `release.yml` sets hostkeeper's own desired version (it does not call the client yet), the
+same entry covers it with two changes: `event_names` adds `workflow_run` and `schedule`, the events
+`release.yml` runs on, and `services` adds `hostkeeper`:
+
+```toml
+event_names = ["workflow_dispatch", "workflow_run", "schedule"]
+services = ["hello", "hostkeeper"]
+```
+
+Adding or changing the entry is a change to the coordinator's configuration, made by its operator;
+the coordinator reads the file when it starts, so restart it afterwards. Nothing in CI writes it.
+
 ## Inputs
 
 | input | type | required | default | meaning |
@@ -93,7 +181,7 @@ only of the services its entry names).
 |---|---|
 | `desired_version` | The desired version the coordinator stored; empty when it stored none. |
 | `converged` | `true` when the fleet converged on the version, `false` otherwise. |
-| `reason` | Why the job ended where it did, one token: `converged`, `not_waited`, `halted`, `superseded`, `not_converged`, `not_stored`, `no_answer`, or the refusal token the coordinator gave (for example `held_bad`). Empty when a verification step failed or a flag was refused (exit 2); `no_answer` also when the client could not get a token or write its files. |
+| `reason` | Why the job ended where it did, one token: `converged`, `not_waited`, `halted`, `superseded`, `not_converged`, `not_stored`, `no_answer`, or the refusal token the coordinator gave (for example `held_bad`, `not_in_channel` or `channel_digest_mismatch`). Empty when a verification step failed or a flag was refused (exit 2); `no_answer` also when the client could not get a token or write its files. |
 
 ## Pinning hostkeeper
 
@@ -259,7 +347,7 @@ counts as one of the `max_polls` reads.
 | Check the version of the verified hostkeeper | The program does not say `hostkeeper <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
 | Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a tag other than `tag:hk-ci` on the credential), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
 | Set the desired version and wait for the fleet: before the call | An input breaks its rule (exit 2): a service name or version with other characters, a digest that is not 64 lower-case hex digits, a URL that is not `https://`, a `max_polls` outside 1 to 1000. Or GitHub issued no token (`reason` is `no_answer`): the calling job does not grant `id-token: write`. The version is not set. | Fix the input, or grant `id-token: write` to the calling job. |
-| Set the desired version and wait for the fleet: the set | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request`, `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later). `no_answer`: the coordinator could not be reached; with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it ([Reaching the coordinator](#reaching-the-coordinator)). `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `releases converge` before you retry. | Fix what the token names, then run the job again. |
+| Set the desired version and wait for the fleet: the set | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request`, `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `not_in_channel` (the coordinator's release channel does not hold the version yet; retry once the channel sync has finished), `channel_digest_mismatch` (the channel's index of the version does not list `package_digest`; do not retry). `no_answer`: the coordinator could not be reached; with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it ([Reaching the coordinator](#reaching-the-coordinator)). `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `releases converge` before you retry. | Fix what the token names, then run the job again. |
 | Set the desired version and wait for the fleet: the wait | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt. `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` reads passed and the fleet had not converged; the roll goes on. A refusal token: the read was refused. | Look at the service in the coordinator's UI or with `hostkeeper ctl releases status`. |
 
 ## What it does not do
@@ -267,4 +355,5 @@ counts as one of the `max_polls` reads.
 - It does not change the coordinator's allow-list, the service's definition, holds or marks.
 - It does not build, sign or publish the service's package; the package and its digest come from
   the service's own release job.
-- It does not retry a refused call.
+- It does not retry a refused call, `not_in_channel` included: run the job again once the
+  release channel holds the version.

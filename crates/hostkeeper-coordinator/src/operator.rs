@@ -11,7 +11,9 @@
 //! token, or any other, `unauthorized`, before the request is looked at. A refusal is one value
 //! of the service's refusal enum and changes nothing; `store_failed` means the ops file could not
 //! be written, and asking again is safe. Every change is one entry of the audit ring and file,
-//! under the name of the operator's token.
+//! under the name of the operator's token; a change whose line cannot be appended to the audit
+//! file is refused `audit_unavailable` and not made, except `Hosts.Abort` and `Releases.Halt`,
+//! which stand ([`crate::ops::OpsStore`]).
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::hold_scope::Scope;
@@ -71,11 +73,20 @@ macro_rules! refusals {
                 }
             }
         }
+    )*};
+}
 
+/// The `From<OpsError>` of the refusals of services that change something: a change whose audit
+/// line could not be appended is `audit_unavailable`, any other failure `store_failed`.
+macro_rules! changing {
+    ($($refusal:ident),*) => {$(
         impl From<OpsError> for proto::$refusal {
             fn from(why: OpsError) -> Self {
                 tracing::error!(%why, "an operator's change could not be written: nothing changed");
-                Self::StoreFailed
+                match why {
+                    OpsError::AuditUnavailable(_) => Self::AuditUnavailable,
+                    _ => Self::StoreFailed,
+                }
             }
         }
     )*};
@@ -88,6 +99,21 @@ refusals!(
     EnrollmentRefusal,
     AuditRefusal
 );
+
+changing!(
+    HostsRefusal,
+    ReleasesRefusal,
+    ServicesRefusal,
+    EnrollmentRefusal
+);
+
+/// `Audit` only reads: a log that cannot be read is `store_failed`.
+impl From<OpsError> for proto::AuditRefusal {
+    fn from(why: OpsError) -> Self {
+        tracing::error!(%why, "the audit log could not be read");
+        Self::StoreFailed
+    }
+}
 
 /// The reason `text` trimmed, if it is one: 1 to 256 bytes with no control character.
 pub(crate) fn valid_reason(text: &str) -> Option<String> {
@@ -325,7 +351,9 @@ impl Coordinator {
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the node id or the reason),
     /// `unknown_service`, `unknown_host` (not heard from since the coordinator started),
-    /// `store_failed`.
+    /// `store_failed`. Never `audit_unavailable`: an abort whose audit line cannot be appended
+    /// is queued all the same, the failure logged and the entry in the ring
+    /// ([`crate::ops::OpsStore::escape`]).
     pub fn abort(
         &self,
         caller: &Caller,
@@ -347,7 +375,7 @@ impl Coordinator {
         }
         let mut audit = entry(by, "abort", &def.name, why);
         audit.node_id = Some(id.to_string());
-        let done = self.ops.change(Write::BeforeMemory, audit, |_| {})?;
+        let done = self.ops.escape(audit)?;
         fleet.queue_abort(id, def.name.clone(), format!("abort-{}", done.seq));
         Ok(proto::AbortResponse {
             queued: true,
@@ -510,7 +538,10 @@ impl Coordinator {
 
     /// `Audit.List`: the entries of the audit file after `since_seq` that match every filter
     /// set, oldest first, at most `limit` ([`MAX_AUDIT_PAGE`] for 0 or more), and the `since_seq`
-    /// of the next page. Changes nothing.
+    /// of the next page. Changes nothing. The entries are read across the active audit file and
+    /// the sealed segments it keeps ([`crate::audit_file`]); a `since_seq` in a segment deleted
+    /// since answers from the oldest entry kept, with nothing in the answer to say so (the
+    /// response has no field for it). It answers when the audit file takes no lines.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a filter that is no actor token, action,
@@ -544,9 +575,8 @@ impl Coordinator {
         };
         let page: Vec<AuditEntry> = self
             .ops
-            .audit_log()?
+            .audit_after(request.since_seq)?
             .into_iter()
-            .filter(|e| e.seq > request.since_seq)
             .filter(|e| actor.is_none_or(|actor| actor_of(&e.by) == actor))
             .filter(|e| request.action.as_ref().is_none_or(|a| *a == e.action))
             .filter(|e| request.service.is_none() || e.service == request.service)

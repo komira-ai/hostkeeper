@@ -260,10 +260,9 @@ async fn set_desired_of_a_service_off_the_allow_list_is_forbidden() {
 }
 
 /// Proves: for every method of the operator API the credentials that are admitted are exactly
-/// these: the operator token for every method but `Converge`, CI's token for `SetDesired` and
-/// `Converge` only, and no credential for any. The others are refused with `unauthorized`
-/// (nothing, or the operator token at `Converge`) or `forbidden` (a CI token at a method that
-/// takes the operator's only).
+/// these: the operator token for every method, CI's token for `SetDesired` and `Converge` only,
+/// and no credential for any. The others are refused with `unauthorized` (nothing) or
+/// `forbidden` (a CI token at a method that takes the operator's only).
 #[tokio::test]
 async fn every_operator_method_admits_exactly_its_credential() {
     let served = served("grpc-cred-table");
@@ -286,14 +285,9 @@ async fn every_operator_method_admits_exactly_its_credential() {
         } else {
             refused(Code::PermissionDenied, "forbidden")
         };
-        let with_operator = if path == CONVERGE {
-            refused(Code::Unauthenticated, "unauthorized")
-        } else {
-            Outcome::Admitted
-        };
         assert_eq!(
             outcome(&served, path, Some(OPERATOR)).await,
-            with_operator,
+            Outcome::Admitted,
             "{path} with the operator token"
         );
         assert_eq!(
@@ -307,6 +301,54 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "{path} with no token"
         );
     }
+}
+
+/// Proves: admitting the operator's token on `Converge` widened no other method of `Releases`:
+/// through the router, each of `Force`, `UnmarkBad`, `ClearHalt`, `Status`, `MarkBad` and
+/// `Halt` still refuses CI's token as `PERMISSION_DENIED` `forbidden` and a call with no token as
+/// `UNAUTHENTICATED` `unauthorized`, and nothing was set afterwards.
+#[tokio::test]
+async fn every_other_releases_method_still_refuses_ci_and_no_token() {
+    let served = served("grpc-cred-releases");
+    let others: Vec<&str> = operator_paths()
+        .into_iter()
+        .filter(|path| path.starts_with("/hostkeeper.operator.v1.Releases/"))
+        .filter(|path| *path != SET_DESIRED && *path != CONVERGE)
+        .collect();
+    assert_eq!(
+        others,
+        [
+            "/hostkeeper.operator.v1.Releases/Force",
+            "/hostkeeper.operator.v1.Releases/UnmarkBad",
+            "/hostkeeper.operator.v1.Releases/ClearHalt",
+            "/hostkeeper.operator.v1.Releases/Status",
+            "/hostkeeper.operator.v1.Releases/MarkBad",
+            "/hostkeeper.operator.v1.Releases/Halt",
+        ]
+    );
+    for path in others {
+        let with_ci = grpc_request(path, (), Some(&ci_token()));
+        assert_eq!(
+            call(&served.coordinator, Surface::Control, &None, with_ci).await,
+            (Code::PermissionDenied, "forbidden".to_owned(), None),
+            "{path} with CI's token"
+        );
+        let with_none = grpc_request(path, (), None);
+        assert_eq!(
+            call(&served.coordinator, Surface::Control, &None, with_none).await,
+            (Code::Unauthenticated, "unauthorized".to_owned(), None),
+            "{path} with no token"
+        );
+    }
+
+    let request = grpc_request(STATUS, (), Some(OPERATOR));
+    let (code, _, body) = call(&served.coordinator, Surface::Control, &None, request).await;
+    assert_eq!(code, Code::Ok);
+    let status: StatusResponse = decode(&body.expect("a message"));
+    assert!(
+        status.services.iter().all(|one| one.desired.is_none()),
+        "nothing was set: {status:?}"
+    );
 }
 
 /// Proves: a bearer longer than the coordinator looks at counts as no bearer, though it is the

@@ -34,6 +34,13 @@
 # `releases set-desired`, reads `releases converge` at most `max_polls` times, and writes the
 # job's outputs.
 #
+# Call it only once the release of the service is in the release channel: a host fetches the
+# version from the channel, and `cargo xtask release channel-sync` stages a published release
+# there (docs/deploy/release-channel.md, "Sync new releases into the channel"). The order is:
+# the release is published, channel-sync stages it, then this workflow sets the desired version.
+# A version set before the channel holds it leaves every host failing its fetch (`fetch_failed`)
+# and retrying until it arrives.
+#
 # The names of the release's assets are written once, in the job's `env`.
 name: set-desired
 
@@ -110,7 +117,7 @@ on:
         description: "`true` when the fleet converged on the version, `false` otherwise."
         value: ${{ jobs.set-desired.outputs.converged }}
       reason:
-        description: Why the job ended where it did, one token.
+        description: "Why the job ended where it did, one token (a refusal token of the coordinator among them, such as `not_in_channel`, which is retryable once the release channel holds the version, or `channel_digest_mismatch`)."
         value: ${{ jobs.set-desired.outputs.reason }}
 
 permissions: {}

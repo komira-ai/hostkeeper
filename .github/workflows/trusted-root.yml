@@ -1,0 +1,45 @@
+# The Sigstore trusted root hostkeeper's package carries, held against the live one. The daemon
+# checks every package's attestation against the root its own package brought
+# (`files/trusted_root.json`, from packaging/sigstore/trusted_root.json) or the host's own copy,
+# whichever was written last, so a key that Sigstore rotates
+# reaches the hosts with the next release of hostkeeper made after the committed root changes,
+# while the old root still verifies that release. This workflow fetches the live root with the
+# runner's `gh` (`gh attestation trusted-root`, as docs/deploy/verify-a-release.md does) once a
+# day and fails when its bytes are not the committed file's: the red run is the notice to commit
+# the new root, and the failed run keeps the live root as its artifact `trusted-root`. The
+# comparison is of bytes, so a new `gh` on the runner that writes the same root differently turns
+# the run red too; the run prints the `gh` version, and the fix is the same: commit the live
+# output. It changes nothing and holds no write scope.
+name: trusted-root
+
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: gh --version
+      - name: The live trusted root
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"
+      - name: The committed root is the live one
+        run: cmp packaging/sigstore/trusted_root.json "$RUNNER_TEMP/trusted_root.json"
+      - name: Keep the live root of a failed comparison
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trusted-root
+          path: ${{ runner.temp }}/trusted_root.json
+          if-no-files-found: ignore

@@ -23,8 +23,8 @@ use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Class, Step, Verdict};
 use hostkeeper_steps::record::{AwaitingRestart, RECORD_FILE, State};
 use hostkeeper_steps::{
-    BAD_VERSIONS_FILE, LaunchError, ProbeCall, ProbeExit, RecordStore, Settled, StepCall, StepExit,
-    StepLauncher,
+    BAD_VERSIONS_FILE, BootId, LaunchError, ProbeCall, ProbeExit, RecordStore, Settled, StepCall,
+    StepExit, StepLauncher,
 };
 use support::selfupdate::{
     HK, NEW, OLD, SelfRig, awaiting, put_record, record_of, refused_before_commit,
@@ -48,7 +48,7 @@ fn with_a(name: &str, state: Option<State>) -> (SelfRig, Reply) {
 fn running() -> State {
     State::Running {
         started: hostkeeper_steps::Stamp {
-            boot_id: "b".to_owned(),
+            boot_id: BootId::new("a test", "b").ok(),
             mono_secs: 1,
         },
         deadline_secs: 10,

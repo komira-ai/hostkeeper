@@ -24,10 +24,28 @@ with no client certificate asked of `Enroll` and `Poll`.
 | `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--enrollment-dir`. |
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
-start logs it at info as `ca_sha256`. At each start the server certificate is made again when
-its file is missing, does not start with a certificate, or has less than a third of its 90 days
-left; delete the file to make one sooner (for new `--server-name` values, say). Nothing renews it
-while the coordinator runs: restart it within the certificate's validity.
+start logs it at info as `ca_sha256`. The server certificate is made again when its file is
+missing, does not start with a certificate, or has less than a third of its 90 days left (60 days
+after it was made): at the start, and while the coordinator runs, at each look of the reload tick
+(`--tls-reload-secs`, 60 seconds when not given), before the tick reloads the TLS files, so the
+heartbeat listener serves the new certificate from that same tick. A restart is not needed. The
+new file, with a new key and a serial from the store, is written whole: a temporary file
+`<file>.tmp` beside it (mode 0600), fsync, rename over the old one, fsync of the directory. Delete
+the file to have one made sooner (for new `--server-name` values, say): the next tick makes it.
+
+A renewal that fails (the file cannot be read, or the new one cannot be made or written) changes
+nothing that is served: the temporary file is removed, the old file stays as it was, and the
+listener keeps serving the old certificate. The failure is logged at error level ("cannot renew
+the coordinator's server certificate") and shown in `GET /v1/status`, which with enrollment has
+
+```json
+"server_certificate": { "not_after": 1807776000, "renewal_error": "No space left on device (os error 28)" }
+```
+
+`not_after` is the end of the certificate in the file, in unix seconds, as the last tick that
+read it found it; `renewal_error` is why the last tick failed, and `null` once a tick finds the
+certificate not due or renews it. Each tick tries again. Without `--enrollment-dir` the status
+has no `server_certificate`. `Releases.Status` over gRPC does not carry it.
 
 With enrollment the heartbeat listener lets a client without a certificate through the TLS
 handshake, and admits a client certificate of the coordinator's CA as well as one that chains to
@@ -75,7 +93,10 @@ Mac nonce was presented. It never answers a CSR or a nonce.
 
 `Approve` names the request, the SHA-256 of its key as listed (compared whole, in constant time;
 another request's key hash is `key_mismatch`), the host id, the role, the services (each one the
-coordinator manages) and a reason. Under the store's lock it is refused when the request is not
+coordinator manages) and a reason. A request (not a renewal) that matches exactly one record of
+the host inventory is approved as that record's host id: an empty host id is it, and the answer's
+`host_id` names it; another host id is `record_mismatch` unless `replace` is set. Any other request
+names its host id. Under the store's lock it is refused when the request is not
 pending, is a `duplicate_claim`, or names a host id another key holds or an operator denied,
 unless `replace` is set. One write of the request file records the approval: host id, role,
 services (the host's first assignment), the operator's token name, the time and the reason. The
@@ -86,17 +107,21 @@ it cannot renew.
 Each approval is audited `enroll_approve` (`enroll_replace` with `replace`) under the operator's
 token name, with the request id, role, services and the claims; each refused one
 `enroll_approve_refused` with its token, and nothing else changes. The audit log is a second file,
-so its entry is written right after the approval; an approval whose entry did not land is audited
-when the coordinator next starts.
+so its entry is written right after the approval; an approval whose entry did not land (a crash,
+or an audit file that takes no lines) is audited when the coordinator next starts. An approval is
+therefore never refused `audit_unavailable`: the request file is its durable record. Once the audit
+file's retention has deleted segments, an approval older than the oldest line kept is not audited
+again.
 
 | token | when |
 |---|---|
 | `unauthorized` | no bearer, or not an operator token |
 | `forbidden` | a CI token |
 | `invalid_request` | a request id, key hash, reason or page token that breaks its rule |
-| `invalid_host_id`, `invalid_role`, `invalid_service` | that field breaks its rule; a service the coordinator does not manage; a renewal named under another host id |
+| `invalid_host_id`, `invalid_role`, `invalid_service` | that field breaks its rule; a service the coordinator does not manage; a renewal named under another host id; no host id for a request that matches no single record |
 | `unknown_request` | no request has the id |
 | `key_mismatch` | the key hash is not the request's |
+| `record_mismatch` | the request matches one inventory record, the host id is another, and `replace` is not set |
 | `not_pending` | the request was approved, issued or denied already |
 | `duplicate_claim` | the request is a duplicate claim and `replace` is not set |
 | `host_id_taken` | another key holds the host id and `replace` is not set |
@@ -132,7 +157,9 @@ breaks its rule or names a service the rollout file does not define stops the st
 ## Backup
 
 Back up the CA key file and its `.cert` once, right after the CA is made, sealed and offline:
-[docs/operations/ca-backup.md](operations/ca-backup.md). Rotating the CA is not built.
+[docs/operations/ca-backup.md](operations/ca-backup.md). Rotating the CA is not built. The enrollment
+store is backed up with the rest of the coordinator's state, by `hostkeeper-coordinator backup`:
+[docs/operations/coordinator-state.md](operations/coordinator-state.md).
 
 ## What a host is told
 

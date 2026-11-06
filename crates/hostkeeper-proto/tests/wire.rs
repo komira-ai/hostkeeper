@@ -257,6 +257,7 @@ fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
             record_problem: RecordProblem::Unreadable.into(),
             ..ServiceRecord::default()
         }],
+        ..StatusResponse::default()
     };
     let read = StatusResponse::decode(status.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(read.services[0].record_problem(), RecordProblem::Unreadable);
@@ -427,7 +428,7 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 25] = [
+const FIELDS: [(&str, &[(&str, u32)]); 26] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -440,6 +441,14 @@ const FIELDS: [(&str, &[(&str, u32)]); 25] = [
     (
         "hostkeeper.agent.v1.VerdictAck",
         &[("service", 1), ("order_id", 2), ("order_try", 3)],
+    ),
+    (
+        "hostkeeper.local.v1.StatusResponse",
+        &[
+            ("services", 1),
+            ("trusted_root_age_secs", 2),
+            ("trusted_root_reason", 3),
+        ],
     ),
     (
         "hostkeeper.local.v1.ServiceRecord",
@@ -690,6 +699,7 @@ fn wire_names_are_pinned() {
                 "unknown_host",
                 "capacity",
                 "store_failed",
+                "audit_unavailable",
             ],
         ),
         (
@@ -713,6 +723,9 @@ fn wire_names_are_pinned() {
                 "already_bad",
                 "already_halted",
                 "unknown_target",
+                "audit_unavailable",
+                "not_in_channel",
+                "channel_digest_mismatch",
             ],
         ),
         (
@@ -729,6 +742,7 @@ fn wire_names_are_pinned() {
                 "store_failed",
                 "unknown_role",
                 "below_min_version",
+                "audit_unavailable",
             ],
         ),
         (
@@ -753,6 +767,8 @@ fn wire_names_are_pinned() {
                 "record_conflict",
                 "no_record",
                 "capacity",
+                "audit_unavailable",
+                "record_mismatch",
             ],
         ),
         (

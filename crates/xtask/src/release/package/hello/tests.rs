@@ -61,6 +61,7 @@ fn request(
         binary: dir.join("hello"),
         unit: None,
         fail_ready,
+        trusted_root: None,
         out: dir.join(out),
     }
 }
@@ -616,6 +617,7 @@ fn hello_takes_no_unit_and_hostkeeper_takes_no_fail_ready_and_needs_its_unit_on_
         let mut r = request(&dir, &commit, platform, fail_ready, out);
         r.service = Service::Hostkeeper;
         r.unit = unit.then(|| dir.join("hostkeeper.service"));
+        r.trusted_root = Some(dir.join("trusted_root.json"));
         r
     };
     refuse(
@@ -651,7 +653,7 @@ fn the_unit_check_holds_each_service_to_its_own_current_path() {
     assert_eq!(
         refused("hostkeeper", hello),
         Err(Error::Failed(
-            "u has no ExecStart line naming /var/lib/hostkeeper/packages/hostkeeper/current/bin/hostkeeper"
+            "u has no ExecStart line naming /var/lib/updater/state/hostkeeper/bin/current"
                 .to_owned()
         ))
     );

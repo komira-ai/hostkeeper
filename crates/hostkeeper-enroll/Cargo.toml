@@ -34,6 +34,10 @@ tonic = { workspace = true, features = ["channel", "tls-ring"] }
 x509-cert.workspace = true
 
 [dev-dependencies]
+# The coordinator's own enrollment and CA (`Enrollment`, `check_request`), which the requests the
+# enroller makes are posted to in `tests/enroll/coordinator.rs`.
+hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
+hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The test PKI of `GrpcEnroll`'s tests, made at run time.
 rcgen.workspace = true

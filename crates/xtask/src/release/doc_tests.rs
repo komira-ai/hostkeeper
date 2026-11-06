@@ -15,7 +15,9 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
-use super::contract::{COORDINATOR, Commit, PROGRAM, Platform, Version, asset_names, stamp_of};
+use super::contract::{
+    COORDINATOR, Commit, PROGRAM, Platform, Signer, Version, asset_names, stamp_of,
+};
 use super::github::Gh;
 use super::ports::{Exec, Ran, Verifier};
 
@@ -162,7 +164,12 @@ fn verify_line(file: &str, offline: bool, commit: &Commit) -> Vec<String> {
     let gh = Gh::new(recorder.clone());
     let path = Path::new("dist").join(file);
     let bundle = Path::new("dist").join(format!("{file}.sigstore.json"));
-    let _not_started = gh.verify(&path, offline.then_some(bundle.as_path()), commit);
+    let _not_started = gh.verify(
+        &Signer::hostkeeper(),
+        &path,
+        offline.then_some(bundle.as_path()),
+        commit,
+    );
     let lines = recorder.0.borrow();
     lines.first().cloned().unwrap_or_default()
 }

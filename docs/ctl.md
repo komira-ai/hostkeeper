@@ -140,7 +140,7 @@ id, role and services the approval names.
 |---|---|---|
 | `--request-id` | STRING |  |
 | `--key-sha256` | STRING | The SHA-256 of the pending request's key, as `PendingEnrollment.key_sha256` lists it. |
-| `--host-id` | STRING | The host id the certificate names. |
+| `--host-id` | STRING | The host id the certificate names. For a request (not a renewal) that matches exactly one inventory record, empty means that record's host id, and another host id needs `replace`; otherwise it is required. |
 | `--role` | STRING |  |
 | `--services` | STRING, repeated | Services to assign to the host; may be empty. |
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. |
@@ -288,7 +288,7 @@ Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState).
 `/hostkeeper.operator.v1.Releases/Converge`
 
 How far a service's hosts are from its desired version. Changes nothing. Takes CI's OIDC
-token only.
+token or the operator token.
 
 | flag | value | meaning |
 |---|---|---|

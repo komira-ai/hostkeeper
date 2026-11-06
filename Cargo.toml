@@ -36,6 +36,10 @@ hex = "0.4.3"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false }
 hyper-util = { version = "0.1.21", default-features = false }
+# The Linux daemon's reader of the BMC over `/dev/ipmi0` (hostkeeper-daemon's `ipmi`): the
+# kernel IPMI device's `ioctl`s behind a safe `File`, so the workspace keeps `unsafe` out. Only
+# its device file connection (`unix-file`), not the RMCP+ client's MD5.
+ipmi-rs = { version = "0.6.0", default-features = false, features = ["unix-file"] }
 # `O_NOFOLLOW` and `O_NONBLOCK` for the daemon config and the manifest (hostkeeper-config) and
 # the secret files (hostkeeper-wire).
 libc = "0.2.190"
@@ -96,6 +100,9 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 # The operator token compared in constant time (hostkeeper-coordinator).
 subtle = "2.6.1"
+# `sysctlbyname` behind a safe interface (MIT): the boot id of a Mac, `kern.bootsessionuuid`
+# (hostkeeper-launchd), a macOS-only target dependency, never compiled on Linux.
+sysctl = "0.7.1"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
 # The validity of a certificate, in the type rcgen takes (hostkeeper-enrollment).

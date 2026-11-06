@@ -120,6 +120,7 @@ only, never from the environment:
 | `--admin-socket` | `/run/hostkeeper/admin.sock` | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
 | `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1 |
+| `--trusted-root-max-age-days` | `90` | days after which the Sigstore trusted root that package attestations are checked against is reported `trusted_root_stale` in the admin `Status`, at least 1; a signal only, package checks go on (see [docs/deploy/verify-a-release.md](docs/deploy/verify-a-release.md#the-trusted-root-on-a-host)) |
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
@@ -138,8 +139,8 @@ and while there is none it says once what it waits for and sends nothing. It the
 admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
 new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
 transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
-the unit's name), and observes each service for `Status`. It has no service manager wired in,
-its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
+the unit's name), stops, starts and reloads units through `systemctl`, and observes each
+service for `Status`. Its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
 protocol probe (each fails without starting). Once the host is enrolled, its heartbeats go to the
 config's `coordinator` over mutual TLS, pinned to `ca_sha256` (JSON, then gRPC once the coordinator
 advertises it), and the coordinator's orders come back in the replies.
