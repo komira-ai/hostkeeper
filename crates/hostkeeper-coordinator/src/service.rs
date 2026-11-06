@@ -923,7 +923,7 @@ impl Coordinator {
                     .collect();
                 let up = hosts.iter().filter(|h| h.host.up).count();
                 let slots_held = hosts.iter().filter(|h| h.host.holds_slot).count();
-                let members = members(def, fleet, &ops, now);
+                let members = members(def, fleet, &ops, desired.as_ref(), now);
                 let convergence = convergence_of(def, desired.as_ref(), fleet, &ops, now);
                 let status = ServiceStatus {
                     desired,

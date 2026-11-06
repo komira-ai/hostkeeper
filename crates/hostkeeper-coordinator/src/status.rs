@@ -181,7 +181,12 @@ pub(crate) fn convergence_of(
 ) -> Convergence {
     let convergence = converge_service(def, desired, fleet, now);
     let deferred = deferred_count(def, fleet, convergence.desired.as_ref(), now);
-    let convergence = account(convergence, def, &members(def, fleet, ops, now), deferred);
+    let convergence = account(
+        convergence,
+        def,
+        &members(def, fleet, ops, desired, now),
+        deferred,
+    );
     match halt::standing(ops, &def.name) {
         Some(halt) => convergence.halted(halt),
         None => convergence,

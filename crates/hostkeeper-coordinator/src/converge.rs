@@ -28,8 +28,10 @@
 //! How long a farm has gone without progress is the caller's to judge: it needs the time of
 //! the last change, which the coordinator does not keep.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
+use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::Outcome;
 use serde::Serialize;
@@ -143,8 +145,15 @@ fn unlisted(host: &Host, desired: &Desired) -> bool {
     desired.lacks_package_for(host.beat.platform)
 }
 
+/// Whether the host `id` of `def` is counted against `desired`: the service is assigned to it
+/// ([`Fleet::is_assigned`], the function the order path asks), an operator does not hold the pair,
+/// and the release index lists a package for its platform.
+fn counted(def: &ServiceDef, desired: &Desired, fleet: &Fleet, id: &HostId, host: &Host) -> bool {
+    fleet.is_assigned(def, id) && !fleet.is_held(&def.name, id) && !unlisted(host, desired)
+}
+
 fn counts(
-    service: &str,
+    def: &ServiceDef,
     role: &str,
     desired: &Desired,
     fleet: &Fleet,
@@ -152,10 +161,10 @@ fn counts(
 ) -> RoleCounts {
     let mine = || {
         fleet
-            .hosts_of(service)
-            .filter(|(id, _)| !fleet.is_held(service, id))
+            .hosts_of(&def.name)
+            .filter(|(id, h)| counted(def, desired, fleet, id, h))
             .map(|(_, h)| h)
-            .filter(move |h| h.role_name() == role && !unlisted(h, desired))
+            .filter(move |h| h.role_name() == role)
     };
     RoleCounts {
         role: role.to_owned(),
@@ -172,8 +181,10 @@ fn counts(
     }
 }
 
-/// The counts of every role of `def` that has a host an operator does not hold, in role order
-/// ([`ServiceDef::role_names`]); none when no desired state was set.
+/// The counts of every role that has a counted host of `def` (assigned, not held, listed):
+/// the rollout file's roles first, in their order ([`ServiceDef::role_names`]), then any other
+/// role, by name, that holds a host an operator's entry assigned (`Services.Assign`); none when
+/// no desired state was set.
 #[must_use]
 pub fn role_counts(
     def: &ServiceDef,
@@ -184,15 +195,25 @@ pub fn role_counts(
     let Some(desired) = desired else {
         return Vec::new();
     };
-    def.role_names()
-        .into_iter()
-        .map(|role| counts(&def.name, role, desired, fleet, now))
+    let assigned: BTreeSet<&str> = fleet
+        .hosts_of(&def.name)
+        .filter(|(id, h)| counted(def, desired, fleet, id, h))
+        .map(|(_, h)| h.role_name())
+        .collect();
+    let base = def.role_names();
+    let added = assigned.iter().copied().filter(|role| !base.contains(role));
+    base.iter()
+        .copied()
+        .filter(|role| assigned.contains(role))
+        .chain(added)
+        .map(|role| counts(def, role, desired, fleet, now))
         .filter(|c| c.at_desired + c.updating + c.failed + c.down > 0)
         .collect()
 }
 
 /// Where the hosts of the service `def` stand at `now` against its `desired`, over the hosts
-/// that heartbeated the service and that an operator does not hold ([`Fleet::is_held`]). One
+/// that heartbeated the service, that it is assigned to ([`Fleet::is_assigned`]: by the rollout
+/// file or an operator's entry) and that an operator does not hold ([`Fleet::is_held`]). One
 /// rule serves every service: converged when every live member runs the desired version and
 /// none is updating, failed, baking or waiting for a promotion; no number of hosts up is
 /// required.
@@ -219,12 +240,7 @@ pub fn converge_service(
     let roles = role_counts(def, Some(desired), fleet, now);
     let live = fleet
         .hosts_of(service)
-        .filter(|(id, h)| {
-            def.roles.contains(h.role_name())
-                && h.is_live(now)
-                && !fleet.is_held(service, id)
-                && !unlisted(h, desired)
-        })
+        .filter(|(id, h)| h.is_live(now) && counted(def, desired, fleet, id, h))
         .count();
     let at_desired: usize = roles.iter().map(|c| c.at_desired).sum();
     let clear = roles.iter().all(|c| c.updating == 0 && c.failed == 0);
@@ -232,8 +248,7 @@ pub fn converge_service(
     // version. A pair an operator holds is left out of every count: it never blocks the others.
     let settled = fleet.hosts_of(service).all(|(id, h)| {
         !h.is_live(now)
-            || fleet.is_held(service, id)
-            || unlisted(h, desired)
+            || !counted(def, desired, fleet, id, h)
             || !(h.beat.promotion_pending
                 || fleet.is_baking(service, id, h, &desired.version, def.bake_beats, now))
     });

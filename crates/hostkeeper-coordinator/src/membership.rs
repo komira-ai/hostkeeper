@@ -1,8 +1,11 @@
 //! Which hosts a service counts (`docs/design/host-updates.md`, section 5.1).
 //!
-//! Without a selector a host belongs to a service if its own heartbeat names it and the
-//! service is assigned to it ([`crate::assignment`]: by its role in the rollout file, or by an
-//! operator's entry): the hosts the coordinator has heard announce it. A service with a
+//! Without a selector a host belongs to a service if the service is assigned to it
+//! ([`crate::assignment`]: by its role in the rollout file, or by an operator's entry) and its
+//! own heartbeat names it, or its agent announced both [`HEARTBEAT_V2`] and
+//! [`INSTALL_FEATURE`]: such an agent lists every service it runs and takes installs, so the
+//! order path tells it to install an assigned service it does not list, and it is `missing` until
+//! it does. A service with a
 //! [`Selector`] says instead which hosts should run it, by certificate role and by the labels
 //! an operator gave the host ([`crate::ops`]; a host never sets its own), with the operator's
 //! entries on top, and a selected host that did not announce the service is `missing`.
@@ -34,8 +37,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::assignment::{Placement, assigned};
 use crate::converge::{Convergence, State};
+use crate::desired::Desired;
 use crate::fleet::{Fleet, Node};
 use crate::ops::{MAX_LABELS, OpsState, label};
+use crate::orders::INSTALL_FEATURE;
 use crate::services::ServiceDef;
 
 /// The feature of an agent that lists every service it runs, the legacy service included, and may say
@@ -150,16 +155,20 @@ pub fn membership(
         role: &node.role,
         labels: ops.hosts.get(&key).map(|host| &host.labels),
     };
-    // Without a selector, a host is the service's only once it announces it.
+    let has = |feature: &str| node.features.iter().any(|f| f == feature);
+    let v2 = has(HEARTBEAT_V2);
+    // Without a selector, a host is the service's once it announces it, or once its agent lists
+    // every service it runs and takes installs: the order path tells such a host to install a
+    // service assigned to it ([`crate::decide`]), so it is missing until it does.
     let selected = assigned(def, ops.assignments.get(&def.name), &host)
-        && (def.selector.is_some() || announced.is_some());
+        && (def.selector.is_some() || announced.is_some() || (v2 && has(INSTALL_FEATURE)));
     if !selected {
         Membership::NotSelected
     } else if !node.is_live(now) {
         Membership::Down
     } else if announced == Some(&Health::Absent) {
         Membership::Absent
-    } else if def.selector.is_some() && !node.features.iter().any(|f| f == HEARTBEAT_V2) {
+    } else if def.selector.is_some() && !v2 {
         Membership::Unmanaged
     } else if announced.is_some() {
         Membership::Present
@@ -216,26 +225,40 @@ pub struct Member {
 }
 
 /// The nodes `def` does not count because they are excluded, absent, missing or unmanaged.
+/// Without a selector, a host is missing only while the order path would tell it to install the
+/// service: it is left out while an operator holds the pair ([`crate::decide::Gate::Held`]), and
+/// while there is no `desired` state or it names no package for the host's platform (no digest,
+/// no release index, or an index that lists none: [`crate::decide::Skip::NoDigest`],
+/// [`crate::decide::Skip::NoPackageForPlatform`]), as [`crate::converge`] leaves such a host out
+/// of every count.
 #[must_use]
-pub fn members(def: &ServiceDef, fleet: &Fleet, ops: &OpsState, now: Duration) -> Vec<Member> {
+pub fn members(
+    def: &ServiceDef,
+    fleet: &Fleet,
+    ops: &OpsState,
+    desired: Option<&Desired>,
+    now: Duration,
+) -> Vec<Member> {
     fleet
         .nodes()
         .filter_map(|(id, node)| {
             let membership = membership(def, id, node, ops, now);
+            // A host a selector selects is missing whether or not it could be ordered now.
+            let installable = def.selector.is_some()
+                || (!fleet.is_held(&def.name, id)
+                    && desired.is_some_and(|d| d.package_for(node.platform).is_some()));
             let key = id.to_string();
             let reason = ops
                 .excluded
                 .iter()
                 .find(|e| e.service == def.name && e.node_id == key)
                 .map(|e| e.reason.clone());
-            matches!(
-                membership,
-                Membership::Excluded
-                    | Membership::Absent
-                    | Membership::Missing
-                    | Membership::Unmanaged
-            )
-            .then(|| Member {
+            let shown = match membership {
+                Membership::Excluded | Membership::Absent | Membership::Unmanaged => true,
+                Membership::Missing => installable,
+                Membership::NotSelected | Membership::Down | Membership::Present => false,
+            };
+            shown.then(|| Member {
                 node_id: id.to_string(),
                 role: node.role.clone(),
                 membership,
