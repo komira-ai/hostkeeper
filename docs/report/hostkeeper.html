@@ -1373,8 +1373,8 @@ probe cannot start on either real launcher, so uninstall and self-update do not 
 host.</li>
 <li><strong>Rollout shape:</strong> one ordinary update at a time across the whole fleet, with no groups. Automatic
 rollback cannot move a host back below the version it runs.</li>
-<li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no expiry of pending
-requests, no CA rotation or revocation lists.</li>
+<li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no CA rotation or
+revocation lists.</li>
 <li><strong>Operations:</strong> a single coordinator with no failover; the rollout file is read only at start; the
 audit keeps only its retained segments, so the oldest entries are deleted; there is no metrics endpoint and no pager (conditions that need a
 person are <code>alert=</code> log lines).</li>

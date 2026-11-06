@@ -646,7 +646,6 @@ pub(crate) fn refuse_unfinished_restore(state: &Path) -> Result<(), StartError> 
     Ok(())
 }
 
-/// The lock of `path`, taken by `lock`.
 /// `--enrollment-request-ttl` in seconds: digits, then one unit of `s`, `m`, `h` or `d`, and at
 /// least one second.
 fn request_ttl_secs(text: &str) -> Result<u64, String> {
@@ -671,6 +670,7 @@ fn request_ttl_secs(text: &str) -> Result<u64, String> {
     Ok(secs)
 }
 
+/// The lock of `path`, taken by `lock`.
 fn take_lock(lock: &dyn StateLock, path: &Path) -> Result<LockGuard, StartError> {
     lock.acquire(path).map_err(|why| match why {
         LockError::Held => StartError::Locked {

@@ -70,6 +70,19 @@ fn a_request_expires_once_when_it_has_waited_longer_than_the_ttl() {
     assert_eq!(reopened.expired().expect("expired"), swept);
 }
 
+/// Catches a sweep that subtracts a post time later than its own clock (a clock stepped back,
+/// a store restored from another machine) and so panics or expires a young request at once.
+#[test]
+fn a_request_posted_after_the_sweeps_clock_still_waits() {
+    let dir = scratch("expiry-clock-behind");
+    let store = open(&dir);
+    let id = post(&store, &HostKey::new(), "m-1", NOW + 1000);
+    for ttl in [0, 1, TTL] {
+        assert_eq!(store.expire(NOW, ttl).expect("sweep"), [], "ttl {ttl}");
+    }
+    assert_eq!(ids(&store.pending().expect("pending")), [id]);
+}
+
 /// Catches a sweep that skips a duplicate claim (it waits for an operator like any request),
 /// expires what an operator already decided, or expires a request posted after the cut.
 #[test]

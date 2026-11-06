@@ -106,7 +106,9 @@ impl Enrollment {
     /// One sweep at the time the clock reads: every request that has waited longer than the
     /// request TTL expires, and each is audited `request_expired`. Returns the ids of the
     /// requests it expired. A sweep that cannot read or write the store is logged at error
-    /// level; what it expired before the failure is audited, and the next sweep goes on.
+    /// level and returns none; a request it expired before the failure is no longer waiting, so
+    /// no later sweep audits it: it is audited at the next start ([`Enrollment::audit_to`]).
+    /// The next sweep goes on with the requests still waiting.
     pub fn expire_requests(&self) -> Vec<KeyHash> {
         let now = self.clock.now_unix();
         let expired = match self.store.expire(now, self.request_ttl_secs) {

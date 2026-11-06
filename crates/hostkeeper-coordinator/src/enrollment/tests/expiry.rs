@@ -399,3 +399,68 @@ async fn a_store_that_cannot_be_read_is_logged_and_the_next_sweep_goes_on() {
     );
     assert_eq!(expiries(&rig), 0);
 }
+
+/// Catches the unenrolled list out of the order of the pending one (first seen, then request
+/// id), a page that repeats or skips an expired request, and a pending request listed with the
+/// expired ones or an expired one with the pending.
+#[tokio::test]
+async fn the_unenrolled_list_pages_in_order_and_holds_only_expired_requests() {
+    let enrollment = Rig::new("expiry-pages");
+    let rig = coordinator_over("expiry-pages-coordinator", &enrollment).await;
+    let operator = rig.coordinator.caller(Some(OPERATOR)).await;
+    let e = &enrollment.enrollment;
+    let mut expired: Vec<(u64, String)> = Vec::new();
+    for (n, offset) in [1, 0, 1].into_iter().enumerate() {
+        let key = HostKey::new();
+        enrollment.clock.set(NOW + offset);
+        e.enroll(enroll_request(&key, &format!("machine-{n}")))
+            .expect("requested");
+        expired.push((NOW + offset, key.key_hash().to_hex()));
+    }
+    expired.sort();
+    enrollment.clock.set(NOW + TTL + 2);
+    let waiting = HostKey::new();
+    e.enroll(enroll_request(&waiting, "machine-9"))
+        .expect("requested");
+    tick(&enrollment).await;
+
+    let mut seen = Vec::new();
+    let mut page_token = String::new();
+    loop {
+        let page = rig
+            .coordinator
+            .enrollment_list(
+                &operator,
+                &ListPendingRequest {
+                    limit: 2,
+                    page_token: page_token.clone(),
+                    unenrolled: true,
+                },
+            )
+            .expect("a page");
+        assert!(page.requests.len() <= 2);
+        seen.extend(
+            page.requests
+                .iter()
+                .map(|r| (r.first_seen_unix, r.request_id.clone(), r.state)),
+        );
+        page_token = page.next_page_token;
+        if page_token.is_empty() {
+            break;
+        }
+    }
+    let unenrolled = EnrollmentRequestState::Unenrolled as i32;
+    let want: Vec<(u64, String, i32)> = expired
+        .into_iter()
+        .map(|(at, id)| (at, id, unenrolled))
+        .collect();
+    assert_eq!(seen, want);
+    let pending = listed(&rig, &operator, false);
+    assert_eq!(
+        pending
+            .iter()
+            .map(|r| r.request_id.clone())
+            .collect::<Vec<_>>(),
+        [waiting.key_hash().to_hex()]
+    );
+}
