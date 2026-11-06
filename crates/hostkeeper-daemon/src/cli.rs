@@ -35,7 +35,8 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_ctl::transport::Network;
 use hostkeeper_ctl::{Connect, Io};
 use hostkeeper_enroll::{
-    Enroller, GrpcEnroll, OsEntropy, PkiDir, Settings as EnrollSettings, SystemWallClock,
+    Enroller, GrpcEnroll, LinuxClaims, OsEntropy, PkiDir, Settings as EnrollSettings,
+    SystemWallClock,
 };
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
@@ -52,6 +53,7 @@ use rustls_pki_types::pem::PemObject;
 use crate::adapters::{Adapters, host_claims, host_clock};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
+use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
@@ -401,8 +403,9 @@ pub fn image_of(own_version: HostkeeperVersion) -> String {
 }
 
 /// The enroller of a host of `kind`: [`GrpcEnroll`] to `endpoint`, the pki directory at `pki`
-/// (its `current` generation is what a renewal presents), the claims of [`host_claims`] (on a
-/// Mac through the host's `ioreg`, [`HostIoreg::system`]), the operating
+/// (its `current` generation is what a renewal presents), the claims of [`host_claims`] (on
+/// Linux the host's files and its BMC behind `/dev/ipmi0`, [`DevIpmi::host`]; on a Mac through
+/// the host's `ioreg`, [`HostIoreg::system`]), the operating
 /// system's entropy, the wall clock for the certificates' validity alone, and the monotonic
 /// clock for the retries. Opening it takes the pki directory's lock and finishes what a crash
 /// left there. `Err` names what refused: the endpoint, the runtime or the pki directory.
@@ -418,7 +421,12 @@ pub fn host_enroller(
     let ports = hostkeeper_enroll::Ports {
         coordinator: Box::new(coordinator),
         store: Box::new(store),
-        claims: host_claims(kind, Box::new(HostIoreg::system())),
+        claims: host_claims(
+            kind,
+            LinuxClaims::host(),
+            Box::new(HostIoreg::system()),
+            Arc::new(DevIpmi::host()),
+        ),
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(host_clock()),

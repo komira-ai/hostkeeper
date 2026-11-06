@@ -31,6 +31,7 @@
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
+//! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
@@ -75,6 +76,7 @@ mod files;
 pub mod halt;
 pub mod hook_log;
 pub mod installed;
+pub mod ipmi;
 pub mod link_adapters;
 pub mod links;
 pub mod locks;
