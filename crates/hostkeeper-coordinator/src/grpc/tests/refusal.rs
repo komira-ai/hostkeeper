@@ -138,6 +138,16 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 "audit_unavailable",
             ),
             (
+                ReleasesRefusal::NotInChannel,
+                FailedPrecondition,
+                "not_in_channel",
+            ),
+            (
+                ReleasesRefusal::ChannelDigestMismatch,
+                FailedPrecondition,
+                "channel_digest_mismatch",
+            ),
+            (
                 ReleasesRefusal::IndexDigestMismatch,
                 InvalidArgument,
                 "index_digest_mismatch",

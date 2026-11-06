@@ -13,6 +13,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
+use crate::channel::{ChannelRefusal, ReleaseChannel};
 use crate::converge::{Convergence, role_counts};
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
@@ -86,13 +87,17 @@ pub enum SetError {
     /// CI set the version before with another package digest: a changed artifact for a version.
     #[error("digest_conflict: the version was set before with another package digest")]
     DigestConflict,
+    /// The release channel (`--release-channel`) does not hold the version, or its index of the
+    /// version disagrees with the set ([`crate::channel`]).
+    #[error(transparent)]
+    Channel(#[from] ChannelRefusal),
 }
 
 impl SetError {
     /// The closed reason token of a refusal of the version itself (`below_min_version`,
-    /// `unparseable_version`, `bad_version`, `digest_conflict`) or of its release index
-    /// (`index_invalid`, `index_digest_mismatch`), which the answer says; `None` for every other
-    /// error.
+    /// `unparseable_version`, `bad_version`, `digest_conflict`, `not_in_channel`,
+    /// `channel_digest_mismatch`) or of its release index (`index_invalid`,
+    /// `index_digest_mismatch`), which the answer says; `None` for every other error.
     #[must_use]
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
@@ -101,6 +106,7 @@ impl SetError {
             Self::UnparseableVersion => Some("unparseable_version"),
             Self::BadVersion => Some("bad_version"),
             Self::DigestConflict => Some("digest_conflict"),
+            Self::Channel(refusal) => Some(refusal.token()),
             Self::Unauthorized(_)
             | Self::Unavailable
             | Self::Store(_)
@@ -234,6 +240,9 @@ pub struct Coordinator {
     /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
     enrollment: Option<Arc<Enrollment>>,
     ui: Option<UiDir>,
+    /// The release channel a set's version must be in (`--release-channel`); `None`: no set is
+    /// checked against one.
+    pub(crate) channel: Option<ReleaseChannel>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -284,6 +293,7 @@ impl Coordinator {
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
             enrollment: None,
             ui: None,
+            channel: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -747,10 +757,11 @@ impl Coordinator {
     /// allow-list accepts. The token is checked before the body is parsed or any state is touched
     /// (the transport has already read the body, at most [`crate::http::MAX_DESIRED_BYTES`]).
     ///
-    /// The version is refused, before anything changes, when it is below the service's
-    /// `min_version`, when the service's `version_scheme` cannot read it, when it is marked bad
-    /// (only the operator's unmark or a force lifts a mark; CI does not), and when CI set it
-    /// before with another package digest. A body that names a digest (`release_digest`) records
+    /// The version is refused, before anything changes, when the release channel does not hold
+    /// it or holds another artifact for it (with `--release-channel` only, [`crate::channel`]),
+    /// when it is below the service's `min_version`, when the service's `version_scheme` cannot
+    /// read it, when it is marked bad (only the operator's unmark or a force lifts a mark; CI
+    /// does not), and when CI set it before with another package digest. A body that names a digest (`release_digest`) records
     /// the version and the digest in the service's registry in the same write as the state
     /// ([`DesiredStore::record`]); setting the same version with the same digest again changes
     /// nothing. A set of a version other than the target of a halt the updater raised lifts that
@@ -780,7 +791,7 @@ impl Coordinator {
         body: &[u8],
     ) -> Result<Set, SetError> {
         let verified = self.ci(bearer).await?;
-        self.set_desired_verified(&verified, body)
+        self.set_desired_verified(&verified, body).await
     }
 
     /// Why CI may not set `desired` for `service`, if it may not: the refusals of

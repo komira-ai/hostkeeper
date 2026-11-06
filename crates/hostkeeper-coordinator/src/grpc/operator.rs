@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use tonic::{Request, Response, Status};
 
 use super::{Admitted, refusal, report};
+use crate::channel::ChannelRefusal;
 use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
@@ -109,6 +110,10 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         }
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
+        SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,
+        SetError::Channel(ChannelRefusal::DigestMismatch) => {
+            proto::ReleasesRefusal::ChannelDigestMismatch
+        }
         SetError::Ops(why) => why.into(),
         SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");
@@ -307,8 +312,12 @@ impl ReleasesApi for ReleasesService {
         };
         let body = desired_body(request.into_inner()).map_err(refusal::releases)?;
         let set = match &ci {
-            Some(verified) => self.coordinator.set_desired_verified(verified, &body),
-            None => self.coordinator.set_desired_operator(&operator, &body),
+            Some(verified) => self.coordinator.set_desired_verified(verified, &body).await,
+            None => {
+                self.coordinator
+                    .set_desired_operator(&operator, &body)
+                    .await
+            }
         }
         .map_err(|why| refusal::releases(set_refusal(why)))?;
         Ok(Response::new(proto::SetDesiredResponse {

@@ -88,10 +88,11 @@ fn snapshot(rig: &Rig) -> (Vec<Option<Vec<u8>>>, OpsState, Option<String>) {
 }
 
 /// The operator's set of `web` to `version`, with the digest registered for it.
-fn operator_set(rig: &Rig, version: &str, n: u8) -> Result<(), SetError> {
+async fn operator_set(rig: &Rig, version: &str, n: u8) -> Result<(), SetError> {
     let body = json!({"service": WEB, "version": version, "release_digest": digest(n)});
     rig.coordinator
         .set_desired_operator("operator", body.to_string().as_bytes())
+        .await
         .map(drop)
 }
 
@@ -120,7 +121,7 @@ async fn force_hold_set_desired_refuse_when_append_fails() {
     );
     assert_eq!(snapshot(&rig), before);
 
-    let refused = operator_set(&rig, "1.0", 1).expect_err("refused");
+    let refused = operator_set(&rig, "1.0", 1).await.expect_err("refused");
     assert!(
         matches!(&refused, SetError::Ops(OpsError::AuditUnavailable(_))),
         "{refused:?}"
@@ -133,7 +134,9 @@ async fn force_hold_set_desired_refuse_when_append_fails() {
 
     down.store(false, Ordering::SeqCst);
     hold(&rig, WEB, scope_fleet()).expect("held once the audit takes lines");
-    operator_set(&rig, "1.0", 1).expect("set once the audit takes lines");
+    operator_set(&rig, "1.0", 1)
+        .await
+        .expect("set once the audit takes lines");
     rig.coordinator
         .force(
             &operator(),

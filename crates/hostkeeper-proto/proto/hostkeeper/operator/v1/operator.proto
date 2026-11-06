@@ -206,13 +206,21 @@ enum ReleasesRefusal {
   // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
   // changed, and asking again is safe once the file takes lines again.
   RELEASES_REFUSAL_AUDIT_UNAVAILABLE = 18;
+  // FAILED_PRECONDITION: `SetDesired` of a version the coordinator's release channel does not
+  // hold yet, or whose index could not be read. Nothing changed; retry once the channel holds it.
+  RELEASES_REFUSAL_NOT_IN_CHANNEL = 19;
+  // FAILED_PRECONDITION: `SetDesired` of a version whose index in the coordinator's release
+  // channel names another service or version, or no package with the digest the set names, or,
+  // for a set over a release index, is not that index (its SHA-256 is not `release_index_digest`).
+  // Nothing changed; the channel holds another artifact, so the same set is refused again.
+  RELEASES_REFUSAL_CHANNEL_DIGEST_MISMATCH = 20;
   // INVALID_ARGUMENT: `SetDesired`'s `release_index` does not have the SHA-256
   // `release_index_digest` names: the index was changed or cut on its way.
-  RELEASES_REFUSAL_INDEX_DIGEST_MISMATCH = 19;
+  RELEASES_REFUSAL_INDEX_DIGEST_MISMATCH = 21;
   // INVALID_ARGUMENT: `SetDesired`'s `release_index` is not a release index of the service at the
   // desired version (design section 5.5), or comes without `release_index_digest`, or with
   // `package_digest`.
-  RELEASES_REFUSAL_INDEX_INVALID = 20;
+  RELEASES_REFUSAL_INDEX_INVALID = 22;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower

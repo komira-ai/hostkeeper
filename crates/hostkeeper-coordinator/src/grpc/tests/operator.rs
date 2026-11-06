@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tonic::Request;
 
 use crate::audit_file::UnixClock;
+use crate::channel::ChannelRefusal;
 use crate::desired::{DesiredError, StoreError};
 use crate::grpc::Admitted;
 use crate::grpc::operator::{
@@ -532,6 +533,14 @@ fn every_way_a_set_of_the_desired_state_fails_is_refused_with_its_value() {
         (SetError::DigestConflict, R::InvalidRequest),
         (SetError::BelowMinVersion, R::BelowMinVersion),
         (SetError::BadVersion, R::HeldBad),
+        (
+            SetError::Channel(ChannelRefusal::NotInChannel),
+            R::NotInChannel,
+        ),
+        (
+            SetError::Channel(ChannelRefusal::DigestMismatch),
+            R::ChannelDigestMismatch,
+        ),
         (
             SetError::Store(StoreError::Io {
                 path: "desired.json".into(),

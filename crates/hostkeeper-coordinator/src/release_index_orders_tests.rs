@@ -333,6 +333,7 @@ async fn an_operators_set_over_an_index_is_audited_with_the_index_digest() {
     let body = index_body(WEB, "2.0", &text, &index);
     rig.coordinator
         .set_desired_operator("operator", body.to_string().as_bytes())
+        .await
         .expect("the operator's set is accepted");
     let audit = rig.coordinator.ops().state().audit;
     let entry = audit.last().expect("an audit entry");

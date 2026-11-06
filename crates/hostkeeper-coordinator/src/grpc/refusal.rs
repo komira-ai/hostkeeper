@@ -58,7 +58,9 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::NoDigest
         | ReleasesRefusal::SelfService
         | ReleasesRefusal::AlreadyBad
-        | ReleasesRefusal::AlreadyHalted => Code::FailedPrecondition,
+        | ReleasesRefusal::AlreadyHalted
+        | ReleasesRefusal::NotInChannel
+        | ReleasesRefusal::ChannelDigestMismatch => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "RELEASES_REFUSAL_")
 }

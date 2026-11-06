@@ -31,11 +31,12 @@
 //! of an internal error. A desired state may name the digest of its version's package
 //! (`release_digest`, 64 lowercase hex characters); a version the coordinator refuses is
 //! answered with its reason as the code: `unparseable_version` (400), and
-//! `below_min_version`, `bad_version` and `digest_conflict` (409). A desired state may instead
-//! name the release index of its version (`release_index`, the text of its `index.json`, with
-//! `release_index_digest`, its SHA-256), from which each host is ordered the package of its own
-//! platform; one the coordinator refuses is answered `index_invalid` or `index_digest_mismatch`
-//! (400). A heartbeat that lists no
+//! `below_min_version`, `bad_version` and `digest_conflict` (409), and, with
+//! `--release-channel`, `not_in_channel` and `channel_digest_mismatch` (409,
+//! [`crate::channel`]). A desired state may instead name the release index of its version
+//! (`release_index`, the text of its `index.json`, with `release_index_digest`, its SHA-256),
+//! from which each host is ordered the package of its own platform; one the coordinator refuses
+//! is answered `index_invalid` or `index_digest_mismatch` (400). A heartbeat that lists no
 //! services, at a coordinator with no legacy service, is a bad request. An agent that announces
 //! `order-v1` is answered with the order terms of [`crate::order_terms`] on an update, and its
 //! heartbeat's top level is never read as the legacy service.
@@ -377,7 +378,10 @@ where
             why.reason().unwrap_or("bad_request"),
         ),
         Err(
-            why @ (SetError::BelowMinVersion | SetError::BadVersion | SetError::DigestConflict),
+            why @ (SetError::BelowMinVersion
+            | SetError::BadVersion
+            | SetError::DigestConflict
+            | SetError::Channel(_)),
         ) => {
             tracing::warn!(%why, "refused a desired state");
             error(StatusCode::CONFLICT, why.reason().unwrap_or("conflict"))
