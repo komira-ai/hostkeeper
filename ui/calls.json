@@ -1,5 +1,6 @@
 {
   "calls": [
+    { "method": "hostkeeper.operator.v1.Alerts/List", "pages": ["fleet"] },
     { "method": "hostkeeper.operator.v1.Audit/List", "pages": ["audit", "host"] },
     { "method": "hostkeeper.operator.v1.Enrollment/AddRecord", "pages": ["inventory"] },
     { "method": "hostkeeper.operator.v1.Enrollment/Approve", "pages": ["enrollment"] },

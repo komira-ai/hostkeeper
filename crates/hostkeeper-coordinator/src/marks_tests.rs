@@ -276,6 +276,7 @@ async fn halt_raised_by_an_operator_blocks_every_host_until_clear_halt() {
         .halt(&operator(), halt_of(WEB))
         .expect("halted");
     assert_eq!(done.entry.expect("an entry").action, "halt");
+    rig.coordinator.observe_alerts().expect("observed");
     assert!(log.text().contains(r#"alert="halt""#), "{}", log.text());
 
     for host in ["d1", "d2"] {
@@ -439,6 +440,7 @@ async fn exclude_abandon_frees_the_slot_of_a_mid_update_host_and_audits_possibly
             .expect("a reason")
             .contains("possibly_mid_update")
     );
+    rig.coordinator.observe_alerts().expect("observed");
     assert!(
         log.text().contains(r#"alert="exclude_abandon""#),
         "{}",

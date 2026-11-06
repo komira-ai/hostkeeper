@@ -158,6 +158,7 @@ flag hosts abort --reason STRING
 flag releases set-desired --release-index STRING
 flag releases set-desired --release-index-digest STRING
 flag enrollment list-records --enrolled true|false
+command alerts list /hostkeeper.operator.v1.Alerts/List
 flag coordinator heartbeat --sent-unix UINT64
 flag coordinator heartbeat --cert-not-after-unix UINT64
 flag coordinator heartbeat --last-renew-error STRING
