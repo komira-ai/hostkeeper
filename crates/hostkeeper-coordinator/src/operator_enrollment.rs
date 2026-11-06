@@ -9,6 +9,11 @@
 //! which audits each approval and each refused one under the name of the operator's token. A
 //! coordinator without `--enrollment-dir` has no pending request.
 //!
+//! An approval of a request that matches one record of the host inventory is made as that
+//! record's host id, read from the ops file when the call is made: an empty host id is it, and
+//! another host id is `record_mismatch` unless the approval replaces (a record removed or added
+//! while the call runs is seen at the next call).
+//!
 //! An approval assigns the services it names to the host it approves
 //! ([`Coordinator::assign_host`], the one path by which `Services.Assign` of a host assigns
 //! too), after the approval is recorded: each service is one audit entry `assign`. An
@@ -47,10 +52,11 @@ impl Coordinator {
         Ok(listed)
     }
 
-    /// `Enrollment.Approve`: approves a pending request as the host id, role and services it
-    /// names, which must be services this coordinator manages ([`Enrollment::approve`]), and
-    /// assigns those services to the host ([`Coordinator::assign_host`]). The host gets its
-    /// certificate at its next `Poll`, never in this answer.
+    /// `Enrollment.Approve`: approves a pending request as the role and services it names,
+    /// which must be services this coordinator manages, and as the host id it names or, for a
+    /// request that matches one inventory record, that record's ([`Enrollment::approve`]); and
+    /// assigns those services to the host ([`Coordinator::assign_host`]). The answer names the
+    /// host id approved. The host gets its certificate at its next `Poll`, never in this answer.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, and the refusals of [`Enrollment::approve`]; without
@@ -64,7 +70,8 @@ impl Coordinator {
         let enrollment: &Enrollment = self.enrollment().ok_or(EnrollmentRefusal::UnknownRequest)?;
         let known = |name: &str| self.services.get(name).is_some();
         let (role, services) = (request.role.clone(), request.services.clone());
-        let approved = enrollment.approve(by, request, &known)?;
+        let records = self.ops.read(|state| state.inventory.clone());
+        let approved = enrollment.approve(by, request, &known, &records)?;
         // The approval checked the host id, the role and the services by the same rules.
         let assigned = approved
             .host_id

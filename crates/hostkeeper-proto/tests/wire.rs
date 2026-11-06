@@ -772,6 +772,7 @@ fn wire_names_are_pinned() {
                 "no_record",
                 "capacity",
                 "audit_unavailable",
+                "record_mismatch",
             ],
         ),
         (

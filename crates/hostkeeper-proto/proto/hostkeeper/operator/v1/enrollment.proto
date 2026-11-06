@@ -89,6 +89,9 @@ enum EnrollmentRefusal {
   // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
   // changed, and asking again is safe once the file takes lines again.
   ENROLLMENT_REFUSAL_AUDIT_UNAVAILABLE = 19;
+  // FAILED_PRECONDITION: `Approve` names a host id other than that of the one inventory record
+  // the request matches, and `replace` is not set.
+  ENROLLMENT_REFUSAL_RECORD_MISMATCH = 20;
 }
 
 message ListPendingRequest {
@@ -173,7 +176,9 @@ message ApproveRequest {
   string request_id = 1;
   // The SHA-256 of the pending request's key, as `PendingEnrollment.key_sha256` lists it.
   string key_sha256 = 2;
-  // The host id the certificate names.
+  // The host id the certificate names. For a request (not a renewal) that matches exactly one
+  // inventory record, empty means that record's host id, and another host id needs `replace`;
+  // otherwise it is required.
   string host_id = 3;
   string role = 4;
   // Services to assign to the host; may be empty.
@@ -185,6 +190,7 @@ message ApproveRequest {
 }
 
 message ApproveResponse {
+  // The host id approved: the one named, or the matching record's when none was named.
   string host_id = 1;
   // Always true: the certificate goes to the host at its next `Poll`, never in this answer.
   bool certificate_issued_at_poll = 2;

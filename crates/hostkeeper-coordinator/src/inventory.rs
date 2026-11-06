@@ -11,7 +11,10 @@
 //! `Enrollment.List` ([`Coordinator::enrollment_list`]) shows each pending request with its
 //! match ([`show_match`], [`match_claims`]): the one record it matches, none, or several (every candidate named, none
 //! chosen). A match fills in a host id and a role for the operator to read; it approves nothing,
-//! and an approval still names the request's key hash (design 5.7, step 3).
+//! and an approval still names the request's key hash (design 5.7, step 3). `Enrollment.Approve`
+//! matches the request again ([`match_claims`]): a request (not a renewal) that matches exactly
+//! one record is approved as that record's host id, which an empty host id defaults to, and
+//! another host id is `record_mismatch` unless the approval replaces.
 
 use hostkeeper_enrollment::enroll::Claims;
 use hostkeeper_enrollment::names::MacAddress;
