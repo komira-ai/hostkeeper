@@ -518,6 +518,23 @@ fn the_image_job_builds_twice_from_scratch_and_compares() {
 }
 
 #[test]
+fn the_image_job_checks_that_the_image_holds_the_web_app() {
+    // Catches: an image released without the operator web app, or checked against another
+    // image or another directory than the commit's `ui/` (a deploy of it would answer 404 at
+    // /ui/): the check removed, run on the second build's context, or on another directory.
+    let check = "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/image-a.tar\" ui\n";
+    let want = "artifacts.yml: job image must check that the image holds the web app";
+    for to in [
+        "        run: true\n",
+        "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/context-a\" ui\n",
+        "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/image-a.tar\" examples\n",
+    ] {
+        let text = with_in(&workflow("artifacts.yml"), check, to);
+        assert_refused("artifacts.yml", &text, want);
+    }
+}
+
+#[test]
 fn attest_job_runs_no_repository_code() {
     // Catches: code of the repository (which a pull request can change) running while a token
     // can sign: a checkout, a cargo command, or a bundle copy that runs a second command.

@@ -230,6 +230,21 @@ fn release_compare_images_of_missing_files_is_a_failure_with_status_1() {
 }
 
 #[test]
+fn release_check_image_ui_of_a_missing_image_is_a_failure_with_status_1() {
+    // Catches: an unreadable image reported as one that holds the web app, or with a status
+    // other than 1.
+    let d = dir("check-image-ui-missing");
+    let o = run(&d, &["release", "check-image-ui", "image.tar", "ui"]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).starts_with("xtask: read image.tar: "),
+        "{}",
+        stderr(&o)
+    );
+    assert_eq!(stdout(&o), "");
+}
+
+#[test]
 fn release_set_version_writes_the_version_into_the_workspace_with_status_0() {
     // Catches: `--version` or `--root` not reaching set-version, or the workspace manifest left
     // at its old version.
