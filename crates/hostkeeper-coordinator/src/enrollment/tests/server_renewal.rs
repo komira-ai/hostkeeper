@@ -23,7 +23,7 @@ use tokio_rustls::{TlsAcceptor, TlsConnector};
 use x509_parser::prelude::X509Certificate;
 
 use super::support::{FixedClock, NOW, Rig, SERVER_NAME, coordinator_over};
-use crate::enrollment::{ServerCertificate, os_random};
+use crate::enrollment::{ServerCertificate, ServerFile, os_random};
 use crate::listen::reload_all;
 use crate::testutil::{Log, OPERATOR};
 use crate::tokens::OperatorTokens;
@@ -220,11 +220,11 @@ async fn the_tick_renews_the_server_certificate_at_two_thirds_of_its_life() {
             renewal_error: None,
         }
     );
+    let text = log.text();
     assert!(
-        log.text()
-            .contains("renewed the coordinator's server certificate"),
-        "{}",
-        log.text()
+        text.contains("renewed the coordinator's server certificate")
+            && text.contains(&format!("path={}", rig.files.server_cert.display())),
+        "{text}"
     );
     let source = heartbeat_source(&rig);
     assert_eq!(served_leaf(&rig, &source).await, renewed);
@@ -327,7 +327,8 @@ async fn a_renewal_that_cannot_be_written_keeps_the_certificate_in_use_and_says_
             && text.contains(
                 "cannot renew the coordinator's server certificate; the one in use is still served"
             )
-            && text.contains(NO_SPACE),
+            && text.contains(NO_SPACE)
+            && text.contains(&format!("path={}", rig.files.server_cert.display())),
         "{text}"
     );
     assert_eq!(
@@ -375,6 +376,9 @@ async fn a_renewal_that_cannot_be_written_keeps_the_certificate_in_use_and_says_
 #[tokio::test]
 async fn a_file_the_tick_cannot_read_is_an_error_and_a_missing_one_is_made_again() {
     let rig = Rig::new("renew-unreadable");
+    let file = ServerFile::new(Arc::new(RealFs), &rig.files.server_cert, &rig.files.names)
+        .expect("a file");
+    assert_eq!(file.path(), rig.files.server_cert.as_path());
     let first = leaf_of(&rig.files.server_cert);
     std::fs::remove_file(&rig.files.server_cert).expect("removed");
     std::fs::create_dir(&rig.files.server_cert).expect("a directory in its place");
