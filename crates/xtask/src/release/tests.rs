@@ -834,6 +834,7 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
             verifier: &verifier,
             run_version: &fakes.run_version,
             pkgbuild: &fakes.pkgbuild,
+            advisories: &fakes.advisories,
         };
         run_with(publish_verb(&dir, &ver, &commit), &ports).expect("publish");
         assert_eq!(fakes.store.all()[i + 1].commit, commit.to_string());

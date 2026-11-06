@@ -41,8 +41,8 @@ pub(crate) mod contract;
 #[cfg(test)]
 mod doc_tests;
 #[cfg(test)]
-mod fakes;
-mod git;
+pub(crate) mod fakes;
+pub(crate) mod git;
 mod github;
 mod index;
 mod locate;
@@ -63,6 +63,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::advisories::DenyCli;
 use check_binary::VersionOf;
 use contract::{Commit, Package, Platform, Repo, Service, Version};
 use git::GitCli;
@@ -478,7 +479,7 @@ impl Adapters for Lent<'_> {
 }
 
 /// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations),
-/// the `--version` of a binary and `pkgbuild`, each running its program through a copy of `exec`. The real
+/// the `--version` of a binary, `pkgbuild` and `cargo deny`, each running its program through a copy of `exec`. The real
 /// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
 /// fake one.
 struct Wired<E> {
@@ -486,6 +487,7 @@ struct Wired<E> {
     gh: Gh<E>,
     version_of: VersionOf<E>,
     pkgbuild: PkgbuildCli<E>,
+    deny: DenyCli<E>,
 }
 
 impl<E: Exec + Clone> Wired<E> {
@@ -494,7 +496,8 @@ impl<E: Exec + Clone> Wired<E> {
             git: GitCli::new(exec.clone()),
             gh: Gh::new(exec.clone()),
             version_of: VersionOf::new(exec.clone()),
-            pkgbuild: PkgbuildCli::new(exec),
+            pkgbuild: PkgbuildCli::new(exec.clone()),
+            deny: DenyCli::new(exec),
         }
     }
 }
@@ -508,6 +511,7 @@ impl<E: Exec> Adapters for Wired<E> {
             verifier: &self.gh,
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,
+            advisories: &self.deny,
         }
     }
 }

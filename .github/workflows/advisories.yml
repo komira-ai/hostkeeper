@@ -1,0 +1,62 @@
+# The security advisories against this repository's dependencies, kept in one GitHub issue
+# instead of failing pull requests (AGENTS.md B9, R6: advisories never block a pull request;
+# ci.yml checks cargo-deny's bans, licences and sources only). This workflow runs daily, on every
+# push to main and by hand, never on a pull request, and no check of a pull request waits for it.
+#
+# `cargo xtask advisories` (crates/xtask/src/advisories.rs) runs `cargo deny check advisories`,
+# then opens the issue "Security advisories in hostkeeper's dependencies" when it finds an
+# advisory or a yanked crate, rewrites the issue's table when the findings change, and comments
+# and closes it when none remain. The run is green whatever it finds: the issue is the signal.
+# It fails only when cargo-deny or the GitHub API failed, and then leaves the issue as it is.
+#
+# cargo-deny is the release binary ci.yml pins, at the same version and SHA-256: `curl --proto
+# =https --proto-redir =https` downloads it, and `cargo xtask install-tool` checks the SHA-256
+# before anything is unpacked or installed.
+#
+# `issues: write` is the one write scope, held by the one job, under the `if:` the workflow lint
+# (crates/xtask/tests/workflows) requires for it: a run of main. A run of another ref, by hand,
+# runs no job.
+name: advisories
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# One run at a time, never cancelled, so two runs never race to open the issue.
+concurrency:
+  group: advisories
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      issues: write
+    env:
+      DENY_VERSION: 0.20.2
+      DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Download cargo-deny (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cargo-deny.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$DENY_VERSION/cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl.tar.gz"
+      - name: Install cargo-deny (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/cargo-deny.tar.gz" --sha256 "$DENY_SHA256" --out "$HOME/.cargo/bin/cargo-deny" --extract tar.gz --member "cargo-deny-$DENY_VERSION-x86_64-unknown-linux-musl/cargo-deny"
+      - run: cargo deny --version
+      - name: Keep the advisories issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo xtask advisories --repo "$GITHUB_REPOSITORY"
