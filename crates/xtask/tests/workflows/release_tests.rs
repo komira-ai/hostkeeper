@@ -5,7 +5,8 @@
 
 use super::lint::{WRITE_ALLOWED, lint};
 use super::release::{
-    PLAN_IF, RELEASE_EXEMPT, RELEASE_GROUP, RELEASE_IF, SIGN_IF, publish_problems,
+    PLAN_IF, PLAN_RUN, PUBLISH_GROUP, RELEASE_EXEMPT, RELEASE_GROUP, RELEASE_IF, SIGN_IF,
+    publish_problems,
 };
 use super::{CLEAN, push_only, with, with_in, workflows};
 
@@ -364,8 +365,8 @@ fn a_workflow_that_publishes_outside_the_release_group_is_refused() {
     assert_eq!(publish_problems("tag.yml", &grouped), Vec::<String>::new());
     let cancels = with_in(
         &workflow("release.yml"),
-        "  cancel-in-progress: false\n",
-        "  cancel-in-progress: true\n",
+        "\n  cancel-in-progress: false\n",
+        "\n  cancel-in-progress: true\n",
     );
     assert_refused(
         "release.yml",
@@ -436,6 +437,105 @@ fn release_workflow_run_names_exactly_the_three_required_workflows() {
         &text,
         "release.yml: trigger push is not one of",
     );
+}
+
+/// The plan step of the repository's release.yml, whole.
+const PLAN_STEP: &str = "      - name: Which commits since the last release are released, oldest first\n        id: walk\n        env:\n          GH_TOKEN: ${{ github.token }}\n          FREEZE: ${{ vars.RELEASE_FREEZE }}\n";
+
+#[test]
+fn release_workflow_plans_with_one_step_for_every_trigger() {
+    // Catches: a plan that differs by trigger again (a `workflow_run` that plans only the commit
+    // whose run completed, so that a busy main never releases): the step skipped for a trigger,
+    // a second plan step beside it, other arguments, or a checkout of another commit than the
+    // tip of main.
+    let text = release_yml();
+    assert!(
+        text.contains(&format!("{PLAN_STEP}        run: {PLAN_RUN}\n")),
+        "{text}"
+    );
+    let one_step = "release.yml: job plan needs exactly one plan step";
+    let skipped = with_in(
+        &text,
+        "        id: walk\n",
+        "        id: walk\n        if: ${{ github.event_name != 'workflow_run' }}\n",
+    );
+    assert_refused(
+        "release.yml",
+        &skipped,
+        "release.yml: the plan step must run for every trigger, under no `if:`",
+    );
+    let second = with_in(
+        &text,
+        PLAN_STEP,
+        &format!(
+            "      - id: push\n        if: ${{{{ github.event_name == 'workflow_run' }}}}\n        env:\n          COMMIT: ${{{{ github.event.workflow_run.head_sha }}}}\n        run: cargo xtask release plan --repo \"$GITHUB_REPOSITORY\" --commit \"$COMMIT\" --output \"$GITHUB_OUTPUT\"\n{PLAN_STEP}"
+        ),
+    );
+    assert_refused("release.yml", &second, one_step);
+    for (from, to) in [
+        (" --output", " --scheduled --output"),
+        ("--commit \"$GITHUB_SHA\"", "--commit \"$COMMIT\""),
+    ] {
+        let changed = with_in(
+            &text,
+            &format!("{PLAN_RUN}\n"),
+            &format!("{}\n", PLAN_RUN.replacen(from, to, 1)),
+        );
+        assert_refused("release.yml", &changed, one_step);
+    }
+    let none = with_in(
+        &text,
+        &format!("        run: {PLAN_RUN}\n"),
+        "        run: echo none\n",
+    );
+    assert_refused("release.yml", &none, one_step);
+    let elsewhere = with_in(
+        &text,
+        "        with:\n          fetch-depth: 0\n",
+        "        with:\n          ref: ${{ github.event.workflow_run.head_sha }}\n          fetch-depth: 0\n",
+    );
+    assert_refused(
+        "release.yml",
+        &elsewhere,
+        "release.yml: job plan must check out the tip of main (no `ref:`)",
+    );
+}
+
+#[test]
+fn release_workflow_publishes_one_tag_at_a_time_across_its_groups() {
+    // Catches: a dispatch or schedule run that a completion of a push run replaces while it
+    // waits (both in one group), or the two groups of main publishing one tag at once, which
+    // creates two drafts of it: the job-level group of publish removed, cancelling, or not
+    // keyed by the tag.
+    let text = release_yml();
+    let block = format!(
+        "    concurrency:\n      group: {PUBLISH_GROUP}\n      cancel-in-progress: false\n"
+    );
+    let want = format!(
+        "release.yml: job publish needs `concurrency:` group {PUBLISH_GROUP}, cancel-in-progress false"
+    );
+    for to in [
+        String::new(),
+        block.replace("cancel-in-progress: false", "cancel-in-progress: true"),
+        block.replace(PUBLISH_GROUP, "release-publish"),
+        block.replace("      cancel-in-progress: false\n", ""),
+    ] {
+        let changed = with_in(&text, &block, &to);
+        assert_refused("release.yml", &changed, &want);
+    }
+    // The lint holds the whole expression: either group of main renamed is refused.
+    for joined in ["&& 'main-dispatch' ||", "&& 'main' ||"] {
+        assert_eq!(RELEASE_GROUP.matches(joined).count(), 1, "{joined}");
+        let one = RELEASE_GROUP.replacen(joined, "&& 'main-shared' ||", 1);
+        let changed = with_in(&text, RELEASE_GROUP, &one);
+        assert_refused(
+            "release.yml",
+            &changed,
+            &format!(
+                "release.yml tags or publishes, so its concurrency group must be {RELEASE_GROUP}"
+            ),
+        );
+    }
 }
 
 #[test]

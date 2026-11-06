@@ -8,16 +8,21 @@
 # for that exact commit. The triggers:
 #
 # - `workflow_run`: the completion of a push run of `ci`, `privileged` or `artifacts` on main.
-#   The three run side by side for every push, so this starts once for each; the plan looks up
-#   all three for the commit, whatever the run that started it concluded, so the run that
-#   finishes last releases and the others end green with nothing to do.
-# - `schedule`, daily: commits a missed or replaced run left behind. The plan walks the
-#   first-parent history from the last release to the tip, oldest first, and releases each
-#   commit that qualifies under the number that commit has.
-# - `workflow_dispatch`, from main: the same walk as the schedule, by hand.
+#   The three run side by side for every push, so this starts once for each.
+# - `schedule`, daily, and `workflow_dispatch`, from main, by hand.
+#
+# Every trigger plans the same way: the plan walks the first-parent history of main from the
+# tip down to the last release, oldest first, and releases each commit that qualifies under the
+# number that commit has, whatever the run that started it concluded. A run that a newer run
+# replaced while it waited in the concurrency group therefore leaves nothing behind: the newer
+# run releases every commit the replaced one would have, and more. (Planning only the commit
+# whose run started it, a busy main never released: each waiting run was replaced before it ran.)
+# Releases keep the order of their versions: while a required run of a commit has not completed,
+# the newer commits wait for it, and the completion of that run releases them all, oldest first.
 #
 # The workflow lint (crates/xtask/tests/workflows) holds the triggers to these three and nothing
-# else, and to no pull-request trigger. Until a workflow named `privileged` exists on main, no
+# else, and to no pull-request trigger; the plan job to one plan step, the same for every
+# trigger; and the concurrency groups to those described below. Until a workflow named `privileged` exists on main, no
 # commit has its successful run, and the plan releases nothing: it says which run is missing.
 #
 # plan     decides which commits are released and as which version (cargo xtask release plan),
@@ -48,11 +53,23 @@
 #          it as hostkeeper's desired version on the coordinator, by one call of the CI client
 #          (set-desired.yml) with an OIDC token. See the comment above the two jobs.
 #
-# One release action at a time, never cancelled: runs of main of this repository share the
-# group `release-main`; any other run (a pull request's `workflow_run` from a fork's branch named
-# main, a dispatch from another branch) takes a group of its own, so that it cannot replace the
-# release that is waiting. artifacts.yml is outside this group: it builds and attests, never
-# tags or publishes, and has a group per commit.
+# Concurrency, never cancelled. A group keeps one running and one waiting run, and a newer run
+# replaces the waiting one:
+#
+# - `release-main`: the `workflow_run` runs of main of this repository. With merges every few
+#   minutes most of them are replaced while they wait, which is safe since each walks it all.
+# - `release-main-dispatch`: the `workflow_dispatch` and `schedule` runs of main, so that a run
+#   by hand is never replaced by the next completion of a push run and cancelled unseen. It may
+#   run beside a run of `release-main`; the two can plan the same commit, and the job-level group
+#   of `publish`, one per tag (`release-publish-<tag>`), keeps them from creating that release
+#   twice: the second waits, then finds it published with the same files and changes nothing
+#   (and the plan of any later run declines it as already released).
+# - any other run (a pull request's `workflow_run` from a fork's branch named main, a dispatch
+#   from another branch) takes a group of its own, so that it cannot replace a release waiting;
+#   its plan job does not run.
+#
+# artifacts.yml is outside these groups: it builds and attests, never tags or publishes, and has
+# a group per commit.
 name: release
 
 on:
@@ -67,7 +84,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: release-${{ (github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository))) && 'main' || github.run_id }}
+  group: release-${{ (github.ref == 'refs/heads/main' && github.event_name != 'workflow_run') && 'main-dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository) && 'main' || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -90,35 +107,26 @@ jobs:
       actions: read
       issues: write
     outputs:
-      release: ${{ steps.push.outputs.release || steps.walk.outputs.release }}
-      matrix: ${{ steps.push.outputs.matrix || steps.walk.outputs.matrix }}
+      release: ${{ steps.walk.outputs.release }}
+      matrix: ${{ steps.walk.outputs.matrix }}
     steps:
-      # The commit the run built (for a `workflow_run`, not `github.sha`, which is the newest
-      # commit of main), with the whole history the version is counted on.
+      # The tip of main (`github.sha`, for every trigger: for a `workflow_run` it is the newest
+      # commit of main, not the commit the completed run built), with the whole history the
+      # version is counted on.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - run: rustup toolchain install
       # xtask is compiled before any step holds the token.
       - name: Compile xtask
         run: cargo xtask --help
-      - name: Whether this commit is released, and as which version
-        id: push
-        if: ${{ github.event_name == 'workflow_run' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          COMMIT: ${{ github.event.workflow_run.head_sha }}
-          FREEZE: ${{ vars.RELEASE_FREEZE }}
-        run: cargo xtask release plan --repo "$GITHUB_REPOSITORY" --commit "$COMMIT" --version-file VERSION --freeze "$FREEZE" --output "$GITHUB_OUTPUT"
       - name: Which commits since the last release are released, oldest first
         id: walk
-        if: ${{ github.event_name != 'workflow_run' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FREEZE: ${{ vars.RELEASE_FREEZE }}
-        run: cargo xtask release plan --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version-file VERSION --freeze "$FREEZE" --scheduled --output "$GITHUB_OUTPUT"
+        run: cargo xtask release plan --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version-file VERSION --freeze "$FREEZE" --output "$GITHUB_OUTPUT"
 
   verify:
     needs: [plan]
@@ -196,6 +204,10 @@ jobs:
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # One publish of a tag at a time, across both groups of main (see the top of this file).
+    concurrency:
+      group: release-publish-${{ matrix.tag }}
+      cancel-in-progress: false
     permissions:
       contents: write
       attestations: read
