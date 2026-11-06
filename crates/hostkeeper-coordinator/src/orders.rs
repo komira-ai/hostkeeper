@@ -56,12 +56,10 @@ pub fn install_order_id(digest: &Digest) -> String {
 /// never sends a lower one.
 #[must_use]
 pub fn next_try(beat: Option<&Heartbeat>, order_id: &str) -> u64 {
+    // Scratch check for komira-ai/hostkeeper#115: one more than the host's last reported try of
+    // the service, whatever the order.
+    let _ = order_id;
     beat.and_then(|b| b.last_update.as_ref())
-        .filter(|r| {
-            r.order_id
-                .as_ref()
-                .is_some_and(|id| id.as_str() == order_id)
-        })
         .map_or(1, |r| r.order_try.unwrap_or(0).saturating_add(1))
 }
 
