@@ -197,13 +197,20 @@ The service `Hosts` of the package `hostkeeper.operator.v1`. The hosts the coord
 
 `/hostkeeper.operator.v1.Hosts/List`
 
-Every host heard from since the coordinator started.
+Every host heard from since the coordinator started, by node id, a page at a time. Changes
+nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--limit` | UINT32 | The most hosts to return; capped at 256, and 0 means the cap. |
+| `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
 
 #### `hostkeeper ctl hosts get`
 
 `/hostkeeper.operator.v1.Hosts/Get`
 
-One host.
+One host heard from since the coordinator started; `unknown_host` for any other. Changes
+nothing.
 
 | flag | value | meaning |
 |---|---|---|

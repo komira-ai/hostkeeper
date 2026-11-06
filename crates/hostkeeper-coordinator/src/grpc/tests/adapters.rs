@@ -1,7 +1,6 @@
 //! The adapters of the operator API over the coordinator: each method answers what the
-//! coordinator's handler answers, each refusal is the status of the value the cause names, a
-//! method with no handler is `UNIMPLEMENTED`, and a call the router admitted no caller for is
-//! refused as an anonymous one.
+//! coordinator's handler answers, each refusal is the status of the value the cause names, and a
+//! call the router admitted no caller for is refused as an anonymous one.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -32,11 +31,6 @@ const EXTRA: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\", \"searc
 fn assert_refused<T: Debug>(result: Result<Response<T>, Status>, code: Code, token: &str) {
     let status = result.expect_err("the call is refused");
     assert_eq!((status.code(), status.message()), (code, token));
-}
-
-/// Asserts that `result` is the answer of a method no handler serves yet.
-fn assert_pending<T: Debug>(result: Result<Response<T>, Status>) {
-    assert_refused(result, Code::Unimplemented, "");
 }
 
 /// A call that carries the operator's token, but whose caller the router found to be CI.
@@ -104,29 +98,6 @@ fn releases(world: &World) -> ReleasesService {
 
 fn services(world: &World) -> ServicesService {
     ServicesService::new(world.coordinator.clone())
-}
-
-/// Proves that a method no handler serves yet answers `UNIMPLEMENTED` with an empty message,
-/// whoever calls.
-#[tokio::test]
-async fn a_method_no_handler_serves_yet_is_unimplemented_with_no_message() {
-    let world = world_of("adapters-pending", None);
-    let c = &world.coordinator;
-    assert_pending(
-        hosts(&world)
-            .list(as_operator(c, proto::ListHostsRequest {}).await)
-            .await,
-    );
-    assert_pending(
-        hosts(&world)
-            .get(as_operator(c, proto::GetHostRequest::default()).await)
-            .await,
-    );
-    assert_pending(
-        releases(&world)
-            .unmark_bad(as_operator(c, proto::UnmarkBadRequest::default()).await)
-            .await,
-    );
 }
 
 /// Proves that `Hosts` refuses a call from no one `unauthorized`, and one from CI `forbidden`,

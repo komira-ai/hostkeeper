@@ -604,6 +604,52 @@ fn an_older_reader_keeps_the_assignments_of_services() {
     }
 }
 
+/// Catches: a page of `Hosts.List` that the release before drops or cannot read past: a request
+/// with a `limit` and a `page_token` is read by the baseline's `ListHostsRequest`, which has no
+/// field, and written back with both kept; a reply with a `next_page_token` is read by the
+/// baseline's `ListHostsResponse` with its hosts, and written back with the token kept; and the
+/// request of the release before, empty, reads as the first page at the cap (`limit` 0, no
+/// token), so an older client is answered as it was.
+#[test]
+fn an_older_reader_keeps_the_page_of_a_host_list() {
+    let older = baseline_pool();
+    let request = op::ListHostsRequest {
+        limit: 2,
+        page_token: "db-1".to_owned(),
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.operator.v1.ListHostsRequest")
+        .expect("released");
+    let read = DynamicMessage::decode(message, round_trip(&request).as_slice()).expect("decodes");
+    let back = op::ListHostsRequest::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, request);
+
+    let reply = op::ListHostsResponse {
+        hosts: vec![op::Host {
+            node_id: "db-1".to_owned(),
+            role: "storage".to_owned(),
+            live: true,
+            ..op::Host::default()
+        }],
+        next_page_token: "db-1".to_owned(),
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.operator.v1.ListHostsResponse")
+        .expect("released");
+    assert!(message.get_field_by_name("next_page_token").is_none());
+    let read = DynamicMessage::decode(message, round_trip(&reply).as_slice()).expect("decodes");
+    let Some(Value::List(hosts)) = read.get_field_by_name("hosts").as_deref().cloned() else {
+        panic!("the hosts are read");
+    };
+    assert_eq!(hosts.len(), 1);
+    let back = op::ListHostsResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, reply);
+
+    let first = op::ListHostsRequest::decode(&[][..]).expect("decodes");
+    assert_eq!(first, op::ListHostsRequest::default());
+    assert_eq!((first.limit, first.page_token.as_str()), (0, ""));
+}
+
 /// Catches: a refusal of `Releases.SetDesired` for the release channel taking the number of a
 /// value the release before already gave a meaning, or renumbering one: the baseline knows no
 /// value 19 or 20, and every value it knows keeps its name and number. A caller of the release
