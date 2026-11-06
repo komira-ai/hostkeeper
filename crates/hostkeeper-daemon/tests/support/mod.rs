@@ -132,6 +132,7 @@ pub fn update(service: &str, version: &str, package_digest: &str, order_try: u64
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
+            index_digest: String::new(),
         })),
     }
 }
@@ -145,6 +146,7 @@ pub fn install(service: &str, version: &str, package_digest: &str, order_try: u6
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
+            index_digest: String::new(),
         })),
     }
 }
@@ -173,6 +175,7 @@ pub fn force_rollback(service: &str, version: &str, package_digest: &str, order_
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
+            index_digest: String::new(),
         })),
     }
 }
@@ -192,6 +195,7 @@ pub fn force(
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
+            index_digest: String::new(),
             halt_generation,
         })),
     }

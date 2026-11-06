@@ -8,7 +8,9 @@
 //!   coordinator's server certificate, and what the heartbeat path asks of them (who an
 //!   enrolled host's certificate names, whether it is denied, retiring or duplicate);
 //! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically,
-//!   with the [`registry`] of every version CI has set and the digest of its package;
+//!   with the [`registry`] of every version CI has set and its release (the digest of its
+//!   package, or the record of its release index, checked by [`release_index`]: each host is
+//!   ordered the package of its own platform);
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
 //! - [`verdicts`]: the release failures heard, each counted once per host, order id and try,
@@ -102,6 +104,7 @@ pub mod order_terms;
 pub mod orders;
 pub mod reconcile;
 pub mod registry;
+pub mod release_index;
 pub mod service;
 pub mod services;
 pub mod stamp;
@@ -189,6 +192,12 @@ mod priority_tests;
 mod recorded_definition_tests;
 #[cfg(test)]
 mod recorded_review_tests;
+#[cfg(test)]
+mod release_index_orders_tests;
+#[cfg(test)]
+mod release_index_support;
+#[cfg(test)]
+mod release_index_tests;
 #[cfg(test)]
 mod rollback_definition_tests;
 #[cfg(test)]

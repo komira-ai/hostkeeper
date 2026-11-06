@@ -44,6 +44,7 @@ async fn an_assigned_service_not_installed_gets_an_install_order() {
             service: WEB.to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(7),
+            index_digest: String::new(),
         }))
     );
 

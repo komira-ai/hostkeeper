@@ -44,7 +44,8 @@ impl Coordinator {
     /// coordinator manages. The refusals are the same and in the same order, and nothing changes
     /// when one is made. Once the state is recorded, one audit entry `set_desired` by `operator`
     /// is written (the service, and as its reason the version, followed by `with package digest
-    /// <digest>` when the body named one); then a force of another version ends and a halt the
+    /// <digest>` when the body named one, or `with release index <digest>` when it named an
+    /// index); then a force of another version ends and a halt the
     /// updater raised is lifted, both audited by `operator`.
     ///
     /// # Errors
@@ -102,9 +103,14 @@ impl Coordinator {
             if let Setter::Operator(name) = setter {
                 let mut entry = AuditEntry::new(name, "set_desired");
                 entry.service = Some(service.clone());
-                entry.reason = Some(match &desired.release_digest {
-                    Some(digest) => format!("{} with package digest {digest}", desired.version),
-                    None => desired.version.to_string(),
+                entry.reason = Some(match (&desired.release_digest, &desired.release_index) {
+                    (Some(digest), _) => {
+                        format!("{} with package digest {digest}", desired.version)
+                    }
+                    (None, Some(index)) => {
+                        format!("{} with release index {}", desired.version, index.digest)
+                    }
+                    (None, None) => desired.version.to_string(),
                 });
                 self.ops.change(Write::BeforeMemory, entry, |_| {})?;
             }

@@ -307,6 +307,7 @@ fn order(
         service: ServiceName::new(service).ok()?,
         version: Version::new(version.as_str()).ok()?,
         digest: PackageDigest::new(digest.as_str()).ok()?,
+        index_digest: None,
     };
     Some(Order {
         id: OrderId::new(id.as_str()).ok()?,

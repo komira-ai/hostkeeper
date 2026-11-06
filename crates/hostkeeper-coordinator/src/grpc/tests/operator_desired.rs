@@ -127,6 +127,7 @@ fn stand_force(world: &World, forced: &str) {
         reason: "test".to_owned(),
         by: "operator".to_owned(),
         digest: Digest::parse(&"ab".repeat(32)).expect("a digest"),
+        release_index: None,
         halt_generation: 0,
         targets: ForceTargets::Fleet,
         include_held: false,

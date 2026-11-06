@@ -221,7 +221,7 @@ named, and every change is audited to a file.
 - **The decision names a gate or a skip.** `decide::Hold` is split into `Gate` (`halted`, `held`,
   `bad`, `below_min_version`, `updating`, `busy_elsewhere`, `no_slot`, `quiet`, `canary_wait`,
   `baking`) and `Skip` (`no_desired`, `not_a_member`, `up_to_date`, `failed_here`, `deferred`,
-  `unsupported`, `no_digest`), and a decision is `Update`, `Install`, `Uninstall`, `Gate` or
+  `unsupported`, `no_digest`, `no_package_for_platform`), and a decision is `Update`, `Install`, `Uninstall`, `Gate` or
   `Skip`. `waiting_for_role`, `waiting_for_service` and `min_up` are no longer produced, nor are
   `no_definition` (a service the coordinator does not manage is `not_a_member`) and `absent`
   (see the assignment below).
@@ -229,7 +229,7 @@ named, and every change is audited to a file.
   selector) are the base; `Services.Assign`, `Unassign` and `SetMinVersion` add entries per role
   and per host on top, kept in the operations file under `assignments`, a key written only once
   an entry stands. A service assigned to a host that does not run it (it does not list it, or
-  lists it `absent`) is ordered `install` with its desired version and package digest, under
+  lists it `absent`) is ordered `install` with its desired version and the package digest of its platform, under
   every rule of an update, but only as a typed order to a daemon that announces `install-v1` and
   `heartbeat-v2`; the JSON reply carries no install, so a kbf agent that reports a service
   `absent` is told nothing (`unsupported`), where `install_when_absent = true` used to order it

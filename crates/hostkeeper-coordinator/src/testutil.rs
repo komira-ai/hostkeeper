@@ -127,6 +127,7 @@ pub fn desired(target: &str, storage: u32, frontend: u32) -> Desired {
         max_updating: RoleLimits::max_updating_default(),
         min_up: RoleLimits::from([("storage", storage), ("frontend", frontend)]),
         release_digest: None,
+        release_index: None,
     }
 }
 

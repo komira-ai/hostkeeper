@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use hostkeeper_wire::Platform;
 use hostkeeper_wire::wire::{ServiceBeat, ServiceReply};
 
 use super::Coordinator;
@@ -20,6 +21,8 @@ use crate::orders::{Order, install_order_id, next_try};
 pub(super) struct Asked<'a> {
     /// The host that sent the heartbeat.
     pub(super) who: &'a Identity,
+    /// The platform the heartbeat names: which package of a release index the host is ordered.
+    pub(super) platform: Platform,
     /// The legacy service the heartbeat's top level speaks for, if any.
     pub(super) legacy: Option<&'a str>,
     /// The services the heartbeat lists.
@@ -67,7 +70,14 @@ impl Coordinator {
                     // An agent that reads order terms is ordered only a version with a digest.
                     let terms = asked.order_v1.then(|| {
                         let digests = self.desired.digests(name);
-                        order_terms::of_beat(&digests, name, &version, asked.announced, id)
+                        order_terms::of_beat(
+                            &digests,
+                            name,
+                            &version,
+                            asked.announced,
+                            id,
+                            asked.platform,
+                        )
                     });
                     let Some(terms) = terms.map_or(Some(None), |made| made.map(Some)) else {
                         continue;
@@ -80,7 +90,11 @@ impl Coordinator {
                     let service = (Some(name) != asked.legacy).then(|| name.to_owned());
                     return Some((ServiceReply::Update { service, version }, None, terms));
                 }
-                Decision::Install { version, digest } if asked.orders => {
+                Decision::Install {
+                    version,
+                    digest,
+                    index_digest,
+                } if asked.orders => {
                     if !release_ack(&self.ops, name, id) {
                         continue;
                     }
@@ -91,6 +105,7 @@ impl Coordinator {
                         service: name.to_owned(),
                         version,
                         digest,
+                        index_digest,
                         order_id,
                         order_try,
                     }

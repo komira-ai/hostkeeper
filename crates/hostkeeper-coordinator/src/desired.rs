@@ -19,14 +19,19 @@
 //! A file that cannot be read back is a refusal to start: the coordinator does not guess what
 //! an operator meant.
 //!
-//! A desired state may name the digest of its version's package (`release_digest`), and each
-//! service's state in the file carries the registry of every version CI has set with a digest
-//! (`digests`, [`crate::registry`]), written in the same replacement of the file as the state,
-//! so a crash leaves both or neither. Both keys are written only when they hold something: a
-//! farm whose CI sends no digest keeps the bytes it had, which earlier builds read. Earlier
-//! builds refuse a file that has either key (their reader refuses a key it does not know), so a
-//! coordinator rolled back below this one refuses to start rather than run without the
-//! digests.
+//! A desired state may name the digest of its version's package (`release_digest`), or the
+//! record of the version's release index (`release_index`: the index's digest and the package
+//! digest of each platform it lists, [`crate::release_index`]), never both; and each service's
+//! state in the file carries the registry of every version CI has set with a release
+//! (`digests`, [`crate::registry`]: a package digest, or the record of an index), written in the
+//! same replacement of the file as the state, so a crash leaves both or neither. The keys are
+//! written only when they hold something: a farm whose CI sends no digest keeps the bytes it
+//! had, which earlier builds read, and a farm that sets no index never has `release_index`.
+//! Earlier builds refuse a file that has the key `release_index` or `digests` (their reader
+//! refuses a key it does not know), so a coordinator rolled back below this one refuses to
+//! start rather than run without the digests. A request never writes the record: the keys
+//! `release_index` and `release_index_digest` of a set are the index's text and its SHA-256,
+//! which are checked and turned into the record ([`Desired::parse_request_noting`]).
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -35,12 +40,13 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-use hostkeeper_wire::RoleName;
 use hostkeeper_wire::version::Version;
+use hostkeeper_wire::{Platform, RoleName};
 
 use serde::{Deserialize, Serialize};
 
-use crate::registry::{Digest, Registry, RegistryError};
+use crate::registry::{Digest, IndexRecord, Package, Registry, RegistryError, Release};
+use crate::release_index;
 use crate::services::Services;
 
 /// The most any count may be: a typo's order of magnitude, not a plan.
@@ -203,6 +209,11 @@ pub struct Desired {
     /// sent none. Written only when there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_digest: Option<Digest>,
+    /// The record of the release index of `version`, as CI set it: each host is ordered the
+    /// package the index lists for its platform. None when CI sent no index; never with a
+    /// `release_digest`. Written only when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_index: Option<IndexRecord>,
 }
 
 /// Why a desired state is refused.
@@ -223,6 +234,29 @@ pub enum DesiredError {
     /// The registry of digests of a service is refused.
     #[error(transparent)]
     Registry(#[from] RegistryError),
+    /// A release index that cannot be taken as the version's: see [`crate::release_index`].
+    #[error("index_invalid: {0}")]
+    IndexInvalid(&'static str),
+    /// The text of a release index does not have the SHA-256 the set named.
+    #[error("index_digest_mismatch: the release index does not have the digest named")]
+    IndexDigestMismatch,
+}
+
+impl DesiredError {
+    /// The closed reason token of a refusal of the release index, which the answer says
+    /// (`index_invalid`, `index_digest_mismatch`); none for every other error.
+    #[must_use]
+    pub const fn reason(&self) -> Option<&'static str> {
+        match self {
+            Self::IndexInvalid(_) => Some("index_invalid"),
+            Self::IndexDigestMismatch => Some("index_digest_mismatch"),
+            Self::Malformed(_)
+            | Self::Count
+            | Self::UnknownService
+            | Self::NoLegacyService
+            | Self::Registry(_) => None,
+        }
+    }
 }
 
 impl Desired {
@@ -279,6 +313,10 @@ impl Desired {
             Some(_) => return Err(DesiredError::Malformed("service is not text".to_owned())),
         };
         let def = services.get(&service).ok_or(DesiredError::UnknownService)?;
+        // The index's text and digest are taken out before the strict read, which knows the
+        // record's key and must never be handed one: a request cannot write the record.
+        let index_text = fields.remove("release_index");
+        let index_digest = fields.remove("release_index_digest");
         // `min_up` is optional for every service: nothing decides on it any more, and the file
         // written names the format's two keys either way (`write_min_up`).
         fields
@@ -287,6 +325,13 @@ impl Desired {
         let mut desired: Self = serde_json::from_value(fields.into()).map_err(malformed)?;
         desired.checked()?;
         desired.refuse_unnamed(services)?;
+        desired.release_index = release_index::checked(
+            index_text.as_ref(),
+            index_digest.as_ref(),
+            desired.release_digest.is_some(),
+            &service,
+            &desired.version,
+        )?;
         let has = |role: &str| def.roles.contains(role);
         let mut dropped = desired.max_updating.retain(&FORMAT_ROLES, has);
         dropped.extend(desired.min_up.retain(&FORMAT_MIN_UP, has));
@@ -319,9 +364,51 @@ impl Desired {
         Ok(())
     }
 
+    /// What CI registered for the version: the package digest, or the release index.
+    #[must_use]
+    pub fn release(&self) -> Option<Release> {
+        self.release_digest
+            .clone()
+            .map(Release::Package)
+            .or_else(|| self.release_index.clone().map(Release::Index))
+    }
+
+    /// The state with `release` as its package digest or release index, and no other.
+    pub fn set_release(&mut self, release: Option<Release>) {
+        self.release_digest = None;
+        self.release_index = None;
+        match release {
+            Some(Release::Package(digest)) => self.release_digest = Some(digest),
+            Some(Release::Index(record)) => self.release_index = Some(record),
+            None => {}
+        }
+    }
+
+    /// The package a host of `platform` is ordered of the version; none when CI set no release
+    /// or the release index lists no package for the platform.
+    #[must_use]
+    pub fn package_for(&self, platform: Platform) -> Option<Package> {
+        self.release()
+            .and_then(|release| release.package_for(platform))
+    }
+
+    /// Whether the version has a release index that lists no package for `platform`: a host of
+    /// that platform is not ordered the version.
+    #[must_use]
+    pub fn lacks_package_for(&self, platform: Platform) -> bool {
+        self.release_index
+            .as_ref()
+            .is_some_and(|record| record.package_for(platform).is_none())
+    }
+
     /// Whether the state is acceptable: every limit key a role name, every count within
-    /// [`MAX_COUNT`].
+    /// [`MAX_COUNT`], and no package digest beside a release index.
     fn checked(&self) -> Result<(), DesiredError> {
+        if self.release_digest.is_some() && self.release_index.is_some() {
+            return Err(DesiredError::Malformed(
+                "release_digest and release_index are exclusive".to_owned(),
+            ));
+        }
         let limits = [&self.max_updating, &self.min_up];
         for role in limits.iter().flat_map(|l| l.0.keys()) {
             if !is_role_name(role) {
@@ -561,8 +648,9 @@ impl DesiredStore {
         self.replace(service, desired, None, &|_| true).map(drop)
     }
 
-    /// Sets the desired state of `service` as [`Self::set`] does, and, when it names a digest,
-    /// records its version and digest in the service's registry ([`Registry::record`], which
+    /// Sets the desired state of `service` as [`Self::set`] does, and, when it names a release
+    /// (a package digest or a release index), records its version and release in the service's
+    /// registry ([`Registry::record`], which
     /// drops past the cap only a version `keep` does not keep), in the same replacement of the
     /// file. When the state and the registry are already what is asked, nothing is written.
     ///
@@ -575,11 +663,10 @@ impl DesiredStore {
         desired: Desired,
         keep: impl Fn(&Version) -> bool,
     ) -> Result<Recorded, StoreError> {
-        let digest = desired
-            .release_digest
-            .clone()
-            .map(|digest| (desired.version.clone(), digest));
-        self.replace(service, desired, digest, &keep)
+        let release = desired
+            .release()
+            .map(|release| (desired.version.clone(), release));
+        self.replace(service, desired, release, &keep)
     }
 
     /// The one replacement of the file: the state of `service`, and the version and digest to
@@ -588,16 +675,16 @@ impl DesiredStore {
         &self,
         service: &str,
         desired: Desired,
-        digest: Option<(Version, Digest)>,
+        release: Option<(Version, Release)>,
         keep: &dyn Fn(&Version) -> bool,
     ) -> Result<Recorded, StoreError> {
         let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         let before = self.lock().clone();
         let mut next = before.clone();
         next.desired.insert(service.to_owned(), desired);
-        if let Some((version, digest)) = digest {
+        if let Some((version, release)) = release {
             let mut registry = next.digests_of(service);
-            registry.record(&version, digest, keep);
+            registry.record(&version, release, keep);
             next.digests.insert(service.to_owned(), registry);
         }
         if next == before {

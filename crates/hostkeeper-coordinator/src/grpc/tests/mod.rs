@@ -16,5 +16,6 @@ mod operator;
 mod operator_desired;
 mod pending;
 mod refusal;
+mod release_index;
 mod report;
 mod support;

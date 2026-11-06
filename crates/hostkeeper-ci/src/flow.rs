@@ -11,7 +11,7 @@ use std::io::{self, Write};
 use rustls_pki_types::CertificateDer;
 
 use crate::call::{Answer, call};
-use crate::flags::{SetDesiredFlags, Settings, is_version, validate};
+use crate::flags::{Release, SetDesiredFlags, Settings, is_version, validate};
 use crate::observe::Convergence;
 use crate::ports::Ports;
 
@@ -127,7 +127,17 @@ pub(crate) fn execute(settings: &Settings, ports: &mut dyn Ports) -> Outcome {
 fn set_version(settings: &Settings, ports: &mut dyn Ports) -> Result<(), Outcome> {
     let (service, version) = (&settings.service, &settings.version);
     let file = settings.work_dir.join(REQUEST_FILE);
-    let request = serde_json::json!({ "desired": { "version": version } }).to_string();
+    // The request file is the canonical JSON of the request. The index is its own text, whole,
+    // in a string: JSON escapes it and the coordinator reads the same bytes back.
+    let request = match &settings.release {
+        Release::Package(_) => serde_json::json!({ "desired": { "version": version } }),
+        Release::Index { text, digest } => serde_json::json!({
+            "desired": { "version": version },
+            "releaseIndex": text,
+            "releaseIndexDigest": digest,
+        }),
+    }
+    .to_string();
     if let Err(e) = std::fs::write(&file, request) {
         return Err(failed(
             ports,
@@ -139,15 +149,11 @@ fn set_version(settings: &Settings, ports: &mut dyn Ports) -> Result<(), Outcome
             ),
         ));
     }
-    let rpc: Vec<OsString> = vec![
-        "set-desired".into(),
-        "--service".into(),
-        service.into(),
-        "--package-digest".into(),
-        settings.package_digest.clone().into(),
-        "--request".into(),
-        file.into_os_string(),
-    ];
+    let mut rpc: Vec<OsString> = vec!["set-desired".into(), "--service".into(), service.into()];
+    if let Release::Package(digest) = &settings.release {
+        rpc.extend(["--package-digest".into(), digest.into()]);
+    }
+    rpc.extend(["--request".into(), file.into_os_string()]);
     match call(ports, settings, rpc) {
         Answer::Reply(reply) => {
             let stored = reply["desired"]["version"].as_str();

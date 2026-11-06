@@ -511,6 +511,7 @@ fn an_update_with_its_terms_is_the_loops_update_order() {
                     service: service("web"),
                     version: version("2.0"),
                     digest: crate::digest(),
+                    index_digest: None,
                 }),
             }),
             ..Reply::default()
