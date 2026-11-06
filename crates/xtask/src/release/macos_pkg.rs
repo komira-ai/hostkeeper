@@ -1,18 +1,31 @@
 //! `release macos-pkg` and `release check-macos-pkg`: the installer pkg of a Mac's first install
 //! (design sections 4.6 and 5.9), `hostkeeper-<v>-macos-arm64.pkg` ([`installer_name`]).
 //!
-//! The pkg installs at `/` exactly two files, and the directories that hold them:
+//! The pkg installs at `/` exactly three files and one empty directory, and the directories
+//! that hold them:
 //!
 //! - the daemon binary at `hostkeeper_launchd::DAEMON_PROGRAM` (`/usr/local/bin/hostkeeper`),
 //!   mode 0755;
 //! - the daemon's launchd plist, `/Library/LaunchDaemons/<label>.plist` with the label
 //!   `hostkeeper_launchd::Label::daemon` (`dev.hostkeeper.hostkeeper`), mode 0644, the text
-//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`.
+//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`;
+//! - the directory of the daemon's output files, `hostkeeper_launchd::DAEMON_LOG_DIR`
+//!   (`/var/log/hostkeeper`), empty: launchd opens the job's `StandardOutPath` and
+//!   `StandardErrorPath` there but does not make their directory;
+//! - the newsyslog entries of those two files, `/etc/newsyslog.d/hostkeeper.conf`, mode 0644
+//!   ([`newsyslog_text`]): each file is rotated when it reaches [`LOG_SIZE_KIB`] KiB, with
+//!   [`LOG_COUNT`] bzip2-compressed archives kept, and never by time.
+//!
+//! `/etc` and `/var` are symbolic links into `/private` on macOS, so the payload holds the last
+//! two under `private/` ([`payload_of`]), the paths the links lead to: a payload directory named
+//! `etc` or `var` would stand in place of the link.
 //!
 //! Every entry is owned by root and wheel (uid 0, gid 0) and every directory is 0755, the modes
-//! macOS gives `/`, `/Library`, `/usr` and `/usr/local`, so installing the pkg changes no system
-//! directory. The pkg has no scripts: nothing runs at install, the daemon is not started, and the
-//! config is not written (the operator's bootstrap places `hostkeeper.toml` and loads the job).
+//! macOS gives `/`, `/Library`, `/usr`, `/usr/local`, `/private`, `/private/etc`,
+//! `/private/etc/newsyslog.d`, `/private/var` and `/private/var/log`, so installing the pkg
+//! changes no system directory. The pkg has no scripts: nothing runs at install, the daemon is
+//! not started, and the config is not written (the operator's bootstrap places `hostkeeper.toml`
+//! and loads the job).
 //!
 //! The pkg is not signed: an installer signature needs an Apple Developer ID Installer
 //! identity. It is attested like every other asset (build provenance by the artifacts
@@ -25,14 +38,15 @@
 //! `PackageInfo` and `Payload`; `PackageInfo` names the identifier, the version and the install
 //! location and no script; and `Payload`, a gzip-compressed cpio archive (the portable `odc`
 //! format), holds exactly the entries above with their modes, owners and bytes, the plist
-//! parsing as a launchd plist that names the daemon's label and binary.
+//! parsing as a launchd plist that names the daemon's label, binary and output files, and the
+//! newsyslog file rotating exactly those output files.
 
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_launchd::plist::DAEMON_PROGRAM;
+use hostkeeper_launchd::plist::{DAEMON_LOG_DIR, DAEMON_PROGRAM};
 use hostkeeper_launchd::{DaemonJob, Label, Platform as Launchd, daemon_plist};
 
 use super::contract::{Version, installer_name};
@@ -47,6 +61,30 @@ const BINARY_MODE: u32 = 0o755;
 
 /// The mode of the plist: launchd refuses a plist that its group or others may write.
 const PLIST_MODE: u32 = 0o644;
+
+/// The mode of the newsyslog file: newsyslog reads it as root; it holds nothing secret.
+const NEWSYSLOG_MODE: u32 = 0o644;
+
+/// The file macOS's newsyslog reads the daemon's rotation entries from.
+const NEWSYSLOG_CONF: &str = "/etc/newsyslog.d/hostkeeper.conf";
+
+/// The size in KiB at which newsyslog rotates an output file of the daemon.
+const LOG_SIZE_KIB: u32 = 10_240;
+
+/// The number of compressed archives newsyslog keeps of each output file.
+const LOG_COUNT: u32 = 5;
+
+/// The mode newsyslog gives the new, empty output file and the archives: the daemon's output
+/// names hosts and services, so only root and wheel read it.
+const LOG_MODE: &str = "640";
+
+/// The flags of each entry: `N`, no process is signalled (the daemon has no pid file, and launchd
+/// holds the files for it); `J`, the archives are bzip2-compressed, as macOS's own entries are.
+const LOG_FLAGS: &str = "NJ";
+
+/// The top directories of macOS that are symbolic links into `/private` and that the payload
+/// installs under (`/tmp`, the third, holds nothing the pkg installs).
+const PRIVATE_TOPS: [&str; 2] = ["etc", "var"];
 
 /// The file-type bits of a cpio mode, and the two types a payload may hold.
 const TYPE_BITS: u32 = 0o170_000;
@@ -69,9 +107,60 @@ fn identifier() -> String {
     Label::daemon().as_str().to_owned()
 }
 
+/// The payload path, from the install location, of the absolute path `installed`: under
+/// `private/` when its top directory is one of macOS's links into `/private`, so the installer
+/// writes through the link and never puts a directory in its place.
+fn payload_of(installed: &str) -> String {
+    let path = installed.trim_start_matches('/');
+    let top = path.split('/').next().unwrap_or(path);
+    if PRIVATE_TOPS.contains(&top) {
+        format!("private/{path}")
+    } else {
+        path.to_owned()
+    }
+}
+
 /// The path of the binary from the install location: `usr/local/bin/hostkeeper`.
 fn binary_path() -> String {
-    DAEMON_PROGRAM.trim_start_matches('/').to_owned()
+    payload_of(DAEMON_PROGRAM)
+}
+
+/// The path of the daemon's log directory from the install location:
+/// `private/var/log/hostkeeper`.
+fn log_dir_path() -> String {
+    payload_of(DAEMON_LOG_DIR)
+}
+
+/// The path of the newsyslog file from the install location:
+/// `private/etc/newsyslog.d/hostkeeper.conf`.
+fn newsyslog_path() -> String {
+    payload_of(NEWSYSLOG_CONF)
+}
+
+/// The daemon's two output files by the plist key that names each: the standard output and the
+/// standard error of `DaemonJob::standard`, the job the plist is written for.
+fn outputs() -> [(&'static str, String); 2] {
+    let job = DaemonJob::standard();
+    [
+        ("StandardOutPath", job.stdout.display().to_string()),
+        ("StandardErrorPath", job.stderr.display().to_string()),
+    ]
+}
+
+/// The text of the newsyslog file: one entry for each of the daemon's output files, the paths
+/// the plist names, rotated by size only (`*` in the time field).
+fn newsyslog_text() -> String {
+    let mut text = String::from(
+        "# The hostkeeper daemon's standard output and standard error, the StandardOutPath and\n\
+         # StandardErrorPath of its launchd job. Installed by the hostkeeper pkg.\n\
+         # logfilename\t[owner:group]\tmode\tcount\tsize\twhen\tflags\n",
+    );
+    for (_, path) in outputs() {
+        text.push_str(&format!(
+            "{path}\troot:wheel\t{LOG_MODE}\t{LOG_COUNT}\t{LOG_SIZE_KIB}\t*\t{LOG_FLAGS}\n"
+        ));
+    }
+    text
 }
 
 /// The path of the plist from the install location:
@@ -104,20 +193,29 @@ enum Want {
 }
 
 /// Every entry of the payload by its path from the install location (`""` is the install
-/// location itself): the two files and each directory that holds them.
+/// location itself): the three files, the log directory and each directory that holds them.
 fn payload(binary: Vec<u8>, plist: Vec<u8>) -> BTreeMap<String, Want> {
     let mut want = BTreeMap::new();
     let files = [
         (binary_path(), BINARY_MODE, binary),
         (plist_path(), PLIST_MODE, plist),
+        (
+            newsyslog_path(),
+            NEWSYSLOG_MODE,
+            newsyslog_text().into_bytes(),
+        ),
     ];
-    for (path, mode, bytes) in files {
+    let entries = files
+        .into_iter()
+        .map(|(path, mode, bytes)| (path, Want::File { mode, bytes }))
+        .chain([(log_dir_path(), Want::Dir)]);
+    for (path, entry) in entries {
         let mut parent = path.as_str();
         while let Some((dir, _)) = parent.rsplit_once('/') {
             want.insert(dir.to_owned(), Want::Dir);
             parent = dir;
         }
-        want.insert(path.clone(), Want::File { mode, bytes });
+        want.insert(path, entry);
     }
     want.insert(String::new(), Want::Dir);
     want
@@ -386,7 +484,8 @@ fn package_info_problems(text: &str, version: &Version, problems: &mut Vec<Strin
 }
 
 /// What is wrong with the launchd plist `bytes` of the payload, one line each: it must parse as
-/// a plist dictionary naming the daemon's label and running the binary of the payload.
+/// a plist dictionary naming the daemon's label, running the binary of the payload, and sending
+/// its output to the files the newsyslog file rotates, in the log directory of the payload.
 fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
     let what = shown(&plist_path());
     let value = match plist::Value::from_reader_xml(bytes) {
@@ -413,7 +512,40 @@ fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
             "{what}: the job runs {program:?}, not the pkg's binary {DAEMON_PROGRAM:?}"
         ));
     }
+    for (key, want) in outputs() {
+        let got = dict.get(key).and_then(plist::Value::as_string);
+        if got != Some(want.as_str()) {
+            problems.push(format!(
+                "{what}: {key} is {got:?}, not {want:?}, the file the pkg's newsyslog entry \
+                 rotates in the directory the pkg makes"
+            ));
+        }
+    }
 }
+
+/// What is wrong with the newsyslog file `bytes` of the payload: the paths of its entries (the
+/// first field of each line that is neither blank nor a `#` comment) must be exactly the
+/// daemon's `StandardOutPath` and `StandardErrorPath`, in that order.
+fn newsyslog_problems(bytes: &[u8], problems: &mut Vec<String>) {
+    let text = String::from_utf8_lossy(bytes);
+    let named: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() & !line.starts_with('#'))
+        .map(|line| line.split_whitespace().next().unwrap_or(line))
+        .collect();
+    let want: Vec<String> = outputs().into_iter().map(|(_, path)| path).collect();
+    if named != want {
+        problems.push(format!(
+            "{}: rotates {named:?}, not the daemon's StandardOutPath and StandardErrorPath \
+             {want:?}",
+            shown(&newsyslog_path())
+        ));
+    }
+}
+
+/// A read-back of one file of the payload: what is wrong with its bytes, one line each.
+type ReadBack = fn(&[u8], &mut Vec<String>);
 
 /// What is wrong with the entries of the payload against `want`, one line each.
 fn payload_problems(
@@ -427,8 +559,8 @@ fn payload_problems(
         let what = shown(path);
         let Some(wanted) = want.remove(path) else {
             problems.push(format!(
-                "{what} ({:?}) is in the payload, which holds only the binary, the plist and \
-                 their directories, each once",
+                "{what} ({:?}) is in the payload, which holds only the binary, the plist, the \
+                 newsyslog file, the log directory and their directories, each once",
                 entry.name
             ));
             continue;
@@ -461,8 +593,10 @@ fn payload_problems(
         {
             let source = if path == binary_path() {
                 format!("the bytes of {}", binary.display())
-            } else {
+            } else if path == plist_path() {
                 "the daemon plist hostkeeper-launchd writes".to_owned()
+            } else {
+                "the newsyslog entries of the daemon's output files".to_owned()
             };
             problems.push(format!("{what}: not {source}"));
         }
@@ -525,11 +659,14 @@ pub(crate) fn check(
                 let bytes = std::fs::read(binary)
                     .map_err(Error::io(format!("read {}", binary.display())))?;
                 let plist = plist_text()?.into_bytes();
-                if let Some(entry) = entries
-                    .iter()
-                    .find(|e| payload_path(&e.name) == plist_path())
-                {
-                    plist_problems(&entry.data, &mut problems);
+                let read_back: [(String, ReadBack); 2] = [
+                    (plist_path(), plist_problems),
+                    (newsyslog_path(), newsyslog_problems),
+                ];
+                for (path, problems_of) in read_back {
+                    if let Some(entry) = entries.iter().find(|e| payload_path(&e.name) == path) {
+                        problems_of(&entry.data, &mut problems);
+                    }
                 }
                 payload_problems(&entries, payload(bytes, plist), binary, &mut problems);
             }
@@ -539,11 +676,14 @@ pub(crate) fn check(
         return Err(Error::Refused(problems));
     }
     Ok(vec![format!(
-        "check-macos-pkg: {} installs exactly {} ({BINARY_MODE:o}) and {} ({PLIST_MODE:o}), \
-         owned by root and wheel, with the label {}, version {version} and no scripts",
+        "check-macos-pkg: {} installs exactly {} ({BINARY_MODE:o}), {} ({PLIST_MODE:o}), {} \
+         ({NEWSYSLOG_MODE:o}) and the directory {} ({DIR_MODE:o}), owned by root and wheel, with \
+         the label {}, version {version} and no scripts",
         expanded.display(),
         shown(&binary_path()),
         shown(&plist_path()),
+        shown(&newsyslog_path()),
+        shown(&log_dir_path()),
         Label::daemon()
     )])
 }

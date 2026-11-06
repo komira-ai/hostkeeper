@@ -21,17 +21,25 @@
 //! The loops stop when [`Links::stop`] is set: the enrollment loop before its next step, the
 //! heartbeat loop at the end of its wait (`hostkeeper_link::ClockSleeper`). An order running on
 //! a worker goes on; its verdict is in its step record.
+//!
+//! The heartbeat loop's link to the coordinator is [`HostLink`]: the [`NegotiatedLink`] of
+//! [`coordinator_link`] (the JSON route and gRPC, both over mutual TLS), made at the first
+//! heartbeat the loop sends, on the loop's own worker.
 
 use std::io;
 use std::num::NonZeroU64;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
+use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::names::Version;
 use hostkeeper_enroll::Enroller;
 use hostkeeper_link::{
-    CertSource, ClientIdentity, CoordinatorLink, Dispatch, Heartbeat, Heartbeater, LinkError,
-    LoopConfig, Platform, Ports, Reply, Sleeper, StopFlag, Tick, UnixClock,
+    CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
+    Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports, Reply,
+    Sleeper, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
+use hostkeeper_steps::Clock;
 
 use crate::executor::Daemon;
 use crate::link_adapters::{DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords};
@@ -193,13 +201,95 @@ impl Log for DaemonLog {
     }
 }
 
-/// The coordinator link of a build that has none: every heartbeat ends unsent, as a connection
-/// this build does not support.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NoLink;
+/// The link to the coordinator of `config`: a [`NegotiatedLink`] over the JSON route
+/// ([`JsonMtlsLink`] through [`TcpTransport`], bounded on `clock`) and gRPC ([`GrpcMtlsLink`]
+/// through [`TcpDial`]). Both trust the CA bundle of the pki directory `pki`'s current generation
+/// whose SHA-256 `config` pins (`ca_sha256`), read again at every heartbeat, and both log to
+/// `log`. Nothing is read or dialed here.
+///
+/// The gRPC link owns a Tokio runtime: the link must be made, called and dropped outside any
+/// other runtime ([`HostLink`] makes it on the heartbeat loop's worker).
+///
+/// # Errors
+/// [`GrpcLinkError::Endpoint`]: `config`'s coordinator address is not one the links dial.
+/// [`GrpcLinkError::Runtime`]: the gRPC link's runtime cannot be started.
+pub fn coordinator_link(
+    config: &DaemonConfig,
+    pki: &Path,
+    clock: Arc<dyn Clock>,
+    log: Arc<dyn Log>,
+) -> Result<NegotiatedLink, GrpcLinkError> {
+    let grpc = GrpcMtlsLink::new(config, pki, Arc::new(TcpDial), Arc::clone(&log))?;
+    let json = JsonMtlsLink::new(config, pki, Arc::new(TcpTransport::new(clock)), log)?;
+    Ok(NegotiatedLink::new(json, grpc))
+}
 
-impl CoordinatorLink for NoLink {
-    fn heartbeat(&self, _identity: &ClientIdentity, _beat: &Heartbeat) -> Result<Reply, LinkError> {
-        Err(LinkError::Transport(io::ErrorKind::Unsupported))
+/// The heartbeat loop's link in the shipped daemon: [`coordinator_link`], made at the first
+/// heartbeat and kept. The loop calls the link only once the host has a certificate, so a host
+/// not enrolled yet makes nothing; and the call is on the loop's worker, outside the daemon's
+/// runtime, where the gRPC link's own runtime may be made and dropped.
+///
+/// A link that cannot be made leaves that heartbeat unsent, as [`LinkError::Transport`] of the
+/// kind [`io::ErrorKind::Other`]; why ([`GrpcLinkError`]) is logged once, and again when it
+/// changes. The next heartbeat tries again.
+pub struct HostLink {
+    config: DaemonConfig,
+    pki: PathBuf,
+    clock: Arc<dyn Clock>,
+    log: Arc<dyn Log>,
+    state: Mutex<Made>,
+}
+
+/// What [`HostLink`] has made so far.
+#[derive(Default)]
+struct Made {
+    link: Option<NegotiatedLink>,
+    /// Why the last try failed, as logged.
+    refused: Option<String>,
+}
+
+impl HostLink {
+    /// The link [`coordinator_link`] makes of these, once a heartbeat needs it.
+    pub fn new(
+        config: DaemonConfig,
+        pki: PathBuf,
+        clock: Arc<dyn Clock>,
+        log: Arc<dyn Log>,
+    ) -> HostLink {
+        HostLink {
+            config,
+            pki,
+            clock,
+            log,
+            state: Mutex::new(Made::default()),
+        }
+    }
+}
+
+impl CoordinatorLink for HostLink {
+    fn heartbeat(&self, identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
+        // One loop calls the link, one heartbeat at a time: the lock is never waited for.
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(link) = &state.link {
+            return link.heartbeat(identity, beat);
+        }
+        let made = coordinator_link(
+            &self.config,
+            &self.pki,
+            Arc::clone(&self.clock),
+            Arc::clone(&self.log),
+        );
+        match made {
+            Ok(link) => state.link.insert(link).heartbeat(identity, beat),
+            Err(error) => {
+                let why = error.to_string();
+                if state.refused.as_deref() != Some(why.as_str()) {
+                    self.log
+                        .line(&format!("error: no link to the coordinator: {why}"));
+                    state.refused = Some(why);
+                }
+                Err(LinkError::Transport(io::ErrorKind::Other))
+            }
+        }
     }
 }

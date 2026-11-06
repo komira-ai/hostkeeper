@@ -1,5 +1,5 @@
 {
- "from": "kbf-coordinator/src/http_tests/features.rs::a_bad_announcement_is_dropped_and_the_host_is_answered_as_an_old_agent",
+ "from": "kbf-coordinator/src/http_tests/features.rs::a_bad_announcement_is_dropped_and_the_host_is_answered_as_an_old_agent. This coordinator reads a list of up to 16 feature names where kbf read 8, so the list of nine of step 5 is an announcement of names it supports none of; kbf's answer to it is in kbf_body",
  "services_fixture": "kbf.services.toml",
  "services_text": "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n",
  "oidc_services": [
@@ -55,7 +55,8 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"agent_features\":[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"nothing\"}"
+   "expect_body": "{\"reply\":\"nothing\",\"features\":[]}",
+   "kbf_body": "{\"reply\":\"nothing\"}"
   },
   {
    "at_secs": 2000,

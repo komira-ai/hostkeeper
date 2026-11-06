@@ -131,10 +131,37 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 | admin socket | `/var/run/hostkeeper/admin.sock` (macOS has a read-only root and no `/run`) |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist` (the linking is not built yet) |
 | the daemon's plist program | `/usr/local/bin/hostkeeper` |
-| the daemon's logs | `/var/log/hostkeeper` |
+| the daemon's logs | `/var/log/hostkeeper/daemon.out.log` and `daemon.err.log` |
 
 The daemon's plist runs `hostkeeper daemon` at load and keeps it alive. It names no user, no
 sandbox profile and no environment.
+
+#### The daemon's logs
+
+launchd appends the daemon's standard output to `/var/log/hostkeeper/daemon.out.log` and its
+standard error to `/var/log/hostkeeper/daemon.err.log`, the `StandardOutPath` and
+`StandardErrorPath` of its plist. launchd does not make the directory of those files, so the pkg
+installs `/var/log/hostkeeper` (root and wheel, 0755), empty.
+
+The pkg also installs `/etc/newsyslog.d/hostkeeper.conf` (root and wheel, 0644), which macOS's
+`newsyslog` reads. It has one entry for each of the two files, taken from the same paths the plist
+names:
+
+| field | value | meaning |
+|---|---|---|
+| owner, mode | `root:wheel`, `640` | the new empty file and the archives are readable by root and wheel only |
+| count | `5` | five archives are kept (`.0` to `.4`); the oldest is deleted |
+| size | `10240` | a file is rotated when it reaches 10 MiB |
+| when | `*` | never rotated by time |
+| flags | `NJ` | no process is signalled; the archives are bzip2-compressed (`.bz2`) |
+
+Each file therefore takes at most about 10 MiB, plus five compressed archives of up to 10 MiB of
+text each. No process is signalled because the daemon has no pid file and does not open the files
+itself: launchd opens them when it starts the daemon. Until the daemon next starts (a self-update
+restarts it, as does a reboot), it keeps writing to the file it was started with. After a rotation
+that file has been renamed and compressed, so the output the daemon writes between the rotation
+and its next start is not kept. The daemon writes only its errors and alerts there, so a file
+seldom reaches the size.
 
 #### A hook step is one launchd job
 
@@ -256,13 +283,21 @@ hostkeeper binary. The artifacts workflow builds them on a GitHub-hosted Apple
 silicon runner, never on a pull request; it runs by hand until its push-to-`main` trigger lands with
 the rest of the release automation.
 
-The pkg is the first install of a Mac. It installs exactly two files, and the directories that
-hold them (each 0755, as macOS has them already), all owned by root and wheel:
+The pkg is the first install of a Mac. It installs exactly three files and one empty directory,
+and the directories that hold them (each 0755, as macOS has them already), all owned by root and
+wheel:
 
 - `/usr/local/bin/hostkeeper`, mode 0755, the released binary;
 - `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, mode 0644, the daemon's job as
   `hostkeeper_launchd::daemon_plist` writes it for `DaemonJob::standard` (label
-  `dev.hostkeeper.hostkeeper`, running `/usr/local/bin/hostkeeper daemon`).
+  `dev.hostkeeper.hostkeeper`, running `/usr/local/bin/hostkeeper daemon`);
+- `/var/log/hostkeeper`, mode 0755, the empty directory of the daemon's logs;
+- `/etc/newsyslog.d/hostkeeper.conf`, mode 0644, the rotation of those logs
+  ([The daemon's logs](#the-daemons-logs)).
+
+`/etc` and `/var` are links into `/private` on macOS, so the payload holds the last two under
+`private/` (`/private/var/log/hostkeeper`, `/private/etc/newsyslog.d/hostkeeper.conf`): a
+directory named `var` or `etc` in the payload would stand in place of the link.
 
 It has no scripts: it starts nothing and writes no config. The operator's bootstrap places
 `hostkeeper.toml` and loads the job. The pkg carries no installer signature, since that needs an
@@ -270,7 +305,8 @@ Apple Developer ID Installer identity. It is attested like every other asset, an
 keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
 `cargo xtask release macos-pkg` builds it with `pkgbuild`; `cargo xtask release check-macos-pkg`
 reads back the pkg that `pkgutil --expand` expanded, and refuses any other file, mode, owner, bytes
-or script.
+or script, a plist whose output paths are not the daemon's two log files, and a newsyslog file
+whose entries name other paths than those two.
 
 hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
