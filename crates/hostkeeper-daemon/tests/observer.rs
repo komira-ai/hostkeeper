@@ -12,7 +12,8 @@ use std::thread;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::admin::{self, Peer, service_state};
 use hostkeeper_daemon::observer::{
-    STATUS_DEADLINE, SealedExe, host_observer, observe, service_health, service_input,
+    STATUS_DEADLINE, SealedExe, host_observer, observe, observer_with, service_health,
+    service_input,
 };
 use hostkeeper_daemon::testing::{Counted, manifest};
 use hostkeeper_daemon::{Daemon, Reply};
@@ -549,6 +550,156 @@ fn a_version_with_no_seal_no_run_unit_or_no_manifest_has_no_digest() {
     assert_eq!(exe.digest("web", "1.0.0"), Some(abc()));
     fs::remove_file(rig.packages.join("web/1.0.0.seal")).expect("remove the seal");
     assert_eq!(exe.digest("web", "1.0.0"), None);
+}
+
+/// The example service's launchd plist for its slot `a`, whose first `ProgramArguments` string
+/// is `/var/lib/hostkeeper/packages/hello/current/bin/hello`.
+const HELLO_PLIST: &str = include_str!("../../../examples/hello/package/macos/units/hello.a.plist");
+
+/// Makes the package `web` at 1.0.0 whose one run unit is the launchd label `web`, started from
+/// `units/web.plist` holding `plist`, with the executable `bin/hook` holding the three bytes
+/// `abc`; `current` names it.
+fn mac_package(rig: &Rig, plist: &str) {
+    let dir = rig.add_units("web", "1.0.0", &["web.plist"], &["web"], &[]);
+    fs::create_dir_all(dir.join("bin")).expect("the bin directory");
+    fs::write(dir.join("bin/hook"), "abc").expect("the executable");
+    set_unit(rig, "web.plist", plist);
+    rig.store.link("web", "current", "1.0.0");
+}
+
+/// A launchd plist whose `ProgramArguments` array starts with `first`.
+fn arguments_plist(first: &str) -> String {
+    format!(
+        "<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>web</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>{first}</string>\n\t\t<string>--port</string>\n\t</array>\n</dict>\n</plist>\n"
+    )
+}
+
+/// A launchd plist with a `Program` of `program` and no `ProgramArguments`.
+fn program_plist(program: &str) -> String {
+    format!(
+        "<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>web</string>\n\t<key>Program</key>\n\t<string>{program}</string>\n</dict>\n</plist>\n"
+    )
+}
+
+/// Catches a Mac service whose version is never confirmed: the example service's own plist,
+/// whose first `ProgramArguments` string goes through `current` as a Mac spells the packages
+/// directory, has the digest of `bin/hello` under the version's directory.
+#[test]
+fn the_example_services_plist_has_the_digest_of_its_first_argument() {
+    let rig = Rig::new("sealed-hello-plist");
+    let dir = rig.add_units("hello", "1.2.3", &["hello.a.plist"], &["hello.a"], &[]);
+    fs::write(dir.join("units/hello.a.plist"), HELLO_PLIST).expect("the plist");
+    fs::create_dir_all(dir.join("bin")).expect("the bin directory");
+    fs::write(dir.join("bin/hello"), "abc").expect("the executable");
+    let exe = SealedExe::new(
+        &rig.packages,
+        Path::new("/var/lib/hostkeeper/packages"),
+        OWN,
+    );
+    assert_eq!(exe.digest("hello", "1.2.3"), Some(abc()));
+}
+
+/// Catches a plist read for the wrong key: the digest is that of the file the first
+/// `ProgramArguments` string names, or the `Program` string when there is no array, and the
+/// `Program` string when there are both, as launchd starts it.
+#[test]
+fn a_plist_has_the_digest_of_its_program_else_its_first_argument() {
+    let rig = Rig::new("sealed-plist");
+    mac_package(&rig, &arguments_plist("/packages/web/current/bin/hook"));
+    let exe = sealed(&rig);
+    assert_eq!(exe.digest("web", "1.0.0"), Some(abc()));
+    set_unit(
+        &rig,
+        "web.plist",
+        &program_plist("/packages/web/current/bin//./hook"),
+    );
+    assert_eq!(exe.digest("web", "1.0.0"), Some(abc()));
+    let both = arguments_plist("/packages/web/current/bin/nothing").replace(
+        "<key>Label</key>",
+        "<key>Program</key><string>/packages/web/current/bin/hook</string><key>Label</key>",
+    );
+    set_unit(&rig, "web.plist", &both);
+    assert_eq!(exe.digest("web", "1.0.0"), Some(abc()));
+}
+
+/// Catches a plist's program given a digest when it is not the version's own executable, by the
+/// same rules as a systemd unit's: a program outside the packages, another service's, a
+/// version's own path, a `..` that leaves `current` or stays under it, `current` itself, a
+/// directory, a missing file, a relative path and an empty string have none, by either key; so
+/// has a plist with neither key, one whose `Program` is not a string, and one that is not text.
+#[test]
+fn a_plist_program_that_is_not_a_file_through_current_has_no_digest() {
+    let rig = Rig::new("sealed-plist-refused");
+    mac_package(&rig, &arguments_plist("/packages/web/current/bin/hook"));
+    fs::create_dir_all(rig.packages.join("other/current/bin")).expect("another service");
+    let exe = sealed(&rig);
+    assert_eq!(exe.digest("web", "1.0.0"), Some(abc()));
+    for path in [
+        "/usr/bin/true",
+        "/packages/other/current/bin/hook",
+        "/packages/web/1.0.0/bin/hook",
+        "/packages/web/current/../1.0.0/bin/hook",
+        "/packages/web/current/bin/../hook",
+        "/packages/web/current/bin/../../1.0.0/bin/hook",
+        "/packages/web/current",
+        "/packages/web/current/bin",
+        "/packages/web/current/bin/nothing",
+        "bin/hook",
+        "",
+    ] {
+        set_unit(&rig, "web.plist", &arguments_plist(path));
+        assert_eq!(exe.digest("web", "1.0.0"), None, "ProgramArguments {path}");
+        set_unit(&rig, "web.plist", &program_plist(path));
+        assert_eq!(exe.digest("web", "1.0.0"), None, "Program {path}");
+    }
+    let neither = "<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>web</string>\n</dict>\n</plist>\n";
+    set_unit(&rig, "web.plist", neither);
+    assert_eq!(exe.digest("web", "1.0.0"), None);
+    let not_a_string = arguments_plist("/packages/web/current/bin/hook").replace(
+        "<key>Label</key>",
+        "<key>Program</key><true/><key>Label</key>",
+    );
+    set_unit(&rig, "web.plist", &not_a_string);
+    assert_eq!(exe.digest("web", "1.0.0"), None);
+    fs::write(rig.packages.join("web/1.0.0/units/web.plist"), [0xff, 0xfe]).expect("not text");
+    assert_eq!(exe.digest("web", "1.0.0"), None);
+}
+
+/// Catches a Mac service reported `version_unconfirmed` while it runs its sealed executable:
+/// the observer of the daemon, over the package tree, confirms the recorded version of a live
+/// launchd job whose process runs the file the plist names, and reports a mismatch, not an
+/// unconfirmed version, when the process runs another file.
+#[test]
+fn the_observer_confirms_the_version_of_a_mac_service() {
+    let rig = Rig::new("observer-mac");
+    let program = rig.packages.join("web/current/bin/hook");
+    mac_package(&rig, &arguments_plist(&program.display().to_string()));
+    rig.manager.set("web", ActiveState::Active, Some(4242));
+    rig.process.set(4242, 77, stat(), abc());
+    let observer = observer_with(
+        Box::new(rig.manager.clone()),
+        Box::new(rig.process.clone()),
+        &rig.packages,
+        OWN,
+    );
+
+    let seen = observe(&observer, &rig.packages, &OWN, &name("web")).expect("observed");
+    assert_eq!(
+        (seen.state.clone(), seen.version.clone()),
+        (
+            Observed::Live,
+            VersionView::Recorded {
+                version: "1.0.0".to_owned(),
+                confirmed: true,
+            }
+        )
+    );
+    assert_eq!(seen.reason_token(), None);
+
+    rig.process.set(4243, 78, stat(), RUNNING);
+    rig.manager.set("web", ActiveState::Active, Some(4243));
+    let seen = observe(&observer, &rig.packages, &OWN, &name("web")).expect("observed");
+    assert_eq!(seen.reason_token(), Some("version_mismatch"));
 }
 
 /// Catches an observer of the host that reads the host while it is made, or is wired to nothing:
