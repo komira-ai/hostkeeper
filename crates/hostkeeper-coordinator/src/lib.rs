@@ -122,6 +122,10 @@ mod assignment_tests;
 #[cfg(test)]
 mod audit_file_tests;
 #[cfg(test)]
+mod audit_refusal_tests;
+#[cfg(test)]
+mod audit_rotation_tests;
+#[cfg(test)]
 mod bake_canary_tests;
 #[cfg(test)]
 mod bake_review_tests;

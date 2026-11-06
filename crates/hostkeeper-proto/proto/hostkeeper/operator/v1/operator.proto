@@ -157,6 +157,9 @@ enum HostsRefusal {
   HOSTS_REFUSAL_CAPACITY = 6;
   // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
   HOSTS_REFUSAL_STORE_FAILED = 7;
+  // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
+  // changed, and asking again is safe once the file takes lines again.
+  HOSTS_REFUSAL_AUDIT_UNAVAILABLE = 8;
 }
 
 // Why `Releases` refused a request. The token is the value's name without the prefix, in lower
@@ -199,6 +202,9 @@ enum ReleasesRefusal {
   RELEASES_REFUSAL_ALREADY_HALTED = 16;
   // INVALID_ARGUMENT: a force target role or host the coordinator does not know.
   RELEASES_REFUSAL_UNKNOWN_TARGET = 17;
+  // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
+  // changed, and asking again is safe once the file takes lines again.
+  RELEASES_REFUSAL_AUDIT_UNAVAILABLE = 18;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower
@@ -228,6 +234,9 @@ enum ServicesRefusal {
   // FAILED_PRECONDITION: `SetMinVersion` above the service's desired version, which would hold
   // every host of the scope below its minimum.
   SERVICES_REFUSAL_BELOW_MIN_VERSION = 10;
+  // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
+  // changed, and asking again is safe once the file takes lines again.
+  SERVICES_REFUSAL_AUDIT_UNAVAILABLE = 11;
 }
 
 // Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.

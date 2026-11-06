@@ -105,7 +105,8 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         }
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
-        SetError::Store(_) | SetError::Ops(_) => {
+        SetError::Ops(why) => why.into(),
+        SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");
             proto::ReleasesRefusal::StoreFailed
         }

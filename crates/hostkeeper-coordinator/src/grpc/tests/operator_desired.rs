@@ -457,9 +457,10 @@ fn world_hooked(name: &str) -> World {
     world
 }
 
-/// Proves: when the ops store cannot be written after the desired state was, the set is
-/// `store_failed` (`INTERNAL`), the desired state stays set, no audit entry stands, and sending
-/// the same set again once the store writes lands exactly one entry.
+/// Proves: when the ops store cannot be written, the operator's set is `store_failed`
+/// (`INTERNAL`) and nothing is set: its audit entry is written before the desired state, so the
+/// desired state is not written and no audit entry stands; sending the same set again once the
+/// store writes lands the state and exactly one entry.
 #[tokio::test]
 async fn a_failed_audit_write_is_store_failed_and_a_resend_lands() {
     let rig = Rig::new("od-store-fails");
@@ -483,16 +484,21 @@ async fn a_failed_audit_write_is_store_failed_and_a_resend_lands() {
         Code::Internal,
         "store_failed",
     );
-    let written = world
-        .file("desired.json")
-        .expect("the desired state was written");
-    assert!(String::from_utf8_lossy(&written).contains("2.0"));
+    let unset = world.file("desired.json");
+    assert!(
+        unset.is_none_or(|text| !String::from_utf8_lossy(&text).contains("2.0")),
+        "the desired state was not written"
+    );
     assert!(audited(&world).is_empty(), "no entry stands");
 
     failing.store(false, Ordering::SeqCst);
     operator_sets(&world, "kbf", "2.0")
         .await
         .expect("the resend");
+    let written = world
+        .file("desired.json")
+        .expect("the desired state was written");
+    assert!(String::from_utf8_lossy(&written).contains("2.0"));
     assert_eq!(audited(&world).len(), 1);
 }
 

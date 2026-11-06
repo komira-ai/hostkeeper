@@ -395,7 +395,8 @@ impl Coordinator {
     /// The refusal, as `ReleasesRefusal`: `unauthorized` or `forbidden` for a caller that is no
     /// operator, then `self_service`, `unknown_service`, `invalid_request`, `confirm_mismatch`,
     /// `below_min_version`, `no_digest`, `unknown_target`; `store_failed` when the desired state
-    /// or the ops file could not be written.
+    /// or the ops file could not be written; `audit_unavailable` when the force's audit lines
+    /// could not be appended, and the desired state is put back as it was.
     pub fn force(
         &self,
         caller: &Caller,
@@ -446,10 +447,11 @@ impl Coordinator {
         // its bad mark standing, so nothing is ordered of it until the force is asked again. A
         // registered digest comes only with a desired state CI set, so there is one; its limits
         // are kept.
-        let mut wanted = self
+        let before = self
             .desired
             .get(&def.name)
             .ok_or(proto::ReleasesRefusal::NoDigest)?;
+        let mut wanted = before.clone();
         wanted.version = version.clone();
         wanted.release_digest = Some(digest.clone());
         let marks = self.ops.marks(&def.name);
@@ -466,9 +468,23 @@ impl Coordinator {
             include_held: request.include_held,
             plan: &plan,
         };
-        let entries = self.ops.decide_changes(Write::BeforeMemory, |state| {
+        let changed = self.ops.decide_changes(Write::BeforeMemory, |state| {
             Ok::<_, proto::ReleasesRefusal>(forcing.apply(state))
-        })?;
+        });
+        // A force the audit cannot record is not made: its desired state, written above, is put
+        // back (the fleet's lock is still held, so no heartbeat has read it). A put-back that
+        // fails is logged and leaves the target desired with no force, as a failed ops write
+        // does.
+        if changed == Err(proto::ReleasesRefusal::AuditUnavailable) {
+            if let Err(why) = self.desired.set(&def.name, before) {
+                tracing::error!(
+                    service = %def.name,
+                    %why,
+                    "a force refused for its audit could not put the desired state back"
+                );
+            }
+        }
+        let entries = changed?;
         fleet.set_marks(marks_of(&self.ops.state()));
         tracing::warn!(
             service = %def.name,
