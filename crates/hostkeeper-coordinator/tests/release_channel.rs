@@ -67,7 +67,9 @@ impl Files {
 }
 
 fn flags_of(args: Vec<OsString>) -> Serve {
-    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command;
+    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
+        panic!("not serve");
+    };
     flags
 }
 

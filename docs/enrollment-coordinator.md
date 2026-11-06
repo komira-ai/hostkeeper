@@ -150,7 +150,9 @@ breaks its rule or names a service the rollout file does not define stops the st
 ## Backup
 
 Back up the CA key file and its `.cert` once, right after the CA is made, sealed and offline:
-[docs/operations/ca-backup.md](operations/ca-backup.md). Rotating the CA is not built.
+[docs/operations/ca-backup.md](operations/ca-backup.md). Rotating the CA is not built. The enrollment
+store is backed up with the rest of the coordinator's state, by `hostkeeper-coordinator backup`:
+[docs/operations/coordinator-state.md](operations/coordinator-state.md).
 
 ## What a host is told
 

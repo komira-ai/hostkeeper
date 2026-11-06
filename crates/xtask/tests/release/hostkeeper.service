@@ -3,5 +3,5 @@
 Description=hostkeeper
 
 [Service]
-ExecStart=/var/lib/hostkeeper/packages/hostkeeper/current/bin/hostkeeper daemon
-Restart=on-failure
+ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon
+Restart=always

@@ -699,8 +699,12 @@ The server certificate is remade when it is missing or in the last third of its 
 start, and while the coordinator runs, at each look of the reload tick (<code>--tls-reload-secs</code>),
 so a coordinator that stays up is not left serving an expired certificate. A renewal that fails
 leaves the certificate in use served, logs at error level, shows its reason in the status, and is
-tried again at the next tick. Rotating the CA, revocation lists and backups are not built: backup is a written procedure
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/ca-backup.md">docs/operations/ca-backup.md</a>).</p>
+tried again at the next tick. Rotating the CA and revocation lists are not built. The CA's key is
+backed up by a written procedure
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/ca-backup.md">docs/operations/ca-backup.md</a>);
+the rest of the coordinator's state, the enrollment store with it, by <code>hostkeeper-coordinator backup</code>
+and <code>restore</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/coordinator-state.md">docs/operations/coordinator-state.md</a>).</p>
 <figure class="wide" id="fig-enroll"><div class="fig-wrap scroll"><svg viewBox="0 0 980 560" role="img" aria-label="Enrollment as a sequence. The daemon&rsquo;s enrollment loop checks the coordinator&rsquo;s CA against its pinned hash, makes a key and posts Coordinator.Enroll with its request and claims. The coordinator stores a pending request and answers pending. The daemon polls with Coordinator.Poll, signing a fresh nonce, until an operator approves with Enrollment.Approve. At the next signed poll the coordinator issues the certificate once, and the daemon checks it and stores it. From half its life the daemon renews with Coordinator.Renew over mutual TLS, with no operator step."><defs><marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker></defs>
 <rect class="box-acc" x="20" y="14" width="180" height="40" rx="4"/><text x="110" y="39" text-anchor="middle" class="t-s t-b">daemon, enrollment loop</text>
 <rect class="box-blue" x="270" y="14" width="180" height="40" rx="4"/><text x="360" y="39" text-anchor="middle" class="t-s t-b">coordinator, heartbeat listener</text>
@@ -869,9 +873,11 @@ attestation verify</code> runs offline against the Sigstore trusted root and the
 <code>[trusted_signers]</code> entry (organisation, workflow, ref globs, hosted runner). There is no unsigned
 mode. The bundle is read up to
 <span data-cell="c-bundle" data-source="crates/hostkeeper-package/src/bundle.rs" data-item="MAX_BUNDLE_BYTES">1 MiB</span>.
-The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code>
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>), but no
-package of this repository installs them. Until an operator places them, every package check ends
+The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code> on Linux
+and under <code>/usr/local/lib/hostkeeper/</code> on a Mac
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>). The macOS
+installer pkg installs both (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>); no Linux
+package does. Until an operator places them on a Linux host, every package check there ends
 <code>attestation_unavailable</code>.</p>
 <p><strong>Unpack.</strong> One streaming pass (zstd, tar, a SHA-256 per file) writes into a private staging
 directory, under hard bounds: a zstd window of at most
@@ -1100,8 +1106,8 @@ itself and falls back after
 starts within
 <span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
 The timer job meant to run it is rendered but not installed.</li>
-<li>The installer is an unsigned <code>.pkg</code> holding the binary and the daemon&rsquo;s plist, with no scripts. The
-operator writes <code>hostkeeper.toml</code>.</li>
+<li>The installer is an unsigned <code>.pkg</code> holding the binary, the daemon&rsquo;s plist, its log directory and
+newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root, with no scripts. The operator writes <code>hostkeeper.toml</code>.</li>
 </ul>
 <p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine
