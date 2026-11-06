@@ -22,6 +22,8 @@
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
 //!   install, and the check of its payload read back from the built pkg.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
+//! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
+//!   (`ui/`) at the path the coordinator serves by default, file for file, owned by root.
 //! - `plan` ([`plan`]): whether a commit (or, on the scheduled path, each missed commit) is
 //!   released, and under which version.
 //! - `locate` ([`locate`]): the commit is on `main` and its runs exist; the id of its build run.
@@ -45,6 +47,7 @@
 mod channel_stage;
 mod check;
 mod check_binary;
+mod check_image_ui;
 mod compare_images;
 pub(crate) mod contract;
 #[cfg(test)]
@@ -283,6 +286,15 @@ pub(crate) enum Verb {
     },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
+    /// Refuse the coordinator's OCI image tarball unless it holds the operator web app at
+    /// /usr/share/hostkeeper-coordinator/ui: exactly the directories and files of `ui`, with
+    /// their bytes, owned by root, files 0644 and directories 0755.
+    CheckImageUi {
+        /// The image tarball.
+        image: PathBuf,
+        /// The web app's directory, `ui` of the commit.
+        ui: PathBuf,
+    },
     /// Whether a commit is released, and as which version.
     Plan {
         #[arg(long)]
@@ -397,6 +409,7 @@ pub(crate) fn run<A: Adapters>(
         Verb::SetVersion { version, root } => set_version::set_version(&root, &version),
         Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
+        Verb::CheckImageUi { image, ui } => check_image_ui::check_image_ui(&image, &ui),
         Verb::Index {
             service,
             fail_ready,
@@ -574,6 +587,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
+        | Verb::CheckImageUi { .. }
         | Verb::Index { .. }
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }

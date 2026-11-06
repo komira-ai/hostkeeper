@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use super::Error;
 
 /// The files of an image tarball by path.
-type Files = BTreeMap<String, Vec<u8>>;
+pub(super) type Files = BTreeMap<String, Vec<u8>>;
 
 /// Passes when the tarballs `a` and `b` hold the same bytes; otherwise fails saying where the
 /// images first differ.
@@ -87,7 +87,7 @@ fn difference(a: &Path, bytes_a: &[u8], b: &Path, bytes_b: &[u8]) -> String {
 }
 
 /// Every entry of the tarball by path (a leading `./` removed).
-fn tar_files(bytes: &[u8]) -> Result<Files, String> {
+pub(super) fn tar_files(bytes: &[u8]) -> Result<Files, String> {
     let unreadable = |_: std::io::Error| "it is not a readable tar archive".to_owned();
     let mut files = Files::new();
     let mut archive = tar::Archive::new(bytes);
@@ -115,7 +115,7 @@ fn parse_json(files: &Files, name: &str, what: &str) -> Result<Value, String> {
 }
 
 /// The digests of the layers of the first manifest of the image, in order.
-fn layers(files: &Files) -> Result<Vec<String>, String> {
+pub(super) fn layers(files: &Files) -> Result<Vec<String>, String> {
     if !files.contains_key("oci-layout") {
         return Err("oci-layout is missing".to_owned());
     }

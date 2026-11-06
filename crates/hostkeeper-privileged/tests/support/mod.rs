@@ -3,9 +3,16 @@
 //! host's programs they run, and a clock that moves only when told to; and, in [`self_update`],
 //! the host of the self-update tests.
 //!
-//! A wait here polls a state systemd or the fixture reaches (a file written, a unit active) and
-//! sleeps between looks; it never bounds the time it waits and nothing asserts how long it took.
-//! A test that hangs is ended by the job's `timeout-minutes` in privileged.yml.
+//! A wait of this module ([`wait_until`], [`wait_for_file`]) polls a state systemd or the fixture
+//! reaches (a file written, a unit active) and sleeps between looks; it never bounds the time it
+//! waits and nothing asserts how long it took. A test that hangs is ended by the job's
+//! `timeout-minutes` in privileged.yml.
+//!
+//! The first-boot tests' harness is in submodules: [`spawn`] (a child process killed when dropped,
+//! and [`spawn::poll`], a wait of a bounded number of looks that fails with the last state it
+//! saw, so that a failure names what it waited for; the bound counts looks, and nothing asserts
+//! how long a wait took), [`pair`] (the coordinator and the daemon as programs, and the host paths the daemon fixes)
+//! and [`channel`] (a release channel on loopback and the fixture package it serves).
 #![allow(dead_code, reason = "each test file uses part of the shared support")]
 
 use std::collections::BTreeMap;
@@ -21,7 +28,10 @@ use hostkeeper_steps::systemd::{SYSTEMCTL, SYSTEMD_RUN};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 use hostkeeper_testkit::Scratch;
 
+pub mod channel;
+pub mod pair;
 pub mod self_update;
+pub mod spawn;
 
 /// The fixture program, built by cargo with these tests.
 pub const FIXTURE: &str = env!("CARGO_BIN_EXE_hostkeeper-fixture-hook");
@@ -54,6 +64,13 @@ impl Bench {
             rig,
             _scratch: scratch,
         }
+    }
+}
+
+impl Bench {
+    /// The test's scratch directory.
+    pub fn scratch(&self) -> &Path {
+        self._scratch.path()
     }
 }
 

@@ -13,7 +13,9 @@
 //!   origin, an inline script or handler, markup built from text).
 //!
 //! The tests under `tests/` also run the app's data layer and pages in a JavaScript engine
-//! against a fake gateway.
+//! against a fake gateway, and send each call of `ui/calls.json` to the real coordinator, built
+//! from its flags and called through its router in process, with an operator's token
+//! (`tests/real_router.rs`).
 
 mod calls;
 mod lexis;
