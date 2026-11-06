@@ -1,5 +1,7 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
-//! `hostkeeper ctl`, which hands every argument after it to `hostkeeper-ctl`, `hostkeeper ci`, the
+//! `hostkeeper admin`, the client of the daemon's admin socket on the host
+//! ([`crate::admin_client`], docs/admin.md), `hostkeeper ctl`, which hands every argument after it
+//! to `hostkeeper-ctl`, `hostkeeper ci`, the
 //! CI client a service's release job runs once it has verified this binary (`hostkeeper_ci`,
 //! docs/deploy/ci-client.md), and the two plumbing verbs of hostkeeper's own update (design
 //! section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the
@@ -16,7 +18,7 @@
 //! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
 //! load, [`EXIT_LOCKED`] when another daemon holds the state directory. The exit status of
 //! `hostkeeper ctl` is the code `hostkeeper_ctl::exit` assigns to the call, `2` for a usage error
-//! among them.
+//! among them; `hostkeeper admin` exits the same way ([`crate::admin_client`]).
 //!
 //! `--version` prints `hostkeeper X.Y.Z+<12 hex digits of the commit>` for a release build and
 //! `hostkeeper X.Y.Z` for a developer build ([`crate::stamp`]).
@@ -49,6 +51,7 @@ use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
 use crate::adapters::{Adapters, host_claims};
+use crate::admin_client::AdminCommand;
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
 use crate::links::{DaemonLog, Links, NoLink};
@@ -107,6 +110,9 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
+    /// Call the host's daemon over its root-only admin socket: `status`, `abort`, `clear-record`
+    /// (docs/admin.md).
+    Admin(AdminCommand),
     /// Call the coordinator's API: one command per RPC, generated from the protobuf services.
     /// `hostkeeper ctl --help` lists them.
     #[command(disable_help_flag = true)]
@@ -198,6 +204,7 @@ pub fn run(cli: Cli) -> ExitCode {
 pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
     let flags = match cli.command {
         Command::Daemon(flags) => flags,
+        Command::Admin(command) => return ExitCode::from(admin_on_terminal(&command)),
         Command::Ctl { args } => return ExitCode::from(ctl_on_terminal(args)),
         Command::SelfUpdateFallback(flags) => return crate::fallback::main(&flags.dir),
         Command::SelfUpdateProtocol => {
@@ -236,6 +243,13 @@ fn ctl_on_terminal(args: Vec<OsString>) -> u8 {
             stderr: &mut stderr,
         },
     )
+}
+
+/// `hostkeeper admin` ([`crate::admin_client::run`]) on the process's own streams.
+fn admin_on_terminal(command: &AdminCommand) -> u8 {
+    let mut stdout = std::io::stdout().lock();
+    let mut stderr = std::io::stderr().lock();
+    crate::admin_client::run(command, &mut stdout, &mut stderr)
 }
 
 /// The readiness notifier the flags ask for: systemd's with `--notify-systemd`, refused when no

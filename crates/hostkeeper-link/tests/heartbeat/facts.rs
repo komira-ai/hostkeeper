@@ -128,14 +128,29 @@ fn a_link_failure_is_logged_and_the_next_period_beats_again() {
 }
 
 /// Catches a loop that waits before its first heartbeat, waits other than its period, or does
-/// not stop when its sleeper says so.
+/// not stop when its sleeper says so; and a heartbeat whose outcome is not handed on, or handed
+/// on for another heartbeat: three heartbeats, one refused by the coordinator between two that
+/// were answered, hand on exactly those three outcomes in that order.
 #[test]
 fn run_beats_at_start_and_after_every_period_until_stopped() {
     let rig = Rig::new("facts-run");
+    let refused = LinkError::Transport(io::ErrorKind::ConnectionRefused);
+    rig.world.link.answer(Ok(Reply::default()));
+    rig.world.link.answer(Err(refused.clone()));
     let sleeper = ScriptedSleeper::new(2);
-    rig.heartbeater().run(&sleeper);
+    let mut seen = Vec::new();
+    rig.heartbeater()
+        .run(&sleeper, &mut |outcome| seen.push(outcome.clone()));
     assert_eq!(rig.world.link.calls().len(), 3);
     assert_eq!(sleeper.waits(), [15, 15, 15]);
+    assert_eq!(
+        seen,
+        [
+            BeatOutcome::Sent,
+            BeatOutcome::NotSent(refused),
+            BeatOutcome::Sent
+        ]
+    );
 }
 
 /// Catches the production sleeper waiting other than the period on its clock, or not stopping

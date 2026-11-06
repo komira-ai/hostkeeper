@@ -11,10 +11,12 @@
 //! - `host.rs`: the key, the entropy and the Linux claims over temporary trees;
 //! - `bmc.rs`: the BMC MAC claim of a Linux host, read through the IPMI port;
 //! - `mac.rs`: the claims of a Mac, read from `ioreg` output, and a request refused without them;
-//! - `pacing.rs`: the loop's log and sleeps.
+//! - `pacing.rs`: the loop's log and sleeps, and the enrollment it reports after each step;
+//! - `enrollment.rs`: the host's enrollment as the enroller reads it from the pki directory.
 
 mod acceptance;
 mod bmc;
+mod enrollment;
 mod faults;
 mod host;
 mod mac;

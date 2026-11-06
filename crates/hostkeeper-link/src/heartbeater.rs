@@ -165,11 +165,12 @@ impl Heartbeater {
         }
     }
 
-    /// Beats now and after every period, until `sleeper` says stop. An order running on a
-    /// worker when it stops goes on; its verdict is in its step record.
-    pub fn run(mut self, sleeper: &dyn Sleeper) {
+    /// Beats now and after every period, until `sleeper` says stop, giving `seen` what each
+    /// heartbeat came to before the wait that follows it. An order running on a worker when it
+    /// stops goes on; its verdict is in its step record.
+    pub fn run(mut self, sleeper: &dyn Sleeper, seen: &mut dyn FnMut(&BeatOutcome)) {
         loop {
-            self.beat_once();
+            seen(&self.beat_once());
             if sleeper.sleep(self.config.period_secs.get()) == Tick::Stop {
                 return;
             }
