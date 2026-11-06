@@ -45,7 +45,7 @@ use hostkeeper_wire::HostId;
 use crate::fleet::Fleet;
 use crate::holds::bad_version;
 use crate::operator::Caller;
-use crate::ops::{HaltOrigin, OpsState};
+use crate::ops::{AuditEntry, HaltOrigin, OpsState};
 use crate::service::Coordinator;
 use crate::services::Services;
 
@@ -414,15 +414,25 @@ fn held_on_bad_versions(fleet: &Fleet, ops: &OpsState, services: &Services) -> V
         .collect()
 }
 
-/// `abandoned_while_updating`: each `exclude_abandon` the ops state keeps, of a service the
-/// rollout file defines, whose host is still excluded from it.
+/// `abandoned_while_updating`: each pair (a service the rollout file defines and a host) whose
+/// last exclusion change the ops state keeps (`exclude`, `exclude_abandon` or `include`) is an
+/// `exclude_abandon`, while the host is still excluded from it.
 fn abandoned(ops: &OpsState, services: &Services) -> Vec<Alert> {
-    ops.audit
-        .iter()
-        .filter(|entry| entry.action == "exclude_abandon")
-        .filter_map(|entry| {
-            let service = entry.service.as_deref()?;
-            let node = entry.node_id.as_deref()?;
+    // The last exclusion change of each pair the ring keeps: an abandon that a later include
+    // or exclude of the pair followed no longer says why the host is excluded.
+    let mut last: BTreeMap<(&str, &str), &AuditEntry> = BTreeMap::new();
+    for entry in &ops.audit {
+        if let ("exclude" | "exclude_abandon" | "include", Some(service), Some(node)) = (
+            entry.action.as_str(),
+            entry.service.as_deref(),
+            entry.node_id.as_deref(),
+        ) {
+            last.insert((service, node), entry);
+        }
+    }
+    last.into_iter()
+        .filter(|(_, entry)| entry.action == "exclude_abandon")
+        .filter_map(|((service, node), entry)| {
             services.get(service)?;
             ops.excluded
                 .iter()
@@ -542,11 +552,17 @@ impl Book {
         }
     }
 
-    /// Notes `alerts`, found at `unix`: an alert the last observation did not find is first
-    /// observed now and logged; one it found keeps its time; one it found and this did not is
-    /// forgotten.
-    fn observe(&self, alerts: Vec<Alert>, unix: u64) -> Vec<Observed> {
+    /// Notes the alerts `find` finds, with the unix time it found them at, under the book's lock,
+    /// so that two observations (the tick and an `Alerts.List`) are made one after the other and
+    /// an older finding never follows a newer one: an alert the last observation did not find is
+    /// first observed now and logged; one it found keeps its time; one it found and this did not
+    /// is forgotten. When `find` fails nothing is noted.
+    fn observe_with<E>(
+        &self,
+        find: impl FnOnce() -> Result<(Vec<Alert>, u64), E>,
+    ) -> Result<Vec<Observed>, E> {
         let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
+        let (alerts, unix) = find()?;
         let observed: Vec<Observed> = alerts
             .into_iter()
             .map(|alert| {
@@ -561,7 +577,7 @@ impl Book {
             .iter()
             .map(|one| (one.alert.subject.clone(), one.first_unix))
             .collect();
-        observed
+        Ok(observed)
     }
 }
 
@@ -612,26 +628,28 @@ impl Coordinator {
     /// # Errors
     /// [`StoreError`]: the enrollment store could not be read; nothing is noted or logged.
     pub fn observe_alerts(&self) -> Result<Vec<Observed>, StoreError> {
-        let heard: Vec<HostId> = self
-            .lock_fleet()
-            .nodes()
-            .map(|(id, _)| id.clone())
-            .collect();
-        let enrollment = self.enrollment_facts(&heard)?;
-        let at = At {
-            now: (self.clock)(),
-            unix: self.ops.unix_now(),
-        };
-        let ops = self.ops.state();
-        let alerts = derive(
-            &self.lock_fleet(),
-            &ops,
-            &self.services,
-            &enrollment,
-            at,
-            &self.alerts.thresholds,
-        );
-        Ok(self.alerts.observe(alerts, at.unix))
+        self.alerts.observe_with(|| {
+            let heard: Vec<HostId> = self
+                .lock_fleet()
+                .nodes()
+                .map(|(id, _)| id.clone())
+                .collect();
+            let enrollment = self.enrollment_facts(&heard)?;
+            let at = At {
+                now: (self.clock)(),
+                unix: self.ops.unix_now(),
+            };
+            let ops = self.ops.state();
+            let alerts = derive(
+                &self.lock_fleet(),
+                &ops,
+                &self.services,
+                &enrollment,
+                at,
+                &self.alerts.thresholds,
+            );
+            Ok((alerts, at.unix))
+        })
     }
 
     /// `Alerts.List`: every alert now, as an observation finds it ([`Self::observe_alerts`]).
@@ -717,3 +735,7 @@ pub async fn observe_every(coordinator: Arc<Coordinator>, interval: Duration) ->
 #[cfg(test)]
 #[path = "alerts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "alerts_coordinator_tests.rs"]
+mod coordinator_tests;

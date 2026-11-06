@@ -557,10 +557,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_ops(ops)
         .with_verdicts(verdicts)
         .with_ui(ui)
-        .with_alert_thresholds(Thresholds {
-            silent_after: Duration::from_secs(flags.alert_silent_host_secs),
-            cert_window_secs: flags.alert_cert_window_secs,
-        });
+        .with_alert_thresholds(alert_thresholds(flags));
     if let Some(channel) = channel {
         coordinator = coordinator.with_release_channel(channel);
     }
@@ -629,6 +626,15 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         reload: interval,
         lock: held,
     })
+}
+
+/// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and
+/// `--alert-cert-window-secs`.
+pub(crate) fn alert_thresholds(flags: &Serve) -> Thresholds {
+    Thresholds {
+        silent_after: Duration::from_secs(flags.alert_silent_host_secs),
+        cert_window_secs: flags.alert_cert_window_secs,
+    }
 }
 
 /// Refuses to start over the marker of a halt that was being written to the ops file at `ops`

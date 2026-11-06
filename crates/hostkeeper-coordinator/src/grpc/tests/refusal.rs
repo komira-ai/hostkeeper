@@ -4,7 +4,7 @@
 use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -34,7 +34,7 @@ where
 }
 
 /// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`,
-/// `EnrollmentRefusal` and `AuditRefusal` becomes the status its proto comment names: the code of the comment and the
+/// `EnrollmentRefusal`, `AuditRefusal` and `AlertsRefusal` becomes the status its proto comment names: the code of the comment and the
 /// value's name, without its prefix and in lower case, as the whole message; and that
 /// `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the enum gains that
 /// the table lacks fails the test.
@@ -299,6 +299,16 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             (AuditRefusal::StoreFailed, Internal, "store_failed"),
         ],
         refusal::audit,
+    );
+
+    assert_table(
+        &[
+            (AlertsRefusal::Unspecified, Internal, "unspecified"),
+            (AlertsRefusal::Unauthorized, Unauthenticated, "unauthorized"),
+            (AlertsRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (AlertsRefusal::StoreFailed, Internal, "store_failed"),
+        ],
+        refusal::alerts,
     );
 }
 
