@@ -2,7 +2,7 @@
 
 <!-- Generated from the protos: `cargo test -p hostkeeper-ctl --test docs` fails when this file differs, and writes the current text beside its test binary. Do not edit by hand. -->
 
-`hostkeeper ctl` calls one RPC of the coordinator per command. Every command, flag and help text below is generated from the protobuf descriptors of `hostkeeper-proto`; the services of a host's admin socket (packages `hostkeeper.local.v<n>`) are not here.
+`hostkeeper ctl` calls one RPC of the coordinator per command. Every command, flag and help text below is generated from the protobuf descriptors of `hostkeeper-proto`; the services of a host's admin socket (packages `hostkeeper.local.v<n>`) are not here: `hostkeeper admin` calls them on the host, as [docs/admin.md](admin.md) describes.
 
 ## Rules
 

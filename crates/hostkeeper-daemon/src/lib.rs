@@ -46,10 +46,12 @@
 //! - [`observer`]: what the admin `Status` reports of a running service.
 //! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason the
 //!   admin `Status` reports of it.
-//! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
-//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ctl`, which it hands to
-//!   `hostkeeper-ctl`, `hostkeeper ci`, and the plumbing verbs `self-update-fallback` and
-//!   `self-update-protocol`; the binary only forwards to it.
+//! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`);
+//!   [`node`]: the host's enrollment and the heartbeat loop's link, which its `Status` reports
+//!   besides the services; [`admin_client`]: `hostkeeper admin`, its client on the host.
+//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper admin`, `hostkeeper ctl`, which it
+//!   hands to `hostkeeper-ctl`, `hostkeeper ci`, and the plumbing verbs `self-update-fallback`
+//!   and `self-update-protocol`; the binary only forwards to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and
@@ -67,6 +69,7 @@
 
 pub mod adapters;
 pub mod admin;
+pub mod admin_client;
 pub mod boot;
 pub mod checks;
 pub mod cli;
@@ -81,6 +84,7 @@ pub mod link_adapters;
 pub mod links;
 pub mod locks;
 pub mod mac;
+pub mod node;
 pub mod notify;
 pub mod observer;
 pub mod packages;

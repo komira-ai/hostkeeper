@@ -30,6 +30,7 @@ use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT, Lifecycle};
 use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
+use crate::node::NodeState;
 use crate::observer;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
@@ -117,6 +118,9 @@ pub struct Ctx {
     pub halts: HaltStore,
     /// The post-success watchers, one per service at most.
     pub watchers: Watchers,
+    /// The host's enrollment and the heartbeat loop's link, as the loops last wrote them: what
+    /// `Status` reports besides the services.
+    pub node: NodeState,
     runners: Mutex<BTreeMap<String, Arc<StepRunner>>>,
     /// How the last uninstall of each service ended, while the daemon runs: what `Status` reports
     /// for a service being removed.
@@ -585,6 +589,7 @@ impl Daemon {
                 step_lock: StepLock::default(),
                 halts,
                 watchers: Watchers::default(),
+                node: NodeState::default(),
                 runners: Mutex::default(),
                 uninstalls: Mutex::default(),
                 record_locks: Mutex::default(),

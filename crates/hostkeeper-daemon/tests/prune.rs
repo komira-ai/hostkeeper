@@ -15,7 +15,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::locks::{Package, ServiceGuard};
 use hostkeeper_daemon::packages::PackageError;
 use hostkeeper_daemon::prune::{self, ForceLockPoint, LayoutPrune, Prune};
-use hostkeeper_daemon::testing::{RecordingPrune, ScriptedLauncher, manifest};
+use hostkeeper_daemon::testing::{RecordingPrune, ScriptedLauncher, manifest, spawn};
 use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Ports, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -522,16 +522,27 @@ fn a_failed_or_deferred_update_prunes_nothing() {
     let stops = rig.launcher.stops_seen();
     let updating = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update(WEB, "1.0.0", &d(), 1)))
+        spawn("the update", move || {
+            daemon.order(&update(WEB, "1.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&updating).expect("the update's cutover runs");
     let waiting = rig.clock.park_next_sleep();
     let forcing = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)))
+        spawn("the force", move || {
+            daemon.order(&force(WEB, "2.0.0", &d(), 2, 0))
+        })
     };
-    assert_eq!(stops.recv().expect("a stop"), "updater-web-cutover-1");
-    waiting.entered();
+    assert_eq!(
+        stops
+            .wait(&forcing)
+            .expect("the force's stop of the cutover"),
+        "updater-web-cutover-1"
+    );
+    waiting
+        .entered(&forcing)
+        .expect("the force waits for the update");
     gate.release();
     assert_eq!(
         updating.join().expect("the update"),
@@ -628,9 +639,11 @@ fn prune_does_not_take_the_step_lock() {
     let gate = rig.launcher.hold("db", Step::Prepare);
     let updating = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("db", "1.0.0", &d(), 1)))
+        spawn("the update", move || {
+            daemon.order(&update("db", "1.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&updating).expect("db's prepare runs");
     web(&rig, "3.0.0");
     forced(&rig, &daemon, "3.0.0", 3);
     assert_eq!(versions(&rig), ["2.0.0", "3.0.0"]);

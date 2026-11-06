@@ -6,11 +6,11 @@ mod support;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_daemon::admin::service_record;
 use hostkeeper_daemon::checks::{force_allowed, installed_rule};
 use hostkeeper_daemon::installed::Lifecycle;
+use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::verb::HookedVerb;
 use hostkeeper_daemon::{Outcome, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -158,9 +158,12 @@ fn force_is_refused_while_a_service_is_tombstoned() {
     let gate = rig.launcher.hold("new", Step::Prepare);
     let installing = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&install("new", "1.0.0", &d(), 1)))
+        spawn("the install", move || {
+            daemon.order(&install("new", "1.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&installing)
+        .expect("the install's prepare runs");
     let before = snapshot(rig.scratch.path());
     let rows = [("web", Refusal::Uninstalling), ("new", Refusal::Installing)];
     for (service, refusal) in rows {
@@ -209,9 +212,12 @@ fn status_reports_removing_while_an_uninstall_is_unfinished() {
     let gate = rig.launcher.hold("new", Step::Prepare);
     let installing = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&install("new", "1.0.0", &d(), 1)))
+        spawn("the install", move || {
+            daemon.order(&install("new", "1.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&installing)
+        .expect("the install's prepare runs");
 
     let status = daemon.status().expect("status");
     let lives: Vec<(String, Lifecycle)> = status

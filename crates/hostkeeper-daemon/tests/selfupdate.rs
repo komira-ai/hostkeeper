@@ -17,7 +17,7 @@ use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::fallback::{self, FallbackError};
 use hostkeeper_daemon::selfupdate::{RELEASE_BINARY, binary_dir, protocol_line};
 use hostkeeper_daemon::start;
-use hostkeeper_daemon::testing::Log;
+use hostkeeper_daemon::testing::{Log, Signal, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply, StoreSeam};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_steps::record::{AwaitingRestart, State};
@@ -432,31 +432,34 @@ fn self_update_waits_for_an_idle_step_lock() {
             false
         }))
     });
-    let daemon = s.daemon().with_stores(seam);
+    let daemon = Arc::new(s.daemon().with_stores(seam));
 
     let held = s.rig.launcher.hold("a", Step::Prepare);
-    std::thread::scope(|scope| {
-        let a = scope.spawn(|| daemon.order(&update("a", "2.0", &d(), 1)));
-        held.entered();
-        let refused = daemon.order(&s.order(NEW, 1));
-        assert_eq!(refused.refusal(), Some(Refusal::Busy), "{refused:?}");
-        assert!(hk_record(&s).is_none());
-        assert!(s.probe.asked().is_empty());
-        held.release();
-        assert!(matches!(
-            a.join().expect("a"),
-            Reply::Finished {
-                verdict: Verdict::Succeeded { .. },
-                ..
-            }
-        ));
-    });
+    let a = {
+        let daemon = Arc::clone(&daemon);
+        spawn("a's order", move || {
+            daemon.order(&update("a", "2.0", &d(), 1))
+        })
+    };
+    held.entered(&a).expect("a's prepare runs");
+    let refused = daemon.order(&s.order(NEW, 1));
+    assert_eq!(refused.refusal(), Some(Refusal::Busy), "{refused:?}");
+    assert!(hk_record(&s).is_none());
+    assert!(s.probe.asked().is_empty());
+    held.release();
+    assert!(matches!(
+        a.join().expect("a"),
+        Reply::Finished {
+            verdict: Verdict::Succeeded { .. },
+            ..
+        }
+    ));
 
-    let (probing, probed) = mpsc::channel();
+    let (probing, probed) = Signal::new();
     let (release, released) = mpsc::channel::<()>();
     let released = Mutex::new(released);
     s.probe.set(move || {
-        probing.send(()).unwrap_or_default();
+        probing.send(());
         released
             .lock()
             .expect("the gate")
@@ -464,23 +467,28 @@ fn self_update_waits_for_an_idle_step_lock() {
             .unwrap_or_default();
         Ok(1)
     });
-    let (asked, fetched) = mpsc::channel();
-    s.rig.store.notify(asked);
-    std::thread::scope(|scope| {
-        let swap = scope.spawn(|| daemon.order(&s.order(NEW, 1)));
-        probed.recv().expect("the swap holds the step lock");
-        let b = scope.spawn(|| daemon.order(&update("b", "2.0", &d(), 1)));
-        while fetched.recv().expect("a package") != "b 2.0" {}
-        release.send(()).expect("release the probe");
-        assert_eq!(swap.join().expect("the swap"), awaiting(false));
-        assert!(matches!(
-            b.join().expect("b"),
-            Reply::Finished {
-                verdict: Verdict::Succeeded { .. },
-                ..
-            }
-        ));
-    });
+    let fetched = s.rig.store.notified();
+    let swap = {
+        let (daemon, order) = (Arc::clone(&daemon), s.order(NEW, 1));
+        spawn("the swap", move || daemon.order(&order))
+    };
+    probed.wait(&swap).expect("the swap holds the step lock");
+    let b = {
+        let daemon = Arc::clone(&daemon);
+        spawn("b's order", move || {
+            daemon.order(&update("b", "2.0", &d(), 1))
+        })
+    };
+    while fetched.wait(&b).expect("b has its package") != "b 2.0" {}
+    release.send(()).expect("release the probe");
+    assert_eq!(swap.join().expect("the swap"), awaiting(false));
+    assert!(matches!(
+        b.join().expect("b"),
+        Reply::Finished {
+            verdict: Verdict::Succeeded { .. },
+            ..
+        }
+    ));
     let events = lines(&log);
     let at = |needle: &str| events.iter().position(|line| line.starts_with(needle));
     let waits = at("awaiting").expect("the record waited");
@@ -527,17 +535,18 @@ fn a_follow_on_that_stops_is_interrupted_with_its_token() {
     assert!(!daemon.ctx().restart().requested());
 
     let s = SelfRig::new("su-follow-changed");
-    let daemon = s.daemon();
+    let daemon = Arc::new(s.daemon());
     let held = s.rig.launcher.hold(HK, Step::Cleanup);
     let binary = s.rig.packages.join(HK).join(NEW).join(RELEASE_BINARY);
-    std::thread::scope(|scope| {
-        let swap = scope.spawn(|| daemon.order(&s.order(NEW, 1)));
-        held.entered();
-        fs::write(&binary, "#!another binary\n").expect("change the release");
-        held.release();
-        let reply = swap.join().expect("the swap");
-        assert_eq!(reply.refusal(), Some(Refusal::PackageFailed), "{reply:?}");
-    });
+    let swap = {
+        let (daemon, order) = (Arc::clone(&daemon), s.order(NEW, 1));
+        spawn("the swap", move || daemon.order(&order))
+    };
+    held.entered(&swap).expect("the swap's cleanup runs");
+    fs::write(&binary, "#!another binary\n").expect("change the release");
+    held.release();
+    let reply = swap.join().expect("the swap");
+    assert_eq!(reply.refusal(), Some(Refusal::PackageFailed), "{reply:?}");
     assert_eq!(s.current().as_deref(), Some(OLD));
     assert!(!s.layout().version_path(NEW).exists());
     assert!(!daemon.ctx().restart().requested());
