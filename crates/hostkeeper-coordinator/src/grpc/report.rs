@@ -351,6 +351,8 @@ pub(crate) fn host(
         services,
         role: node.role.clone(),
         node_id,
+        // `Hosts.List` and `Hosts.Get` fill these in from the host inventory.
+        ..proto::Host::default()
     }
 }
 

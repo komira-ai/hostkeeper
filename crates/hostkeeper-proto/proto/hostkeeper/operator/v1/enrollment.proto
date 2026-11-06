@@ -38,7 +38,8 @@ service Enrollment {
   // MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
   // holds, is refused; remove the record first.
   rpc AddRecord(AddRecordRequest) returns (AddRecordResponse);
-  // The records, by host id, a page at a time.
+  // The records, by host id, a page at a time; all of them, or only those a host is enrolled
+  // against, or only the others.
   rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
   // Remove the record of a host id. An enrolled host keeps its certificate.
   rpc RemoveRecord(RemoveRecordRequest) returns (RemoveRecordResponse);
@@ -197,6 +198,10 @@ message InventoryRecord {
   // The name of the operator token that added it.
   string added_by = 7;
   uint64 added_unix = 8;
+  // A host is enrolled against the record: the claims of the request its key was approved from
+  // match this record and no other, and its host id is not denied (`Host.inventory_record_id`
+  // names the record).
+  bool enrolled = 9;
 }
 
 message ApproveRequest {
@@ -249,6 +254,9 @@ message ListRecordsRequest {
   uint32 limit = 1;
   // Where to go on, as `next_page_token` gave it; empty for the first page.
   string page_token = 2;
+  // Unset for every record; true for only the records a host is enrolled against
+  // (`InventoryRecord.enrolled`), false for only the others.
+  optional bool enrolled = 3;
 }
 
 message ListRecordsResponse {

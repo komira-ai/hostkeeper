@@ -1,4 +1,6 @@
-// Host: one host's services, holds, marks and last update, and what an operator may do to it.
+// Host: one host's services, holds, marks and last update, the host-inventory record its
+// enrollment matched (linked to the Inventory page) with that record's data MACs, BMC MAC and
+// serial, when it enrolled, and what an operator may do to it.
 // Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
 // when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
@@ -236,6 +238,24 @@ function assignedSection(listing, nodeId, ends) {
       : null);
 }
 
+// The facts the host inventory gives of `host`: the record its enrollment matched, as a link to
+// the Inventory page's enrolled records with that record marked, the record's MACs and serial,
+// and when the host's approval was made. Each is "-" when there is none.
+function inventoryFacts(ctx, host) {
+  const recordId = typeof host.inventoryRecordId === "string" ? host.inventoryRecordId : "";
+  const record = recordId === "" ? "none matched" : h("button", {
+    type: "button", class: "linklike", name: "open-record",
+    on: { click: () => ctx.navigate("inventory", { enrolled: "true", record: recordId }) },
+  }, recordId);
+  return [
+    ["Inventory record", record],
+    ["Data MACs", list(host, "dataMacs").join(", ") || "-"],
+    ["BMC MAC", host.bmcMac || "-"],
+    ["Serial", host.serial || "-"],
+    ["Enrolled", fmtUnix(host.enrolledUnix) === "-" ? "not enrolled" : fmtUnix(host.enrolledUnix)],
+  ];
+}
+
 function chooser(ctx) {
   const form = { nodeId: "" };
   return h("section", { class: "page" },
@@ -287,6 +307,7 @@ export async function render(ctx) {
       ["Agent", agent ? `${agent["name"] || "-"} ${agent.version || ""}` : "-"],
       ["Labels", labelsForm.labels || "-"],
       ["Excluded from", (host.exclusions || []).map((x) => `${x.service} (${x.reason || "-"})`).join(", ") || "-"],
+      ...inventoryFacts(ctx, host),
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
     h("fieldset", {},
       h("legend", {}, "Labels"),

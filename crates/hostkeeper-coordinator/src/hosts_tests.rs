@@ -244,6 +244,12 @@ fn a_host_is_what_the_status_holds_of_it() {
             },
             web,
         ],
+        // A coordinator without enrollment holds no host as enrolled.
+        inventory_record_id: String::new(),
+        data_macs: Vec::new(),
+        bmc_mac: String::new(),
+        serial: String::new(),
+        enrolled_unix: 0,
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

@@ -237,6 +237,18 @@ pub struct RecordedApproval {
     pub mac_nonce: bool,
 }
 
+/// A host that holds an approval and is not denied: what the coordinator matches against its
+/// host inventory ([`EnrollmentStore::enrolled_host`], [`EnrollmentStore::enrolled_hosts`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnrolledHost {
+    pub host_id: HostId,
+    /// What the host claimed in the request its key was approved from.
+    pub claims: Claims,
+    /// When that request was last approved, unix seconds; 0 for an approval recorded without
+    /// an approver ([`EnrollmentStore::approve`]).
+    pub approved_unix: u64,
+}
+
 /// A recorded approval.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Approval {

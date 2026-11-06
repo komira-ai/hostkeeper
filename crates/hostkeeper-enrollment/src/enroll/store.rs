@@ -178,6 +178,19 @@ impl EnrollmentStore {
             .transpose()
     }
 
+    /// The host ids of every host file, sorted; a file whose name is no host id is left out.
+    pub(super) fn host_ids(&self) -> Result<Vec<HostId>, StoreError> {
+        let dir = self.dir.join(HOSTS);
+        let names = self.fs.list(&dir).map_err(io_at(&dir))?;
+        let mut ids: Vec<HostId> = names
+            .iter()
+            .filter_map(|name| name.strip_suffix(".pb"))
+            .filter_map(|name| HostId::parse(name).ok())
+            .collect();
+        ids.sort();
+        Ok(ids)
+    }
+
     pub(super) fn write_host(&self, host: &pb::Host) -> Result<(), StoreError> {
         let name = format!("{}.pb", host.host_id);
         self.write(HOSTS, &name, &host.encode_to_vec())

@@ -157,3 +157,4 @@ flag hosts abort --service STRING
 flag hosts abort --reason STRING
 flag releases set-desired --release-index STRING
 flag releases set-desired --release-index-digest STRING
+flag enrollment list-records --enrolled true|false
