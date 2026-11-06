@@ -3,6 +3,8 @@
 //! clean ([`CLEAN`]) and reading the exact problems it reports. The rules of `privileged.yml`, the
 //! one workflow that runs a job as root, are tested in `privileged_tests.rs`.
 
+mod callers;
+mod callers_tests;
 mod lint;
 mod privileged_tests;
 mod release;
