@@ -47,7 +47,7 @@ jobs:
 const USES: &str = "    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@0123456789abcdef0123456789abcdef01234567 # v0.1.0\n";
 
 /// The listed callers, as a refusal names them.
-const ONLY: &str = "only [\"hello-desired.yml/set-desired\"] may";
+const ONLY: &str = "only [\"hello-desired.yml/set-desired\", \"release.yml/set-desired\"] may";
 
 fn hello_problems(text: &str) -> Vec<String> {
     lint(HELLO_FILE, text)

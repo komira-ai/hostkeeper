@@ -7,6 +7,8 @@
 mod advisories;
 mod callers;
 mod callers_tests;
+mod desired;
+mod desired_tests;
 mod lint;
 mod privileged_tests;
 mod release;
