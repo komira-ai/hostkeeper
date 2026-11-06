@@ -113,6 +113,13 @@ therefore never refused `audit_unavailable`: the request file is its durable rec
 file's retention has deleted segments, an approval older than the oldest line kept is not audited
 again.
 
+The coordinator's own enrollment changes are audited under `coordinator`: a new request
+(`enroll_requested`, with its request id, round and `pending` or `duplicate_claim`, and the host
+it renews if any), a certificate's first issue at a `Poll` (`enroll_issued`, once per request and
+round, with the serial) and a `Renew` (`cert_renewed`, with the serial). A repost of a request, a
+later poll of an issued one and a refused call write nothing. No reason holds a CSR, a key, a
+nonce or a signature.
+
 | token | when |
 |---|---|
 | `unauthorized` | no bearer, or not an operator token |

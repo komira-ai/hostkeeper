@@ -8,6 +8,10 @@
 //! from any peer but uid 0, or from one whose credentials are unknown, is closed before a byte
 //! of it is read, so no request of it is ever decoded.
 //!
+//! `Status` reports, besides the services, the host's enrollment and the heartbeat loop's link
+//! as the loops last wrote them into the daemon's [`crate::node::NodeState`]; each is absent
+//! until its loop wrote it.
+//!
 //! The service has exactly the three calls of `hostkeeper.local.v1.Admin`: `Status`, `Abort`
 //! ([`Daemon::abort`]) and `ClearRecord` ([`Daemon::clear_record`]). Nothing on the socket
 //! reaches `clear_halt` or a verb that installs, updates or switches a version. A refused call
@@ -18,6 +22,7 @@
 use std::io;
 use std::sync::Arc;
 
+use hostkeeper_enroll::Enrollment;
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_observe::{
     HealthView, Observation, ServiceState as Observed, UnhealthyReason, UnobservedReason,
@@ -26,7 +31,8 @@ use hostkeeper_observe::{
 use hostkeeper_proto::hostkeeper::agent::v1::{FailureClass, FailurePhase, Health};
 use hostkeeper_proto::hostkeeper::local::v1::admin_server::{Admin, AdminServer};
 use hostkeeper_proto::hostkeeper::local::v1::{
-    AbortRequest, AbortResponse, ClearRecordRequest, ClearRecordResponse, Lifecycle as Life,
+    AbortRequest, AbortResponse, ClearRecordRequest, ClearRecordResponse,
+    Enrollment as WireEnrollment, EnrollmentState, Lifecycle as Life, LinkHealth as WireLink,
     Liveness, RecordProblem, ServiceRecord, ServiceState, StatusRequest, StatusResponse,
     StepOutcome, StepRecord, Unhealthy,
 };
@@ -40,6 +46,7 @@ use tonic::{Request, Response, Status};
 use crate::checks;
 use crate::executor::{Daemon, LastUninstall, RecordState, Refused, ServiceStatus};
 use crate::installed::Lifecycle;
+use crate::node::LinkHealth;
 use crate::refusal::Refusal;
 
 /// Who is at the other end of a connection.
@@ -150,12 +157,15 @@ impl Admin for AdminService {
             .ok_or_else(|| Status::internal(Refusal::StoreFailed.token()))?;
         let services = status.services.iter().map(service_record).collect();
         let root = status.trusted_root.as_ref();
+        let node = &self.daemon.ctx().node;
         Ok(Response::new(StatusResponse {
             services,
             trusted_root_age_secs: root.and_then(|root| root.age_secs),
             trusted_root_reason: root
                 .and_then(|root| root.problem)
                 .map_or_else(String::new, |problem| problem.token().to_owned()),
+            enrollment: node.enrollment().as_ref().map(enrollment),
+            link: node.link().map(link_health),
         }))
     }
 
@@ -210,6 +220,39 @@ pub fn service_record(status: &ServiceStatus) -> ServiceRecord {
         state: status.observation.as_ref().map(service_state),
         record_problem: problem as i32,
         lifecycle: lifecycle(status.lifecycle) as i32,
+    }
+}
+
+/// The host's enrollment in the fields of the wire's `Enrollment`: `key_sha256` only for a
+/// pending host, `host_id` and `not_after_unix` only for an enrolled one. Why a pki directory
+/// is unreadable is not on the wire; the enrollment loop logged it.
+pub fn enrollment(enrollment: &Enrollment) -> WireEnrollment {
+    let state = match enrollment {
+        Enrollment::Unenrolled => EnrollmentState::Unenrolled,
+        Enrollment::Pending { .. } => EnrollmentState::Pending,
+        Enrollment::Enrolled { .. } => EnrollmentState::Enrolled,
+        Enrollment::Unreadable(_) => EnrollmentState::Unreadable,
+    };
+    let mut out = WireEnrollment {
+        state: state as i32,
+        ..WireEnrollment::default()
+    };
+    match enrollment {
+        Enrollment::Pending { key_sha256 } => out.key_sha256 = key_sha256.to_string(),
+        Enrollment::Enrolled { host_id, not_after } => {
+            out.host_id = host_id.as_str().to_owned();
+            out.not_after_unix = Some(*not_after);
+        }
+        Enrollment::Unenrolled | Enrollment::Unreadable(_) => {}
+    }
+    out
+}
+
+/// The heartbeat loop's link in the fields of the wire's `LinkHealth`, one to one.
+pub fn link_health(link: LinkHealth) -> WireLink {
+    WireLink {
+        last_success_unix: link.last_success_unix,
+        consecutive_failures: link.consecutive_failures,
     }
 }
 

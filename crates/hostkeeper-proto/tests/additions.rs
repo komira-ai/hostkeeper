@@ -10,7 +10,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     PollResponse, PollState, RenewRequest, RenewResponse, VerdictAck,
 };
 use hostkeeper_proto::hostkeeper::local::v1::{
-    Lifecycle, ServiceRecord, StatusResponse, StepRecord,
+    Enrollment, EnrollmentState, Lifecycle, LinkHealth, ServiceRecord, StatusResponse, StepRecord,
 };
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
 
@@ -35,6 +35,8 @@ fn audit_entry(action: &str) -> op::AuditEntry {
         service: Some("db".to_owned()),
         node_id: Some("db-1".to_owned()),
         reason: Some("disk swap".to_owned()),
+        at_unix: Some(1_800_000_000),
+        by_name: Some("alice".to_owned()),
     }
 }
 
@@ -140,6 +142,8 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 action: Some("abort".to_owned()),
                 service: Some("db".to_owned()),
                 node_id: Some("db-1".to_owned()),
+                by_name: Some("alice".to_owned()),
+                newest: true,
             }),
         ),
         (
@@ -148,6 +152,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 entries: vec![
                     audit_entry("exclude_abandon"),
                     audit_entry("enroll_approve"),
+                    audit_entry("enroll_issued"),
                 ],
                 next_seq: 41,
             }),
@@ -256,7 +261,26 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
             }),
         ),
         ("hostkeeper.agent.v1.VerdictAck", round_trip(&verdict_ack())),
+        ("hostkeeper.local.v1.Enrollment", round_trip(&enrolled())),
+        ("hostkeeper.local.v1.LinkHealth", round_trip(&link())),
     ]
+}
+
+/// An enrolled host, every field set.
+fn enrolled() -> Enrollment {
+    Enrollment {
+        state: EnrollmentState::Enrolled.into(),
+        key_sha256: "ab".repeat(32),
+        host_id: "web-17".to_owned(),
+        not_after_unix: Some(1_900_604_800),
+    }
+}
+
+fn link() -> LinkHealth {
+    LinkHealth {
+        last_success_unix: Some(1_900_000_015),
+        consecutive_failures: 3,
+    }
 }
 
 fn verdict_ack() -> VerdictAck {
@@ -269,8 +293,8 @@ fn verdict_ack() -> VerdictAck {
 
 /// Catches: a message added since the baseline that does not read back as written, and a new
 /// field or message that a reader built from the baseline drops: a new field of a released
-/// message (`ExcludeRequest.abandon`, `ForceResponse.skipped`) is kept by the older reader of
-/// that message, which still reads what it knows (`HeartbeatResponse.acks` too, and an answer of
+/// message (`ExcludeRequest.abandon`, `ForceResponse.skipped`, `AuditEntry.at_unix` and
+/// `by_name`) is kept by the older reader of that message, which still reads what it knows (`HeartbeatResponse.acks` too, and an answer of
 /// the release before reads with no acks); a whole new message is kept, byte for byte, by
 /// an older reader that knows none of its fields (a gateway or proxy of the release before).
 #[test]
@@ -313,6 +337,19 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
     let back = op::ForceResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(back, force);
 
+    // `AuditEntry.at_unix` and `by_name` are new fields of a released message: the older reader
+    // of the entries above kept them, and an entry the release before wrote reads with neither.
+    let entry = older
+        .get_message_by_name("hostkeeper.operator.v1.AuditEntry")
+        .expect("released");
+    assert!(entry.get_field_by_name("at_unix").is_none());
+    assert!(entry.get_field_by_name("by_name").is_none());
+    let mut old_entry = DynamicMessage::new(entry);
+    old_entry.set_field_by_name("seq", Value::U64(7));
+    old_entry.set_field_by_name("action", Value::String("exclude".to_owned()));
+    let read = op::AuditEntry::decode(old_entry.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!((read.seq, read.at_unix, read.by_name), (7, None, None));
+
     let acked = HeartbeatResponse {
         features: vec!["verdict-acks-v1".to_owned()],
         acks: vec![verdict_ack()],
@@ -344,7 +381,7 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 24);
+    assert_eq!(messages.len(), 26);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
@@ -391,6 +428,49 @@ fn an_older_admin_reader_keeps_the_lifecycle_of_a_service() {
     assert_eq!(read.lifecycle(), Lifecycle::Unspecified);
 }
 
+/// Catches the host's enrollment or link that an admin client of the release before cannot read
+/// past, or drops: a `StatusResponse` with a service, an enrollment and a link is read by the
+/// baseline's `StatusResponse`, which has neither, with its service, and written back with both
+/// kept; a status of the release before reads with neither, and an `Enrollment` of an enrollment
+/// state the reader does not know reads as UNSPECIFIED.
+#[test]
+fn an_older_admin_reader_keeps_the_enrollment_and_link_of_a_status() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.StatusResponse")
+        .expect("released");
+    assert!(message.get_field_by_name("enrollment").is_none());
+    assert!(message.get_field_by_name("link").is_none());
+    let status = StatusResponse {
+        services: vec![ServiceRecord {
+            service: "web".to_owned(),
+            ..ServiceRecord::default()
+        }],
+        enrollment: Some(enrolled()),
+        link: Some(link()),
+        ..StatusResponse::default()
+    };
+    let read = DynamicMessage::decode(message, round_trip(&status).as_slice()).expect("decodes");
+    let services = read.get_field_by_name("services").expect("known");
+    assert_eq!(services.as_list().map(<[Value]>::len), Some(1));
+    let back = StatusResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, status);
+
+    let before = StatusResponse {
+        services: status.services.clone(),
+        ..StatusResponse::default()
+    };
+    let read = StatusResponse::decode(round_trip(&before).as_slice()).expect("decodes");
+    assert_eq!((read.enrollment, read.link), (None, None));
+
+    let later = Enrollment {
+        state: 99,
+        ..Enrollment::default()
+    };
+    let read = Enrollment::decode(round_trip(&later).as_slice()).expect("decodes");
+    assert_eq!(read.state(), EnrollmentState::Unspecified);
+}
+
 /// Catches the trusted root's age and reason in `Status` that an admin client of the release
 /// before cannot read past, or drops, and a status of the release before read as a root of age
 /// 0: a `StatusResponse` with both is read by the baseline's, which has neither, with its
@@ -410,6 +490,7 @@ fn an_older_admin_reader_keeps_the_trusted_roots_age_and_reason() {
         }],
         trusted_root_age_secs: Some(91 * 86_400),
         trusted_root_reason: "trusted_root_stale".to_owned(),
+        ..StatusResponse::default()
     };
     let read = DynamicMessage::decode(message, round_trip(&stale).as_slice()).expect("decodes");
     let services = read.get_field_by_name("services").expect("the services");
@@ -543,4 +624,87 @@ fn the_release_channel_refusals_are_new_values_of_releases() {
             value.name()
         );
     }
+}
+
+/// Catches a release named by its index that a reader of the release before drops or cannot read
+/// past: `SetDesiredRequest.release_index` and `release_index_digest`,
+/// `DesiredState.release_index_digest`, and the `index_digest` of an update and a force are kept
+/// by the baseline's readers, which still read every field they know; an update of the release
+/// before reads with an empty `index_digest`, which the daemon does not check.
+#[test]
+fn a_release_index_and_its_digest_are_kept_by_an_older_reader() {
+    use hostkeeper_proto::hostkeeper::agent::v1::{Force, Update};
+
+    let older = baseline_pool();
+    let index = r#"{"packages":[],"schema":1,"service":"db","version":"1.4"}"#;
+    let set = op::SetDesiredRequest {
+        service: "db".to_owned(),
+        desired: Some(op::DesiredState {
+            version: "1.4".to_owned(),
+            release_index_digest: Some("cd".repeat(32)),
+            ..op::DesiredState::default()
+        }),
+        release_index: Some(index.to_owned()),
+        release_index_digest: Some("cd".repeat(32)),
+        ..op::SetDesiredRequest::default()
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.operator.v1.SetDesiredRequest")
+        .expect("released");
+    assert!(message.get_field_by_name("release_index").is_none());
+    assert!(message.get_field_by_name("release_index_digest").is_none());
+    let read = DynamicMessage::decode(message, round_trip(&set).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("service").as_deref(),
+        Some(&Value::String("db".to_owned()))
+    );
+    let back = op::SetDesiredRequest::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, set);
+
+    let update = Update {
+        service: "db".to_owned(),
+        version: "1.4".to_owned(),
+        package_digest: "ab".repeat(32),
+        index_digest: "cd".repeat(32),
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.agent.v1.Update")
+        .expect("released");
+    assert!(message.get_field_by_name("index_digest").is_none());
+    let read = DynamicMessage::decode(message, round_trip(&update).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("package_digest").as_deref(),
+        Some(&Value::String("ab".repeat(32)))
+    );
+    let back = Update::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, update);
+    let before = Update::decode(
+        Update {
+            index_digest: String::new(),
+            ..update.clone()
+        }
+        .encode_to_vec()
+        .as_slice(),
+    )
+    .expect("decodes");
+    assert_eq!(before.index_digest, "");
+
+    let force = Force {
+        service: "db".to_owned(),
+        version: "1.4".to_owned(),
+        package_digest: "ab".repeat(32),
+        halt_generation: 3,
+        index_digest: "cd".repeat(32),
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.agent.v1.Force")
+        .expect("released");
+    assert!(message.get_field_by_name("index_digest").is_none());
+    let read = DynamicMessage::decode(message, round_trip(&force).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("halt_generation").as_deref(),
+        Some(&Value::U64(3))
+    );
+    let back = Force::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, force);
 }

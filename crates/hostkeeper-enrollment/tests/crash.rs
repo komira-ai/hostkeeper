@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_enrollment::ca::{Ca, CaError};
-use hostkeeper_enrollment::enroll::{EnrollmentStore, IssueError, RequestState, StoreError};
+use hostkeeper_enrollment::enroll::{
+    EnrollmentStore, IssueError, IssuedCertificate, RequestState, StoreError,
+};
 use hostkeeper_enrollment::fs::{FaultFs, Fs, Op, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use support::{FixedClock, HostKey, NOW, TestCa, decision, files, host_id, request, scratch};
@@ -59,15 +61,16 @@ fn under(op: &Op, sub: &str) -> bool {
 
 /// Catches a second serial (and so a second certificate) being minted for one request when
 /// issuance stops after the certificate file is written and before the request is marked
-/// issued, or before the file is written; and a retry that does not return the same bytes on
-/// every call.
+/// issued, or before the file is written; a retry that does not return the same bytes on
+/// every call; and a first issue told more than once, or not at all: the call that signs, or
+/// that records a certificate signed before the crash, is the first, and no later call is.
 #[test]
 fn a_crash_between_approval_and_issue_yields_one_certificate() {
     let ca = TestCa::new("crash-ca");
-    // A run without a fault shows where each write falls.
+    // A run without a fault shows where each write falls; its first call is the first issue.
     let probe = Approved::new("crash-probe");
     let base = probe.fs.count();
-    probe.store.issue(&ca.ca, &probe.id).expect("issue");
+    assert!(probe.store.issue(&ca.ca, &probe.id).expect("issue").first);
     let ops = probe.fs.ops();
     let issued_write = find(&ops, base, |op| under(op, "issued"));
     let marked_write = find(&ops, issued_write, |op| under(op, "requests"));
@@ -89,7 +92,16 @@ fn a_crash_between_approval_and_issue_yields_one_certificate() {
         let reopened = EnrollmentStore::open(Arc::new(RealFs), run.dir.path()).expect("reopen");
         let first = reopened.issue(&ca.ca, &run.id).expect("retry");
         let second = reopened.issue(&ca.ca, &run.id).expect("again");
-        assert_eq!(first, second, "{name}");
+        assert!(first.first, "{name}: the retry is the first issue");
+        assert!(!second.first, "{name}: a later call is not");
+        assert_eq!(
+            IssuedCertificate {
+                first: true,
+                ..second
+            },
+            first,
+            "{name}: the same certificate"
+        );
         assert_eq!(first.serial, 2, "{name}: the reserved serial");
         assert_eq!(reopened.allocate_serial().expect("serial"), 3, "{name}");
         let view = reopened.request(&run.id).expect("read").expect("held");

@@ -285,7 +285,7 @@ fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
 }
 
 /// Catches: an order that cannot say one verb with its typed arguments, or that reads back as
-/// another: a force with its digest and halt generation, in a reply.
+/// another: a force with its digests and halt generation, in a reply.
 #[test]
 fn an_order_is_one_verb_with_typed_arguments() {
     let reply = HeartbeatResponse {
@@ -297,6 +297,7 @@ fn an_order_is_one_verb_with_typed_arguments() {
                 version: "1.4".to_owned(),
                 package_digest: "ab".repeat(32),
                 halt_generation: 3,
+                index_digest: "cd".repeat(32),
             })),
         }),
         ..HeartbeatResponse::default()
@@ -307,6 +308,7 @@ fn an_order_is_one_verb_with_typed_arguments() {
         panic!("not a force: {:?}", order.verb);
     };
     assert_eq!(force.package_digest.len(), 64);
+    assert_eq!(force.index_digest, "cd".repeat(32));
     assert_eq!((force.halt_generation, order.r#try), (3, 1));
 }
 
@@ -428,7 +430,7 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 26] = [
+const FIELDS: [(&str, &[(&str, u32)]); 29] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -448,7 +450,22 @@ const FIELDS: [(&str, &[(&str, u32)]); 26] = [
             ("services", 1),
             ("trusted_root_age_secs", 2),
             ("trusted_root_reason", 3),
+            ("enrollment", 4),
+            ("link", 5),
         ],
+    ),
+    (
+        "hostkeeper.local.v1.Enrollment",
+        &[
+            ("state", 1),
+            ("key_sha256", 2),
+            ("host_id", 3),
+            ("not_after_unix", 4),
+        ],
+    ),
+    (
+        "hostkeeper.local.v1.LinkHealth",
+        &[("last_success_unix", 1), ("consecutive_failures", 2)],
     ),
     (
         "hostkeeper.local.v1.ServiceRecord",
@@ -532,6 +549,21 @@ const FIELDS: [(&str, &[(&str, u32)]); 26] = [
             ("action", 4),
             ("service", 5),
             ("node_id", 6),
+            ("by_name", 7),
+            ("newest", 8),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.AuditEntry",
+        &[
+            ("seq", 1),
+            ("by", 2),
+            ("action", 3),
+            ("service", 4),
+            ("node_id", 5),
+            ("reason", 6),
+            ("at_unix", 7),
+            ("by_name", 8),
         ],
     ),
     (
@@ -662,7 +694,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 11] = [
+    let cases: [(&str, &str, &[&str]); 12] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -726,6 +758,8 @@ fn wire_names_are_pinned() {
                 "audit_unavailable",
                 "not_in_channel",
                 "channel_digest_mismatch",
+                "index_digest_mismatch",
+                "index_invalid",
             ],
         ),
         (
@@ -801,6 +835,11 @@ fn wire_names_are_pinned() {
             "hostkeeper.local.v1.Lifecycle",
             "LIFECYCLE_",
             &["absent", "installing", "running", "removing"],
+        ),
+        (
+            "hostkeeper.local.v1.EnrollmentState",
+            "ENROLLMENT_STATE_",
+            &["unenrolled", "pending", "enrolled", "unreadable"],
         ),
     ];
     for (name, prefix, want) in cases {

@@ -6,7 +6,7 @@ use hostkeeper_wire::wire::{Heartbeat, ORDER_FEATURE, OrderId, Outcome, UpdateRe
 
 use crate::marks_support::{WEB, beat_of, digest, restart, rig, runs, set, start, who};
 use crate::order_terms::{order_id_text, order_try, terms};
-use crate::registry::Digest;
+use crate::registry::{Digest, Package};
 use crate::service::{FEATURES, HeartbeatRefused, sends};
 use crate::testutil::{Log, Rig, ci_token, version};
 
@@ -260,7 +260,10 @@ fn the_order_id_names_the_update_and_the_try_follows_its_verdict() {
 /// Catches: a digest or id lost in the assembly.
 #[test]
 fn terms_join_the_id_the_try_and_the_registered_digest() {
-    let registered = Digest::parse(&digest(7)).expect("a digest");
+    let registered = Package {
+        digest: Digest::parse(&digest(7)).expect("a digest"),
+        index_digest: None,
+    };
     let made = terms(
         WEB,
         &version("2.0"),

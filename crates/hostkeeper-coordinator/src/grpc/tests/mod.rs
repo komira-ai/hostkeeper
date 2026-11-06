@@ -18,5 +18,6 @@ mod operator_desired;
 mod pending;
 mod readme_status;
 mod refusal;
+mod release_index;
 mod report;
 mod support;

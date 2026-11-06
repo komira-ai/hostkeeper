@@ -2,7 +2,7 @@
 
 <!-- Generated from the protos: `cargo test -p hostkeeper-ctl --test docs` fails when this file differs, and writes the current text beside its test binary. Do not edit by hand. -->
 
-`hostkeeper ctl` calls one RPC of the coordinator per command. Every command, flag and help text below is generated from the protobuf descriptors of `hostkeeper-proto`; the services of a host's admin socket (packages `hostkeeper.local.v<n>`) are not here.
+`hostkeeper ctl` calls one RPC of the coordinator per command. Every command, flag and help text below is generated from the protobuf descriptors of `hostkeeper-proto`; the services of a host's admin socket (packages `hostkeeper.local.v<n>`) are not here: `hostkeeper admin` calls them on the host, as [docs/admin.md](admin.md) describes.
 
 ## Rules
 
@@ -59,6 +59,8 @@ The entries after `since_seq` that match every filter set, newest last. Changes 
 | `--action` | STRING | Only entries of this action (`AuditEntry.action`). |
 | `--service` | STRING |  |
 | `--node-id` | STRING |  |
+| `--by-name` | STRING | Only entries made under this name (`AuditEntry.by_name`), as a token is named: 1 to 32 bytes of `[a-z0-9-]`. A name no entry has lists none. |
+| `--newest` | true\|false | The newest `limit` matching entries after `since_seq`, oldest first, in place of the oldest; `next_seq` goes on from the newest of them. |
 
 ### `coordinator`
 
@@ -272,7 +274,9 @@ the coordinator manages, audited as `set_desired` under the token's name).
 | `--service` | STRING |  |
 | `--if-generation` | UINT64 | Write only if the service's generation is this one now; otherwise refused with `generation_conflict`, and nothing changes. Absent: write whatever the generation is. |
 | `--write-id` | STRING | The writer's own id for this write, kept with it and returned by `Converge`, so a writer that lost the answer can tell whether its write landed: 1 to 128 visible ASCII characters. Absent: none. |
-| `--package-digest` | STRING | The digest of the package CI registers for `desired.version` (64 lower-case hex characters). |
+| `--package-digest` | STRING | The digest of the package CI registers for `desired.version` (64 lower-case hex characters), the one package every host is ordered whatever its platform: for a fleet of one platform. Refused with `release_index` (`index_invalid`). |
+| `--release-index` | STRING | The release index of `desired.version` (`index.json`, design section 5.5), byte for byte: per platform, the package file, its size and its SHA-256. The coordinator checks that its SHA-256 is `release_index_digest` (else `index_digest_mismatch`) and that it is the index of `service` at `desired.version` (else `index_invalid`), keeps the digest of each platform's package, and orders each host the package of its own platform. Comes with `release_index_digest`. |
+| `--release-index-digest` | STRING | The SHA-256 of `release_index` (64 lower-case hex characters), as CI's release job wrote it down when it published the index: the release this desired state names. |
 
 Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState).
 

@@ -20,6 +20,11 @@
 //!   (`halt`: the host, the check and the version); see [`crate::halt`].
 //! - `in_progress`: everything else.
 //!
+//! A host whose platform the desired version's release index lists no package for is not ordered
+//! the version ([`crate::decide::Skip::NoPackageForPlatform`]) and could never reach it: it is
+//! left out of every count, as a pair an operator holds is, so it neither blocks the others nor
+//! keeps the service from converging.
+//!
 //! How long a farm has gone without progress is the caller's to judge: it needs the time of
 //! the last change, which the coordinator does not keep.
 
@@ -132,6 +137,12 @@ fn failed_to_reach(host: &Host, desired: &Desired) -> bool {
             .is_some_and(|r| r.outcome == Outcome::Failed && r.target == desired.version)
 }
 
+/// Whether the desired version's release index lists no package for the platform of `host`:
+/// nothing is ordered it, so it is not counted.
+fn unlisted(host: &Host, desired: &Desired) -> bool {
+    desired.lacks_package_for(host.beat.platform)
+}
+
 fn counts(
     service: &str,
     role: &str,
@@ -144,7 +155,7 @@ fn counts(
             .hosts_of(service)
             .filter(|(id, _)| !fleet.is_held(service, id))
             .map(|(_, h)| h)
-            .filter(move |h| h.role_name() == role)
+            .filter(move |h| h.role_name() == role && !unlisted(h, desired))
     };
     RoleCounts {
         role: role.to_owned(),
@@ -209,7 +220,10 @@ pub fn converge_service(
     let live = fleet
         .hosts_of(service)
         .filter(|(id, h)| {
-            def.roles.contains(h.role_name()) && h.is_live(now) && !fleet.is_held(service, id)
+            def.roles.contains(h.role_name())
+                && h.is_live(now)
+                && !fleet.is_held(service, id)
+                && !unlisted(h, desired)
         })
         .count();
     let at_desired: usize = roles.iter().map(|c| c.at_desired).sum();
@@ -219,6 +233,7 @@ pub fn converge_service(
     let settled = fleet.hosts_of(service).all(|(id, h)| {
         !h.is_live(now)
             || fleet.is_held(service, id)
+            || unlisted(h, desired)
             || !(h.beat.promotion_pending
                 || fleet.is_baking(service, id, h, &desired.version, def.bake_beats, now))
     });

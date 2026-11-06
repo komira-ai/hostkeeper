@@ -30,6 +30,10 @@ pub struct IssuedCertificate {
     pub not_after: u64,
     /// The certificate, DER: the same bytes on every call for one request id and round.
     pub certificate_der: Vec<u8>,
+    /// The request became issued at this call: its certificate was signed now, or was signed
+    /// before a crash and is recorded issued now. Decided under the store's lock, so one call
+    /// per request and round says so.
+    pub first: bool,
 }
 
 impl EnrollmentStore {
@@ -67,11 +71,12 @@ impl EnrollmentStore {
             .load_issued(request_id)?
             .filter(|issued| issued.round == round)
         {
-            if row.state != RequestState::Issued {
+            let first = row.state != RequestState::Issued;
+            if first {
                 row.set_state(RequestState::Issued);
                 self.write_request(&row)?;
             }
-            return Ok(view(request_id, &host_id, issued));
+            return Ok(view(request_id, &host_id, issued, first));
         }
         if row.state == RequestState::Issued {
             let reason = "the request is issued but its certificate file is gone";
@@ -99,11 +104,16 @@ impl EnrollmentStore {
         self.write_issued(&issued, request_id)?;
         row.set_state(RequestState::Issued);
         self.write_request(&row)?;
-        Ok(view(request_id, &host_id, issued))
+        Ok(view(request_id, &host_id, issued, true))
     }
 }
 
-fn view(request_id: &KeyHash, host_id: &HostId, issued: pb::Issued) -> IssuedCertificate {
+fn view(
+    request_id: &KeyHash,
+    host_id: &HostId,
+    issued: pb::Issued,
+    first: bool,
+) -> IssuedCertificate {
     IssuedCertificate {
         request_id: *request_id,
         round: issued.round,
@@ -111,5 +121,6 @@ fn view(request_id: &KeyHash, host_id: &HostId, issued: pb::Issued) -> IssuedCer
         serial: issued.serial,
         not_after: issued.not_after,
         certificate_der: issued.certificate_der,
+        first,
     }
 }

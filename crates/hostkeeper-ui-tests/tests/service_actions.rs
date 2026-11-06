@@ -27,6 +27,10 @@ export async function main() {{
     )
 }
 
+/// A release index as typed in the page: inner line breaks and a final newline, which its digest
+/// covers.
+const INDEX: &str = "{\n  \"service\": \"api\"\n}\n";
+
 fn digest() -> String {
     "ab".repeat(32)
 }
@@ -99,6 +103,24 @@ fn rollout_shows_assigned_roles_operator_assignments_hosts_and_uninstalling() {
 }
 
 #[test]
+fn the_set_desired_form_names_a_release_index_and_its_digest_not_a_package_digest() {
+    // Catches: a form that still asks for one package digest (which fails every host of another
+    // platform), that leaves out the index or its digest, or that shows either under another label.
+    let mut ui = Ui::start();
+    let out = run_rollout(&mut ui, "return null;", "[]");
+    let shown = out["text"].as_str().expect("the page text");
+    assert!(
+        shown.contains("Release index digest (64 hex characters)"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("Release index (the text of index.json)"),
+        "{shown}"
+    );
+    assert!(!shown.contains("Package digest"), "{shown}");
+}
+
+#[test]
 fn rollout_shows_no_assignments_for_a_service_the_list_does_not_name() {
     // Catches: a page that fails on a service with no entry, or shows another service's rows.
     let mut ui = Ui::start();
@@ -166,10 +188,11 @@ return null;"#,
 }
 
 #[test]
-fn set_desired_sends_the_version_with_ci_limits_and_the_typed_digest() {
-    // Catches: a body that drops CI's limits, copies the old package digest, sends a blank digest
-    // or sends ifGeneration or writeId; limits invented for a service with none; a missing
-    // refresh; a dropped-roles notice that is not reported.
+fn set_desired_sends_the_version_with_ci_limits_and_the_typed_release_index() {
+    // Catches: a body that drops CI's limits, copies the old package digest, sends a blank
+    // digest or index, sends a package digest, changes the index text (its trailing newline, its
+    // inner line breaks) or sends ifGeneration or writeId; limits invented for a service with
+    // none; a missing refresh; a dropped-roles notice that is not reported.
     let mut ui = Ui::start();
     ui.reply(
         &m("Releases/SetDesired"),
@@ -188,10 +211,12 @@ fn set_desired_sends_the_version_with_ci_limits_and_the_typed_digest() {
         &format!(
             r#"
 type(tree, "desired-version", "1.5.0");
-type(tree, "desired-digest", "  {}  ");
+type(tree, "desired-index-digest", "  {}  ");
+type(tree, "desired-index", {INDEX:?});
 await click(tree, "set-desired", 0);
 type(tree, "desired-version", "1.6.0");
-type(tree, "desired-digest", "   ");
+type(tree, "desired-index-digest", "   ");
+type(tree, "desired-index", " \n ");
 await click(tree, "set-desired", 0);
 type(tree, "desired-version", "0.1.0", 1);
 await click(tree, "set-desired", 1);
@@ -211,7 +236,8 @@ return null;"#,
         [
             (
                 m("Releases/SetDesired"),
-                json!({"service": "api", "desired": desired("1.5.0"), "packageDigest": digest()})
+                json!({"service": "api", "desired": desired("1.5.0"),
+                       "releaseIndexDigest": digest(), "releaseIndex": INDEX})
             ),
             (
                 m("Releases/SetDesired"),

@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
@@ -68,6 +67,20 @@ impl Held {
     }
 }
 
+/// What is called with the service each time a caller begins to wait in
+/// [`ServiceLocks::wait_let_go`].
+type OnWait = Arc<dyn Fn(&ServiceName) + Send + Sync>;
+
+/// The [`OnWait`] of the locks, when one is set; shared by the clones.
+#[derive(Clone, Default)]
+struct WaitHook(Arc<Mutex<Option<OnWait>>>);
+
+impl fmt::Debug for WaitHook {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WaitHook")
+    }
+}
+
 /// One lock per service, made when a service's first order comes. A clone shares the locks: a
 /// post-success watcher's thread keeps a service locked through it.
 #[derive(Clone, Debug, Default)]
@@ -75,8 +88,8 @@ pub struct ServiceLocks {
     held: Arc<Mutex<BTreeMap<String, Held>>>,
     /// Signalled whenever a lock is let go of or kept for good.
     changed: Arc<Condvar>,
-    /// The callers in [`ServiceLocks::wait_let_go`] now.
-    waiting: Arc<AtomicUsize>,
+    /// Told of each caller that begins to wait in [`ServiceLocks::wait_let_go`].
+    on_wait: WaitHook,
 }
 
 impl ServiceLocks {
@@ -149,7 +162,16 @@ impl ServiceLocks {
     /// Waits until the lock of `service` is free, or held for good by a step that could not be
     /// stopped: the order holding it has ended.
     pub fn wait_let_go(&self, service: &ServiceName) {
-        self.waiting.fetch_add(1, Ordering::SeqCst);
+        // Called once the hook's lock is let go of, so the hook never runs under it.
+        let hook = self
+            .on_wait
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(hook) = hook {
+            hook(service);
+        }
         let mut map = self.map();
         while map.get(service.as_str()).is_some_and(|held| !held.stuck) {
             map = self
@@ -157,13 +179,18 @@ impl ServiceLocks {
                 .wait(map)
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        self.waiting.fetch_sub(1, Ordering::SeqCst);
     }
 
-    /// How many callers wait in [`ServiceLocks::wait_let_go`] now: what a test watches for to
+    /// Calls `hook` with the service each time a caller begins to wait in
+    /// [`ServiceLocks::wait_let_go`], in place of any hook set before: what a test watches for to
     /// know that an abort has asked its runner and waits for the order.
-    pub fn waiting(&self) -> usize {
-        self.waiting.load(Ordering::SeqCst)
+    pub fn on_wait(&self, hook: impl Fn(&ServiceName) + Send + Sync + 'static) {
+        let mut on_wait = self
+            .on_wait
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *on_wait = Some(Arc::new(hook));
     }
 
     /// Who holds the lock of `service` now, `None` when nobody does.

@@ -104,6 +104,10 @@ fn desired_state(desired: &Desired) -> proto::DesiredState {
             .release_digest
             .as_ref()
             .map(|digest| digest.as_str().to_owned()),
+        release_index_digest: desired
+            .release_index
+            .as_ref()
+            .map(|record| record.digest.as_str().to_owned()),
     }
 }
 
@@ -388,6 +392,7 @@ fn skip_of(skip: Skip) -> proto::GateReason {
         Skip::UpToDate => proto::GateReason::UpToDate,
         Skip::FailedHere => proto::GateReason::FailedHere,
         Skip::Deferred => proto::GateReason::Deferred,
+        Skip::NoPackageForPlatform => proto::GateReason::NoPackageForPlatform,
         Skip::Unsupported | Skip::NoDigest => proto::GateReason::Unspecified,
     }
 }

@@ -37,6 +37,7 @@ use hostkeeper_steps::Clock;
 
 use crate::executor::Daemon;
 use crate::link_adapters::{DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords};
+use crate::node::NodeState;
 
 pub use hostkeeper_link::Log;
 
@@ -56,7 +57,7 @@ pub struct Links {
     pub link: Arc<dyn CoordinatorLink>,
     /// The host's client certificate and key, read at every heartbeat.
     pub certs: Arc<dyn CertSource>,
-    /// The unix clock of the deferrals.
+    /// The unix clock of the deferrals, and of the last answered heartbeat `Status` reports.
     pub clock: Arc<dyn UnixClock>,
     /// Where both loops' lines go.
     pub log: Arc<dyn Log>,
@@ -73,19 +74,31 @@ pub struct Links {
 
 impl Links {
     /// Starts the enrollment loop, then the heartbeat loop, each on a worker of
-    /// [`Links::dispatch`].
+    /// [`Links::dispatch`]. Each loop writes what the admin `Status` reports of it into the
+    /// daemon's [`crate::node::NodeState`]: the enrollment loop the host's enrollment after each
+    /// step, the heartbeat loop its link after each heartbeat, at the second of [`Links::clock`].
     pub fn start(self, daemon: &Arc<Daemon>) {
         let heartbeater = self.heartbeater(daemon);
         let Links {
             enroller,
+            clock,
             log,
             sleeper,
             dispatch,
             stop,
             ..
         } = self;
-        dispatch.start(Box::new(move || enroll(enroller, log.as_ref(), &stop)));
-        dispatch.start(Box::new(move || heartbeater.run(&*sleeper)));
+        let enrolling = Arc::clone(daemon);
+        dispatch.start(Box::new(move || {
+            enroll(enroller, log.as_ref(), &enrolling.ctx().node, &stop);
+        }));
+        let beating = Arc::clone(daemon);
+        dispatch.start(Box::new(move || {
+            let node = &beating.ctx().node;
+            heartbeater.run(&*sleeper, &mut |outcome| {
+                node.beat(outcome, clock.unix_secs());
+            });
+        }));
     }
 
     /// The heartbeat loop over `daemon`: its executor, held halts, installed services and
@@ -116,13 +129,16 @@ impl Links {
     }
 }
 
-/// The enrollment loop: the enroller made, then its steps until `stop` is set; without an
-/// enroller, the reason logged once ([`NO_ENROLLMENT`]).
-fn enroll(make: MakeEnroller, log: &dyn Log, stop: &StopFlag) {
+/// The enrollment loop: the enroller made, then its steps until `stop` is set, the host's
+/// enrollment after each held in `node`; without an enroller, the reason logged once
+/// ([`NO_ENROLLMENT`]), and `node` left without an enrollment.
+fn enroll(make: MakeEnroller, log: &dyn Log, node: &NodeState, stop: &StopFlag) {
     match make() {
-        Ok(mut enroller) => {
-            enroller.run_loop(&mut |line: &str| log.line(line), &mut || !stop.is_stopped())
-        }
+        Ok(mut enroller) => enroller.run_loop(
+            &mut |line: &str| log.line(line),
+            &mut |enrollment| node.set_enrollment(enrollment),
+            &mut || !stop.is_stopped(),
+        ),
         Err(why) => log.line(&format!("{NO_ENROLLMENT}{why}")),
     }
 }

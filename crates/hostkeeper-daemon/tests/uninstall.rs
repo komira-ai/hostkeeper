@@ -5,11 +5,11 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
 use hostkeeper_daemon::halt::HaltStore;
-use hostkeeper_daemon::testing::AdditiveFault;
+use hostkeeper_daemon::testing::{AdditiveFault, Signal, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_placed::testing::{Event, FakeUnitControl, FsWrite, UnitCall};
@@ -539,11 +539,11 @@ fn an_uninstall_holds_its_service_and_a_lost_step_is_interrupted() {
     let rig = Rig::new("uninstall-lock");
     let daemon = Arc::new(rig.daemon());
     installed(&rig, &daemon, "web", "1.0.0");
-    let (entered, on_entered) = mpsc::channel();
+    let (entered, on_entered) = Signal::new();
     let (release, on_release) = mpsc::channel::<()>();
     let on_release = Mutex::new(on_release);
     rig.launcher.during_additive(move |_| {
-        entered.send(()).expect("the test waits");
+        entered.send(());
         on_release
             .lock()
             .expect("the gate")
@@ -552,9 +552,9 @@ fn an_uninstall_holds_its_service_and_a_lost_step_is_interrupted() {
     });
     let running = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&uninstall("web", 1)))
+        spawn("the uninstall", move || daemon.order(&uninstall("web", 1)))
     };
-    on_entered.recv().expect("the hook runs");
+    on_entered.wait(&running).expect("the hook runs");
     assert_eq!(daemon.order(&uninstall("web", 1)), Reply::Running);
     assert_eq!(
         daemon.order(&update("web", "2.0.0", &d(), 2)),

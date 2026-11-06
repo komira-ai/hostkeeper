@@ -210,9 +210,17 @@ enum ReleasesRefusal {
   // hold yet, or whose index could not be read. Nothing changed; retry once the channel holds it.
   RELEASES_REFUSAL_NOT_IN_CHANNEL = 19;
   // FAILED_PRECONDITION: `SetDesired` of a version whose index in the coordinator's release
-  // channel names another service or version, or no package with the digest the set names.
+  // channel names another service or version, or no package with the digest the set names, or,
+  // for a set over a release index, is not that index (its SHA-256 is not `release_index_digest`).
   // Nothing changed; the channel holds another artifact, so the same set is refused again.
   RELEASES_REFUSAL_CHANNEL_DIGEST_MISMATCH = 20;
+  // INVALID_ARGUMENT: `SetDesired`'s `release_index` does not have the SHA-256
+  // `release_index_digest` names: the index was changed or cut on its way.
+  RELEASES_REFUSAL_INDEX_DIGEST_MISMATCH = 21;
+  // INVALID_ARGUMENT: `SetDesired`'s `release_index` is not a release index of the service at the
+  // desired version (design section 5.5), or comes without `release_index_digest`, or with
+  // `package_digest`.
+  RELEASES_REFUSAL_INDEX_INVALID = 22;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower
@@ -270,8 +278,8 @@ message AuditEntry {
   // `force_ended`, `mark_bad`, `unmark_bad`, `halt`, `last_good`, `assign`, `unassign`,
   // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
   // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
-  // `mac_auto_approve_declined`, `record_add`, `record_remove`). Open: a later coordinator adds
-  // actions.
+  // `mac_auto_approve_declined`, `record_add`, `record_remove`, `enroll_requested`,
+  // `enroll_issued`, `cert_renewed`). Open: a later coordinator adds actions.
   string action = 3;
   // The service, when the change is about one.
   optional string service = 4;
@@ -279,6 +287,13 @@ message AuditEntry {
   optional string node_id = 5;
   // Why, when the change has a reason.
   optional string reason = 6;
+  // When it was made, by the coordinator's clock. `Audit.List` sets it from the audit file; it
+  // is unset in the answer of the call that made the change, and for a coordinator that keeps
+  // no audit file (it lists its ring, which holds no time).
+  optional uint64 at_unix = 7;
+  // Who made it, by name: the name of the operator's token, or `coordinator`, `ci` or
+  // `mdm-nonce` for a change that is not an operator's. `by` says which kind of actor that is.
+  optional string by_name = 8;
 }
 
 // Who made a change.
@@ -408,6 +423,9 @@ enum GateReason {
   GATE_REASON_WAITING_FOR_OPERATOR = 22;
   // The host's identity is also another host's: a cloned disk.
   GATE_REASON_DUPLICATE = 23;
+  // The release index of the desired version lists no package for the host's platform: the host
+  // is not ordered the version, and this is no failed update.
+  GATE_REASON_NO_PACKAGE_FOR_PLATFORM = 24;
 }
 
 // Whether a service counts a host.
@@ -485,9 +503,15 @@ message DesiredState {
   // none. A service's definition may require roles here (`kbf` requires `storage` and
   // `frontend`).
   map<string, uint32> min_up = 3;
-  // The digest of the package CI registered for this version (64 lower-case hex characters): the
-  // one every order of this version names, and that a force fills in.
+  // The digest of the one package CI registered for this version (64 lower-case hex characters),
+  // which every order of this version names, whatever the host's platform. Absent when the
+  // version was set with a release index.
   optional string package_digest = 4;
+  // The SHA-256 of the release index CI registered for this version (64 lower-case hex
+  // characters): each host is ordered the package the index lists for its platform, and a host
+  // whose platform it does not list is ordered nothing (`GATE_REASON_NO_PACKAGE_FOR_PLATFORM`).
+  // Absent when the version was set with one `package_digest`, or with neither.
+  optional string release_index_digest = 5;
 }
 
 message SetDesiredRequest {
@@ -500,8 +524,20 @@ message SetDesiredRequest {
   // that lost the answer can tell whether its write landed: 1 to 128 visible ASCII characters.
   // Absent: none.
   optional string write_id = 4;
-  // The digest of the package CI registers for `desired.version` (64 lower-case hex characters).
+  // The digest of the package CI registers for `desired.version` (64 lower-case hex characters),
+  // the one package every host is ordered whatever its platform: for a fleet of one platform.
+  // Refused with `release_index` (`index_invalid`).
   optional string package_digest = 5;
+  // The release index of `desired.version` (`index.json`, design section 5.5), byte for byte:
+  // per platform, the package file, its size and its SHA-256. The coordinator checks that its
+  // SHA-256 is `release_index_digest` (else `index_digest_mismatch`) and that it is the index of
+  // `service` at `desired.version` (else `index_invalid`), keeps the digest of each platform's
+  // package, and orders each host the package of its own platform. Comes with
+  // `release_index_digest`.
+  optional string release_index = 6;
+  // The SHA-256 of `release_index` (64 lower-case hex characters), as CI's release job wrote
+  // it down when it published the index: the release this desired state names.
+  optional string release_index_digest = 7;
 }
 
 message SetDesiredResponse {
@@ -966,6 +1002,12 @@ message ListAuditRequest {
   optional string action = 4;
   optional string service = 5;
   optional string node_id = 6;
+  // Only entries made under this name (`AuditEntry.by_name`), as a token is named: 1 to 32
+  // bytes of `[a-z0-9-]`. A name no entry has lists none.
+  optional string by_name = 7;
+  // The newest `limit` matching entries after `since_seq`, oldest first, in place of the
+  // oldest; `next_seq` goes on from the newest of them.
+  bool newest = 8;
 }
 
 message ListAuditResponse {
