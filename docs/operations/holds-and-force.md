@@ -116,7 +116,8 @@ file that cannot be opened), the call is refused with `audit_unavailable` (gRPC 
 and changes nothing: `Releases.Force`, `Services.Hold`, `Releases.SetDesired` by an operator,
 and every other call above that changes the ops state. Asking again once the disk has room is
 safe. The line is appended before the ops file is written, so an audit line can name a change
-whose ops-file write then failed (`store_failed`), never the other way round; a force, which
+whose ops-file write then failed (`store_failed`), or the first lines of a force refused at a
+later one, never the other way round; a force, which
 writes the desired state first, puts it back. On the JSON routes, whose answers are frozen, the
 same refusal is `500 internal`.
 

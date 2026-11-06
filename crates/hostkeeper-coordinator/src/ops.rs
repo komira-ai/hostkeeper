@@ -43,7 +43,8 @@
 //! The audit file is the durable record, so a [`Write::BeforeMemory`] change appends its lines
 //! first, before the ops file is written, and is refused with [`OpsError::AuditUnavailable`]
 //! when a line cannot be appended (a full disk): nothing of it is made. An audit line can so name
-//! a change whose ops-file write then failed, but no change is made without its line. Two kinds
+//! a change whose ops-file write then failed, or, for a change of several entries (a force), the
+//! entries appended before the one that failed; but no change is made without its lines. Two kinds
 //! of change still stand when their line cannot be appended, logged as an error with the entry
 //! in the ring: a change that raises protection ([`Write::AfterMemory`], [`Write::Halt`]: a
 //! halt, a bad mark), and an operator's `abort` ([`OpsStore::escape`]), the operator's way out
@@ -740,7 +741,7 @@ impl OpsStore {
             let ring = self.lock().audit.clone();
             return Ok(ring.into_iter().filter(|e| e.seq > since_seq).collect());
         };
-        let read = audit_file::read_after(log.path(), since_seq)?;
+        let read = log.read_after(since_seq)?;
         Ok(read.lines.into_iter().map(AuditLine::into_entry).collect())
     }
 

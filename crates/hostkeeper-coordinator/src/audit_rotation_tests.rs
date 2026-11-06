@@ -8,6 +8,7 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
 use clap::Parser as _;
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use crate::audit_file::{
     self, AuditLine, AuditLog, DEFAULT_MAX_BYTES, DEFAULT_RETAINED, DEFAULT_ROTATION, Detail,
@@ -482,4 +483,130 @@ fn config_rejects_zero_rotation_values() {
     );
     let ones = ["--audit-max-bytes", "1", "--audit-retained-segments", "1"];
     assert_eq!(parsed(&ones), (1, 1));
+}
+
+/// A rig of the marks' services whose ops store rotates its audit file by `rotation`, after the
+/// same twelve audited changes: a hold and an unhold of `web` on the fleet and of `db` on `d1`,
+/// three times over.
+fn listed_rig(test: &str, rotation: Rotation) -> crate::testutil::Rig {
+    use crate::marks_support::{DB, WEB, hold, rig, scope_fleet, scope_host, start, unhold};
+    let mut rig = rig(test, "");
+    let ops = OpsStore::open_with(&rig.dir.path().join("desired.json.ops"), rotation)
+        .expect("an ops store");
+    rig.coordinator = start(&rig.dir, &rig.clock, "").with_ops(ops);
+    for _ in 0..3 {
+        hold(&rig, WEB, scope_fleet()).expect("held");
+        unhold(&rig, WEB, scope_fleet()).expect("released");
+        hold(&rig, DB, scope_host("d1")).expect("held");
+        unhold(&rig, DB, scope_host("d1")).expect("released");
+    }
+    rig
+}
+
+/// Every entry `Audit.List` answers for `request` page by page, `limit` a page, from
+/// `since_seq`, with the `next_seq` of each page.
+fn pages(
+    rig: &crate::testutil::Rig,
+    request: &proto::ListAuditRequest,
+    limit: u32,
+) -> (Vec<proto::AuditEntry>, Vec<u64>) {
+    let mut since_seq = request.since_seq;
+    let (mut entries, mut cursors) = (Vec::new(), Vec::new());
+    loop {
+        let page = rig
+            .coordinator
+            .audit_list(
+                &crate::marks_support::operator(),
+                proto::ListAuditRequest {
+                    since_seq,
+                    limit,
+                    ..request.clone()
+                },
+            )
+            .expect("answered");
+        cursors.push(page.next_seq);
+        if page.entries.is_empty() {
+            return (entries, cursors);
+        }
+        since_seq = page.next_seq;
+        entries.extend(page.entries);
+    }
+}
+
+/// Proves: through the `Audit.List` handler, a store whose audit is spread over many segments
+/// answers every filter (none, an actor, an action, a service, a host), paged three at a time
+/// from a cursor that starts in an older segment, with exactly the entries and `next_seq`
+/// cursors of a store that keeps them in one file, oldest first; and a cursor in a segment the
+/// retention deleted answers from the oldest entry kept.
+///
+/// Catches: a list that reads the active file only, answers a segment twice or out of order,
+/// filters or pages differently across files, or answers nothing for a cursor older than what
+/// is kept.
+#[test]
+fn audit_list_reads_across_segments() {
+    let rotated = listed_rig("audit-list-rotated", rotation(1, 100));
+    let single = listed_rig("audit-list-single", DEFAULT_ROTATION);
+    let active = rotated.dir.path().join("desired.json.ops.audit");
+    assert_eq!(numbers_of(&active), (1..=11).collect::<Vec<_>>());
+    assert_eq!(
+        numbers_of(&single.dir.path().join("desired.json.ops.audit")),
+        Vec::<u64>::new()
+    );
+
+    let all = proto::ListAuditRequest::default();
+    let filters = [
+        all.clone(),
+        proto::ListAuditRequest {
+            actor: Some("operator".to_owned()),
+            ..all.clone()
+        },
+        proto::ListAuditRequest {
+            action: Some("hold".to_owned()),
+            ..all.clone()
+        },
+        proto::ListAuditRequest {
+            service: Some("web".to_owned()),
+            ..all.clone()
+        },
+        proto::ListAuditRequest {
+            node_id: Some("d1".to_owned()),
+            ..all.clone()
+        },
+    ];
+    for filter in &filters {
+        for since_seq in [0, 2] {
+            let request = proto::ListAuditRequest {
+                since_seq,
+                ..filter.clone()
+            };
+            let (entries, cursors) = pages(&rotated, &request, 3);
+            assert_eq!(
+                (entries.clone(), cursors),
+                pages(&single, &request, 3),
+                "{request:?}"
+            );
+            let seqs: Vec<u64> = entries.iter().map(|e| e.seq).collect();
+            assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
+            assert!(seqs.iter().all(|seq| *seq > since_seq), "{seqs:?}");
+        }
+    }
+    let (every, _) = pages(&rotated, &all, 0);
+    assert_eq!(
+        every.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        (1..=12).collect::<Vec<_>>()
+    );
+
+    let kept = listed_rig("audit-list-kept", rotation(1, 2));
+    let (from_deleted, _) = pages(
+        &kept,
+        &proto::ListAuditRequest {
+            since_seq: 1,
+            ..all
+        },
+        0,
+    );
+    assert_eq!(
+        from_deleted.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        [10, 11, 12]
+    );
 }

@@ -379,6 +379,17 @@ impl AuditLog {
         &self.path
     }
 
+    /// [`read_after`] of the files of this log, under the lock that keeps appends one at a
+    /// time: no rotation seals the active file between the listing of the files and their read,
+    /// which would leave the segment it made out of the answer.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`], as [`read_after`].
+    pub(crate) fn read_after(&self, since_seq: u64) -> Result<AuditRead, OpsError> {
+        let _appends = self.lock();
+        read_after(&self.path, since_seq)
+    }
+
     /// The number of the last line the files hold: 0 when they hold none.
     pub(crate) fn last_seq(&self) -> u64 {
         *self.lock()

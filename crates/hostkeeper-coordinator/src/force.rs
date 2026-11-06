@@ -475,14 +475,14 @@ impl Coordinator {
         // back (the fleet's lock is still held, so no heartbeat has read it). A put-back that
         // fails is logged and leaves the target desired with no force, as a failed ops write
         // does.
-        if changed == Err(proto::ReleasesRefusal::AuditUnavailable) {
-            if let Err(why) = self.desired.set(&def.name, before) {
-                tracing::error!(
-                    service = %def.name,
-                    %why,
-                    "a force refused for its audit could not put the desired state back"
-                );
-            }
+        if changed == Err(proto::ReleasesRefusal::AuditUnavailable)
+            && let Err(why) = self.desired.set(&def.name, before)
+        {
+            tracing::error!(
+                service = %def.name,
+                %why,
+                "a force refused for its audit could not put the desired state back"
+            );
         }
         let entries = changed?;
         fleet.set_marks(marks_of(&self.ops.state()));
