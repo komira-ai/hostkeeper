@@ -138,19 +138,17 @@ fn a_plan_for_a_commit_whose_ci_is_pending_releases_the_earlier_commits_whose_ru
 }
 
 #[test]
-fn a_commit_that_is_not_done_does_not_stop_the_walk() {
-    // Catches: a pending, missing or failed run of one commit holding back the newer commits
-    // whose runs all succeeded (only a failed privileged run holds them).
+fn a_missing_or_failed_run_does_not_stop_the_walk() {
+    // Catches: a commit whose run never came or failed (which may never change) holding back
+    // the newer commits whose runs all succeeded; only a failed privileged run holds them.
     let mut h = FakeHistory::default();
     let r = root(&mut h);
     let a = code(&mut h, &r, "fn a2() {}");
-    let p = code(&mut h, &a, "fn p() {}");
-    let m = code(&mut h, &p, "fn m() {}");
+    let m = code(&mut h, &a, "fn m() {}");
     let f = code(&mut h, &m, "fn f() {}");
     let b = code(&mut h, &f, "fn b() {}");
     let fakes = after_root(h, &r);
     green(&fakes, &a);
-    let pending = ci_pending(&fakes, &p);
     fakes.runs.push("ci.yml", &f, "success");
     fakes.runs.push("privileged.yml", &f, "success");
     let failed = fakes.runs.push("artifacts.yml", &f, "failure");
@@ -161,23 +159,70 @@ fn a_commit_that_is_not_done_does_not_stop_the_walk() {
             &[
                 release_line("0.1.2", &a),
                 decline_line(
-                    &p,
-                    "0.1.3",
-                    &format!("waiting for ci.yml: run {pending} has not completed")
-                ),
-                decline_line(
                     &m,
-                    "0.1.4",
+                    "0.1.3",
                     "waiting for ci.yml: no push run on main for this commit"
                 ),
                 decline_line(
                     &f,
-                    "0.1.5",
+                    "0.1.4",
                     &format!("artifacts.yml run {failed} ended failure")
                 ),
-                release_line("0.1.6", &b),
+                release_line("0.1.5", &b),
             ],
-            &[("0.1.2", &a), ("0.1.6", &b)],
+            &[("0.1.2", &a), ("0.1.5", &b)],
+        ))
+    );
+}
+
+#[test]
+fn a_pending_run_holds_the_newer_commits_until_it_completes_and_then_all_release_in_order() {
+    // Catches: a newer commit released past an older one whose run has not completed, which
+    // ends every later walk above the older one so it is never released; or the held commits
+    // not released, oldest first, once that run completes.
+    let mut h = FakeHistory::default();
+    let r = root(&mut h);
+    let a = code(&mut h, &r, "fn a2() {}");
+    let p = code(&mut h, &a, "fn p() {}");
+    let d = docs(&mut h, &p);
+    let b = code(&mut h, &d, "fn b() {}");
+    let c = code(&mut h, &b, "fn c() {}");
+    let fakes = after_root(h, &r);
+    green(&fakes, &a);
+    let pending = ci_pending(&fakes, &p);
+    for commit in [&d, &b, &c] {
+        green(&fakes, commit);
+    }
+    let behind = format!("waiting for {p} (0.1.3), an older commit whose runs have not completed");
+    assert_eq!(
+        plan_of(&fakes, &request(&c)),
+        Ok(lines(
+            &[
+                release_line("0.1.2", &a),
+                decline_line(
+                    &p,
+                    "0.1.3",
+                    &format!("waiting for ci.yml: run {pending} has not completed")
+                ),
+                decline_line(&d, "0.1.4", "documentation only"),
+                decline_line(&b, "0.1.5", &behind),
+                decline_line(&c, "0.1.6", &behind),
+            ],
+            &[("0.1.2", &a)],
+        ))
+    );
+    fakes.store.insert(published("v0.1.2", &a));
+    fakes.runs.push("ci.yml", &p, "success");
+    assert_eq!(
+        plan_of(&fakes, &request(&c)),
+        Ok(lines(
+            &[
+                release_line("0.1.3", &p),
+                decline_line(&d, "0.1.4", "documentation only"),
+                release_line("0.1.5", &b),
+                release_line("0.1.6", &c),
+            ],
+            &[("0.1.3", &p), ("0.1.5", &b), ("0.1.6", &c)],
         ))
     );
 }

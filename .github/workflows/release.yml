@@ -17,6 +17,8 @@
 # replaced while it waited in the concurrency group therefore leaves nothing behind: the newer
 # run releases every commit the replaced one would have, and more. (Planning only the commit
 # whose run started it, a busy main never released: each waiting run was replaced before it ran.)
+# Releases keep the order of their versions: while a required run of a commit has not completed,
+# the newer commits wait for it, and the completion of that run releases them all, oldest first.
 #
 # The workflow lint (crates/xtask/tests/workflows) holds the triggers to these three and nothing
 # else, and to no pull-request trigger; the plan job to one plan step, the same for every

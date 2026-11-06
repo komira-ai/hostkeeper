@@ -7,6 +7,11 @@
 //! whose runs are done, so a run that a newer one replaced in the release concurrency group
 //! leaves nothing behind.
 //!
+//! Releases keep the order of their versions: a commit with a required run that has not
+//! completed holds every newer commit that would be released until that run completes (a newer
+//! release would end the walk above it, and it would never be released). A missing or failed run
+//! holds nothing: it may never change.
+//!
 //! A commit is released when it is not frozen, not already released, not documentation only,
 //! not held by a red privileged run, and every required workflow has a successful push run on
 //! `main` for it. Versions come from the first-parent history ([`version::version_in`]), never
@@ -54,11 +59,28 @@ pub(crate) fn is_docs_path(path: &str) -> bool {
     path.starts_with(dir) | path.ends_with(suffix)
 }
 
-/// One commit judged: its version, and why it is not released (none: it is released).
+/// One commit judged: its version, why it is not released (none: it is released), and whether
+/// a required run of it has not completed.
 struct Candidate {
     commit: Commit,
     version: Version,
     reason: Option<String>,
+    pending: bool,
+}
+
+/// Why a commit is not released, and whether that is a required run that has not completed.
+struct Decline {
+    reason: String,
+    pending: bool,
+}
+
+impl Decline {
+    fn settled(reason: String) -> Option<Self> {
+        Some(Self {
+            reason,
+            pending: false,
+        })
+    }
 }
 
 /// An open hold: the privileged run `run` failed on `commit`, the commit at `index` of the
@@ -121,9 +143,17 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         releases: &releases,
         hold,
     };
-    let mut candidates = Vec::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
     for index in (0..end).rev() {
-        candidates.push(judge(&context, index)?);
+        let mut candidate = judge(&context, index)?;
+        let older = candidates.iter().find(|c| c.pending);
+        if let (None, Some(older)) = (&candidate.reason, older) {
+            candidate.reason = Some(format!(
+                "waiting for {} ({}), an older commit whose runs have not completed",
+                older.commit, older.version
+            ));
+        }
+        candidates.push(candidate);
     }
     let printed = candidates.iter().map(describe).collect();
     finish(request, printed, &candidates)
@@ -201,11 +231,12 @@ fn judge(context: &Context<'_>, index: usize) -> Result<Candidate, Error> {
         &context.chain[index..],
         &context.request.version_file,
     )?;
-    let reason = decline(context, index, &commit, &version)?;
+    let decline = decline(context, index, &commit, &version)?;
     Ok(Candidate {
         commit,
         version,
-        reason,
+        pending: decline.as_ref().is_some_and(|d| d.pending),
+        reason: decline.map(|d| d.reason),
     })
 }
 
@@ -215,30 +246,33 @@ fn decline(
     index: usize,
     commit: &Commit,
     version: &Version,
-) -> Result<Option<String>, Error> {
+) -> Result<Option<Decline>, Error> {
     let tag = version.tag();
     let released = context
         .releases
         .iter()
         .find(|r| (r.tag == tag) | (r.commit == commit.as_str()));
     if let Some(release) = released {
-        return Ok(Some(format!("already released as {}", release.tag)));
+        return Ok(Decline::settled(format!(
+            "already released as {}",
+            release.tag
+        )));
     }
     let paths = context
         .ports
         .git
         .changed_paths(commit, context.chain.get(index + 1))?;
     if paths.iter().all(|p| is_docs_path(p)) {
-        return Ok(Some("documentation only".to_owned()));
+        return Ok(Decline::settled("documentation only".to_owned()));
     }
     if let Some(hold) = context.hold.as_ref().filter(|h| index <= h.index) {
-        return Ok(Some(hold.reason()));
+        return Ok(Decline::settled(hold.reason()));
     }
     waiting(context, commit)
 }
 
 /// The first required workflow without a successful push run for `commit`, as a reason.
-fn waiting(context: &Context<'_>, commit: &Commit) -> Result<Option<String>, Error> {
+fn waiting(context: &Context<'_>, commit: &Commit) -> Result<Option<Decline>, Error> {
     for workflow in REQUIRED_WORKFLOWS {
         let runs = context
             .ports
@@ -249,13 +283,18 @@ fn waiting(context: &Context<'_>, commit: &Commit) -> Result<Option<String>, Err
             RunState::Missing => {
                 format!("waiting for {workflow}: no push run on main for this commit")
             }
-            RunState::Pending(id) => format!("waiting for {workflow}: run {id} has not completed"),
+            RunState::Pending(id) => {
+                return Ok(Some(Decline {
+                    reason: format!("waiting for {workflow}: run {id} has not completed"),
+                    pending: true,
+                }));
+            }
             RunState::Failed(id) => {
                 format!("{workflow} run {id} ended {}", conclusion_of(&runs, id))
             }
             RunState::Other(id, conclusion) => format!("{workflow} run {id} ended {conclusion}"),
         };
-        return Ok(Some(reason));
+        return Ok(Decline::settled(reason));
     }
     Ok(None)
 }
