@@ -296,18 +296,19 @@ fn force_back_to_previous_needs_no_fetch() {
 
     s.coordinator.force(SERVICE, V1, e2e::HOST_ID);
 
+    // The verdict of the force order: the heartbeat wire carries no `forced` flag (the
+    // coordinator's `update_result` says so), so the force's own order id is the witness.
     wait_for("the host reports the force to 1.0.0", COORDINATED, || {
         let update = s.last_update();
-        update["target"] == V1 && update["forced"] == true && update["outcome"] != Value::Null
+        update["target"] == V1
+            && update["orderId"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("force-"))
+            && update["outcome"] != Value::Null
     });
     let update = s.last_update();
     assert_eq!(update["outcome"], "OUTCOME_SUCCEEDED", "{update}");
-    assert!(
-        update["orderId"]
-            .as_str()
-            .is_some_and(|id| id.starts_with("force-")),
-        "{update}"
-    );
+    assert_eq!(s.convergence()["force"]["version"], V1, "the force stands");
     assert_eq!(s.channel.total(), requests, "the force fetched nothing");
 
     assert_eq!(s.link("current").as_deref(), Some(V1));
