@@ -27,6 +27,10 @@
 //! - `channel-stage` ([`channel_stage`]): one version of a service from a directory of release
 //!   assets, checked and laid out in a directory as the release channel serves it
 //!   (`S/V/index.json` beside each package and its bundle); copies files only, idempotent.
+//! - `channel-sync` ([`sync`]): every new published release of one or more repositories,
+//!   downloaded, checked (`release check` for hostkeeper's, the sums and the repository's own
+//!   attestations for another's) and staged into a release channel by `channel-stage`, a new
+//!   version renamed into place whole; never changes a version already there.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh` and `pkgbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
@@ -55,6 +59,7 @@ pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
 mod set_version;
+mod sync;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod version;
@@ -190,14 +195,22 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary and
-    /// its launchd plist, nothing else, and no scripts.
+    /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary, its
+    /// launchd plist, its log directory and newsyslog file, the pinned `gh` and the Sigstore
+    /// trusted root, nothing else, and no scripts.
     MacosPkg {
         #[arg(long)]
         version: Version,
         /// The macos-arm64 hostkeeper binary: `/usr/local/bin/hostkeeper` in the pkg.
         #[arg(long)]
         binary: PathBuf,
+        /// The pinned darwin-arm64 `gh`: `/usr/local/lib/hostkeeper/gh` in the pkg.
+        #[arg(long)]
+        gh: PathBuf,
+        /// The Sigstore trusted root, as the pinned `gh attestation trusted-root` prints it:
+        /// `/usr/local/lib/hostkeeper/trusted_root.json` in the pkg.
+        #[arg(long)]
+        trusted_root: PathBuf,
         /// A directory to lay the pkg's tree out in; it must not exist.
         #[arg(long)]
         stage: PathBuf,
@@ -206,7 +219,8 @@ pub(crate) enum Verb {
         out: PathBuf,
     },
     /// Check a pkg that `pkgutil --expand` expanded into a directory: no scripts, and a payload
-    /// of exactly the binary and the daemon's plist with their modes, owners and bytes.
+    /// of exactly the binary, the daemon's plist, its log directory and newsyslog file, `gh` and
+    /// the trusted root with their modes, owners and bytes.
     CheckMacosPkg {
         /// The directory `pkgutil --expand` wrote.
         expanded: PathBuf,
@@ -215,6 +229,12 @@ pub(crate) enum Verb {
         /// The binary the pkg must hold.
         #[arg(long)]
         binary: PathBuf,
+        /// The `gh` the pkg must hold.
+        #[arg(long)]
+        gh: PathBuf,
+        /// The trusted root the pkg must hold.
+        #[arg(long)]
+        trusted_root: PathBuf,
     },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
@@ -287,6 +307,29 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Copy every new published release of each repository into the release channel: download
+    /// its assets, check them (`release check` for a hostkeeper release; for another
+    /// repository's, its SHA256SUMS and the attestation of every asset with a bundle by that
+    /// repository's own artifacts.yml on refs/heads/main) and stage each service version it
+    /// carries by `channel-stage`. A version already in the channel is left alone; one there with
+    /// other bytes is refused, and the run goes on with the others and then fails. Reads public
+    /// release assets only.
+    ChannelSync {
+        /// A repository whose releases are synced, `<owner>/<name>`; repeat it (or list several)
+        /// for more, synced in the order given.
+        #[arg(long = "repo", required = true, num_args = 1..)]
+        repos: Vec<Repo>,
+        /// The root of the channel's tree, as `channel-stage --out` names it. It must exist.
+        #[arg(long)]
+        channel_dir: PathBuf,
+        /// Skip every release older than this tag, `v<X.Y.Z>` (the tag itself is synced).
+        #[arg(long, value_parser = sync::parse_tag)]
+        since: Option<Version>,
+        /// Run again and again, this many seconds after each run ends, and never exit (the
+        /// sidecar's loop). Without it the verb runs once.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        every_secs: Option<u64>,
+    },
     /// Publish a checked directory as the release of the version, at the commit.
     Publish {
         dir: PathBuf,
@@ -322,7 +365,17 @@ pub(crate) fn run<A: Adapters>(
             expanded,
             version,
             binary,
-        } => macos_pkg::check(&expanded, &version, &binary),
+            gh,
+            trusted_root,
+        } => macos_pkg::check(
+            &expanded,
+            &version,
+            &macos_pkg::Sources {
+                binary,
+                gh,
+                trusted_root,
+            },
+        ),
         Verb::ChannelStage {
             service,
             version,
@@ -383,13 +436,19 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         Verb::MacosPkg {
             version,
             binary,
+            gh,
+            trusted_root,
             stage,
             out,
         } => macos_pkg::build(
             ports.pkgbuild,
             &macos_pkg::Request {
                 version,
-                binary,
+                sources: macos_pkg::Sources {
+                    binary,
+                    gh,
+                    trusted_root,
+                },
                 stage,
                 out,
             },
@@ -428,6 +487,27 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => publish::publish(ports, &dir, &repo, &version, &commit),
+        Verb::ChannelSync {
+            repos,
+            channel_dir,
+            since,
+            every_secs,
+        } => {
+            let request = sync::Request {
+                repos,
+                channel: channel_dir,
+                since,
+            };
+            match every_secs {
+                None => sync::sync(ports.source, ports.verifier, &request),
+                Some(secs) => sync::every(
+                    ports.source,
+                    ports.verifier,
+                    &request,
+                    &sync::Sleep(std::time::Duration::from_secs(secs)),
+                ),
+            }
+        }
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
@@ -477,6 +557,7 @@ impl<E: Exec> Adapters for Wired<E> {
             git: &self.git,
             runs: &self.gh,
             store: &self.gh,
+            source: &self.gh,
             verifier: &self.gh,
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,
@@ -556,5 +637,7 @@ pub(crate) fn state(runs: &[Run], commit: &Commit) -> RunState {
     }
 }
 
+#[cfg(test)]
+mod macos_pkg_verb_tests;
 #[cfg(test)]
 mod tests;

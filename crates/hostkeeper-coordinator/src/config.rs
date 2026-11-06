@@ -1,5 +1,7 @@
 //! `hostkeeper-coordinator serve`'s flags and start-up: read every file, bind both listeners,
-//! print the start line, then serve until SIGTERM or SIGINT.
+//! print the start line, then serve until SIGTERM or SIGINT. The binary's other two verbs,
+//! `backup` and `restore`, copy the state files `serve` keeps and put a copy back
+//! ([`crate::backup`]), under the same lock.
 //!
 //! Everything is a flag; the coordinator reads no environment variable. Without
 //! `--enrollment-dir` it holds no CA key: its certificate and key are files the farm CA issued,
@@ -22,7 +24,9 @@
 //! Before it opens any state file, the start takes the lock of `<state-file>.lock`
 //! ([`crate::lock`]) and holds it for as long as the coordinator runs, so a second `serve` on
 //! the same files is refused. It then refuses to start over a halt that was being written when
-//! the coordinator stopped (`<ops-file>.halts.unfinished`, [`crate::ops::Write::Halt`]), and
+//! the coordinator stopped (`<ops-file>.halts.unfinished`, [`crate::ops::Write::Halt`]) and
+//! over a restore that stopped partway (`<state-file>.restore-unfinished`, [`crate::backup`]),
+//! and
 //! reads the spent ids of CI's tokens (`<state-file>.jti`, [`crate::jti_file`]).
 
 use std::convert::Infallible;
@@ -47,6 +51,9 @@ use hostkeeper_wire::identity::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::backup::{
+    Backup, BackupError, Report, Restore, backup, ops_path, restore, restore_marker,
+};
 use crate::desired::{DesiredStore, StoreError};
 use crate::enrollment::{
     AllowlistError, MacAllowlist, MacPolicy, NoDeviceState, Setup, SetupError, os_random, setup,
@@ -162,6 +169,14 @@ pub enum StartError {
         /// The marker file.
         path: PathBuf,
     },
+    /// A restore into these state files stopped before it finished.
+    #[error(
+        "{path}: a restore into these state files stopped before it finished, so they may hold part of a snapshot; remove them and this file, and restore again"
+    )]
+    RestoreUnfinished {
+        /// The marker file.
+        path: PathBuf,
+    },
     /// `--quiet-secs` is below two heartbeat intervals.
     #[error(
         "--quiet-secs: {secs} is below {floor}, two heartbeat intervals: a restarted coordinator would order before it has heard the fleet"
@@ -201,9 +216,18 @@ pub struct Cli {
 
 /// The verbs of the binary.
 #[derive(Clone, Debug, Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "parsed once per process from its arguments; boxing `Serve` would change every caller for no saving"
+)]
 pub enum Command {
     /// Serve the heartbeat and private listeners until SIGTERM or SIGINT.
     Serve(Serve),
+    /// Copy the state of a stopped coordinator into a new directory, with the SHA-256 of each
+    /// file in its manifest. The CA's key is not copied.
+    Backup(Backup),
+    /// Put a copy `backup` made back, into targets that hold no state.
+    Restore(Restore),
 }
 
 /// The flags of `serve`.
@@ -419,12 +443,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     // The lock before any state file: none is opened (an open settles a staged halts file,
     // which is a write) before this process is the one coordinator on them.
     let held = take_lock(lock, &lock_path(&flags.state_file))?;
-    let ops_path = flags.ops_file.clone().unwrap_or_else(|| {
-        let mut name = flags.state_file.clone().into_os_string();
-        name.push(".ops");
-        PathBuf::from(name)
-    });
+    let ops_path = ops_path(&flags.state_file, flags.ops_file.as_deref());
     refuse_unfinished_halt(&ops_path)?;
+    refuse_unfinished_restore(&flags.state_file)?;
     // The wall clock is read for the validity of CI's tokens and the expiry of their spent
     // ids, and for nothing the coordinator decides.
     let oidc_clock = hostkeeper_oidc::system_clock();
@@ -533,6 +554,19 @@ pub(crate) fn refuse_unfinished_halt(ops: &Path) -> Result<(), StartError> {
     let marker = crate::ops_file::unfinished_path(ops);
     if marker.exists() {
         return Err(StartError::HaltWriteUnfinished { path: marker });
+    }
+    Ok(())
+}
+
+/// Refuses to start over the marker of a restore into the state file `state` that did not
+/// finish ([`crate::backup::restore_marker`]): the state files may be part of a snapshot only.
+///
+/// # Errors
+/// [`StartError::RestoreUnfinished`]: the marker is there.
+pub(crate) fn refuse_unfinished_restore(state: &Path) -> Result<(), StartError> {
+    let marker = restore_marker(state);
+    if marker.exists() {
+        return Err(StartError::RestoreUnfinished { path: marker });
     }
     Ok(())
 }
@@ -689,8 +723,8 @@ fn runtime(flags: Serve) -> Result<(), StartError> {
     runtime.block_on(start(flags, Roots::System, bind_tcp, signalled()))
 }
 
-/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start is exit 1;
-/// SIGTERM or SIGINT is exit 0.
+/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup or restore
+/// is exit 1; SIGTERM or SIGINT, a backup made and a restore done are exit 0.
 #[must_use]
 pub fn main(args: Vec<OsString>) -> ExitCode {
     let cli = match Cli::try_parse_from(args) {
@@ -703,9 +737,27 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .try_init();
-    let Command::Serve(flags) = cli.command;
-    match runtime(flags) {
-        Ok(()) => ExitCode::SUCCESS,
+    match cli.command {
+        Command::Serve(flags) => match runtime(flags) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(why) => {
+                eprintln!("hostkeeper-coordinator: {why}");
+                ExitCode::from(1)
+            }
+        },
+        Command::Backup(flags) => finish(backup(&flags, &FileLock)),
+        Command::Restore(flags) => finish(restore(&flags, &FileLock)),
+    }
+}
+
+/// The exit of a backup or a restore: its report on standard output and exit 0, or why it was
+/// refused on standard error and exit 1.
+fn finish(done: Result<Report, BackupError>) -> ExitCode {
+    match done {
+        Ok(report) => {
+            print!("{report}");
+            ExitCode::SUCCESS
+        }
         Err(why) => {
             eprintln!("hostkeeper-coordinator: {why}");
             ExitCode::from(1)

@@ -452,7 +452,7 @@ fn the_boot_id_file_is_a_bare_id_and_an_unknown_future_record_schema_is_held() {
 
 /// Catches a start whose parts run out of order: the registration socket and the placed links
 /// first, then the records, the boot id, the uninstalls, the updates, the watchers, the boot steps
-/// and the readiness notice last.
+/// the readiness notice, and the units of hostkeeper's own update once the daemon is ready.
 #[test]
 fn the_start_runs_its_parts_in_order_with_before_records_first() {
     let rig = Rig::new("boot-order");
@@ -472,6 +472,7 @@ fn the_start_runs_its_parts_in_order_with_before_records_first() {
             Stage::RestartWatchers,
             Stage::BootSteps,
             Stage::Ready,
+            Stage::SelfUnits,
         ]
     );
     assert_eq!(started.boot_report().ready, Some(Ok(())));

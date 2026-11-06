@@ -47,7 +47,9 @@ fn serve(extra: &[&str]) -> hostkeeper_coordinator::config::Serve {
         args.push(value.into());
     }
     args.extend(extra.iter().map(OsString::from));
-    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command;
+    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
+        panic!("serve")
+    };
     flags
 }
 

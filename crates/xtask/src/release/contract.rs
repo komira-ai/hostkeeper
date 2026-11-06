@@ -258,6 +258,40 @@ impl fmt::Display for Repo {
     }
 }
 
+/// The identity whose attestations a repository's release is checked against: the workflow file
+/// `.github/workflows/artifacts.yml` of the repository, on [`SIGNER_REF`]. Hostkeeper's own is
+/// [`Signer::hostkeeper`], the [`SIGNER_WORKFLOW`] of [`REPO`]; `release channel-sync` holds the
+/// release of any other repository it syncs to that repository's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Signer {
+    /// The repository whose attestations count.
+    pub(crate) repo: String,
+    /// The workflow that signs, `<owner>/<repo>/.github/workflows/artifacts.yml`.
+    pub(crate) workflow: String,
+    /// The ref the signing run ran on.
+    pub(crate) source_ref: &'static str,
+}
+
+impl Signer {
+    /// The signer of the releases of `repo`: its own `artifacts.yml` on [`SIGNER_REF`].
+    pub(crate) fn of(repo: &Repo) -> Signer {
+        Signer {
+            repo: repo.as_str().to_owned(),
+            workflow: format!("{repo}/.github/workflows/{ARTIFACTS_WORKFLOW}"),
+            source_ref: SIGNER_REF,
+        }
+    }
+
+    /// The signer of hostkeeper's own releases: [`SIGNER_WORKFLOW`] of [`REPO`].
+    pub(crate) fn hostkeeper() -> Signer {
+        Signer {
+            repo: REPO.to_owned(),
+            workflow: SIGNER_WORKFLOW.to_owned(),
+            source_ref: SIGNER_REF,
+        }
+    }
+}
+
 /// The text the hostkeeper binary prints for `--version`: `hostkeeper X.Y.Z+<12 hex>`, the
 /// release version and the first [`SHORT_COMMIT`] digits of the commit it was built from.
 pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
