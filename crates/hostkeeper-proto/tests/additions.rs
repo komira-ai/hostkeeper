@@ -35,6 +35,8 @@ fn audit_entry(action: &str) -> op::AuditEntry {
         service: Some("db".to_owned()),
         node_id: Some("db-1".to_owned()),
         reason: Some("disk swap".to_owned()),
+        at_unix: Some(1_800_000_000),
+        by_name: Some("alice".to_owned()),
     }
 }
 
@@ -140,6 +142,8 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 action: Some("abort".to_owned()),
                 service: Some("db".to_owned()),
                 node_id: Some("db-1".to_owned()),
+                by_name: Some("alice".to_owned()),
+                newest: true,
             }),
         ),
         (
@@ -148,6 +152,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 entries: vec![
                     audit_entry("exclude_abandon"),
                     audit_entry("enroll_approve"),
+                    audit_entry("enroll_issued"),
                 ],
                 next_seq: 41,
             }),
@@ -288,8 +293,8 @@ fn verdict_ack() -> VerdictAck {
 
 /// Catches: a message added since the baseline that does not read back as written, and a new
 /// field or message that a reader built from the baseline drops: a new field of a released
-/// message (`ExcludeRequest.abandon`, `ForceResponse.skipped`) is kept by the older reader of
-/// that message, which still reads what it knows (`HeartbeatResponse.acks` too, and an answer of
+/// message (`ExcludeRequest.abandon`, `ForceResponse.skipped`, `AuditEntry.at_unix` and
+/// `by_name`) is kept by the older reader of that message, which still reads what it knows (`HeartbeatResponse.acks` too, and an answer of
 /// the release before reads with no acks); a whole new message is kept, byte for byte, by
 /// an older reader that knows none of its fields (a gateway or proxy of the release before).
 #[test]
@@ -331,6 +336,19 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
     assert_eq!(entries.as_list().map(<[Value]>::len), Some(1));
     let back = op::ForceResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(back, force);
+
+    // `AuditEntry.at_unix` and `by_name` are new fields of a released message: the older reader
+    // of the entries above kept them, and an entry the release before wrote reads with neither.
+    let entry = older
+        .get_message_by_name("hostkeeper.operator.v1.AuditEntry")
+        .expect("released");
+    assert!(entry.get_field_by_name("at_unix").is_none());
+    assert!(entry.get_field_by_name("by_name").is_none());
+    let mut old_entry = DynamicMessage::new(entry);
+    old_entry.set_field_by_name("seq", Value::U64(7));
+    old_entry.set_field_by_name("action", Value::String("exclude".to_owned()));
+    let read = op::AuditEntry::decode(old_entry.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!((read.seq, read.at_unix, read.by_name), (7, None, None));
 
     let acked = HeartbeatResponse {
         features: vec!["verdict-acks-v1".to_owned()],

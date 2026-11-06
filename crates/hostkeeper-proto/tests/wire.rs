@@ -430,7 +430,7 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 28] = [
+const FIELDS: [(&str, &[(&str, u32)]); 29] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -549,6 +549,21 @@ const FIELDS: [(&str, &[(&str, u32)]); 28] = [
             ("action", 4),
             ("service", 5),
             ("node_id", 6),
+            ("by_name", 7),
+            ("newest", 8),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.AuditEntry",
+        &[
+            ("seq", 1),
+            ("by", 2),
+            ("action", 3),
+            ("service", 4),
+            ("node_id", 5),
+            ("reason", 6),
+            ("at_unix", 7),
+            ("by_name", 8),
         ],
     ),
     (

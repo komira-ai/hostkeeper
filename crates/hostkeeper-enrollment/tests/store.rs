@@ -8,8 +8,9 @@ use std::sync::{Arc, Barrier};
 
 use hostkeeper_enrollment::ca::{HOST_VALIDITY_SECS, ProfileError, Signer};
 use hostkeeper_enrollment::enroll::{
-    ApproveError, EnrollmentStore, IssueError, LIVE_WINDOW_SECS, MAX_NONCE_BYTES, MIN_NONCE_BYTES,
-    NewRequest, POLL_DOMAIN, PollError, PostError, RequestState, StoreError, poll_message,
+    ApproveError, EnrollmentStore, IssueError, IssuedCertificate, LIVE_WINDOW_SECS,
+    MAX_NONCE_BYTES, MIN_NONCE_BYTES, NewRequest, POLL_DOMAIN, PollError, PostError, RequestState,
+    StoreError, poll_message,
 };
 use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_enrollment::names::{KeyHash, Role, ServiceName};
@@ -422,7 +423,8 @@ fn a_poll_signature_is_checked_over_the_documented_message_and_nothing_else() {
     assert_eq!(err.token(), Some("unknown_request"));
 }
 
-/// Catches a second poll that mints a new certificate instead of returning the same bytes.
+/// Catches a second poll that mints a new certificate instead of returning the same bytes, and
+/// a later poll, or one after a reopen, told it is the first issue.
 #[test]
 fn a_poll_after_issue_returns_the_same_certificate() {
     let f = Fixture::new("poll-twice");
@@ -441,8 +443,14 @@ fn a_poll_after_issue_returns_the_same_certificate() {
     f.ca.clock.set(NOW + 3600);
     let second = f.store.issue(&f.ca.ca, &id).expect("issue");
     let third = f.reopen().issue(&f.ca.ca, &id).expect("issue");
-    assert_eq!(first, second);
-    assert_eq!(first, third);
+    assert!(first.first);
+    assert!(!second.first && !third.first);
+    let later = IssuedCertificate {
+        first: false,
+        ..first.clone()
+    };
+    assert_eq!(later, second);
+    assert_eq!(later, third);
     assert_eq!(
         (
             first.serial,

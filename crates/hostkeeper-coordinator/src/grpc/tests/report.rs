@@ -203,6 +203,8 @@ fn status_lists_every_service_in_name_order_with_the_top_level_facts() {
             service: Some("web".to_owned()),
             node_id: Some("d1".to_owned()),
             reason: Some("freeze".to_owned()),
+            at_unix: None,
+            by_name: Some("alice".to_owned()),
         }]
     );
 }

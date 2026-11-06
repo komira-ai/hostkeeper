@@ -105,6 +105,8 @@ async fn unmark_bad_undoes_mark_bad_and_is_audited() {
             service: Some(WEB.to_owned()),
             node_id: None,
             reason: Some("2.0: the crash was the disk".to_owned()),
+            at_unix: None,
+            by_name: Some("operator".to_owned()),
         })
     );
     assert_eq!(
