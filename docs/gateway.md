@@ -93,5 +93,6 @@ Only the HTTP status 200 is a success.
   call the gateway.
 - No gRPC-web, no streaming and no reflection. A gRPC call is HTTP/2 with `Content-Type:
   application/grpc` and does not go through the gateway.
-- A method the coordinator has no handler for yet answers `UNIMPLEMENTED` (501) with an empty
-  reason after its caller is checked.
+- A method the coordinator has no handler for yet would answer `UNIMPLEMENTED` (501) with an
+  empty reason after its caller is checked. Every method of `hostkeeper.operator.v1` has one
+  today.

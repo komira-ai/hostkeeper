@@ -171,7 +171,8 @@ async fn enroll_poll_and_renew_take_no_credential_at_the_router() {
 }
 
 /// Proves: CI's token reaches `SetDesired` and `Converge` and no other method: `Hosts.List`
-/// and `Releases.Force` refuse it as `PERMISSION_DENIED` `forbidden`, `SetDesired` and
+/// and `Releases.Force` refuse it as `PERMISSION_DENIED` `forbidden` (and `Hosts.List`
+/// answers the operator's token `OK`, so the refusal is the token's), `SetDesired` and
 /// `Converge` answer CI's token, and a
 /// `SetDesired` of a service that CI's allow-list entry does not name is `PERMISSION_DENIED`
 /// `forbidden` and changes nothing.
@@ -190,6 +191,10 @@ async fn ci_token_reaches_only_set_desired_and_converge() {
             "{path}"
         );
     }
+    // The refusal is the CI token's: the operator's token is answered on the same path.
+    let request = grpc_request("/hostkeeper.operator.v1.Hosts/List", (), Some(OPERATOR));
+    let (code, message, _) = call(&served.coordinator, Surface::Control, &None, request).await;
+    assert_eq!((code, message.as_str()), (Code::Ok, ""));
 
     let request = grpc_request(SET_DESIRED, set_kbf(), Some(&ci_token()));
     let (code, message, body) = call(&served.coordinator, Surface::Control, &None, request).await;

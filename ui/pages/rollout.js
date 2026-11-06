@@ -6,7 +6,7 @@
 // and Hosts.List to count a force's hosts. The desired version is set here or by CI.
 
 import {
-  h, action, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select, table,
+  h, action, allPages, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select, table,
   trimmed, words,
 } from "../view.js";
 
@@ -44,12 +44,13 @@ export function forceTargetCount(target, hosts) {
   return count;
 }
 
-// Counts the hosts of `request` over a fresh Hosts.List. `{ok: true, request, count}`, or
-// `{ok: false, error}` when the list could not be read: then no force may be sent.
+// Counts the hosts of `request` over a fresh Hosts.List, every page of it. `{ok: true, request,
+// count}`, or `{ok: false, error}` when a page could not be read: then no force may be sent.
 export async function prepareForce(api, request) {
   try {
-    const listed = await api.call("hostkeeper.operator.v1.Hosts/List", {});
-    return { ok: true, request, count: forceTargetCount(request, listed.hosts || []) };
+    const hosts = await allPages((pageToken) => api.call("hostkeeper.operator.v1.Hosts/List",
+      pageToken === "" ? {} : { pageToken }), "hosts");
+    return { ok: true, request, count: forceTargetCount(request, hosts) };
   } catch (error) {
     return { ok: false, error };
   }

@@ -37,6 +37,8 @@ request-file coordinator heartbeat agent
 flag coordinator heartbeat --features STRING
 request-file coordinator heartbeat services
 command hosts list /hostkeeper.operator.v1.Hosts/List
+flag hosts list --limit UINT32
+flag hosts list --page-token STRING
 command hosts get /hostkeeper.operator.v1.Hosts/Get
 flag hosts get --node-id STRING
 command hosts exclude /hostkeeper.operator.v1.Hosts/Exclude

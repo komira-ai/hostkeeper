@@ -1,23 +1,27 @@
 //! The status and the convergence as `hostkeeper.operator.v1` says them: the coordinator's report
 //! types ([`crate::status::Status`], [`crate::converge::Convergence`]) mapped field by field to
-//! the messages of `Releases.Status` and `Releases.Converge`.
+//! the messages of `Releases.Status` and `Releases.Converge`, and one host of the status as
+//! `Hosts.List` and `Hosts.Get` answer it ([`host`]).
 //!
 //! The mapping decides nothing. A fact with no field in the proto is left out (the `hold` of a
 //! host that the rollout gate has no spelling for, the legacy service's top-level status, the
-//! flattened heartbeat's platform); a proto field with no source here stays at its default (the
+//! flattened heartbeat's platform in `Releases.Status`); a proto field with no source here stays at its default (the
 //! write record of a service, the pinned count of a role). A standing force is in the marks of
 //! the ops state, so [`status`] puts it into the convergence of its service; [`convergence`]
 //! alone has no force to name.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::wire::{self, Heartbeat};
+use hostkeeper_wire::{HostId, Platform};
 
 use crate::converge::{Convergence, HaltNote, RoleCounts, State};
 use crate::decide::{Gate, Skip, Why};
 use crate::desired::{Desired, RoleLimits};
+use crate::fleet::Node;
 use crate::force::ForceRecord;
 use crate::holds::holding;
 use crate::membership::{HostCounts, Member, Membership};
@@ -220,31 +224,138 @@ fn service_host(
     members: &[Member],
     ops: &OpsState,
 ) -> proto::ServiceHost {
+    let view = host_service(service, host, members, ops);
+    proto::ServiceHost {
+        node_id: host.host.node_id.clone(),
+        role: host.host.role.clone(),
+        live: host.host.live,
+        excluded_reason: view.excluded_reason.clone(),
+        view: Some(view),
+        beat: Some(service_beat(service, &host.host.beat)),
+    }
+}
+
+/// How `service` sees a host it heard: `members` are the nodes the service does not count; a
+/// host not among them is present.
+fn host_service(
+    service: &str,
+    host: &ServiceHostStatus,
+    members: &[Member],
+    ops: &OpsState,
+) -> proto::HostService {
     let node_id = host.host.node_id.as_str();
     let role = host.host.role.as_str();
     let member = members.iter().find(|m| m.node_id == node_id);
-    let excluded_reason = member.and_then(|m| m.reason.clone());
     let beat = &host.host.beat;
-    proto::ServiceHost {
-        node_id: node_id.to_owned(),
-        role: role.to_owned(),
-        live: host.host.live,
-        view: Some(proto::HostService {
-            service: service.to_owned(),
-            up: host.host.up,
-            holds_slot: host.host.holds_slot,
-            gate_reason: gate_reason(host.hold).into(),
-            membership: membership(member.map(|m| m.membership)).into(),
-            holds: holding(&ops.holds, service, node_id, role)
-                .map(hold_proto)
-                .collect(),
-            installed_version: installed_version(beat),
-            health: health(beat.health).into(),
-            last_update: beat.last_update.as_ref().map(update_result),
-            excluded_reason: excluded_reason.clone(),
+    proto::HostService {
+        service: service.to_owned(),
+        up: host.host.up,
+        holds_slot: host.host.holds_slot,
+        gate_reason: gate_reason(host.hold).into(),
+        membership: membership(member.map(|m| m.membership)).into(),
+        holds: holding(&ops.holds, service, node_id, role)
+            .map(hold_proto)
+            .collect(),
+        installed_version: installed_version(beat),
+        health: health(beat.health).into(),
+        last_update: beat.last_update.as_ref().map(update_result),
+        excluded_reason: member.and_then(|m| m.reason.clone()),
+    }
+}
+
+/// How `service` sees a host it has no heartbeat of, but does not count for a reason
+/// (`member`): excluded, absent, missing or unmanaged. Nothing it did not hear is said: no
+/// health, version or update, and the gate's reason is unspecified, as the gate is asked only
+/// of a host the service heard.
+fn member_service(service: &str, member: &Member, ops: &OpsState) -> proto::HostService {
+    proto::HostService {
+        service: service.to_owned(),
+        membership: membership(Some(member.membership)).into(),
+        holds: holding(&ops.holds, service, &member.node_id, &member.role)
+            .map(hold_proto)
+            .collect(),
+        excluded_reason: member.reason.clone(),
+        ..proto::HostService::default()
+    }
+}
+
+/// The host `id` of the node `node` as `Hosts.List` and `Hosts.Get` answer it, from `status`
+/// at `now`, when the ops store's wall clock reads `unix_now`.
+///
+/// Its services are every service of the status that heard it or does not count it (in name
+/// order); a service whose selector does not take it is not among them. Its last heartbeat is
+/// put back together from what the coordinator keeps: the platform of the first service that
+/// heard it, its agent and features, and one entry per service that heard it (each as
+/// [`service_beat`] says it). The coordinator's clock is not the wall clock, so the time of the
+/// last heartbeat is `unix_now` less the seconds the host has been silent.
+pub(crate) fn host(
+    id: &HostId,
+    node: &Node,
+    status: &Status,
+    now: Duration,
+    unix_now: u64,
+) -> proto::Host {
+    let node_id = id.to_string();
+    let mut services = Vec::new();
+    let mut beats = Vec::new();
+    let mut platform = None;
+    for (name, one) in &status.per_service {
+        if let Some(heard) = one.hosts.iter().find(|h| h.host.node_id == node_id) {
+            services.push(host_service(name, heard, &one.members, &status.ops));
+            beats.push(service_beat(name, &heard.host.beat));
+            platform = platform.or(Some(heard.host.beat.platform));
+        } else if let Some(member) = one.members.iter().find(|m| m.node_id == node_id) {
+            services.push(member_service(name, member, &status.ops));
+        }
+    }
+    let silent = now.saturating_sub(node.seen).as_secs();
+    proto::Host {
+        live: node.is_live(now),
+        last_heartbeat_unix: unix_now.saturating_sub(silent),
+        heartbeat: Some(agent::HeartbeatRequest {
+            platform: platform
+                .map_or(agent::Platform::Unspecified, platform_of)
+                .into(),
+            agent: node.agent.as_ref().map(|said| agent::AgentInfo {
+                name: said.name.as_str().to_owned(),
+                version: said.version.as_str().to_owned(),
+            }),
+            features: node.features.clone(),
+            services: beats,
         }),
-        beat: Some(service_beat(service, beat)),
-        excluded_reason,
+        labels: status
+            .ops
+            .hosts
+            .get(&node_id)
+            .map(|host| {
+                host.labels
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        exclusions: status
+            .ops
+            .excluded
+            .iter()
+            .filter(|e| e.node_id == node_id)
+            .map(|e| proto::Exclusion {
+                service: e.service.clone(),
+                reason: e.reason.clone(),
+            })
+            .collect(),
+        services,
+        role: node.role.clone(),
+        node_id,
+    }
+}
+
+/// A platform by its name.
+fn platform_of(platform: Platform) -> agent::Platform {
+    match platform {
+        Platform::LinuxX86_64 => agent::Platform::LinuxX8664,
+        Platform::LinuxArm64 => agent::Platform::LinuxArm64,
+        Platform::DarwinArm64 => agent::Platform::DarwinArm64,
     }
 }
 

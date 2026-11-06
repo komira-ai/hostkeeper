@@ -149,6 +149,28 @@ export function list(obj, key) {
   return obj && Array.isArray(obj[key]) ? obj[key] : [];
 }
 
+// Every item `reply[key]` of a paged list, from `page(token)`, which resolves to one reply: the
+// first page for the token "", then the page each reply's `nextPageToken` names, to the last. A
+// token that does not move past the one before ends the list, so a reply that repeats one
+// cannot keep the page asking. A `reply[key]` that is there and is no list throws, as reading
+// it would.
+export async function allPages(page, key) {
+  const items = [];
+  let token = "";
+  for (;;) {
+    const reply = await page(token);
+    if (reply && reply[key] !== undefined && !Array.isArray(reply[key])) {
+      throw new TypeError(`${key} is not a list`);
+    }
+    items.push(...list(reply, key));
+    const next = reply && typeof reply.nextPageToken === "string" ? reply.nextPageToken : "";
+    if (next === "" || next <= token) {
+      return items;
+    }
+    token = next;
+  }
+}
+
 // The bound controls below keep their own view node up to date as the operator types, ticks or
 // chooses, so a tree mounted again (after a status line changes) shows what the state holds.
 

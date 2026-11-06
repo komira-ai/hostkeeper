@@ -1,11 +1,11 @@
 //! The operator's calls that mark or steer the rollout, as plain functions over the messages of
-//! `hostkeeper.operator.v1`: `Releases.MarkBad` and `Releases.Halt`, `Hosts.Abort` and
-//! `Hosts.Exclude` (with `abandon`), `Services.Hold` and `Services.Unhold`, and `Audit.List`;
-//! `Releases.Force` is in [`crate::force`], `Services.Assign`, `Unassign`, `SetMinVersion` and
-//! `List` in [`crate::assign`], `Enrollment.List` and `Enrollment.Approve` in
-//! [`crate::operator_enrollment`], and the inventory's calls in [`crate::inventory`]. A transport
-//! (the gRPC services, or a JSON gateway) authenticates the bearer ([`Coordinator::caller`]) and
-//! hands the call here.
+//! `hostkeeper.operator.v1`: `Releases.MarkBad`, `Releases.UnmarkBad` and `Releases.Halt`,
+//! `Hosts.Abort` and `Hosts.Exclude` (with `abandon`), `Services.Hold` and `Services.Unhold`,
+//! and `Audit.List`; `Releases.Force` is in [`crate::force`], `Services.Assign`, `Unassign`,
+//! `SetMinVersion` and `List` in [`crate::assign`], `Enrollment.List` and `Enrollment.Approve`
+//! in [`crate::operator_enrollment`], the inventory's calls in [`crate::inventory`], and
+//! `Hosts.List` and `Hosts.Get` in [`crate::hosts`]. A transport (the gRPC services, or a JSON
+//! gateway) authenticates the bearer ([`Coordinator::caller`]) and hands the call here.
 //!
 //! Every one of them takes the operator token only: a valid CI token is `forbidden` and no
 //! token, or any other, `unauthorized`, before the request is looked at. A refusal is one value
@@ -22,8 +22,8 @@ use hostkeeper_wire::{HostId, RoleName};
 use crate::halt;
 use crate::holds::{HoldMark, HoldScope, MAX_HOLDS, marks_of};
 use crate::operate::reason;
-use crate::ops::{AuditEntry, Exclusion, OpsError, Write};
-use crate::reconcile::{CI, COORDINATOR};
+use crate::ops::{AuditEntry, Exclusion, FailureAck, OpsError, Write};
+use crate::reconcile::{CI, COORDINATOR, is_release_failure_beat};
 use crate::service::Coordinator;
 use crate::tokens::TokenName;
 
@@ -217,6 +217,62 @@ impl Coordinator {
             Ok(())
         })?;
         Ok(proto::MarkBadResponse {
+            entry: Some(entry_proto(&done)),
+        })
+    }
+
+    /// `Releases.UnmarkBad`: lifts the bad mark of a version of a service, the inverse of
+    /// [`Self::mark_bad`], whether the operator, the coordinator's rollback or a force set it:
+    /// the version may be ordered again and CI may set it. The failure reports of the version
+    /// that the service's hosts stand on are acked in the same write ([`crate::acks`]), so the
+    /// override is not undone by the failures it overrode; a new failure counts again.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, `unknown_service`, `invalid_request` (the version or the
+    /// reason), `not_marked_bad`, `store_failed`.
+    pub fn unmark_bad(
+        &self,
+        caller: &Caller,
+        request: proto::UnmarkBadRequest,
+    ) -> Result<proto::UnmarkBadResponse, proto::ReleasesRefusal> {
+        let by = caller.operator()?;
+        let def = self
+            .services
+            .get(&request.service)
+            .ok_or(proto::ReleasesRefusal::UnknownService)?;
+        let version = Version::parse(&request.version)
+            .ok()
+            .filter(|version| def.version_scheme.parses(version))
+            .ok_or(proto::ReleasesRefusal::InvalidRequest)?;
+        let why = valid_reason(&request.reason).ok_or(proto::ReleasesRefusal::InvalidRequest)?;
+        // Under the fleet's lock, as the mark is made: no heartbeat decides between the lift
+        // and its write, and the reports acked are the ones the fleet holds at the lift.
+        let fleet = self.lock_fleet();
+        let acks: Vec<FailureAck> = fleet
+            .hosts_of(&def.name)
+            .filter(|(_, host)| is_release_failure_beat(&host.beat, &version))
+            .filter_map(|(id, host)| {
+                host.beat.last_update.clone().map(|report| FailureAck {
+                    node_id: id.to_string(),
+                    report,
+                })
+            })
+            .collect();
+        let audit = entry(by, "unmark_bad", &def.name, format!("{version}: {why}"));
+        let done = self.ops.try_change(Write::BeforeMemory, audit, |state| {
+            let marks = state.services.entry(def.name.clone()).or_default();
+            if !marks.bad.contains(&version) {
+                return Err(proto::ReleasesRefusal::NotMarkedBad);
+            }
+            marks.bad.retain(|bad| *bad != version);
+            marks.bad_by_force.retain(|bad| *bad != version);
+            for ack in acks {
+                marks.failure_acked.retain(|old| old.node_id != ack.node_id);
+                marks.failure_acked.push(ack);
+            }
+            Ok(())
+        })?;
+        Ok(proto::UnmarkBadResponse {
             entry: Some(entry_proto(&done)),
         })
     }

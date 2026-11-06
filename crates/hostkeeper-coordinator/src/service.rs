@@ -863,13 +863,19 @@ impl Coordinator {
         self.operator(bearer)?;
         let now = (self.clock)();
         let fleet = self.lock_fleet();
+        Ok(self.status_in(&fleet, now))
+    }
+
+    /// The status of `fleet` at `now`, which the caller holds locked: what [`Self::status`]
+    /// answers, and what `Hosts.List` and `Hosts.Get` read ([`crate::hosts`]).
+    pub(crate) fn status_in(&self, fleet: &Fleet, now: Duration) -> Status {
         let hosts = self
             .legacy
             .iter()
             .flat_map(|name| {
                 fleet
                     .hosts_of(name)
-                    .map(|(id, host)| host_status(&fleet, name, id, host, now))
+                    .map(|(id, host)| host_status(fleet, name, id, host, now))
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -880,28 +886,28 @@ impl Coordinator {
             .defs()
             .map(|def| {
                 let desired = self.desired.get(&def.name);
-                let roles = role_counts(def, desired.as_ref(), &fleet, now);
+                let roles = role_counts(def, desired.as_ref(), fleet, now);
                 let hosts: Vec<ServiceHostStatus> = fleet
                     .hosts_of(&def.name)
                     .map(|(id, host)| ServiceHostStatus {
-                        host: host_status(&fleet, &def.name, id, host, now),
+                        host: host_status(fleet, &def.name, id, host, now),
                         hold: halt::decide(
                             &self.ops,
                             &self.services,
                             &all,
                             &def.name,
-                            &fleet,
+                            fleet,
                             id,
                             now,
                         )
                         .why(),
-                        held_on_bad_version: on_bad_version(&fleet, &ops, &def.name, id),
+                        held_on_bad_version: on_bad_version(fleet, &ops, &def.name, id),
                     })
                     .collect();
                 let up = hosts.iter().filter(|h| h.host.up).count();
                 let slots_held = hosts.iter().filter(|h| h.host.holds_slot).count();
-                let members = members(def, &fleet, &ops, now);
-                let convergence = convergence_of(def, desired.as_ref(), &fleet, &ops, now);
+                let members = members(def, fleet, &ops, now);
+                let convergence = convergence_of(def, desired.as_ref(), fleet, &ops, now);
                 let status = ServiceStatus {
                     desired,
                     roles,
@@ -914,7 +920,7 @@ impl Coordinator {
                 (def.name.clone(), status)
             })
             .collect();
-        Ok(Status {
+        Status {
             per_service,
             ops,
             desired: self
@@ -932,7 +938,7 @@ impl Coordinator {
                 .clone(),
             hosts,
             commit: crate::BUILD_COMMIT,
-        })
+        }
     }
 
     /// Where the hosts of `service` stand against its desired state, if `bearer` is a

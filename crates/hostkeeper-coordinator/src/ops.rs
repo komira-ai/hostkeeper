@@ -263,10 +263,11 @@ pub struct AuditEntry {
     /// `coordinator` for the coordinator's own changes, `ci` for CI's.
     pub by: String,
     /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`,
-    /// `halt`, `mark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`, `set_min_version`,
-    /// `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the coordinator's own:
-    /// `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and `uninstall_cancelled`;
-    /// CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an earlier build wrote).
+    /// `halt`, `mark_bad`, `unmark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`,
+    /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made;
+    /// the coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
+    /// `uninstall_cancelled`; CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an
+    /// earlier build wrote).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]

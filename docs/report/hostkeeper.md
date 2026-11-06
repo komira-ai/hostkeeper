@@ -22,7 +22,7 @@ host. Before anything else, an engineer should know these facts:
 | Piece | State on `main` |
 |---|---|
 | Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment | Built and tested in process |
-| Operator API over gRPC and the HTTP/JSON gateway; generated `hostkeeper ctl`; web UI | Built; three declared methods answer `UNIMPLEMENTED` (see [The two APIs](#the-two-apis)) |
+| Operator API over gRPC and the HTTP/JSON gateway; generated `hostkeeper ctl`; web UI | Built; every declared method has a handler (see [The two APIs](#the-two-apis)) |
 | Assignment of services to roles and hosts; `install` and `uninstall` orders | Built in the coordinator; sent only to a daemon that announces `install-v1`, which the shipped daemon does not |
 | Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop | Built and running in the shipped binary |
 | Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune | Built; reachable only through an order |
@@ -273,10 +273,10 @@ other. A body is at most
 <span data-cell="c-operator-bytes" data-source="crates/hostkeeper-coordinator/src/http.rs" data-item="MAX_OPERATOR_BYTES">4096</span>
 bytes. A test holds [docs/gateway.md](../gateway.md)'s status table equal to the code's.
 
-**What the operator API does not do yet.** Three declared methods answer `UNIMPLEMENTED`:
-`Hosts.List`, `Hosts.Get` and `Releases.UnmarkBad` (the `PENDING` list in
-[crates/hostkeeper-coordinator/src/grpc/mod.rs](../../crates/hostkeeper-coordinator/src/grpc/mod.rs)).
-A test fails if any other method answers so.
+**Every declared method has a handler.** The `PENDING` list in
+[crates/hostkeeper-coordinator/src/grpc/mod.rs](../../crates/hostkeeper-coordinator/src/grpc/mod.rs),
+of the methods that answer `UNIMPLEMENTED` until their handler lands, is empty, and a test fails if
+any method of the command table answers so.
 
 **Credentials.** CI authenticates with a GitHub Actions OIDC token, checked against an allow-list
 (`--oidc-config`) by [crates/hostkeeper-oidc](../../crates/hostkeeper-oidc). It allows a clock
@@ -304,12 +304,11 @@ JavaScript modules, with no framework and no build step. Its pages are Fleet, Ho
 Enrollment, Inventory and Audit, and each button is one gateway call made with the operator's token,
 held in page memory only. The coordinator serves the files under `/ui/` of its private listener when
 started with `--ui-dir` ([docs/ui-serving.md](../ui-serving.md)). The packages do not include the
-files. Because `Hosts.List` and `Hosts.Get` are not served, the Fleet and Host pages and the Rollout
-page's force dialog get a refusal instead of data. The Rollout page's convergence button sends
-`Releases.Converge` with the operator's token, which the coordinator refuses, and its unmark button
-calls `Releases.UnmarkBad`, which is not served. The UI tests run the app in a JavaScript engine
-against a fake gateway ([crates/hostkeeper-ui-tests](../../crates/hostkeeper-ui-tests)), so they
-catch none of these.
+files. The Rollout page's convergence button sends `Releases.Converge` with the operator's token,
+which the coordinator refuses. The UI tests run the app in a JavaScript engine against a fake
+gateway ([crates/hostkeeper-ui-tests](../../crates/hostkeeper-ui-tests)), so they do not catch
+this; the Fleet and Host pages are also tested on a `Hosts.List` reply the coordinator's own test
+holds equal to its answer.
 
 **Wire compatibility.** `the_protos_keep_every_rule_against_the_baseline` compares the compiled
 descriptors with a committed baseline and fails on any removed, renumbered, renamed or retyped
@@ -750,8 +749,6 @@ What is not built, plainly:
   not, and its heartbeat loop runs only `update` and `force`. `Hosts.Abort` likewise reaches only a
   daemon announcing `abort-v1`, which the shipped daemon does not. The coordinator never orders
   `force_rollback` or `clear_halt`.
-- **Host listing and unmarking:** `Hosts.List`, `Hosts.Get` and `Releases.UnmarkBad` answer
-  `UNIMPLEMENTED`.
 - **Additive steps:** a manifest's `boot` step, the hook's `uninstall` step and the self-update
   probe cannot start on either real launcher, so uninstall and self-update do not complete on a
   host.

@@ -61,9 +61,11 @@ import "hostkeeper/agent/v1/agent.proto";
 
 // The hosts the coordinator has heard from, and what an operator decides about them.
 service Hosts {
-  // Every host heard from since the coordinator started.
+  // Every host heard from since the coordinator started, by node id, a page at a time. Changes
+  // nothing.
   rpc List(ListHostsRequest) returns (ListHostsResponse);
-  // One host.
+  // One host heard from since the coordinator started; `unknown_host` for any other. Changes
+  // nothing.
   rpc Get(GetHostRequest) returns (GetHostResponse);
   // Take a host out of a service: its heartbeats do not count for the service and it is not
   // ordered. A second exclusion of the same host and service replaces the first.
@@ -275,10 +277,18 @@ enum Actor {
   ACTOR_COORDINATOR = 3;
 }
 
-message ListHostsRequest {}
+message ListHostsRequest {
+  // The most hosts to return; capped at 256, and 0 means the cap.
+  uint32 limit = 1;
+  // Where to go on, as `next_page_token` gave it; empty for the first page.
+  string page_token = 2;
+}
 
 message ListHostsResponse {
+  // By node id.
   repeated Host hosts = 1;
+  // The token of the next page; empty on the last.
+  string next_page_token = 2;
 }
 
 message GetHostRequest {

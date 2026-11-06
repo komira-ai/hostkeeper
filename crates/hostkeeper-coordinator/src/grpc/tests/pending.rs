@@ -1,6 +1,5 @@
-//! Every RPC of the command table is served, or listed in [`PENDING`] and answered
-//! `UNIMPLEMENTED` with no message: a method added to a proto without a handler cannot pass
-//! unnoticed.
+//! Every RPC of the command table is served: none answers `UNIMPLEMENTED`, and [`PENDING`]
+//! lists nothing. A method added to a proto without a handler cannot pass unnoticed.
 
 use hostkeeper_proto::ctl::{COMMANDS, Command};
 use tonic::Code;
@@ -10,7 +9,6 @@ use super::support::{
     served_with_enrollment, updater,
 };
 use crate::grpc::PENDING;
-use crate::grpc::gateway::is_method;
 use crate::http::{Peer, Surface};
 use crate::testutil::{OPERATOR, ci_token};
 
@@ -45,88 +43,46 @@ async fn unserved(served: &Served, commands: &[Command], pending: &[&str]) -> Ve
     found
 }
 
-/// The paths of [`PENDING`], sorted.
-fn pending_sorted() -> Vec<&'static str> {
-    let mut paths = PENDING.to_vec();
-    paths.sort_unstable();
-    paths
+/// Proves: [`PENDING`] lists no method: every method of the operator API has a handler.
+#[test]
+fn no_method_is_pending() {
+    assert_eq!(PENDING, &[] as &[&str]);
 }
 
 /// Proves: no RPC of the command table (the agent's service and the operator API) answers
-/// `UNIMPLEMENTED` to an empty request unless [`PENDING`] lists it, each called with the
-/// credentials it takes on the listener that serves it.
+/// `UNIMPLEMENTED` to an empty request, each called with the credentials it takes on the
+/// listener that serves it, with nothing excused; and the table is not empty, so the check
+/// called something.
 #[tokio::test]
-async fn every_rpc_is_served_or_listed_pending() {
+async fn every_rpc_answers_something_other_than_unimplemented() {
     let served = served_with_enrollment("grpc-pending-all");
     assert!(
-        COMMANDS.len() > PENDING.len(),
+        !COMMANDS.is_empty(),
         "the table lists the agent's and the operator's RPCs"
     );
-    let found = unserved(&served, COMMANDS, PENDING).await;
-    assert_eq!(
-        found,
-        Vec::<&str>::new(),
-        "RPCs with no handler and no listing"
-    );
+    let found = unserved(&served, COMMANDS, &[]).await;
+    assert_eq!(found, Vec::<&str>::new(), "RPCs with no handler");
 }
 
-/// Proves: the check above sees a method with no handler: with nothing listed pending it finds
-/// exactly the paths of [`PENDING`], so a listing cannot be missing from the table without the
-/// test failing, and no served method is mistaken for an unserved one.
-#[tokio::test]
-async fn the_check_finds_exactly_the_pending_methods_when_none_is_listed() {
-    let served = served("grpc-pending-none-listed");
-    let mut found = unserved(&served, COMMANDS, &[]).await;
-    found.sort_unstable();
-    assert_eq!(found, pending_sorted());
-}
-
-/// Proves: the check sees a path of a served service that has no method: it is found, and the
-/// ones that are served are not.
+/// Proves: the check above is not blind to an RPC with no handler: of `Hosts.List`, which is
+/// served, and `Hosts.NoSuchMethod`, a path of the same served service that has no method, it
+/// finds the second alone, and does not find it when it is excused.
 #[tokio::test]
 async fn the_check_finds_a_method_the_table_does_not_know() {
     let served = served("grpc-pending-unknown");
     let known = COMMANDS
         .iter()
-        .find(|command| command.path == "/hostkeeper.operator.v1.Hosts/Abort")
+        .find(|command| command.path == "/hostkeeper.operator.v1.Hosts/List")
         .copied()
-        .expect("Hosts.Abort is in the table");
+        .expect("Hosts.List is in the table");
     let invented = Command {
         path: "/hostkeeper.operator.v1.Hosts/NoSuchMethod",
         ..known
     };
-    let found = unserved(&served, &[known, invented], PENDING).await;
+    let found = unserved(&served, &[known, invented], &[]).await;
     assert_eq!(found, vec!["/hostkeeper.operator.v1.Hosts/NoSuchMethod"]);
-}
-
-/// Proves: every method [`PENDING`] lists answers `UNIMPLEMENTED` with an empty message and no
-/// response message, to a caller admitted for it.
-#[tokio::test]
-async fn pending_methods_answer_unimplemented_with_no_message() {
-    let served = served("grpc-pending-answers");
-    assert_ne!(PENDING.len(), 0, "some methods are pending");
-    for path in PENDING {
-        let (surface, peer, bearer) = credentials(path);
-        let request = grpc_request(path, (), bearer.as_deref());
-        let answer = call(&served.coordinator, surface, &peer, request).await;
-        assert_eq!(answer, (Code::Unimplemented, String::new(), None), "{path}");
-    }
-}
-
-/// Proves: every path in [`PENDING`] is a method of the command table and of the descriptors
-/// the gateway reads, listed once, so a rename in a proto leaves no stale entry.
-#[test]
-fn every_pending_path_is_a_method_of_the_descriptors() {
-    for path in PENDING {
-        assert!(
-            COMMANDS.iter().any(|command| command.path == *path),
-            "{path} is in the command table"
-        );
-        assert!(is_method(path).is_some(), "{path} is in the descriptors");
-    }
-    let mut once = pending_sorted();
-    once.dedup();
-    assert_eq!(once.len(), PENDING.len(), "no path is listed twice");
+    let excused = unserved(&served, &[known, invented], &[invented.path]).await;
+    assert_eq!(excused, Vec::<&str>::new());
 }
 
 /// Proves: a served method answers with its message, so `UNIMPLEMENTED` above is not just what

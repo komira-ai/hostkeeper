@@ -87,14 +87,16 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   [Operator verbs on the host](#operator-verbs-on-the-host)).
 - **Packages and placement.** Built: B5 (fetch, verify, unpack, seal), B27 (placed-path
   linking), B28 (hookless force), B23's `install` and `uninstall` orders in the daemon. Partly
-  built: B23's assignment of services by the coordinator (roles in the rollout file; the
-  operator API declares `Services.Assign` and `Services.Unassign`, which answer `UNIMPLEMENTED`).
+  built: B23's assignment of services by the coordinator (roles in the rollout file,
+  `Services.Assign` and `Services.Unassign`; its `install` and `uninstall` orders go only to a
+  daemon that announces `install-v1`, which the shipped daemon does not).
 - **Coordinator and rollout.** Built: B6 (the coordinator, its rollout file and operator tokens),
   B7 (holds, halts, abort, exclude, force with targets, set-desired refusals).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
-- **Operator surfaces.** Built: B1 (the protobuf services), B10 (generated `hostkeeper ctl`,
-  gRPC beside the gateway), B24 (the CI client), B25 (the UI).
+- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler:
+  none answers `UNIMPLEMENTED`), B10 (generated `hostkeeper ctl`, gRPC beside the gateway), B24
+  (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a
