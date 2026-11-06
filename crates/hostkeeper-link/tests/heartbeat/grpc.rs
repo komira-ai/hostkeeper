@@ -19,7 +19,7 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_coordinator::http::Surface;
 use hostkeeper_coordinator::listen::connection;
 use hostkeeper_coordinator::service::Coordinator;
-use hostkeeper_link::testing::{FakeLink, RecordingLog, identity, verdict};
+use hostkeeper_link::testing::{FakeLink, RecordingLog, identity};
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, AsyncConn, CoordinatorLink, EndpointError, Feature, GrpcDial,
     GrpcLinkError, GrpcMtlsLink, Health, Heartbeat, LinkError, MAX_HEARTBEAT_BYTES, NegotiatedLink,
@@ -36,6 +36,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::coordinator::{OPERATOR, PATIENCE, call, coordinator, serve_coordinator};
 use crate::tls::{COORDINATOR, Ca, Farm, Leaf, PipeTransport, Pki, config, config_text, link};
+use crate::verdict;
 use crate::{digest, order_id, reply, service, version};
 
 /// The connections the link is handed: the client ends of in-memory streams the test queued,
