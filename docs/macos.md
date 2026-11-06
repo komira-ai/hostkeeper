@@ -67,7 +67,12 @@ serve it:
 - `hostkeeper_steps::selfupdate::launchd_fallback_job`: the job `<label>.fallback`, which runs
   `previous self-update-fallback --dir <dir>` every `StartInterval` seconds and not at load.
   The plist is deterministic (keys sorted, fixed indentation) and every path and the label in
-  it are XML-escaped.
+  it are XML-escaped. The daemon writes it at each start, once ready, as
+  `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.fallback.plist` with an interval of 60
+  seconds, only when it differs from what is there, and then boots the job out and bootstraps it
+  again (`hostkeeper_daemon::selfunits`). Until the first self-update there is no `previous`, and
+  launchd cannot spawn the job's program when the interval comes; the daemon's own plist still
+  starts `/usr/local/bin/hostkeeper`, not the binary directory's `current`.
 
 Since the timer runs the verb whether or not the new binary is failing, the verb decides the
 burst itself on a Mac (`hostkeeper_daemon::fallback::fallback_after_burst`). Each start of the
@@ -298,9 +303,9 @@ hostkeeper binary. The artifacts workflow builds them on a GitHub-hosted Apple
 silicon runner, never on a pull request; it runs by hand until its push-to-`main` trigger lands with
 the rest of the release automation.
 
-The pkg is the first install of a Mac. It installs exactly three files and one empty directory,
-and the directories that hold them (each 0755, as macOS has them already), all owned by root and
-wheel:
+The pkg is the first install of a Mac. It installs exactly five files and one empty directory,
+and the directories that hold them (each 0755, as macOS has them already; `/usr/local/lib` and
+`/usr/local/lib/hostkeeper` are made so when they are not there), all owned by root and wheel:
 
 - `/usr/local/bin/hostkeeper`, mode 0755, the released binary;
 - `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, mode 0644, the daemon's job as
@@ -308,24 +313,55 @@ wheel:
   `dev.hostkeeper.hostkeeper`, running `/usr/local/bin/hostkeeper daemon`);
 - `/var/log/hostkeeper`, mode 0755, the empty directory of the daemon's logs;
 - `/etc/newsyslog.d/hostkeeper.conf`, mode 0644, the rotation of those logs
-  ([The daemon's logs](#the-daemons-logs)).
+  ([The daemon's logs](#the-daemons-logs));
+- `/usr/local/lib/hostkeeper/gh`, mode 0755, the pinned darwin-arm64 `gh` that checks each
+  package's attestation;
+- `/usr/local/lib/hostkeeper/trusted_root.json`, mode 0644, the Sigstore trusted root that `gh`
+  checks it against, as the pinned `gh attestation trusted-root` printed it when the pkg was built.
 
-`/etc` and `/var` are links into `/private` on macOS, so the payload holds the last two under
-`private/` (`/private/var/log/hostkeeper`, `/private/etc/newsyslog.d/hostkeeper.conf`): a
+`/etc` and `/var` are links into `/private` on macOS, so the payload holds the log directory and
+the newsyslog file under `private/` (`/private/var/log/hostkeeper`, `/private/etc/newsyslog.d/hostkeeper.conf`): a
 directory named `var` or `etc` in the payload would stand in place of the link.
+
+`gh` and the trusted root are under `/usr/local` because `/usr` is read-only on a Mac; a Linux
+host keeps them under `/usr/lib/hostkeeper`. The workflow that builds the pkg pins both: it
+downloads `gh` and checks the download against the version and SHA-256 in the workflow, the same
+way it pins its other tools, then prints the trusted root with that `gh` and checks it against its
+own pinned SHA-256. Nothing is downloaded at install. A change of either pin is a pull request; a
+trusted root that Sigstore or GitHub have changed since the pin fails the build of the pkg until
+the pin is moved.
+
+The daemon on a Mac reads the CA bundle its package fetch trusts from `/etc/ssl/cert.pem`, the
+system roots macOS keeps there, which the pkg does not install. (A Linux host reads
+`/etc/ssl/certs/ca-certificates.crt`, or `/etc/pki/tls/certs/ca-bundle.crt` when only that one
+exists.)
 
 It has no scripts: it starts nothing and writes no config. The operator's bootstrap places
 `hostkeeper.toml` and loads the job. The pkg carries no installer signature, since that needs an
 Apple Developer ID Installer identity. It is attested like every other asset, and the binary in it
 keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
-`cargo xtask release macos-pkg` builds it with `pkgbuild`; `cargo xtask release check-macos-pkg`
-reads back the pkg that `pkgutil --expand` expanded, and refuses any other file, mode, owner, bytes
-or script, a plist whose output paths are not the daemon's two log files, and a newsyslog file
-whose entries name other paths than those two.
+`cargo xtask release macos-pkg` builds it with `pkgbuild` from the binary, `gh` and the trusted
+root (`--binary`, `--gh`, `--trusted-root`); `cargo xtask release check-macos-pkg` reads back the
+pkg that `pkgutil --expand` expanded, against the same three files, and refuses a missing file and
+any other file, mode, owner, bytes or script, a plist whose output paths are not the daemon's two
+log files, and a newsyslog file whose entries name other paths than those two.
 
 hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
 pkg's plist.
+
+### Boot id
+
+The daemon's clock reads the boot id through a port, `hostkeeper_steps::BootIdSource`. On a Mac
+it is `hostkeeper_launchd::SysctlBootId`: the `kern.bootsessionuuid` sysctl, a UUID the kernel
+makes at each boot, accepted only as a UUID (`hostkeeper_launchd::parse_boot_session_uuid`), so a
+boot id is never empty. One that cannot be read or parsed is an error, read as "the host may have
+rebooted", never as the same boot: a stamp of an unknown boot measures no elapsed time (the step
+runner begins such a window again once, when it first meets it, then counts it on its own
+process's monotonic clock); the start pass reads the step records as after a boot, alerts
+`journal_unavailable`, writes no `.boot-id` and runs no hook; and starts of an unknown boot are no
+burst for the fallback. A stamp of an unknown boot is stored with an empty `boot_id`, the value
+older releases wrote on a Mac, so the on-disk format is unchanged.
 
 ### The device run
 
@@ -335,12 +371,14 @@ Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`) are not counted b
 gate; what they drive is measured against fakes on Linux. They:
 
 - start the daemon as a launchd job of the system domain, with a config and directories of their
-  own, and call `Status` on its admin socket;
+  own, call `Status` on its admin socket, and read the Mac's boot id in the `.boot-id` its start
+  pass wrote;
 - run the fixture hook in mode `sleep` as a step job through `LaunchdLauncher` with a bound of 5
   seconds: the job is booted out at the bound, the step has no exit code (a failed step), and
   launchd no longer holds the job;
 - read a running job, an ended job and an unknown label through the observer's service manager:
   active, inactive, not found;
+- read the boot id from `kern.bootsessionuuid` twice: a UUID, the same on both reads;
 - check the process identity against real processes and print what `proc_pidpath` and the image
   lookup give when the file is unchanged, renamed over, unlinked, started through a link, at a
   path longer than `PROC_PIDPATHINFO_MAXSIZE`, and run by another user;
@@ -352,5 +390,3 @@ gate; what they drive is measured against fakes on Linux. They:
 
 - The placed plists of a service package linked into `/Library/LaunchDaemons` by the daemon in a
   real update (the unit control is wired; a device run of an update is not part of the run above).
-- The boot id of the monotonic clock on a Mac (the start log and the step records compare stamps
-  under it).

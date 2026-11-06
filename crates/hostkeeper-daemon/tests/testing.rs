@@ -7,11 +7,12 @@ use hostkeeper_daemon::locks::ServiceLocks;
 use hostkeeper_daemon::testing::{
     Counted, Ending, FakeClock, Missed, ScriptedLauncher, Signal, lock_waits, spawn,
 };
-use hostkeeper_steps::{Clock, StepLauncher};
+use hostkeeper_steps::{BootIdError, Clock, StepLauncher};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
 /// Catches a fake clock that moves on its own, or does not move when slept on: a sleep moves
-/// it, a frozen one only by `advance`, and a new boot id is reported.
+/// it, a frozen one only by `advance`, a new boot id is reported, and a lost one cannot be read
+/// until one is set again.
 #[test]
 fn the_fake_clock_moves_only_when_told() {
     let clock = FakeClock::new();
@@ -23,9 +24,19 @@ fn the_fake_clock_moves_only_when_told() {
     assert_eq!(frozen.mono_secs(), start);
     frozen.advance(2);
     assert_eq!(frozen.mono_secs(), start + 2);
-    assert_eq!(clock.boot_id(), "boot-1");
+    let id = || clock.boot_id().map(|id| id.as_str().to_owned());
+    assert_eq!(id().expect("a boot id"), "boot-1");
     clock.set_boot_id("boot-2");
-    assert_eq!(clock.boot_id(), "boot-2");
+    assert_eq!(id().expect("a boot id"), "boot-2");
+    clock.lose_boot_id();
+    assert!(matches!(
+        clock.boot_id(),
+        Err(BootIdError::Empty {
+            from: "the fake clock"
+        })
+    ));
+    clock.set_boot_id("boot-3");
+    assert_eq!(id().expect("a boot id"), "boot-3");
 }
 
 /// Catches a scripted launcher whose stops always fail: a stop of a service not marked failing

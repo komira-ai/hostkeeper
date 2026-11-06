@@ -195,8 +195,10 @@ fn the_start_settles_before_the_boot_pass_and_goes_on_when_it_cannot() {
     );
 }
 
-/// Catches the old binary's daemon serving on after its own update asked it to exit: the admin
-/// socket's server returns `Ok` once the restart is asked for, for the binary to exit with 0.
+/// Catches the old binary's daemon serving on after its own update asked it to exit, or exiting
+/// with a status its unit's `Restart=` does not restart: the admin socket's server returns `Ok`
+/// once the restart is asked for, which the command line exits with as 0; an error is its own
+/// status.
 #[tokio::test]
 async fn the_daemon_stops_serving_once_its_restart_is_asked() {
     let s = SelfRig::new("su-serve");
@@ -206,6 +208,41 @@ async fn the_daemon_stops_serving_once_its_restart_is_asked() {
     daemon.ctx().restart().request();
     let ended = served.await.expect("the server task");
     assert!(ended.is_ok(), "{ended:?}");
+    assert_eq!(cli::exit_status(&ended), 0);
+    let failed = Err(start::StartError::NoNotifySocket);
+    assert_eq!(cli::exit_status(&failed), EXIT_FAILED);
+}
+
+/// Catches the fallback unit putting back a binary that no update switched in: systemd runs it
+/// whenever the daemon's unit fails its start limit, for any reason (a config that does not
+/// load, a burst of restarts). Once the new binary confirmed its update, the fallback leaves
+/// `current` as it is, writes nothing, and exits non-zero naming why, so the unit's
+/// `ExecStartPost=` lines do not start the daemon again.
+#[test]
+fn the_fallback_leaves_a_binary_no_update_waits_for() {
+    let (s, _old) = swapped("su-fallback-confirmed");
+    assert_eq!(
+        s.daemon_at(NEW).settle_self_update().expect("settled"),
+        Settled::Confirmed
+    );
+    let dir = binary_dir(&s.rig.state);
+    let before = snapshot(&s.rig.state);
+    let err = fallback::fallback(&dir).expect_err("nothing waits");
+    assert!(matches!(err, FallbackError::NothingWaits(_)), "{err:?}");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "no update of hostkeeper waits for its restart, so {} is left as it is: the binary \
+             that runs was not switched in by an update",
+            dir.display()
+        )
+    );
+    assert_eq!(
+        code(fallback::main(&dir)),
+        code(ExitCode::from(EXIT_FAILED))
+    );
+    assert_eq!(snapshot(&s.rig.state), before);
+    assert_eq!(s.current().as_deref(), Some(NEW));
 }
 
 /// The design's named test. Catches a fallback after which the host could be ordered the same

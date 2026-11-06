@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use hostkeeper_config::daemon::Bounds;
 use hostkeeper_hook::{Class, Outcome};
+use hostkeeper_steps::{BootId, BootIdError};
 
 use super::*;
 use crate::fetch::{FetchEnv, PackageOrder, fetch_package};
@@ -556,8 +557,8 @@ impl Clock for Tripwire {
         self.now + self.jump * late
     }
 
-    fn boot_id(&self) -> String {
-        crate::testing::BOOT.to_owned()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the tripwire", crate::testing::BOOT)
     }
 
     fn sleep_secs(&self, _: u64) {}

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_steps::Clock;
+use hostkeeper_steps::{BootId, BootIdError, Clock};
 
 use crate::beat::{Health, Heartbeat, Liveness, Platform};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
@@ -328,8 +328,8 @@ impl Clock for FakeClock {
         self.mono.load(Ordering::SeqCst)
     }
 
-    fn boot_id(&self) -> String {
-        "fake-boot".to_owned()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the fake clock", "fake-boot")
     }
 
     fn sleep_secs(&self, secs: u64) {

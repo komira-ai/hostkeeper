@@ -18,8 +18,8 @@ use std::thread::{self, JoinHandle};
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_steps::{
-    Clock, Finished, LaunchError, RunError, StepCall, StepExit, StepLauncher, StepRunner,
-    UpdateOrder,
+    BootId, BootIdError, Clock, Finished, LaunchError, RunError, StepCall, StepExit, StepLauncher,
+    StepRunner, UpdateOrder,
 };
 
 /// What a stopped watcher's launcher answers: the run is not started.
@@ -190,7 +190,7 @@ impl Clock for SlicedClock {
         self.inner.mono_secs()
     }
 
-    fn boot_id(&self) -> String {
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
         self.inner.boot_id()
     }
 

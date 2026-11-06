@@ -547,13 +547,21 @@ fn force_starts_exactly_the_units_the_target_lists() {
 /// Catches a wait that ends on the first active unit, ends early, or reads another clock: with
 /// `force_start_secs` 60, one unit active at once is asked after once, and another that turns
 /// active on its 61st ask passes, on its 62nd fails `start_failed`; either way the clock moved 60
-/// seconds, by the force's polls alone.
+/// seconds, by the force's polls alone. The same holds on a clock whose boot id cannot be read:
+/// the wait is of this process and ends at its bound, never waits forever nor ends at once.
 #[test]
 fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
     let two = "web-two.service";
     let failed_start = failed(Phase::AfterCommit, Class::Release, "start_failed");
-    for (asks, expected) in [(60, succeeded()), (61, failed_start)] {
+    let cases = [(60, succeeded()), (61, failed_start)];
+    for (lost, (asks, expected)) in [false, true]
+        .into_iter()
+        .flat_map(|lost| cases.clone().into_iter().map(move |case| (lost, case)))
+    {
         let rig = Rig::new("force-wait");
+        if lost {
+            rig.clock.lose_boot_id();
+        }
         let daemon = rig.daemon();
         rig.add_units(WEB, "2.0.0", &[UNIT, two], &[UNIT, two], &[]);
         rig.units.active_after(two, asks);
@@ -561,11 +569,11 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
         assert_eq!(
             daemon.order(&force(WEB, "2.0.0", &d(), 1, 0)),
             expected,
-            "{asks}"
+            "{asks} {lost}"
         );
-        assert_eq!(rig.clock.mono_secs() - began, 60, "{asks}");
-        assert_eq!(asked_active(&rig, UNIT), 1, "{asks}");
-        assert_eq!(asked_active(&rig, two), 61, "{asks}");
+        assert_eq!(rig.clock.mono_secs() - began, 60, "{asks} {lost}");
+        assert_eq!(asked_active(&rig, UNIT), 1, "{asks} {lost}");
+        assert_eq!(asked_active(&rig, two), 61, "{asks} {lost}");
     }
 }
 

@@ -16,7 +16,7 @@ use hostkeeper_daemon::watchers::STOPPED;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::RECORD_FILE;
-use hostkeeper_steps::{Finished, LaunchError, ResumeAction, RunError};
+use hostkeeper_steps::{BootId, Finished, LaunchError, ResumeAction, RunError};
 use support::{
     PENDING_LINE, Rig, alerting, crash_after_writing, d, finished, lines, manifest_with, name, ok,
     update,
@@ -129,7 +129,7 @@ fn the_watcher_restarts_after_a_reboot_and_never_runs_rollback() {
     assert_eq!(later_steps(&rig), [Step::Verify; 5]);
     let rec = rig.record("web").expect("a record");
     let began = rec.progress.watching.expect("the watcher's stamp");
-    assert_eq!(began.boot_id, "boot-2");
+    assert_eq!(began.boot_id.as_ref().map(BootId::as_str), Some("boot-2"));
 }
 
 /// Catches a promotion that is watched without end: `verify` keeps reporting the promotion

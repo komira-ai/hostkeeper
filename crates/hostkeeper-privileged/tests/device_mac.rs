@@ -1,6 +1,6 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
-//! The device run on a Mac (design section 5.9): the launchd adapters, the process probe and the
-//! package check against the real launchd, kernel and tools of a GitHub-hosted macOS runner, as
+//! The device run on a Mac (design section 5.9): the launchd adapters, the process probe, the
+//! boot id and the package check against the real launchd, kernel and tools of a GitHub-hosted macOS runner, as
 //! root, in `.github/workflows/privileged.yml`'s job `macos-device` only. Like the Linux
 //! privileged tests these are not counted by the coverage gate; what they drive is measured
 //! against fakes in the pull-request set.
@@ -22,19 +22,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::Duration;
 
+use hostkeeper_daemon::boot::BOOT_ID_FILE;
 use hostkeeper_daemon::mac::HostMacVerify;
 use hostkeeper_hook::{Invocation, Outcome, Step};
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print};
 use hostkeeper_launchd::procid::darwin::DarwinPidInfo;
 use hostkeeper_launchd::{
     Label, Launchctl, LaunchctlProcess, LaunchdLauncher, LaunchdProcessProbe,
-    LaunchdServiceManager, PidInfo, StdFileIdentity,
+    LaunchdServiceManager, PidInfo, StdFileIdentity, SysctlBootId, parse_boot_session_uuid,
 };
 use hostkeeper_observe::{ActiveState, ProcessProbe, ServiceManager, UnitState};
 use hostkeeper_privileged::{Mode, Rig};
 use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
-use hostkeeper_steps::{Bound, StepCall, StepLauncher};
+use hostkeeper_steps::{BootIdSource, Bound, StepCall, StepLauncher};
 use hostkeeper_testkit::Scratch;
 use hostkeeper_unpack::{MacVerify, SignatureVerdict};
 use hyper_util::rt::TokioIo;
@@ -432,9 +433,26 @@ fn a_fixture_hook_runs_as_a_launchd_job_and_is_stopped_at_its_timeout() {
     assert_eq!(status, JobStatus::NotLoaded, "the job is gone");
 }
 
-/// Catches a daemon that does not start under launchd on a Mac: the daemon binary, as a job of
-/// the system domain with a config, state and packages directories and admin socket of its own,
-/// is `running` and answers `Status` on its admin socket.
+/// Catches a boot id of a Mac that is empty, not the kernel's or not stable within a boot: the
+/// real reader gives `kern.bootsessionuuid` as a UUID, and two reads in this process give the
+/// same id.
+#[test]
+fn the_boot_id_of_a_mac_is_a_uuid_the_same_on_two_reads() {
+    let first = SysctlBootId.read().expect("kern.bootsessionuuid");
+    let second = SysctlBootId.read().expect("kern.bootsessionuuid");
+    println!("kern.bootsessionuuid: {first}");
+    assert!(!first.as_str().is_empty());
+    assert_eq!(
+        parse_boot_session_uuid(first.as_str()).expect("a UUID"),
+        first
+    );
+    assert_eq!(second, first);
+}
+
+/// Catches a daemon that does not start under launchd on a Mac, or starts under no boot id: the
+/// daemon binary, as a job of the system domain with a config, state and packages directories
+/// and admin socket of its own, is `running`, answers `Status` on its admin socket, and its start
+/// pass wrote the Mac's boot id.
 #[test]
 fn the_daemon_starts_under_launchd_and_answers_status() {
     as_root();
@@ -515,4 +533,7 @@ hosted_runner = true
     println!("Status: {status:?}");
     let socket_dir = fs::metadata(socket.parent().expect("a parent")).expect("its directory");
     assert_eq!(socket_dir.permissions().mode() & 0o777, 0o700);
+    let written = fs::read_to_string(state.join(BOOT_ID_FILE)).expect("the boot id file");
+    let id = SysctlBootId.read().expect("kern.bootsessionuuid");
+    assert_eq!(written, id.as_str());
 }

@@ -16,7 +16,7 @@ use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_placed::testing::{FakeUnitControl, FaultFs};
 use hostkeeper_placed::{PathState, PlacedRecord, Side, SwitchIntent};
 use hostkeeper_steps::record::{RECORD_FILE, Record, State};
-use hostkeeper_steps::{ForcePhase, ForceRecord, ForceVerdict, RecordStore, Stamp};
+use hostkeeper_steps::{BootId, ForcePhase, ForceRecord, ForceVerdict, RecordStore, Stamp};
 use support::{BASE, OWN, Rig, Tap, config, d, install, name, ok, update};
 
 fn version(text: &str) -> Version {
@@ -88,7 +88,7 @@ fn a_record_says_which_side_of_the_switch_it_is_on() {
     // (record, rebooted, the version replaced, the side)
     let mut watching = at(&base, Step::Cleanup, done(), true);
     watching.progress.watching = Some(Stamp {
-        boot_id: "boot-1".to_owned(),
+        boot_id: BootId::new("a test", "boot-1").ok(),
         mono_secs: 1,
     });
     let finished = State::Finished {

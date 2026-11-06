@@ -25,8 +25,8 @@ use std::task::{Context, Poll};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Step;
 use hostkeeper_steps::{
-    AdditiveCall, Clock, LaunchError, Layout, Protected, PruneReport, PruneStep, Seal, Staged,
-    StepCall, StepExit, StepLauncher, tree_digest,
+    AdditiveCall, BootId, BootIdError, Clock, LaunchError, Layout, Protected, PruneReport,
+    PruneStep, Seal, Staged, StepCall, StepExit, StepLauncher, tree_digest,
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tonic::transport::server::Connected;
@@ -123,6 +123,12 @@ impl FakeClock {
     pub fn set_boot_id(&self, id: &str) {
         *lock(&self.boot) = id.to_owned();
     }
+
+    /// The boot id can no longer be read: [`Clock::boot_id`] answers [`BootIdError::Empty`]
+    /// until [`FakeClock::set_boot_id`] names one again.
+    pub fn lose_boot_id(&self) {
+        lock(&self.boot).clear();
+    }
 }
 
 impl Clock for FakeClock {
@@ -130,8 +136,8 @@ impl Clock for FakeClock {
         self.mono.load(Ordering::SeqCst)
     }
 
-    fn boot_id(&self) -> String {
-        lock(&self.boot).clone()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the fake clock", &lock(&self.boot))
     }
 
     /// Moves the clock by `secs` at once, or, frozen, only yields.

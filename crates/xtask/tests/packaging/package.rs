@@ -3,6 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use hostkeeper_daemon::cli::{GH_BINARY, SIGSTORE_TRUSTED_ROOT};
+use xtask::test_support::NFPM_STAGED;
+
+use crate::attestation_files::staged;
 use crate::nfpm::{self, Config};
 use crate::script::{self, Command};
 use crate::{INSTALLED_UNIT, NFPM, POSTINSTALL, PREREMOVE, altered, config, read, refuses};
@@ -118,8 +122,8 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
         (
             altered(
                 &text,
-                "      mode: 0755\n",
-                "      mode: 0755\n      mtime: \"2027-01-01T00:00:00Z\"\n",
+                "    dst: /usr/bin/hostkeeper\n    file_info:\n      mode: 0755\n",
+                "    dst: /usr/bin/hostkeeper\n    file_info:\n      mode: 0755\n      mtime: \"2027-01-01T00:00:00Z\"\n",
             ),
             "[\"contents[].file_info.mtime\"]",
         ),
@@ -127,8 +131,9 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
     refuses(check_nfpm_keys, &cases);
 }
 
-/// The four files of the package, sorted as [`Config::files`] sorts them.
-fn package_files() -> Vec<nfpm::File> {
+/// The six files of the package, sorted as [`Config::files`] sorts them: `gh` and the trusted
+/// root at the daemon's own paths, from where `release nfpm-stage` writes them.
+pub fn package_files() -> Vec<nfpm::File> {
     let file = |dst: &str, src: &str, mode: &str| nfpm::File {
         dst: dst.to_owned(),
         src: src.to_owned(),
@@ -149,6 +154,8 @@ fn package_files() -> Vec<nfpm::File> {
             "packaging/linux/hostkeeper.toml.template",
             "0644",
         ),
+        file(GH_BINARY, &staged(NFPM_STAGED[0]), "0755"),
+        file(SIGSTORE_TRUSTED_ROOT, &staged(NFPM_STAGED[1]), "0644"),
     ];
     files.sort();
     files
@@ -269,7 +276,31 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
             "not [",
         ),
         (
-            altered(&text, "      mode: 0755\n", "      mode: 0700\n"),
+            altered(
+                &text,
+                "    dst: /usr/bin/hostkeeper\n    file_info:\n      mode: 0755\n",
+                "    dst: /usr/bin/hostkeeper\n    file_info:\n      mode: 0700\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "    dst: /usr/lib/hostkeeper/gh\n    file_info:\n      mode: 0755\n",
+                "    dst: /usr/lib/hostkeeper/gh\n    file_info:\n      mode: 0775\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "    dst: /usr/lib/hostkeeper/trusted_root.json\n",
+                "    dst: /etc/hostkeeper/trusted_root.json\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(&text, "  - src: target/nfpm/gh\n", "  - src: /usr/bin/gh\n"),
             "not [",
         ),
         (
