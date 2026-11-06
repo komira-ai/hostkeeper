@@ -26,6 +26,9 @@
 //! every systemd unit is checked (design section 4.7: a unit names package files only through the
 //! service's own `current`) and the entry list is checked against the rules of section 5.5 that
 //! apply to a list this module builds ([`check_entries`]).
+//!
+//! The child [`nfpm_stage`] is `release nfpm-stage`: the pinned `gh` and the Sigstore trusted
+//! root, checked and laid out for the deb and the rpm that `packaging/linux/nfpm.yaml` builds.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -37,6 +40,7 @@ use super::contract::{Commit, DIGEST_SUFFIX, Package, Platform, Service, Version
 use super::ports::GitHistory;
 
 mod hello;
+pub(super) mod nfpm_stage;
 
 /// Why a Linux package of hostkeeper needs `--unit`.
 const LINUX_NEEDS_UNIT: &str =

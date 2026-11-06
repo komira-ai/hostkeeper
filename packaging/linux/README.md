@@ -17,7 +17,9 @@ image, network boot, signing and publishing the packages are not here.
 `cargo test -p xtask --test packaging` reads every file here and checks it: the unit's keys and
 command line, that the directories are the design's with the design's modes, that the template
 is refused until each placeholder is filled and loads once they are, that the packages carry
-exactly the four files and no key, certificate, token or config, that the scripts never start
+exactly the six files and no key, certificate, token or config, that `gh` and the trusted root
+are installed at the daemon's own paths from where `cargo xtask release nfpm-stage` writes them,
+that the scripts never start
 the unit, and that the overlay equals these sources.
 
 ## The packages
@@ -32,8 +34,15 @@ packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-
 | `/usr/lib/systemd/system/hostkeeper.service` | 0644 |
 | `/usr/lib/tmpfiles.d/hostkeeper.conf` | 0644 |
 | `/usr/share/hostkeeper/hostkeeper.toml.template` | 0644 |
+| `/usr/lib/hostkeeper/gh` | 0755 |
+| `/usr/lib/hostkeeper/trusted_root.json` | 0644 |
 
-all owned by root. On a first install the post-install script makes the directories of
+all owned by root. The last two are what the daemon checks every package's attestation with: a
+pinned `gh` (the distribution's own may have no `gh attestation`) and the Sigstore trusted root
+captured when the package was built. Before nfpm runs, `cargo xtask release nfpm-stage` checks
+the `gh` archive against its pin and writes both into `target/nfpm/`; where they come from, how
+the pin is bumped and what a stale trusted root does are in
+`docs/deploy/verify-a-release.md`, "What the deb and the rpm check packages with". On a first install the post-install script makes the directories of
 `hostkeeper.conf` and enables the unit. It does not start it: the daemon first runs at the next
 boot, or when the operator runs `systemctl start hostkeeper.service`. An upgrade leaves the unit
 enabled or disabled as it was. Removing the package disables the unit; it does not stop a
@@ -67,7 +76,8 @@ has a config but no certificate yet, its enrollment, is design section 5.7.
 | `etc/hostkeeper/hostkeeper.toml.template` | the config template |
 
 The image build copies the tree onto the image root (`cp -a overlay/. <image root>/`, keeping
-the link), installs the daemon as `/usr/bin/hostkeeper` (the deb or the rpm does that too), and
+the link), installs the daemon as `/usr/bin/hostkeeper` and `gh` and the trusted root under
+`/usr/lib/hostkeeper/` (the deb or the rpm does that too), and
 fills `etc/hostkeeper/hostkeeper.toml.template` into `etc/hostkeeper/hostkeeper.toml` in the
 image, root's, mode 0600, as above. Nothing else. The overlay files are the files of this
 directory, byte for byte; the test above fails when they differ.
