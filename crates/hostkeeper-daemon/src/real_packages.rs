@@ -204,6 +204,17 @@ impl Packages for RealPackages {
         index_digest: Option<&PackageDigest>,
     ) -> Result<VersionDir, PackageError> {
         self.remove_orphans(service)?;
+        // Negative control: fetch stubbed. A version not on disk is answered with the
+        // directory `current` names, without the release channel request.
+        let service_dir = self.root.join(service.as_str());
+        if !service_dir.join(version.as_str()).exists()
+            && let Ok(target) = std::fs::read_link(service_dir.join("current"))
+        {
+            let canned = service_dir.join(target);
+            let staged =
+                Staged::seal(&canned).map_err(|error| refused(io_refusal(error.to_string())))?;
+            return Ok(VersionDir::new(staged));
+        }
         let order = PackageOrder {
             service: service.clone(),
             version: version.clone(),
