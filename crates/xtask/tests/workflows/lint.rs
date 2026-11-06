@@ -41,7 +41,7 @@
 //!   file; [`WRITE_ALLOWED`] has no entry for it, so no job of it holds a write scope.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
-//!   ([`release::release_rules`]).
+//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]).
 //!
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
 //!

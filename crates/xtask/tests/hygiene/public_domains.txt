@@ -72,6 +72,7 @@ yaml.org
 =hostkeeper.agent.v1.health
 =hostkeeper.agent.v1.claims
 =hostkeeper.operator.v1.services
+=hostkeeper.operator.v1.host
 # systemd targets in packaging/linux/hostkeeper.service and its test, and in the channel sync's
 # units of docs/deploy/channel-sync (`target` is a top-level domain), not hosts.
 =default.target

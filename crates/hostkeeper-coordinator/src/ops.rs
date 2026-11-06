@@ -280,7 +280,9 @@ pub struct AuditEntry {
     /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made;
     /// the coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
     /// `uninstall_cancelled`; CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an
-    /// earlier build wrote).
+    /// earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
+    /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
+    /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]

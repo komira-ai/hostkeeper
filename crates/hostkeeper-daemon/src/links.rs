@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::names::Version;
-use hostkeeper_enroll::{Enroller, RETRY_SECS, RenewalState};
+use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
     Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports, Reply,
@@ -49,6 +49,7 @@ use crate::link_adapters::{
 };
 use crate::node::NodeState;
 
+pub use hostkeeper_enroll::RenewalState;
 pub use hostkeeper_link::Log;
 
 /// Makes the enroller of the enrollment loop, on the loop's own worker: the enroller's transport

@@ -1,10 +1,12 @@
 // Inventory: the servers the operator recorded when building them (host id, role, data MACs, BMC
-// MAC, serial, notes), so that a pending enrollment request can be matched to its record.
-// Calls: Enrollment.ListRecords; on a button, Enrollment.AddRecord or Enrollment.RemoveRecord.
-// A record approves nothing: Enrollment still approves each request by its key hash.
+// MAC, serial, notes), so that a pending enrollment request can be matched to its record, and
+// whether a host is enrolled against each. Calls: Enrollment.ListRecords, all records or, with
+// the filter, only the enrolled or only the not enrolled ones; on a button, Enrollment.AddRecord
+// or Enrollment.RemoveRecord. A record approves nothing: Enrollment still approves each request
+// by its key hash. The page's `record` parameter (the Host page's link) marks that record's row.
 
 import {
-  h, action, errorView, field, fmtUnix, reasonProblem, table, trimmed, words,
+  h, action, errorView, field, fmtUnix, reasonProblem, select, table, trimmed, words,
 } from "../view.js";
 
 const PAGE_SIZE = 50;
@@ -56,8 +58,20 @@ export function recordRequest(form) {
   return { hostId, role, dataMacs, bmcMac, serial, notes };
 }
 
-function recordRow(ctx, record, removal) {
-  return h("tr", {},
+// The `enrolled` of a ListRecordsRequest for the page's `enrolled` parameter: true for "true",
+// false for "false", and absent (every record) for anything else.
+export function enrolledFilter(param) {
+  if (param === "true") {
+    return { enrolled: true };
+  }
+  if (param === "false") {
+    return { enrolled: false };
+  }
+  return {};
+}
+
+function recordRow(ctx, record, removal, chosen) {
+  return h("tr", chosen ? { "aria-current": "true" } : {},
     h("td", {}, record.hostId),
     h("td", {}, record.role || "-"),
     h("td", {}, (record.dataMacs || []).join(", ") || "-"),
@@ -66,6 +80,7 @@ function recordRow(ctx, record, removal) {
     h("td", {}, record.notes || "-"),
     h("td", {}, record.addedBy || "-"),
     h("td", {}, fmtUnix(record.addedUnix)),
+    h("td", {}, record.enrolled === true ? "yes" : "no"),
     h("td", {}, action(ctx, "Remove", "remove-record", async () => {
       const reason = trimmed(removal.reason);
       if (reason === "") {
@@ -81,10 +96,16 @@ function recordRow(ctx, record, removal) {
 }
 
 export async function render(ctx) {
-  const pageToken = ctx.params && typeof ctx.params.pageToken === "string" ? ctx.params.pageToken : "";
+  const param = (name) => (ctx.params && typeof ctx.params[name] === "string" ? ctx.params[name] : "");
+  const pageToken = param("pageToken");
+  const filter = enrolledFilter(param("enrolled"));
+  const shown = filter.enrolled === undefined ? "" : String(filter.enrolled);
+  // The parameters that keep the filter across pages.
+  const kept = shown === "" ? {} : { enrolled: shown };
   let listed;
   try {
-    listed = await ctx.api.call("hostkeeper.operator.v1.Enrollment/ListRecords", { limit: PAGE_SIZE, pageToken });
+    listed = await ctx.api.call("hostkeeper.operator.v1.Enrollment/ListRecords",
+      Object.assign({ limit: PAGE_SIZE, pageToken }, filter));
   } catch (error) {
     return errorView("Inventory", error);
   }
@@ -92,22 +113,34 @@ export async function render(ctx) {
   const next = typeof listed.nextPageToken === "string" ? listed.nextPageToken : "";
   const form = { hostId: "", role: "", dataMacs: "", bmcMac: "", serial: "", notes: "" };
   const removal = { reason: "" };
+  const filterForm = { enrolled: shown };
+  const nothing = shown === "" ? "No server is recorded." : `No ${shown === "true" ? "" : "not "}enrolled server is recorded.`;
   return h("section", { class: "page" },
     h("h2", {}, "Inventory"),
     h("p", { class: "note" },
       "Record each server's data MAC and BMC MAC when you build it. A pending request that matches "
-      + "one record shows its host id and role on the Enrollment page; it is still approved by its key hash."),
+      + "one record shows its host id and role on the Enrollment page; it is still approved by its key hash. "
+      + "A record is enrolled when an enrolled host's claims match it and no other record."),
+    h("fieldset", {},
+      h("legend", {}, "Filter"),
+      select("Enrolled", "enrolled-filter", filterForm, "enrolled",
+        [["", "every record"], ["true", "enrolled"], ["false", "not enrolled"]]),
+      action(ctx, "Show", "show", async () => {
+        ctx.navigate("inventory", filterForm.enrolled === "" ? {} : { enrolled: filterForm.enrolled });
+        return undefined;
+      })),
     records.length === 0
-      ? h("p", {}, "No server is recorded.")
-      : table(["Host id", "Role", "Data MACs", "BMC MAC", "Serial", "Notes", "Added by", "Added at", ""],
-        records.map((record) => recordRow(ctx, record, removal))),
+      ? h("p", {}, nothing)
+      : table(["Host id", "Role", "Data MACs", "BMC MAC", "Serial", "Notes", "Added by", "Added at", "Enrolled", ""],
+        records.map((record) => recordRow(ctx, record, removal, record.hostId === param("record")))),
     records.length === 0 ? null : field("Reason for a removal", "remove-reason", removal, "reason", { maxlength: 256 }),
     h("div", { class: "buttons" },
       pageToken === "" ? null : h("button", {
-        type: "button", name: "first-page", on: { click: () => ctx.navigate("inventory", {}) },
+        type: "button", name: "first-page", on: { click: () => ctx.navigate("inventory", kept) },
       }, "First page"),
       next === "" ? null : h("button", {
-        type: "button", name: "next-page", on: { click: () => ctx.navigate("inventory", { pageToken: next }) },
+        type: "button", name: "next-page",
+        on: { click: () => ctx.navigate("inventory", Object.assign({ pageToken: next }, kept)) },
       }, "Next page")),
     h("fieldset", {},
       h("legend", {}, "Record a server"),

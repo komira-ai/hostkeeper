@@ -14,7 +14,7 @@ crate's plain types. The crate depends on no crate of this workspace;
 | `ca::issue` | `Ca::issue_host` (subject `CN=host:<approved id>`, `clientAuth` only, `CA:FALSE`, exactly 7 days from the CA's clock) and `Ca::issue_server` (`serverAuth` only, the DNS names asked for, at most 90 days). A validity above the cap is refused (`validity_over_cap`), never clamped. `Signer` is the seam a separate signer process would implement; `Ca` is the one implementation. |
 | `ca::key` | `Ca::init` makes the CA (a P-256 key and its self-signed certificate, 20 years); `Ca::open` loads it. The key is one PKCS#8 file, mode 0600, of the user the coordinator runs as; a key file that is a symbolic link, another user's, or open to group or others is refused, checked on the opened file. |
 | `ca::bundle` | `CaBundle`: the CA certificate and its SHA-256 (the `ca_sha256` a daemon config pins), and `host_certificate`, which reads a certificate a caller presents back as the host and key it names when this CA signed it with the subject `host:<id>`. `PollBundle`: what a poll returns. |
-| `enroll` | `EnrollmentStore`: `post` (refused `pending_full` while `max_pending` requests wait, 256 unless `with_max_pending` says otherwise), `approve`, `approve_recorded` (the approval with who made it, when and why, refusing a `duplicate_claim` request unless it replaces, and checking and consuming a Mac nonce in the same write), `issue`, `verify_poll`, `deny`, `retire`, `report_live`, `issue_mac_nonce`, and `is_denied`, `is_retiring`, `is_duplicate`, `renew_allowed`, `host_role`, `host_role_for` (only for the key the host id is approved for), `pending`, `request`, `recorded_approvals`, `bound_macs`, `allocate_serial`. A new request (not a renewal) is a duplicate claim when another request has its machine id, or when it claims a MAC bound to an enrolled host: a universally administered unicast MAC (data or BMC) claimed by the request a host's key came from, for a host that is not denied. `Claims` reads its MACs (`data_macs`, `bmc`, `all_macs`). |
+| `enroll` | `EnrollmentStore`: `post` (refused `pending_full` while `max_pending` requests wait, 256 unless `with_max_pending` says otherwise), `approve`, `approve_recorded` (the approval with who made it, when and why, refusing a `duplicate_claim` request unless it replaces, and checking and consuming a Mac nonce in the same write), `expire` (every waiting request older than a TTL, at a given time, once), `issue`, `verify_poll`, `deny`, `retire`, `report_live`, `issue_mac_nonce`, and `is_denied`, `is_retiring`, `is_duplicate`, `renew_allowed`, `host_role`, `host_role_for` (only for the key the host id is approved for), `pending`, `expired`, `request`, `recorded_approvals`, `bound_macs`, `allocate_serial`. A new request (not a renewal) is a duplicate claim when another request has its machine id, or when it claims a MAC bound to an enrolled host: a universally administered unicast MAC (data or BMC) claimed by the request a host's key came from, for a host that is not denied. `Claims` reads its MACs (`data_macs`, `bmc`, `all_macs`). |
 | `validity` | `UnixClock` and `SystemClock`, the only read of the wall clock in the crate (the wall-clock lint allows this file), and the validity window. |
 | `fs` | The `Fs` port every file is written through, `RealFs`, and `FaultFs`, which fails a chosen operation for the crash tests. |
 | `names` | `HostId` (a DNS label), `Role`, `ServiceName`, `KeyHash` (compared in constant time where an approval checks it), `MacAddress` (six octets read as `aa:bb:..`, `AA-BB-..` or twelve hex digits, written lower-case and colon-separated). |
@@ -29,7 +29,7 @@ and a state it does not know, and ignores fields it does not know.
 
 | file | message | holds |
 |---|---|---|
-| `requests/<request id>.pb` | `Request` | the CSR, claims (the BMC MAC among them), image, post time, `renewal_of`, state, the approval (with its approver, time, reason and the SHA-256 of the Mac nonce it consumed), the issuance round and its reserved serial, whether a Mac nonce was presented |
+| `requests/<request id>.pb` | `Request` | the CSR, claims (the BMC MAC among them), image, post time, `renewal_of`, state, the approval (with its approver, time, reason and the SHA-256 of the Mac nonce it consumed), the issuance round and its reserved serial, whether a Mac nonce was presented, and when and under which TTL it expired (the state keeps the waiting state it expired in, so a release before expiry reads it as waiting) |
 | `issued/<request id>.pb` | `Issued` | the certificate of the request's current round, its serial, host id and end |
 | `hosts/<host id>.pb` | `Host` | the key hash (the request id it came from), machine id, role, services, the `duplicate` mark |
 | `deny/<host id>.pb` | `Deny` | retiring, retired, or cleared by a named request |
@@ -59,7 +59,7 @@ signing returns `None` and is not a refusal.
 | `PostError` | `PendingFull` | `pending_full` |
 | `ApproveError` | `UnknownRequest` | `unknown_request` |
 | `ApproveError` | `KeyMismatch` | `key_mismatch` |
-| `ApproveError` | `NotPending(_)` | `not_pending` |
+| `ApproveError` | `NotPending(_)` (also an expired request) | `not_pending` |
 | `ApproveError` | `HostIdTaken` | `host_id_taken` |
 | `ApproveError` | `Denied` | `denied` |
 | `ApproveError` | `RenewalOfOtherHost` | `renewal_of_other_host` |
@@ -67,7 +67,7 @@ signing returns `None` and is not a refusal.
 | `ApproveError` | `MacNonce(_)` | `nonce_unknown`, `nonce_expired`, `nonce_used`, `nonce_wrong_serial` |
 | `IssueError` | `UnknownRequest` | `unknown_request` |
 | `IssueError` | `Denied` | `denied` |
-| `IssueError` | `NotApproved(_)` | none: the poll answers "pending" |
+| `IssueError` | `NotApproved(_)` (also an expired request) | none: the poll answers "pending" |
 | `PollError` | `UnknownRequest` | `unknown_request` |
 | `PollError` | `BadSignature` | `bad_signature` |
 | `PollError` | `BadNonce(_)` | `bad_signature` |

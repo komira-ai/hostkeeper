@@ -18,6 +18,8 @@
 //! - `approve` and `list`: `Enrollment.Approve` and `Enrollment.List` of
 //!   `hostkeeper.operator.v1` as plain functions over the store, and the audit of each
 //!   approval in the coordinator's ops store ([`Enrollment::audit_to`]);
+//! - `expiry`: a request no operator approved within the request TTL expires
+//!   ([`Enrollment::expire_requests`], run by the reload tick), audited `request_expired`;
 //! - `mac_nonce` and `device_state`: the Mac path of design 5.9, a request approved by its MDM
 //!   nonce when the allowlist and the gate's [`DeviceState`] port agree.
 //!
@@ -28,6 +30,7 @@
 
 mod approve;
 mod device_state;
+mod expiry;
 mod list;
 mod mac_nonce;
 mod nonce;
@@ -47,6 +50,7 @@ pub use approve::{ACTION_APPROVE, ACTION_REFUSED, ACTION_REPLACE, Approved, toke
 #[cfg(test)]
 pub use device_state::FakeDeviceState;
 pub use device_state::{DeviceState, DeviceStateError, DeviceStatus, NoDeviceState};
+pub use expiry::DEFAULT_REQUEST_TTL_SECS;
 pub use list::MAX_PENDING_PAGE;
 pub use mac_nonce::{
     ACTION_DECLINED, AllowlistError, MAC_APPROVER, MAC_NONCE_BYTES, MacAllowEntry, MacAllowlist,
@@ -88,7 +92,8 @@ pub struct ServerCertificate {
 }
 
 /// The coordinator's enrollment: its store, its CA, its server certificate file, its wall
-/// clock, its poll nonces, the Mac path's policy, and the ops store it audits approvals in.
+/// clock, its poll nonces, the Mac path's policy, the request TTL, and the ops store it audits
+/// approvals in.
 pub struct Enrollment {
     store: EnrollmentStore,
     ca: Ca,
@@ -98,6 +103,8 @@ pub struct Enrollment {
     clock: Arc<dyn UnixClock>,
     nonces: Nonces,
     mac: MacPolicy,
+    /// How long a request waits for an operator before it expires, in seconds.
+    request_ttl_secs: u64,
     /// Set when a coordinator takes this enrollment ([`Enrollment::audit_to`]).
     audit: Mutex<Option<Arc<OpsStore>>>,
 }
@@ -140,6 +147,7 @@ impl Enrollment {
             clock,
             nonces: Nonces::new(random),
             mac: MacPolicy::default(),
+            request_ttl_secs: DEFAULT_REQUEST_TTL_SECS,
             audit: Mutex::new(None),
         }
     }

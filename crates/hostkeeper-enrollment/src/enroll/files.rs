@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use prost::Message;
 
-use super::{Claims, RequestState, StoreError};
+use super::{Claims, Expiry, RequestState, StoreError};
 use crate::ca::P256Key;
 use crate::names::{HostId, KeyHash};
 
@@ -80,13 +80,19 @@ pub(crate) struct RequestRow {
 }
 
 impl RequestRow {
-    /// Reads the request file `path` of request `id`.
+    /// Reads the request file `path` of request `id`. A waiting request with `expired_unix` set
+    /// is [`RequestState::Expired`].
     pub fn read(path: &Path, bytes: &[u8], id: &KeyHash) -> Result<RequestRow, StoreError> {
         let pb: pb::Request = decode(path, bytes, |m: &pb::Request| m.schema)?;
-        let state = RequestState::from_number(pb.state).ok_or(StoreError::UnknownState {
+        let stored = RequestState::from_number(pb.state).ok_or(StoreError::UnknownState {
             path: path.to_path_buf(),
             value: pb.state,
         })?;
+        let state = if stored.is_pending() && pb.expired_unix != 0 {
+            RequestState::Expired
+        } else {
+            stored
+        };
         let key = P256Key::from_spki(&pb.spki_der)
             .ok()
             .filter(|key| key.key_hash() == *id && pb.request_id == id.as_bytes())
@@ -134,10 +140,28 @@ impl RequestRow {
         optional_host(&self.path, text)
     }
 
-    /// Sets the state, in the row and in its message.
+    /// Sets a state the file holds, in the row and in its message; never
+    /// [`RequestState::Expired`], which [`RequestRow::expire`] sets.
     pub fn set_state(&mut self, state: RequestState) {
         self.state = state;
         self.pb.state = state as i32;
+    }
+
+    /// Marks the waiting request expired at `now` under `ttl_secs`: the message keeps its
+    /// waiting state, so a release that does not know `expired_unix` reads it as waiting.
+    pub fn expire(&mut self, now: u64, ttl_secs: u64) {
+        self.state = RequestState::Expired;
+        // A clock at 0 is not a time a request expires at: 0 means "not expired".
+        self.pb.expired_unix = now.max(1);
+        self.pb.expired_after_secs = ttl_secs;
+    }
+
+    /// When and under which TTL the request expired, if it did.
+    pub fn expiry(&self) -> Option<Expiry> {
+        (self.state == RequestState::Expired).then_some(Expiry {
+            expired_unix: self.pb.expired_unix,
+            ttl_secs: self.pb.expired_after_secs,
+        })
     }
 }
 
@@ -251,6 +275,16 @@ mod tests {
         }
         assert_eq!(
             RequestState::from_number(pb::RequestState::Unspecified as i32),
+            None
+        );
+        // Expired is held as a waiting state with `expired_unix` set, never as a number of its
+        // own: a file in it reads as waiting to a release before expiry.
+        assert_eq!(
+            pb::RequestState::try_from(RequestState::Expired as i32).ok(),
+            None
+        );
+        assert_eq!(
+            RequestState::from_number(RequestState::Expired as i32),
             None
         );
         let denies = [

@@ -281,7 +281,7 @@ message AuditEntry {
   // `set_min_version`, `uninstalled`, `uninstall_cancelled`, `hold`, `unhold`, `abort`,
   // `exclude_abandon`, `enroll_approve`, `enroll_replace`, `enroll_approve_refused`,
   // `mac_auto_approve_declined`, `record_add`, `record_remove`, `enroll_requested`,
-  // `enroll_issued`, `cert_renewed`). Open: a later coordinator adds actions.
+  // `enroll_issued`, `cert_renewed`, `request_expired`). Open: a later coordinator adds actions.
   string action = 3;
   // The service, when the change is about one.
   optional string service = 4;
@@ -349,15 +349,30 @@ message Host {
   repeated Exclusion exclusions = 7;
   // How each service the coordinator manages sees it.
   repeated HostService services = 8;
+  // The host id of the inventory record the host's enrollment matches: the claims of the request
+  // its certificate's key was approved from, matched as `Enrollment.List` matches a pending
+  // request (`InventoryMatch`). Empty when the host is not enrolled (no approval of its key is
+  // held, or its host id is denied), when the coordinator has no enrollment, or when no record or
+  // more than one matches.
+  string inventory_record_id = 9;
+  // The data MACs of that record, lower-case, colon-separated, sorted; empty without a record.
+  repeated string data_macs = 10;
+  // The BMC MAC of that record; empty without a record or when it names none.
+  string bmc_mac = 11;
+  // The serial of that record; empty without a record or when it names none.
+  string serial = 12;
+  // When the request of the host's key was approved, in unix seconds; 0 when the host is not
+  // enrolled. A renewal approved by an operator moves it to that approval.
+  uint64 enrolled_unix = 13;
   // The last second the host's current certificate is valid, as its last heartbeat said; absent
   // when it said none (no certificate, or an agent that predates the field).
-  optional uint64 cert_not_after_unix = 9;
+  optional uint64 cert_not_after_unix = 14;
   // Why the host's last step of enrollment or renewal failed, as its last heartbeat said; absent
   // when that step succeeded.
-  optional string last_renew_error = 10;
+  optional string last_renew_error = 15;
   // How many of its heartbeats since the coordinator started said a time further from the
   // coordinator's clock than `--clock-skew-secs`, either way.
-  uint64 clock_skew_beats = 11;
+  uint64 clock_skew_beats = 16;
 }
 
 // A host taken out of a service.

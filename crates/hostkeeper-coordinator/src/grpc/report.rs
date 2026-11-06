@@ -358,6 +358,8 @@ pub(crate) fn host(
         clock_skew_beats: node.skewed_beats,
         role: node.role.clone(),
         node_id,
+        // `Hosts.List` and `Hosts.Get` fill these in from the host inventory.
+        ..proto::Host::default()
     }
 }
 

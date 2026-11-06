@@ -247,6 +247,12 @@ fn a_host_is_what_the_status_holds_of_it() {
             },
             web,
         ],
+        // A coordinator without enrollment holds no host as enrolled.
+        inventory_record_id: String::new(),
+        data_macs: Vec::new(),
+        bmc_mac: String::new(),
+        serial: String::new(),
+        enrolled_unix: 0,
         cert_not_after_unix: None,
         last_renew_error: None,
         clock_skew_beats: 0,

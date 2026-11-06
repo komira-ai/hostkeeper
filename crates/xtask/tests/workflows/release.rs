@@ -6,7 +6,8 @@
 //!   the repository).
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
 //!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
-//!   `plan`, `verify` and `publish` under their exact `if:`, checks both shipped binaries
+//!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the two jobs
+//!   of hostkeeper's own deploy, held to [`desired::problems`]; checks both shipped binaries
 //!   ([`SHIPPED_BINARIES`]) in `verify`, and
 //!   has no step that builds or signs ([`build_problems`]).
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
@@ -21,6 +22,7 @@
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
+use super::desired;
 use super::lint::{entries, entry, runs_on_pull_requests, triggers};
 use super::yaml::{self, Node, Value};
 
@@ -47,6 +49,10 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
     "artifacts.yml",
     "builds and attests one commit and never tags or publishes; its own per-commit group",
 )];
+
+/// The jobs of release.yml, sorted: the release (`plan`, `verify`, `publish`) and hostkeeper's
+/// own deploy ([`desired::CHANNEL_JOB`], [`desired::JOB`]).
+pub const RELEASE_JOBS: [&str; 5] = ["channel", "plan", "publish", "set-desired", "verify"];
 
 /// The triggers release.yml may have.
 pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workflow_run"];
@@ -266,9 +272,9 @@ fn release_problems(doc: &Node) -> Vec<String> {
         .filter_map(|(k, _)| k.as_str())
         .collect();
     jobs.sort_unstable();
-    if jobs != ["plan", "publish", "verify"] {
+    if jobs != RELEASE_JOBS {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify and publish"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, channel and set-desired"
         ));
     }
     for (name, condition, needs) in [
@@ -304,6 +310,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
         let name = name.as_str().unwrap_or_default();
         problems.extend(build_problems(name, Some(j)));
     }
+    problems.extend(desired::problems(doc));
     problems
 }
 
