@@ -21,23 +21,26 @@ struct Args {
     verb: Verb,
 }
 
-/// The verb the arguments after the program name spell.
-fn verb(args: &[&str]) -> Verb {
-    Args::try_parse_from(std::iter::once("release").chain(args.iter().copied()))
-        .map(|a| a.verb)
-        .expect("parse the argv")
+/// The verb the arguments after the program name spell, or clap's refusal.
+pub(super) fn parse(args: &[&str]) -> Result<Verb, clap::Error> {
+    Args::try_parse_from(std::iter::once("release").chain(args.iter().copied())).map(|a| a.verb)
 }
 
-fn text(path: &Path) -> &str {
+/// The verb the arguments after the program name spell.
+pub(super) fn verb(args: &[&str]) -> Verb {
+    parse(args).expect("parse the argv")
+}
+
+pub(super) fn text(path: &Path) -> &str {
     path.to_str().expect("a UTF-8 path")
 }
 
-fn empty() -> Fakes {
+pub(super) fn empty() -> Fakes {
     Fakes::over(FakeHistory::default())
 }
 
 /// Runs `v` and tells whether it asked for its adapters.
-fn connects(v: Verb) -> (Result<Vec<String>, Error>, bool) {
+pub(super) fn connects(v: Verb) -> (Result<Vec<String>, Error>, bool) {
     let connected = Cell::new(false);
     let out = run(v, || {
         connected.set(true);
@@ -177,6 +180,10 @@ fn verbs_that_read_no_port_run_with_the_ports_lent_back() {
         "--version",
         "0.1.9",
         "--binary",
+        text(&d.join("a")),
+        "--gh",
+        text(&d.join("a")),
+        "--trusted-root",
         text(&d.join("a")),
     ]);
     assert!(matches!(run_with(check, &ports), Err(Error::Io { .. })));
@@ -893,70 +900,6 @@ fn the_wired_adapters_route_each_port_to_its_program() {
     assert_eq!(
         ports.run_version.version_of(Path::new("bin/x")),
         Err(PortError::new("bin/x --version", why("bin/x")))
-    );
-}
-
-#[test]
-fn check_macos_pkg_reads_the_expanded_pkg_without_asking_for_adapters() {
-    // Catches: the expanded directory, `--version` or `--binary` not reaching the check, or the
-    // verb building the real adapters though it reads no port.
-    let d = scratch("release-check-macos-pkg-verb");
-    let absent = d.join("expanded");
-    let (out, connected) = connects(verb(&[
-        "check-macos-pkg",
-        text(&absent),
-        "--version",
-        "0.1.9",
-        "--binary",
-        text(&d.join("hostkeeper")),
-    ]));
-    assert!(
-        matches!(&out, Err(Error::Io { what, .. }) if *what == format!("read {}", absent.display())),
-        "{out:?}"
-    );
-    assert!(!connected);
-}
-
-#[test]
-fn macos_pkg_builds_through_the_pkgbuild_port_with_its_flags() {
-    // Catches: `--version`, `--binary`, `--stage` or `--out` not reaching the pkg builder, or the
-    // builder run without the pkgbuild port.
-    let d = scratch("release-macos-pkg-verb");
-    std::fs::write(d.join("hostkeeper"), b"bin").expect("write the binary");
-    let fakes = empty();
-    let stage = d.join("root");
-    let out = d.join("dist");
-    let build = verb(&[
-        "macos-pkg",
-        "--version",
-        "0.1.9",
-        "--binary",
-        text(&d.join("hostkeeper")),
-        "--stage",
-        text(&stage),
-        "--out",
-        text(&out),
-    ]);
-    let lines = run_with(build, &fakes.ports()).expect("build");
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].starts_with("hostkeeper-0.1.9-macos-arm64.pkg: sha256 "));
-    let calls = fakes.pkgbuild.calls.borrow();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(
-        (
-            calls[0].root.as_path(),
-            calls[0].pkg.as_path(),
-            calls[0].version.to_string()
-        ),
-        (
-            stage.as_path(),
-            out.join("hostkeeper-0.1.9-macos-arm64.pkg").as_path(),
-            "0.1.9".to_owned()
-        )
-    );
-    assert_eq!(
-        std::fs::read(stage.join("usr/local/bin/hostkeeper")).expect("the staged binary"),
-        b"bin"
     );
 }
 

@@ -261,6 +261,22 @@ What the device run found on macOS 15 (arm64):
 
 So `proc_pidpath` alone is not enough: after a rename over the path it still names the path, whose file is then another. With the image's device and inode it is: a replaced or unlinked file is refused, and never read as the new version.
 
+#### The sealed executable
+
+The digest of the running executable is compared with that of the executable sealed with the
+recorded version, as on Linux. On a Mac the first `[units] run` entry is a launchd label, and the
+sealed executable is the one its `units/<label>.plist` starts: the string of the plist's `Program`
+key when it has one (launchd starts that file then), else the first string of its `ProgramArguments`
+array, read with XML comments skipped and character references decoded
+(`hostkeeper_placed::lint::plist_program`, the parser the placed-unit lint reads plists with). The
+path rules are those of a systemd unit's `ExecStart=`: the path must go through
+`<packages>/<service>/current/`, as the host spells the packages directory, and the rest of it be
+plain names with no `..` component (an empty or `.` component inside the path is dropped, as a path
+reads it); the file hashed is the one at the same place under the version's own directory. A program
+anywhere else, a `Program` key not followed by a string, a plist with neither key, or a file that
+cannot be read gives no digest, and the recorded version is then reported unconfirmed
+(`version_unconfirmed`), never confirmed from another file.
+
 #### Units in a package
 
 A package's `units/` may hold `<label>.plist` files. A label is the service name or starts with
@@ -282,9 +298,9 @@ hostkeeper binary. The artifacts workflow builds them on a GitHub-hosted Apple
 silicon runner, never on a pull request; it runs by hand until its push-to-`main` trigger lands with
 the rest of the release automation.
 
-The pkg is the first install of a Mac. It installs exactly three files and one empty directory,
-and the directories that hold them (each 0755, as macOS has them already), all owned by root and
-wheel:
+The pkg is the first install of a Mac. It installs exactly five files and one empty directory,
+and the directories that hold them (each 0755, as macOS has them already; `/usr/local/lib` and
+`/usr/local/lib/hostkeeper` are made so when they are not there), all owned by root and wheel:
 
 - `/usr/local/bin/hostkeeper`, mode 0755, the released binary;
 - `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, mode 0644, the daemon's job as
@@ -292,20 +308,38 @@ wheel:
   `dev.hostkeeper.hostkeeper`, running `/usr/local/bin/hostkeeper daemon`);
 - `/var/log/hostkeeper`, mode 0755, the empty directory of the daemon's logs;
 - `/etc/newsyslog.d/hostkeeper.conf`, mode 0644, the rotation of those logs
-  ([The daemon's logs](#the-daemons-logs)).
+  ([The daemon's logs](#the-daemons-logs));
+- `/usr/local/lib/hostkeeper/gh`, mode 0755, the pinned darwin-arm64 `gh` that checks each
+  package's attestation;
+- `/usr/local/lib/hostkeeper/trusted_root.json`, mode 0644, the Sigstore trusted root that `gh`
+  checks it against, as the pinned `gh attestation trusted-root` printed it when the pkg was built.
 
-`/etc` and `/var` are links into `/private` on macOS, so the payload holds the last two under
-`private/` (`/private/var/log/hostkeeper`, `/private/etc/newsyslog.d/hostkeeper.conf`): a
+`/etc` and `/var` are links into `/private` on macOS, so the payload holds the log directory and
+the newsyslog file under `private/` (`/private/var/log/hostkeeper`, `/private/etc/newsyslog.d/hostkeeper.conf`): a
 directory named `var` or `etc` in the payload would stand in place of the link.
+
+`gh` and the trusted root are under `/usr/local` because `/usr` is read-only on a Mac; a Linux
+host keeps them under `/usr/lib/hostkeeper`. The workflow that builds the pkg pins both: it
+downloads `gh` and checks the download against the version and SHA-256 in the workflow, the same
+way it pins its other tools, then prints the trusted root with that `gh` and checks it against its
+own pinned SHA-256. Nothing is downloaded at install. A change of either pin is a pull request; a
+trusted root that Sigstore or GitHub have changed since the pin fails the build of the pkg until
+the pin is moved.
+
+The daemon on a Mac reads the CA bundle its package fetch trusts from `/etc/ssl/cert.pem`, the
+system roots macOS keeps there, which the pkg does not install. (A Linux host reads
+`/etc/ssl/certs/ca-certificates.crt`, or `/etc/pki/tls/certs/ca-bundle.crt` when only that one
+exists.)
 
 It has no scripts: it starts nothing and writes no config. The operator's bootstrap places
 `hostkeeper.toml` and loads the job. The pkg carries no installer signature, since that needs an
 Apple Developer ID Installer identity. It is attested like every other asset, and the binary in it
 keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
-`cargo xtask release macos-pkg` builds it with `pkgbuild`; `cargo xtask release check-macos-pkg`
-reads back the pkg that `pkgutil --expand` expanded, and refuses any other file, mode, owner, bytes
-or script, a plist whose output paths are not the daemon's two log files, and a newsyslog file
-whose entries name other paths than those two.
+`cargo xtask release macos-pkg` builds it with `pkgbuild` from the binary, `gh` and the trusted
+root (`--binary`, `--gh`, `--trusted-root`); `cargo xtask release check-macos-pkg` reads back the
+pkg that `pkgutil --expand` expanded, against the same three files, and refuses a missing file and
+any other file, mode, owner, bytes or script, a plist whose output paths are not the daemon's two
+log files, and a newsyslog file whose entries name other paths than those two.
 
 hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
@@ -336,8 +370,5 @@ gate; what they drive is measured against fakes on Linux. They:
 
 - The placed plists of a service package linked into `/Library/LaunchDaemons` by the daemon in a
   real update (the unit control is wired; a device run of an update is not part of the run above).
-- The version of a running service confirmed by the digest of its executable on a Mac: the sealed
-  executable is found from a systemd unit's `ExecStart=` only, so on a Mac the recorded version is
-  reported unconfirmed.
 - The boot id of the monotonic clock on a Mac (the start log and the step records compare stamps
   under it).

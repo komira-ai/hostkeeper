@@ -203,7 +203,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <tr><td>Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment</td><td>Built and tested in process</td></tr>
 <tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hostkeeper ctl</code>; web UI</td><td>Built; three declared methods answer <code>UNIMPLEMENTED</code> (<a href="#apis">the two APIs</a>)</td></tr>
 <tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both, but has no link (below)</td></tr>
-<tr><td>Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop</td><td>Built and running in the shipped binary; read from the code, the CA refuses the enrollment loop&rsquo;s certificate request (<a href="#n-h5">h5</a>), which has not been run to confirm</td></tr>
+<tr><td>Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop</td><td>Built and running in the shipped binary; the enrollment loop&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts (<a href="#n-h5">h5</a>)</td></tr>
 <tr><td>Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune</td><td>Built; reachable only through an order</td></tr>
 <tr><td>Daemon heartbeat to the coordinator</td><td>Built and running in the shipped binary: JSON, then gRPC once the coordinator advertises it, over mutual TLS; the coordinator&rsquo;s orders reach an enrolled host</td></tr>
 <tr><td>Linux unit control (daemon-reload, start, stop) for linked units</td><td><strong>Not wired</strong>: the Linux adapter set uses <code>Unwired</code>, which refuses every call; the step launcher is wired</td></tr>
@@ -405,9 +405,9 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <ul>
 <li id="n-h1"><strong>h1.</strong> A daemon runs under launchd on a Mac: a device test starts it and asks its status. No update, linked unit or enrollment has run on a Mac. On Linux the unit control is <code>Unwired</code>, so no update has run there either.</li>
 <li id="n-h2"><strong>h2.</strong> CI authenticates to the coordinator with a GitHub Actions OIDC token on <code>Releases.SetDesired</code> and <code>Releases.Converge</code>, and an operator&rsquo;s token may also set the desired version. Packages are attested in CI, and hosts only dial out. CI needs network reach to the coordinator&rsquo;s private listener, not to any host. Releases are published from <code>main</code> as GitHub releases, but no release channel that the daemon reads is hosted: the operator stages and serves one. The shipped daemon&rsquo;s heartbeat reaches the coordinator over mutual TLS once the host is enrolled, so a desired version reaches it in the reply.</li>
-<li id="n-h3"><strong>h3.</strong> The step contract (prepare, cutover, verify, cleanup, rollback), the rollback after a failed verify and the dead-man are built and tested in process. The service&rsquo;s hook does the hand-off; the daemon does not enforce zero dropped requests. On Linux a hooked update stops before cutover, because unit control is unwired, and until the CA accepts the daemon&rsquo;s certificate request (<a href="#n-h5">h5</a>) no host has the certificate its heartbeat, and so its orders, need.</li>
+<li id="n-h3"><strong>h3.</strong> The step contract (prepare, cutover, verify, cleanup, rollback), the rollback after a failed verify and the dead-man are built and tested in process. The service&rsquo;s hook does the hand-off; the daemon does not enforce zero dropped requests. On Linux a hooked update stops before cutover, because unit control is unwired.</li>
 <li id="n-h4"><strong>h4.</strong> The one-at-a-time gate, the canary, the bake, holds and force are built in the coordinator. <code>Hosts.Abort</code> does not reach the shipped daemon; an abort is done on the host through the admin socket. The group sizes <code>max_updating</code> and <code>min_up</code> are stored but no decision reads them.</li>
-<li id="n-h5"><strong>h5.</strong> A host id is chosen by the operator and bound to the host&rsquo;s key at approval. It is not derived from a MAC address. MAC addresses, serials and the machine id travel as claims that help match an inventory record and authorise nothing. The BMC claim&rsquo;s parser and wire field are built, but no IPMI reader is, so the shipped daemon never sends a BMC MAC. The CA, approval, renewal and the pinned CA hash are built. Read from the code, the daemon&rsquo;s certificate request has an empty subject, which the CA refuses; this has not been run to confirm.</li>
+<li id="n-h5"><strong>h5.</strong> A host id is chosen by the operator and bound to the host&rsquo;s key at approval. It is not derived from a MAC address. MAC addresses, serials and the machine id travel as claims that help match an inventory record and authorise nothing. The BMC claim&rsquo;s parser and wire field are built, but no IPMI reader is, so the shipped daemon never sends a BMC MAC. The CA, approval, renewal and the pinned CA hash are built, and the daemon&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts.</li>
 <li id="n-h6"><strong>h6.</strong> One root daemon, in Rust, with its verbs compiled in and no interpreter on the host. Hooks are executables that services ship. The coordinator is a second program.</li>
 <li id="n-h7"><strong>h7.</strong> gRPC and an HTTP/JSON gateway serve every operator method except <code>Hosts.List</code>, <code>Hosts.Get</code> and <code>Releases.UnmarkBad</code>, which answer <code>UNIMPLEMENTED</code>, so the Fleet and Host pages get refusals (the Host page still lists the services assigned to the host). <code>hostkeeper ctl</code> is generated from the protos, the web UI is built and the audit file is append-only. A <code>SetDesired</code> by CI writes no audit entry of its own; one by an operator writes a <code>set_desired</code> entry.</li>
 <li id="n-h8"><strong>h8.</strong> State is plain files, with one coordinator and no database. There is no failover, and the operator supervises the coordinator.</li>
@@ -438,7 +438,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <h3 id="g2">G2: deploying from GitHub Actions without ssh keys, inbound access or a person</h3>
 <p>CI should publish a signed release and set the desired version, and hosts should pull it. Static keys in CI and open inbound ports are the usual weak points.</p>
 <ul>
-<li>hostkeeper&rsquo;s design fits: CI&rsquo;s OIDC token is checked against an allow-list, is good once, and reaches only <code>SetDesired</code> and <code>Converge</code>. Hosts dial out. The gap on <code>main</code> is that the host side is not fully wired (Linux unit control, a certificate request the CA accepts) and no release channel is hosted.</li>
+<li>hostkeeper&rsquo;s design fits: CI&rsquo;s OIDC token is checked against an allow-list, is good once, and reaches only <code>SetDesired</code> and <code>Converge</code>. Hosts dial out. The gap on <code>main</code> is that the host side is not fully wired (Linux unit control) and no release channel is hosted.</li>
 <li>Nomad&rsquo;s documentation shows an OIDC path for CI: its JWT auth method validates tokens against a discovery URL and maps claims to ACL rules. Its pages do not name GitHub, and the runner must reach the servers.</li>
 <li>Kubernetes can validate external OIDC and JWT tokens in the API server, and GitHub issues per-job OIDC tokens. A pull model needs an add-on such as Flux.</li>
 <li>Ansible&rsquo;s <code>ansible-pull</code> is a real pull model that can pin a ref and verify a GPG signature. It needs Ansible on every host, and CI would hold a controller token. We found no OIDC sign-in in the pages read; that is a keyword search, not proof.</li>
@@ -476,7 +476,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <h3 id="g5">G5: hardware identity and enrollment with a CA and operator approval</h3>
 <p>Hostnames get reused and cloned. A host should prove which machine it is, and a person should approve it.</p>
 <ul>
-<li>hostkeeper binds a host id to the host&rsquo;s key at approval, with a CA that issues short-lived client certificates. Claims (MAC addresses, serial, machine id) are matched against an operator&rsquo;s inventory of MAC addresses, BMC MACs and serials, and by design authorise nothing. The BMC reader is not built, and a real enrollment is blocked on <code>main</code> by the certificate request&rsquo;s empty subject (<a href="#n-h5">h5</a>).</li>
+<li>hostkeeper binds a host id to the host&rsquo;s key at approval, with a CA that issues short-lived client certificates. Claims (MAC addresses, serial, machine id) are matched against an operator&rsquo;s inventory of MAC addresses, BMC MACs and serials, and by design authorise nothing. The BMC reader is not built (<a href="#n-h5">h5</a>).</li>
 <li>Mender identifies devices by identity attributes, a MAC by default, with accept and reject states. Fleet uses hardware identifiers and enroll secrets. MDM ties enrollment to Apple hardware serials through Automated Device Enrollment and issues certificates over SCEP.</li>
 <li>Puppet has a CA with manual signing of requests, though the identity is the certname. Kubernetes has CA-signed node certificates with approval of requests, with the identity from the node name.</li>
 <li>Salt has key acceptance by an operator, with the minion id as the identity. It has an <code>ipmi</code> module and a BMC extension, but they are modules that use supplied credentials, not a built-in identity.</li>
@@ -695,9 +695,11 @@ client authentication only) valid for
 <span data-cell="c-host-cert" data-source="crates/hostkeeper-enrollment/src/ca/issue.rs" data-item="HOST_VALIDITY_SECS">7 days</span>,
 and the coordinator&rsquo;s own server certificate, valid for at most
 <span data-cell="c-server-cert" data-source="crates/hostkeeper-enrollment/src/ca/issue.rs" data-item="SERVER_VALIDITY_CAP_SECS">90 days</span>.
-The server certificate is remade only at a start that finds it missing or in the last third of its
-life; nothing renews it while the coordinator runs, so the coordinator must be restarted within
-that life. Rotating the CA, revocation lists and backups are not built: backup is a written procedure
+The server certificate is remade when it is missing or in the last third of its life: at the
+start, and while the coordinator runs, at each look of the reload tick (<code>--tls-reload-secs</code>),
+so a coordinator that stays up is not left serving an expired certificate. A renewal that fails
+leaves the certificate in use served, logs at error level, shows its reason in the status, and is
+tried again at the next tick. Rotating the CA, revocation lists and backups are not built: backup is a written procedure
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/ca-backup.md">docs/operations/ca-backup.md</a>).</p>
 <figure class="wide" id="fig-enroll"><div class="fig-wrap scroll"><svg viewBox="0 0 980 560" role="img" aria-label="Enrollment as a sequence. The daemon&rsquo;s enrollment loop checks the coordinator&rsquo;s CA against its pinned hash, makes a key and posts Coordinator.Enroll with its request and claims. The coordinator stores a pending request and answers pending. The daemon polls with Coordinator.Poll, signing a fresh nonce, until an operator approves with Enrollment.Approve. At the next signed poll the coordinator issues the certificate once, and the daemon checks it and stores it. From half its life the daemon renews with Coordinator.Renew over mutual TLS, with no operator step."><defs><marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker></defs>
 <rect class="box-acc" x="20" y="14" width="180" height="40" rx="4"/><text x="110" y="39" text-anchor="middle" class="t-s t-b">daemon, enrollment loop</text>
@@ -757,14 +759,17 @@ one-use MDM nonce (valid
 is built in the coordinator&rsquo;s library. The shipped coordinator wires its device check to
 <code>NoDeviceState</code> and the daemon never sends a nonce, so a Mac is approved by an operator like any
 host.</p>
-<p><strong>A defect found while writing this report, by reading the code.</strong> The daemon builds its
-certificate request with an empty subject
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-enroll/src/key.rs">crates/hostkeeper-enroll/src/key.rs</a>, <code>csr_der</code>).
-The CA&rsquo;s profile accepts only a subject that is exactly one <code>CN=host:&lt;id&gt;</code>
+<p><strong>The daemon&rsquo;s certificate request.</strong> The daemon builds every certificate request, for <code>Enroll</code>
+and for <code>Renew</code>, with the one subject <code>CN=host:pending</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-enroll/src/key.rs">crates/hostkeeper-enroll/src/key.rs</a>, <code>csr_der</code>):
+the CA&rsquo;s profile accepts only a subject that is exactly one <code>CN=host:&lt;id&gt;</code>
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-enrollment/src/ca/profile.rs">crates/hostkeeper-enrollment/src/ca/profile.rs</a>,
-<code>check_request</code>), and refuses anything else as <code>bad_csr</code>. Every coordinator test builds its request
-with <code>host:pending</code>, and no test sends the daemon&rsquo;s own request to the CA. Read this way, a real
-daemon&rsquo;s first <code>Enroll</code> is refused. It has not been run to confirm.</p>
+<code>check_request</code>) and refuses anything else as <code>bad_csr</code>. The id is assigned at approval, and the CA
+never takes it from the request: the certificate&rsquo;s subject is always the approved id. An earlier
+daemon sent an empty subject, which the CA refused, so no daemon could finish enrollment. The tests
+in <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-enroll/tests/enroll/coordinator.rs">crates/hostkeeper-enroll/tests/enroll/coordinator.rs</a>
+hold the daemon&rsquo;s own requests to the CA&rsquo;s profile, and drive the daemon&rsquo;s enroller against the
+coordinator&rsquo;s own enrollment and CA through approval, the first certificate and its renewal.</p>
 <h3 id="apis">The two APIs</h3>
 <p>Every API is a protobuf service in <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-proto">crates/hostkeeper-proto</a>,
 compiled in pure Rust with nothing generated checked in
@@ -864,9 +869,11 @@ attestation verify</code> runs offline against the Sigstore trusted root and the
 <code>[trusted_signers]</code> entry (organisation, workflow, ref globs, hosted runner). There is no unsigned
 mode. The bundle is read up to
 <span data-cell="c-bundle" data-source="crates/hostkeeper-package/src/bundle.rs" data-item="MAX_BUNDLE_BYTES">1 MiB</span>.
-The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code>
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>), but no
-package of this repository installs them. Until an operator places them, every package check ends
+The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code> on Linux
+and under <code>/usr/local/lib/hostkeeper/</code> on a Mac
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>). The macOS
+installer pkg installs both (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>); no Linux
+package does. Until an operator places them on a Linux host, every package check there ends
 <code>attestation_unavailable</code>.</p>
 <p><strong>Unpack.</strong> One streaming pass (zstd, tar, a SHA-256 per file) writes into a private staging
 directory, under hard bounds: a zstd window of at most
@@ -1095,8 +1102,8 @@ itself and falls back after
 starts within
 <span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
 The timer job meant to run it is rendered but not installed.</li>
-<li>The installer is an unsigned <code>.pkg</code> holding the binary and the daemon&rsquo;s plist, with no scripts. The
-operator writes <code>hostkeeper.toml</code>.</li>
+<li>The installer is an unsigned <code>.pkg</code> holding the binary, the daemon&rsquo;s plist, its log directory and
+newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root, with no scripts. The operator writes <code>hostkeeper.toml</code>.</li>
 </ul>
 <p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine
@@ -1216,8 +1223,7 @@ labels = { demo = "yes" }</code></pre>
 <p>With it, tierstore goes first to one canary, which bakes for three healthy heartbeats, and then to the other hosts one at a time, Linux and Mac alike; a failed release on two of them (the default threshold) marks the version bad and sets the desired version back. hello goes only to hosts the operator labels <code>demo=yes</code> (<code>hostkeeper ctl hosts set-labels</code>). The BMC MAC on each server&rsquo;s record is there for the operator and for a future reader: the shipped daemon sends no BMC MAC, so today a server is matched on its data MACs alone.</p>
 <details class="edge"><summary>Edge cases: what the lab cannot do yet on <code>main</code></summary>
 <ul>
-<li>A host is first given a service by an <code>install</code> order, which the coordinator sends only to a daemon that announces <code>install-v1</code>. The daemon&rsquo;s heartbeat loop announces it and runs the install, but the CA refuses the daemon&rsquo;s certificate request (<a href="#n-h5">h5</a>), so the lab&rsquo;s first deploy of tierstore is planned as a forced one (<code>Releases.Force</code>), which <a href="#open">the measurements</a> time; a force reaches only hosts that already announce the service.</li>
-<li>The daemon&rsquo;s certificate request has an empty subject, which the CA refuses (<a href="#identity">identity and enrollment</a>), so a lab host cannot enroll until that is fixed.</li>
+<li>A host is first given a service by an <code>install</code> order, which the coordinator sends only to a daemon that announces <code>install-v1</code>. The daemon&rsquo;s heartbeat loop announces it and runs the install. The lab&rsquo;s first deploy of tierstore is planned as a forced one (<code>Releases.Force</code>), which <a href="#open">the measurements</a> time; a force reaches only hosts that already announce the service.</li>
 <li>On the Macs, tierstore&rsquo;s hook restarts its launchd job; the socket hand-off is Linux-only. Every Mac update of tierstore is therefore a short gap in serving.</li>
 <li>The rollout is serial across the eight hosts and every service, so a fleet-wide update of tierstore takes eight bakes.</li>
 </ul>
@@ -1273,8 +1279,9 @@ are the trusted signers and the conformance suite, not the daemon.</li>
 acknowledges it, but the resend queue is in memory, so after a daemon restart the verdict comes
 back from the step record when the coordinator orders again. A heartbeat is at most
 <span data-cell="c-heartbeat-bytes" data-source="crates/hostkeeper-link/src/beat.rs" data-item="MAX_HEARTBEAT_BYTES">16 KiB</span>.
-A host away past its certificate&rsquo;s expiry must be approved again, and a coordinator left running
-past its server certificate&rsquo;s life is refused by every daemon until it restarts.</li>
+A host away past its certificate&rsquo;s expiry must be approved again. A coordinator renews its own
+server certificate while it runs; one whose renewals keep failing (shown in the status) is refused
+by every daemon once the certificate in use expires.</li>
 <li><strong>A bad package.</strong> Fetch, digest, attestation and unpack failures refuse the order before any hook
 runs. One difference from the design: on a hooked order, a transient fetch or attestation failure
 reaches the coordinator as <code>Failed</code> with the reason, not as <code>Deferred</code>
@@ -1327,12 +1334,12 @@ lint holds each crate&rsquo;s dependencies. This report&rsquo;s own check is als
 <h2>What is not built yet</h2>
 <p>What is not built, plainly:</p>
 <ul>
-<li><strong>The CA refuses the daemon&rsquo;s enrollment request</strong>, read from the code (<a href="#n-h5">h5</a>), so a host gets no certificate for its heartbeat, and on Linux the unit control
-(daemon-reload, start, stop) is not wired; the step launcher is. Together these mean no host
-built from <code>main</code> can be updated by the coordinator, although the heartbeat link is wired.</li>
+<li><strong>Linux unit control:</strong> on Linux the unit control (daemon-reload, start, stop) is not wired; the step
+launcher is. A hooked update on a Linux host built from <code>main</code> therefore stops before cutover
+(<a href="#n-h3">h3</a>), although the heartbeat link is wired.</li>
 <li><strong>Orders the daemon takes:</strong> the heartbeat loop runs <code>update</code>, <code>force</code>, <code>install</code>, <code>uninstall</code>
 and <code>abort</code>, and announces <code>install-v1</code> and <code>abort-v1</code>, so the coordinator&rsquo;s install, uninstall
-and <code>Hosts.Abort</code> are sent to it over the heartbeat link, once the host has a certificate (above). The loop
+and <code>Hosts.Abort</code> are sent to it over the heartbeat link, once the host has its certificate (<a href="#identity">identity and enrollment</a>). The loop
 runs no <code>force_rollback</code> or <code>clear_halt</code>, and the coordinator never orders them.</li>
 <li><strong>Host listing and unmarking:</strong> <code>Hosts.List</code>, <code>Hosts.Get</code> and <code>Releases.UnmarkBad</code> answer
 <code>UNIMPLEMENTED</code>.</li>
@@ -1342,7 +1349,7 @@ host.</li>
 <li><strong>Rollout shape:</strong> one ordinary update at a time across the whole fleet, with no groups. Automatic
 rollback cannot move a host back below the version it runs.</li>
 <li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no expiry of pending
-requests, no CA rotation or revocation lists, and the certificate-request defect above.</li>
+requests, no CA rotation or revocation lists.</li>
 <li><strong>Operations:</strong> a single coordinator with no failover; the rollout file is read only at start; the
 audit file is never rotated; there is no metrics endpoint and no pager (conditions that need a
 person are <code>alert=</code> log lines).</li>
@@ -1387,7 +1394,6 @@ That test asserts behaviour, not time.</p>
 <p><strong>What the farm run needs first, from the code on <code>main</code>:</strong></p>
 <ul>
 <li>a systemd unit control in the Linux adapter set in place of <code>Unwired</code>;</li>
-<li>a daemon certificate request the CA accepts (see <a href="#identity">Identity and enrollment</a>);</li>
 <li>for a first install, the heartbeat link above: the loop announces <code>install-v1</code> and runs the
 <code>install</code> order, and a force reaches only hosts that already announce the service;</li>
 <li>the pinned <code>gh</code> and the Sigstore trusted root on every host, and a staged release channel.</li>
