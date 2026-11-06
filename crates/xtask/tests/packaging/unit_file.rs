@@ -1,14 +1,16 @@
-//! The unit, `hostkeeper.service`: its command line, its account, its start limits, the units
-//! it conflicts with and the keys it sets.
+//! The unit, `hostkeeper.service`: its command lines, its account, its restart policy and start
+//! limits, the units it conflicts with and the keys it sets.
 
 use crate::unit::{self, Unit};
 use crate::{UNIT, altered, read, refuses};
 
-/// The daemon's command line: the `daemon` verb with each path of design sections 4.1 and 10
-/// spelled out as a flag, and the flag that makes it report ready to systemd. `daemon_flags.rs`
-/// parses this line with the binary's own flag parser.
+/// The daemon's command line: `current` of the binary directory of hostkeeper's own update (the
+/// binary the update chose; `self_update.rs` holds it to the daemon's `binary_dir`), the `daemon`
+/// verb with each path of design sections 4.1 and 10 spelled out as a flag, and the flag that
+/// makes it report ready to systemd. `daemon_flags.rs` parses this line with the binary's own flag
+/// parser.
 const DAEMON_COMMAND: [&str; 11] = [
-    "/usr/bin/hostkeeper",
+    "/var/lib/updater/state/hostkeeper/bin/current",
     "daemon",
     "--config",
     "/etc/hostkeeper/hostkeeper.toml",
@@ -19,6 +21,20 @@ const DAEMON_COMMAND: [&str; 11] = [
     "--admin-socket",
     "/run/hostkeeper/admin.sock",
     "--notify-systemd",
+];
+
+/// The command line run before each start: the binary the package installed gives the binary
+/// directory its first binary when `current` starts none (`self-update-seed`). Its `-` prefix,
+/// the one prefix a line of this unit has, lets the start go on when it fails: an older binary
+/// without the verb, under a unit an update placed, while `current` is already there.
+/// `daemon_flags.rs` parses it with the binary's own flag parser.
+const SEED_COMMAND: [&str; 6] = [
+    "/usr/bin/hostkeeper",
+    "self-update-seed",
+    "--state-dir",
+    "/var/lib/updater/state",
+    "--binary",
+    "/usr/bin/hostkeeper",
 ];
 
 /// kbf's update agent and the root half that serves it, as kbf v0.0.64 names their units in
@@ -51,8 +67,10 @@ const UNIT_KEYS: [(&str, &[&str]); 3] = [
         &[
             "Type",
             "TimeoutStartSec",
+            "ExecStartPre",
             "ExecStart",
             "Restart",
+            "RestartSec",
             "RuntimeDirectory",
             "RuntimeDirectoryMode",
         ],
@@ -94,9 +112,9 @@ fn check_command(text: &str) -> Result<(), String> {
                 entry.line
             ));
         }
-        if key.starts_with("Exec") && key != "ExecStart" {
+        if key.starts_with("Exec") && !matches!(key, "ExecStart" | "ExecStartPre") {
             return Err(format!(
-                "line {}: {key}= runs a command besides the daemon",
+                "line {}: {key}= runs a command besides the daemon and its seed",
                 entry.line
             ));
         }
@@ -105,12 +123,25 @@ fn check_command(text: &str) -> Result<(), String> {
     if words != DAEMON_COMMAND {
         return Err(format!("ExecStart= runs {words:?}, not {DAEMON_COMMAND:?}"));
     }
+    let pre = unit.single("Service", "ExecStartPre")?;
+    let seed = pre.strip_prefix('-').ok_or_else(|| {
+        format!("ExecStartPre= has no `-`: a seed that fails would stop the start: {pre:?}")
+    })?;
+    let words = unit::command_words(seed)?;
+    if words != SEED_COMMAND {
+        return Err(format!(
+            "ExecStartPre= runs {words:?}, not {SEED_COMMAND:?}"
+        ));
+    }
     Ok(())
 }
 
-/// Catches a unit whose command line is not the daemon's: a renamed or dropped flag, a flag
-/// without its value, another verb, a second command, a prefix that ignores a failure, a value
-/// taken from the environment, or any environment set for the daemon.
+/// Catches a unit whose command line is not the daemon's: a program other than `current` of the
+/// binary directory (the deb's `/usr/bin/hostkeeper`, `previous`), a renamed or dropped flag, a
+/// flag without its value, another verb, a second command, a prefix that ignores a failure, a
+/// value taken from the environment, or any environment set for the daemon; and a unit whose seed
+/// before the start is missing, can stop the start, or is not the seed of the state directory
+/// with the package's binary.
 #[test]
 fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
     let text = read(UNIT);
@@ -141,9 +172,41 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             altered(
                 &text,
                 line_end,
-                "--notify-systemd\nExecStartPre=/usr/bin/true\n",
+                "--notify-systemd\nExecStartPost=/usr/bin/true\n",
             ),
-            "ExecStartPre= runs a command",
+            "ExecStartPost= runs a command",
+        ),
+        (
+            altered(
+                &text,
+                line_end,
+                "--notify-systemd\nExecStartPre=-/usr/bin/true\n",
+            ),
+            "sets ExecStartPre= 2 times",
+        ),
+        (
+            altered(&text, "ExecStartPre=-/usr/bin/", "ExecStartPre=/usr/bin/"),
+            "ExecStartPre= has no `-`",
+        ),
+        (
+            altered(
+                &text,
+                "self-update-seed --state-dir",
+                "self-update-seed --dir",
+            ),
+            "ExecStartPre= runs",
+        ),
+        (
+            altered(&text, " --binary /usr/bin/hostkeeper\n", "\n"),
+            "ExecStartPre= runs",
+        ),
+        (
+            altered(
+                &text,
+                "ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper\n",
+                "",
+            ),
+            "[Service] has no ExecStartPre=",
         ),
         (
             altered(
@@ -170,7 +233,23 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             "holds `%`",
         ),
         (
-            altered(&text, "--state-dir", "--state-directory"),
+            altered(&text, "current daemon --config", "previous daemon --config"),
+            "ExecStart= runs",
+        ),
+        (
+            altered(
+                &text,
+                "ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon",
+                "ExecStart=/usr/bin/hostkeeper daemon",
+            ),
+            "ExecStart= runs",
+        ),
+        (
+            altered(
+                &text,
+                "daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir",
+                "daemon --config /etc/hostkeeper/hostkeeper.toml --state-directory",
+            ),
             "ExecStart= runs",
         ),
         (
@@ -182,11 +261,7 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             "ExecStart= runs",
         ),
         (
-            altered(
-                &text,
-                "hostkeeper daemon --config",
-                "hostkeeper serve --config",
-            ),
+            altered(&text, "current daemon --config", "current serve --config"),
             "ExecStart= runs",
         ),
         (
@@ -202,7 +277,7 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             "a second command",
         ),
         (
-            altered(&text, "ExecStart=/usr/bin/", "ExecStart=-/usr/bin/"),
+            altered(&text, "ExecStart=/var/lib/", "ExecStart=-/var/lib/"),
             "has a prefix",
         ),
         (
@@ -213,14 +288,14 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             altered(
                 &text,
                 line_end,
-                "--notify-systemd\nExecStart=/usr/bin/hostkeeper daemon\n",
+                "--notify-systemd\nExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon\n",
             ),
             "sets ExecStart= 2 times",
         ),
     ];
     refuses(check_command, &cases);
     // A command line continued over two lines is one command line.
-    let continued = altered(&text, " --state-dir", " \\\n    --state-dir");
+    let continued = altered(&text, " --packages-dir", " \\\n    --packages-dir");
     assert_eq!(check_command(&continued), Ok(()));
 }
 
@@ -321,8 +396,16 @@ fn check_limits(text: &str) -> Result<(), String> {
         ));
     }
     let restart = unit.single("Service", "Restart")?;
-    if restart != "on-failure" {
-        return Err(format!("Restart={restart}, not on-failure"));
+    if restart != "always" {
+        return Err(format!(
+            "Restart={restart}, not always: the daemon exits 0 to be started again after its own update"
+        ));
+    }
+    let delay = unit.single("Service", "RestartSec")?;
+    if delay != "1" {
+        return Err(format!(
+            "RestartSec={delay}, not 1, the delay of the self-update drop-in"
+        ));
     }
     let timeout = unit.single("Service", "TimeoutStartSec")?;
     if timeout != "infinity" {
@@ -334,9 +417,11 @@ fn check_limits(text: &str) -> Result<(), String> {
 }
 
 /// Catches start limits other than the ones the self-update fallback of design section 6.6 is
-/// written against (3 failed starts within 300 seconds), limits put where systemd does not read
-/// them, a restart policy that restarts a daemon that stopped cleanly, or a start timeout that
-/// would stop a daemon during a long boot pass (design section 6.5).
+/// written against (3 starts within 300 seconds), limits put where systemd does not read them, a
+/// restart policy that does not restart a daemon that exited cleanly for its own update
+/// (`on-failure`, the policy that left a self-updated host down), a restart delay other than the
+/// drop-in's, or a start timeout that would stop a daemon during a long boot pass (design section
+/// 6.5).
 #[test]
 fn unit_restart_limits_match_the_self_update_fallback_assumption() {
     let text = read(UNIT);
@@ -344,8 +429,8 @@ fn unit_restart_limits_match_the_self_update_fallback_assumption() {
     let limits = "StartLimitIntervalSec=300\nStartLimitBurst=3\n";
     let moved = altered(
         &altered(&text, limits, ""),
-        "Restart=on-failure\n",
-        &format!("Restart=on-failure\n{limits}"),
+        "Restart=always\n",
+        &format!("Restart=always\n{limits}"),
     );
     let cases = [
         (
@@ -382,9 +467,18 @@ fn unit_restart_limits_match_the_self_update_fallback_assumption() {
             "has no TimeoutStartSec=",
         ),
         (
-            altered(&text, "Restart=on-failure", "Restart=always"),
-            "Restart=always",
+            altered(&text, "Restart=always", "Restart=on-failure"),
+            "Restart=on-failure, not always",
         ),
+        (
+            altered(&text, "Restart=always", "Restart=no"),
+            "Restart=no, not always",
+        ),
+        (
+            altered(&text, "RestartSec=1", "RestartSec=30"),
+            "RestartSec=30, not 1",
+        ),
+        (altered(&text, "RestartSec=1\n", ""), "has no RestartSec="),
     ];
     refuses(check_limits, &cases);
 }
@@ -563,10 +657,10 @@ fn unit_holds_only_the_keys_the_design_names() {
         (
             altered(
                 &text,
-                "Restart=on-failure\n",
-                "Restart=on-failure\nRestartSec=5\n",
+                "Restart=always\n",
+                "Restart=always\nRestartPreventExitStatus=0\n",
             ),
-            "[Service] RestartSec= is not",
+            "[Service] RestartPreventExitStatus= is not",
         ),
         (
             altered(

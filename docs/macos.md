@@ -67,7 +67,12 @@ serve it:
 - `hostkeeper_steps::selfupdate::launchd_fallback_job`: the job `<label>.fallback`, which runs
   `previous self-update-fallback --dir <dir>` every `StartInterval` seconds and not at load.
   The plist is deterministic (keys sorted, fixed indentation) and every path and the label in
-  it are XML-escaped.
+  it are XML-escaped. The daemon writes it at each start, once ready, as
+  `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.fallback.plist` with an interval of 60
+  seconds, only when it differs from what is there, and then boots the job out and bootstraps it
+  again (`hostkeeper_daemon::selfunits`). Until the first self-update there is no `previous`, and
+  launchd cannot spawn the job's program when the interval comes; the daemon's own plist still
+  starts `/usr/local/bin/hostkeeper`, not the binary directory's `current`.
 
 Since the timer runs the verb whether or not the new binary is failing, the verb decides the
 burst itself on a Mac (`hostkeeper_daemon::fallback::fallback_after_burst`). Each start of the
