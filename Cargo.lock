@@ -1627,7 +1627,9 @@ dependencies = [
 name = "hostkeeper-privileged"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "hex",
+ "hostkeeper-coordinator",
  "hostkeeper-daemon",
  "hostkeeper-hook",
  "hostkeeper-launchd",
@@ -1637,12 +1639,16 @@ dependencies = [
  "hostkeeper-testkit",
  "hostkeeper-unpack",
  "hyper-util",
+ "rcgen",
  "rustix",
+ "rustls",
+ "serde_json",
  "sha2",
  "thiserror",
  "tokio",
  "tonic",
  "tower",
+ "x509-parser",
 ]
 
 [[package]]

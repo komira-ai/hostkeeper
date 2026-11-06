@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 

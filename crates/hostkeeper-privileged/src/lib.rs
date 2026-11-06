@@ -1,16 +1,22 @@
 //! What the privileged tests share, and the part of them that can be tested without root.
 //!
-//! The privileged tests (`tests/transient_unit.rs`, `tests/observer.rs`) run as root against the
-//! real systemd of a host, in `.github/workflows/privileged.yml` only, after a merge to main.
-//! Each file starts with `#![cfg(feature = "privileged")]`; the feature is off by default, so the
-//! pull-request set compiles none of them ([`PRIVILEGED`]). They drive the production adapters
+//! The privileged tests (`tests/transient_unit.rs`, `tests/observer.rs`, `tests/unit_control.rs`)
+//! run as root against the real systemd of a host, in `.github/workflows/privileged.yml` only,
+//! after a merge to main. Each of these files starts with `#![cfg(feature = "privileged")]` (the
+//! first-boot and macOS files below with lines of their own); the feature is off by default, so
+//! the pull-request set compiles none of them ([`PRIVILEGED`]). They drive the production adapters
 //! (`hostkeeper_steps::SystemdLauncher`, `hostkeeper_steps::DeadMan`, the observer's
 //! `SystemdManager` and `ProcProbe`), never a copy of them. The macOS device tests
 //! (`tests/device_mac.rs`, first line `#![cfg(all(target_os = "macos", feature = "privileged"))]`)
 //! do the same on a Mac, in privileged.yml's job `macos-device`, against launchd: the daemon
 //! (the program `hostkeeper-device-daemon`, which forwards to `hostkeeper_daemon::cli::main`),
 //! `hostkeeper_launchd`'s launcher, service manager and process probe, and the daemon's package
-//! check.
+//! check. The first-boot tests (`tests/first_boot.rs`, `tests/install_uninstall.rs`, first line
+//! `#![cfg(all(target_os = "linux", feature = "privileged"))]`, privileged.yml's job `first-boot`)
+//! start the programs themselves as child processes: the coordinator (the program
+//! `hostkeeper-privileged-coordinator`, which forwards to
+//! `hostkeeper_coordinator::config::main`) and the daemon (`hostkeeper-device-daemon`), and drive
+//! them as an operator and a host do.
 //!
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its

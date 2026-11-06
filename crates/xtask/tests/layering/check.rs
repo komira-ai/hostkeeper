@@ -56,7 +56,9 @@ pub type Layer = (
 /// crates' and the web app's tests read the protobuf descriptors; the privileged tests drive the
 /// step runner's launcher and dead-man and the observer's adapters against the host, and on a
 /// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
-/// normal dependency), the launchd adapters and the package check, and call its admin socket.
+/// normal dependency), the launchd adapters and the package check, and call its admin socket; the
+/// first-boot tests start the coordinator and the daemon as child processes (the coordinator is
+/// their program `hostkeeper-privileged-coordinator`, which needs it as a normal dependency).
 pub const LAYERS: [Layer; 23] = [
     (BINARY, &[DAEMON], &[PROTO]),
     (CI, &[CTL], &[PROTO]),
@@ -91,7 +93,7 @@ pub const LAYERS: [Layer; 23] = [
     (PLACED, &[CONFIG], &[]),
     (
         PRIVILEGED,
-        &[DAEMON, HOOK],
+        &[COORDINATOR, DAEMON, HOOK],
         &[LAUNCHD, OBSERVE, PROTO, STEPS, UNPACK],
     ),
     (PROTO, &[], &[]),

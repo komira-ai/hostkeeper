@@ -1319,9 +1319,19 @@ production adapters against real systemd: a step in a real transient unit ended 
 its whole control group, <code>RuntimeMaxSec</code> as the only property, an unbounded <code>prepare</code>, the
 dead-man stopping a unit by name, a unit name reused after a failure, long output kept to its last
 bytes, and the observer reading a real unit&rsquo;s state and its main process&rsquo;s executable digest.
-The workload is <code>hostkeeper-fixture-hook</code>. This suite does not run the daemon, an enrollment or a
-whole update under systemd. On macOS, the <code>macos-device</code> job above is the only test that runs the
-daemon binary under a real service manager.</li>
+The workload is <code>hostkeeper-fixture-hook</code>. Its job <code>first-boot</code> runs the programs themselves:
+the coordinator and the daemon started as child processes on loopback and driven through
+<code>hostkeeper ctl</code>. <code>first_boot.rs</code> covers an enrollment, its approval, the host certificate,
+heartbeats over mutual TLS and a restart of each program. <code>install_uninstall.rs</code> covers a package
+assigned and installed once across coordinator restarts, and kept by the daemon&rsquo;s boot pass, from a
+release channel the test serves over HTTPS. Its update and uninstall tests are ignored for the gaps
+they found: an update after an install is refused <code>try_conflict</code>
+(<a href="https://github.com/komira-ai/hostkeeper/issues/109"><code>komira-ai/hostkeeper#109</code></a>), and the Linux
+launcher runs no <code>uninstall</code> hook
+(<a href="https://github.com/komira-ai/hostkeeper/issues/110"><code>komira-ai/hostkeeper#110</code></a>). Its one stand-in is the attestation
+verifier, <code>true</code> in place of <code>gh</code>. A renewal is not covered: no flag shortens the host
+certificate&rsquo;s validity (<a href="https://github.com/komira-ai/hostkeeper/issues/100"><code>komira-ai/hostkeeper#100</code></a>). On macOS, the
+<code>macos-device</code> job above is the only test that runs the daemon binary under launchd.</li>
 <li><strong>End to end, in process.</strong> <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/tests/end_to_end.rs">crates/hostkeeper-daemon/tests/end_to_end.rs</a>
 runs the real coordinator, heartbeat loop, executor, step runner and boot pass together, with
 fakes for the transport, the service manager and the package source: a desired version set on
