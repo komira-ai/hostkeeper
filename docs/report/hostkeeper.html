@@ -695,9 +695,11 @@ client authentication only) valid for
 <span data-cell="c-host-cert" data-source="crates/hostkeeper-enrollment/src/ca/issue.rs" data-item="HOST_VALIDITY_SECS">7 days</span>,
 and the coordinator&rsquo;s own server certificate, valid for at most
 <span data-cell="c-server-cert" data-source="crates/hostkeeper-enrollment/src/ca/issue.rs" data-item="SERVER_VALIDITY_CAP_SECS">90 days</span>.
-The server certificate is remade only at a start that finds it missing or in the last third of its
-life; nothing renews it while the coordinator runs, so the coordinator must be restarted within
-that life. Rotating the CA, revocation lists and backups are not built: backup is a written procedure
+The server certificate is remade when it is missing or in the last third of its life: at the
+start, and while the coordinator runs, at each look of the reload tick (<code>--tls-reload-secs</code>),
+so a coordinator that stays up is not left serving an expired certificate. A renewal that fails
+leaves the certificate in use served, logs at error level, shows its reason in the status, and is
+tried again at the next tick. Rotating the CA, revocation lists and backups are not built: backup is a written procedure
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/ca-backup.md">docs/operations/ca-backup.md</a>).</p>
 <figure class="wide" id="fig-enroll"><div class="fig-wrap scroll"><svg viewBox="0 0 980 560" role="img" aria-label="Enrollment as a sequence. The daemon&rsquo;s enrollment loop checks the coordinator&rsquo;s CA against its pinned hash, makes a key and posts Coordinator.Enroll with its request and claims. The coordinator stores a pending request and answers pending. The daemon polls with Coordinator.Poll, signing a fresh nonce, until an operator approves with Enrollment.Approve. At the next signed poll the coordinator issues the certificate once, and the daemon checks it and stores it. From half its life the daemon renews with Coordinator.Renew over mutual TLS, with no operator step."><defs><marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker></defs>
 <rect class="box-acc" x="20" y="14" width="180" height="40" rx="4"/><text x="110" y="39" text-anchor="middle" class="t-s t-b">daemon, enrollment loop</text>
@@ -1271,8 +1273,9 @@ are the trusted signers and the conformance suite, not the daemon.</li>
 acknowledges it, but the resend queue is in memory, so after a daemon restart the verdict comes
 back from the step record when the coordinator orders again. A heartbeat is at most
 <span data-cell="c-heartbeat-bytes" data-source="crates/hostkeeper-link/src/beat.rs" data-item="MAX_HEARTBEAT_BYTES">16 KiB</span>.
-A host away past its certificate&rsquo;s expiry must be approved again, and a coordinator left running
-past its server certificate&rsquo;s life is refused by every daemon until it restarts.</li>
+A host away past its certificate&rsquo;s expiry must be approved again. A coordinator renews its own
+server certificate while it runs; one whose renewals keep failing (shown in the status) is refused
+by every daemon once the certificate in use expires.</li>
 <li><strong>A bad package.</strong> Fetch, digest, attestation and unpack failures refuse the order before any hook
 runs. One difference from the design: on a hooked order, a transient fetch or attestation failure
 reaches the coordinator as <code>Failed</code> with the reason, not as <code>Deferred</code>
