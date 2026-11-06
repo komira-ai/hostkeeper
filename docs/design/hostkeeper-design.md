@@ -308,7 +308,7 @@ CI or an operator token sets the desired version (Q6): the operator through the 
 |---|---|---|
 | Daemon | host client certificate (7 days) | heartbeat, renew, execute the verbs on its own host |
 | Coordinator | server certificate chaining to the CA pinned in the daemon config | order any verb for any enrolled host, assign services; supply no command, path or URL |
-| Operator | personal token | exclude, include, label, hold and unhold, clear halt, force, mark and unmark bad, approve enrollment, assign services, set `min_version`, set the desired version of any managed service |
+| Operator | personal token | exclude, include, label, hold and unhold, clear halt, force, mark and unmark bad, approve enrollment, assign services, set `min_version`, set the desired version of any managed service, read convergence |
 | CI | OIDC token, single-use `jti` | set the desired version and read convergence, only for services its allow-list entry names |
 | Local root | uid 0 on the host | everything, including editing the daemon config |
 | Trusted signer | the organisation's release workflow named in the daemon config | publish packages (binaries and hooks) that run as root on every host the coordinator assigns them to |

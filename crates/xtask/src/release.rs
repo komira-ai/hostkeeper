@@ -27,6 +27,10 @@
 //! - `channel-stage` ([`channel_stage`]): one version of a service from a directory of release
 //!   assets, checked and laid out in a directory as the release channel serves it
 //!   (`S/V/index.json` beside each package and its bundle); copies files only, idempotent.
+//! - `channel-sync` ([`sync`]): every new published release of one or more repositories,
+//!   downloaded, checked (`release check` for hostkeeper's, the sums and the repository's own
+//!   attestations for another's) and staged into a release channel by `channel-stage`, a new
+//!   version renamed into place whole; never changes a version already there.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh` and `pkgbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
@@ -55,6 +59,7 @@ pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
 mod set_version;
+mod sync;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod version;
@@ -302,6 +307,29 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Copy every new published release of each repository into the release channel: download
+    /// its assets, check them (`release check` for a hostkeeper release; for another
+    /// repository's, its SHA256SUMS and the attestation of every asset with a bundle by that
+    /// repository's own artifacts.yml on refs/heads/main) and stage each service version it
+    /// carries by `channel-stage`. A version already in the channel is left alone; one there with
+    /// other bytes is refused, and the run goes on with the others and then fails. Reads public
+    /// release assets only.
+    ChannelSync {
+        /// A repository whose releases are synced, `<owner>/<name>`; repeat it (or list several)
+        /// for more, synced in the order given.
+        #[arg(long = "repo", required = true, num_args = 1..)]
+        repos: Vec<Repo>,
+        /// The root of the channel's tree, as `channel-stage --out` names it. It must exist.
+        #[arg(long)]
+        channel_dir: PathBuf,
+        /// Skip every release older than this tag, `v<X.Y.Z>` (the tag itself is synced).
+        #[arg(long, value_parser = sync::parse_tag)]
+        since: Option<Version>,
+        /// Run again and again, this many seconds after each run ends, and never exit (the
+        /// sidecar's loop). Without it the verb runs once.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        every_secs: Option<u64>,
+    },
     /// Publish a checked directory as the release of the version, at the commit.
     Publish {
         dir: PathBuf,
@@ -459,6 +487,27 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => publish::publish(ports, &dir, &repo, &version, &commit),
+        Verb::ChannelSync {
+            repos,
+            channel_dir,
+            since,
+            every_secs,
+        } => {
+            let request = sync::Request {
+                repos,
+                channel: channel_dir,
+                since,
+            };
+            match every_secs {
+                None => sync::sync(ports.source, ports.verifier, &request),
+                Some(secs) => sync::every(
+                    ports.source,
+                    ports.verifier,
+                    &request,
+                    &sync::Sleep(std::time::Duration::from_secs(secs)),
+                ),
+            }
+        }
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
@@ -508,6 +557,7 @@ impl<E: Exec> Adapters for Wired<E> {
             git: &self.git,
             runs: &self.gh,
             store: &self.gh,
+            source: &self.gh,
             verifier: &self.gh,
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,
