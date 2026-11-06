@@ -879,7 +879,10 @@ and the rpm install both on Linux, <code>gh</code> from its release archive chec
 trusted root captured when the package is built
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/verify-a-release.md">docs/deploy/verify-a-release.md</a>); the macOS
 installer pkg installs both on a Mac (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>). A host
-without them ends every package check <code>attestation_unavailable</code>.</p>
+without them ends every package check <code>attestation_unavailable</code>. Hostkeeper&rsquo;s own package also
+carries the trusted root, so each update of hostkeeper brings the root of its release; the daemon uses
+the copy written last and reports its age in the admin <code>Status</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/verify-a-release.md#the-trusted-root-on-a-host">docs/deploy/verify-a-release.md</a>).</p>
 <p><strong>Unpack.</strong> One streaming pass (zstd, tar, a SHA-256 per file) writes into a private staging
 directory, under hard bounds: a zstd window of at most
 <span data-cell="c-window" data-source="crates/hostkeeper-unpack/src/archive.rs" data-item="MAX_WINDOW_BYTES">8 MiB</span>,
@@ -1364,8 +1367,7 @@ person are <code>alert=</code> log lines).</li>
 <li><strong>macOS:</strong> no MDM, no update run on a device, no signed installer.</li>
 <li><strong>A hook is root and is not confined.</strong> This is by design: the trust is in the signed package and
 the conformance suite (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#11-limits">design: Limits</a>).</li>
-<li><strong>Distribution:</strong> releases are published as GitHub releases, but no release channel is hosted.
-The trusted root a Linux host checks with is the one of the deb or rpm it last installed; self-update does not refresh it.</li>
+<li><strong>Distribution:</strong> releases are published as GitHub releases, but no release channel is hosted.</li>
 </ul>
 <p>The design&rsquo;s plan for the rest is its build order
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#122-build-order-from-todays-code-to-done">design: Build order</a>).
