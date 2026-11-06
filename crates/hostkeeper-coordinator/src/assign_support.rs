@@ -105,6 +105,7 @@ pub(crate) fn install(to: &str, n: u8) -> Order {
         version: version(to),
         order_id: install_order_id(&digest),
         digest,
+        index_digest: None,
         order_try: 1,
     }
 }

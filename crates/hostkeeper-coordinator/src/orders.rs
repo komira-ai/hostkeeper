@@ -65,6 +65,12 @@ pub fn next_try(beat: Option<&Heartbeat>, order_id: &str) -> u64 {
         .map_or(1, |r| r.order_try.unwrap_or(0).saturating_add(1))
 }
 
+/// The `index_digest` of an order as the agent's messages say it: the digest, or empty when the
+/// order names no index (the daemon checks none).
+fn index_text(digest: Option<&Digest>) -> String {
+    digest.map(ToString::to_string).unwrap_or_default()
+}
+
 /// An order a heartbeat answer carries as a typed order: an operator's, or the rollout gate's
 /// update with its terms, install or uninstall.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,8 +83,11 @@ pub enum Order {
         service: String,
         /// The version to run.
         version: Version,
-        /// The package digest CI registered for the version.
+        /// The package digest CI registered for the version, for the host's platform.
         digest: PackageDigest,
+        /// The digest of the release index it was taken from; none for a version registered
+        /// with one package digest.
+        index_digest: Option<Digest>,
         /// The order's id ([`crate::order_terms::order_id_text`]).
         order_id: String,
         /// The try, from 1.
@@ -97,8 +106,11 @@ pub enum Order {
         service: String,
         /// The version forced.
         version: Version,
-        /// The package digest CI registered for the version.
+        /// The package digest CI registered for the version, for the host's platform.
         digest: Digest,
+        /// The digest of the release index it was taken from; none for a version registered
+        /// with one package digest.
+        index_digest: Option<Digest>,
         /// Greater than the halt generation the host holds the service under.
         halt_generation: u64,
         /// The force's order id: `force-<generation>`.
@@ -111,8 +123,11 @@ pub enum Order {
         service: String,
         /// Its desired version.
         version: Version,
-        /// The package digest CI set for the version.
+        /// The package digest CI set for the version, for the host's platform.
         digest: Digest,
+        /// The digest of the release index it was taken from; none for a version set with one
+        /// package digest.
+        index_digest: Option<Digest>,
         /// The order's id ([`install_order_id`]).
         order_id: String,
         /// The try ([`next_try`]).
@@ -140,6 +155,7 @@ impl Order {
                 service,
                 version,
                 digest,
+                index_digest,
                 order_id,
                 order_try,
             } => (
@@ -149,6 +165,7 @@ impl Order {
                     service: service.clone(),
                     version: version.to_string(),
                     package_digest: digest.as_str().to_owned(),
+                    index_digest: index_text(index_digest.as_ref()),
                 }),
             ),
             Self::Abort { service, order_id } => (
@@ -162,6 +179,7 @@ impl Order {
                 service,
                 version,
                 digest,
+                index_digest,
                 halt_generation,
                 order_id,
             } => (
@@ -172,12 +190,14 @@ impl Order {
                     version: version.to_string(),
                     package_digest: digest.to_string(),
                     halt_generation: *halt_generation,
+                    index_digest: index_text(index_digest.as_ref()),
                 }),
             ),
             Self::Install {
                 service,
                 version,
                 digest,
+                index_digest,
                 order_id,
                 order_try,
             } => (
@@ -187,6 +207,7 @@ impl Order {
                     service: service.clone(),
                     version: version.to_string(),
                     package_digest: digest.to_string(),
+                    index_digest: index_text(index_digest.as_ref()),
                 }),
             ),
             Self::Uninstall {
@@ -248,10 +269,14 @@ fn force_for(fleet: &Fleet, state: &OpsState, service: &str, id: &HostId) -> Opt
         || reported;
     let ordered = force.hosts.iter().any(|host| host == id.as_str());
     let held = !force.include_held && fleet.is_held(service, id);
+    // The package of the host's own platform; a platform the force's index does not list is
+    // ordered nothing (the plan left such a host out when it was made).
+    let package = force.package_for(host.beat.platform)?;
     (ordered && !done && !held).then(|| Order::Force {
         service: service.to_owned(),
         version: force.version.clone(),
-        digest: force.digest.clone(),
+        digest: package.digest,
+        index_digest: package.index_digest,
         halt_generation: force.halt_generation,
         order_id,
     })

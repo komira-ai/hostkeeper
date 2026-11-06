@@ -28,6 +28,7 @@ fn force(service: &str) -> Order {
             service: service.to_owned(),
             version: "2.0.0".to_owned(),
             package_digest: d(),
+            index_digest: String::new(),
             halt_generation: 1,
         })),
     }

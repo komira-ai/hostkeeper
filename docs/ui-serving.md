@@ -27,8 +27,8 @@ it again.
 
 - **Rollout**: for each service, the roles it is assigned to, the operator's assignments (a
   removal is shown as one), the hosts it is assigned to, the hosts being uninstalled, and the
-  desired version. The same section sets the desired version (a version and, if you have it, the
-  package digest), assigns the service to a role, and unassigns it from a role, with a box to
+  desired version. The same section sets the desired version (a version and, if you have them, the
+  text of the release index and its digest; the text is sent as typed), assigns the service to a role, and unassigns it from a role, with a box to
   uninstall it from each host that loses its last assignment. Setting the desired version and
   unassigning with uninstall ask first.
 - **Host**: the services assigned to that host, how each is assigned (to the host or through its

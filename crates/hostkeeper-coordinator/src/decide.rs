@@ -11,7 +11,8 @@
 //!
 //! An assigned service the host runs is told to update, and one it does not run (it does not
 //! list it, or lists it `absent`: staged, never run) is told to install
-//! ([`Decision::Install`], with the desired version's package digest), under the same rules,
+//! ([`Decision::Install`], with the package digest of the desired version for the host's
+//! platform), under the same rules,
 //! checked in this order (an install has no version to be up to date at, and is ordered only to
 //! a daemon that announced [`crate::orders::INSTALL_FEATURE`] and lists every service it runs):
 //!
@@ -70,7 +71,8 @@
 //! itself or when something changes (the quiet start, the one live update, the canary, a bake, a
 //! version marked bad, a halt); a [`Skip`] is a question that does not apply (no desired state,
 //! not a member of the service, a host at the desired version, one that failed it, one that
-//! declined it, an install the host's agent cannot take or that has no package digest). [`Why`]
+//! declined it, an install the host's agent cannot take or that has no package digest, a release
+//! index that lists no package for the host's platform). [`Why`]
 //! is either, spelled in snake case for the status. [`decide_in`] drops the reason.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -165,6 +167,10 @@ pub enum Skip {
     Unsupported,
     /// The pair needs an install, and the desired version has no package digest to install.
     NoDigest,
+    /// The desired version's release index lists no package for the host's platform: the host
+    /// is not ordered the version, an update or an install. It is no failed update: it counts
+    /// as none, halts nothing and rolls nothing back.
+    NoPackageForPlatform,
 }
 
 /// Why a host is told nothing, as the status says it in `hold`: a gate or a skip, each in its own
@@ -190,8 +196,10 @@ pub enum Decision {
     Install {
         /// The desired version.
         version: Version,
-        /// Its package digest, as CI set it.
+        /// The digest of its package for the host's platform, as CI set it.
         digest: Digest,
+        /// The digest of the release index `digest` was taken from, when CI set an index.
+        index_digest: Option<Digest>,
     },
     /// Tell the host, which runs `running` of the service, to uninstall it.
     Uninstall {
@@ -294,18 +302,22 @@ fn order_or_hold(
     }
     let beat = host.map(|h| &h.beat);
     let installed = beat.is_some_and(|b| b.health != Health::Absent);
+    // The host's platform picks its package of a release index. Every host reaching here has
+    // one: it has a word of the service, or it announced that it lists every service it runs,
+    // which only a node says.
+    let platform = fleet.platform_of(service, id);
+    let package = platform.and_then(|platform| desired.package_for(platform));
+    let unlisted = desired.release_index.is_some() && package.is_none();
     let order = if installed {
         Some(Decision::Update {
             version: desired.version.clone(),
         })
     } else {
-        desired
-            .release_digest
-            .clone()
-            .map(|digest| Decision::Install {
-                version: desired.version.clone(),
-                digest,
-            })
+        package.map(|package| Decision::Install {
+            version: desired.version.clone(),
+            digest: package.digest,
+            index_digest: package.index_digest,
+        })
     };
     let failed_here = beat
         .and_then(|b| b.last_update.as_ref())
@@ -337,6 +349,7 @@ fn order_or_hold(
             !installed && !fleet.announced(id, INSTALL_FEATURE),
             Decision::Skip(Skip::Unsupported),
         ),
+        (unlisted, Decision::Skip(Skip::NoPackageForPlatform)),
         (order.is_none(), Decision::Skip(Skip::NoDigest)),
         (failed_here, Decision::Skip(Skip::FailedHere)),
         (

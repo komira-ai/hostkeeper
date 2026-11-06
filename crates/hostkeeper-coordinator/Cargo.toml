@@ -29,6 +29,9 @@ name = "hostkeeper-coordinator"
 path = "src/main.rs"
 
 [dependencies]
+# The release index (`index.json`) a desired state may carry: parsed once when it is set, to learn
+# the package digest of each platform.
+hostkeeper-config = { path = "../hostkeeper-config" }
 # The CA and the enrollment store (`--enrollment-dir`, `--ca-key-file`).
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc" }

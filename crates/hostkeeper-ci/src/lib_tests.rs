@@ -50,6 +50,9 @@ fn the_flags_parse_with_their_defaults() {
     assert_eq!(flags.max_polls, 180);
     assert_eq!(flags.pause_secs, 10);
     assert_eq!(flags.github_output, None);
+    assert_eq!(flags.package_digest.as_deref().map(str::len), Some(64));
+    assert_eq!(flags.release_index_file, None);
+    assert_eq!(flags.release_index_digest, None);
     let given = parse(&[
         "--wait",
         "false",
@@ -91,4 +94,46 @@ fn run_without_the_platform_variables_fails_at_the_token() {
         format!("{:?}", run(CiCommand::SetDesired(invalid))),
         format!("{:?}", ExitCode::from(2))
     );
+}
+
+/// Catches the index flags spelled otherwise, the package digest still being required, and an
+/// empty value (what the workflow passes for an input left out) being refused by the parser
+/// instead of read as absent.
+#[test]
+fn the_release_flags_are_optional_and_may_be_empty() {
+    let mut args = vec![
+        "hostkeeper-ci",
+        "set-desired",
+        "--service",
+        "svc",
+        "--version",
+        "1.2.3",
+        "--release-index-file",
+        "index.json",
+        "--release-index-digest",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--endpoint",
+        "https://coordinator.example",
+        "--ca-file",
+        "ca.pem",
+        "--audience",
+        "hostkeeper-ci",
+        "--work-dir",
+        "work",
+        "--web-roots",
+        "roots.pem",
+    ];
+    let CiCommand::SetDesired(index) = Cli::try_parse_from(args.clone()).expect("flags").command;
+    assert_eq!(index.package_digest, None);
+    assert_eq!(
+        index.release_index_file.as_deref(),
+        Some(std::path::Path::new("index.json"))
+    );
+    assert_eq!(
+        index.release_index_digest.as_deref().map(str::len),
+        Some(64)
+    );
+    args.extend(["--package-digest", ""]);
+    let CiCommand::SetDesired(empty) = Cli::try_parse_from(args).expect("flags").command;
+    assert_eq!(empty.package_digest.as_deref(), Some(""));
 }

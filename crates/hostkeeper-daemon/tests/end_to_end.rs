@@ -223,6 +223,7 @@ fn reply_of(answer: &Answer) -> Reply {
                 service: ServiceName::new(service).expect("a service"),
                 version: Version::new(version.as_str()).expect("a version"),
                 digest: PackageDigest::new(digest.as_str()).expect("a digest"),
+                index_digest: None,
             }),
         }),
         _ => None,

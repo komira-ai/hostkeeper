@@ -40,6 +40,7 @@ fn update() -> Order {
             service: name("web"),
             version: version("2.0.0"),
             digest: PackageDigest::new(&d()).expect("a digest"),
+            index_digest: None,
         }),
     }
 }

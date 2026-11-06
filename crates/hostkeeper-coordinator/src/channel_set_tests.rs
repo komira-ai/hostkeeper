@@ -11,7 +11,7 @@ use crate::channel::{ChannelRefusal, FetchError, ReleaseChannel};
 use crate::channel_tests::{D1, D2, FakeChannel, index};
 use crate::desired::Desired;
 use crate::http::{DESIRED_PATH, Surface, handle};
-use crate::registry::Digest;
+use crate::registry::{Digest, Release};
 use crate::rollback_tests::{ONE, round, services_of, wanted};
 use crate::service::SetError;
 use crate::testutil::{LEGACY, OPERATOR, Rig, ci_token, version};
@@ -96,7 +96,7 @@ async fn a_version_not_yet_in_the_channel_is_refused_and_takes_no_slot() {
     assert_eq!(wanted(&rig), version("2.0"));
     assert_eq!(
         rig.coordinator.desired.digests(LEGACY).get(&version("2.0")),
-        Some(&Digest::parse(D2).expect("a digest"))
+        Some(&Release::Package(Digest::parse(D2).expect("a digest")))
     );
     assert_eq!(
         ordered(&rig, 2_010),
@@ -290,4 +290,47 @@ async fn the_json_route_answers_a_channel_refusal_409_with_its_token() {
         assert_eq!(answer, json!({"error": token}), "{at}");
     }
     assert_eq!(wanted(&rig), version("1.0"));
+}
+
+/// Catches: a set over a release index accepted while the channel holds another index of the
+/// version (a release rebuilt after CI took the digest), which every host would then refuse with
+/// `index_digest_mismatch`; or refused when the channel holds the very index the set names. The
+/// other index is refused `channel_digest_mismatch` with nothing changed; the named one is set.
+#[tokio::test]
+async fn a_set_over_an_index_needs_the_channel_to_hold_that_very_index() {
+    use crate::channel::{Fetched, index_path};
+    use crate::release_index_support::{ALL, index_text, sha};
+
+    let fake = Arc::new(FakeChannel::default());
+    let rig = rig("channel-index", "", &fake).await;
+    let named = index_text(LEGACY, "2.0", &ALL);
+    let body = json!({
+        "version": "2.0",
+        "min_up": {"storage": 0, "frontend": 0},
+        "release_index": named,
+        "release_index_digest": sha(&named),
+    })
+    .to_string();
+    let path = index_path(LEGACY, &version("2.0"));
+    let other = index_text(LEGACY, "2.0", &ALL[..2]);
+    fake.answer(&path, Ok(Fetched::Found(other.into_bytes())));
+    let before = files(&rig);
+    let refused = ci_sets(&rig, &body).await.expect_err("refused");
+    assert!(
+        matches!(refused, SetError::Channel(ChannelRefusal::DigestMismatch)),
+        "{refused:?}"
+    );
+    assert_eq!(refused.reason(), Some("channel_digest_mismatch"));
+    assert_eq!(wanted(&rig), version("1.0"));
+    assert_eq!(files(&rig), before);
+
+    fake.answer(&path, Ok(Fetched::Found(named.clone().into_bytes())));
+    let set = ci_sets(&rig, &body)
+        .await
+        .expect("the channel holds the index");
+    assert_eq!(set.version, version("2.0"));
+    assert_eq!(
+        set.release_index.map(|record| record.digest.to_string()),
+        Some(sha(&named))
+    );
 }

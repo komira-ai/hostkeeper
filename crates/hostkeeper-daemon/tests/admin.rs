@@ -558,8 +558,10 @@ impl Packages for ReportingRoot {
         service: &ServiceName,
         version: &hostkeeper_config::names::Version,
         digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
     ) -> Result<VersionDir, PackageError> {
-        self.inner.version_dir(service, version, digest)
+        self.inner
+            .version_dir(service, version, digest, index_digest)
     }
 
     fn trusted_root(&self) -> Option<RootReport> {

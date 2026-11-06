@@ -276,20 +276,31 @@ What it proves: the binary was built from the pinned commit and reports the vers
 
 Refuse when: the output differs in any character.
 
-### 7. Package digest for desired state
+### 7. Release index digest for desired state
 
 ```sh
+grep "  <service>-index.json$" release/SHA256SUMS
+sha256sum release/<service>-index.json
 cat release/hostkeeper-<version>-<platform>.tar.zst.sha256
 sha256sum release/hostkeeper-<version>-<platform>.tar.zst
 ```
 
-The digest in the first output equals the digest of the package that step 3 (or step 4) verified.
-This SHA-256 is what CI puts in the desired state with the version (design section 4.7); the daemon
-checks the package against it, and checks an attestation for it, before it reads the archive.
+(`index.json` for the hostkeeper packages; `<service>` is `hello` for the hello packages.)
 
-What it proves: the digest placed in desired state is the digest of the attested package.
+The digest of the index in the first two outputs is equal, and the index lists, for
+`<platform>`, the package file and the digest in the last two outputs, which are equal. These
+are what CI puts in the desired state with the version (design section 4.7): the index text and
+its SHA-256, so that each host is ordered the package of its own platform. The coordinator
+checks the index against its digest and keeps each platform's package digest; the daemon checks
+the index it fetches against the digest before it reads it, then the package against the
+index, and checks an attestation for the package, before it reads the archive. A fleet of one
+platform may put the one package digest in the desired state instead.
 
-Refuse when: the two digests differ, or the package did not pass step 3 or step 4.
+What it proves: the digest placed in desired state is the digest of the verified index, and the
+index lists the attested package.
+
+Refuse when: the digests differ, the index lists another digest for the package than the package
+has, or the package did not pass step 3 or step 4.
 
 ## What the release workflow runs
 
