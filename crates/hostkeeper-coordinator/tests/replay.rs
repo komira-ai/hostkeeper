@@ -6,11 +6,13 @@ mod support;
 
 use support::replay::{Sequence, check_changed_list, replay, sequence_files};
 
-/// The recorded sequences in which a rule this coordinator cut decided: each records this
-/// coordinator's answer in `expect_status`/`expect_body` and kbf's beside it in
-/// `kbf_status`/`kbf_body`. Every other sequence is kbf's bytes, and any difference in it fails.
+/// The recorded sequences in which a rule this coordinator cut or changed decided: each records
+/// this coordinator's answer in `expect_status`/`expect_body` and kbf's beside it in
+/// `kbf_status`/`kbf_body` (in `17`, the one step whose list of nine feature names kbf's bound
+/// of 8 dropped). Every other sequence is kbf's bytes, and any difference in it fails.
 /// `tests/fixtures/recorded/README.md` says, for each, the rule and the old and the new reason.
 const CHANGED: &[&str] = &[
+    "17-features-a-bad-announcement-is-dropped",
     "24-cut-never-last-does-not-delay-an-order",
     "25-cut-min-up-does-not-delay-an-order",
     "26-cut-role-order-does-not-delay-an-order",

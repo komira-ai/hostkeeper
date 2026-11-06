@@ -51,7 +51,7 @@ use rustls_pki_types::pem::PemObject;
 use crate::adapters::{Adapters, host_claims};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
-use crate::links::{DaemonLog, Links, NoLink};
+use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::observer::observer_with;
@@ -79,12 +79,21 @@ pub const DEFAULT_ADMIN_SOCKET: &str = if cfg!(target_os = "macos") {
 };
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
-/// The host's CA bundle (PEM): the roots the package fetch's HTTPS client trusts.
+/// The CA bundle (PEM) of a Debian-family Linux host: the roots the package fetch's HTTPS client
+/// trusts. A Linux host whose bundle is neither this nor [`CA_BUNDLE_RHEL`] is given this path.
 pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
-/// The pinned `gh` that checks a package's attestation.
+/// The CA bundle of a RHEL-family Linux host.
+pub const CA_BUNDLE_RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
+/// The CA bundle of a Mac, the system roots macOS keeps as PEM.
+pub const CA_BUNDLE_MACOS: &str = "/etc/ssl/cert.pem";
+/// The pinned `gh` that checks a package's attestation, on a Linux host.
 pub const GH_BINARY: &str = "/usr/lib/hostkeeper/gh";
-/// The Sigstore trusted root, as `gh attestation trusted-root` prints it.
+/// The pinned `gh` on a Mac, where the installer pkg puts it (`/usr` itself is read-only there).
+pub const GH_BINARY_MACOS: &str = "/usr/local/lib/hostkeeper/gh";
+/// The Sigstore trusted root, as `gh attestation trusted-root` prints it, on a Linux host.
 pub const SIGSTORE_TRUSTED_ROOT: &str = "/usr/lib/hostkeeper/trusted_root.json";
+/// The Sigstore trusted root on a Mac, where the installer pkg puts it.
+pub const SIGSTORE_TRUSTED_ROOT_MACOS: &str = "/usr/local/lib/hostkeeper/trusted_root.json";
 /// The directory `gh` runs in, under the state directory.
 pub const GH_HOME: &str = ".gh";
 /// How often each service's dead-man looks at its running step on a host, in seconds.
@@ -308,7 +317,10 @@ async fn start_and_serve(
 ///   ([`host_claims`]);
 /// - the heartbeat loop reads the certificate and key of the pki directory's `current` link at
 ///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock;
-///   this build has no coordinator link yet ([`NoLink`]), so every heartbeat ends unsent;
+///   its link ([`HostLink`]) is the JSON route and gRPC over mutual TLS to the same
+///   `coordinator`, pinned to the same `ca_sha256`, trusting the CA bundle of the pki directory's
+///   `current` generation, its connections bounded on the daemon's clock; the link is made at the
+///   first heartbeat, on the loop's worker, so a host not enrolled yet makes none;
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
 /// - both loops log through the daemon's alert sink ([`DaemonLog`]).
 pub fn host_links(
@@ -326,9 +338,15 @@ pub fn host_links(
         image: image_of(ctx.own_version),
     };
     let pki = files.pki.clone();
+    let link = HostLink::new(
+        ctx.config.clone(),
+        files.pki.clone(),
+        Arc::clone(&ctx.clock),
+        log.clone(),
+    );
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings, kind)),
-        link: Arc::new(NoLink),
+        link: Arc::new(link),
         certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
         clock: Arc::new(SystemUnixClock),
         log,
@@ -401,13 +419,40 @@ pub struct HostFiles {
 }
 
 impl HostFiles {
-    /// Where a host keeps them: [`CA_BUNDLE`], [`GH_BINARY`], [`SIGSTORE_TRUSTED_ROOT`] and
-    /// [`PKI_DIR`].
+    /// Where this host keeps them: [`HostFiles::for_platform`] for the platform this binary was
+    /// built for, asking the filesystem which CA bundle exists.
     pub fn host() -> HostFiles {
+        HostFiles::for_platform(Platform::host().kind, Path::exists)
+    }
+
+    /// Where a host of `kind` keeps them, `exists` saying whether a path is there; the pki
+    /// directory is [`PKI_DIR`] on both.
+    ///
+    /// - A Mac: [`CA_BUNDLE_MACOS`], [`GH_BINARY_MACOS`] and [`SIGSTORE_TRUSTED_ROOT_MACOS`],
+    ///   whatever `exists` says.
+    /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
+    ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
+    ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
+    pub fn for_platform(kind: PlatformKind, exists: impl Fn(&Path) -> bool) -> HostFiles {
+        let (ca_bundle, gh, trusted_root) = match kind {
+            PlatformKind::Macos => (
+                CA_BUNDLE_MACOS,
+                GH_BINARY_MACOS,
+                SIGSTORE_TRUSTED_ROOT_MACOS,
+            ),
+            PlatformKind::Linux => (
+                [CA_BUNDLE, CA_BUNDLE_RHEL]
+                    .into_iter()
+                    .find(|bundle| exists(Path::new(bundle)))
+                    .unwrap_or(CA_BUNDLE),
+                GH_BINARY,
+                SIGSTORE_TRUSTED_ROOT,
+            ),
+        };
         HostFiles {
-            ca_bundle: PathBuf::from(CA_BUNDLE),
-            gh: PathBuf::from(GH_BINARY),
-            trusted_root: PathBuf::from(SIGSTORE_TRUSTED_ROOT),
+            ca_bundle: PathBuf::from(ca_bundle),
+            gh: PathBuf::from(gh),
+            trusted_root: PathBuf::from(trusted_root),
             pki: PathBuf::from(PKI_DIR),
         }
     }
