@@ -428,7 +428,7 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 26] = [
+const FIELDS: [(&str, &[(&str, u32)]); 28] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -677,7 +677,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 11] = [
+    let cases: [(&str, &str, &[&str]); 12] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
