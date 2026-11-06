@@ -180,7 +180,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <li><a href="#lab">Our lab, the worked example</a></li>
 <li><a href="#correct">Correctness and failure handling</a></li>
 <li><a href="#limits">What is not built yet</a></li>
-<li><a href="#open">What we have not measured yet</a></li>
+<li><a href="#open">What we have measured, and what not yet</a></li>
 <li><a href="#sources">Sources</a></li>
 </ol>
 </nav>
@@ -196,13 +196,13 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <li>A hand-off with no dropped requests is the service&rsquo;s own knowledge, so the hook does it and the contract gives it the steps to do it in.</li>
 </ol>
 <p><strong>The solution.</strong> The daemon is one Rust binary that runs as root under systemd or launchd and listens on no network port. It enrolls with the coordinator&rsquo;s certificate authority, and an operator approves it by its key. The coordinator keeps its state in plain files, serves an operator API over gRPC and an HTTP/JSON gateway, a generated command line and a small web UI, and writes an append-only audit file. CI signs in with its GitHub Actions OIDC token and sets the desired version. The coordinator&rsquo;s rollout gate orders one update at a time, with a canary, a bake, holds, a halt, a fleet-wide force and an automatic rollback.</p>
-<p><strong>Where it stands.</strong> hostkeeper is early. Its parts are built and tested one by one, and releases are published from <code>main</code>, but on <code>main</code> they are not yet joined into a path that updates a real host: the shipped daemon does not send heartbeats, and on Linux it does not yet control units. The table says what is built; <a href="#limits">what is not built yet</a> lists what is missing, and every measurement in <a href="#open">what we have not measured yet</a> is still open.</p>
+<p><strong>Where it stands.</strong> hostkeeper is early. Its parts are built and tested one by one, and releases are published from <code>main</code>. One canary run on one lab node has enrolled a host and installed, updated and rolled back a demo service with the shipped daemon and coordinator. The table says what is built; <a href="#limits">what is not built yet</a> lists what is missing, and <a href="#open">what we have measured, and what not yet</a> gives that run&rsquo;s times and memory, and the measurements still open.</p>
 <div class="tblw"><table class="tbl">
 <thead><tr><th>Piece</th><th>State on <code>main</code></th></tr></thead>
 <tbody>
 <tr><td>Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment</td><td>Built and tested in process</td></tr>
 <tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hostkeeper ctl</code>; web UI</td><td>Built; every declared method has a handler (<a href="#apis">the two APIs</a>)</td></tr>
-<tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both, but has no link (below)</td></tr>
+<tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both over its link (below)</td></tr>
 <tr><td>Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop</td><td>Built and running in the shipped binary; the enrollment loop&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts (<a href="#n-h5">h5</a>)</td></tr>
 <tr><td>Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune</td><td>Built; reachable only through an order</td></tr>
 <tr><td>Daemon heartbeat to the coordinator</td><td>Built and running in the shipped binary: JSON, then gRPC once the coordinator advertises it, over mutual TLS; the coordinator&rsquo;s orders reach an enrolled host</td></tr>
@@ -210,7 +210,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <tr><td>macOS daemon under launchd</td><td>Built; a device run starts it under launchd and asks its status, and a device run of hello's package installs, updates, rolls back a failed verify and uninstalls it under launchd</td></tr>
 <tr><td>Releases</td><td>Published from <code>main</code> as GitHub releases by <code>release.yml</code>; no hosted release channel</td></tr>
 </tbody></table></div>
-<p>This report is about hostkeeper, its design and the evidence for it. Our lab is the worked example, so <a href="#lab">its section</a> is a case study and carries a Case study label. The sections run from the problem, through a comparison with the tools that exist and the design as it is on <code>main</code>, to the lab, correctness and testing, what is not built and what we have not measured.</p>
+<p>This report is about hostkeeper, its design and the evidence for it. Our lab is the worked example, so <a href="#lab">its section</a> is a case study and carries a Case study label. The sections run from the problem, through a comparison with the tools that exist and the design as it is on <code>main</code>, to the lab, correctness and testing, what is not built, and what we have measured and not yet.</p>
 <details class="method"><summary>How to read the numbers in this report</summary>
 <p>Every number in this report sits in a named cell, and a test holds each cell to its source. A cell of the code names the constant it quotes, so a constant changed in the code fails the test until the report follows. A cell of a measurement names the result file that holds the run. A measurement not yet taken is an open cell that prints <span class="v-na">open</span> and no number. A cell that quotes another tool&rsquo;s documentation names the page, which is in the <a href="#sources">sources</a>; the test cannot fetch that page, so it checks only that the page is cited. Versions are written with a leading v and are names, not numbers. The test is <code>cargo test -p xtask --test report</code> (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/xtask/tests/report">crates/xtask/tests/report</a>), and it lists the open cells. Result files live in <a href="https://github.com/komira-ai/hostkeeper/tree/main/docs/report/results">docs/report/results</a>.</p>
 </details>
@@ -617,7 +617,7 @@ token request variables in <code>hostkeeper ci</code>.</p>
 <text x="782" y="440" class="t-s t-m">index, package, attestation bundle</text>
 <path class="ln ln-dash" marker-end="url(#aa)" d="M880 370V398"/>
 <text x="864" y="390" text-anchor="end" class="t-s t-m">fetched and verified, only inside an order</text>
-</svg></div><figcaption><strong>The parts, and which way each connection goes.</strong> Every connection to the coordinator is made by its caller; the coordinator never connects to a host. The red dashed line is the gap that matters most on <code>main</code>: the daemon&rsquo;s heartbeat client exists but the shipped daemon does not use it.</figcaption></figure>
+</svg></div><figcaption><strong>The parts, and which way each connection goes.</strong> Every connection to the coordinator is made by its caller; the coordinator never connects to a host.</figcaption></figure>
 <p><strong>The coordinator</strong> has two TLS listeners
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/config.rs">crates/hostkeeper-coordinator/src/config.rs</a>,
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#43-the-coordinator">design: The coordinator</a>):</p>
@@ -651,7 +651,7 @@ The coordinator cannot change it. The daemon&rsquo;s local interface is a unix s
 <code>hostkeeper.local.v1.Admin</code> (<code>Status</code>, <code>Abort</code>, <code>ClearRecord</code>) to root only
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/admin.rs">crates/hostkeeper-daemon/src/admin.rs</a>).
 <code>hostkeeper ctl</code> has no command for it, so a root user needs a gRPC client of their own.</p>
-<p><strong>The gap that matters most.</strong> The heartbeat client is in
+<p><strong>The heartbeat link.</strong> The heartbeat client is in
 <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-link">crates/hostkeeper-link</a>, with gRPC over mutual TLS
 (<code>GrpcMtlsLink</code>), a JSON form and one that negotiates between them. Each call is bounded to
 <span data-cell="c-call" data-source="crates/hostkeeper-link/src/dial.rs" data-item="CALL_SECS">10 s</span>.
@@ -1152,7 +1152,7 @@ paths (the CA bundle, <code>gh</code> and the trusted root use their Linux paths
 <span class="bar" aria-hidden="true"></span>
 <p class="eyebrow-case">Case study</p>
 <h2>Our lab, the worked example</h2>
-<p>Our lab is where hostkeeper will first run, and where the measurements of <a href="#open">the last section</a> will be taken. This section shows how the lab is laid out, how its machines are described to hostkeeper, and how an operator sees it in the UI. The lab is described generically: the machines are named node-1 to node-6 and mac-1 and mac-2, and no hostname, address or serial of a real machine appears. On <code>main</code> the daemon does not yet send heartbeats, so what follows is the lab as hostkeeper is set up to keep it, not a record of updates it has made there.</p>
+<p>Our lab is where hostkeeper runs first, and where the measurements of <a href="#open">the last section</a> are taken. This section shows how the lab is laid out, how its machines are described to hostkeeper, and how an operator sees it in the UI. The lab is described generically: the machines are named node-1 to node-6 and mac-1 and mac-2, and no hostname, address or serial of a real machine appears. So far one canary run has used one node of it, node-5; what follows is the lab as hostkeeper is set up to keep it, not a record of updates it has made there.</p>
 
 <h3 id="topology">The topology</h3>
 <p>The lab has six Linux servers that are both build and storage nodes, and two Mac Studios. A management network reaches every machine and every server&rsquo;s BMC. A separate storage network joins the six Linux nodes, for the storage traffic between them. The coordinator runs in a container on a separate development machine on the management network. CI runs on GitHub-hosted runners outside the lab and reaches the coordinator&rsquo;s private listener, and nothing else: no host has an inbound port, and the runners hold no ssh key.</p>
@@ -1405,35 +1405,39 @@ are not planned there (<a href="https://github.com/komira-ai/hostkeeper/blob/mai
 </section>
 <section id="open">
 <span class="bar" aria-hidden="true"></span>
-<h2>What we have not measured yet</h2>
-<p>The headline numbers are missing: how long a host takes to enroll, how long a desired version takes to reach the fleet, how long a failed verify takes to roll back, and what the coordinator and the daemon cost to run. Each is an open cell below, and each stays open until a run on the lab fills it from a result file. None is estimated.</p>
-<p>Every cell below is open: no farm run has measured hostkeeper yet. The farm run writes its rows to
-a result file in <a href="https://github.com/komira-ai/hostkeeper/tree/main/docs/report/results">docs/report/results</a> and fills each cell from it.</p>
+<h2>What we have measured, and what not yet</h2>
+<p>The headline numbers are how long a host takes to enroll, how long a desired version takes to reach the fleet, how long a failed verify takes to roll back, and what the coordinator and the daemon cost to run. Each is a cell below, filled from a result file or open until a run on the lab fills it. None is estimated.</p>
+<p><strong>What the filled cells are.</strong> They come from one canary run on one Linux node of the lab, node-5, with the coordinator in a container on the lab&rsquo;s development machine. Each step was run once, so a cell is one sample, not a distribution, and says nothing yet about the six-node fleet. The ready times were read by polling the hello service over ssh every few seconds (the interval is in each cell), so each is an upper bound: the service was ready at most one poll interval sooner. Every number is a row of
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/report/results/farm-canary-node-5.tsv">docs/report/results/farm-canary-node-5.tsv</a>, which says how it was taken.</p>
 <div class="tblw"><table class="tbl">
 <thead><tr><th>Measurement</th><th>Result</th></tr></thead>
 <tbody>
-<tr><td>Time to enroll a host, from the daemon&rsquo;s first <code>Enroll</code> to its certificate</td><td><span data-cell="m-enroll" data-open="farm run">open</span></td></tr>
-<tr><td>Desired-version change to converged: hello v1 install</td><td><span data-cell="m-converge-install" data-open="farm run">open</span></td></tr>
-<tr><td>Desired-version change to converged: hello v1 to v2 update</td><td><span data-cell="m-converge-update" data-open="farm run">open</span></td></tr>
-<tr><td>Desired-version change to rolled back: hello failed <code>verify</code>, automatic rollback</td><td><span data-cell="m-converge-rollback" data-open="farm run">open</span></td></tr>
+<tr><td>Adopt and bootstrap a host: record it, install the daemon&rsquo;s package, write its config and start it, pending enrollment</td><td><span data-cell="m-bootstrap" data-result="farm-canary-node-5.tsv">34 s, one run on node-5</span></td></tr>
+<tr><td>Time to enroll a host, from the daemon&rsquo;s first <code>Enroll</code> to its certificate</td><td><span data-cell="m-enroll" data-result="farm-canary-node-5.tsv">38 s, of which 37 s was the operator&rsquo;s time before approving; about 1 s from approval to the certificate</span></td></tr>
+<tr><td>Time from enrollment to the host&rsquo;s first heartbeat</td><td><span data-cell="m-first-heartbeat" data-open="a first-heartbeat time in the coordinator&rsquo;s host record">open: the coordinator does not record it yet</span></td></tr>
+<tr><td>Desired-version change to converged: hello v1 install</td><td><span data-cell="m-converge-install" data-result="farm-canary-node-5.tsv">at most 7.4 s to serving v1 (polled every 3 s)</span></td></tr>
+<tr><td>Desired-version change to converged: hello v1 to v2 update</td><td><span data-cell="m-converge-update" data-result="farm-canary-node-5.tsv">at most 10.1 s to serving v2 (polled every 2 s); the coordinator recorded the service converged about 70 s after the change, from later heartbeats; this run did not break that time down</span></td></tr>
+<tr><td>Desired-version change to rolled back: hello failed <code>verify</code>, automatic rollback</td><td><span data-cell="m-converge-rollback" data-result="farm-canary-node-5.tsv">at most 6.0 s to serving the previous build again, and at most 2.6 s from the failed verify (polled every 2 s)</span></td></tr>
 <tr><td>tierstore forced first deploy, from <code>Releases.Force</code> to every target running</td><td><span data-cell="m-tierstore-force-first" data-open="farm run">open</span></td></tr>
 <tr><td>Coordinator CPU at the six-node fleet</td><td><span data-cell="m-coordinator-cpu" data-open="farm run">open</span></td></tr>
 <tr><td>Coordinator memory at the six-node fleet</td><td><span data-cell="m-coordinator-memory" data-open="farm run">open</span></td></tr>
-<tr><td>Daemon resident memory per host</td><td><span data-cell="m-daemon-rss" data-open="farm run">open</span></td></tr>
+<tr><td>Coordinator memory with one host enrolled, idle</td><td><span data-cell="m-coordinator-memory-one-host" data-result="farm-canary-node-5.tsv">6.67 MiB, its container</span></td></tr>
+<tr><td>Daemon resident memory per host</td><td><span data-cell="m-daemon-rss" data-result="farm-canary-node-5.tsv">15.4 MiB on node-5, idle</span></td></tr>
+<tr><td>Release channel&rsquo;s web server, for comparison</td><td><span data-cell="m-channel-memory" data-result="farm-canary-node-5.tsv">2.45 MiB, its container, idle</span></td></tr>
 </tbody></table></div>
-<p><strong>Where the numbers will come from.</strong> hostkeeper exports no metrics, and the daemon does not fill
-the step durations its wire format has room for. So the times come from outside: the time between
-the CI client&rsquo;s poll lines and the audit file&rsquo;s <code>at_unix</code> stamps (for <code>last_good</code>, <code>mark_bad</code> and
-<code>force</code>) on the coordinator, and each host&rsquo;s journal. CPU and memory come from the hosts&rsquo; own
-process or cgroup accounting. The coordinator&rsquo;s six-host behaviour (canary, one host at a time,
+<p><strong>Where the numbers come from.</strong> hostkeeper exports no metrics, and the daemon does not fill
+the step durations its wire format has room for. So the times come from outside: the audit file&rsquo;s <code>at_unix</code> stamps on the
+coordinator (<code>enroll_requested</code> and <code>enroll_approve</code> for the canary; <code>last_good</code>, <code>mark_bad</code>
+and <code>force</code> for the fleet), the convergence state the coordinator reports, each host&rsquo;s journal,
+the operator&rsquo;s own commands and a poll of the service; the fleet run will also use the CI client&rsquo;s
+poll lines. CPU and memory come from the hosts&rsquo; own process or container accounting. The coordinator&rsquo;s six-host behaviour (canary, one host at a time,
 rollback at two failures of six) is already tested in process
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/tierstore_service_tests.rs">crates/hostkeeper-coordinator/src/tierstore_service_tests.rs</a>).
 That test asserts behaviour, not time.</p>
-<p><strong>What the farm run needs first, from the code on <code>main</code>:</strong></p>
+<p><strong>What the open fleet measurements need first, from the code on <code>main</code>:</strong></p>
 <ul>
-<li>for a first install, the heartbeat link above: the loop announces <code>install-v1</code> and runs the
-<code>install</code> order, and a force reaches only hosts that already announce the service;</li>
-<li>the pinned <code>gh</code> and the Sigstore trusted root on every host, and a staged release channel.</li>
+<li>for the forced first deploy of tierstore, hosts that already announce tierstore: a force reaches no other;</li>
+<li>the pinned <code>gh</code> and the Sigstore trusted root on each host the fleet run adds, and the release channel the canary staged.</li>
 </ul>
 </section>
 <section id="sources">
