@@ -1,18 +1,30 @@
 //! `release macos-pkg` and `release check-macos-pkg`: the installer pkg of a Mac's first install
 //! (design sections 4.6 and 5.9), `hostkeeper-<v>-macos-arm64.pkg` ([`installer_name`]).
 //!
-//! The pkg installs at `/` exactly two files, and the directories that hold them:
+//! The pkg installs at `/` exactly four files, and the directories that hold them:
 //!
 //! - the daemon binary at `hostkeeper_launchd::DAEMON_PROGRAM` (`/usr/local/bin/hostkeeper`),
 //!   mode 0755;
 //! - the daemon's launchd plist, `/Library/LaunchDaemons/<label>.plist` with the label
 //!   `hostkeeper_launchd::Label::daemon` (`dev.hostkeeper.hostkeeper`), mode 0644, the text
-//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`.
+//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`;
+//! - the pinned `gh` the daemon checks a package's attestation with, at
+//!   `/usr/local/lib/hostkeeper/gh` ([`GH_PATH`]), mode 0755;
+//! - the Sigstore trusted root that `gh` checks it against, as `gh attestation trusted-root`
+//!   prints it, at `/usr/local/lib/hostkeeper/trusted_root.json` ([`TRUSTED_ROOT_PATH`]), mode
+//!   0644.
+//!
+//! The last two are the paths the daemon reads on a Mac (`hostkeeper_daemon::cli::HostFiles`).
+//! This verb takes both as files and pins neither: the job that builds the pkg downloads `gh` and
+//! prints the trusted root with it, each checked against the SHA-256 pinned in the workflow
+//! (`cargo xtask install-tool --sha256`), and nothing is downloaded at install.
 //!
 //! Every entry is owned by root and wheel (uid 0, gid 0) and every directory is 0755, the modes
 //! macOS gives `/`, `/Library`, `/usr` and `/usr/local`, so installing the pkg changes no system
-//! directory. The pkg has no scripts: nothing runs at install, the daemon is not started, and the
-//! config is not written (the operator's bootstrap places `hostkeeper.toml` and loads the job).
+//! directory; `/usr/local/lib` and `/usr/local/lib/hostkeeper` are made with that mode when they
+//! are not there. The pkg has no scripts: nothing runs at install, the daemon is not started, and
+//! the config is not written (the operator's bootstrap places `hostkeeper.toml` and loads the
+//! job).
 //!
 //! The pkg is not signed: an installer signature needs an Apple Developer ID Installer
 //! identity. It is attested like every other asset (build provenance by the artifacts
@@ -24,8 +36,9 @@
 //! `pkgutil --expand` has expanded into a directory: the directory holds exactly `Bom`,
 //! `PackageInfo` and `Payload`; `PackageInfo` names the identifier, the version and the install
 //! location and no script; and `Payload`, a gzip-compressed cpio archive (the portable `odc`
-//! format), holds exactly the entries above with their modes, owners and bytes, the plist
-//! parsing as a launchd plist that names the daemon's label and binary.
+//! format), holds exactly the entries above with their modes, owners and bytes (the binary, `gh`
+//! and the trusted root those of the files it is given), the plist parsing as a launchd plist
+//! that names the daemon's label and binary.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -47,6 +60,18 @@ const BINARY_MODE: u32 = 0o755;
 
 /// The mode of the plist: launchd refuses a plist that its group or others may write.
 const PLIST_MODE: u32 = 0o644;
+
+/// The mode of `gh`, which the daemon runs.
+const GH_MODE: u32 = 0o755;
+
+/// The mode of the trusted root, which `gh` reads.
+const TRUSTED_ROOT_MODE: u32 = 0o644;
+
+/// Where a Mac keeps the pinned `gh`: under `/usr/local`, since `/usr` is read-only on a Mac.
+const GH_PATH: &str = "/usr/local/lib/hostkeeper/gh";
+
+/// Where a Mac keeps the Sigstore trusted root.
+const TRUSTED_ROOT_PATH: &str = "/usr/local/lib/hostkeeper/trusted_root.json";
 
 /// The file-type bits of a cpio mode, and the two types a payload may hold.
 const TYPE_BITS: u32 = 0o170_000;
@@ -96,6 +121,63 @@ fn plist_text() -> Result<String, Error> {
     daemon_plist(&DaemonJob::standard()).ok().ok_or(unwritable)
 }
 
+/// The files the pkg is made from, as the verbs are given them.
+pub(crate) struct Sources {
+    /// The macos-arm64 hostkeeper binary.
+    pub(crate) binary: PathBuf,
+    /// The pinned darwin-arm64 `gh`.
+    pub(crate) gh: PathBuf,
+    /// The Sigstore trusted root, as the pinned `gh attestation trusted-root` prints it.
+    pub(crate) trusted_root: PathBuf,
+}
+
+impl Sources {
+    /// The bytes of the four files of the payload; `Err` naming the source that cannot be read.
+    fn contents(&self) -> Result<Contents, Error> {
+        let read = |path: &Path| {
+            std::fs::read(path).map_err(Error::io(format!("read {}", path.display())))
+        };
+        Ok(Contents {
+            binary: read(&self.binary)?,
+            plist: plist_text()?.into_bytes(),
+            gh: read(&self.gh)?,
+            trusted_root: read(&self.trusted_root)?,
+        })
+    }
+
+    /// What a payload file at `path` that holds other bytes than its source is said to differ
+    /// from.
+    fn source_of(&self, path: &str) -> String {
+        let given = [
+            (binary_path(), &self.binary),
+            (gh_path(), &self.gh),
+            (trusted_root_path(), &self.trusted_root),
+        ];
+        given.into_iter().find(|(at, _)| at == path).map_or_else(
+            || "the daemon plist hostkeeper-launchd writes".to_owned(),
+            |(_, source)| format!("the bytes of {}", source.display()),
+        )
+    }
+}
+
+/// The bytes of each file of the payload.
+struct Contents {
+    binary: Vec<u8>,
+    plist: Vec<u8>,
+    gh: Vec<u8>,
+    trusted_root: Vec<u8>,
+}
+
+/// The path of `gh` from the install location: `usr/local/lib/hostkeeper/gh`.
+fn gh_path() -> String {
+    GH_PATH.trim_start_matches('/').to_owned()
+}
+
+/// The path of the trusted root from the install location.
+fn trusted_root_path() -> String {
+    TRUSTED_ROOT_PATH.trim_start_matches('/').to_owned()
+}
+
 /// What one entry of the payload must be.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Want {
@@ -104,12 +186,18 @@ enum Want {
 }
 
 /// Every entry of the payload by its path from the install location (`""` is the install
-/// location itself): the two files and each directory that holds them.
-fn payload(binary: Vec<u8>, plist: Vec<u8>) -> BTreeMap<String, Want> {
+/// location itself): the four files and each directory that holds them.
+fn payload(contents: Contents) -> BTreeMap<String, Want> {
     let mut want = BTreeMap::new();
     let files = [
-        (binary_path(), BINARY_MODE, binary),
-        (plist_path(), PLIST_MODE, plist),
+        (binary_path(), BINARY_MODE, contents.binary),
+        (plist_path(), PLIST_MODE, contents.plist),
+        (gh_path(), GH_MODE, contents.gh),
+        (
+            trusted_root_path(),
+            TRUSTED_ROOT_MODE,
+            contents.trusted_root,
+        ),
     ];
     for (path, mode, bytes) in files {
         let mut parent = path.as_str();
@@ -126,8 +214,8 @@ fn payload(binary: Vec<u8>, plist: Vec<u8>) -> BTreeMap<String, Want> {
 /// What `release macos-pkg` builds the pkg from.
 pub(crate) struct Request {
     pub(crate) version: Version,
-    /// The macos-arm64 hostkeeper binary.
-    pub(crate) binary: PathBuf,
+    /// The binary, `gh` and the trusted root the pkg installs.
+    pub(crate) sources: Sources,
     /// The directory the pkg's tree is laid out in; it must not exist.
     pub(crate) stage: PathBuf,
     /// The directory the pkg is written to.
@@ -137,9 +225,7 @@ pub(crate) struct Request {
 /// Lays the payload out under `request.stage` and builds the pkg from it into `request.out`;
 /// the lines to print.
 pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<String>, Error> {
-    let plist = plist_text()?;
-    let binary = std::fs::read(&request.binary)
-        .map_err(Error::io(format!("read {}", request.binary.display())))?;
+    let contents = request.sources.contents()?;
     let stage = &request.stage;
     if std::fs::symlink_metadata(stage).is_ok() {
         return Err(Error::Failed(format!(
@@ -149,7 +235,7 @@ pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<St
     }
     // In path order, so each directory is made before what it holds; `""` is the stage itself
     // (the components drop the `/` that joining an empty path leaves).
-    for (path, want) in payload(binary, plist.into_bytes()) {
+    for (path, want) in payload(contents) {
         let at: PathBuf = stage.join(&path).components().collect();
         let mode = match &want {
             Want::Dir => {
@@ -419,7 +505,7 @@ fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
 fn payload_problems(
     entries: &[CpioEntry],
     mut want: BTreeMap<String, Want>,
-    binary: &Path,
+    sources: &Sources,
     problems: &mut Vec<String>,
 ) {
     for entry in entries {
@@ -427,8 +513,8 @@ fn payload_problems(
         let what = shown(path);
         let Some(wanted) = want.remove(path) else {
             problems.push(format!(
-                "{what} ({:?}) is in the payload, which holds only the binary, the plist and \
-                 their directories, each once",
+                "{what} ({:?}) is in the payload, which holds only the binary, the plist, gh, \
+                 the trusted root and their directories, each once",
                 entry.name
             ));
             continue;
@@ -459,12 +545,7 @@ fn payload_problems(
         if let Want::File { bytes, .. } = &wanted
             && entry.data != *bytes
         {
-            let source = if path == binary_path() {
-                format!("the bytes of {}", binary.display())
-            } else {
-                "the daemon plist hostkeeper-launchd writes".to_owned()
-            };
-            problems.push(format!("{what}: not {source}"));
+            problems.push(format!("{what}: not {}", sources.source_of(path)));
         }
     }
     problems.extend(
@@ -473,13 +554,13 @@ fn payload_problems(
     );
 }
 
-/// The `release check-macos-pkg <expanded> --version V --binary B` verb: checks the pkg that
-/// `pkgutil --expand` expanded into `expanded` against `version` and the binary `binary`, and
-/// lists every problem it finds.
+/// The `release check-macos-pkg <expanded> --version V --binary B --gh G --trusted-root R`
+/// verb: checks the pkg that `pkgutil --expand` expanded into `expanded` against `version` and
+/// the files of `sources`, and lists every problem it finds.
 pub(crate) fn check(
     expanded: &Path,
     version: &Version,
-    binary: &Path,
+    sources: &Sources,
 ) -> Result<Vec<String>, Error> {
     let what = format!("read {}", expanded.display());
     let mut names: Vec<(String, bool)> = std::fs::read_dir(expanded)
@@ -522,16 +603,14 @@ pub(crate) fn check(
         match read {
             Err(why) => problems.push(why),
             Ok(entries) => {
-                let bytes = std::fs::read(binary)
-                    .map_err(Error::io(format!("read {}", binary.display())))?;
-                let plist = plist_text()?.into_bytes();
+                let contents = sources.contents()?;
                 if let Some(entry) = entries
                     .iter()
                     .find(|e| payload_path(&e.name) == plist_path())
                 {
                     plist_problems(&entry.data, &mut problems);
                 }
-                payload_problems(&entries, payload(bytes, plist), binary, &mut problems);
+                payload_problems(&entries, payload(contents), sources, &mut problems);
             }
         }
     }
@@ -539,8 +618,9 @@ pub(crate) fn check(
         return Err(Error::Refused(problems));
     }
     Ok(vec![format!(
-        "check-macos-pkg: {} installs exactly {} ({BINARY_MODE:o}) and {} ({PLIST_MODE:o}), \
-         owned by root and wheel, with the label {}, version {version} and no scripts",
+        "check-macos-pkg: {} installs exactly {} ({BINARY_MODE:o}), {} ({PLIST_MODE:o}), \
+         {GH_PATH} ({GH_MODE:o}) and {TRUSTED_ROOT_PATH} ({TRUSTED_ROOT_MODE:o}), owned by root \
+         and wheel, with the label {}, version {version} and no scripts",
         expanded.display(),
         shown(&binary_path()),
         shown(&plist_path()),
@@ -548,5 +628,7 @@ pub(crate) fn check(
     )])
 }
 
+#[cfg(test)]
+mod check_tests;
 #[cfg(test)]
 mod tests;

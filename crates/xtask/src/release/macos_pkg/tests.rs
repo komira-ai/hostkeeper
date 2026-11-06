@@ -8,13 +8,20 @@ use crate::release::fakes::{FakeExec, FakePkgbuild, PkgCall, scratch, tree_of};
 use crate::testdir::TestDir;
 
 /// The binary the pkg holds; nothing runs it.
-const BINARY: &[u8] = b"the macos-arm64 hostkeeper binary";
+pub(super) const BINARY: &[u8] = b"the macos-arm64 hostkeeper binary";
+/// The `gh` the pkg holds; nothing runs it.
+pub(super) const GH_BYTES: &[u8] = b"the pinned darwin-arm64 gh";
+/// The trusted root the pkg holds, one JSON object per line as `gh attestation trusted-root`
+/// prints it.
+pub(super) const ROOT_BYTES: &[u8] = b"{\"mediaType\":\"trusted-root\"}\n";
 
-const PLIST: &str = "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist";
-const BIN: &str = "usr/local/bin/hostkeeper";
+pub(super) const PLIST: &str = "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist";
+pub(super) const BIN: &str = "usr/local/bin/hostkeeper";
+pub(super) const GH: &str = "usr/local/lib/hostkeeper/gh";
+pub(super) const ROOT: &str = "usr/local/lib/hostkeeper/trusted_root.json";
 
 /// The paths of the payload, from the install location, with `/` after a directory's.
-const TREE: [&str; 7] = [
+const TREE: [&str; 11] = [
     "Library/",
     "Library/LaunchDaemons/",
     "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist",
@@ -22,15 +29,19 @@ const TREE: [&str; 7] = [
     "usr/local/",
     "usr/local/bin/",
     "usr/local/bin/hostkeeper",
+    "usr/local/lib/",
+    "usr/local/lib/hostkeeper/",
+    "usr/local/lib/hostkeeper/gh",
+    "usr/local/lib/hostkeeper/trusted_root.json",
 ];
 
-fn version() -> Version {
+pub(super) fn version() -> Version {
     "0.1.5".parse().expect("a version")
 }
 
 /// `PackageInfo` as `pkgbuild` writes it for the pkg of 0.1.5, with `attributes` in place of
 /// the identifier, version and install location.
-fn package_info_with(attributes: &str) -> String {
+pub(super) fn package_info_with(attributes: &str) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<pkg-info overwrite-permissions=\"true\" \
          relocatable=\"false\" {attributes} postinstall-action=\"none\" format-version=\"2\" \
@@ -41,14 +52,14 @@ fn package_info_with(attributes: &str) -> String {
     )
 }
 
-fn package_info() -> String {
+pub(super) fn package_info() -> String {
     package_info_with(
         "identifier=\"dev.hostkeeper.hostkeeper\" version=\"0.1.5\" install-location=\"/\"",
     )
 }
 
 /// One portable (`odc`) cpio entry: a header, the name and its NUL, the data.
-fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> {
+pub(super) fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> {
     let header = format!(
         "070707{:06o}{:06o}{mode:06o}{uid:06o}{gid:06o}{:06o}{:06o}{:011o}{:06o}{:011o}",
         1,
@@ -64,25 +75,27 @@ fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> 
 }
 
 /// A cpio archive of `entries`, then the trailer, then a block's padding.
-fn odc(entries: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn odc(entries: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = entries.concat();
     bytes.extend(odc_entry(TRAILER, 0, 0, 0, b""));
     bytes.extend([0_u8; 120]);
     bytes
 }
 
-fn gzip(bytes: &[u8]) -> Vec<u8> {
+pub(super) fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     gz.write_all(bytes).expect("compress");
     gz.finish().expect("compress")
 }
 
-fn dir_entry(name: &str) -> Vec<u8> {
+pub(super) fn dir_entry(name: &str) -> Vec<u8> {
     odc_entry(name, 0o040_755, 0, 0, b"")
 }
 
-/// The payload `pkgbuild` writes for the binary `binary`: every entry, in its order.
-fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
+/// The payload `pkgbuild` writes for the binary `binary`: every entry, in its order. The entry
+/// of the binary is the 8th (index 7), of `gh` the 11th (index 10) and of the trusted root the
+/// 12th (index 11).
+pub(super) fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
     let plist = plist_text().expect("the plist");
     vec![
         dir_entry("."),
@@ -93,20 +106,42 @@ fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
         dir_entry("./usr/local"),
         dir_entry("./usr/local/bin"),
         odc_entry(&format!("./{BIN}"), 0o100_755, 0, 0, binary),
+        dir_entry("./usr/local/lib"),
+        dir_entry("./usr/local/lib/hostkeeper"),
+        odc_entry(&format!("./{GH}"), 0o100_755, 0, 0, GH_BYTES),
+        odc_entry(&format!("./{ROOT}"), 0o100_644, 0, 0, ROOT_BYTES),
     ]
 }
 
-/// A pkg expanded as `pkgutil --expand` leaves it, with `entries` as its payload, and the binary
-/// it is checked against, in a scratch directory of its own.
-struct Expanded {
-    dir: TestDir,
+/// The sources of the pkg as written under `dir` by [`write_sources`].
+pub(super) fn sources_in(dir: &Path) -> Sources {
+    Sources {
+        binary: dir.join("hostkeeper"),
+        gh: dir.join("gh"),
+        trusted_root: dir.join("trusted_root.json"),
+    }
+}
+
+/// Writes the binary, `gh` and the trusted root under `dir`; their paths.
+pub(super) fn write_sources(dir: &Path) -> Sources {
+    let sources = sources_in(dir);
+    std::fs::write(&sources.binary, BINARY).expect("the binary");
+    std::fs::write(&sources.gh, GH_BYTES).expect("gh");
+    std::fs::write(&sources.trusted_root, ROOT_BYTES).expect("the trusted root");
+    sources
+}
+
+/// A pkg expanded as `pkgutil --expand` leaves it, with `entries` as its payload, and the binary,
+/// `gh` and trusted root it is checked against, in a scratch directory of its own.
+pub(super) struct Expanded {
+    pub(super) dir: TestDir,
 }
 
 impl Expanded {
-    fn new(name: &str, entries: &[Vec<u8>]) -> Expanded {
+    pub(super) fn new(name: &str, entries: &[Vec<u8>]) -> Expanded {
         let dir = scratch(name);
         std::fs::create_dir(dir.join("pkg")).expect("the expanded pkg");
-        std::fs::write(dir.join("hostkeeper"), BINARY).expect("the binary");
+        write_sources(&dir);
         let expanded = Expanded { dir };
         expanded.write("Bom", b"BOMStore");
         expanded.write("PackageInfo", package_info().as_bytes());
@@ -114,27 +149,27 @@ impl Expanded {
         expanded
     }
 
-    fn good(name: &str) -> Expanded {
+    pub(super) fn good(name: &str) -> Expanded {
         Expanded::new(name, &good_entries(BINARY))
     }
 
-    fn pkg(&self) -> PathBuf {
+    pub(super) fn pkg(&self) -> PathBuf {
         self.dir.join("pkg")
     }
 
-    fn binary(&self) -> PathBuf {
-        self.dir.join("hostkeeper")
+    pub(super) fn sources(&self) -> Sources {
+        sources_in(&self.dir)
     }
 
-    fn write(&self, file: &str, bytes: &[u8]) {
+    pub(super) fn write(&self, file: &str, bytes: &[u8]) {
         std::fs::write(self.pkg().join(file), bytes).expect("write a file of the pkg");
     }
 
-    fn check(&self) -> Result<Vec<String>, Error> {
-        check(&self.pkg(), &version(), &self.binary())
+    pub(super) fn check(&self) -> Result<Vec<String>, Error> {
+        check(&self.pkg(), &version(), &self.sources())
     }
 
-    fn problems(&self) -> Vec<String> {
+    pub(super) fn problems(&self) -> Vec<String> {
         match self.check() {
             Err(Error::Refused(lines)) => lines,
             other => panic!("expected a refusal, got {other:?}"),
@@ -160,7 +195,12 @@ fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launch
     );
     assert_eq!(identifier(), "dev.hostkeeper.hostkeeper");
     assert_eq!(identifier(), Label::daemon().as_str());
-    let want = payload(BINARY.to_vec(), b"plist".to_vec());
+    let want = payload(Contents {
+        binary: BINARY.to_vec(),
+        plist: b"plist".to_vec(),
+        gh: GH_BYTES.to_vec(),
+        trusted_root: ROOT_BYTES.to_vec(),
+    });
     let paths: Vec<&str> = want.keys().map(String::as_str).collect();
     assert_eq!(
         paths,
@@ -172,7 +212,11 @@ fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launch
             "usr",
             "usr/local",
             "usr/local/bin",
-            BIN
+            BIN,
+            "usr/local/lib",
+            "usr/local/lib/hostkeeper",
+            GH,
+            ROOT
         ]
     );
     assert_eq!(
@@ -189,6 +233,38 @@ fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launch
             bytes: b"plist".to_vec()
         }
     );
+    assert_eq!(
+        want[GH],
+        Want::File {
+            mode: 0o755,
+            bytes: GH_BYTES.to_vec()
+        }
+    );
+    assert_eq!(
+        want[ROOT],
+        Want::File {
+            mode: 0o644,
+            bytes: ROOT_BYTES.to_vec()
+        }
+    );
+}
+
+#[test]
+fn gh_and_the_trusted_root_are_where_the_daemon_reads_them_on_a_mac() {
+    // Catches: the pkg installing `gh` or the trusted root at another path than the one the
+    // daemon reads on a Mac, so the daemon's fetch or verify finds nothing; and the daemon
+    // reading a CA bundle other than macOS's own, which the pkg does not install.
+    let mac = hostkeeper_daemon::cli::HostFiles::for_platform(
+        hostkeeper_launchd::PlatformKind::Macos,
+        |_| false,
+    );
+    assert_eq!(Path::new("/").join(gh_path()), mac.gh);
+    assert_eq!(Path::new("/").join(trusted_root_path()), mac.trusted_root);
+    assert_eq!(
+        (gh_path().as_str(), trusted_root_path().as_str()),
+        (GH, ROOT)
+    );
+    assert_eq!(mac.ca_bundle, Path::new("/etc/ssl/cert.pem"));
 }
 
 #[test]
@@ -266,12 +342,11 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
     }
 }
 
-/// A request for the pkg of 0.1.5 over the binary written under `dir`.
+/// A request for the pkg of 0.1.5 over the binary, `gh` and trusted root written under `dir`.
 fn request(dir: &Path) -> Request {
-    std::fs::write(dir.join("hostkeeper"), BINARY).expect("write the binary");
     Request {
         version: version(),
-        binary: dir.join("hostkeeper"),
+        sources: write_sources(dir),
         stage: dir.join("root"),
         out: dir.join("dist"),
     }
@@ -282,10 +357,11 @@ fn mode_of(path: &Path) -> u32 {
 }
 
 #[test]
-fn build_lays_out_exactly_the_binary_and_the_plist_with_their_modes_and_runs_pkgbuild_once() {
-    // Catches: a pkg with anything but the binary and the plist (a script, a config, a stray
-    // file), a mode launchd or the installer would refuse or that would change a system
-    // directory, or pkgbuild asked for another identifier, version or file name.
+fn build_lays_out_exactly_the_binary_the_plist_gh_and_the_trusted_root_and_runs_pkgbuild_once() {
+    // Catches: a pkg with anything but the binary, the plist, gh and the trusted root (a
+    // script, a config, a stray file), or without one of them; a mode launchd or the installer
+    // would refuse, a gh that cannot run, or a mode that would change a system directory; or
+    // pkgbuild asked for another identifier, version or file name.
     let dir = scratch("macos-pkg-build");
     let r = request(&dir);
     let fake = FakePkgbuild::default();
@@ -313,7 +389,7 @@ fn build_lays_out_exactly_the_binary_and_the_plist_with_their_modes_and_runs_pkg
     for path in TREE {
         let at = r.stage.join(path.trim_end_matches('/'));
         let want = match path {
-            PLIST => 0o644,
+            PLIST | ROOT => 0o644,
             _ => 0o755,
         };
         assert_eq!(mode_of(&at), want, "{path}");
@@ -325,6 +401,11 @@ fn build_lays_out_exactly_the_binary_and_the_plist_with_their_modes_and_runs_pkg
     assert_eq!(
         std::fs::read_to_string(r.stage.join(PLIST)).expect("the plist"),
         plist_text().expect("the plist")
+    );
+    assert_eq!(std::fs::read(r.stage.join(GH)).expect("gh"), GH_BYTES);
+    assert_eq!(
+        std::fs::read(r.stage.join(ROOT)).expect("the trusted root"),
+        ROOT_BYTES
     );
 }
 
@@ -378,18 +459,26 @@ fn build_refuses_a_stage_that_exists_and_runs_nothing() {
 }
 
 #[test]
-fn a_missing_binary_or_an_unwritable_place_is_an_io_error_naming_the_path() {
-    // Catches: a pkg built without its binary, or a failure to lay out or write reported as
-    // success; pkgbuild is never asked.
+fn a_missing_binary_gh_or_trusted_root_or_an_unwritable_place_is_an_io_error_naming_the_path() {
+    // Catches: a pkg built without its binary, gh or trusted root, or a failure to lay out or
+    // write reported as success; pkgbuild is never asked, and nothing is laid out.
     let dir = scratch("macos-pkg-io");
     let fake = FakePkgbuild::default();
-    let mut r = request(&dir);
-    r.binary = dir.join("absent");
-    assert!(matches!(
-        build(&fake, &r),
-        Err(Error::Io { what, .. }) if what == format!("read {}", r.binary.display())
-    ));
-    assert!(!r.stage.exists());
+    let absent = dir.join("absent");
+    for missing in 0..3 {
+        let mut r = request(&dir);
+        let source = [
+            &mut r.sources.binary,
+            &mut r.sources.gh,
+            &mut r.sources.trusted_root,
+        ];
+        *source.into_iter().nth(missing).expect("a source") = absent.clone();
+        assert!(matches!(
+            build(&fake, &r),
+            Err(Error::Io { what, .. }) if what == format!("read {}", absent.display())
+        ));
+        assert!(!r.stage.exists());
+    }
     let mut r = request(&dir);
     r.stage = dir.join("no-parent").join("root");
     assert!(matches!(
@@ -596,329 +685,4 @@ fn an_odc_archive_that_is_cut_short_or_malformed_is_refused_with_where() {
         read_odc(&empty),
         Err("the name at byte 76 does not end in NUL".to_owned())
     );
-}
-
-#[test]
-fn a_good_expanded_pkg_passes_the_check() {
-    // Catches: a check that refuses the pkg pkgbuild makes of the tree build lays out.
-    let expanded = Expanded::good("macos-pkg-check-good");
-    assert_eq!(
-        expanded.check(),
-        Ok(vec![format!(
-            "check-macos-pkg: {} installs exactly /usr/local/bin/hostkeeper (755) and \
-             /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist (644), owned by root and \
-             wheel, with the label dev.hostkeeper.hostkeeper, version 0.1.5 and no scripts",
-            expanded.pkg().display()
-        )])
-    );
-}
-
-#[test]
-fn a_pkg_with_scripts_or_another_file_or_without_a_part_is_refused() {
-    // Catches: a pkg with a Scripts directory (a preinstall or postinstall that would run as
-    // root at install), a stray file, or a missing bill of materials, payload or info.
-    let expanded = Expanded::good("macos-pkg-check-scripts");
-    std::fs::create_dir(expanded.pkg().join("Scripts")).expect("Scripts");
-    std::fs::write(expanded.pkg().join("Scripts/postinstall"), b"#!/bin/sh\n").expect("write");
-    expanded.write("Distribution", b"<installer-gui-script/>");
-    std::fs::remove_file(expanded.pkg().join("Bom")).expect("remove");
-    let only = "an expanded pkg of hostkeeper holds only the files Bom, PackageInfo and Payload \
-                (no Scripts)";
-    assert_eq!(
-        expanded.problems(),
-        [
-            format!("Distribution: {only}"),
-            format!("Scripts: {only}"),
-            "missing Bom".to_owned(),
-        ]
-    );
-    // A part that is a directory is not that part, and is not read.
-    let expanded = Expanded::good("macos-pkg-check-payload-dir");
-    std::fs::remove_file(expanded.pkg().join("Payload")).expect("remove");
-    std::fs::create_dir(expanded.pkg().join("Payload")).expect("a directory");
-    std::fs::remove_file(expanded.pkg().join("PackageInfo")).expect("remove");
-    assert_eq!(
-        expanded.problems(),
-        [
-            format!("Payload: {only}"),
-            "missing PackageInfo".to_owned(),
-            "missing Payload".to_owned(),
-        ]
-    );
-}
-
-#[test]
-fn package_info_of_another_identifier_version_or_location_or_with_a_script_is_refused() {
-    // Catches: the pkg of another package or version, one installed elsewhere than `/`, or one
-    // that runs a script or asks for a restart after install.
-    let cases: [(String, Vec<&str>); 8] = [
-        (
-            package_info_with(
-                "identifier=\"dev.hostkeeper.other\" version=\"0.1.4\" install-location=\"/opt\"",
-            ),
-            vec![
-                "PackageInfo: identifier is \"dev.hostkeeper.other\", not \"dev.hostkeeper.hostkeeper\"",
-                "PackageInfo: version is \"0.1.4\", not \"0.1.5\"",
-                "PackageInfo: install-location is \"/opt\", not \"/\"",
-            ],
-        ),
-        (
-            package_info_with("version=\"0.1.5\""),
-            vec![
-                "PackageInfo has no identifier",
-                "PackageInfo has no install-location",
-            ],
-        ),
-        (
-            package_info().replace(
-                "postinstall-action=\"none\"",
-                "postinstall-action=\"restart\"",
-            ),
-            vec!["PackageInfo: postinstall-action is \"restart\", not \"none\""],
-        ),
-        (
-            package_info().replace(
-                "<relocate/>",
-                "<scripts><postinstall file=\"./postinstall\"/></scripts>",
-            ),
-            vec!["PackageInfo names a script (<postinstall>): the pkg runs nothing at install"],
-        ),
-        (
-            package_info().replace(
-                "<relocate/>",
-                "<scripts><preinstall file=\"./preinstall\"/></scripts>",
-            ),
-            vec!["PackageInfo names a script (<preinstall>): the pkg runs nothing at install"],
-        ),
-        (
-            "<installer-script/>".to_owned(),
-            vec!["PackageInfo has no readable <pkg-info> element"],
-        ),
-        (
-            "<pkg-info identifier=\"dev.hostkeeper.hostkeeper\" version=0.1.5>".to_owned(),
-            vec!["PackageInfo has no readable <pkg-info> element"],
-        ),
-        (
-            "<pkg-info a b=\"c\">".to_owned(),
-            vec!["PackageInfo has no readable <pkg-info> element"],
-        ),
-    ];
-    for (n, (text, want)) in cases.into_iter().enumerate() {
-        let expanded = Expanded::good(&format!("macos-pkg-check-info-{n}"));
-        expanded.write("PackageInfo", text.as_bytes());
-        assert_eq!(expanded.problems(), want, "{text}");
-    }
-    // A self-closing element with the three attributes is read; one without its end is not.
-    assert_eq!(
-        pkg_info_attributes("<pkg-info identifier=\"i\" version=\"v\"/>").map(|a| a.len()),
-        Some(2)
-    );
-    assert_eq!(pkg_info_attributes("<pkg-info identifier=\"i\""), None);
-    // A value whose closing quote never comes is not read as running to the end.
-    assert_eq!(pkg_info_attributes("<pkg-info identifier=\"i>"), None);
-}
-
-#[test]
-fn a_payload_that_is_not_a_gzip_cpio_is_refused() {
-    // Catches: a payload in another format (pbzx, xz, newc cpio) passing as empty or read
-    // loosely.
-    let expanded = Expanded::good("macos-pkg-check-not-gzip");
-    expanded.write("Payload", b"pbzx not gzip");
-    let problems = expanded.problems();
-    assert_eq!(problems.len(), 1);
-    assert!(
-        problems[0].starts_with("Payload is not gzip data: "),
-        "{problems:?}"
-    );
-    let expanded = Expanded::good("macos-pkg-check-newc");
-    expanded.write("Payload", &gzip(b"070701 a newc header"));
-    assert_eq!(
-        expanded.problems(),
-        ["Payload: the archive ends at byte 20 without its trailer"]
-    );
-}
-
-#[test]
-fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each() {
-    // Catches: a payload with a file beyond the binary and the plist, one of them missing, an
-    // entry not owned by root and wheel, a writable or setuid mode, a link or directory in
-    // place of a file (or the reverse), or other bytes than the released binary and plist.
-    let good = good_entries(BINARY);
-    let plist = plist_text().expect("the plist");
-    let with = |n: usize, entry: Vec<u8>| {
-        let mut entries = good.clone();
-        entries[n] = entry;
-        entries
-    };
-    let cases: Vec<(Vec<Vec<u8>>, Vec<String>)> = vec![
-        (
-            [
-                good.clone(),
-                vec![odc_entry("./etc/hostkeeper.toml", 0o100_644, 0, 0, b"x")],
-            ]
-            .concat(),
-            vec![
-                "/etc/hostkeeper.toml (\"./etc/hostkeeper.toml\") is in the payload, which holds \
-                 only the binary, the plist and their directories, each once"
-                    .to_owned(),
-            ],
-        ),
-        (
-            good[..7].to_vec(),
-            vec!["missing /usr/local/bin/hostkeeper in the payload".to_owned()],
-        ),
-        (
-            [&good[..3], &good[4..]].concat(),
-            vec![
-                "missing /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist in the payload"
-                    .to_owned(),
-            ],
-        ),
-        (
-            with(
-                7,
-                odc_entry(&format!("./{BIN}"), 0o100_755, 501, 20, BINARY),
-            ),
-            vec![
-                "/usr/local/bin/hostkeeper: owned by uid 501 and gid 20, not root and wheel (0 \
-                 and 0)"
-                    .to_owned(),
-            ],
-        ),
-        (
-            with(7, odc_entry(&format!("./{BIN}"), 0o104_755, 0, 0, BINARY)),
-            vec!["/usr/local/bin/hostkeeper: mode 4755, not 755".to_owned()],
-        ),
-        (
-            with(
-                3,
-                odc_entry(&format!("./{PLIST}"), 0o100_664, 0, 0, plist.as_bytes()),
-            ),
-            vec![
-                "/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist: mode 664, not 644"
-                    .to_owned(),
-            ],
-        ),
-        (
-            with(1, odc_entry("./Library", 0o040_775, 0, 0, b"")),
-            vec!["/Library: mode 775, not 755".to_owned()],
-        ),
-        (
-            with(
-                7,
-                odc_entry(&format!("./{BIN}"), 0o120_755, 0, 0, b"/elsewhere"),
-            ),
-            vec!["/usr/local/bin/hostkeeper: of type 120000, not a regular file".to_owned()],
-        ),
-        (
-            with(6, odc_entry("./usr/local/bin", 0o100_755, 0, 0, b"")),
-            vec!["/usr/local/bin: of type 100000, not a directory".to_owned()],
-        ),
-        (
-            with(
-                7,
-                odc_entry(&format!("./{BIN}"), 0o100_755, 0, 0, b"another binary"),
-            ),
-            vec![format!(
-                "/usr/local/bin/hostkeeper: not the bytes of {{binary}}"
-            )],
-        ),
-        (
-            with(
-                3,
-                odc_entry(
-                    &format!("./{PLIST}"),
-                    0o100_644,
-                    0,
-                    0,
-                    plist.replace("<true/>", "<false/>").as_bytes(),
-                ),
-            ),
-            vec![
-                "/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist: not the daemon plist \
-                 hostkeeper-launchd writes"
-                    .to_owned(),
-            ],
-        ),
-        (
-            with(
-                3,
-                odc_entry(
-                    &format!("./{PLIST}"),
-                    0o100_644,
-                    0,
-                    0,
-                    plist
-                        .replace(">dev.hostkeeper.hostkeeper<", ">dev.hostkeeper.x<")
-                        .as_bytes(),
-                ),
-            ),
-            vec![
-                "/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist: the label is \
-                 Some(\"dev.hostkeeper.x\"), not \"dev.hostkeeper.hostkeeper\""
-                    .to_owned(),
-                "/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist: not the daemon plist \
-                 hostkeeper-launchd writes"
-                    .to_owned(),
-            ],
-        ),
-        (
-            [good.clone(), vec![good[7].clone()]].concat(),
-            vec![
-                "/usr/local/bin/hostkeeper (\"./usr/local/bin/hostkeeper\") is in the payload, \
-                 which holds only the binary, the plist and their directories, each once"
-                    .to_owned(),
-            ],
-        ),
-        // A name without `./` is the same path: pkgbuild writes `./`, other tools may not.
-        (with(7, odc_entry(BIN, 0o100_755, 0, 0, BINARY)), vec![]),
-    ];
-    for (n, (entries, want)) in cases.into_iter().enumerate() {
-        let expanded = Expanded::new(&format!("macos-pkg-check-payload-{n}"), &entries);
-        let want: Vec<String> = want
-            .iter()
-            .map(|w| w.replace("{binary}", &expanded.binary().display().to_string()))
-            .collect();
-        match expanded.check() {
-            Ok(_) => assert!(want.is_empty(), "case {n} passed, wanted {want:?}"),
-            Err(Error::Refused(got)) => assert_eq!(got, want, "case {n}"),
-            Err(other) => panic!("case {n}: {other:?}"),
-        }
-    }
-}
-
-#[test]
-fn a_name_without_the_dot_slash_prefix_or_with_another_one_is_not_a_payload_path() {
-    // Catches: a payload path read loosely, so that `./x` and `x` and `../x` name one entry.
-    assert_eq!(payload_path("."), "");
-    assert_eq!(payload_path("./usr"), "usr");
-    assert_eq!(payload_path("usr"), "usr");
-    assert_eq!(payload_path("../usr"), "../usr");
-    assert_eq!(payload_path("/usr"), "/usr");
-    let mut entries = good_entries(BINARY);
-    entries[4] = dir_entry("../usr");
-    let expanded = Expanded::new("macos-pkg-check-dotdot", &entries);
-    assert_eq!(
-        expanded.problems(),
-        [
-            "/../usr (\"../usr\") is in the payload, which holds only the binary, the plist and \
-             their directories, each once",
-            "missing /usr in the payload",
-        ]
-    );
-}
-
-#[test]
-fn an_unreadable_directory_or_binary_is_an_io_error_naming_it() {
-    // Catches: a check that passes because it could read nothing.
-    let expanded = Expanded::good("macos-pkg-check-io");
-    let absent = expanded.dir.join("absent");
-    assert!(matches!(
-        check(&absent, &version(), &expanded.binary()),
-        Err(Error::Io { what, .. }) if what == format!("read {}", absent.display())
-    ));
-    assert!(matches!(
-        check(&expanded.pkg(), &version(), &absent),
-        Err(Error::Io { what, .. }) if what == format!("read {}", absent.display())
-    ));
 }
