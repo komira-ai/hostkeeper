@@ -9,6 +9,11 @@
 //! hello's hook in step jobs; hello's hook starts and stops its two slots, the jobs `hello.a` and
 //! `hello.b`, with `launchctl` (`e2e::hello` says how the package is built).
 //!
+//! Before any order, the three packages go through the daemon's own package store on this Mac
+//! (fetch, attestation, unpack with the Mac's checks, seal): a first install the daemon refuses
+//! is reported only once the service is listed, so a refusal fails the test there with its
+//! reason instead of as a wait that never ends.
+//!
 //! The test is one `#[test]` in four phases, each starting from the state the one before left:
 //! the install of `1.0.0`, the update to `1.1.0`, the update to `1.2.0` whose server answers
 //! `/readyz` with 503 so that hello's `verify` fails and the daemon rolls back to `1.1.0`, and
@@ -117,13 +122,19 @@ impl Rig {
         }
 
         let coordinator = CoordinatorHandle::start(&host.base().join("coordinator"), SERVICE, ROLE);
-        host.write_config(&format!(
+        let config = format!(
             "coordinator = \"{}\"\nca_sha256 = \"{}\"\nrelease_channel = \"{}\"\n\n{}",
             coordinator.heartbeat_url(),
             coordinator.ca_sha256(),
             channel.base_url(),
             signer.trusted_signers_toml(),
-        ));
+        );
+        host.write_config(&config);
+        let digests: Vec<(&str, String)> = packages
+            .iter()
+            .map(|(version, package)| (*version, package.sha256.clone()))
+            .collect();
+        host.check_package_store(&config, SERVICE, &digests);
         host.start_daemon();
         coordinator.approve_enrollment(HOST_ID, SERVICE);
         Rig {

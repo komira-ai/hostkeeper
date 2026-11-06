@@ -26,8 +26,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use std::num::NonZeroU64;
+
+use hostkeeper_config::daemon::DaemonConfig;
+use hostkeeper_config::manifest::HostkeeperVersion;
+use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_daemon::adapters::Adapters;
+use hostkeeper_daemon::cli::{HostFiles, host_ports};
+use hostkeeper_daemon::start::Settings;
+use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print, print_args};
-use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess};
+use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess, Platform};
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_proto::hostkeeper::local::v1::{StatusRequest, StatusResponse};
 use hostkeeper_steps::record::RECORD_FILE;
@@ -415,6 +424,44 @@ impl MacHost {
         super::wait_for("the daemon answers Status", STATUS_TRIES, || {
             self.status().is_ok()
         });
+    }
+
+    /// Takes each `(version, digest)` of `service` through the daemon's own package store on
+    /// this Mac, as an order does before its first step: `host_ports` over the daemon config
+    /// `config` and the host's files and adapters, then `version_dir` (fetch from the release
+    /// channel, the attestation checked by the installed `gh`, the digest, the unpack with the
+    /// Mac's quarantine and code-signature checks, the seal), into a packages directory of its
+    /// own, so that the daemon's stays untouched. A refusal there is one the daemon would give
+    /// the order and report only once the service is listed, so it fails the test here with
+    /// the daemon's own reason and detail.
+    ///
+    /// # Panics
+    /// The store cannot be built, or it refuses a version.
+    pub fn check_package_store(&self, config: &str, service: &str, versions: &[(&str, String)]) {
+        let parsed = DaemonConfig::parse(config).expect("the daemon config parses");
+        let settings = Settings {
+            config: self.config_path(),
+            state_dir: self.base.join("check-state"),
+            packages_dir: self.base.join("check-packages"),
+            admin_socket: self.base.join("run").join("check.sock"),
+            trusted_uid: 0,
+            trusted_root_max_age_days: NonZeroU64::new(3650).expect("not zero"),
+        };
+        make_dir(&settings.state_dir, 0o755);
+        make_dir(&settings.packages_dir, 0o755);
+        let own = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION")).expect("a version");
+        let adapters = Adapters::for_platform(&Platform::host())
+            .unwrap_or_else(|e| panic!("the Mac's adapters: {e}"));
+        let ports = host_ports(&parsed, &settings, &HostFiles::host(), own, adapters)
+            .unwrap_or_else(|e| panic!("the daemon's ports: {e}"));
+        let name = ServiceName::new(service).expect("a service name");
+        for (version, digest) in versions {
+            let digest = PackageDigest::new(digest).expect("a digest");
+            let version = Version::new(version).expect("a version");
+            if let Err(refused) = ports.packages.version_dir(&name, &version, &digest, None) {
+                panic!("the daemon's package store refuses {service} {version}: {refused}");
+            }
+        }
     }
 
     /// The daemon's answer to `Status` on its admin socket.
