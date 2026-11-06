@@ -2,8 +2,8 @@
 // change it made (`AuditEntry`), and who made it (`Actor`). The rest of the package is
 // operator.proto (`Hosts`, `Releases`, `Services`, `Audit` and their refusals, `AuditRefusal`
 // among them), which imports this file publicly, and enrollment.proto (`Enrollment` and
-// `EnrollmentRefusal`); this file is the same package and API, kept apart so that each file
-// stays under 1000 lines.
+// `EnrollmentRefusal`); this file is the same package and API, kept apart to shorten
+// operator.proto.
 //
 // Served by: the coordinator, on its control listener, as operator.proto says.
 //

@@ -20,6 +20,8 @@
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::HostId;
 
+use crate::audit_file::Query;
+use crate::enrollment::{ACTION_APPROVE, ACTION_REPLACE};
 use crate::grpc::report;
 use crate::holds::marks_of;
 use crate::operator::{Caller, entry_proto, optional_reason};
@@ -107,10 +109,12 @@ impl Coordinator {
 
     /// `Hosts.Retire`: revokes the enrolled host `node_id`, as the module says. The fleet's
     /// lock is held from the deny row to the slot, so two calls at once audit one retirement,
-    /// and no assignment is written between the read and the drop. The first retirement is
-    /// audited; a repeat writes and audits nothing more, unless the host still has entries in the
-    /// assignments (the first call's write of them failed), which it drops and audits then.
-    /// Answers whether an update is still in flight on the host, holding its slot.
+    /// and no assignment is written between the deny row and the drop. The first retirement is
+    /// audited. A repeat of a host already denied writes and audits nothing more, unless the
+    /// audit log shows the retirement unfinished ([`Coordinator::retire_audited`]: the first
+    /// call's ops write failed after its deny row), which it finishes then: the host's entries
+    /// are dropped and the retirement audited. Answers whether an update is still in flight on
+    /// the host, holding its slot.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the node id or the reason),
@@ -132,13 +136,7 @@ impl Coordinator {
         let mut fleet = self.lock_fleet();
         let first = enrollment.deny_host(&id)?;
         let node = id.as_str();
-        let held = self.ops.read(|state| {
-            state
-                .assignments
-                .values()
-                .any(|entries| entries.names_host(node))
-        });
-        let entry = if first || held {
+        let entry = if first || !self.retire_audited(node)? {
             let mut audit = AuditEntry::new(by, ACTION_RETIRE);
             audit.node_id = Some(node.to_owned());
             audit.reason = why;
@@ -164,5 +162,28 @@ impl Coordinator {
             entry: entry.as_ref().map(entry_proto),
             update_in_flight,
         })
+    }
+
+    /// Whether the audit log holds the retirement of `node`: the newest of its entries that
+    /// approve or retire it is a `host_retire`. An approval that takes the host id back
+    /// (`replace`) is newer, so a later retirement of it is owed its own entry. Once the audit
+    /// file's retention has deleted the entry, a repeat audits the retirement again.
+    ///
+    /// # Errors
+    /// `store_failed`: the audit log cannot be read (logged).
+    fn retire_audited(&self, node: &str) -> Result<bool, proto::HostsRefusal> {
+        let keep = |entry: &AuditEntry| {
+            entry.node_id.as_deref() == Some(node)
+                && [ACTION_RETIRE, ACTION_APPROVE, ACTION_REPLACE].contains(&entry.action.as_str())
+        };
+        let newest = self.ops.audit_page(&Query {
+            since_seq: 0,
+            limit: 1,
+            newest: true,
+            keep: &keep,
+        })?;
+        Ok(newest
+            .first()
+            .is_some_and(|logged| logged.entry.action == ACTION_RETIRE))
     }
 }

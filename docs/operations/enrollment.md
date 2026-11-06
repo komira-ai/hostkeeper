@@ -284,9 +284,11 @@ is unknown, denied or certified for another key is refused `renewal_not_allowed`
 
 Retire a node that is lost, dead or replaced. A deny row is written for its host id: its
 heartbeats and its `Renew` are refused `denied` at once, though its certificate stays valid until
-it expires (7 days at most). Its own service assignments (`services assign --node-id`) are
-dropped; what its role or the rollout file assigns is not. It is sent no `uninstall`: what it runs
-stays as it is. The reason may be left out.
+it expires (7 days at most). Every entry of its own in the services' assignments is dropped: an
+assignment or exclusion of the host (`services assign --node-id`, `services unassign --node-id`),
+its minimum version (`services set-min-version` of the host), and an uninstall it was ordered,
+which is cancelled. What its role or the rollout file assigns is not. It is sent no `uninstall`:
+what it runs stays as it is. The reason may be left out.
 
 ```
 hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
@@ -297,7 +299,9 @@ The answer's `update_in_flight` says whether the node was updating. If it was, i
 live update slot until its heartbeat reports the update's record final; a node that is gone never
 does, so free its slot with `hosts exclude --abandon true` for the service it was updating. A node
 with no update in flight frees its slot at once. The retirement is audited `host_retire`;
-retiring a node already retired succeeds and audits nothing. A host id no host was enrolled as is
+retiring a node already retired succeeds and audits nothing. If a retirement is refused after its
+deny row was written (`audit_unavailable` or `store_failed`), the node is refused already; ask
+again once the coordinator can write, and the retirement is finished and audited. A host id no host was enrolled as is
 `unknown_host` (NOT_FOUND).
 
 A retired host id is taken again only by an approval with `--replace true`.

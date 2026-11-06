@@ -282,10 +282,12 @@ abort of a host that runs nothing of the service is accepted and changes nothing
 `/hostkeeper.operator.v1.Hosts/Retire`
 
 Retire an enrolled host: a deny row is written, so its heartbeats and its `Renew` are
-refused `denied` at once, and its own service assignments (`Services.Assign` of the host)
-are dropped. An update in flight on it keeps its slot until the host reports the update's
-record final; a host with none frees it now. The host is sent no `uninstall`. Retiring a
-host already retired is answered as retired and audited once.
+refused `denied` at once, and every entry of the host's own in the services' assignments is
+dropped: an assignment or exclusion of the host, its minimum version, and an uninstall it was
+ordered (which is cancelled); a role's entries stay. An update in flight on it keeps its
+slot until the host reports the update's record final; a host with none frees it now. The
+host is sent no `uninstall`. Retiring a host already retired is answered as retired and
+audited once.
 
 | flag | value | meaning |
 |---|---|---|

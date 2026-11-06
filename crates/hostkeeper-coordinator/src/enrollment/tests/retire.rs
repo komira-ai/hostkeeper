@@ -273,14 +273,18 @@ fn switchable(ops: &std::path::Path, down: &Arc<AtomicBool>) -> Appender {
 
 /// Proves: a `Retire` whose audit line cannot be appended is refused `audit_unavailable`, with
 /// the host denied (the deny row is written first) and its assignment kept, unaudited; asking
-/// again once the file takes lines drops the assignment and audits the retirement, once.
+/// again once the file takes lines drops the assignment and audits the retirement, once. The
+/// same holds for a host with no assignment at all, whose repeat finds nothing to drop: it is
+/// audited once, and a third call audits nothing.
 ///
 /// Catches: a retirement cut short that a repeat answers as done, leaving the host's
-/// assignments and no audit entry, and an assignment dropped with no audit line.
+/// assignments or no audit entry (whether or not the host had assignments), and an assignment
+/// dropped with no audit line.
 #[tokio::test]
 async fn a_retirement_whose_audit_fails_is_finished_by_asking_again() {
     let enrollment = Rig::new("retire-audit-fault");
     enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
+    enrolled(&enrollment.enrollment, &HostKey::new(), "machine-2", "s2");
     let mut rig = coordinator_over("retire-audit-fault-coordinator", &enrollment).await;
     assign(&rig.coordinator, "s1");
     let down = Arc::new(AtomicBool::new(true));
@@ -302,6 +306,11 @@ async fn a_retirement_whose_audit_fails_is_finished_by_asking_again() {
         "denied first"
     );
     assert!(names(c, "s1"), "the assignment is kept");
+    assert_eq!(
+        retire(c, "s2", "dead").await,
+        Err(HostsRefusal::AuditUnavailable)
+    );
+    assert!(!names(c, "s2"), "s2 has no assignment");
     assert_eq!(retirements(c, skip), []);
 
     down.store(false, Ordering::SeqCst);
@@ -313,8 +322,18 @@ async fn a_retirement_whose_audit_fails_is_finished_by_asking_again() {
         "the answer is the entry written"
     );
     assert!(!names(c, "s1"), "the assignment is dropped");
+    let s2 = retire(c, "s2", "dead").await.expect("retired");
+    assert!(
+        s2.entry.is_some(),
+        "a host with no assignment is audited too"
+    );
+    let third = retire(c, "s2", "dead").await.expect("retired");
+    assert_eq!(third.entry, None, "and only once");
     assert_eq!(
         retirements(c, skip),
-        [audited("operator", ACTION_RETIRE, Some("s1"), "lost")]
+        [
+            audited("operator", ACTION_RETIRE, Some("s1"), "lost"),
+            audited("operator", ACTION_RETIRE, Some("s2"), "dead"),
+        ]
     );
 }

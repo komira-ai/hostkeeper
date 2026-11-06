@@ -149,9 +149,12 @@ and one that cannot be written is logged.
 writes the host's deny row (retiring), drops the host's own entries from the operator's service
 assignments with the `host_retire` audit entry in one write of the ops file, and frees the host's
 update slot when no update or order of it is in flight, making the row final; otherwise the
-host's final report does that, as below. The deny row is the first write, so a retirement cut
-short by a failed ops write leaves the host refused, and asking again drops its entries and
-audits it. A repeat of a finished retirement audits nothing. A host id the store never approved
+host's final report does that, as below. The host's entries are its assignment or exclusion,
+its minimum version and an uninstall it was ordered, in each service; a role's stay. The deny
+row is the first write, so a retirement cut short by a failed ops write leaves the host refused.
+A repeat of a host already denied is finished unless the audit log holds its retirement (the
+newest of its approvals and retirements is a `host_retire`): its entries are dropped and it is
+audited then. A repeat of a finished retirement audits nothing. A host id the store never approved
 is `unknown_host`.
 
 ## A Mac approved by its nonce
