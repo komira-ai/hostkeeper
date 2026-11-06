@@ -13,7 +13,7 @@
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::order::{DeferredReport, OrderResult};
 
@@ -263,22 +263,22 @@ impl Heartbeat {
     pub fn to_json(&self) -> Value {
         let features: Vec<&str> = self.features.iter().map(|f| f.as_str()).collect();
         let services: Vec<Value> = self.services.iter().map(ServiceFacts::to_json).collect();
-        let mut beat = json!({
-            "platform": self.platform.as_str(),
-            "agent": { "name": AGENT_NAME, "version": self.agent_version.as_str() },
-            "agent_features": features,
-            "services": services,
-            "sent_unix": self.sent_unix,
-        });
-        if let Some(object) = beat.as_object_mut() {
-            if let Some(not_after) = self.renewal.cert_not_after_unix {
-                object.insert("cert_not_after_unix".to_owned(), not_after.into());
-            }
-            if let Some(error) = &self.renewal.last_renew_error {
-                object.insert("last_renew_error".to_owned(), error.clone().into());
-            }
+        let mut beat = Map::new();
+        beat.insert("platform".to_owned(), self.platform.as_str().into());
+        beat.insert(
+            "agent".to_owned(),
+            json!({ "name": AGENT_NAME, "version": self.agent_version.as_str() }),
+        );
+        beat.insert("agent_features".to_owned(), features.into());
+        beat.insert("services".to_owned(), services.into());
+        beat.insert("sent_unix".to_owned(), self.sent_unix.into());
+        if let Some(not_after) = self.renewal.cert_not_after_unix {
+            beat.insert("cert_not_after_unix".to_owned(), not_after.into());
         }
-        beat
+        if let Some(error) = &self.renewal.last_renew_error {
+            beat.insert("last_renew_error".to_owned(), error.clone().into());
+        }
+        Value::Object(beat)
     }
 
     /// Its size: the bytes of [`Heartbeat::to_json`].

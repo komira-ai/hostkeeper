@@ -245,7 +245,8 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
     releases status --service api
 ```
 
-`hosts list` and `hosts get` answer `UNIMPLEMENTED` in this build.
+`hosts list` and `hosts get` answer each host the coordinator has heard from since it started;
+[Renewal](#renewal) says what they answer of its certificate.
 
 ## Renewal
 
@@ -262,7 +263,8 @@ more than `--clock-skew-secs` (120 by default) from the coordinator's clock, eit
 page of the operator web app shows the end and the error, warns while the end is less than 48
 hours away (or past) or an error is reported, and shows the count. A daemon whose enroller
 cannot be opened (its pki directory locked or unreadable, its coordinator address refused) logs
-`error: the enrollment loop cannot start yet: <why>` once per reason, reports it as its
+`error: the enrollment loop cannot start yet: <why>` (once, and again when the reason changes),
+reports it as its
 `last_renew_error`, and tries again after 5 seconds, then 10, 20 and so on, at most every 5
 minutes, for as long as it runs.
 

@@ -158,3 +158,43 @@ fn the_skew_bound_is_the_one_the_coordinator_is_given() {
     ask(&rig, "d1", "daemon", beat(Some(unix_now(&rig) + 11)));
     assert_eq!(get(&rig, "d1").clock_skew_beats, 1);
 }
+
+/// The value of `--clock-skew-secs` a `serve` given `extra` reads.
+fn skew_flag(extra: &[&str]) -> u64 {
+    use clap::Parser as _;
+
+    use crate::config::{Cli, Command};
+
+    let mut args = vec!["hostkeeper-coordinator", "serve"];
+    for flag in [
+        "--heartbeat-listen",
+        "--private-listen",
+        "--tls-cert",
+        "--tls-key",
+        "--client-ca",
+        "--state-file",
+        "--oidc-config",
+        "--operator-token-file",
+        "--rollout-file",
+    ] {
+        args.push(flag);
+        args.push(if flag.ends_with("listen") {
+            "192.0.2.1:1"
+        } else {
+            "unread"
+        });
+    }
+    args.extend_from_slice(extra);
+    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
+        panic!("serve")
+    };
+    flags.clock_skew_secs
+}
+
+/// Catches `--clock-skew-secs` without its default of [`CLOCK_SKEW_AFTER`], or not taken as
+/// given: 120 when absent, the number given otherwise.
+#[test]
+fn the_clock_skew_flag_defaults_to_two_minutes_and_takes_a_value() {
+    assert_eq!(skew_flag(&[]), CLOCK_SKEW_AFTER.as_secs());
+    assert_eq!(skew_flag(&["--clock-skew-secs", "30"]), 30);
+}

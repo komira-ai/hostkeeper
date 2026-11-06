@@ -1,8 +1,7 @@
 //! What the coordinator knows of the hosts: the last heartbeat of each, and when it came.
 //!
 //! Nothing here is stored. After a restart the coordinator knows no host until it
-//! heartbeats, and the count of each host's heartbeats whose clock was off
-//! ([`Node::skewed_beats`]) starts again from zero, which is why the minimums are counted against the heartbeats it has seen and
+//! heartbeats, which is why the minimums are counted against the heartbeats it has seen and
 //! never against a host list (`docs/design/host-updates.md`). Time is a `Duration`
 //! since the coordinator started, so the decision replays exactly in a test.
 //!
@@ -14,6 +13,10 @@
 //! [`Fleet::record_in`] under that service's name. A restart forgets the
 //! outstanding orders: the start-up quiet period lets the hosts report first, and a host
 //! that began updating says so.
+//!
+//! A host's clock is held against the coordinator's wall clock, which the caller passes in
+//! ([`Fleet::note_node`]): the count of each host's heartbeats whose clock was off
+//! ([`Node::skewed_beats`]) starts again from zero after a restart.
 //!
 //! The operator's holds and the hosts a standing force orders are kept here as a copy of the ops
 //! store's ([`Marks`]), refreshed under the fleet's lock, so the decisions read them with the
