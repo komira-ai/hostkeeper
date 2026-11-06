@@ -114,9 +114,8 @@ async fn an_install_needs_a_daemon_that_takes_it_and_a_digest() {
         .services
         .as_ref()
         .map(|s| s[0].as_heartbeat(beat.platform));
-    assert_eq!(next_try(one.as_ref(), &order_id), 5);
-    assert_eq!(next_try(one.as_ref(), "install-other"), 1);
-    assert_eq!(next_try(None, &order_id), 1);
+    assert_eq!(next_try(one.and_then(|b| b.last_update).as_ref()), 5);
+    assert_eq!(next_try(None), 1);
 }
 
 /// Catches: a service ordered to a host it is not assigned to, installed or not, or one ordered

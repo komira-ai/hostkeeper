@@ -35,6 +35,11 @@ use hostkeeper_link::{
     OrderRef, OrderResult, Outcome, PackageDigest, Reason, Reply, ServiceFacts, StopFlag, Target,
     Verb,
 };
+use hostkeeper_oidc::testkit::{
+    STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
+    spent,
+};
+use hostkeeper_oidc::{OidcConfig, Verifier};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1::AbortRequest;
 use hostkeeper_wire::identity::Identity;
@@ -71,15 +76,39 @@ fn coordinator(dir: &Path) -> Arc<Coordinator> {
     .expect("the desired state");
     let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
     let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
-    let (verifier, _) = hostkeeper_oidc::testkit::static_verifier();
+    // CI's allow-list admits `web`, so a scenario can set its next version.
+    let allow = format!("{}services = [\"{SERVICE}\"]\n", config_text(STATIC_ISSUER));
+    let (oidc_now, _) = oidc_clock();
+    let verifier = Verifier::new(
+        OidcConfig::parse(&allow).expect("the allow-list"),
+        Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
+        Duration::from_secs(30),
+        oidc_now,
+        spent(),
+    );
     let clock: Clock = Arc::new(|| Duration::from_secs(1_000));
     let rollout = format!("[[service]]\nname = \"{SERVICE}\"\nroles = [\"daemon\"]\n");
     Arc::new(
-        Coordinator::new(desired, verifier, OPERATOR.to_owned(), clock)
+        Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
             .with_services(Services::parse(&rollout).expect("the rollout file"))
             .with_quiet(Duration::ZERO)
             .with_ops(ops),
     )
+}
+
+/// CI sets `web` to `version`, with the package digest [`d`].
+fn set_desired(coordinator: &Coordinator, version: &str) {
+    let token = mint(&keys()[0], &good_claims(STATIC_ISSUER));
+    let body = format!(
+        r#"{{"service":"{SERVICE}","version":"{version}","release_digest":"{}"}}"#,
+        d()
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("a runtime");
+    runtime
+        .block_on(coordinator.set_desired(Some(&token), body.as_bytes()))
+        .expect("CI sets the version");
 }
 
 /// Where the coordinator says `web` stands: `converged`, `in_progress`, `blocked` or `halted`.
@@ -425,4 +454,102 @@ fn an_abort_the_coordinator_queues_stops_the_live_update_and_its_halt_is_reporte
     host.beat();
     assert_eq!(host.ordered()[2], None);
     assert_eq!(convergence(&coordinator), "halted");
+}
+
+/// The next version CI sets after the install.
+const NEXT: &str = "3.0.0";
+
+/// The order of the answer `n` (from 0) and its try, as the loop read it.
+fn order_and_try(host: &Host, n: usize) -> (Verb, u64) {
+    let order = host.ordered()[n].clone().expect("an order");
+    (order.verb, order.order_try)
+}
+
+/// `web` at `version`, as an update or an install of the package [`d`] names it.
+fn web_at(version: &str) -> Target {
+    Target {
+        service: ServiceName::new(SERVICE).expect("a service"),
+        version: Version::new(version).expect("a version"),
+        digest: PackageDigest::new(&d()).expect("a digest"),
+        index_digest: None,
+    }
+}
+
+/// Catches the update after an install refused `try_conflict` (komira-ai/hostkeeper#115): the
+/// coordinator numbered tries per order id, so the update of a service the host had just
+/// installed went at try 1, the try the daemon's step record held for the install, and the daemon
+/// refused it for its other package. The coordinator installs `web` at [`TARGET`] (try 1); CI sets
+/// [`NEXT`]; the coordinator orders the update at try 2; the real executor runs all four steps of
+/// it, and the coordinator reads `web` converged at [`NEXT`] and orders nothing more.
+#[test]
+fn an_update_after_an_install_runs_and_converges() {
+    let rig = Rig::new("typed-install-update");
+    rig.stage(SERVICE, TARGET);
+    rig.stage(SERVICE, NEXT);
+    for (step, line) in HOOK_LINES {
+        rig.launcher.replies(SERVICE, step, &[(0, line), (0, line)]);
+    }
+    let dir = Scratch::new("typed-install-update-coordinator");
+    let coordinator = coordinator(dir.path());
+    let mut host = Host::new(&rig, &coordinator);
+
+    host.beat();
+    assert_eq!(order_and_try(&host, 0), (Verb::Install(web_at(TARGET)), 1));
+    assert!(host.dispatch.run_next());
+    host.beat();
+    assert_eq!(host.ordered()[1], None);
+    assert_eq!(convergence(&coordinator), "converged");
+
+    set_desired(&coordinator, NEXT);
+    host.beat();
+    assert_eq!(order_and_try(&host, 2), (Verb::Update(web_at(NEXT)), 2));
+    assert!(host.dispatch.run_next());
+    assert_eq!(
+        rig.launcher.steps(SERVICE),
+        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup].repeat(2)
+    );
+    host.beat();
+    host.beat();
+    assert_eq!(host.ordered()[3..], [None, None]);
+    assert_eq!(convergence(&coordinator), "converged");
+}
+
+/// Catches a host ordered from try 1 again after its daemon restarts: the daemon installs `web`
+/// (try 1) and reports the install's verdict, which the coordinator stores and acknowledges; the
+/// daemon restarts, and its loop, which no longer sends that verdict, lists `web` with none. The
+/// coordinator reads the host as still reporting the verdict it acknowledged (design 8.2), so it
+/// orders the next update one past it, at try 2, which the restarted daemon runs to convergence.
+/// At try 1 the daemon, whose step record holds the install's try 1, would refuse it
+/// `try_conflict`.
+#[test]
+fn a_restarted_daemon_is_ordered_one_past_the_try_it_reported() {
+    let rig = Rig::new("typed-restart-update");
+    rig.stage(SERVICE, TARGET);
+    rig.stage(SERVICE, NEXT);
+    for (step, line) in HOOK_LINES {
+        rig.launcher.replies(SERVICE, step, &[(0, line), (0, line)]);
+    }
+    let dir = Scratch::new("typed-restart-update-coordinator");
+    let coordinator = coordinator(dir.path());
+    let mut host = Host::new(&rig, &coordinator);
+    host.beat();
+    assert_eq!(order_and_try(&host, 0), (Verb::Install(web_at(TARGET)), 1));
+    assert!(host.dispatch.run_next());
+    host.beat();
+    assert_eq!(host.ordered()[1], None);
+    assert_eq!(convergence(&coordinator), "converged");
+    drop(host);
+
+    set_desired(&coordinator, NEXT);
+    let mut host = Host::new(&rig, &coordinator);
+    host.beat();
+    assert_eq!(order_and_try(&host, 0), (Verb::Update(web_at(NEXT)), 2));
+    assert!(host.dispatch.run_next());
+    assert_eq!(
+        rig.launcher.steps(SERVICE),
+        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup].repeat(2)
+    );
+    host.beat();
+    assert_eq!(host.ordered()[1], None);
+    assert_eq!(convergence(&coordinator), "converged");
 }

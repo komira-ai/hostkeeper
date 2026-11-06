@@ -5,11 +5,12 @@
 //! The order id names the update, not the answer: it is `update-` and the first 32 lowercase
 //! hex characters of the SHA-256 of the service, a newline and the version, so the same update
 //! has the same id at every heartbeat and across a coordinator restart, and fits the 64 bytes of
-//! an [`OrderId`]. The try is what the host's verdicts say: 1 for an order the host has not
-//! reported a verdict of, and one more than the try of the verdict the host reports for this
-//! order id. A resend of an outstanding order therefore keeps its try, an order given again after
-//! a verdict raises it, and a restarted coordinator, which remembers no tries, never issues a try
-//! lower than the host reported.
+//! an [`OrderId`]. The try is what the host's verdicts say, per service as the daemon keys it
+//! (design section 8.3, [`crate::orders::next_try`]): one more than the try of the verdict the
+//! host reports for the service, whatever order that verdict ended (an install, an earlier update,
+//! a force), and 1 when it reports none. A resend of an outstanding order therefore keeps its try,
+//! the next order after a verdict raises it, and a restarted coordinator, which remembers no
+//! tries, never issues a try lower than the host reported.
 //!
 //! The package digest is the one CI registered with the version ([`crate::registry`]), or, for a
 //! version registered with a release index, the one the index lists for the host's platform, with
@@ -22,7 +23,7 @@ use hostkeeper_wire::wire::{OrderId, PackageDigest, ServiceBeat, ServiceReply, U
 use hostkeeper_wire::{HostId, Platform};
 
 use crate::ops_file;
-use crate::orders::Order;
+use crate::orders::{Order, next_try};
 use crate::registry::{Digest, Package, Registry};
 
 /// What an update answer carries for an agent that announced `order-v1`.
@@ -47,14 +48,6 @@ pub fn order_id_text(service: &str, version: &Version) -> String {
     format!("update-{}", &hash[..32])
 }
 
-/// The try of the order `id`, given the last update the host reported for the service: one more
-/// than the try of that verdict when it is a verdict of this order, else 1.
-#[must_use]
-pub fn order_try(id: &OrderId, last: Option<&UpdateResult>) -> u64 {
-    last.filter(|result| result.order_id.as_ref() == Some(id))
-        .map_or(1, |result| result.order_try.unwrap_or(0).saturating_add(1))
-}
-
 /// The terms of the order that updates `service` to `version`, whose package for the host CI
 /// registered as `package`, given the last update the host reported for the service. `None` only
 /// if the id or the digest were no such thing, which their grammars rule out for a version and a
@@ -69,7 +62,7 @@ pub fn terms(
     OrderId::parse(&order_id_text(service, version))
         .zip(PackageDigest::parse(package.digest.as_str()))
         .map(|(id, package_digest)| Terms {
-            order_try: order_try(&id, last),
+            order_try: next_try(last),
             order_id: id,
             package_digest,
             index_digest: package.index_digest.clone(),

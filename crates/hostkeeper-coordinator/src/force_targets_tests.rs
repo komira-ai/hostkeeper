@@ -118,6 +118,7 @@ fn forced(ver: &str, n: u8, halt_generation: u64, generation: u64) -> Order {
         index_digest: None,
         halt_generation,
         order_id: format!("force-{generation}"),
+        order_try: 1,
     }
 }
 

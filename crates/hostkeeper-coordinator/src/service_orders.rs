@@ -99,7 +99,11 @@ impl Coordinator {
                         continue;
                     }
                     let order_id = install_order_id(&digest);
-                    let order_try = next_try(fleet.get_in(name, id).map(|h| &h.beat), &order_id);
+                    let order_try = next_try(
+                        fleet
+                            .get_in(name, id)
+                            .and_then(|h| h.beat.last_update.as_ref()),
+                    );
                     fleet.order(name, id.clone(), version.clone(), now);
                     Order::Install {
                         service: name.to_owned(),
@@ -111,7 +115,11 @@ impl Coordinator {
                     }
                 }
                 Decision::Uninstall { order_id, running } if asked.orders => {
-                    let order_try = next_try(fleet.occupant(name, id).map(|h| &h.beat), &order_id);
+                    let order_try = next_try(
+                        fleet
+                            .occupant(name, id)
+                            .and_then(|h| h.beat.last_update.as_ref()),
+                    );
                     fleet.order_uninstall(name, id.clone(), running, order_id.clone(), now);
                     Order::Uninstall {
                         service: name.to_owned(),
