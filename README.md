@@ -140,8 +140,8 @@ and while there is none it says once what it waits for and sends nothing. It the
 admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
 new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
 transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
-the unit's name), and observes each service for `Status`. It has no service manager wired in,
-its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
+the unit's name), stops, starts and reloads units through `systemctl`, and observes each
+service for `Status`. Its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
 protocol probe (each fails without starting). Once the host is enrolled, its heartbeats go to the
 config's `coordinator` over mutual TLS, pinned to `ca_sha256` (JSON, then gRPC once the coordinator
 advertises it), and the coordinator's orders come back in the replies.
