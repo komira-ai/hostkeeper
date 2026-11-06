@@ -8,8 +8,9 @@
 //! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
 //! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
 //! nothing else ([`crate::selfupdate::protocol_line`]); and `hostkeeper self-update-seed
-//! --state-dir <dir> --binary <file>`, which the daemon's unit runs before each start to give the
-//! binary directory its first binary ([`crate::seed`]). Configuration comes in as flags only, never from the
+//! --state-dir <dir> --binary <file>`, which the daemon's unit runs before each start (on a Mac the
+//! pkg's `postinstall`, at install) to give the binary directory its first binary
+//! ([`crate::seed`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
 //!
 //! The two values read from the environment are platform-set markers of systemd, and only
@@ -157,7 +158,7 @@ pub enum Command {
     /// stages a new binary).
     SelfUpdateProtocol,
     /// Give the binary directory of hostkeeper's own update its first binary when its `current`
-    /// starts none (run by the daemon's unit before each start).
+    /// starts none (run by the daemon's unit before each start, and by the macOS pkg at install).
     SelfUpdateSeed(SeedFlags),
     /// The hook of hostkeeper's own package: every step does nothing and exits 0, since
     /// hostkeeper replaces itself by the daemon's self-update (run by a daemon that installs or

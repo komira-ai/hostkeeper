@@ -60,19 +60,31 @@ a start limit nor `OnFailure=`, so on a Mac the same verb is run by a timer job.
 serve it:
 
 - the daemon's own `LaunchDaemons` plist, the one `hostkeeper_launchd::plist::daemon_plist`
-  renders (see [One daemon, run by launchd](#one-daemon-run-by-launchd)): `KeepAlive` is plain
-  `true`, the counterpart of the unit's `Restart=always`, because the daemon exits cleanly after
-  switching to a new binary and must be started again. It sets no `ThrottleInterval`: launchd
-  waits its default 10 seconds between two starts;
+  renders (see [One daemon, run by launchd](#one-daemon-run-by-launchd)). Its program is
+  `current` of the binary directory, `/var/lib/updater/state/hostkeeper/bin/current`
+  (`hostkeeper_launchd::plist::DAEMON_PROGRAM`, the path `hostkeeper_daemon::selfupdate::binary_dir`
+  derives from the daemon's state directory), the link a self-update switches to the new binary,
+  as the Linux unit's `ExecStart=` is. `KeepAlive` is plain `true`, the counterpart of the unit's
+  `Restart=always`, because the daemon exits cleanly after switching to a new binary and must be
+  started again, from what `current` names then. It sets no `ThrottleInterval`: launchd waits its
+  default 10 seconds between two starts;
 - `hostkeeper_steps::selfupdate::launchd_fallback_job`: the job `<label>.fallback`, which runs
   `previous self-update-fallback --dir <dir>` every `StartInterval` seconds and not at load.
   The plist is deterministic (keys sorted, fixed indentation) and every path and the label in
   it are XML-escaped. The daemon writes it at each start, once ready, as
   `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.fallback.plist` with an interval of 60
   seconds, only when it differs from what is there, and then boots the job out and bootstraps it
-  again (`hostkeeper_daemon::selfunits`). Until the first self-update there is no `previous`, and
-  launchd cannot spawn the job's program when the interval comes; the daemon's own plist still
-  starts `/usr/local/bin/hostkeeper`, not the binary directory's `current`.
+  again (`hostkeeper_daemon::selfunits`). Its `--dir` is the directory the daemon's own plist
+  starts `current` of, so the `current` it flips back is the one launchd starts next. Until the
+  first self-update there is no `previous`, and launchd cannot spawn the job's program when the
+  interval comes.
+
+launchd has no counterpart of the unit's `ExecStartPre=`, so on a Mac the binary directory gets
+its first binary at install: the pkg's `postinstall` runs
+`/usr/local/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/local/bin/hostkeeper`
+(see [Release and installer pkg](#release-and-installer-pkg)). A `current` that later starts
+nothing (removed by hand, or a link to a version that is gone) leaves launchd retrying a program it
+cannot spawn; installing the pkg again seeds it.
 
 Since the timer runs the verb whether or not the new binary is failing, the verb decides the
 burst itself on a Mac (`hostkeeper_daemon::fallback::fallback_after_burst`). Each start of the
@@ -134,7 +146,8 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
 | admin socket | `/var/run/hostkeeper/admin.sock` (macOS has a read-only root and no `/run`) |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |
-| the daemon's plist program | `/usr/local/bin/hostkeeper` |
+| the daemon's plist program | `/var/lib/updater/state/hostkeeper/bin/current`, which the pkg's `postinstall` points at `/usr/local/bin/hostkeeper` on a first install |
+| the `hostkeeper` of the command line | `/usr/local/bin/hostkeeper` |
 | the daemon's logs | `/var/log/hostkeeper/daemon.out.log` and `daemon.err.log` |
 
 The daemon's plist runs `hostkeeper daemon` at load and keeps it alive. It names no user, no
@@ -328,7 +341,7 @@ and the directories that hold them (each 0755, as macOS has them already; `/usr/
 - `/usr/local/bin/hostkeeper`, mode 0755, the released binary;
 - `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, mode 0644, the daemon's job as
   `hostkeeper_launchd::daemon_plist` writes it for `DaemonJob::standard` (label
-  `dev.hostkeeper.hostkeeper`, running `/usr/local/bin/hostkeeper daemon`);
+  `dev.hostkeeper.hostkeeper`, running `/var/lib/updater/state/hostkeeper/bin/current daemon`);
 - `/var/log/hostkeeper`, mode 0755, the empty directory of the daemon's logs;
 - `/etc/newsyslog.d/hostkeeper.conf`, mode 0644, the rotation of those logs
   ([The daemon's logs](#the-daemons-logs));
@@ -354,15 +367,30 @@ system roots macOS keeps there, which the pkg does not install. (A Linux host re
 `/etc/ssl/certs/ca-certificates.crt`, or `/etc/pki/tls/certs/ca-bundle.crt` when only that one
 exists.)
 
-It has no scripts: it starts nothing and writes no config. The operator's bootstrap places
-`hostkeeper.toml` and loads the job. The pkg carries no installer signature, since that needs an
+It has one script, a `postinstall` of one command, which the installer runs as root once the files
+are in place:
+
+```
+exec /usr/local/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/local/bin/hostkeeper
+```
+
+It is the seed the Linux unit runs before each start (`hostkeeper_daemon::seed`): when `current`
+of the binary directory starts nothing, it stages the installed binary as its version
+(`versions/<version>`) and points `current` at it, so the job's first start runs it; when
+`current` starts a binary, as after a self-update, it changes nothing, so installing the pkg again
+never puts an older binary back over an update. A seed that cannot do its work fails the install
+with its message: the binary or the directory cannot be read or written, or a daemon holds the
+state directory's lock while `current` starts nothing (a daemon an older pkg started, which runs
+`/usr/local/bin/hostkeeper`; boot its job out before installing). The script starts nothing and
+writes no config. The operator's bootstrap places `hostkeeper.toml` and loads the job. The pkg carries no installer signature, since that needs an
 Apple Developer ID Installer identity. It is attested like every other asset, and the binary in it
 keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
 `cargo xtask release macos-pkg` builds it with `pkgbuild` from the binary, `gh` and the trusted
 root (`--binary`, `--gh`, `--trusted-root`); `cargo xtask release check-macos-pkg` reads back the
 pkg that `pkgutil --expand` expanded, against the same three files, and refuses a missing file and
-any other file, mode, owner, bytes or script, a plist whose output paths are not the daemon's two
-log files, and a newsyslog file whose entries name other paths than those two.
+any other file, mode, owner or bytes, any script but that `postinstall` with exactly those
+bytes, a plist whose program is not `current` of the binary directory or whose output paths are
+not the daemon's two log files, and a newsyslog file whose entries name other paths than those two.
 
 hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the

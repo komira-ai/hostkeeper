@@ -188,10 +188,12 @@ pub(crate) trait AdvisoryCheck {
 /// Builds a flat macOS installer package from a directory tree (`pkgbuild`).
 pub(crate) trait BuildPkg {
     /// Builds `pkg` from the tree `root`, installed at `/`, with the package identifier
-    /// `identifier` and version `version`, every entry owned by root and wheel, and no scripts.
+    /// `identifier` and version `version`, every entry owned by root and wheel, and the scripts
+    /// of the directory `scripts`.
     fn build_pkg(
         &self,
         root: &Path,
+        scripts: &Path,
         identifier: &str,
         version: &Version,
         pkg: &Path,

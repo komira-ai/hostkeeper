@@ -391,8 +391,9 @@ jobs:
         run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json" --stage "$RUNNER_TEMP/pkg-root" --out dist
       # Read back from the built pkg: its payload holds exactly the binary, the daemon's plist,
       # the log directory and the newsyslog file, gh and the trusted root, with their paths, modes,
-      # owners and bytes, the plist names the daemon's label and output files, the newsyslog file
-      # rotates exactly those files, and the pkg has no scripts.
+      # owners and bytes, the plist names the daemon's label, `current` of the self-update binary
+      # directory as its program and its output files, the newsyslog file rotates exactly those
+      # files, and the pkg's one script is the postinstall that seeds that binary directory.
       - name: Expand the installer pkg
         run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
       - name: The installer pkg installs exactly the binary, the plist, the log directory and its newsyslog file, gh and the trusted root

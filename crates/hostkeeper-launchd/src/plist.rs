@@ -11,8 +11,18 @@ use std::path::{Path, PathBuf};
 
 use crate::label::Label;
 
-/// The installed daemon binary the daemon job runs.
-pub const DAEMON_PROGRAM: &str = "/usr/local/bin/hostkeeper";
+/// The state directory of the daemon the daemon job runs: the daemon's default
+/// (`hostkeeper_daemon::cli::DEFAULT_STATE_DIR`), which the job gives it by passing no flag.
+pub const DAEMON_STATE_DIR: &str = "/var/lib/updater/state";
+/// The program the daemon job runs: `current` of the binary directory of hostkeeper's own update
+/// under [`DAEMON_STATE_DIR`] (`hostkeeper_daemon::selfupdate::binary_dir`, laid out by
+/// `hostkeeper_steps::Layout::new`), the link a self-update switches to the new binary. The job
+/// starts what that link names, so the clean exit after a switch starts the new binary.
+pub const DAEMON_PROGRAM: &str = "/var/lib/updater/state/hostkeeper/bin/current";
+/// The binary the pkg installs, on the `PATH` of a root shell: the `hostkeeper` of the command
+/// line, and the first binary of the binary directory, which the pkg's `postinstall` puts in
+/// (`hostkeeper self-update-seed`) so that [`DAEMON_PROGRAM`] starts it before any self-update.
+pub const INSTALLED_BINARY: &str = "/usr/local/bin/hostkeeper";
 /// The directory the daemon job's output files are in.
 pub const DAEMON_LOG_DIR: &str = "/var/log/hostkeeper";
 
@@ -35,7 +45,8 @@ pub struct DaemonJob {
 }
 
 impl DaemonJob {
-    /// The job of an installed host: the daemon label, [`DAEMON_PROGRAM`], and two files in
+    /// The job of an installed host: the daemon label, [`DAEMON_PROGRAM`] (`current` of the
+    /// self-update binary directory, not [`INSTALLED_BINARY`]), and two files in
     /// [`DAEMON_LOG_DIR`].
     pub fn standard() -> DaemonJob {
         let logs = Path::new(DAEMON_LOG_DIR);

@@ -60,7 +60,8 @@ pub(super) fn package_info_with(attributes: &str) -> String {
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<pkg-info overwrite-permissions=\"true\" \
          relocatable=\"false\" {attributes} postinstall-action=\"none\" format-version=\"2\" \
          generator-version=\"InstallCmds-845 (24A335)\" auth=\"root\">\n    <payload \
-         numberOfFiles=\"8\" installKBytes=\"1\"/>\n    <bundle-version/>\n    \
+         numberOfFiles=\"8\" installKBytes=\"1\"/>\n    <scripts>\n        <postinstall \
+         file=\"./postinstall\"/>\n    </scripts>\n    <bundle-version/>\n    \
          <upgrade-bundle/>\n    <update-bundle/>\n    <atomic-update-bundle/>\n    \
          <strict-identifier/>\n    <relocate/>\n</pkg-info>\n"
     )
@@ -104,6 +105,21 @@ pub(super) fn gzip(bytes: &[u8]) -> Vec<u8> {
 
 pub(super) fn dir_entry(name: &str) -> Vec<u8> {
     odc_entry(name, 0o040_755, 0, 0, b"")
+}
+
+/// The scripts archive `pkgbuild` writes: its top directory and the postinstall, owned by the
+/// user who built the pkg.
+pub(super) fn good_scripts() -> Vec<Vec<u8>> {
+    vec![
+        odc_entry(".", 0o040_755, 501, 20, b""),
+        odc_entry(
+            "./postinstall",
+            0o100_755,
+            501,
+            20,
+            postinstall_text().as_bytes(),
+        ),
+    ]
 }
 
 /// The payload `pkgbuild` writes for the binary `binary`: every entry, in its order.
@@ -183,6 +199,7 @@ impl Expanded {
         expanded.write("Bom", b"BOMStore");
         expanded.write("PackageInfo", package_info().as_bytes());
         expanded.write("Payload", &gzip(&odc(entries)));
+        expanded.write("Scripts", &gzip(&odc(&good_scripts())));
         expanded
     }
 
@@ -217,12 +234,12 @@ impl Expanded {
 #[test]
 fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launchd_names_them() {
     // Catches: a binary or plist path, a plist file name or an identifier that is not the one
-    // hostkeeper-launchd defines (the label, the LaunchDaemons directory, the program path).
+    // hostkeeper-launchd defines (the label, the LaunchDaemons directory, the installed binary).
     assert_eq!(binary_path(), BIN);
     assert_eq!(plist_path(), PLIST);
     assert_eq!(
         format!("/{}", binary_path()),
-        hostkeeper_launchd::plist::DAEMON_PROGRAM
+        hostkeeper_launchd::plist::INSTALLED_BINARY
     );
     assert_eq!(
         Path::new("/").join(plist_path()),
@@ -309,7 +326,8 @@ fn gh_and_the_trusted_root_are_where_the_daemon_reads_them_on_a_mac() {
 #[test]
 fn the_plist_parses_and_names_the_label_and_the_binary_hostkeeper_launchd_uses() {
     // Catches: a plist that does not parse, that names another label than the daemon's, or that
-    // runs another program than the binary the pkg installs.
+    // runs another program than `current` of the self-update binary directory (the binary the
+    // pkg installs among them).
     let text = plist_text().expect("the plist");
     assert_eq!(
         text,
@@ -328,7 +346,10 @@ fn the_plist_parses_and_names_the_label_and_the_binary_hostkeeper_launchd_uses()
         .iter()
         .filter_map(plist::Value::as_string)
         .collect();
-    assert_eq!(args, ["/usr/local/bin/hostkeeper", "daemon"]);
+    assert_eq!(
+        args,
+        ["/var/lib/updater/state/hostkeeper/bin/current", "daemon"]
+    );
     let mut problems = Vec::new();
     plist_problems(text.as_bytes(), &mut problems);
     assert_eq!(problems, Vec::<String>::new());
@@ -355,10 +376,14 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
             )],
         ),
         (
-            text.replace("/usr/local/bin/hostkeeper", "/tmp/hostkeeper"),
+            text.replace(
+                "/var/lib/updater/state/hostkeeper/bin/current",
+                "/usr/local/bin/hostkeeper",
+            ),
             vec![format!(
-                "{at}: the job runs Some(\"/tmp/hostkeeper\"), not the pkg's binary \
-                 \"/usr/local/bin/hostkeeper\""
+                "{at}: the job runs Some(\"/usr/local/bin/hostkeeper\"), not \
+                 \"/var/lib/updater/state/hostkeeper/bin/current\", current of the binary \
+                 directory a self-update switches"
             )],
         ),
         (
@@ -377,7 +402,7 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
             vec![
                 format!("{at}: the label is None, not \"dev.hostkeeper.hostkeeper\""),
                 format!(
-                    "{at}: the job runs None, not the pkg's binary \"/usr/local/bin/hostkeeper\""
+                    "{at}: the job runs None, not \"/var/lib/updater/state/hostkeeper/bin/current\""
                 ),
                 format!(
                     "{at}: StandardOutPath is None, not \"/var/log/hostkeeper/daemon.out.log\", \
@@ -405,7 +430,7 @@ fn request(dir: &Path) -> Request {
     Request {
         version: version(),
         sources: write_sources(dir),
-        stage: dir.join("root"),
+        stage: dir.join("stage"),
         out: dir.join("dist"),
     }
 }
@@ -415,20 +440,24 @@ fn mode_of(path: &Path) -> u32 {
 }
 
 #[test]
-fn build_lays_out_exactly_the_payload_with_its_modes_and_runs_pkgbuild_once() {
-    // Catches: a pkg with anything but its payload (a script, a config, a stray
-    // file) or without gh or the trusted root, a mode launchd or the installer would refuse, a
-    // gh that cannot run, or a mode that would change a system directory, or pkgbuild asked for
-    // another identifier, version or file name.
+fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_runs_pkgbuild_once()
+{
+    // Catches: a pkg with anything but its payload and its postinstall (another script, a
+    // config, a stray file) or without gh, the trusted root or the postinstall, a mode launchd or
+    // the installer would refuse, a gh or postinstall that cannot run, or a mode that would
+    // change a system directory, or pkgbuild asked for another identifier, version or file name.
     let dir = scratch("macos-pkg-build");
     let r = request(&dir);
     let fake = FakePkgbuild::default();
     let lines = build(&fake, &r).expect("build");
     let pkg = r.out.join("hostkeeper-0.1.5-macos-arm64.pkg");
+    let root = r.stage.join("root");
+    let scripts = r.stage.join("scripts");
     assert_eq!(
         *fake.calls.borrow(),
         [PkgCall {
-            root: r.stage.clone(),
+            root: root.clone(),
+            scripts: scripts.clone(),
             identifier: "dev.hostkeeper.hostkeeper".to_owned(),
             version: version(),
             pkg: pkg.clone(),
@@ -443,32 +472,40 @@ fn build_lays_out_exactly_the_payload_with_its_modes_and_runs_pkgbuild_once() {
         )]
     );
     assert_eq!(std::fs::read(&pkg).expect("the pkg"), FakePkgbuild::BYTES);
+    let mut laid_out: Vec<String> = TREE.iter().map(|p| format!("root/{p}")).collect();
+    laid_out.extend(["root/", "scripts/", "scripts/postinstall"].map(str::to_owned));
+    laid_out.sort();
+    assert_eq!(tree_of(&r.stage), laid_out);
     assert_eq!(mode_of(&r.stage), 0o755);
+    assert_eq!(mode_of(&root), 0o755);
+    assert_eq!(mode_of(&scripts), 0o755);
+    assert_eq!(mode_of(&scripts.join("postinstall")), 0o755);
+    assert_eq!(
+        std::fs::read_to_string(scripts.join("postinstall")).expect("the postinstall"),
+        postinstall_text()
+    );
     for path in TREE {
-        let at = r.stage.join(path.trim_end_matches('/'));
+        let at = root.join(path.trim_end_matches('/'));
         let want = match path {
             PLIST | NEWSYSLOG | ROOT => 0o644,
             _ => 0o755,
         };
         assert_eq!(mode_of(&at), want, "{path}");
     }
+    assert_eq!(std::fs::read(root.join(BIN)).expect("the binary"), BINARY);
     assert_eq!(
-        std::fs::read(r.stage.join(BIN)).expect("the binary"),
-        BINARY
-    );
-    assert_eq!(
-        std::fs::read_to_string(r.stage.join(PLIST)).expect("the plist"),
+        std::fs::read_to_string(root.join(PLIST)).expect("the plist"),
         plist_text().expect("the plist")
     );
     assert_eq!(
-        std::fs::read_to_string(r.stage.join(NEWSYSLOG)).expect("the newsyslog file"),
+        std::fs::read_to_string(root.join(NEWSYSLOG)).expect("the newsyslog file"),
         newsyslog_text()
     );
-    let log_dir = std::fs::read_dir(r.stage.join(LOG_DIR)).expect("the log directory");
+    let log_dir = std::fs::read_dir(root.join(LOG_DIR)).expect("the log directory");
     assert_eq!(log_dir.count(), 0);
-    assert_eq!(std::fs::read(r.stage.join(GH)).expect("gh"), GH_BYTES);
+    assert_eq!(std::fs::read(root.join(GH)).expect("gh"), GH_BYTES);
     assert_eq!(
-        std::fs::read(r.stage.join(ROOT)).expect("the trusted root"),
+        std::fs::read(root.join(ROOT)).expect("the trusted root"),
         ROOT_BYTES
     );
 }
@@ -480,25 +517,34 @@ fn what_build_lays_out_is_what_the_check_accepts() {
     let dir = scratch("macos-pkg-round-trip");
     let r = request(&dir);
     build(&FakePkgbuild::default(), &r).expect("build");
-    // The payload pkgbuild makes of the tree: each entry with its mode on disk, owned by root.
-    let mut entries = vec![odc_entry(".", 0o040_000 | mode_of(&r.stage), 0, 0, b"")];
-    for path in tree_of(&r.stage) {
-        let name = path.trim_end_matches('/');
-        let at = r.stage.join(name);
-        let (kind, data) = if path.ends_with('/') {
-            (0o040_000, Vec::new())
-        } else {
-            (0o100_000, std::fs::read(&at).expect("read"))
-        };
-        entries.push(odc_entry(
-            &format!("./{name}"),
-            kind | mode_of(&at),
-            0,
-            0,
-            &data,
-        ));
-    }
+    // The archives pkgbuild makes of the payload's tree (owned by root) and of the scripts
+    // directory (owned by the user who built it): each entry with its mode on disk.
+    let archive = |dir: &Path, uid: u32| {
+        let mut entries = vec![odc_entry(".", 0o040_000 | mode_of(dir), uid, uid, b"")];
+        for path in tree_of(dir) {
+            let name = path.trim_end_matches('/');
+            let at = dir.join(name);
+            let (kind, data) = if path.ends_with('/') {
+                (0o040_000, Vec::new())
+            } else {
+                (0o100_000, std::fs::read(&at).expect("read"))
+            };
+            entries.push(odc_entry(
+                &format!("./{name}"),
+                kind | mode_of(&at),
+                uid,
+                uid,
+                &data,
+            ));
+        }
+        entries
+    };
+    let entries = archive(&r.stage.join("root"), 0);
     let expanded = Expanded::new("macos-pkg-round-trip-expanded", &entries);
+    expanded.write(
+        "Scripts",
+        &gzip(&odc(&archive(&r.stage.join("scripts"), 501))),
+    );
     assert!(expanded.check().is_ok(), "{:?}", expanded.check());
 }
 
@@ -574,12 +620,15 @@ fn a_pkgbuild_failure_is_passed_on() {
     assert!(!r.out.join("hostkeeper-0.1.5-macos-arm64.pkg").exists());
 }
 
-/// The command line the adapter runs for the tree `root` and the pkg `pkg`.
-fn pkgbuild_line(root: &str, pkg: &str) -> Vec<String> {
+/// The command line the adapter runs for the tree `root`, the scripts directory `scripts` and
+/// the pkg `pkg`.
+fn pkgbuild_line(root: &str, scripts: &str, pkg: &str) -> Vec<String> {
     [
         "pkgbuild",
         "--root",
         root,
+        "--scripts",
+        scripts,
         "--identifier",
         "dev.hostkeeper.hostkeeper",
         "--version",
@@ -595,15 +644,17 @@ fn pkgbuild_line(root: &str, pkg: &str) -> Vec<String> {
 }
 
 #[test]
-fn pkgbuild_runs_once_with_a_fixed_argument_list_and_no_scripts() {
-    // Catches: pkgbuild run with scripts, another install location, ownership taken from the
-    // build user, or any argument out of place.
-    let line = pkgbuild_line("/stage/root", "/out/x.pkg");
+fn pkgbuild_runs_once_with_a_fixed_argument_list_and_the_scripts_directory() {
+    // Catches: pkgbuild run without the scripts directory (a pkg whose job has nothing to start),
+    // another install location, ownership taken from the build user, or any argument out of
+    // place.
+    let line = pkgbuild_line("/stage/root", "/stage/scripts", "/out/x.pkg");
     let words: Vec<&str> = line.iter().map(String::as_str).collect();
     let cli = PkgbuildCli::new(FakeExec::default().on(&words, true, "", ""));
     assert_eq!(
         cli.build_pkg(
             Path::new("/stage/root"),
+            Path::new("/stage/scripts"),
             "dev.hostkeeper.hostkeeper",
             &version(),
             Path::new("/out/x.pkg")
@@ -611,13 +662,12 @@ fn pkgbuild_runs_once_with_a_fixed_argument_list_and_no_scripts() {
         Ok(())
     );
     assert_eq!(*cli.exec.calls.borrow(), std::slice::from_ref(&line));
-    assert!(!line.iter().any(|w| w.contains("script")));
 }
 
 #[test]
 fn a_pkgbuild_that_fails_or_cannot_start_is_a_port_error_with_its_words() {
     // Catches: a failed pkgbuild taken as success, or an error that does not say what ran.
-    let line = pkgbuild_line("/r", "/p.pkg");
+    let line = pkgbuild_line("/r", "/s", "/p.pkg");
     let words: Vec<&str> = line.iter().map(String::as_str).collect();
     let what = format!("pkgbuild {}", line[1..].join(" "));
     let cli =
@@ -625,6 +675,7 @@ fn a_pkgbuild_that_fails_or_cannot_start_is_a_port_error_with_its_words() {
     let build = |cli: &PkgbuildCli<FakeExec>, root: &str| {
         cli.build_pkg(
             Path::new(root),
+            Path::new("/s"),
             "dev.hostkeeper.hostkeeper",
             &version(),
             Path::new("/p.pkg"),
@@ -639,7 +690,7 @@ fn a_pkgbuild_that_fails_or_cannot_start_is_a_port_error_with_its_words() {
         other.what,
         format!(
             "pkgbuild {}",
-            pkgbuild_line("/other", "/p.pkg")[1..].join(" ")
+            pkgbuild_line("/other", "/s", "/p.pkg")[1..].join(" ")
         )
     );
     assert!(other.why.starts_with("not scripted: pkgbuild"), "{other:?}");
@@ -650,9 +701,10 @@ fn a_path_that_is_not_utf8_is_a_port_error_and_runs_nothing() {
     // Catches: a path mangled into a command line that names another directory.
     let cli = PkgbuildCli::new(FakeExec::default());
     let bad = Path::new(OsStr::from_bytes(b"/stage/\xff"));
-    for (root, pkg) in [(bad, Path::new("/p.pkg")), (Path::new("/r"), bad)] {
+    let (good, scripts, pkg) = (Path::new("/r"), Path::new("/s"), Path::new("/p.pkg"));
+    for (root, scripts, pkg) in [(bad, scripts, pkg), (good, bad, pkg), (good, scripts, bad)] {
         let e = cli
-            .build_pkg(root, "dev.hostkeeper.hostkeeper", &version(), pkg)
+            .build_pkg(root, scripts, "dev.hostkeeper.hostkeeper", &version(), pkg)
             .expect_err("not UTF-8");
         assert_eq!(
             e,
@@ -752,3 +804,4 @@ fn an_odc_archive_that_is_cut_short_or_malformed_is_refused_with_where() {
 }
 
 mod logs;
+mod self_update;
