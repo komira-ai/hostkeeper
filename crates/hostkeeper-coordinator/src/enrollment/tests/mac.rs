@@ -1,7 +1,9 @@
 //! The Mac path: a request with an MDM nonce is approved only when every condition holds, a
 //! declined attempt keeps the nonce, the nonce lives one hour, a coordinator without a gate
 //! approves no Mac, claims approve nothing, no answer or audit entry carries the nonce, and
-//! the allowlist and the issue refuse what they must.
+//! the allowlist and the issue refuse what they must; a Mac the allowlist does not approve is
+//! approved by the operator as the host id of the one inventory record its serial matches, and
+//! one whose serial matches no record needs a host id named.
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -10,18 +12,21 @@ use hostkeeper_enrollment::enroll::{MAC_NONCE_VALID_SECS, MacNonceHash, RequestS
 use hostkeeper_enrollment::fs::{FaultFs, Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_proto::hostkeeper::agent::v1::{EnrollResponse, EnrollState};
-use hostkeeper_proto::hostkeeper::operator::v1::{EnrollmentRefusal, ListPendingRequest};
+use hostkeeper_proto::hostkeeper::operator::v1::{
+    AddRecordRequest, EnrollmentRefusal, InventoryMatch, ListPendingRequest, PendingEnrollment,
+};
 use prost::Message;
 
 use super::support::{
-    Audited, HostKey, NOW, Rig, SERIAL, audit_after, audit_of, audited, coordinator_over, enrolled,
-    host_id, mac_request,
+    Audited, HostKey, NOW, Rig, SERIAL, approval, audit_after, audit_of, audited, coordinator_over,
+    enrolled, host_id, mac_request,
 };
 use crate::enrollment::{
     AllowlistError, DeviceStateError, DeviceStatus, Enrollment, FakeDeviceState, MacAllowlist,
     MacDecline, MacNonceError, MacOutcome, MacPolicy, Random, os_random,
 };
-use crate::testutil::{OPERATOR, scratch};
+use crate::marks_support::operator;
+use crate::testutil::{OPERATOR, Rig as CoordinatorRig, scratch};
 
 /// The allowlist entry of [`SERIAL`]: host id `mac-<serial>`, role `build`, service `kbf`.
 const ALLOWED: &str = r#"
@@ -628,4 +633,176 @@ fn a_nonce_is_issued_only_for_a_serial_from_fresh_random_bytes() {
         .issue_mac_nonce(SERIAL)
         .expect_err("the lock fails");
     assert!(matches!(refused, MacNonceError::Store(_)), "{refused}");
+}
+
+/// The allowlist of a Mac other than [`SERIAL`]'s: [`SERIAL`] has no entry in it.
+const OTHER_ALLOWED: &str = r#"
+[[mac]]
+serial = "C02VIP000001"
+host_id_prefix = "vip-"
+role = "admin"
+services = ["kbf"]
+"#;
+
+/// The serial of a recorded Mac other than [`SERIAL`]'s.
+const OTHER_SERIAL: &str = "C02OTHER0001";
+
+/// Records the Mac `host` by its serial `serial` alone: no role, no MAC.
+fn record_mac(rig: &CoordinatorRig, host: &str, serial: &str) {
+    rig.coordinator
+        .add_record(
+            &operator(),
+            AddRecordRequest {
+                host_id: host.to_owned(),
+                serial: serial.to_owned(),
+                ..AddRecordRequest::default()
+            },
+        )
+        .expect("recorded");
+}
+
+/// The one pending request of `key`, as `Enrollment.List` shows it.
+fn shown(rig: &CoordinatorRig, key: &HostKey) -> PendingEnrollment {
+    let hex = key.key_hash().to_hex();
+    let listed = rig
+        .coordinator
+        .enrollment_list(&operator(), &ListPendingRequest::default())
+        .expect("listed");
+    let mut found = listed.requests.into_iter().filter(|p| p.request_id == hex);
+    let one = found.next().expect("listed");
+    assert!(found.next().is_none());
+    one
+}
+
+/// Posts a Mac request of a new key claiming [`SERIAL`], with a nonce issued for it, to a
+/// coordinator whose gate says the device is enrolled and supervised but whose allowlist has no
+/// entry for [`SERIAL`]; asserts that the MDM path declined it `serial_not_allowed` and left it
+/// pending, and gives the key.
+fn post_unlisted_mac(enrollment: &Rig, rig: &CoordinatorRig) -> HostKey {
+    let e = &enrollment.enrollment;
+    let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
+    let key = HostKey::new();
+    let before = audit_of(&rig.coordinator).len();
+    let answer = e
+        .enroll(mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes()))
+        .expect("enrolled");
+    assert_eq!(answer.state, EnrollState::Pending as i32);
+    assert_eq!(state_of(e, &key), RequestState::Pending);
+    assert_eq!(
+        audit_after(&rig.coordinator, before),
+        [declined(MacDecline::SerialNotAllowed, &key)]
+    );
+    key
+}
+
+/// Catches a Mac's request matched to an inventory record by anything but its serial (letters
+/// compared without case), the match lost on the way to the approval, and an approval naming no
+/// host id given anything but the matched record's: a Mac the allowlist does not approve, whose
+/// serial one record holds (in lower case) and another record does not, is shown `matched` to
+/// that record and approved as its host id, and the operator's audit entries (the approval and
+/// the assignment of its service) name it.
+#[tokio::test]
+async fn a_mac_whose_serial_matches_one_record_is_approved_as_that_records_host_id() {
+    let gate = gate_saying(SERIAL, Ok(GOOD));
+    let enrollment = mac_rig("mac-inventory", Arc::new(RealFs), &gate, OTHER_ALLOWED);
+    let rig = coordinator_over("mac-inventory-coordinator", &enrollment).await;
+    record_mac(&rig, "mac-recorded", &SERIAL.to_ascii_lowercase());
+    record_mac(&rig, "mac-other", OTHER_SERIAL);
+    let key = post_unlisted_mac(&enrollment, &rig);
+
+    let view = shown(&rig, &key);
+    assert_eq!(
+        (
+            view.inventory_match(),
+            view.record_host_id.as_str(),
+            view.candidate_host_ids.len()
+        ),
+        (InventoryMatch::Matched, "mac-recorded", 0)
+    );
+
+    let before = audit_of(&rig.coordinator).len();
+    let approved = rig
+        .coordinator
+        .enrollment_approve(&operator(), approval(&key, ""))
+        .expect("approved as the record's host id");
+
+    assert_eq!(approved.host_id, "mac-recorded");
+    let e = &enrollment.enrollment;
+    let view = e
+        .store()
+        .request(&key.key_hash())
+        .expect("read")
+        .expect("held");
+    assert_eq!(
+        (view.state, view.host_id.map(|host| host.to_string())),
+        (RequestState::Approved, Some("mac-recorded".to_owned()))
+    );
+    assert!(
+        e.store()
+            .host_role(&host_id("mac-recorded"))
+            .expect("read")
+            .is_some()
+    );
+    assert_eq!(
+        e.store().host_role(&host_id("mac-other")).expect("read"),
+        None
+    );
+    assert_eq!(
+        audit_after(&rig.coordinator, before)
+            .iter()
+            .map(|(by, action, node, _)| (by.as_str(), action.as_str(), node.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("operator", "enroll_approve", Some("mac-recorded")),
+            ("operator", "assign", Some("mac-recorded"))
+        ]
+    );
+}
+
+/// Catches a Mac whose serial no record holds taking a record's host id, or approved with no
+/// host id at all: design 5.7 approves an unmatched request as the host id the operator names,
+/// which it must name. Approved naming none, the request is refused `invalid_host_id` and stays
+/// pending with no host made; approved naming one, it is that host.
+#[tokio::test]
+async fn a_mac_whose_serial_matches_no_record_is_refused_invalid_host_id_and_stays_pending() {
+    let gate = gate_saying(SERIAL, Ok(GOOD));
+    let enrollment = mac_rig("mac-no-record", Arc::new(RealFs), &gate, OTHER_ALLOWED);
+    let rig = coordinator_over("mac-no-record-coordinator", &enrollment).await;
+    record_mac(&rig, "mac-other", OTHER_SERIAL);
+    let key = post_unlisted_mac(&enrollment, &rig);
+
+    let view = shown(&rig, &key);
+    assert_eq!(
+        (
+            view.inventory_match(),
+            view.record_host_id.as_str(),
+            view.candidate_host_ids.len()
+        ),
+        (InventoryMatch::Unmatched, "", 0)
+    );
+
+    let e = &enrollment.enrollment;
+    assert_eq!(
+        rig.coordinator
+            .enrollment_approve(&operator(), approval(&key, ""))
+            .err(),
+        Some(EnrollmentRefusal::InvalidHostId)
+    );
+    let held = e
+        .store()
+        .request(&key.key_hash())
+        .expect("read")
+        .expect("held");
+    assert_eq!((held.state, held.host_id), (RequestState::Pending, None));
+    assert_eq!(
+        e.store().host_role(&host_id("mac-other")).expect("read"),
+        None
+    );
+
+    let approved = rig
+        .coordinator
+        .enrollment_approve(&operator(), approval(&key, "mac-named"))
+        .expect("an unmatched Mac is approved as the host id named");
+    assert_eq!(approved.host_id, "mac-named");
+    assert_eq!(state_of(e, &key), RequestState::Approved);
 }
