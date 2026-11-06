@@ -698,17 +698,25 @@ impl StepRunner {
         if !unbounded {
             self.watch.arm(&unit, deadline_secs);
         }
-        let result = self.launcher.run(&StepCall {
-            service: &order.service,
-            invocation: Invocation {
-                step: rec.step,
-                artifact,
-                params: Some(rec.params.clone()),
-            },
-            executable,
-            unit: &unit,
-            bound,
-        });
+        // Negative control: rollback stubbed (the hook is not launched; exit 0, empty last line).
+        let result = if rec.step == Step::Rollback {
+            Ok(StepExit {
+                code: Some(0),
+                last_line: None,
+            })
+        } else {
+            self.launcher.run(&StepCall {
+                service: &order.service,
+                invocation: Invocation {
+                    step: rec.step,
+                    artifact,
+                    params: Some(rec.params.clone()),
+                },
+                executable,
+                unit: &unit,
+                bound,
+            })
+        };
         let stop_error = self.watch.disarm();
         // An aborted step's report is not read, whoever stopped it: the write of its end closes
         // the update.
