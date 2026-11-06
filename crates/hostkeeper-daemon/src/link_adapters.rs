@@ -65,32 +65,39 @@ pub fn wire_order(order: &Order) -> wire::Order {
             target.service.as_str().to_owned(),
             target.version.as_str().to_owned(),
             target.digest.as_str().to_owned(),
+            target
+                .index_digest
+                .as_ref()
+                .map_or_else(String::new, |d| d.as_str().to_owned()),
         )
     };
     let verb = match &order.verb {
         Verb::Update(target) => {
-            let (service, version, package_digest) = terms(target);
+            let (service, version, package_digest, index_digest) = terms(target);
             wire::order::Verb::Update(wire::Update {
                 service,
                 version,
                 package_digest,
+                index_digest,
             })
         }
         Verb::Force(target) => {
-            let (service, version, package_digest) = terms(target);
+            let (service, version, package_digest, index_digest) = terms(target);
             wire::order::Verb::Force(wire::Force {
                 service,
                 version,
                 package_digest,
+                index_digest,
                 halt_generation: 0,
             })
         }
         Verb::Install(target) => {
-            let (service, version, package_digest) = terms(target);
+            let (service, version, package_digest, index_digest) = terms(target);
             wire::order::Verb::Install(wire::Install {
                 service,
                 version,
                 package_digest,
+                index_digest,
             })
         }
         Verb::Uninstall(service) => wire::order::Verb::Uninstall(wire::Uninstall {

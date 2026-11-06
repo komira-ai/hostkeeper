@@ -493,6 +493,7 @@ pub struct FakePackages {
     root: PathBuf,
     failures: Mutex<BTreeMap<(String, String), PackageError>>,
     asked: Mutex<Vec<(String, String)>>,
+    index_digests: Mutex<Vec<Option<String>>>,
     swept: Mutex<Vec<String>>,
     notify: Mutex<Vec<Sender<String>>>,
 }
@@ -509,6 +510,7 @@ impl FakePackages {
             root: packages_dir.to_path_buf(),
             failures: Mutex::default(),
             asked: Mutex::default(),
+            index_digests: Mutex::default(),
             swept: Mutex::default(),
             notify: Mutex::default(),
         })
@@ -561,6 +563,12 @@ impl FakePackages {
         lock(&self.asked).clone()
     }
 
+    /// The index digest of every package asked for, in the order of [`FakePackages::asked`]:
+    /// `None` for an order that named none.
+    pub fn index_digests(&self) -> Vec<Option<String>> {
+        lock(&self.index_digests).clone()
+    }
+
     /// Every service whose orphans were asked to be removed, in order.
     pub fn swept(&self) -> Vec<String> {
         lock(&self.swept).clone()
@@ -578,9 +586,11 @@ impl Packages for FakePackages {
         service: &ServiceName,
         version: &Version,
         _digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
     ) -> Result<VersionDir, PackageError> {
         let key = (service.to_string(), version.to_string());
         lock(&self.asked).push(key.clone());
+        lock(&self.index_digests).push(index_digest.map(|d| d.as_str().to_owned()));
         for tx in lock(&self.notify).iter() {
             tx.send(format!("{service} {version}")).unwrap_or_default();
         }

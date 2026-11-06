@@ -72,6 +72,7 @@ fn target(name: &str, to: &str) -> Target {
         service: service(name),
         version: version(to),
         digest: digest(),
+        index_digest: None,
     }
 }
 

@@ -132,12 +132,15 @@ impl PackageError {
 
 /// Fetches, verifies, unpacks and seals packages.
 pub trait Packages: Send + Sync {
-    /// The sealed version directory of `service` at `version`, whose package has `digest`.
+    /// The sealed version directory of `service` at `version`, whose package has `digest`. When
+    /// `index_digest` is given, the release index must have that SHA-256 (checked before it is
+    /// read); `None` checks nothing.
     fn version_dir(
         &self,
         service: &ServiceName,
         version: &Version,
         digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
     ) -> Result<VersionDir, PackageError>;
 
     /// Removes what a crashed fetch or unpack of `service` left in its package directory. The

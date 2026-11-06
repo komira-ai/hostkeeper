@@ -9,8 +9,9 @@ use crate::testing::tlv;
 
 /// The reason tokens that have shipped. A token is never removed or renamed (formats change
 /// additively only), so this list only grows, and each entry must stay in `REASONS`.
-const SHIPPED: [&str; 7] = [
+const SHIPPED: [&str; 8] = [
     "index_invalid",
+    "index_digest_mismatch",
     "no_package_for_platform",
     "package_digest_mismatch",
     "fetch_failed",

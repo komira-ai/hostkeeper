@@ -156,7 +156,13 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
     });
     match unfinished {
         Some((rec, force)) => match locked(ctx, &service, &package, guard) {
-            Ok(guard) => resume_with(ctx, &guard, &service, (rec, force), &package),
+            Ok(guard) => resume_with(
+                ctx,
+                &guard,
+                &service,
+                (rec, force),
+                (&package, order.package.index_digest.as_ref()),
+            ),
             Err(reply) => reply,
         },
         None => fresh(ctx, &order, held_halt, &package, guard),
@@ -181,7 +187,7 @@ pub fn resume(ctx: &Ctx, service: &ServiceName, rec: Record, force: ForceRecord)
         digest,
     };
     match locked(ctx, service, &package, None) {
-        Ok(guard) => resume_with(ctx, &guard, service, (rec, force), &package),
+        Ok(guard) => resume_with(ctx, &guard, service, (rec, force), (&package, None)),
         Err(reply) => reply,
     }
 }
@@ -195,7 +201,12 @@ fn fresh<'c>(
     guard: Option<ServiceGuard<'c>>,
 ) -> Reply {
     let service = &order.package.service;
-    let target = match obtain(ctx, service, &order.package.version, &order.package.digest) {
+    let target = match obtain(
+        ctx,
+        service,
+        &order.package.version,
+        (&order.package.digest, order.package.index_digest.as_ref()),
+    ) {
         Ok(target) => target,
         Err(failed) => return failed,
     };
@@ -225,10 +236,15 @@ fn resume_with(
     guard: &ServiceGuard<'_>,
     service: &ServiceName,
     journal: (Record, ForceRecord),
-    package: &Package,
+    (package, index_digest): (&Package, Option<&PackageDigest>),
 ) -> Reply {
     let (rec, force) = journal;
-    match obtain(ctx, service, &package.version, &package.digest) {
+    match obtain(
+        ctx,
+        service,
+        &package.version,
+        (&package.digest, index_digest),
+    ) {
         Ok(target) => switch::run(ctx, guard, rec, force, &target.manifest),
         Err(reply) => reply,
     }
@@ -242,14 +258,14 @@ fn obtain(
     ctx: &Ctx,
     service: &ServiceName,
     version: &Version,
-    digest: &PackageDigest,
+    (digest, index_digest): (&PackageDigest, Option<&PackageDigest>),
 ) -> Result<Target, Reply> {
     let (dir, tree_digest) = match on_disk(ctx, service, version, digest) {
         Some(found) => found,
         None => {
             let dir = ctx
                 .packages
-                .version_dir(service, version, digest)
+                .version_dir(service, version, digest, index_digest)
                 .map_err(|error| {
                     let refusal = checks::package_refusal(&error);
                     failed_before(package_class(&error), refusal.token())

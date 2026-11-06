@@ -233,7 +233,12 @@ pub(crate) fn prepare(
     })?;
     let dir = ctx
         .packages
-        .version_dir(service, &order.version, &order.digest)
+        .version_dir(
+            service,
+            &order.version,
+            &order.digest,
+            order.index_digest.as_ref(),
+        )
         .map_err(|e| Reply::refused(checks::package_refusal(&e), e))?;
     let expected = Expected {
         name: service.clone(),
