@@ -54,6 +54,8 @@
 //! - [`channel`]: with `--release-channel`, the check that the release channel holds a version
 //!   before it is set, over the HTTPS fetch of [`channel_https`];
 //! - [`status`]: what an operator reads, and the convergence of a service;
+//! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
+//!   answered by `Alerts.List` and logged with an `alert=` field;
 //! - [`stamp`]: the commit and the version `--version` prints;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
@@ -78,6 +80,7 @@
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
 pub mod acks;
+pub mod alerts;
 pub mod assign;
 pub mod assignment;
 pub(crate) mod audit_file;

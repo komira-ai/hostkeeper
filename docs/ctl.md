@@ -41,6 +41,17 @@ The response goes to stdout; diagnostics go to stderr. A refusal prints `refused
 
 ## Commands
 
+### `alerts`
+
+The service `Alerts` of the package `hostkeeper.operator.v1`. The conditions that need a person.
+
+#### `hostkeeper ctl alerts list`
+
+`/hostkeeper.operator.v1.Alerts/List`
+
+Every condition that needs a person now, by kind, then service, host and version. Changes
+nothing.
+
 ### `audit`
 
 The service `Audit` of the package `hostkeeper.operator.v1`. The coordinator's audit log.
