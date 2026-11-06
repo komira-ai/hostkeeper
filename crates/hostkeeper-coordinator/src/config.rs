@@ -17,7 +17,9 @@
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
-//! files of that directory under `/ui/` (`crate::ui`). With `--release-channel` a set of the
+//! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
+//! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
+//! a directory ([`Serve::with_default_ui_dir`]). With `--release-channel` a set of the
 //! desired state is refused unless the release channel holds the version (`crate::channel`):
 //! the URL is checked at start (`https://` only), and the channel is fetched only by a set.
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
@@ -368,7 +370,9 @@ pub struct Serve {
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
     /// The files need no token; the operator API they call does. It must be a directory at
-    /// start. Without it no file is served.
+    /// start. Without it, /usr/share/hostkeeper-coordinator/ui is served when it is a
+    /// directory (the container image holds the web app there), and otherwise no file is
+    /// served.
     #[arg(long)]
     pub ui_dir: Option<PathBuf>,
     /// How long after its start the coordinator orders nothing, in seconds, so that it hears
@@ -402,6 +406,26 @@ pub struct Serve {
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     pub release_channel_timeout_secs: u64,
+}
+
+/// The directory the binary serves under `/ui/` when `--ui-dir` is absent and this path is a
+/// directory: where the coordinator's container image holds the operator web app
+/// (`packaging/container/Dockerfile`).
+pub const DEFAULT_UI_DIR: &str = "/usr/share/hostkeeper-coordinator/ui";
+
+impl Serve {
+    /// These flags with `--ui-dir` set to `default` when the flag is absent and `default` is a
+    /// directory (a symbolic link to one included). A `--ui-dir` that was given is kept as
+    /// given, a directory or not, so [`build`] still refuses one that is not. Anything else at
+    /// `default` (nothing, a file, a path that cannot be read) leaves the flag absent, and no
+    /// file is served.
+    #[must_use]
+    pub fn with_default_ui_dir(mut self, default: &Path) -> Self {
+        if self.ui_dir.is_none() && default.is_dir() {
+            self.ui_dir = Some(default.to_owned());
+        }
+        self
+    }
 }
 
 /// Where the listeners are bound.
@@ -814,16 +838,19 @@ where
     }
 }
 
-/// Builds the runtime and runs the coordinator on it until a signal.
+/// Builds the runtime and runs the coordinator on it until a signal, serving
+/// [`DEFAULT_UI_DIR`] when `--ui-dir` is absent and that path is a directory.
 fn runtime(flags: Serve) -> Result<(), StartError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+    let flags = flags.with_default_ui_dir(Path::new(DEFAULT_UI_DIR));
     runtime.block_on(start(flags, Roots::System, bind_tcp, signalled()))
 }
 
 /// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup or restore
-/// is exit 1; SIGTERM or SIGINT, a backup made and a restore done are exit 0.
+/// is exit 1; SIGTERM or SIGINT, a backup made and a restore done are exit 0. `serve` without
+/// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
 pub fn main(args: Vec<OsString>) -> ExitCode {
     let cli = match Cli::try_parse_from(args) {

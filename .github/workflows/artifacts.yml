@@ -33,11 +33,13 @@
 # `<version>-fail-ready` in its manifest and index.
 #
 # The image job builds the coordinator's image twice, each time with a new BuildKit builder from
-# a context that holds the released binary alone, with the commit time as SOURCE_DATE_EPOCH and
-# every timestamp in the image rewritten to it; `release compare-images` refuses the two unless
-# they are byte for byte equal, so the released image is one anyone can rebuild from the commit.
-# The image is then loaded and run through its entrypoint with --version, which must print the
-# coordinator's stamp.
+# a context that holds the released binary and the operator web app (`ui/` of the commit, files
+# 0644 and directories 0755), with the commit time as SOURCE_DATE_EPOCH and every timestamp in
+# the image rewritten to it; `release compare-images` refuses the two unless they are byte for
+# byte equal, so the released image is one anyone can rebuild from the commit. `release
+# check-image-ui` then refuses the image unless it holds the web app where the coordinator serves
+# it when given no --ui-dir, file for file, owned by root. The image is then loaded and run
+# through its entrypoint with --version, which must print the coordinator's stamp.
 #
 # The attest job is in THIS file for one reason: the signer identity of an attestation is the
 # workflow file that ran the signing step, and every consumer verifies exactly
@@ -406,8 +408,10 @@ jobs:
           if-no-files-found: error
 
   # The coordinator's image, per platform on a runner of that architecture, from the binary of
-  # the coordinator tarball the build job released: built twice, each time by a new builder from
-  # a context holding that binary alone, and released only when the two are byte for byte equal.
+  # the coordinator tarball the build job released and the web app of the commit: built twice,
+  # each time by a new builder from a context holding that binary and `ui/` (its modes set, so
+  # the image does not take the runner's umask), and released only when the two are byte for
+  # byte equal and the image holds the web app.
   # Each build has a docker-container builder of the pinned BuildKit image, whose `docker`
   # exporter writes a tarball that is an OCI image layout (`oci-layout`, `index.json`, `blobs/`,
   # what compare-images reads) and also holds the `manifest.json` that `docker load` reads, named
@@ -450,10 +454,18 @@ jobs:
       - name: The commit time
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
       - run: mkdir "$RUNNER_TEMP/context-a" "$RUNNER_TEMP/context-b" dist
-      - name: The first context, the released coordinator alone
+      - name: The first context, the released coordinator
         run: tar -xzf "built/hostkeeper-coordinator-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/context-a" hostkeeper-coordinator
-      - name: The second context, the released coordinator alone
+      - name: The first context, the web app
+        run: cp -R ui "$RUNNER_TEMP/context-a/ui"
+      - name: The first context, the web app's modes
+        run: chmod -R u=rwX,go=rX "$RUNNER_TEMP/context-a/ui"
+      - name: The second context, the released coordinator
         run: tar -xzf "built/hostkeeper-coordinator-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/context-b" hostkeeper-coordinator
+      - name: The second context, the web app
+        run: cp -R ui "$RUNNER_TEMP/context-b/ui"
+      - name: The second context, the web app's modes
+        run: chmod -R u=rwX,go=rX "$RUNNER_TEMP/context-b/ui"
       - name: The first builder
         run: docker buildx create --name image-a --driver docker-container --driver-opt "image=$BUILDKIT_IMAGE" --bootstrap
       - name: The first build
@@ -464,6 +476,8 @@ jobs:
         run: docker buildx build --builder image-b --no-cache --platform "$OCI_PLATFORM" --provenance=false --sbom=false --file packaging/container/Dockerfile --output "type=docker,name=hostkeeper-coordinator:$RELEASE_VERSION,dest=$RUNNER_TEMP/image-b.tar,rewrite-timestamp=true" "$RUNNER_TEMP/context-b"
       - name: The two builds are byte for byte equal
         run: cargo xtask release compare-images "$RUNNER_TEMP/image-a.tar" "$RUNNER_TEMP/image-b.tar"
+      - name: The image holds the web app
+        run: cargo xtask release check-image-ui "$RUNNER_TEMP/image-a.tar" ui
       # The image as a deployment starts it: loaded into the runner's docker and run through its
       # own entrypoint, with --version as its only argument, it exits 0 and prints exactly the
       # coordinator's stamp of this version and commit.
