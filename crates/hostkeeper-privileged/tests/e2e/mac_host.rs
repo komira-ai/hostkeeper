@@ -27,6 +27,13 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use std::num::NonZeroU64;
+use std::os::unix::fs::MetadataExt;
+use std::sync::Arc;
+
+use hostkeeper_config::daemon::Sha256Hex;
+use hostkeeper_package::gh::{FileTrust, GhVerifier, OwnedBy, Runner, Spawn, SystemRunner};
+use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier};
+use hostkeeper_steps::{Clock, Stamp};
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
@@ -171,6 +178,16 @@ fn daemon_plist(label: &Label, argv: &[String], out: &Path, err: &Path) -> Strin
          <true/>\n  <key>StandardErrorPath</key>\n  <string>{err}</string>\n  \
          <key>StandardOutPath</key>\n  <string>{out}</string>\n</dict>\n</plist>\n"
     )
+}
+
+/// One package [`MacHost::check_package_store`] takes through the daemon's store: its version,
+/// SHA-256, file name, bytes and Sigstore bundle.
+pub struct CheckedPackage {
+    pub version: String,
+    pub sha256: String,
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+    pub bundle: Vec<u8>,
 }
 
 /// The labels of hello's two slots.
@@ -329,13 +346,19 @@ impl MacHost {
         serde_json::from_slice(&bytes).ok()
     }
 
-    /// Puts the `gh` program at the path the daemon runs it from on a Mac, mode 0755.
+    /// Puts the `gh` program at the path the daemon runs it from on a Mac, mode 0755, owned by
+    /// root. Its bytes are written to a new file: `fs::copy` clones the file on macOS and keeps
+    /// the owner of the source (the runner's user, who unpacked it), and the daemon trusts a `gh`
+    /// owned by root only.
+    ///
+    /// # Panics
+    /// The program cannot be read or written, or the new file is not root's.
     pub fn install_gh(&self, gh: &Path) {
         let to = Path::new(GH_PATH);
-        fs::copy(gh, to)
-            .unwrap_or_else(|e| panic!("copy {} to {}: {e}", gh.display(), to.display()));
-        fs::set_permissions(to, fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("chmod {}: {e}", to.display()));
+        let bytes = fs::read(gh).unwrap_or_else(|e| panic!("read {}: {e}", gh.display()));
+        put(to, &bytes, 0o755);
+        let owner = fs::metadata(to).map(|meta| meta.uid());
+        assert_eq!(owner.ok(), Some(0), "{} is root's", to.display());
     }
 
     /// Puts the Sigstore trusted root (`jsonl`) where the daemon reads it on a Mac, mode 0644.
@@ -437,7 +460,7 @@ impl MacHost {
     ///
     /// # Panics
     /// The store cannot be built, or it refuses a version.
-    pub fn check_package_store(&self, config: &str, service: &str, versions: &[(&str, String)]) {
+    pub fn check_package_store(&self, config: &str, service: &str, versions: &[CheckedPackage]) {
         let parsed = DaemonConfig::parse(config).expect("the daemon config parses");
         let settings = Settings {
             config: self.config_path(),
@@ -455,13 +478,89 @@ impl MacHost {
         let ports = host_ports(&parsed, &settings, &HostFiles::host(), own, adapters)
             .unwrap_or_else(|e| panic!("the daemon's ports: {e}"));
         let name = ServiceName::new(service).expect("a service name");
-        for (version, digest) in versions {
-            let digest = PackageDigest::new(digest).expect("a digest");
-            let version = Version::new(version).expect("a version");
+        for package in versions {
+            let digest = PackageDigest::new(&package.sha256).expect("a digest");
+            let version = Version::new(&package.version).expect("a version");
             if let Err(refused) = ports.packages.version_dir(&name, &version, &digest, None) {
-                panic!("the daemon's package store refuses {service} {version}: {refused}");
+                let why = self.explain_attestation(&parsed, package);
+                panic!("the daemon's package store refuses {service} {version}: {refused}\n{why}");
             }
         }
+    }
+
+    /// What the attestation check meets on this Mac, for the message of a refused package:
+    /// the trust check of `gh` and of the trusted root, `gh --version`, and the production
+    /// verifier run on `package` and its bundle, each through the daemon's own `SystemRunner`
+    /// and `OwnedBy`, with the time each took (printed, never judged).
+    fn explain_attestation(&self, config: &DaemonConfig, package: &CheckedPackage) -> String {
+        let files = HostFiles::host();
+        let clock: Arc<dyn Clock> = Arc::new(hostkeeper_daemon::adapters::host_clock());
+        let home = self.base.join("explain-gh");
+        make_dir(&home, 0o700);
+        let mut out = String::new();
+        for path in [&files.gh, &files.trusted_root] {
+            let meta = fs::symlink_metadata(path).map(|m| (m.uid(), format!("{:o}", m.mode())));
+            let parent = path
+                .parent()
+                .map(|dir| fs::metadata(dir).map(|m| (m.uid(), format!("{:o}", m.mode()))));
+            out.push_str(&format!(
+                "trust of {}: {:?} (file {meta:?}, directory {parent:?})\n",
+                path.display(),
+                OwnedBy { uid: 0 }.check(path)
+            ));
+        }
+        let deadline = |secs: u64| {
+            let now = Stamp::now(clock.as_ref());
+            Stamp {
+                mono_secs: now.mono_secs + secs,
+                ..now
+            }
+        };
+        let runner = SystemRunner::new(Arc::clone(&clock));
+        let started = Stamp::now(clock.as_ref());
+        let version = runner.run(&Spawn {
+            program: files.gh.clone(),
+            args: vec!["--version".into()],
+            env: Vec::new(),
+            cwd: home.clone(),
+            deadline: deadline(120),
+        });
+        out.push_str(&format!(
+            "gh --version: {version:?}, after {:?} s\n",
+            started.elapsed_secs(clock.as_ref())
+        ));
+        let archive = home.join(&package.file_name);
+        let bundle = home.join(format!("{}.sigstore.json", package.file_name));
+        put(&archive, &package.bytes, 0o644);
+        put(&bundle, &package.bundle, 0o644);
+        let verifier = GhVerifier::new(
+            files.gh.clone(),
+            files.trusted_root.clone(),
+            home.clone(),
+            Box::new(SystemRunner::new(Arc::clone(&clock))),
+            Box::new(OwnedBy { uid: 0 }),
+        );
+        let sha256 = Sha256Hex::parse(&package.sha256).expect("a digest");
+        let commit = CommitId::new(super::COMMIT).expect("a commit");
+        let source_ref = SourceRef::new(super::SOURCE_REF).expect("a ref");
+        let until = deadline(600);
+        let started = Stamp::now(clock.as_ref());
+        let verdict = verifier.verify(&Attest {
+            archive: &archive,
+            bundle: &bundle,
+            sha256: &sha256,
+            commit: &commit,
+            source_ref: &source_ref,
+            signers: &config.trusted_signers,
+            deadline: &until,
+        });
+        out.push_str(&format!(
+            "gh attestation verify of {}: {verdict:?}, after {:?} s (the daemon allows {} s)\n",
+            package.file_name,
+            started.elapsed_secs(clock.as_ref()),
+            config.bounds.attestation_timeout_secs
+        ));
+        out
     }
 
     /// The daemon's answer to `Status` on its admin socket.

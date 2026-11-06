@@ -36,7 +36,9 @@ use std::path::{Path, PathBuf};
 use e2e::channel::ReleaseChannel;
 use e2e::coordinator::CoordinatorHandle;
 use e2e::hello::{HELLO_E2E, HelloLayout, HelloPackage, SERVICE, SLOTS, label};
-use e2e::mac_host::{LAUNCHD_DIR, MacHost, PLACED_DIR, is_loaded, job_fields, plist_link};
+use e2e::mac_host::{
+    CheckedPackage, LAUNCHD_DIR, MacHost, PLACED_DIR, is_loaded, job_fields, plist_link,
+};
 use e2e::scenario::{COORDINATED, LOCAL, pinned_gh};
 use e2e::signer::FixtureSigner;
 use e2e::{HOST_ID, ROLE, http_get, wait_for};
@@ -130,11 +132,17 @@ impl Rig {
             signer.trusted_signers_toml(),
         );
         host.write_config(&config);
-        let digests: Vec<(&str, String)> = packages
-            .iter()
-            .map(|(version, package)| (*version, package.sha256.clone()))
+        let checked: Vec<CheckedPackage> = packages
+            .values()
+            .map(|package| CheckedPackage {
+                version: package.version.clone(),
+                sha256: package.sha256.clone(),
+                file_name: package.file_name.clone(),
+                bytes: package.bytes.clone(),
+                bundle: signer.bundle(&package.file_name, &package.sha256),
+            })
             .collect();
-        host.check_package_store(&config, SERVICE, &digests);
+        host.check_package_store(&config, SERVICE, &checked);
         host.start_daemon();
         coordinator.approve_enrollment(HOST_ID, SERVICE);
         Rig {
