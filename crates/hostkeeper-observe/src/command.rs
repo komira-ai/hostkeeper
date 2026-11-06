@@ -8,6 +8,13 @@
 //! pipe rather than read without end. If the reading has not ended by the deadline the child is killed and reaped, and the run
 //! is [`RunError::TimedOut`]. The deadline bounds the wait for the child's output to end, which
 //! for `systemctl show` is its exit.
+//!
+//! The child has the daemon's environment less `MANAGER_ONLY`, the variables systemd sets for
+//! the daemon's own process: its notify socket, its watchdog and the sockets passed to it. A
+//! child that kept `NOTIFY_SOCKET` would speak to systemd as the daemon; systemd's own tools,
+//! `systemctl` among them, send their exit status there (`EXIT_STATUS=`) when it is set, which
+//! systemd refuses from any process but the daemon's main one (the unit's `NotifyAccess=` is
+//! `main`, the default of `Type=notify`).
 
 use std::io::{self, Read};
 use std::process::{Command, Stdio};
@@ -21,6 +28,17 @@ use crate::ports::{CommandOutput, CommandRunner};
 /// The standard output kept unless told otherwise: far above what `systemctl show` prints for
 /// four properties.
 pub const MAX_STDOUT: usize = 64 * 1024;
+
+/// The variables of the daemon's environment no child is given: those of sd_notify(3) and of
+/// sd_listen_fds(3), which belong to the process systemd started.
+const MANAGER_ONLY: [&str; 6] = [
+    "NOTIFY_SOCKET",
+    "WATCHDOG_USEC",
+    "WATCHDOG_PID",
+    "LISTEN_FDS",
+    "LISTEN_PID",
+    "LISTEN_FDNAMES",
+];
 
 /// Runs programs as child processes.
 #[derive(Clone, Copy, Debug)]
@@ -48,13 +66,16 @@ impl CommandRunner for ProcessRunner {
         let Some((program, args)) = argv.split_first() else {
             return Err(RunError::Empty);
         };
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(because(program))?;
+            .stderr(Stdio::null());
+        for name in MANAGER_ONLY {
+            command.env_remove(name);
+        }
+        let mut child = command.spawn().map_err(because(program))?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let cap = self.max_stdout;
