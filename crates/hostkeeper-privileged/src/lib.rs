@@ -10,7 +10,12 @@
 //! do the same on a Mac, in privileged.yml's job `macos-device`, against launchd: the daemon
 //! (the program `hostkeeper-device-daemon`, which forwards to `hostkeeper_daemon::cli::main`),
 //! `hostkeeper_launchd`'s launcher, service manager and process probe, and the daemon's package
-//! check.
+//! check. `tests/tierstore_shaped.rs` runs the whole update path end to end: the real
+//! coordinator and the real daemon (that same program, under a `Type=notify` unit) update a
+//! tierstore-shaped package (the program `tierstore-like` and `fixtures/tierstore-shaped/`),
+//! roll it back on a failed `verify` and force it back with no fetch; its rig is `tests/e2e/`,
+//! test code outside the measured set, whose root-free parts `tests/tierstore_rig.rs` runs in
+//! the pull-request set.
 //!
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its

@@ -1,0 +1,32 @@
+# The manifest of the tierstore-shaped fixture package (see README.md). The test fills every
+# double-brace placeholder before it packs the file; "{port}" in the health URL is the manifest's own
+# placeholder and stays as written.
+schema         = 1
+name           = "{{service}}"
+version        = "{{version}}"
+platform       = "{{platform}}"
+min_hostkeeper = "0.1.0"
+
+[hook]
+command              = ["bin/tierstore-like", "update-hook"]
+# At least the verify and the rollback bounds together (60 + 30 is less than this).
+verify_deadline_secs = 120
+
+# prepare is unbounded: it waits on the drain gate for as long as the host is busy.
+[hook.timeout_secs]
+prepare  = 0
+cutover  = 60
+verify   = 30
+rollback = 60
+cleanup  = 30
+
+# Two instances of the template units/{{service}}@.service, one per port.
+[units]
+run = ["{{service}}@{{port_a}}.service", "{{service}}@{{port_b}}.service"]
+
+[health]
+url = "http://127.0.0.1:{port}/healthz"
+
+[params]
+tierstore_like_record_dir  = "{{record_dir}}"
+tierstore_like_fail_verify = {{fail_verify}}

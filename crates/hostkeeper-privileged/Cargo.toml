@@ -41,11 +41,40 @@ path = "tests/bin/fixture_hook.rs"
 name = "hostkeeper-device-daemon"
 path = "tests/bin/device_daemon.rs"
 
+# The tierstore-shaped fixture of `tests/tierstore_shaped.rs`: a stand-in service and its update
+# hook in one program, which the tests put at `bin/tierstore-like` of a package they build at
+# test time (`fixtures/tierstore-shaped/` holds the rest of that package as source). A program of
+# the tests, outside the measured set like every file under `tests/` (design question Q9).
+[[bin]]
+name = "tierstore-like"
+path = "tests/bin/tierstore_like.rs"
+
 [features]
 # The tests that run as root against the host's systemd. Only privileged.yml turns it on.
 privileged = []
 
 [dev-dependencies]
+# The end-to-end rig of `tests/tierstore_shaped.rs` and `tests/tierstore_rig.rs` (`tests/e2e/`):
+# the real coordinator in process with its fake OIDC issuer's config (`testkit`), the manifest
+# loader and the platform names, the production attestation verifier (`gh` with a test trust
+# root), the certificates of the loopback release channel (rcgen, rustls, ureq for its test
+# client), the package archive (tar, ruzstd), the Sigstore bundle of the fixture signer (p256,
+# base64, getrandom), and the JSON of `hostkeeper ctl` and of the step record.
+base64.workspace = true
+clap.workspace = true
+getrandom.workspace = true
+hostkeeper-config = { path = "../hostkeeper-config" }
+hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
+hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
+hostkeeper-package = { path = "../hostkeeper-package" }
+p256.workspace = true
+rcgen.workspace = true
+ruzstd.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+serde_json.workspace = true
+tar.workspace = true
+ureq.workspace = true
 # What the privileged tests drive: the production launcher and dead-man, and the observer's real
 # adapters; on a Mac the launchd adapters, the process probe over `proc_pidpath`, and the package
 # check (`hostkeeper_unpack::MacVerify`) over `codesign` and `getxattr`.
@@ -56,13 +85,13 @@ hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # over a Unix socket.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hyper-util = { workspace = true, features = ["tokio"] }
-tokio = { workspace = true, features = ["net", "rt"] }
+tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tonic = { workspace = true, features = ["channel"] }
 tower = { workspace = true, features = ["util"] }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The effective uid the privileged tests check before they act.
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["fs", "process"] }
 
 [lints]
 workspace = true
