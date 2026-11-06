@@ -57,6 +57,7 @@ async fn the_grpc_heartbeat_answers_the_gates_install_and_uninstall() {
             service: "other".to_owned(),
             version: "3.0".to_owned(),
             package_digest: "1".repeat(64),
+            index_digest: String::new(),
         }))
     );
 

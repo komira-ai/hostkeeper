@@ -127,6 +127,16 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 InvalidArgument,
                 "unknown_target",
             ),
+            (
+                ReleasesRefusal::IndexDigestMismatch,
+                InvalidArgument,
+                "index_digest_mismatch",
+            ),
+            (
+                ReleasesRefusal::IndexInvalid,
+                InvalidArgument,
+                "index_invalid",
+            ),
         ],
         refusal::releases,
     );

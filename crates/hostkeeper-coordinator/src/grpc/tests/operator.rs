@@ -156,6 +156,7 @@ pub(super) fn state(version: &str, min_up: &[(&str, u32)]) -> proto::DesiredStat
             .map(|(role, n)| ((*role).to_owned(), *n))
             .collect(),
         package_digest: None,
+        release_index_digest: None,
     }
 }
 

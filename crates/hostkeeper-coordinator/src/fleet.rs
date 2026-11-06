@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Agent, Health, Heartbeat, Outcome, UpdateResult};
-use hostkeeper_wire::{HostId, RoleName};
+use hostkeeper_wire::{HostId, Platform, RoleName};
 
 use crate::assignment::{Placement, ServiceAssignments, assigned, effective_min_version};
 use crate::bake::Bake;
@@ -117,6 +117,9 @@ pub struct Node {
     pub features: Vec<String>,
     /// The agent its last top-level heartbeat named, if it named one.
     pub agent: Option<Agent>,
+    /// The platform its last heartbeat named: which package of a release index the host is
+    /// ordered, including a service it does not run yet.
+    pub platform: Platform,
     /// When it last heartbeated.
     pub seen: Duration,
     /// The services its last heartbeat named, with the health it gave each (the legacy service: the
@@ -258,6 +261,15 @@ impl Fleet {
     #[must_use]
     pub fn node(&self, id: &HostId) -> Option<&Node> {
         self.nodes.get(id)
+    }
+
+    /// The platform the host `id` last named: its node's, else the last word of it about
+    /// `service`.
+    #[must_use]
+    pub fn platform_of(&self, service: &str, id: &HostId) -> Option<Platform> {
+        self.node(id)
+            .map(|node| node.platform)
+            .or_else(|| self.get_in(service, id).map(|host| host.beat.platform))
     }
 
     /// Every node that has heartbeated, by host id.

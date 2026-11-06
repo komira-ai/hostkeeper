@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::desired::{Desired, DesiredError, DesiredStore, Recorded, StoreError};
 use crate::http::{DESIRED_PATH, Surface, handle};
 use crate::ops_tests::temp_beside;
-use crate::registry::{Digest, DigestError, MAX_REGISTRY, Registry, RegistryError};
+use crate::registry::{Digest, DigestError, MAX_REGISTRY, Registry, RegistryError, Release};
 use crate::rollback_tests::{
     AUTO, ONE, THREE, TWO, marks, persisted, restart, rig, round, seed, two_failed, wanted,
 };
@@ -42,6 +42,11 @@ async fn set(rig: &Rig, body: &str) -> Result<Desired, SetError> {
 
 fn digest(text: &str) -> Digest {
     Digest::parse(text).expect("a digest")
+}
+
+/// The release of one package digest.
+fn package(text: &str) -> Release {
+    Release::Package(digest(text))
 }
 
 /// The bytes of the rig's state file and ops file.
@@ -81,7 +86,7 @@ async fn set_desired_records_the_digest_with_the_version() {
     );
     assert_eq!(
         store.digests(LEGACY).get(&version("2.0")),
-        Some(&digest(D1))
+        Some(&package(D1))
     );
 
     let mut three = desired("3.0", 0, 0);
@@ -105,17 +110,17 @@ async fn set_desired_records_the_digest_with_the_version() {
     );
     assert_eq!(
         unsynced.digests(LEGACY).get(&version("3.0")),
-        Some(&digest(D2))
+        Some(&package(D2))
     );
     let after = reopened(&path);
     assert_eq!(after.get(LEGACY).map(|d| d.version), Some(version("3.0")));
     assert_eq!(
         after.digests(LEGACY).get(&version("2.0")),
-        Some(&digest(D1))
+        Some(&package(D1))
     );
     assert_eq!(
         after.digests(LEGACY).get(&version("3.0")),
-        Some(&digest(D2))
+        Some(&package(D2))
     );
 }
 
@@ -314,11 +319,11 @@ fn the_registry_drops_the_oldest_version_not_kept_at_its_cap() {
     let mut registry = Registry::default();
     let v = |n: usize| Version::parse(&format!("1.{n}")).expect("a version");
     for n in 1..=MAX_REGISTRY {
-        registry.record(&v(n), digest(D1), |_| false);
+        registry.record(&v(n), package(D1), |_| false);
     }
     assert_eq!(registry.len(), MAX_REGISTRY);
     let kept = v(1);
-    registry.record(&v(MAX_REGISTRY + 1), digest(D2), |x| *x == kept);
+    registry.record(&v(MAX_REGISTRY + 1), package(D2), |x| *x == kept);
     assert_eq!(registry.len(), MAX_REGISTRY);
     assert!(registry.get(&v(1)).is_some(), "kept");
     assert!(
@@ -326,9 +331,9 @@ fn the_registry_drops_the_oldest_version_not_kept_at_its_cap() {
         "the oldest not kept, by number"
     );
     assert!(registry.get(&v(10)).is_some(), "1.10 is newer than 1.2");
-    assert_eq!(registry.get(&v(MAX_REGISTRY + 1)), Some(&digest(D2)));
+    assert_eq!(registry.get(&v(MAX_REGISTRY + 1)), Some(&package(D2)));
 
-    registry.record(&v(MAX_REGISTRY + 2), digest(D2), |_| true);
+    registry.record(&v(MAX_REGISTRY + 2), package(D2), |_| true);
     assert_eq!(registry.len(), MAX_REGISTRY + 1, "every one is kept");
 }
 
@@ -449,11 +454,11 @@ fn the_semver_scheme_reads_release_numbers_and_a_suffix_only() {
 fn the_registry_breaks_a_tie_of_release_numbers_by_text() {
     let mut registry = Registry::default();
     for n in 0..MAX_REGISTRY - 2 {
-        registry.record(&version(&format!("2.{n}")), digest(D1), |_| false);
+        registry.record(&version(&format!("2.{n}")), package(D1), |_| false);
     }
-    registry.record(&version("1.0.0"), digest(D1), |_| false);
-    registry.record(&version("1.0"), digest(D1), |_| false);
-    registry.record(&version("3.0"), digest(D2), |_| false);
+    registry.record(&version("1.0.0"), package(D1), |_| false);
+    registry.record(&version("1.0"), package(D1), |_| false);
+    registry.record(&version("3.0"), package(D2), |_| false);
     assert_eq!(registry.len(), MAX_REGISTRY);
     assert!(registry.get(&version("1.0")).is_none());
     assert!(registry.get(&version("1.0.0")).is_some());
