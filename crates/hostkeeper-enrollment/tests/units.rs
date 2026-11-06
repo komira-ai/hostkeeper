@@ -128,6 +128,15 @@ fn the_file_system_port_does_what_it_says() {
     assert!(fs.lock(&dir.path().join("absent/lock")).is_err());
     assert!(fs.sync_file(&dir.path().join("absent")).is_err());
     assert!(fs.sync_dir(&dir.path().join("absent")).is_err());
+    let doomed = dir.path().join("doomed");
+    std::fs::write(&doomed, b"x").expect("write");
+    fs.remove(&doomed).expect("removed");
+    assert!(!doomed.exists());
+    fs.remove(&doomed).expect("a missing file is fine");
+    assert!(
+        fs.remove(&dir.path().join("x")).is_err(),
+        "a directory is no file"
+    );
 
     let fault = FaultFs::new();
     fault.fail_at(2);
@@ -142,13 +151,15 @@ fn the_file_system_port_does_what_it_says() {
     fault.lock(&dir.path().join("lock2")).expect("lock");
     fault.read_private(&file).expect("read");
     write_atomic(&fault, dir.path(), "e.pb", b"e", 0o600).expect("write");
-    assert_eq!(fault.count(), 11);
+    fault.remove(&dir.path().join("e.pb")).expect("removed");
+    assert_eq!(fault.count(), 12);
     let ops = fault.ops();
     assert_eq!(ops[3], Op::CreateDir(stray));
     assert_eq!(ops[4], Op::List(dir.path().to_path_buf()));
     assert_eq!(ops[5], Op::Lock(dir.path().join("lock2")));
     assert_eq!(ops[6], Op::ReadPrivate(file.clone()));
     assert_eq!(ops[7], Op::WriteNew(dir.path().join("e.pb.tmp")));
+    assert_eq!(ops[11], Op::Remove(dir.path().join("e.pb")));
     let never = FaultFs::new();
     never.fail_at(0);
     assert!(never.read(&file).is_ok());

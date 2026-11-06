@@ -3,8 +3,20 @@
 # hooks and places the units of every service of the host (section 5.3). Its configuration is
 # its flags; it reads no environment variable.
 #
-# Installed at /usr/lib/systemd/system/hostkeeper.service by the deb and the rpm
-# (packaging/linux/nfpm.yaml), and by a boot image through packaging/linux/overlay/.
+# The one unit file of the daemon. Installed at /usr/lib/systemd/system/hostkeeper.service by the
+# deb and the rpm (packaging/linux/nfpm.yaml) and by a boot image through
+# packaging/linux/overlay/, and carried as units/hostkeeper.service by hostkeeper's own package
+# (.github/workflows/artifacts.yml), whose update links it in place of this one.
+#
+# It starts the binary hostkeeper's own update chose (section 6.6): `current` of the binary
+# directory under the state directory. A self-update stages the new binary there, switches
+# `current` and exits 0, and the restart policy, always, starts the new binary; the fallback unit
+# (hostkeeper-fallback.service, with the drop-in hostkeeper.service.d/self-update.conf that names
+# it in OnFailure=, both written by the daemon at its start) switches `current` back when the new
+# binary fails its start limit. Before each start, the binary the package installed gives the
+# binary directory its first binary when `current` starts none, so the first start of a host
+# works before any update; the `-` lets a start go on when that binary is older and lacks the
+# verb, since `current` is then already there.
 [Unit]
 Description=hostkeeper, the update daemon of this host
 Documentation=https://github.com/komira-ai/hostkeeper/blob/main/packaging/linux/README.md
@@ -19,8 +31,10 @@ Conflicts=kbf-updater-agent.service kbf-host-local.service kbf-host-local-fronte
 # Before= orders them (systemd.unit(5), Before=, After=). So in a handoff, in either direction,
 # the stopping updater has exited before the starting one runs.
 After=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.service
-# Three failed starts within 300 seconds leave the unit failed: the bound the self-update
-# fallback of design section 6.6 is written against.
+# Three starts within 300 seconds, restarts included, leave the unit failed and start its
+# OnFailure= unit: the bound the self-update fallback of design section 6.6 is written against.
+# The fallback puts the previous binary back only while an update waits for its restart;
+# otherwise the unit stays failed until `systemctl reset-failed hostkeeper.service`.
 StartLimitIntervalSec=300
 StartLimitBurst=3
 
@@ -30,8 +44,12 @@ Type=notify
 # The boot pass runs every unfinished update to its verdict, each step under its own timeout,
 # before the daemon is ready: no start timeout cuts it short.
 TimeoutStartSec=infinity
-ExecStart=/usr/bin/hostkeeper daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd
-Restart=on-failure
+ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper
+ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd
+# The daemon exits 0 to be started again after its own update, so a clean exit restarts it too.
+# The drop-in the daemon writes (hostkeeper_steps::selfupdate::main_dropin) sets the same two.
+Restart=always
+RestartSec=1
 # /run/hostkeeper, the directory of the admin socket: root's alone.
 RuntimeDirectory=hostkeeper
 RuntimeDirectoryMode=0700

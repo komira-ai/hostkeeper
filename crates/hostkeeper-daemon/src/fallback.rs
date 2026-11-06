@@ -1,9 +1,10 @@
 //! `hostkeeper self-update-fallback --dir <dir>`: what the fallback of hostkeeper's own update
 //! runs, with the *previous* binary (design section 6.6). On Linux the fallback unit runs it once
-//! the new binary has failed `StartLimitBurst` starts (`hostkeeper_steps::selfupdate::
-//! fallback_unit`, unchanged); on macOS the fallback timer job runs it every interval
-//! (`hostkeeper_steps::selfupdate::launchd_fallback_job`), and the verb decides the burst itself
-//! ([`fallback_after_burst`]). The verb is the same code on both; only what makes it act differs.
+//! the daemon's unit has failed its start limit (`StartLimitBurst=` starts within
+//! `StartLimitIntervalSec=`; the unit `hostkeeper_steps::selfupdate::fallback_unit`, which the
+//! daemon writes at its start, `crate::selfunits`); on macOS the fallback timer job runs it every
+//! interval (`hostkeeper_steps::selfupdate::launchd_fallback_job`), and the verb decides the burst
+//! itself ([`fallback_after_burst`]). The verb is the same code on both; only what makes it act differs.
 //!
 //! The fallback, in this order: `current` of the binary directory `<dir>` is pointed at
 //! `previous` again ([`Layout::flip_back`], which refuses a `previous` that is not an executable
@@ -14,6 +15,16 @@
 //! a host that runs the previous binary, whose start settles the same verdict. Run again, it
 //! changes nothing. The step record, the list and the start log are in the parent of `<dir>`,
 //! the state directory of the service `hostkeeper` ([`crate::selfupdate::binary_dir`]).
+//!
+//! On both systems the fallback puts nothing back when no update waits for its restart and
+//! `current` is not `previous` already ([`FallbackError::NothingWaits`]): the binary that runs was
+//! not switched in by an update, so it is not the one that failed. A new binary that confirmed its
+//! update at its start ([`crate::selfupdate`]) has run, and is not put back either, even when that
+//! start fails later. On Linux systemd runs the
+//! fallback unit whenever the daemon's unit fails its start limit, for any reason (a config that
+//! does not load, three restarts within the window); the verb then exits [`EXIT_FAILED`], the
+//! unit's `ExecStartPost=` lines do not run, and the daemon's unit stays failed until
+//! `systemctl reset-failed`, as it did before the fallback was installed.
 //!
 //! On macOS the fallback runs only when all of these hold, and otherwise nothing is written:
 //!
@@ -32,9 +43,10 @@
 //! architecture) writes none, and is not fallen back from by this rule.
 //!
 //! It exits 0 when the previous binary is back or, on macOS, when there was nothing to do yet,
-//! and [`EXIT_FAILED`] with a message naming the cause when there is no `previous`, when it is not
-//! an executable file, or when the record, the list, the log or the lock cannot be used; with no
-//! `previous`, nothing is written.
+//! and [`EXIT_FAILED`] with a message naming the cause when there is no `previous`, when no update
+//! waits for its restart, when `previous` is not an executable file, or when the record, the
+//! list, the log or the lock cannot be used; with no `previous`, or nothing waiting, nothing is
+//! written.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -42,7 +54,7 @@ use std::process::ExitCode;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_launchd::{Platform, PlatformKind};
-use hostkeeper_steps::record::Loaded;
+use hostkeeper_steps::record::{AwaitingRestart, Loaded};
 use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, START_LIMIT_WINDOW_SECS, settle};
 use hostkeeper_steps::{
     Clock, DaemonStart, Layout, RecordStore, SelfUpdateError, Settled, Stamp, StartLog,
@@ -60,6 +72,13 @@ pub enum FallbackError {
     /// The binary directory has no `previous`: there is nothing to fall back to.
     #[error("{} has no previous binary to fall back to", .0.display())]
     NoPrevious(PathBuf),
+    /// No update waits for its restart, and `current` of the binary directory is not `previous`:
+    /// the binary that runs was not switched in by an update, and is not put back.
+    #[error(
+        "no update of hostkeeper waits for its restart, so {} is left as it is: the binary that runs was not switched in by an update",
+        .0.display()
+    )]
+    NothingWaits(PathBuf),
     /// `previous` could not be read, or names what is not an executable file, or `current`
     /// could not be moved.
     #[error("the previous binary cannot be put back: {0}")]
@@ -103,12 +122,25 @@ pub fn fallback(dir: &Path) -> Result<Settled, FallbackError> {
 /// The fallback for the binary directory `layout`, the update in the record of `store`: the seam
 /// of the tests that stop it at a write of the record.
 pub fn fallback_with(layout: &Layout, store: &RecordStore) -> Result<Settled, FallbackError> {
-    if layout.previous()?.is_none() {
+    let previous = layout.previous()?;
+    if previous.is_none() {
         return Err(FallbackError::NoPrevious(layout.dir().to_path_buf()));
+    }
+    if awaited(store)?.is_none() & (layout.current()? != previous) {
+        return Err(FallbackError::NothingWaits(layout.dir().to_path_buf()));
     }
     layout.flip_back()?;
     let running = layout.current()?.unwrap_or_default();
     Ok(settle(layout, store, &running)?)
+}
+
+/// The update the record of `store` waits for the restart into, if any; a record of a newer
+/// daemon, which this binary cannot read, waits for nothing it knows of.
+fn awaited(store: &RecordStore) -> Result<Option<AwaitingRestart>, SelfUpdateError> {
+    Ok(match store.load()? {
+        Loaded::Current(rec) => rec.progress.awaiting_restart,
+        Loaded::Absent | Loaded::Newer { .. } => None,
+    })
 }
 
 /// The fallback on macOS for the binary directory `dir`: [`fallback_with`] once the version the
@@ -118,14 +150,7 @@ pub fn fallback_with(layout: &Layout, store: &RecordStore) -> Result<Settled, Fa
 pub fn fallback_after_burst(dir: &Path, clock: &dyn Clock) -> Result<Judged, FallbackError> {
     let hk_state = dir.parent().unwrap_or(dir);
     let state = hk_state.parent().unwrap_or(hk_state);
-    let awaiting = match RecordStore::new(hk_state)
-        .load()
-        .map_err(SelfUpdateError::from)?
-    {
-        Loaded::Current(rec) => rec.progress.awaiting_restart,
-        Loaded::Absent | Loaded::Newer { .. } => None,
-    };
-    let Some(awaiting) = awaiting else {
+    let Some(awaiting) = awaited(&RecordStore::new(hk_state))? else {
         return Ok(Judged::NotPending);
     };
     let _lock = match lock_state_dir(state) {

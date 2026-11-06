@@ -1,12 +1,13 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
 //! `hostkeeper ctl`, which hands every argument after it to `hostkeeper-ctl`, `hostkeeper ci`, the
 //! CI client a service's release job runs once it has verified this binary (`hostkeeper_ci`,
-//! docs/deploy/ci-client.md), and the two plumbing verbs of hostkeeper's own update (design
+//! docs/deploy/ci-client.md), and the three plumbing verbs of hostkeeper's own update (design
 //! section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the
-//! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]), and
-//! `hostkeeper self-update-protocol`,
-//! which prints this binary's self-update protocol and does nothing else
-//! ([`crate::selfupdate::protocol_line`]). Configuration comes in as flags only, never from the
+//! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
+//! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
+//! nothing else ([`crate::selfupdate::protocol_line`]); and `hostkeeper self-update-seed
+//! --state-dir <dir> --binary <file>`, which the daemon's unit runs before each start to give the
+//! binary directory its first binary ([`crate::seed`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
 //!
 //! The one value read from the environment is the address of systemd's notify socket, a
@@ -51,7 +52,7 @@ use rustls_pki_types::pem::PemObject;
 use crate::adapters::{Adapters, host_claims, host_clock};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
-use crate::links::{DaemonLog, Links, NoLink};
+use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
 use crate::observer::observer_with;
@@ -79,12 +80,21 @@ pub const DEFAULT_ADMIN_SOCKET: &str = if cfg!(target_os = "macos") {
 };
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
-/// The host's CA bundle (PEM): the roots the package fetch's HTTPS client trusts.
+/// The CA bundle (PEM) of a Debian-family Linux host: the roots the package fetch's HTTPS client
+/// trusts. A Linux host whose bundle is neither this nor [`CA_BUNDLE_RHEL`] is given this path.
 pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
-/// The pinned `gh` that checks a package's attestation.
+/// The CA bundle of a RHEL-family Linux host.
+pub const CA_BUNDLE_RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
+/// The CA bundle of a Mac, the system roots macOS keeps as PEM.
+pub const CA_BUNDLE_MACOS: &str = "/etc/ssl/cert.pem";
+/// The pinned `gh` that checks a package's attestation, on a Linux host.
 pub const GH_BINARY: &str = "/usr/lib/hostkeeper/gh";
-/// The Sigstore trusted root, as `gh attestation trusted-root` prints it.
+/// The pinned `gh` on a Mac, where the installer pkg puts it (`/usr` itself is read-only there).
+pub const GH_BINARY_MACOS: &str = "/usr/local/lib/hostkeeper/gh";
+/// The Sigstore trusted root, as `gh attestation trusted-root` prints it, on a Linux host.
 pub const SIGSTORE_TRUSTED_ROOT: &str = "/usr/lib/hostkeeper/trusted_root.json";
+/// The Sigstore trusted root on a Mac, where the installer pkg puts it.
+pub const SIGSTORE_TRUSTED_ROOT_MACOS: &str = "/usr/local/lib/hostkeeper/trusted_root.json";
 /// The directory `gh` runs in, under the state directory.
 pub const GH_HOME: &str = ".gh";
 /// How often each service's dead-man looks at its running step on a host, in seconds.
@@ -125,6 +135,20 @@ pub enum Command {
     /// Print this binary's self-update protocol and nothing else (run by the daemon before it
     /// stages a new binary).
     SelfUpdateProtocol,
+    /// Give the binary directory of hostkeeper's own update its first binary when its `current`
+    /// starts none (run by the daemon's unit before each start).
+    SelfUpdateSeed(SeedFlags),
+}
+
+/// The flags of `hostkeeper self-update-seed`.
+#[derive(Clone, Debug, PartialEq, Eq, Args)]
+pub struct SeedFlags {
+    /// The daemon's state directory: the binary directory is `hostkeeper/bin` in it.
+    #[arg(long)]
+    pub state_dir: PathBuf,
+    /// The binary put in as this binary's version: the one the package installed.
+    #[arg(long)]
+    pub binary: PathBuf,
 }
 
 /// The flags of `hostkeeper self-update-fallback`.
@@ -200,6 +224,9 @@ pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
         Command::Daemon(flags) => flags,
         Command::Ctl { args } => return ExitCode::from(ctl_on_terminal(args)),
         Command::SelfUpdateFallback(flags) => return crate::fallback::main(&flags.dir),
+        Command::SelfUpdateSeed(flags) => {
+            return crate::seed::main(&flags.state_dir, &flags.binary);
+        }
         Command::SelfUpdateProtocol => {
             print!("{}", crate::selfupdate::protocol_line());
             return ExitCode::SUCCESS;
@@ -207,9 +234,23 @@ pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
         Command::Ci(command) => return hostkeeper_ci::run(command),
     };
     let period = flags.link.heartbeat_secs;
-    let started = notifier(&flags, notify_socket)
+    let served = notifier(&flags, notify_socket)
         .and_then(|notifier| daemon(&flags.settings(), period, notifier.as_ref()));
-    started.err().map_or(ExitCode::SUCCESS, report)
+    ExitCode::from(exit_status(&served))
+}
+
+/// The exit status of `hostkeeper daemon` once it has served: 0 when it returned to be started
+/// again, as after its own update asked it to exit ([`start::serve`]), which the unit's
+/// `Restart=always` restarts; the error's status ([`StartError::exit_code`]), said on standard
+/// error, otherwise.
+pub fn exit_status(served: &Result<(), StartError>) -> u8 {
+    match served {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("hostkeeper daemon: {error}");
+            error.exit_code()
+        }
+    }
 }
 
 /// Runs `hostkeeper ctl` with `args`, the arguments after `ctl`, and returns its exit code
@@ -249,11 +290,6 @@ pub fn notifier(
         (true, Some(socket)) => Ok(Box::new(SystemdNotifier::new(socket))),
         (true, None) => Err(StartError::NoNotifySocket),
     }
-}
-
-fn report(error: StartError) -> ExitCode {
-    eprintln!("hostkeeper daemon: {error}");
-    ExitCode::from(error.exit_code())
 }
 
 /// Starts the daemon and serves it, beating every `period` seconds, returning only on an error
@@ -308,7 +344,10 @@ async fn start_and_serve(
 ///   ([`host_claims`]);
 /// - the heartbeat loop reads the certificate and key of the pki directory's `current` link at
 ///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock;
-///   this build has no coordinator link yet ([`NoLink`]), so every heartbeat ends unsent;
+///   its link ([`HostLink`]) is the JSON route and gRPC over mutual TLS to the same
+///   `coordinator`, pinned to the same `ca_sha256`, trusting the CA bundle of the pki directory's
+///   `current` generation, its connections bounded on the daemon's clock; the link is made at the
+///   first heartbeat, on the loop's worker, so a host not enrolled yet makes none;
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
 /// - both loops log through the daemon's alert sink ([`DaemonLog`]).
 pub fn host_links(
@@ -326,9 +365,15 @@ pub fn host_links(
         image: image_of(ctx.own_version),
     };
     let pki = files.pki.clone();
+    let link = HostLink::new(
+        ctx.config.clone(),
+        files.pki.clone(),
+        Arc::clone(&ctx.clock),
+        log.clone(),
+    );
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings, kind)),
-        link: Arc::new(NoLink),
+        link: Arc::new(link),
         certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
         clock: Arc::new(SystemUnixClock),
         log,
@@ -401,13 +446,40 @@ pub struct HostFiles {
 }
 
 impl HostFiles {
-    /// Where a host keeps them: [`CA_BUNDLE`], [`GH_BINARY`], [`SIGSTORE_TRUSTED_ROOT`] and
-    /// [`PKI_DIR`].
+    /// Where this host keeps them: [`HostFiles::for_platform`] for the platform this binary was
+    /// built for, asking the filesystem which CA bundle exists.
     pub fn host() -> HostFiles {
+        HostFiles::for_platform(Platform::host().kind, Path::exists)
+    }
+
+    /// Where a host of `kind` keeps them, `exists` saying whether a path is there; the pki
+    /// directory is [`PKI_DIR`] on both.
+    ///
+    /// - A Mac: [`CA_BUNDLE_MACOS`], [`GH_BINARY_MACOS`] and [`SIGSTORE_TRUSTED_ROOT_MACOS`],
+    ///   whatever `exists` says.
+    /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
+    ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
+    ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
+    pub fn for_platform(kind: PlatformKind, exists: impl Fn(&Path) -> bool) -> HostFiles {
+        let (ca_bundle, gh, trusted_root) = match kind {
+            PlatformKind::Macos => (
+                CA_BUNDLE_MACOS,
+                GH_BINARY_MACOS,
+                SIGSTORE_TRUSTED_ROOT_MACOS,
+            ),
+            PlatformKind::Linux => (
+                [CA_BUNDLE, CA_BUNDLE_RHEL]
+                    .into_iter()
+                    .find(|bundle| exists(Path::new(bundle)))
+                    .unwrap_or(CA_BUNDLE),
+                GH_BINARY,
+                SIGSTORE_TRUSTED_ROOT,
+            ),
+        };
         HostFiles {
-            ca_bundle: PathBuf::from(CA_BUNDLE),
-            gh: PathBuf::from(GH_BINARY),
-            trusted_root: PathBuf::from(SIGSTORE_TRUSTED_ROOT),
+            ca_bundle: PathBuf::from(ca_bundle),
+            gh: PathBuf::from(gh),
+            trusted_root: PathBuf::from(trusted_root),
             pki: PathBuf::from(PKI_DIR),
         }
     }
