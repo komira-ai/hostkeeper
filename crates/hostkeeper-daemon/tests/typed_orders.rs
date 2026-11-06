@@ -205,6 +205,9 @@ fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
         promotion_pending: false,
         deferred: None,
         agent: None,
+        sent_unix: None,
+        cert_not_after_unix: None,
+        last_renew_error: None,
     }
 }
 
@@ -331,6 +334,8 @@ impl Host {
             period: DEFAULT_HEARTBEAT_SECS,
             dispatch: dispatch.clone(),
             stop: StopFlag::default(),
+            enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
+            renewal: hostkeeper_enroll::RenewalState::default(),
         };
         Host {
             heartbeater: links.heartbeater(&daemon),

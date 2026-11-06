@@ -61,6 +61,9 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             .map(|f| f.as_str().to_owned())
             .collect(),
         services,
+        sent_unix: Some(beat.sent_unix),
+        cert_not_after_unix: beat.renewal.cert_not_after_unix,
+        last_renew_error: beat.renewal.last_renew_error.clone(),
     })
 }
 
@@ -376,6 +379,8 @@ mod tests {
             agent_version: version("0.9.0"),
             features: ANNOUNCED.to_vec(),
             services,
+            sent_unix: 0,
+            renewal: crate::Renewal::default(),
         }
     }
 
@@ -397,6 +402,30 @@ mod tests {
 
     fn sent(beat: &Heartbeat) -> pb::HeartbeatRequest {
         heartbeat(beat).expect("a request")
+    }
+
+    /// Catches the host's clock or certificate left out of the request, or put in another
+    /// field: they go out in `sent_unix`, `cert_not_after_unix` and `last_renew_error`, and the
+    /// two the enrollment loop did not give are left unset.
+    #[test]
+    fn the_host_clock_and_certificate_go_out_in_their_fields() {
+        let mut full = beat(Platform::LinuxX86_64, Vec::new());
+        full.sent_unix = 2_000_000_123;
+        full.renewal = crate::Renewal {
+            cert_not_after_unix: Some(2_000_600_000),
+            last_renew_error: Some("renewal refused: host_excluded".to_owned()),
+        };
+        let request = sent(&full);
+        assert_eq!(request.sent_unix, Some(2_000_000_123));
+        assert_eq!(request.cert_not_after_unix, Some(2_000_600_000));
+        assert_eq!(
+            request.last_renew_error.as_deref(),
+            Some("renewal refused: host_excluded")
+        );
+        let request = sent(&beat(Platform::LinuxX86_64, Vec::new()));
+        assert_eq!(request.sent_unix, Some(0));
+        assert_eq!(request.cert_not_after_unix, None);
+        assert_eq!(request.last_renew_error, None);
     }
 
     /// The order `o-1`, try 2, with the given verb.
@@ -502,6 +531,9 @@ mod tests {
                         ..pb::ServiceBeat::default()
                     },
                 ],
+                sent_unix: Some(0),
+                cert_not_after_unix: None,
+                last_renew_error: None,
             }
         );
     }

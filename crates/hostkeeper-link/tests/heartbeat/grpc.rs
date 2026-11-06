@@ -176,6 +176,8 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         agent_version: version("0.9.0"),
         features: ANNOUNCED.to_vec(),
         services,
+        sent_unix: 0,
+        renewal: hostkeeper_link::Renewal::default(),
     }
 }
 

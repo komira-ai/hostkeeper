@@ -70,14 +70,17 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_wire::wire::clip_renew_error;
 
-use crate::beat::{ANNOUNCED, Feature, Features, Heartbeat, Observed, Platform, ServiceFacts, fit};
+use crate::beat::{
+    ANNOUNCED, Feature, Features, Heartbeat, Observed, Platform, Renewal, ServiceFacts, fit,
+};
 use crate::deferral::{Book, Deferral};
 use crate::names::Reason;
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
-    RecordedService, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
+    RecordedService, RenewalSource, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -118,6 +121,7 @@ pub struct Ports {
     pub orders: Arc<dyn OrderSink>,
     pub dispatch: Arc<dyn Dispatch>,
     pub halts: Arc<dyn HeldHalts>,
+    pub renewal: Arc<dyn RenewalSource>,
     pub clock: Arc<dyn UnixClock>,
     pub log: Arc<dyn Log>,
 }
@@ -400,11 +404,22 @@ impl Heartbeater {
                 name,
             });
         }
+        let Renewal {
+            cert_not_after_unix,
+            last_renew_error,
+        } = self.ports.renewal.renewal();
         Ok(Heartbeat {
             platform: self.config.platform,
             agent_version: self.config.agent_version.clone(),
             features: ANNOUNCED.to_vec(),
             services,
+            sent_unix: now,
+            renewal: Renewal {
+                cert_not_after_unix,
+                last_renew_error: last_renew_error
+                    .map(|text| clip_renew_error(&text).to_owned())
+                    .filter(|text| !text.is_empty()),
+            },
         })
     }
 

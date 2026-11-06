@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::Clock;
 
-use crate::beat::{Health, Heartbeat, Liveness, Oversize};
+use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal};
 use crate::names::Reason;
 use crate::order::{Order, OrderResult, Reply};
 
@@ -146,6 +146,12 @@ pub enum CertState {
 /// under the `current` link of the pki directory, which enrollment writes).
 pub trait CertSource: Send + Sync {
     fn current(&self) -> CertState;
+}
+
+/// What the enrollment loop last said of the host's certificate, read at every heartbeat: the
+/// daemon's is the enrollment loop's state, which the loop sets after each of its steps.
+pub trait RenewalSource: Send + Sync {
+    fn renewal(&self) -> Renewal;
 }
 
 /// One installed service, as its step record says.

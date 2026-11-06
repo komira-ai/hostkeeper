@@ -165,3 +165,6 @@ flag enrollment reject --reason STRING
 command hosts retire /hostkeeper.operator.v1.Hosts/Retire
 flag hosts retire --node-id STRING
 flag hosts retire --reason STRING
+flag coordinator heartbeat --sent-unix UINT64
+flag coordinator heartbeat --cert-not-after-unix UINT64
+flag coordinator heartbeat --last-renew-error STRING

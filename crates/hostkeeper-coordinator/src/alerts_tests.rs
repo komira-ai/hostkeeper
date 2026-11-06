@@ -41,6 +41,10 @@ fn node(seen: u64) -> Node {
         platform: Platform::LinuxX86_64,
         seen: secs(seen),
         announced: BTreeMap::from([(LEGACY.to_owned(), Health::Healthy)]),
+        sent_unix: None,
+        cert_not_after_unix: None,
+        last_renew_error: None,
+        skewed_beats: 0,
     }
 }
 
@@ -48,7 +52,7 @@ fn node(seen: u64) -> Node {
 fn fleet_of(hosts: &[&str], seen: u64) -> Fleet {
     let mut fleet = Fleet::new(Duration::ZERO, QUIET_START);
     for host in hosts {
-        fleet.note_node(id(host), node(seen));
+        fleet.note_node(id(host), node(seen), UNIX);
         fleet.record_named_in(LEGACY, id(host), "daemon", beat("1.0"), secs(seen));
     }
     fleet
@@ -333,7 +337,7 @@ fn a_failed_canary_names_its_host_while_its_version_is_bad() {
 fn a_held_host_on_a_bad_version_is_held_on_bad_version() {
     let mut fleet = Fleet::new(Duration::ZERO, QUIET_START);
     for host in ["d1", "d2", "d3"] {
-        fleet.note_node(id(host), node(990));
+        fleet.note_node(id(host), node(990), UNIX);
     }
     fleet.record_named_in(LEGACY, id("d1"), "daemon", beat("2.0"), secs(990));
     fleet.record_named_in(LEGACY, id("d2"), "daemon", beat("2.0"), secs(990));
@@ -455,7 +459,7 @@ fn a_host_silent_for_the_threshold_is_silent_and_one_just_inside_is_not() {
         ..Thresholds::default()
     };
     let mut fleet = fleet_of(&["d1"], 700);
-    fleet.note_node(id("d2"), node(701));
+    fleet.note_node(id("d2"), node(701), UNIX);
     let alerts = derive(
         &fleet,
         &OpsState::default(),

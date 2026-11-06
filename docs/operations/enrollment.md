@@ -269,7 +269,7 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 `hosts get --node-id <host id>` answers the host once it has heartbeated, with the inventory record
 its enrollment matched (`inventory_record_id`, `data_macs`, `bmc_mac`, `serial`; empty when none
 or several match) and when it was approved (`enrolled_unix`); `hosts list` answers every host the
-same way, a page at a time.
+same way, a page at a time. [Renewal](#renewal) says what they answer of its certificate.
 
 ## Renewal
 
@@ -277,6 +277,19 @@ A host certificate lasts 7 days. From half its life the daemon renews it with `R
 mutual TLS with the certificate it holds, for the same key; no operator is involved. The node
 logs `renewed the certificate of host:<id> (generation <n>)` and the coordinator `renewed a host
 certificate`. A refused renewal is logged on the node as `renewal refused: <token>`.
+
+Every heartbeat also says when the host's certificate ends, why its last enrollment or renewal
+step failed (until a step succeeds), and the host's own clock. `hostkeeper ctl hosts get
+--node-id <id>` answers the first two as `cert_not_after_unix` and `last_renew_error`, and
+`clock_skew_beats`: how many of the host's heartbeats since the coordinator started said a time
+more than `--clock-skew-secs` (120 by default) from the coordinator's clock, either way. The Host
+page of the operator web app shows the end and the error, warns while the end is less than 48
+hours away (or past) or an error is reported, and shows the count. A daemon whose enroller
+cannot be opened (its pki directory locked or unreadable, its coordinator address refused) logs
+`error: the enrollment loop cannot start yet: <why>` (once, and again when the reason changes),
+reports it as its
+`last_renew_error`, and tries again after 5 seconds, then 10, 20 and so on, at most every 5
+minutes, for as long as it runs.
 
 A host that was offline until its certificate expired cannot renew it. Its daemon posts a new
 request for the key it holds, with `renewal_of` set to its host id, and waits as a new host does
