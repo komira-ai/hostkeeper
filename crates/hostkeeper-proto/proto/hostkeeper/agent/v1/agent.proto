@@ -39,9 +39,12 @@
 // package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds
 // everything else (the release channel, the package of its own platform with its size and digest
 // in the version's release index, the hook, the units) in its own configuration, in the index and
-// in the manifest of the package that verified (design section 5.5). The daemon does not check a
-// package against an order's `package_digest`; the field stays so that every release reads every
-// order.
+// in the manifest of the package that verified (design section 5.5). The coordinator fills
+// `package_digest` with the digest the version's release index lists for the host's own platform,
+// and `index_digest` with the SHA-256 of that index. The daemon refuses an index whose SHA-256 is
+// not `index_digest` (`index_digest_mismatch`), and a package whose SHA-256 is not
+// `package_digest` (`digest_mismatch`). An empty `index_digest` (an order of a coordinator before
+// it, or of a version set with one package digest) skips the index check.
 //
 // Enrollment: a host with no certificate generates a P-256 key, keeps it, and sends `Enroll`
 // with a CSR for it and its claims. Its request is pending until an operator approves it
@@ -133,6 +136,17 @@ message HeartbeatRequest {
   repeated string features = 3;
   // Every service installed on the host, one entry each, at most 16, none named twice.
   repeated ServiceBeat services = 4;
+  // The host's clock when it made the heartbeat, in seconds since the epoch: what the coordinator
+  // holds against its own clock to count the heartbeats of a host whose clock is off. Absent from
+  // an agent that predates it.
+  optional uint64 sent_unix = 5;
+  // The last second the host's current certificate is valid, in seconds since the epoch. Absent
+  // from an agent that predates it and from a host that holds no certificate.
+  optional uint64 cert_not_after_unix = 6;
+  // Why the host's last step of enrollment or renewal failed, as the host words it, at most 256
+  // bytes (a reader cuts a longer one at a character boundary); absent once a step succeeds, and
+  // from an agent that predates it.
+  optional string last_renew_error = 7;
 }
 
 // The platforms releases are built for.
@@ -365,8 +379,10 @@ message Order {
 message Update {
   string service = 1;
   string version = 2;
-  // Not checked by the daemon, which takes the digest from the release index (see Orders above).
+  // The SHA-256 of the package of the host's platform (see Orders above).
   string package_digest = 3;
+  // The SHA-256 of the version's release index; empty: not checked (see Orders above).
+  string index_digest = 4;
 }
 
 // The arguments of an `install`.
@@ -374,6 +390,8 @@ message Install {
   string service = 1;
   string version = 2;
   string package_digest = 3;
+  // The SHA-256 of the version's release index; empty: not checked (see Orders above).
+  string index_digest = 4;
 }
 
 // The arguments of a `force_rollback`.
@@ -381,16 +399,20 @@ message ForceRollback {
   string service = 1;
   string version = 2;
   string package_digest = 3;
+  // The SHA-256 of the version's release index; empty: not checked (see Orders above).
+  string index_digest = 4;
 }
 
 // The arguments of a `force`.
 message Force {
   string service = 1;
   string version = 2;
-  // Not checked by the daemon, which takes the digest from the release index (see Orders above).
+  // The SHA-256 of the package of the host's platform (see Orders above).
   string package_digest = 3;
   // Greater than the generation the service is held under: a force lifts a standing halt.
   uint64 halt_generation = 4;
+  // The SHA-256 of the version's release index; empty: not checked (see Orders above).
+  string index_digest = 5;
 }
 
 // The arguments of an `uninstall`.

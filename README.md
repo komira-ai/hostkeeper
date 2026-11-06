@@ -58,16 +58,18 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
-| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway; not shipped |
+| [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, and each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
 | [`hello`](examples/hello) | the example service: an HTTP server on loopback and its update hook, packaged for each release, which proves an install, an update and a rollback on the farm ([docs/hello.md](docs/hello.md)) |
 | `hostkeeper-testkit` | helpers the tests share |
-| [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` only, after a merge to main, and the workload fixture `hostkeeper-fixture-hook` they drive; not shipped |
+| [`hostkeeper-privileged`](crates/hostkeeper-privileged) | the tests that run as root against a host's real systemd, in `privileged.yml` only, after a merge to main, with the workload fixture `hostkeeper-fixture-hook` they drive, and the end-to-end update of a tierstore-shaped package through the real coordinator and daemon; not shipped |
 | `coverage-gate`, `xtask` | the 99% coverage gate, and the CI steps and release verbs |
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
 no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
 the coordinator's HTTP/JSON gateway with the operator's token, each button one method call. The
-coordinator serves it under `/ui/` of its private listener when started with `--ui-dir`
+coordinator serves it under `/ui/` of its private listener: the coordinator's container image
+holds it at `/usr/share/hostkeeper-coordinator/ui`, which the coordinator serves when started
+without `--ui-dir`, and `--ui-dir` names another directory
 ([docs/ui-serving.md](docs/ui-serving.md)).
 
 The design is [docs/design/hostkeeper-design.md](docs/design/hostkeeper-design.md).
@@ -76,6 +78,9 @@ the hook contract and the step record.
 
 Every command of `hostkeeper ctl`, with its flags and exit codes, is in [docs/ctl.md](docs/ctl.md),
 which a test regenerates from the protos and compares, so it cannot drift from them.
+Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the
+way, is [docs/operations/enrollment.md](docs/operations/enrollment.md); a test parses each of
+its `hostkeeper ctl` lines with ctl's own parser.
 
 ## Build order
 
@@ -94,17 +99,17 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   B7 (holds, halts, abort, exclude, force with targets, set-desired refusals).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
-- **Operator surfaces.** Built: B1 (the protobuf services), B10 (generated `hostkeeper ctl`,
-  gRPC beside the gateway), B24 (the CI client), B25 (the UI). The operator API declares
-  `Hosts.List`, `Hosts.Get` and `Releases.UnmarkBad`, which answer `UNIMPLEMENTED` until a
-  handler serves them.
+- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler:
+  none answers `UNIMPLEMENTED`), B10 (generated `hostkeeper ctl`, gRPC beside the gateway), B24
+  (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a
   device).
 - **Release.** Partly built: B14 (the release workflows and the release verbs of `xtask`; no
-  release is published). Planned: B12 (the privileged workflow with real systemd), B15 (the
-  privileged end-to-end proof).
+  release is published). Built: B12 (the privileged workflow with real systemd,
+  `privileged.yml`), B15 (the privileged end-to-end proof,
+  `crates/hostkeeper-privileged/tests/tierstore_shaped.rs`).
 - **Clean-up.** Built: B19 (the wall-clock lint). B26 (the removal of the old per-service crate
   and its vocabulary) is this change.
 
@@ -120,7 +125,8 @@ only, never from the environment:
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
 | `--admin-socket` | `/run/hostkeeper/admin.sock` | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
-| `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1 |
+| `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1; the end of a running order is reported within a second, without waiting for the period |
+| `--trusted-root-max-age-days` | `90` | days after which the Sigstore trusted root that package attestations are checked against is reported `trusted_root_stale` in the admin `Status`, at least 1; a signal only, package checks go on (see [docs/deploy/verify-a-release.md](docs/deploy/verify-a-release.md#the-trusted-root-on-a-host)) |
 
 At start it loads the config first: a config that does not load stops the daemon with an error
 naming the key, and nothing on the host changes. It then takes the lock on the state directory
@@ -139,8 +145,8 @@ and while there is none it says once what it waits for and sends nothing. It the
 admin socket, until an update of hostkeeper itself asks it to exit so that its unit starts the
 new binary. This build fetches, verifies and unpacks packages, runs each step of a hook in a
 transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
-the unit's name), and observes each service for `Status`. It has no service manager wired in,
-its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
+the unit's name), stops, starts and reloads units through `systemctl`, and observes each
+service for `Status`. Its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
 protocol probe (each fails without starting). Once the host is enrolled, its heartbeats go to the
 config's `coordinator` over mutual TLS, pinned to `ca_sha256` (JSON, then gRPC once the coordinator
 advertises it), and the coordinator's orders come back in the replies.

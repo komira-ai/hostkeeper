@@ -54,6 +54,15 @@ no fixed port and no root, and they write only under Cargo's target directory.
   fails when any crate of the workspace is under 99.00% of its lines or of its branches. Every
   crate is judged; there is no way to exclude one (rules T1 to T4).
 
+Security advisories are not checked on a pull request: a new advisory against a crate already in
+`Cargo.lock` would fail every open pull request for something none of them did. Instead
+`.github/workflows/advisories.yml` runs `cargo xtask advisories` daily, on every push to `main`
+and by hand. It runs `cargo deny check advisories` and keeps what it finds (advisories and yanked
+crates) in one issue, "Security advisories in hostkeeper's dependencies": it opens the issue,
+rewrites its table when the findings change, and comments and closes it when none remain. The
+workflow lint holds that workflow to those triggers, to `issues: write` on its one job of `main`
+only, and to the cargo-deny pin of `ci.yml`.
+
 To see the coverage table locally, with the nightly named in `ci.yml` and `cargo-llvm-cov`
 installed:
 
@@ -91,9 +100,36 @@ The tests, in `crates/hostkeeper-privileged/tests/`, drive the production code:
   `a_unit_name_is_reusable_after_it_failed` and
   `a_long_output_is_kept_to_its_last_bytes_with_the_last_line`;
 - `observer.rs`, the observer's `systemctl show` and `/proc` adapters:
-  `the_observer_reads_active_state_and_the_main_pid_digest_of_a_real_unit`.
+  `the_observer_reads_active_state_and_the_main_pid_digest_of_a_real_unit`;
+- `unit_control.rs`, the Linux unit control's `systemctl`:
+  `the_linux_unit_control_reloads_starts_and_stops_a_real_unit`.
 
-Each of these files starts with `#![cfg(feature = "privileged")]`. The feature is off by default,
+In the job `first-boot`, the programs themselves: the tests start the coordinator and the daemon
+as child processes on loopback and drive them only through their flags, files and `hostkeeper
+ctl` (`tests/support/pair.rs`):
+
+- `first_boot.rs`: `a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts`
+  (enrollment, approval, the host certificate, heartbeats over mutual TLS, a restart of the
+  coordinator and of the daemon), and `a_short_lived_certificate_is_renewed_and_the_heartbeat_goes_on`,
+  ignored until the coordinator has a flag for the host certificates' validity
+  (komira-ai/hostkeeper#100);
+- `install_uninstall.rs`, a package served by a release channel of the test over HTTPS:
+  `an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, and, ignored
+  until the gaps they found are fixed, `a_new_desired_version_is_installed_over_the_installed_one`
+  (komira-ai/hostkeeper#109) and `an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host`
+  (komira-ai/hostkeeper#110).
+
+The daemon fixes paths on the host that these tests cannot move. Both tests claim its pki
+directory `/etc/updater`, its self-update units and `/var/lib/hostkeeper`; `install_uninstall.rs`
+also claims the verifier's directory `/usr/lib/hostkeeper` and the fixture service's unit. A test
+refuses to start if the host already has a path it claims, and removes them when it ends.
+`install_uninstall.rs` appends the release channel's CA to the host's CA bundle and writes the
+bundle back as it was when it ends. The verifier is the one stand-in:
+`/usr/bin/true` in place of `gh`, since an attestation of a package the test builds cannot be made
+without the network.
+
+The files of the job `privileged` start with `#![cfg(feature = "privileged")]`, those of
+`first-boot` with `#![cfg(all(target_os = "linux", feature = "privileged"))]`. The feature is off by default,
 so `cargo test --workspace` and CI's `test` job compile none of them, and they count toward no
 coverage gate; the crate's library (the workload fixture `hostkeeper-fixture-hook`, the host
 check, the rig) is tested without root in the pull-request set like any crate. A privileged test
@@ -109,7 +145,46 @@ cargo test -p hostkeeper-privileged --features privileged --locked --config "tar
 ```
 
 Each test names its units `hostkeeper-ci-<test>-<pid>-<n>` and stops, unlinks and resets them when
-it ends, failed or not; `journalctl --unit 'hostkeeper-ci-*'` shows what they logged.
+it ends, failed or not; `journalctl --unit 'hostkeeper-ci-*'` shows what they logged. The
+first-boot tests also add a CA to the host's CA bundle and write under `/etc`, `/usr/lib` and
+`/var/lib`: run them only on a throwaway VM, never on a host that runs hostkeeper.
+
+### The tierstore-shaped end-to-end tests
+
+`tierstore_shaped.rs` runs the whole update path with nothing faked: the real coordinator (in the
+test process) and the real `hostkeeper daemon` (under a `Type=notify` unit, started with
+`systemctl`) update a package shaped like tierstore, two instantiated run units whose hook drains
+in `prepare` and starts the new release beside the old in `cutover`. The package is fetched from
+a release channel the test serves over HTTPS on loopback, its attestation is checked by the pinned
+`gh` (the job's step `Install gh` puts it at `target/privileged-tools/gh`) against a trust root
+the test makes, and it is unpacked, sealed and switched by the daemon; `hostkeeper ctl` sets the
+desired version and reads the coordinator's answer. The tests:
+
+- `a_tierstore_shaped_package_updates_end_to_end`: from `1.0.0` to `1.1.0`, the old release
+  serving while `prepare` drains, then the new one serving and the host converged;
+- `a_failed_verify_rolls_back_and_the_old_release_serves`: `1.2.0`, whose `verify` fails, is
+  rolled back by its hook, the old release serves again and the coordinator marks `1.2.0` bad;
+- `force_back_to_previous_needs_no_fetch`: a force to the previous version with the release
+  channel stopped fetches nothing, and exactly two versions stay on disk;
+- `the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass`: `systemctl start` of the
+  daemon returns after its boot pass relinked a placed path;
+- `fixture_attestation_is_checked_by_the_production_verifier`: the fixture's attestation passes
+  the production fetch and proof with the pinned `gh`, and another digest or signer does not.
+
+These tests use the host's fixed paths the daemon uses (`/usr/lib/hostkeeper`, `/etc/updater`,
+`/var/lib/hostkeeper`, the CA bundle and the unit directory): what is already there, left by
+another test, is moved aside and put back, and everything the test wrote is removed or restored
+when it ends, failed or not; a failed test
+first copies its hook records, step record and journal to `target/privileged-artifacts/`, which the
+workflow uploads. `tierstore_rig.rs` checks the fixture package against the production unpacker
+and the release channel's log without root, in the pull-request set.
+
+The fixture package is source: `crates/hostkeeper-privileged/fixtures/tierstore-shaped/` (its
+manifest and unit template) and the program `tests/bin/tierstore_like.rs`, built into a
+`.tar.zst` at test time by `PackageBuilder` (`tests/e2e/package.rs`). To add a fixture version,
+add a `FixtureVersion` to `Scenario::start` (`tests/e2e/scenario.rs`): its version, two ports
+(chosen at run time) and whether its `verify` fails; the scenario builds, signs and publishes it
+with the others. Nothing binary is committed.
 
 ## Tests
 

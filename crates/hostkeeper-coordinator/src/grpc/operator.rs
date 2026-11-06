@@ -1,19 +1,21 @@
-//! The five services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
-//! `Services`, `Enrollment` and `Audit`.
+//! The six services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
+//! `Services`, `Enrollment`, `Audit` and `Alerts`.
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
-//! ([`crate::operator`], [`crate::force`], [`crate::assign`]) calls it with the caller the
-//! router admitted. A method the frozen JSON routes have (`Hosts.Include`, `Hosts.SetLabels`, `Releases.ClearHalt`,
-//! `Releases.SetDesired`, `Releases.Converge`, `Releases.Status`) builds the request that route
-//! reads and calls what that route calls. A method no handler serves yet is `UNIMPLEMENTED`
-//! ([`super::PENDING`] lists them). The caller was settled before the request was read
-//! ([`super::admit`]) and arrives in the request's extensions; a request without one is an
-//! anonymous caller, and is refused as such.
+//! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
+//! [`crate::alerts`]) calls it with
+//! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
+//! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
+//! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
+//! method has a handler ([`super::PENDING`] is empty). The caller was settled before the request
+//! was read ([`super::admit`]) and arrives in the request's extensions; a request without one is
+//! an anonymous caller, and is refused as such.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::Alerts as AlertsApi;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::Audit as AuditApi;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::Enrollment as EnrollmentApi;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::Hosts as HostsApi;
@@ -23,6 +25,7 @@ use serde_json::{Value, json};
 use tonic::{Request, Response, Status};
 
 use super::{Admitted, refusal, report};
+use crate::channel::ChannelRefusal;
 use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
@@ -33,11 +36,6 @@ const UNKNOWN_SERVICE: &str = "service is not one this coordinator manages";
 
 /// What `operate` says of a clear of a service that is not halted.
 const NOT_HALTED: &str = "the service is not halted";
-
-/// The status of a method no handler serves yet.
-fn pending() -> Status {
-    Status::unimplemented("")
-}
 
 /// The caller the router admitted for `request`; anonymous when it admitted none.
 pub(crate) fn caller_of<T>(request: &Request<T>) -> Caller {
@@ -100,12 +98,21 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::Unavailable => proto::ReleasesRefusal::KeysUnavailable,
         SetError::Forbidden => proto::ReleasesRefusal::Forbidden,
         SetError::Invalid(DesiredError::UnknownService) => proto::ReleasesRefusal::UnknownService,
+        SetError::Invalid(DesiredError::IndexInvalid(_)) => proto::ReleasesRefusal::IndexInvalid,
+        SetError::Invalid(DesiredError::IndexDigestMismatch) => {
+            proto::ReleasesRefusal::IndexDigestMismatch
+        }
         SetError::Invalid(_) | SetError::UnparseableVersion | SetError::DigestConflict => {
             proto::ReleasesRefusal::InvalidRequest
         }
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
-        SetError::Store(_) | SetError::Ops(_) => {
+        SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,
+        SetError::Channel(ChannelRefusal::DigestMismatch) => {
+            proto::ReleasesRefusal::ChannelDigestMismatch
+        }
+        SetError::Ops(why) => why.into(),
+        SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");
             proto::ReleasesRefusal::StoreFailed
         }
@@ -131,7 +138,9 @@ pub(crate) fn converge_refusal(why: ConvergenceError) -> proto::ReleasesRefusal 
 /// `invalid_request`: no desired state; a precondition (`if_generation`) or a write id, which
 /// the desired-state store keeps no generation or id for and so cannot honour; or two package
 /// digests that differ. An empty `service` names none, which the JSON route reads as the legacy
-/// service.
+/// service. A release index and its digest are passed as the keys `release_index` and
+/// `release_index_digest`, which the route checks (an index beside a package digest, or one of
+/// the pair alone, is its `index_invalid`).
 pub(crate) fn desired_body(
     request: proto::SetDesiredRequest,
 ) -> Result<Vec<u8>, proto::ReleasesRefusal> {
@@ -155,6 +164,12 @@ pub(crate) fn desired_body(
     if let Some(digest) = digest {
         body["release_digest"] = digest.into();
     }
+    if let Some(index) = request.release_index {
+        body["release_index"] = index.into();
+    }
+    if let Some(digest) = request.release_index_digest {
+        body["release_index_digest"] = digest.into();
+    }
     Ok(serde_json::to_vec(&body).unwrap_or_default())
 }
 
@@ -173,6 +188,10 @@ pub(crate) fn desired_proto(desired: &Desired) -> proto::DesiredState {
         max_updating: limits("max_updating"),
         min_up: limits("min_up"),
         package_digest: desired.release_digest.as_ref().map(ToString::to_string),
+        release_index_digest: desired
+            .release_index
+            .as_ref()
+            .map(|record| record.digest.to_string()),
     }
 }
 
@@ -192,16 +211,24 @@ impl HostsService {
 impl HostsApi for HostsService {
     async fn list(
         &self,
-        _request: Request<proto::ListHostsRequest>,
+        request: Request<proto::ListHostsRequest>,
     ) -> Result<Response<proto::ListHostsResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .list_hosts(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::hosts)
     }
 
     async fn get(
         &self,
-        _request: Request<proto::GetHostRequest>,
+        request: Request<proto::GetHostRequest>,
     ) -> Result<Response<proto::GetHostResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .get_host(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::hosts)
     }
 
     async fn exclude(
@@ -257,6 +284,17 @@ impl HostsApi for HostsService {
             .map(Response::new)
             .map_err(refusal::hosts)
     }
+
+    async fn retire(
+        &self,
+        request: Request<proto::RetireRequest>,
+    ) -> Result<Response<proto::RetireResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .retire_host(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::hosts)
+    }
 }
 
 /// The service of `Releases`.
@@ -290,8 +328,12 @@ impl ReleasesApi for ReleasesService {
         };
         let body = desired_body(request.into_inner()).map_err(refusal::releases)?;
         let set = match &ci {
-            Some(verified) => self.coordinator.set_desired_verified(verified, &body),
-            None => self.coordinator.set_desired_operator(&operator, &body),
+            Some(verified) => self.coordinator.set_desired_verified(verified, &body).await,
+            None => {
+                self.coordinator
+                    .set_desired_operator(&operator, &body)
+                    .await
+            }
         }
         .map_err(|why| refusal::releases(set_refusal(why)))?;
         Ok(Response::new(proto::SetDesiredResponse {
@@ -305,10 +347,12 @@ impl ReleasesApi for ReleasesService {
         &self,
         request: Request<proto::ConvergeRequest>,
     ) -> Result<Response<proto::ConvergeResponse>, Status> {
-        if !matches!(
+        // CI's token or the operator's: a convergence is a read, and changes nothing.
+        let ci = matches!(
             request.extensions().get::<Admitted>(),
             Some(Admitted::Ci(_))
-        ) {
+        );
+        if !ci && caller_of(&request).operator().is_err() {
             return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
         }
         // No service names the legacy service, as the JSON route's query does.
@@ -342,9 +386,13 @@ impl ReleasesApi for ReleasesService {
 
     async fn unmark_bad(
         &self,
-        _request: Request<proto::UnmarkBadRequest>,
+        request: Request<proto::UnmarkBadRequest>,
     ) -> Result<Response<proto::UnmarkBadResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .unmark_bad(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::releases)
     }
 
     async fn clear_halt(
@@ -515,6 +563,17 @@ impl EnrollmentApi for EnrollmentService {
             .map_err(refusal::enrollment)
     }
 
+    async fn reject(
+        &self,
+        request: Request<proto::RejectRequest>,
+    ) -> Result<Response<proto::RejectResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .enrollment_reject(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
+    }
+
     async fn add_record(
         &self,
         request: Request<proto::AddRecordRequest>,
@@ -572,5 +631,31 @@ impl AuditApi for AuditService {
             .audit_list(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::audit)
+    }
+}
+
+/// The service of `Alerts`.
+pub(crate) struct AlertsService {
+    coordinator: Arc<Coordinator>,
+}
+
+impl AlertsService {
+    /// The service over `coordinator`.
+    pub(crate) fn new(coordinator: Arc<Coordinator>) -> Self {
+        Self { coordinator }
+    }
+}
+
+#[tonic::async_trait]
+impl AlertsApi for AlertsService {
+    async fn list(
+        &self,
+        request: Request<proto::ListAlertsRequest>,
+    ) -> Result<Response<proto::ListAlertsResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .list_alerts(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::alerts)
     }
 }

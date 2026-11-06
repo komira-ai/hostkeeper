@@ -1,6 +1,7 @@
 //! The host inventory in the app: the Inventory page's calls (`Enrollment.ListRecords`,
-//! `AddRecord`, `RemoveRecord`) and what it checks before sending, and the Enrollment page's
-//! match line and the host id and role a match fills in.
+//! `AddRecord`, `RemoveRecord`) and what it checks before sending, its Enrolled column and
+//! filter, the Host page's link to a host's record, and the Enrollment page's match line and
+//! the host id and role a match fills in.
 
 mod support;
 
@@ -196,6 +197,170 @@ await click(tree, "first-page");
     assert_shows(&out, &["Inventory", "store_failed"]);
 }
 
+/// Two records, `db-1` enrolled and `db-2` not, and a next page after `db-2`.
+fn enrolled_reply() -> Value {
+    json!({"records": [
+        {"hostId": "db-1", "dataMacs": ["0c:c4:7a:00:00:02"], "enrolled": true},
+        {"hostId": "db-2", "serial": "SN-2"},
+     ],
+     "nextPageToken": "db-2"})
+}
+
+#[test]
+fn inventory_page_shows_and_filters_by_enrolled() {
+    // Catches: the Enrolled column missing or reading an absent `enrolled` (false, which the
+    // coordinator's JSON leaves out) as anything but "no"; the filter not sent as typed (an
+    // absent filter sent as false, or false dropped), a parameter off its two values sent at all,
+    // the Show button navigating without the choice, paging that drops the filter, and the
+    // record the Host page links to left unmarked.
+    let mut ui = Ui::start();
+    ui.reply(&m("Enrollment/ListRecords"), enrolled_reply());
+    let out = ui.run(&page_driver(
+        "inventory",
+        r#"{ enrolled: "false", record: "db-2" }"#,
+        "[]",
+        r#"
+choose(tree, "enrolled-filter", "true");
+await click(tree, "show");
+choose(tree, "enrolled-filter", "");
+await click(tree, "show");
+await click(tree, "next-page");
+const marked = nodes(tree).filter((n) => n.tag === "tr" && n.attrs["aria-current"] === "true");
+return { rows: rows(tree), marked: marked.map((row) => text(row.children[0])) };
+"#,
+    ));
+    assert_eq!(
+        bodies(&ui),
+        [(
+            m("Enrollment/ListRecords"),
+            json!({"limit": 50, "pageToken": "", "enrolled": false})
+        )]
+    );
+    assert_eq!(
+        out["out"]["rows"],
+        json!([
+            [
+                "Host id",
+                "Role",
+                "Data MACs",
+                "BMC MAC",
+                "Serial",
+                "Notes",
+                "Added by",
+                "Added at",
+                "Enrolled",
+                ""
+            ],
+            [
+                "db-1",
+                "-",
+                "0c:c4:7a:00:00:02",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "yes",
+                "Remove"
+            ],
+            ["db-2", "-", "-", "-", "SN-2", "-", "-", "-", "no", "Remove"],
+        ])
+    );
+    assert_eq!(out["out"]["marked"], json!(["db-2"]));
+    assert_eq!(
+        out["seen"]["navigations"],
+        json!([
+            {"name": "inventory", "params": {"enrolled": "true"}},
+            {"name": "inventory", "params": {}},
+            {"name": "inventory", "params": {"pageToken": "db-2", "enrolled": "false"}},
+        ])
+    );
+
+    for (params, sent) in [
+        (
+            r#"{ enrolled: "true", pageToken: "db-0" }"#,
+            json!({"limit": 50, "pageToken": "db-0", "enrolled": true}),
+        ),
+        (
+            r#"{ enrolled: "yes" }"#,
+            json!({"limit": 50, "pageToken": ""}),
+        ),
+        ("{}", json!({"limit": 50, "pageToken": ""})),
+    ] {
+        let mut ui = Ui::start();
+        ui.reply(&m("Enrollment/ListRecords"), json!({}));
+        let out = ui.run(&page_driver(
+            "inventory",
+            params,
+            "[]",
+            r#"await click(tree, "first-page").catch(() => {}); return null;"#,
+        ));
+        assert_eq!(
+            bodies(&ui),
+            [(m("Enrollment/ListRecords"), sent.clone())],
+            "{params}"
+        );
+        let empty = match sent.get("enrolled").and_then(Value::as_bool) {
+            Some(true) => "No enrolled server is recorded.",
+            Some(false) => "No not enrolled server is recorded.",
+            None => "No server is recorded.",
+        };
+        assert_shows(&out, &[empty]);
+        let first = if sent["pageToken"] == "db-0" {
+            json!([{"name": "inventory", "params": {"enrolled": "true"}}])
+        } else {
+            json!([])
+        };
+        assert_eq!(out["seen"]["navigations"], first, "{params}");
+    }
+}
+
+#[test]
+fn host_page_links_its_record_to_the_inventory_page() {
+    // Catches: the record id not offered as a link, a link that opens the Inventory page on
+    // another record or without the enrolled filter, and a host with no record shown with an
+    // empty link instead of "none matched" and "not enrolled"; and the first heartbeat of an
+    // enrolled host not heard since its approval shown as "-" instead of "not yet", or that of a
+    // host not enrolled as "not yet" instead of "-".
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Hosts/Get"),
+        json!({"host": {"nodeId": "db-1", "role": "storage", "inventoryRecordId": "db-1",
+                        "dataMacs": ["0c:c4:7a:00:00:02"], "enrolledUnix": "1800000000"}}),
+    );
+    ui.reply(&m("Services/List"), json!({}));
+    let out = ui.run(&page_driver(
+        "host",
+        r#"{ nodeId: "db-1" }"#,
+        "[]",
+        r#"await click(tree, "open-record"); return cell(tree, "First heartbeat");"#,
+    ));
+    assert_eq!(
+        out["seen"]["navigations"],
+        json!([{"name": "inventory", "params": {"enrolled": "true", "record": "db-1"}}])
+    );
+    assert_eq!(out["out"], json!("not yet"));
+
+    let mut bare = Ui::start();
+    bare.reply(
+        &m("Hosts/Get"),
+        json!({"host": {"nodeId": "web-9", "enrolledUnix": "0"}}),
+    );
+    bare.reply(&m("Services/List"), json!({}));
+    let out = bare.run(&page_driver(
+        "host",
+        r#"{ nodeId: "web-9" }"#,
+        "[]",
+        r#"return { record: cell(tree, "Inventory record"), enrolled: cell(tree, "Enrolled"),
+                   first: cell(tree, "First heartbeat"),
+                   links: nodes(tree).filter((n) => n.attrs["name"] === "open-record").length };"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!({"record": "none matched", "enrolled": "not enrolled", "first": "-", "links": 0})
+    );
+}
+
 fn matched_reply() -> Value {
     json!({"requests": [
        {"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32),
@@ -275,5 +440,106 @@ return filled;
             "BMC MAC",
             "0c:c4:7a:00:00:01",
         ],
+    );
+}
+
+#[test]
+fn enrollment_page_approves_a_matched_request_as_its_record_unless_replace() {
+    // Catches: a matched request's host id not prefilled from its record, an empty host id for it
+    // refused in the page (or sent as anything but empty), the host id the coordinator answers
+    // not reported, a host id other than the record's sent without Replace, Replace not letting
+    // it through, and a renewal or an unmatched request held to a record.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Enrollment/List"),
+        json!({"requests": [
+           {"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32),
+            "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-1", "recordRole": "storage"},
+           {"requestId": "2e".repeat(32), "keySha256": "cd".repeat(32), "renewalOf": "s6",
+            "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-2", "recordRole": "storage"},
+           {"requestId": "3d".repeat(32), "keySha256": "ef".repeat(32),
+            "inventoryMatch": "INVENTORY_MATCH_UNMATCHED"},
+           {"requestId": "4c".repeat(32), "keySha256": "12".repeat(32),
+            "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-4"},
+        ]}),
+    );
+    for host in ["db-1", "db-9", "s6", "web-1"] {
+        ui.reply(
+            &m("Enrollment/Approve"),
+            json!({"hostId": host, "certificateIssuedAtPoll": true}),
+        );
+    }
+    // An answer without a host id: the page reports the record's.
+    ui.reply(
+        &m("Enrollment/Approve"),
+        json!({"certificateIssuedAtPoll": true}),
+    );
+    let out = ui.run(&page_driver(
+        "enrollment",
+        "{}",
+        "[true, true]",
+        r#"
+const filled = [0, 1, 2, 3].map((i) => named(tree, "host-id")[i].attrs.value);
+for (const i of [0, 1, 2, 3]) {
+  type(tree, "role", "storage", i);
+  type(tree, "reason", "built today", i);
+}
+type(tree, "host-id", "", 0);
+await click(tree, "approve", 0);
+type(tree, "host-id", "db-9", 0);
+await click(tree, "approve", 0);
+tick(tree, "replace", true, 0);
+await click(tree, "approve", 0);
+await click(tree, "approve", 1);
+await click(tree, "approve", 2);
+type(tree, "host-id", "web-1", 2);
+await click(tree, "approve", 2);
+type(tree, "host-id", "", 3);
+tick(tree, "replace", true, 3);
+await click(tree, "approve", 3);
+return filled;
+"#,
+    ));
+    assert_eq!(out["out"], json!(["db-1", "s6", "", "db-4"]));
+    let body = |id: &str, key: &str, host: &str, replace: bool| {
+        json!({"requestId": id.repeat(32), "keySha256": key.repeat(32), "hostId": host,
+               "role": "storage", "services": [], "replace": replace, "reason": "built today"})
+    };
+    assert_eq!(
+        bodies(&ui),
+        [
+            (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
+            (m("Enrollment/Approve"), body("1f", "ab", "", false)),
+            (m("Enrollment/Approve"), body("1f", "ab", "db-9", true)),
+            (m("Enrollment/Approve"), body("2e", "cd", "s6", false)),
+            (m("Enrollment/Approve"), body("3d", "ef", "web-1", false)),
+            (m("Enrollment/Approve"), body("4c", "12", "", true)),
+        ]
+    );
+    let seen = &out["seen"];
+    assert_eq!(
+        seen["questions"],
+        json!([
+            format!(
+                "Approve request {} as db-9 and revoke the certificate of any host that holds db-9?",
+                "1f".repeat(32)
+            ),
+            format!(
+                "Approve request {} as db-4 and revoke the certificate of any host that holds db-4?",
+                "4c".repeat(32)
+            ),
+        ])
+    );
+    assert_eq!(
+        seen["reports"],
+        json!([
+            "Approved db-1: the host gets its certificate at its next poll.",
+            "This request matches the record of db-1: approve it as db-1, or tick Replace to approve it as db-9.",
+            "Approved db-9: the host gets its certificate at its next poll.",
+            "Approved s6: the host gets its certificate at its next poll.",
+            "Name the host id.",
+            "Approved web-1: the host gets its certificate at its next poll.",
+            "Approved db-4: the host gets its certificate at its next poll.",
+        ])
     );
 }

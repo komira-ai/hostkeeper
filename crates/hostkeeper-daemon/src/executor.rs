@@ -30,11 +30,13 @@ use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT, Lifecycle};
 use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
+use crate::node::NodeState;
 use crate::observer;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
+use crate::trusted_root::RootReport;
 use crate::verb::Verb;
 use crate::verbs;
 use crate::verbs::abort::Aborted;
@@ -116,6 +118,9 @@ pub struct Ctx {
     pub halts: HaltStore,
     /// The post-success watchers, one per service at most.
     pub watchers: Watchers,
+    /// The host's enrollment and the heartbeat loop's link, as the loops last wrote them: what
+    /// `Status` reports besides the services.
+    pub node: NodeState,
     runners: Mutex<BTreeMap<String, Arc<StepRunner>>>,
     /// How the last uninstall of each service ended, while the daemon runs: what `Status` reports
     /// for a service being removed.
@@ -528,6 +533,10 @@ pub struct DaemonStatus {
     pub version: HostkeeperVersion,
     /// Every service with a package directory, a state directory or a tombstone, by name.
     pub services: Vec<ServiceStatus>,
+    /// The Sigstore trusted root the package store checks attestations with: its age and the
+    /// reason it needs attention ([`Packages::trusted_root`]); `None` from a store that reports
+    /// none.
+    pub trusted_root: Option<RootReport>,
 }
 
 /// Why [`Daemon::status`] could not list the services.
@@ -580,6 +589,7 @@ impl Daemon {
                 step_lock: StepLock::default(),
                 halts,
                 watchers: Watchers::default(),
+                node: NodeState::default(),
                 runners: Mutex::default(),
                 uninstalls: Mutex::default(),
                 record_locks: Mutex::default(),
@@ -802,6 +812,7 @@ impl Daemon {
         Ok(DaemonStatus {
             version: ctx.own_version,
             services,
+            trusted_root: ctx.packages.trusted_root(),
         })
     }
 }

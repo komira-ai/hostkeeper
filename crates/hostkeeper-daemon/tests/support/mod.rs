@@ -16,13 +16,15 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
-use hostkeeper_daemon::links::Links;
+use hostkeeper_daemon::cli::DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS;
+use hostkeeper_daemon::links::{Links, MakeEnroller};
 use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
 use hostkeeper_daemon::testing::{
     FakeClock, FakePackages, Log, NoPrune, ScriptedLauncher, manifest,
 };
 use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
+use hostkeeper_enroll::{Enroller, RenewalState, Settings as EnrollSettings};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_link::testing::{
     FakeCerts, FakeLink, ManualDispatch, RecordingLog, ScriptedSleeper,
@@ -58,11 +60,25 @@ pub fn idle_links() -> Links {
         clock: Arc::new(hostkeeper_link::testing::FakeClock::new(0, 0)),
         log: Arc::new(RecordingLog::default()),
         sleeper: Box::new(ScriptedSleeper::new(0)),
+        enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
+        renewal: RenewalState::default(),
+        watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),
-        watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
     }
+}
+
+/// An enroller opened from `settings` and `ports` at the first try; a later try is refused,
+/// since the ports went to the first.
+pub fn open_once(settings: EnrollSettings, ports: hostkeeper_enroll::Ports) -> MakeEnroller {
+    let mut parts = Some((settings, ports));
+    Box::new(move || {
+        let (settings, ports) = parts
+            .take()
+            .ok_or_else(|| "the enroller was opened already".to_owned())?;
+        Enroller::open(settings, ports).map_err(|e| e.to_string())
+    })
 }
 
 /// A directory under the target directory, unique to the test, removed when it is dropped.
@@ -133,6 +149,7 @@ pub fn update(service: &str, version: &str, package_digest: &str, order_try: u64
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
+            index_digest: String::new(),
         })),
     }
 }
@@ -146,6 +163,7 @@ pub fn install(service: &str, version: &str, package_digest: &str, order_try: u6
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
+            index_digest: String::new(),
         })),
     }
 }
@@ -174,6 +192,7 @@ pub fn force_rollback(service: &str, version: &str, package_digest: &str, order_
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
+            index_digest: String::new(),
         })),
     }
 }
@@ -193,6 +212,7 @@ pub fn force(
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
+            index_digest: String::new(),
             halt_generation,
         })),
     }
@@ -386,6 +406,7 @@ impl Rig {
             packages_dir: self.packages.clone(),
             admin_socket: self.socket.clone(),
             trusted_uid: my_uid(),
+            trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
         }
     }
 

@@ -8,7 +8,8 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     Claims, CoordinatorRefusal, EnrollRequest, EnrollState,
 };
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    EnrollmentRefusal, InventoryMatch, ListPendingRequest, ListPendingResponse, PendingEnrollment,
+    EnrollmentRefusal, EnrollmentRequestState, InventoryMatch, ListPendingRequest,
+    ListPendingResponse, PendingEnrollment,
 };
 use prost::Message;
 use tonic::Code;
@@ -42,6 +43,7 @@ fn pages(rig: &crate::testutil::Rig, operator: &Caller, limit: u32) -> Vec<ListP
                 &ListPendingRequest {
                     limit,
                     page_token: page_token.clone(),
+                    ..ListPendingRequest::default()
                 },
             )
             .expect("a page");
@@ -103,6 +105,7 @@ async fn list_reports_claims_key_hash_and_flags_without_secrets() {
         mac_nonce_presented: false,
         // No inventory record is held: every request reads unmatched.
         inventory_match: InventoryMatch::Unmatched.into(),
+        state: EnrollmentRequestState::Pending.into(),
         ..PendingEnrollment::default()
     };
     let mut third = [
@@ -160,6 +163,7 @@ async fn a_limit_over_the_cap_is_clamped() {
                 &ListPendingRequest {
                     limit,
                     page_token: String::new(),
+                    ..ListPendingRequest::default()
                 },
             )
             .expect("a page");
@@ -200,6 +204,7 @@ async fn a_page_token_this_coordinator_did_not_give_is_invalid_request() {
             &ListPendingRequest {
                 limit: 1,
                 page_token: token.clone(),
+                ..ListPendingRequest::default()
             },
         );
         assert_eq!(refused, Err(EnrollmentRefusal::InvalidRequest), "{token}");
@@ -211,6 +216,7 @@ async fn a_page_token_this_coordinator_did_not_give_is_invalid_request() {
             &ListPendingRequest {
                 limit: 1,
                 page_token: String::new(),
+                ..ListPendingRequest::default()
             },
         )
         .expect("a page");
@@ -226,6 +232,7 @@ async fn a_page_token_this_coordinator_did_not_give_is_invalid_request() {
             &ListPendingRequest {
                 limit: 1,
                 page_token: first.next_page_token,
+                ..ListPendingRequest::default()
             },
         )
         .expect("a page");

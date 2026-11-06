@@ -61,6 +61,11 @@ pub(crate) const HELLO: &str = "hello";
 /// The coordinator's asset stem, and the name of its binary.
 pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 
+/// Where the coordinator's container image holds the operator web app (`ui/` of the commit):
+/// the destination of the Dockerfile's `COPY ui`, and the default UI directory of the
+/// coordinator's `serve` (`hostkeeper_coordinator::config::DEFAULT_UI_DIR`).
+pub(crate) const IMAGE_UI_DIR: &str = "/usr/share/hostkeeper-coordinator/ui";
+
 /// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
 /// `--version` ([`stamp_of`]).
 pub(crate) const PROGRAMS: [&str; 2] = [PROGRAM, COORDINATOR];
@@ -255,6 +260,40 @@ impl FromStr for Repo {
 impl fmt::Display for Repo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// The identity whose attestations a repository's release is checked against: the workflow file
+/// `.github/workflows/artifacts.yml` of the repository, on [`SIGNER_REF`]. Hostkeeper's own is
+/// [`Signer::hostkeeper`], the [`SIGNER_WORKFLOW`] of [`REPO`]; `release channel-sync` holds the
+/// release of any other repository it syncs to that repository's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Signer {
+    /// The repository whose attestations count.
+    pub(crate) repo: String,
+    /// The workflow that signs, `<owner>/<repo>/.github/workflows/artifacts.yml`.
+    pub(crate) workflow: String,
+    /// The ref the signing run ran on.
+    pub(crate) source_ref: &'static str,
+}
+
+impl Signer {
+    /// The signer of the releases of `repo`: its own `artifacts.yml` on [`SIGNER_REF`].
+    pub(crate) fn of(repo: &Repo) -> Signer {
+        Signer {
+            repo: repo.as_str().to_owned(),
+            workflow: format!("{repo}/.github/workflows/{ARTIFACTS_WORKFLOW}"),
+            source_ref: SIGNER_REF,
+        }
+    }
+
+    /// The signer of hostkeeper's own releases: [`SIGNER_WORKFLOW`] of [`REPO`].
+    pub(crate) fn hostkeeper() -> Signer {
+        Signer {
+            repo: REPO.to_owned(),
+            workflow: SIGNER_WORKFLOW.to_owned(),
+            source_ref: SIGNER_REF,
+        }
     }
 }
 

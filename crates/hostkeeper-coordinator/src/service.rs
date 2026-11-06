@@ -13,12 +13,13 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
+use crate::channel::{ChannelRefusal, ReleaseChannel};
 use crate::converge::{Convergence, role_counts};
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
 use crate::halt;
-use crate::holds::{alert_on_bad_version, marks_of, on_bad_version};
+use crate::holds::{marks_of, on_bad_version};
 use crate::identity::Identity;
 use crate::membership::{Standing, members, standing};
 use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
@@ -86,22 +87,28 @@ pub enum SetError {
     /// CI set the version before with another package digest: a changed artifact for a version.
     #[error("digest_conflict: the version was set before with another package digest")]
     DigestConflict,
+    /// The release channel (`--release-channel`) does not hold the version, or its index of the
+    /// version disagrees with the set ([`crate::channel`]).
+    #[error(transparent)]
+    Channel(#[from] ChannelRefusal),
 }
 
 impl SetError {
     /// The closed reason token of a refusal of the version itself (`below_min_version`,
-    /// `unparseable_version`, `bad_version`, `digest_conflict`), which the answer says; `None`
-    /// for every other error.
+    /// `unparseable_version`, `bad_version`, `digest_conflict`, `not_in_channel`,
+    /// `channel_digest_mismatch`) or of its release index (`index_invalid`,
+    /// `index_digest_mismatch`), which the answer says; `None` for every other error.
     #[must_use]
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
+            Self::Invalid(why) => why.reason(),
             Self::BelowMinVersion => Some("below_min_version"),
             Self::UnparseableVersion => Some("unparseable_version"),
             Self::BadVersion => Some("bad_version"),
             Self::DigestConflict => Some("digest_conflict"),
+            Self::Channel(refusal) => Some(refusal.token()),
             Self::Unauthorized(_)
             | Self::Unavailable
-            | Self::Invalid(_)
             | Self::Store(_)
             | Self::Ops(_)
             | Self::Forbidden => None,
@@ -160,20 +167,20 @@ pub struct Set {
 
 /// The features this coordinator advertises to an agent that announces `agent_features`.
 ///
-/// Each name is added in the change that implements what it names (`halt-v1`; the others
-/// follow), so a name is never advertised for behaviour that is not there. `deferred-v1`: a
-/// heartbeat's `deferred` report ends the order, holds no slot and backs the host off
-/// ([`crate::defer`]). `halt-v1`: the clear generations of [`crate::halt`]. `heartbeat-v2`:
-/// selector membership, hosts that are `missing`, `absent` or `unmanaged`
-/// ([`crate::membership`]). `order-v1`: an update answer carries the order terms of
-/// [`crate::order_terms`], and the heartbeat's top level is the agent itself, never the legacy
-/// service. `verdict-acks-v1`: the acks of the verdicts stored ([`crate::verdict_file`]).
-/// `grpc-v1`: the coordinator serves `hostkeeper.agent.v1.Coordinator` on the heartbeat
-/// listener ([`crate::grpc`]), so an agent that announced it may send its next heartbeat there.
+/// Each name is added in the change that implements what it names, so a name is never
+/// advertised for behaviour that is not there. `deferred-v1`: a `deferred` report ends the
+/// order, holds no slot and backs the host off ([`crate::defer`]). `halt-v1`: the clear
+/// generations of [`crate::halt`]. `heartbeat-v2`: selector membership ([`crate::membership`]).
+/// `forced-v1`: the `force` order of a standing force ([`crate::force`]), which a daemon runs
+/// only while this is advertised. `order-v1`: the order terms of [`crate::order_terms`], and the
+/// agent itself, never the legacy service, as the heartbeat's top level. `verdict-acks-v1`: the
+/// acks of the verdicts stored ([`crate::verdict_file`]). `grpc-v1`: the agent API is served on
+/// the heartbeat listener ([`crate::grpc`]), so an agent may send its next heartbeat there.
 pub const FEATURES: &[&str] = &[
     "deferred-v1",
     halt::FEATURE,
     crate::membership::HEARTBEAT_V2,
+    crate::force::FEATURE,
     ORDER_FEATURE,
     verdict_file::FEATURE,
     crate::grpc::GRPC_FEATURE,
@@ -233,6 +240,11 @@ pub struct Coordinator {
     /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
     enrollment: Option<Arc<Enrollment>>,
     ui: Option<UiDir>,
+    /// The alerts the last observation found ([`crate::alerts`]).
+    pub(crate) alerts: crate::alerts::Book,
+    /// The release channel a set's version must be in (`--release-channel`); `None`: no set is
+    /// checked against one.
+    pub(crate) channel: Option<ReleaseChannel>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -283,6 +295,8 @@ impl Coordinator {
             features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
             enrollment: None,
             ui: None,
+            alerts: crate::alerts::Book::default(),
+            channel: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -587,12 +601,17 @@ impl Coordinator {
             role: who.role.name().to_owned(),
             features: beat.agent_features.clone(),
             agent: beat.agent.clone(),
+            platform: beat.platform,
             seen: now,
             announced: legacy
                 .map(|name| (name.to_owned(), beat.health))
                 .into_iter()
                 .chain(announced.iter().map(|one| (one.name.clone(), one.health)))
                 .collect(),
+            sent_unix: beat.sent_unix,
+            cert_not_after_unix: beat.cert_not_after_unix,
+            last_renew_error: beat.last_renew_error.clone(),
+            skewed_beats: 0,
         };
         // The halts are noted under the fleet's lock, which every decision and order below is
         // made under: a halt is never raised between another heartbeat's decision to order and
@@ -674,7 +693,7 @@ impl Coordinator {
                 _ => {}
             }
         }
-        fleet.note_node(who.host_id.clone(), node);
+        fleet.note_node(who.host_id.clone(), node, self.ops.unix_now());
         if turn == Turn::Hold {
             return (ServiceReply::Nothing, None, None, Vec::new());
         }
@@ -694,10 +713,7 @@ impl Coordinator {
                 let acked = self.ops.marks(&def.name).failure_acked;
                 fleet.keep_verdicts_of(&def.name, &want.version, &acked);
             }
-            reconcile(def, &self.ops, &self.desired, &fleet, now);
-            self.ops.read(|state| {
-                alert_on_bad_version(&mut fleet, state, &def.name, &who.host_id);
-            });
+            reconcile(def, &self.ops, &self.desired, &mut fleet, now);
         }
         // The verdicts are durable before the answer acknowledges them, and before any order.
         let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);
@@ -711,8 +727,8 @@ impl Coordinator {
         }
         let asked = Asked {
             who: &who,
+            platform,
             legacy,
-            announced: &announced,
             held: &held,
             order_v1,
             orders,
@@ -744,10 +760,11 @@ impl Coordinator {
     /// allow-list accepts. The token is checked before the body is parsed or any state is touched
     /// (the transport has already read the body, at most [`crate::http::MAX_DESIRED_BYTES`]).
     ///
-    /// The version is refused, before anything changes, when it is below the service's
-    /// `min_version`, when the service's `version_scheme` cannot read it, when it is marked bad
-    /// (only the operator's unmark or a force lifts a mark; CI does not), and when CI set it
-    /// before with another package digest. A body that names a digest (`release_digest`) records
+    /// The version is refused, before anything changes, when the release channel does not hold
+    /// it or holds another artifact for it (with `--release-channel` only, [`crate::channel`]),
+    /// when it is below the service's `min_version`, when the service's `version_scheme` cannot
+    /// read it, when it is marked bad (only the operator's unmark or a force lifts a mark; CI
+    /// does not), and when CI set it before with another package digest. A body that names a digest (`release_digest`) records
     /// the version and the digest in the service's registry in the same write as the state
     /// ([`DesiredStore::record`]); setting the same version with the same digest again changes
     /// nothing. A set of a version other than the target of a halt the updater raised lifts that
@@ -777,7 +794,7 @@ impl Coordinator {
         body: &[u8],
     ) -> Result<Set, SetError> {
         let verified = self.ci(bearer).await?;
-        self.set_desired_verified(&verified, body)
+        self.set_desired_verified(&verified, body).await
     }
 
     /// Why CI may not set `desired` for `service`, if it may not: the refusals of
@@ -798,8 +815,8 @@ impl Coordinator {
             return Err(SetError::BadVersion);
         }
         let registered = self.desired.digests(service).get(version).cloned();
-        if let (Some(before), Some(now)) = (registered, desired.release_digest.as_ref())
-            && before != *now
+        if let (Some(before), Some(now)) = (registered, desired.release())
+            && before != now
         {
             return Err(SetError::DigestConflict);
         }
@@ -863,13 +880,19 @@ impl Coordinator {
         self.operator(bearer)?;
         let now = (self.clock)();
         let fleet = self.lock_fleet();
+        Ok(self.status_in(&fleet, now))
+    }
+
+    /// The status of `fleet` at `now`, which the caller holds locked: what [`Self::status`]
+    /// answers, and what `Hosts.List` and `Hosts.Get` read ([`crate::hosts`]).
+    pub(crate) fn status_in(&self, fleet: &Fleet, now: Duration) -> Status {
         let hosts = self
             .legacy
             .iter()
             .flat_map(|name| {
                 fleet
                     .hosts_of(name)
-                    .map(|(id, host)| host_status(&fleet, name, id, host, now))
+                    .map(|(id, host)| host_status(fleet, name, id, host, now))
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -880,28 +903,28 @@ impl Coordinator {
             .defs()
             .map(|def| {
                 let desired = self.desired.get(&def.name);
-                let roles = role_counts(def, desired.as_ref(), &fleet, now);
+                let roles = role_counts(def, desired.as_ref(), fleet, now);
                 let hosts: Vec<ServiceHostStatus> = fleet
                     .hosts_of(&def.name)
                     .map(|(id, host)| ServiceHostStatus {
-                        host: host_status(&fleet, &def.name, id, host, now),
+                        host: host_status(fleet, &def.name, id, host, now),
                         hold: halt::decide(
                             &self.ops,
                             &self.services,
                             &all,
                             &def.name,
-                            &fleet,
+                            fleet,
                             id,
                             now,
                         )
                         .why(),
-                        held_on_bad_version: on_bad_version(&fleet, &ops, &def.name, id),
+                        held_on_bad_version: on_bad_version(fleet, &ops, &def.name, id),
                     })
                     .collect();
                 let up = hosts.iter().filter(|h| h.host.up).count();
                 let slots_held = hosts.iter().filter(|h| h.host.holds_slot).count();
-                let members = members(def, &fleet, &ops, now);
-                let convergence = convergence_of(def, desired.as_ref(), &fleet, &ops, now);
+                let members = members(def, fleet, &ops, now);
+                let convergence = convergence_of(def, desired.as_ref(), fleet, &ops, now);
                 let status = ServiceStatus {
                     desired,
                     roles,
@@ -914,7 +937,7 @@ impl Coordinator {
                 (def.name.clone(), status)
             })
             .collect();
-        Ok(Status {
+        Status {
             per_service,
             ops,
             desired: self
@@ -932,7 +955,11 @@ impl Coordinator {
                 .clone(),
             hosts,
             commit: crate::BUILD_COMMIT,
-        })
+            server_certificate: self
+                .enrollment
+                .as_deref()
+                .map(Enrollment::server_certificate),
+        }
     }
 
     /// Where the hosts of `service` stand against its desired state, if `bearer` is a

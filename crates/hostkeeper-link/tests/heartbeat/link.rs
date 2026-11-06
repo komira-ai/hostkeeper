@@ -24,6 +24,8 @@ fn beat() -> Heartbeat {
         agent_version: version("0.9.0"),
         features: ANNOUNCED.to_vec(),
         services: Vec::new(),
+        sent_unix: 0,
+        renewal: hostkeeper_link::Renewal::default(),
     }
 }
 
@@ -511,6 +513,7 @@ fn an_update_with_its_terms_is_the_loops_update_order() {
                     service: service("web"),
                     version: version("2.0"),
                     digest: crate::digest(),
+                    index_digest: None,
                 }),
             }),
             ..Reply::default()

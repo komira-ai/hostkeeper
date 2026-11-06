@@ -1,5 +1,6 @@
-//! The daemon behind four ports of the heartbeat loop (`hostkeeper_link`): the executor, the
-//! held halts, the installed services and the service observer.
+//! The daemon behind five ports of the heartbeat loop (`hostkeeper_link`): the executor, the
+//! held halts, the installed services, the service observer and the enrollment loop's word on
+//! the certificate.
 //!
 //! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order (an update, a forced
 //! update, an install, an uninstall or an abort) as the protobuf `Order` that [`Daemon::order`]
@@ -15,15 +16,19 @@
 //! version, at that version, with the target of its step record while the record is unfinished
 //! ([`recorded`]). [`DaemonObserver`] is its [`ServiceObserver`]: the observation the admin
 //! `Status` reports ([`Daemon::observer`]), in the loop's words ([`observation`]).
+//!
+//! [`DaemonRenewal`] is its [`RenewalSource`]: the [`RenewalState`] the enrollment loop writes
+//! after each step ([`crate::links::Links::renewal`]), as it is when the heartbeat is made.
 
 use std::io;
 use std::sync::Arc;
 
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Phase, Verdict};
 use hostkeeper_link::{
     Health, HeldHalts, Liveness, Observation, Order, OrderResult, OrderSink, Outcome, Reason,
-    RecordedService, ServiceObserver, ServiceRecords, Target, Verb,
+    RecordedService, Renewal, RenewalSource, ServiceObserver, ServiceRecords, Target, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -65,32 +70,39 @@ pub fn wire_order(order: &Order) -> wire::Order {
             target.service.as_str().to_owned(),
             target.version.as_str().to_owned(),
             target.digest.as_str().to_owned(),
+            target
+                .index_digest
+                .as_ref()
+                .map_or_else(String::new, |d| d.as_str().to_owned()),
         )
     };
     let verb = match &order.verb {
         Verb::Update(target) => {
-            let (service, version, package_digest) = terms(target);
+            let (service, version, package_digest, index_digest) = terms(target);
             wire::order::Verb::Update(wire::Update {
                 service,
                 version,
                 package_digest,
+                index_digest,
             })
         }
         Verb::Force(target) => {
-            let (service, version, package_digest) = terms(target);
+            let (service, version, package_digest, index_digest) = terms(target);
             wire::order::Verb::Force(wire::Force {
                 service,
                 version,
                 package_digest,
+                index_digest,
                 halt_generation: 0,
             })
         }
         Verb::Install(target) => {
-            let (service, version, package_digest) = terms(target);
+            let (service, version, package_digest, index_digest) = terms(target);
             wire::order::Verb::Install(wire::Install {
                 service,
                 version,
                 package_digest,
+                index_digest,
             })
         }
         Verb::Uninstall(service) => wire::order::Verb::Uninstall(wire::Uninstall {
@@ -334,5 +346,26 @@ pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
         version,
         health,
         health_detail: seen.reason_token().map(str::to_owned),
+    }
+}
+
+/// The heartbeat loop's [`RenewalSource`] over the enrollment loop's [`RenewalState`].
+pub struct DaemonRenewal {
+    state: RenewalState,
+}
+
+impl DaemonRenewal {
+    pub fn new(state: RenewalState) -> DaemonRenewal {
+        DaemonRenewal { state }
+    }
+}
+
+impl RenewalSource for DaemonRenewal {
+    fn renewal(&self) -> Renewal {
+        let noted = self.state.get();
+        Renewal {
+            cert_not_after_unix: noted.not_after,
+            last_renew_error: noted.last_error,
+        }
     }
 }

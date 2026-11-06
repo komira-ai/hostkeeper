@@ -61,6 +61,9 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             .map(|f| f.as_str().to_owned())
             .collect(),
         services,
+        sent_unix: Some(beat.sent_unix),
+        cert_not_after_unix: beat.renewal.cert_not_after_unix,
+        last_renew_error: beat.renewal.last_renew_error.clone(),
     })
 }
 
@@ -221,9 +224,18 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
     }
 }
 
+/// The words of a protobuf order that names a package: service, version, package digest and
+/// index digest (empty: none).
+struct TargetTerms {
+    service: String,
+    version: String,
+    digest: String,
+    index_digest: String,
+}
+
 /// What a protobuf verb names: a version and package, or the service alone.
 enum Terms {
-    Target(fn(Target) -> Verb, (String, String, String)),
+    Target(fn(Target) -> Verb, TargetTerms),
     Service(fn(ServiceName) -> Verb, String),
 }
 
@@ -237,15 +249,39 @@ fn order_of(order: pb::Order) -> (Option<Order>, Option<Dropped>) {
     let (name, terms) = match verb {
         Some(pb::order::Verb::Update(a)) => (
             "update",
-            Terms::Target(Verb::Update, (a.service, a.version, a.package_digest)),
+            Terms::Target(
+                Verb::Update,
+                TargetTerms {
+                    service: a.service,
+                    version: a.version,
+                    digest: a.package_digest,
+                    index_digest: a.index_digest,
+                },
+            ),
         ),
         Some(pb::order::Verb::Force(a)) => (
             "force",
-            Terms::Target(Verb::Force, (a.service, a.version, a.package_digest)),
+            Terms::Target(
+                Verb::Force,
+                TargetTerms {
+                    service: a.service,
+                    version: a.version,
+                    digest: a.package_digest,
+                    index_digest: a.index_digest,
+                },
+            ),
         ),
         Some(pb::order::Verb::Install(a)) => (
             "install",
-            Terms::Target(Verb::Install, (a.service, a.version, a.package_digest)),
+            Terms::Target(
+                Verb::Install,
+                TargetTerms {
+                    service: a.service,
+                    version: a.version,
+                    digest: a.package_digest,
+                    index_digest: a.index_digest,
+                },
+            ),
         ),
         Some(pb::order::Verb::Uninstall(a)) => {
             ("uninstall", Terms::Service(Verb::Uninstall, a.service))
@@ -282,12 +318,19 @@ fn order_of(order: pb::Order) -> (Option<Order>, Option<Dropped>) {
     }
 }
 
-/// What an order acts on, when the daemon's grammars read the service, version and digest.
-fn target((service, version, digest): &(String, String, String)) -> Option<Target> {
+/// What an order acts on, when the daemon's grammars read the service, version and digests. An
+/// empty index digest is none; a non-empty one the grammar refuses makes the order unreadable.
+fn target(terms: &TargetTerms) -> Option<Target> {
+    let index_digest = if terms.index_digest.is_empty() {
+        None
+    } else {
+        Some(PackageDigest::new(&terms.index_digest).ok()?)
+    };
     Some(Target {
-        service: ServiceName::new(service).ok()?,
-        version: Version::new(version).ok()?,
-        digest: PackageDigest::new(digest).ok()?,
+        service: ServiceName::new(&terms.service).ok()?,
+        version: Version::new(&terms.version).ok()?,
+        digest: PackageDigest::new(&terms.digest).ok()?,
+        index_digest,
     })
 }
 
@@ -336,6 +379,8 @@ mod tests {
             agent_version: version("0.9.0"),
             features: ANNOUNCED.to_vec(),
             services,
+            sent_unix: 0,
+            renewal: crate::Renewal::default(),
         }
     }
 
@@ -359,6 +404,30 @@ mod tests {
         heartbeat(beat).expect("a request")
     }
 
+    /// Catches the host's clock or certificate left out of the request, or put in another
+    /// field: they go out in `sent_unix`, `cert_not_after_unix` and `last_renew_error`, and the
+    /// two the enrollment loop did not give are left unset.
+    #[test]
+    fn the_host_clock_and_certificate_go_out_in_their_fields() {
+        let mut full = beat(Platform::LinuxX86_64, Vec::new());
+        full.sent_unix = 2_000_000_123;
+        full.renewal = crate::Renewal {
+            cert_not_after_unix: Some(2_000_600_000),
+            last_renew_error: Some("renewal refused: host_excluded".to_owned()),
+        };
+        let request = sent(&full);
+        assert_eq!(request.sent_unix, Some(2_000_000_123));
+        assert_eq!(request.cert_not_after_unix, Some(2_000_600_000));
+        assert_eq!(
+            request.last_renew_error.as_deref(),
+            Some("renewal refused: host_excluded")
+        );
+        let request = sent(&beat(Platform::LinuxX86_64, Vec::new()));
+        assert_eq!(request.sent_unix, Some(0));
+        assert_eq!(request.cert_not_after_unix, None);
+        assert_eq!(request.last_renew_error, None);
+    }
+
     /// The order `o-1`, try 2, with the given verb.
     fn order(verb: pb::order::Verb) -> pb::HeartbeatResponse {
         pb::HeartbeatResponse {
@@ -376,6 +445,7 @@ mod tests {
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: digest.to_owned(),
+            index_digest: String::new(),
         }
     }
 
@@ -461,6 +531,9 @@ mod tests {
                         ..pb::ServiceBeat::default()
                     },
                 ],
+                sent_unix: Some(0),
+                cert_not_after_unix: None,
+                last_renew_error: None,
             }
         );
     }
@@ -664,6 +737,7 @@ mod tests {
             service: name("web"),
             version: version("2.0"),
             digest: PackageDigest::new(&digest()).expect("a digest"),
+            index_digest: None,
         };
         let updated = reply(order(pb::order::Verb::Update(terms(
             "web",
@@ -683,6 +757,7 @@ mod tests {
             service: "web".to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(),
+            index_digest: String::new(),
             halt_generation: 5,
         })));
         assert_eq!(
@@ -698,6 +773,7 @@ mod tests {
             service: "web".to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(),
+            index_digest: String::new(),
         })));
         let uninstalled = reply(order(pb::order::Verb::Uninstall(pb::Uninstall {
             service: "web".to_owned(),
@@ -723,6 +799,82 @@ mod tests {
         }
     }
 
+    /// An index digest unlike the package digest, for the tests of the index digest.
+    fn index_digest() -> String {
+        "cd".repeat(32)
+    }
+
+    /// Proves an `update`, a `force` and an `install` that carry an index digest give the loop
+    /// an order whose target holds it beside the package digest, and one that carries none (an
+    /// older coordinator) gives a target with no index digest.
+    #[test]
+    fn an_index_digest_of_an_order_is_kept_and_an_empty_one_is_none() {
+        let wanted = PackageDigest::new(&index_digest()).expect("an index digest");
+        let package = PackageDigest::new(&digest()).expect("a digest");
+        let verbs = [
+            reply(order(pb::order::Verb::Update(pb::Update {
+                index_digest: index_digest(),
+                ..terms("web", "2.0", &digest())
+            }))),
+            reply(order(pb::order::Verb::Force(pb::Force {
+                service: "web".to_owned(),
+                version: "2.0".to_owned(),
+                package_digest: digest(),
+                halt_generation: 1,
+                index_digest: index_digest(),
+            }))),
+            reply(order(pb::order::Verb::Install(pb::Install {
+                service: "web".to_owned(),
+                version: "2.0".to_owned(),
+                package_digest: digest(),
+                index_digest: index_digest(),
+            }))),
+        ];
+        for mapped in verbs {
+            assert_eq!(mapped.dropped, None);
+            let order = mapped.reply.order.expect("an order");
+            let target = order.target().expect("a target");
+            assert_eq!(target.index_digest.as_ref(), Some(&wanted));
+            assert_eq!(target.digest, package);
+        }
+        let none = reply(order(pb::order::Verb::Update(terms(
+            "web",
+            "2.0",
+            &digest(),
+        ))));
+        let order = none.reply.order.expect("an order");
+        assert_eq!(order.target().expect("a target").index_digest, None);
+    }
+
+    /// Proves an index digest that is not 64 lower-case hex digits makes the order unreadable,
+    /// as a bad package digest does: not given to the loop, and dropped naming the verb.
+    #[test]
+    fn a_malformed_index_digest_drops_the_order() {
+        for bad in [
+            "not-a-digest",
+            &index_digest().to_uppercase(),
+            &"cd".repeat(31),
+        ] {
+            let verbs = [
+                reply(order(pb::order::Verb::Update(pb::Update {
+                    index_digest: bad.to_owned(),
+                    ..terms("web", "2.0", &digest())
+                }))),
+                reply(order(pb::order::Verb::Install(pb::Install {
+                    service: "web".to_owned(),
+                    version: "2.0".to_owned(),
+                    package_digest: digest(),
+                    index_digest: bad.to_owned(),
+                }))),
+            ];
+            for mapped in verbs {
+                assert_eq!(mapped.reply.order, None, "{bad}");
+                let dropped = mapped.dropped.expect("dropped");
+                assert_eq!(dropped.why, NOT_READ);
+            }
+        }
+    }
+
     /// Proves an order of a verb the daemon does not run, and one with no verb, is not given to
     /// the loop and comes back with why and which.
     #[test]
@@ -731,6 +883,7 @@ mod tests {
             service: "web".to_owned(),
             version: "1.0".to_owned(),
             package_digest: digest(),
+            index_digest: String::new(),
         })));
         let clear = reply(order(pb::order::Verb::ClearHalt(pb::ClearHalt {
             service: "web".to_owned(),
@@ -767,6 +920,7 @@ mod tests {
             service: "web".to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(),
+            index_digest: String::new(),
             halt_generation: 1,
         }));
         forced.order.as_mut().expect("an order").order_id = ".hidden".to_owned();
@@ -781,6 +935,7 @@ mod tests {
                     service: "web".to_owned(),
                     version: "2.0".to_owned(),
                     package_digest: "not-a-digest".to_owned(),
+                    index_digest: String::new(),
                 }),
                 "install order \"o-1\"",
             ),

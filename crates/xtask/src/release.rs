@@ -11,14 +11,21 @@
 //! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
 //!   unless it says `hello`; for hello `--fail-ready` builds its failing build), `.tar.zst`, and
 //!   its SHA-256.
+//! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
+//!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
+//!   and staged for the deb and the rpm.
+//! - `check-linux-pkg` ([`package::linux_check`]): a built deb or rpm, read back, installs the
+//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing build: which
 //!   package serves each platform, refused unless it has the package of every released platform.
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
 //!   install, and the check of its payload read back from the built pkg.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
-//! - `plan` ([`plan`]): whether a commit (or, on the scheduled path, each missed commit) is
-//!   released, and under which version.
+//! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
+//!   (`ui/`) at the path the coordinator serves by default, file for file, owned by root.
+//! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
+//!   under which versions.
 //! - `locate` ([`locate`]): the commit is on `main` and its runs exist; the id of its build run.
 //! - `check` ([`check`]): every asset against `SHA256SUMS`, both release indexes against the
 //!   packages, every attestation and bundle against the signer identity of [`contract`] and the
@@ -27,6 +34,10 @@
 //! - `channel-stage` ([`channel_stage`]): one version of a service from a directory of release
 //!   assets, checked and laid out in a directory as the release channel serves it
 //!   (`S/V/index.json` beside each package and its bundle); copies files only, idempotent.
+//! - `channel-sync` ([`sync`]): every new published release of one or more repositories,
+//!   downloaded, checked (`release check` for hostkeeper's, the sums and the repository's own
+//!   attestations for another's) and staged into a release channel by `channel-stage`, a new
+//!   version renamed into place whole; never changes a version already there.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
 //! `gh` and `pkgbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
@@ -36,13 +47,14 @@
 mod channel_stage;
 mod check;
 mod check_binary;
+mod check_image_ui;
 mod compare_images;
 pub(crate) mod contract;
 #[cfg(test)]
 mod doc_tests;
 #[cfg(test)]
-mod fakes;
-mod git;
+pub(crate) mod fakes;
+pub(crate) mod git;
 mod github;
 mod index;
 mod locate;
@@ -55,6 +67,7 @@ pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
 mod set_version;
+mod sync;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod version;
@@ -63,6 +76,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::advisories::DenyCli;
 use check_binary::VersionOf;
 use contract::{Commit, Package, Platform, Repo, Service, Version};
 use git::GitCli;
@@ -168,9 +182,49 @@ pub(crate) enum Verb {
         /// `--fail-ready`, so it never reports ready. Refused for hostkeeper.
         #[arg(long)]
         fail_ready: bool,
+        /// The Sigstore trusted root, as `gh attestation trusted-root` prints it:
+        /// `files/trusted_root.json` in the package, which the daemon checks attestations
+        /// against. Required for hostkeeper on every platform (the release passes
+        /// `packaging/sigstore/trusted_root.json`); refused for hello.
+        #[arg(long)]
+        trusted_root: Option<PathBuf>,
         /// The directory the package and its `.sha256` are written to.
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Stage the pinned `gh` and the Sigstore trusted root for the deb and the rpm: `gh` out of
+    /// its release archive, refused unless the archive has the pinned SHA-256 and `gh` is a
+    /// program of the architecture; the trusted root refused unless each line is one. Writes
+    /// `<out>/gh` (0755) and `<out>/trusted_root.json` (0644) only when both pass.
+    NfpmStage {
+        /// The architecture of the packages, as nfpm's `ARCH`.
+        #[arg(long, value_enum)]
+        arch: package::nfpm_stage::Arch,
+        /// The pinned version of `gh`, `X.Y.Z`.
+        #[arg(long)]
+        gh_version: Version,
+        /// The downloaded `gh_<version>_linux_<arch>.tar.gz`.
+        #[arg(long)]
+        gh_archive: PathBuf,
+        /// The pinned SHA-256 of that archive, 64 lowercase hex digits.
+        #[arg(long)]
+        gh_sha256: crate::install::Sha256,
+        /// The output of `gh attestation trusted-root`.
+        #[arg(long)]
+        trusted_root: PathBuf,
+        /// The directory nfpm.yaml takes the two files from.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Read a built deb or rpm and refuse it unless it installs `/usr/lib/hostkeeper/gh` (a
+    /// regular file, 0755) and `/usr/lib/hostkeeper/trusted_root.json` (0644), both
+    /// root:root, with the bytes of the files `nfpm-stage` wrote.
+    CheckLinuxPkg {
+        /// The `.deb` or `.rpm` nfpm built.
+        package: PathBuf,
+        /// The directory `nfpm-stage` wrote (its `--out`).
+        #[arg(long)]
+        staged: PathBuf,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per released platform, refused when the package of any is missing: `index.json` for
@@ -189,14 +243,22 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary and
-    /// its launchd plist, nothing else, and no scripts.
+    /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary, its
+    /// launchd plist, its log directory and newsyslog file, the pinned `gh` and the Sigstore
+    /// trusted root, nothing else, and no scripts.
     MacosPkg {
         #[arg(long)]
         version: Version,
         /// The macos-arm64 hostkeeper binary: `/usr/local/bin/hostkeeper` in the pkg.
         #[arg(long)]
         binary: PathBuf,
+        /// The pinned darwin-arm64 `gh`: `/usr/local/lib/hostkeeper/gh` in the pkg.
+        #[arg(long)]
+        gh: PathBuf,
+        /// The Sigstore trusted root, as the pinned `gh attestation trusted-root` prints it:
+        /// `/usr/local/lib/hostkeeper/trusted_root.json` in the pkg.
+        #[arg(long)]
+        trusted_root: PathBuf,
         /// A directory to lay the pkg's tree out in; it must not exist.
         #[arg(long)]
         stage: PathBuf,
@@ -205,7 +267,8 @@ pub(crate) enum Verb {
         out: PathBuf,
     },
     /// Check a pkg that `pkgutil --expand` expanded into a directory: no scripts, and a payload
-    /// of exactly the binary and the daemon's plist with their modes, owners and bytes.
+    /// of exactly the binary, the daemon's plist, its log directory and newsyslog file, `gh` and
+    /// the trusted root with their modes, owners and bytes.
     CheckMacosPkg {
         /// The directory `pkgutil --expand` wrote.
         expanded: PathBuf,
@@ -214,14 +277,30 @@ pub(crate) enum Verb {
         /// The binary the pkg must hold.
         #[arg(long)]
         binary: PathBuf,
+        /// The `gh` the pkg must hold.
+        #[arg(long)]
+        gh: PathBuf,
+        /// The trusted root the pkg must hold.
+        #[arg(long)]
+        trusted_root: PathBuf,
     },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
-    /// Whether a commit is released, and as which version.
+    /// Refuse the coordinator's OCI image tarball unless it holds the operator web app at
+    /// /usr/share/hostkeeper-coordinator/ui: exactly the directories and files of `ui`, with
+    /// their bytes, owned by root, files 0644 and directories 0755.
+    CheckImageUi {
+        /// The image tarball.
+        image: PathBuf,
+        /// The web app's directory, `ui` of the commit.
+        ui: PathBuf,
+    },
+    /// Which commits since the last release are released, oldest first, and as which versions.
     Plan {
         #[arg(long)]
         repo: Repo,
-        /// The pushed commit, or on the scheduled path the tip of `main`.
+        /// The tip of `main`: every commit from it down to the last release is planned,
+        /// oldest first.
         #[arg(long)]
         commit: Commit,
         #[arg(long, default_value = "VERSION")]
@@ -230,9 +309,6 @@ pub(crate) enum Verb {
         /// `false` stops releases.
         #[arg(long, default_value = "")]
         freeze: String,
-        /// Plan every commit since the last release, oldest first, not only `--commit`.
-        #[arg(long)]
-        scheduled: bool,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -286,6 +362,29 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Copy every new published release of each repository into the release channel: download
+    /// its assets, check them (`release check` for a hostkeeper release; for another
+    /// repository's, its SHA256SUMS and the attestation of every asset with a bundle by that
+    /// repository's own artifacts.yml on refs/heads/main) and stage each service version it
+    /// carries by `channel-stage`. A version already in the channel is left alone; one there with
+    /// other bytes is refused, and the run goes on with the others and then fails. Reads public
+    /// release assets only.
+    ChannelSync {
+        /// A repository whose releases are synced, `<owner>/<name>`; repeat it (or list several)
+        /// for more, synced in the order given.
+        #[arg(long = "repo", required = true, num_args = 1..)]
+        repos: Vec<Repo>,
+        /// The root of the channel's tree, as `channel-stage --out` names it. It must exist.
+        #[arg(long)]
+        channel_dir: PathBuf,
+        /// Skip every release older than this tag, `v<X.Y.Z>` (the tag itself is synced).
+        #[arg(long, value_parser = sync::parse_tag)]
+        since: Option<Version>,
+        /// Run again and again, this many seconds after each run ends, and never exit (the
+        /// sidecar's loop). Without it the verb runs once.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        every_secs: Option<u64>,
+    },
     /// Publish a checked directory as the release of the version, at the commit.
     Publish {
         dir: PathBuf,
@@ -308,6 +407,7 @@ pub(crate) fn run<A: Adapters>(
         Verb::SetVersion { version, root } => set_version::set_version(&root, &version),
         Verb::Stamp { version, commit } => Ok(vec![contract::stamp_string(&version, &commit)]),
         Verb::CompareImages { a, b } => compare_images::compare_images(&a, &b),
+        Verb::CheckImageUi { image, ui } => check_image_ui::check_image_ui(&image, &ui),
         Verb::Index {
             service,
             fail_ready,
@@ -317,11 +417,37 @@ pub(crate) fn run<A: Adapters>(
             Some(package) => index::write_index(&dir, package, &version),
             None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
         },
+        Verb::NfpmStage {
+            arch,
+            gh_version,
+            gh_archive,
+            gh_sha256,
+            trusted_root,
+            out,
+        } => package::nfpm_stage::stage(&package::nfpm_stage::Request {
+            arch,
+            gh_version,
+            gh_archive,
+            gh_sha256,
+            trusted_root,
+            out,
+        }),
+        Verb::CheckLinuxPkg { package, staged } => package::linux_check::check(&package, &staged),
         Verb::CheckMacosPkg {
             expanded,
             version,
             binary,
-        } => macos_pkg::check(&expanded, &version, &binary),
+            gh,
+            trusted_root,
+        } => macos_pkg::check(
+            &expanded,
+            &version,
+            &macos_pkg::Sources {
+                binary,
+                gh,
+                trusted_root,
+            },
+        ),
         Verb::ChannelStage {
             service,
             version,
@@ -365,6 +491,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             binary,
             unit,
             fail_ready,
+            trusted_root,
             out,
         } => package::package(
             ports.git,
@@ -376,19 +503,26 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 binary,
                 unit,
                 fail_ready,
+                trusted_root,
                 out,
             },
         ),
         Verb::MacosPkg {
             version,
             binary,
+            gh,
+            trusted_root,
             stage,
             out,
         } => macos_pkg::build(
             ports.pkgbuild,
             &macos_pkg::Request {
                 version,
-                binary,
+                sources: macos_pkg::Sources {
+                    binary,
+                    gh,
+                    trusted_root,
+                },
                 stage,
                 out,
             },
@@ -398,7 +532,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             commit,
             version_file,
             freeze,
-            scheduled,
             output,
         } => plan::plan(
             ports,
@@ -407,7 +540,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 commit,
                 version_file,
                 freeze,
-                scheduled,
                 output,
             },
         ),
@@ -427,10 +559,34 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => publish::publish(ports, &dir, &repo, &version, &commit),
+        Verb::ChannelSync {
+            repos,
+            channel_dir,
+            since,
+            every_secs,
+        } => {
+            let request = sync::Request {
+                repos,
+                channel: channel_dir,
+                since,
+            };
+            match every_secs {
+                None => sync::sync(ports.source, ports.verifier, &request),
+                Some(secs) => sync::every(
+                    ports.source,
+                    ports.verifier,
+                    &request,
+                    &sync::Sleep(std::time::Duration::from_secs(secs)),
+                ),
+            }
+        }
         Verb::SetVersion { .. }
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
+        | Verb::CheckImageUi { .. }
         | Verb::Index { .. }
+        | Verb::NfpmStage { .. }
+        | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
         | Verb::ChannelStage { .. } => run(verb, || Lent(*ports)),
     }
@@ -447,7 +603,7 @@ impl Adapters for Lent<'_> {
 }
 
 /// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations),
-/// the `--version` of a binary and `pkgbuild`, each running its program through a copy of `exec`. The real
+/// the `--version` of a binary, `pkgbuild` and `cargo deny`, each running its program through a copy of `exec`. The real
 /// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
 /// fake one.
 struct Wired<E> {
@@ -455,6 +611,7 @@ struct Wired<E> {
     gh: Gh<E>,
     version_of: VersionOf<E>,
     pkgbuild: PkgbuildCli<E>,
+    deny: DenyCli<E>,
 }
 
 impl<E: Exec + Clone> Wired<E> {
@@ -463,7 +620,8 @@ impl<E: Exec + Clone> Wired<E> {
             git: GitCli::new(exec.clone()),
             gh: Gh::new(exec.clone()),
             version_of: VersionOf::new(exec.clone()),
-            pkgbuild: PkgbuildCli::new(exec),
+            pkgbuild: PkgbuildCli::new(exec.clone()),
+            deny: DenyCli::new(exec),
         }
     }
 }
@@ -474,9 +632,11 @@ impl<E: Exec> Adapters for Wired<E> {
             git: &self.git,
             runs: &self.gh,
             store: &self.gh,
+            source: &self.gh,
             verifier: &self.gh,
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,
+            advisories: &self.deny,
         }
     }
 }
@@ -552,5 +712,7 @@ pub(crate) fn state(runs: &[Run], commit: &Commit) -> RunState {
     }
 }
 
+#[cfg(test)]
+mod macos_pkg_verb_tests;
 #[cfg(test)]
 mod tests;

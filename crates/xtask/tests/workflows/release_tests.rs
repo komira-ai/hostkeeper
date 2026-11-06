@@ -5,7 +5,8 @@
 
 use super::lint::{WRITE_ALLOWED, lint};
 use super::release::{
-    PLAN_IF, RELEASE_EXEMPT, RELEASE_GROUP, RELEASE_IF, SIGN_IF, publish_problems,
+    PLAN_IF, PLAN_RUN, PUBLISH_GROUP, RELEASE_EXEMPT, RELEASE_GROUP, RELEASE_IF, SIGN_IF,
+    publish_problems,
 };
 use super::{CLEAN, push_only, with, with_in, workflows};
 
@@ -187,7 +188,8 @@ fn release_workflows_have_empty_top_level_permissions() {
             "permissions:\n  contents: write\n",
             "",
         ] {
-            let text = with_in(&workflow(file), "permissions: {}\n", top);
+            // The top-level line: no job's `permissions: {}` starts a line.
+            let text = with_in(&workflow(file), "\npermissions: {}\n", &format!("\n{top}"));
             assert_refused(file, &text, "no top-level `permissions: {}`");
         }
     }
@@ -263,11 +265,11 @@ fn publish_job_alone_holds_contents_write() {
 fn unpinned_action_is_refused_in_the_new_workflows() {
     // Catches: an action of a release workflow that a tag or branch move would change under us,
     // in the job that publishes and in the job that signs.
-    let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-";
+    let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-${{ matrix.tag }}";
     let text = with_in(
         &workflow("release.yml"),
         download,
-        "actions/download-artifact@v8\n        with:\n          name: release-",
+        "actions/download-artifact@v8\n        with:\n          name: release-${{ matrix.tag }}",
     );
     assert_refused(
         "release.yml",
@@ -363,8 +365,8 @@ fn a_workflow_that_publishes_outside_the_release_group_is_refused() {
     assert_eq!(publish_problems("tag.yml", &grouped), Vec::<String>::new());
     let cancels = with_in(
         &workflow("release.yml"),
-        "  cancel-in-progress: false\n",
-        "  cancel-in-progress: true\n",
+        "\n  cancel-in-progress: false\n",
+        "\n  cancel-in-progress: true\n",
     );
     assert_refused(
         "release.yml",
@@ -437,11 +439,110 @@ fn release_workflow_run_names_exactly_the_three_required_workflows() {
     );
 }
 
+/// The plan step of the repository's release.yml, whole.
+const PLAN_STEP: &str = "      - name: Which commits since the last release are released, oldest first\n        id: walk\n        env:\n          GH_TOKEN: ${{ github.token }}\n          FREEZE: ${{ vars.RELEASE_FREEZE }}\n";
+
 #[test]
-fn release_workflow_keeps_its_three_jobs_and_checks_the_binary() {
-    // Catches: a job added beside plan, verify and publish (which could write or build without a
-    // rule about it), publish no longer waiting for verify, and verify no longer running the
-    // binary it is about to release.
+fn release_workflow_plans_with_one_step_for_every_trigger() {
+    // Catches: a plan that differs by trigger again (a `workflow_run` that plans only the commit
+    // whose run completed, so that a busy main never releases): the step skipped for a trigger,
+    // a second plan step beside it, other arguments, or a checkout of another commit than the
+    // tip of main.
+    let text = release_yml();
+    assert!(
+        text.contains(&format!("{PLAN_STEP}        run: {PLAN_RUN}\n")),
+        "{text}"
+    );
+    let one_step = "release.yml: job plan needs exactly one plan step";
+    let skipped = with_in(
+        &text,
+        "        id: walk\n",
+        "        id: walk\n        if: ${{ github.event_name != 'workflow_run' }}\n",
+    );
+    assert_refused(
+        "release.yml",
+        &skipped,
+        "release.yml: the plan step must run for every trigger, under no `if:`",
+    );
+    let second = with_in(
+        &text,
+        PLAN_STEP,
+        &format!(
+            "      - id: push\n        if: ${{{{ github.event_name == 'workflow_run' }}}}\n        env:\n          COMMIT: ${{{{ github.event.workflow_run.head_sha }}}}\n        run: cargo xtask release plan --repo \"$GITHUB_REPOSITORY\" --commit \"$COMMIT\" --output \"$GITHUB_OUTPUT\"\n{PLAN_STEP}"
+        ),
+    );
+    assert_refused("release.yml", &second, one_step);
+    for (from, to) in [
+        (" --output", " --scheduled --output"),
+        ("--commit \"$GITHUB_SHA\"", "--commit \"$COMMIT\""),
+    ] {
+        let changed = with_in(
+            &text,
+            &format!("{PLAN_RUN}\n"),
+            &format!("{}\n", PLAN_RUN.replacen(from, to, 1)),
+        );
+        assert_refused("release.yml", &changed, one_step);
+    }
+    let none = with_in(
+        &text,
+        &format!("        run: {PLAN_RUN}\n"),
+        "        run: echo none\n",
+    );
+    assert_refused("release.yml", &none, one_step);
+    let elsewhere = with_in(
+        &text,
+        "        with:\n          fetch-depth: 0\n",
+        "        with:\n          ref: ${{ github.event.workflow_run.head_sha }}\n          fetch-depth: 0\n",
+    );
+    assert_refused(
+        "release.yml",
+        &elsewhere,
+        "release.yml: job plan must check out the tip of main (no `ref:`)",
+    );
+}
+
+#[test]
+fn release_workflow_publishes_one_tag_at_a_time_across_its_groups() {
+    // Catches: a dispatch or schedule run that a completion of a push run replaces while it
+    // waits (both in one group), or the two groups of main publishing one tag at once, which
+    // creates two drafts of it: the job-level group of publish removed, cancelling, or not
+    // keyed by the tag.
+    let text = release_yml();
+    let block = format!(
+        "    concurrency:\n      group: {PUBLISH_GROUP}\n      cancel-in-progress: false\n"
+    );
+    let want = format!(
+        "release.yml: job publish needs `concurrency:` group {PUBLISH_GROUP}, cancel-in-progress false"
+    );
+    for to in [
+        String::new(),
+        block.replace("cancel-in-progress: false", "cancel-in-progress: true"),
+        block.replace(PUBLISH_GROUP, "release-publish"),
+        block.replace("      cancel-in-progress: false\n", ""),
+    ] {
+        let changed = with_in(&text, &block, &to);
+        assert_refused("release.yml", &changed, &want);
+    }
+    // The lint holds the whole expression: either group of main renamed is refused.
+    for joined in ["&& 'main-dispatch' ||", "&& 'main' ||"] {
+        assert_eq!(RELEASE_GROUP.matches(joined).count(), 1, "{joined}");
+        let one = RELEASE_GROUP.replacen(joined, "&& 'main-shared' ||", 1);
+        let changed = with_in(&text, RELEASE_GROUP, &one);
+        assert_refused(
+            "release.yml",
+            &changed,
+            &format!(
+                "release.yml tags or publishes, so its concurrency group must be {RELEASE_GROUP}"
+            ),
+        );
+    }
+}
+
+#[test]
+fn release_workflow_keeps_its_five_jobs_and_checks_the_binary() {
+    // Catches: a job added beside plan, verify, publish and the two deploy jobs (which could
+    // write or build without a rule about it), publish no longer waiting for verify, and verify
+    // no longer running the binary it is about to release.
     let text = with_in(
         &workflow("release.yml"),
         "    needs: [plan, verify]\n",
@@ -459,7 +560,7 @@ fn release_workflow_keeps_its_three_jobs_and_checks_the_binary() {
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: jobs are [\"notify\", \"plan\", \"publish\", \"verify\"], not plan, verify and publish",
+        "release.yml: jobs are [\"channel\", \"notify\", \"plan\", \"publish\", \"set-desired\", \"verify\"], not plan, verify, publish, channel and set-desired",
     );
     for program in ["hostkeeper", "hostkeeper-coordinator"] {
         let check = format!(
@@ -513,6 +614,23 @@ fn the_image_job_builds_twice_from_scratch_and_compares() {
         (compare, "        run: cmp "),
     ] {
         let text = with_in(&workflow("artifacts.yml"), from, to);
+        assert_refused("artifacts.yml", &text, want);
+    }
+}
+
+#[test]
+fn the_image_job_checks_that_the_image_holds_the_web_app() {
+    // Catches: an image released without the operator web app, or checked against another
+    // image or another directory than the commit's `ui/` (a deploy of it would answer 404 at
+    // /ui/): the check removed, run on the second build's context, or on another directory.
+    let check = "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/image-a.tar\" ui\n";
+    let want = "artifacts.yml: job image must check that the image holds the web app";
+    for to in [
+        "        run: true\n",
+        "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/context-a\" ui\n",
+        "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/image-a.tar\" examples\n",
+    ] {
+        let text = with_in(&workflow("artifacts.yml"), check, to);
         assert_refused("artifacts.yml", &text, want);
     }
 }

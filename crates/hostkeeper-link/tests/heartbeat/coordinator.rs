@@ -151,6 +151,8 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         agent_version: version("0.9.0"),
         features: hostkeeper_link::ANNOUNCED.to_vec(),
         services: Vec::new(),
+        sent_unix: 0,
+        renewal: hostkeeper_link::Renewal::default(),
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),
@@ -160,6 +162,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
                 Feature::DeferredV1,
                 Feature::HaltV1,
                 Feature::HeartbeatV2,
+                Feature::ForcedV1,
                 Feature::OrderV1,
                 Feature::VerdictAcksV1,
                 Feature::GrpcV1
@@ -209,6 +212,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             service: service("web"),
             version: version("2.0"),
             digest: digest(),
+            index_digest: None,
         }),
     };
     // The other API carries the same order: the typed order the coordinator gives for the same
@@ -227,6 +231,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
                 service: "web".to_owned(),
                 version: "2.0".to_owned(),
                 package_digest: digest().as_str().to_owned(),
+                index_digest: String::new(),
             })),
         }
     );

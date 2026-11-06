@@ -115,8 +115,10 @@ fn forced(ver: &str, n: u8, halt_generation: u64, generation: u64) -> Order {
         service: WEB.to_owned(),
         version: version(ver),
         digest: Digest::parse(&digest(n)).expect("a digest"),
+        index_digest: None,
         halt_generation,
         order_id: format!("force-{generation}"),
+        order_try: 1,
     }
 }
 
@@ -466,6 +468,7 @@ fn end_by_ci_ends_a_force_only_for_another_version() {
                 reason: "fix the farm".to_owned(),
                 by: "operator".to_owned(),
                 digest: Digest::parse(&digest(2)).expect("a digest"),
+                release_index: None,
                 halt_generation: 1,
                 targets: ForceTargets::Fleet,
                 include_held: false,

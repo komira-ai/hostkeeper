@@ -1,10 +1,7 @@
 # The test fixture unit of `cargo xtask release package`; the Linux packaging supplies the real unit.
 [Unit]
 Description=hostkeeper
-StartLimitIntervalSec=0
 
 [Service]
-ExecStart=/var/lib/hostkeeper/packages/hostkeeper/current/bin/hostkeeper daemon
+ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon
 Restart=always
-RestartSec=5
-WatchdogSec=60

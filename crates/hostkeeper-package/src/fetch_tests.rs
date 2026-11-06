@@ -647,6 +647,67 @@ fn an_invalid_index_fails_the_release_with_index_invalid() {
     }
 }
 
+/// An order for tierstore 1.5.0 that names `hex` as the SHA-256 of the index.
+fn with_index_digest(hex: &str) -> PackageOrder {
+    PackageOrder {
+        index_digest: Some(digest(hex)),
+        ..tierstore()
+    }
+}
+
+/// Catches an index digest that is ignored or compared with the wrong bytes: an order naming the
+/// SHA-256 of the index the channel serves fetches the package as an order naming none does, and
+/// the digest is read in either case.
+#[test]
+fn an_index_that_hashes_to_the_orders_index_digest_is_accepted() {
+    let scratch = scratch("fetch-index-digest-ok");
+    let index = index_json("tierstore", "1.5.0", &[(HOST, ARCHIVE)]);
+    let fetcher = published("tierstore", "1.5.0", ARCHIVE);
+    let upper = sha256_hex(index.as_bytes()).to_ascii_uppercase();
+    for order in [with_index_digest(&upper), tierstore()] {
+        let staged = fetch(
+            &fetcher,
+            &FakeClock::at(1),
+            &bounds(),
+            scratch.path(),
+            &order,
+        )
+        .expect("the index is the one named, or none is named");
+        assert_eq!(staged.sha256, digest(&sha256_hex(ARCHIVE)));
+    }
+    assert_eq!(
+        urls(&fetcher),
+        [at_index(), at_package(), at_index(), at_package()]
+    );
+}
+
+/// Catches an index that is believed though its bytes are not the ones the order names: an index
+/// that is valid for the version but hashes to another digest, and text that is not an index at
+/// all, are both refused with `index_digest_mismatch` (so the digest is checked before the text
+/// is parsed), a release failure; the package is never requested and nothing is left.
+#[test]
+fn an_index_that_hashes_to_another_digest_is_refused_before_it_is_read() {
+    let scratch = scratch("fetch-index-digest-bad");
+    let named = sha256_hex(b"the index the coordinator was given");
+    let valid = index_json("tierstore", "1.5.0", &[(HOST, ARCHIVE)]).into_bytes();
+    for body in [valid, b"not json".to_vec()] {
+        let fetcher = FakeFetcher::new()
+            .route(&at_index(), serve(&body))
+            .route(&at_package(), serve(ARCHIVE));
+        let refused = fetch(
+            &fetcher,
+            &FakeClock::at(1),
+            &bounds(),
+            scratch.path(),
+            &with_index_digest(&named),
+        )
+        .expect_err("not the index the order names");
+        assert_eq!(refused, failed(INDEX_DIGEST_MISMATCH));
+        assert_eq!(urls(&fetcher), [at_index()]);
+        assert!(left(scratch.path()).is_empty());
+    }
+}
+
 /// Catches a host that is given another platform's package, or a missing entry that is not
 /// refused: an index with only linux-arm64 and macos-arm64 packages, read by a linux-x86_64
 /// host, fails the release with `no_package_for_platform`, the package is never requested, and

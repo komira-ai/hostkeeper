@@ -230,6 +230,21 @@ fn release_compare_images_of_missing_files_is_a_failure_with_status_1() {
 }
 
 #[test]
+fn release_check_image_ui_of_a_missing_image_is_a_failure_with_status_1() {
+    // Catches: an unreadable image reported as one that holds the web app, or with a status
+    // other than 1.
+    let d = dir("check-image-ui-missing");
+    let o = run(&d, &["release", "check-image-ui", "image.tar", "ui"]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).starts_with("xtask: read image.tar: "),
+        "{}",
+        stderr(&o)
+    );
+    assert_eq!(stdout(&o), "");
+}
+
+#[test]
 fn release_set_version_writes_the_version_into_the_workspace_with_status_0() {
     // Catches: `--version` or `--root` not reaching set-version, or the workspace manifest left
     // at its old version.
@@ -346,6 +361,42 @@ fn release_channel_stage_stages_a_release_once_and_then_changes_nothing_with_sta
 }
 
 #[test]
+fn release_channel_sync_without_its_channel_fails_with_status_1_and_bad_flags_status_2() {
+    // Catches: a missing channel directory made, synced into or reported as success (the
+    // request is refused before GitHub is asked anything), or a bad flag read as a failure.
+    let d = dir("channel-sync");
+    let o = run(
+        &d,
+        &[
+            "release",
+            "channel-sync",
+            "--repo",
+            "komira-ai/tierstore",
+            "--channel-dir",
+            "missing",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).starts_with("xtask: --channel-dir missing: "),
+        "{}",
+        stderr(&o)
+    );
+    assert!(!d.join("missing").exists());
+    for bad in [
+        ["--repo", "no-slash", "--channel-dir", "."],
+        ["--since", "0.1.0", "--channel-dir", "."],
+        ["--every-secs", "0", "--channel-dir", "."],
+    ] {
+        let mut argv = vec!["release", "channel-sync", "--repo", "a/b"];
+        argv.extend(bad);
+        let o = run(&d, &argv);
+        assert_eq!(o.status.code(), Some(2), "{bad:?}: {}", stderr(&o));
+        assert_eq!(stdout(&o), "");
+    }
+}
+
+#[test]
 fn release_channel_stage_refusals_are_failures_with_status_1_and_bad_names_status_2() {
     // Catches: a rebuilt package written over a staged one, a release lacking a required
     // platform staged, or a name outside the daemon's grammar reported as a failure (status 1)
@@ -383,6 +434,33 @@ fn release_channel_stage_refusals_are_failures_with_status_1_and_bad_names_statu
     let mut bad = channel_stage(&[]);
     bad[3] = "tier+store";
     let o = run(&d, &bad);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
+}
+
+#[test]
+fn advisories_reaches_cargo_deny_first_and_fails_with_status_1_when_it_cannot_start() {
+    // Catches: `advisories` not dispatched to the verb, a GitHub call made before the check
+    // ran, a cargo that cannot start reported as "no advisories" (status 0, which would close
+    // the issue), and a bad `--repo` accepted. The PATH holds no program, so nothing is run.
+    let d = dir("advisories");
+    let empty = d.join("empty-path");
+    std::fs::create_dir(&empty).expect("an empty PATH directory");
+    let o = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(&d)
+        .env("PATH", &empty)
+        .args(["advisories", "--repo", "komira-ai/hostkeeper"])
+        .output()
+        .expect("run xtask");
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
+    assert_eq!(
+        stderr(&o),
+        "xtask: cargo deny --log-level warn --format json --manifest-path ./Cargo.toml \
+         --all-features check advisories: No such file or directory (os error 2)\n"
+    );
+
+    let o = run(&d, &["advisories", "--repo", "not a repository"]);
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert_eq!(stdout(&o), "");
 }

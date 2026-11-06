@@ -77,6 +77,9 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<wire::Heartbeat, Unsendable>
             name,
             version: agent_version,
         }),
+        sent_unix: Some(beat.sent_unix),
+        cert_not_after_unix: beat.renewal.cert_not_after_unix,
+        last_renew_error: beat.renewal.last_renew_error.clone(),
     })
 }
 
@@ -307,6 +310,7 @@ fn order(
         service: ServiceName::new(service).ok()?,
         version: Version::new(version.as_str()).ok()?,
         digest: PackageDigest::new(digest.as_str()).ok()?,
+        index_digest: None,
     };
     Some(Order {
         id: OrderId::new(id.as_str()).ok()?,

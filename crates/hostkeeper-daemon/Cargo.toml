@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The hostkeeper daemon: start-up, the order executor with its locks, checks and try rules, the held halts, and the root-only admin socket."
+description = "The hostkeeper daemon: start-up, the order executor with its locks, checks and try rules, the held halts, the root-only admin socket and its client."
 
 # The library of the one root process of a host (docs/design/hostkeeper-design.md, sections 4.1,
 # 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3). Everything the daemon does is here, so that it is measured;
@@ -33,6 +33,9 @@ hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 # claims.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The BMC's MAC address, claimed in a Linux host's enrollment request: `Get LAN Configuration
+# Parameters` sent to `/dev/ipmi0` (`ipmi`).
+ipmi-rs.workspace = true
 # The macOS adapters (`adapters::Adapters::macos`): the launchd step launcher, service manager,
 # unit control and process probe, the `Platform` the host's adapters are chosen by, and the
 # process port `codesign` and `ioreg` run through (`mac`).
@@ -58,14 +61,21 @@ libc.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 # The host's CA bundle (PEM) read into the DER roots the package fetch's HTTPS client trusts.
 rustls-pki-types.workspace = true
+# `trusted_root`: whether the Sigstore trusted root file is a stream of JSON trusted roots.
+serde_json.workspace = true
 thiserror.workspace = true
+# `hostkeeper admin`: the unix socket handed to tonic's channel as hyper reads it, through a
+# connector made with `service_fn`.
+hyper-util = { workspace = true, features = ["tokio"] }
+tower = { workspace = true, features = ["util"] }
 # A manifest's `[params]` table is handed to the hook's params file as TOML text.
 toml.workspace = true
 # `sync` for the notice that ends the admin socket's server when the daemon exits for its own
 # update.
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync"] }
 tokio-stream = { workspace = true, features = ["net"] }
-tonic = { workspace = true, features = ["server"] }
+# `server` for the admin socket, `channel` for `hostkeeper admin`, its client.
+tonic = { workspace = true, features = ["server", "channel"] }
 
 [dev-dependencies]
 # tests/hello.rs: the example service's real hook, run in process by a step launcher of the test.
@@ -81,6 +91,9 @@ bytes.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The public key of the enrollment request's CSR, whose SHA-256 is the request id the fake
+# coordinator of tests/bmc_claim.rs answers with.
+x509-cert.workspace = true
 # tests/coordinator_link.rs: the shipped heartbeat link against the coordinator's own listener on
 # loopback, behind the TLS of a test CA (`rcgen`) the coordinator serves with (`hostkeeper-tls`).
 hostkeeper-tls = { path = "../hostkeeper-tls" }
@@ -97,7 +110,6 @@ prost-types.workspace = true
 # The effective uid: the owner the tests' daemon config is trusted for; an extended attribute
 # set on a scratch file, which the quarantine check reads.
 rustix = { workspace = true, features = ["fs", "process"] }
-serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
 tonic = { workspace = true, features = ["channel"] }
 tower = { workspace = true, features = ["util"] }

@@ -16,7 +16,7 @@ use hostkeeper_launchd::launchctl::{
 };
 use hostkeeper_launchd::launcher::{POLL, STDERR_FILE, STDOUT_FILE};
 use hostkeeper_launchd::{FakeLaunchctl, Label, LaunchdLauncher};
-use hostkeeper_steps::{Bound, Captured, LaunchError, StepExit, StepLauncher};
+use hostkeeper_steps::{AdditiveCall, Bound, Captured, LaunchError, StepExit, StepLauncher};
 use plist::Value;
 use support::{FakePace, Hook, PARAMS, SimLaunchd, call, hook_file, scratch, secs};
 
@@ -602,4 +602,146 @@ fn a_job_in_xpcproxy_is_not_ended_whatever_exit_it_still_shows() {
 
     assert_eq!(exit.code, Some(3));
     assert_eq!(pace.sleeps(), [POLL]);
+}
+
+const UNINSTALL_UNIT: &str = "updater-web-uninstall-7";
+const UNINSTALL_LABEL: &str = "dev.hostkeeper.hostkeeper.step.web.uninstall.7";
+
+/// The `uninstall` of a hook whose command is `[<hook>, "update-hook"]`, bounded by `timeout`.
+fn uninstall<'a>(hook: &'a Path, hook_args: &'a [String], timeout: u64) -> AdditiveCall<'a> {
+    AdditiveCall {
+        service: "web",
+        step: "uninstall",
+        hook_args,
+        params: Path::new(PARAMS),
+        executable: hook,
+        unit: UNINSTALL_UNIT,
+        timeout_secs: timeout,
+    }
+}
+
+/// Catches an uninstall the Mac launcher does not run (the trait's default starts nothing), runs
+/// with the wrong arguments, or whose end is lost: the job runs exactly
+/// `<hook> update-hook uninstall --params <params>`, its exit code and last line are the step's,
+/// the log is given its output under the unit's name, and the job is booted out and its
+/// directory removed after it.
+#[test]
+fn an_additive_step_runs_as_one_job_with_the_hook_arguments_before_the_step() {
+    let root = scratch("launcher-additive");
+    let hook = hook_file(root.path());
+    let jobs = root.path().join("jobs");
+    let (launcher, sim, _, logged) = sim_launcher(&jobs);
+    sim.script(UNINSTALL_LABEL, Hook::exits(2, 4, "{\"detail\":\"gone\"}"));
+    let hook_args = ["update-hook".to_owned()];
+
+    let exit = launcher
+        .run_additive(&uninstall(&hook, &hook_args, 60))
+        .expect("the step ran");
+
+    assert_eq!(
+        exit,
+        StepExit {
+            code: Some(4),
+            last_line: Some("{\"detail\":\"gone\"}".to_owned())
+        }
+    );
+    let arguments = sim.plists()[0]
+        .get("ProgramArguments")
+        .cloned()
+        .expect("the job's arguments");
+    let text = |word: &str| Value::String(word.to_owned());
+    assert_eq!(
+        arguments,
+        Value::Array(vec![
+            text(hook.to_str().expect("UTF-8")),
+            text("update-hook"),
+            text("uninstall"),
+            text("--params"),
+            text(PARAMS),
+        ])
+    );
+    let logged = logged.lock().expect("the log");
+    assert_eq!(logged.len(), 1);
+    assert_eq!(logged[0].0, UNINSTALL_UNIT);
+    assert!(
+        !sim.is_loaded(UNINSTALL_LABEL),
+        "the ended job is booted out"
+    );
+    assert!(
+        !jobs.join(UNINSTALL_LABEL).exists(),
+        "its directory is removed"
+    );
+}
+
+/// Catches an additive step bounded wrongly: a `timeout_secs` of 30 boots the job out at exactly
+/// 30 s with no exit code, and a `timeout_secs` of 0 is no bound, so a job that runs for an hour
+/// is not booted out and ends with its own code.
+#[test]
+fn an_additive_step_is_bounded_by_its_timeout_and_zero_is_no_bound() {
+    let root = scratch("launcher-additive-bound");
+    let hook = hook_file(root.path());
+    let (launcher, sim, _, _) = sim_launcher(&root.path().join("jobs"));
+    let hook_args: [String; 0] = [];
+
+    sim.script(UNINSTALL_LABEL, Hook::exits(3600, 0, "{}"));
+    let exit = launcher
+        .run_additive(&uninstall(&hook, &hook_args, 30))
+        .expect("the step ran");
+    assert_eq!(exit.code, None);
+    assert_eq!(
+        sim.stopped_after(),
+        [(UNINSTALL_LABEL.to_owned(), Duration::from_secs(30))]
+    );
+
+    sim.script(UNINSTALL_LABEL, Hook::exits(3600, 0, "{}"));
+    let exit = launcher
+        .run_additive(&uninstall(&hook, &hook_args, 0))
+        .expect("the step ran");
+    assert_eq!(exit.code, Some(0));
+    assert_eq!(
+        sim.stopped_after().len(),
+        1,
+        "the unbounded job was not stopped"
+    );
+}
+
+/// Catches an additive call the launcher should refuse before it touches launchd, as it refuses
+/// a step: a relative executable, a relative params file and a unit that is not a step unit are
+/// launcher errors, and a missing hook is a hook that did not start.
+#[test]
+fn a_bad_additive_call_is_refused_before_any_launchctl_call() {
+    let root = scratch("launcher-additive-refuse");
+    let hook = hook_file(root.path());
+    let (launcher, sim, _, _) = sim_launcher(&root.path().join("jobs"));
+    let hook_args: [String; 0] = [];
+
+    assert_eq!(
+        launcher_error(launcher.run_additive(&uninstall(Path::new("bin/hook"), &hook_args, 5))),
+        "the hook executable \"bin/hook\" is not an absolute path"
+    );
+    let mut relative = uninstall(&hook, &hook_args, 5);
+    relative.params = Path::new("params.toml");
+    assert_eq!(
+        launcher_error(launcher.run_additive(&relative)),
+        "the params file \"params.toml\" is not an absolute path"
+    );
+    let mut not_a_step = uninstall(&hook, &hook_args, 5);
+    not_a_step.unit = "web.service";
+    assert_eq!(
+        launcher_error(launcher.run_additive(&not_a_step)),
+        "\"web.service\" is not the name of a step unit (updater-<service>-<step>-<generation>)"
+    );
+    let missing = root.path().join("missing");
+    assert_eq!(
+        no_start(launcher.run_additive(&uninstall(&missing, &hook_args, 5))),
+        format!(
+            "{}: No such file or directory (os error 2)",
+            missing.display()
+        )
+    );
+    assert!(
+        sim.calls().is_empty(),
+        "no launchctl call: {:?}",
+        sim.calls()
+    );
 }

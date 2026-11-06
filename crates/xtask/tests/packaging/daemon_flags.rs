@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use hostkeeper_daemon::cli::{
     Cli, Command, DEFAULT_ADMIN_SOCKET, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR,
-    DaemonFlags,
+    DaemonFlags, SeedFlags,
 };
 
 use crate::tmpfiles;
@@ -26,14 +26,28 @@ const ENVIRONMENT_KEYS: [&str; 4] = [
     "UnsetEnvironment",
 ];
 
-/// The flags of a command line, as the binary parses them: `words` are the words of the line,
-/// the program first. The program's path is dropped and the binary's own name stands in for it.
-pub fn parse_flags(words: &[String]) -> Result<DaemonFlags, String> {
+/// A command line as the binary parses it: `words` are the words of the line, the program
+/// first. The program's path is dropped and the binary's own name stands in for it.
+pub fn parse(words: &[String]) -> Result<Command, String> {
     let args = std::iter::once("hostkeeper").chain(words.iter().skip(1).map(String::as_str));
-    let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
-    match cli.command {
+    Ok(Cli::try_parse_from(args)
+        .map_err(|e| e.to_string())?
+        .command)
+}
+
+/// The flags of a command line of the daemon, as the binary parses them ([`parse`]).
+pub fn parse_flags(words: &[String]) -> Result<DaemonFlags, String> {
+    match parse(words)? {
         Command::Daemon(flags) => Ok(flags),
         other => Err(format!("the line runs {other:?}, not the daemon")),
+    }
+}
+
+/// The flags of the seed's command line, as the binary parses them ([`parse`]).
+pub fn parse_seed(words: &[String]) -> Result<SeedFlags, String> {
+    match parse(words)? {
+        Command::SelfUpdateSeed(flags) => Ok(flags),
+        other => Err(format!("the line runs {other:?}, not the seed")),
     }
 }
 
@@ -53,21 +67,28 @@ fn check_unit_lines(text: &str) -> Result<(), String> {
                 entry.line
             ));
         }
-        if COMMAND_KEYS.contains(&key) {
-            let words = unit::command_words(&entry.value)?;
-            parse_flags(&words).map_err(|e| {
-                format!(
-                    "line {}: {key}= does not parse under the binary's own flags: {e}",
-                    entry.line
-                )
-            })?;
+        let parsed = match key {
+            "ExecStartPre" => {
+                let line = entry.value.strip_prefix('-').unwrap_or(&entry.value);
+                Some(parse_seed(&unit::command_words(line)?).map(drop))
+            }
+            _ if COMMAND_KEYS.contains(&key) => {
+                Some(parse_flags(&unit::command_words(&entry.value)?).map(drop))
+            }
+            _ => None,
+        };
+        if let Some(Err(e)) = parsed {
+            return Err(format!(
+                "line {}: {key}= does not parse under the binary's own flags: {e}",
+                entry.line
+            ));
         }
     }
     Ok(())
 }
 
 /// Every `*.service` file under `dir` (regular files only), by its path from `root`.
-fn services(root: &Path, dir: &Path, out: &mut Vec<String>) {
+pub fn services(root: &Path, dir: &Path, out: &mut Vec<String>) {
     for entry in fs::read_dir(dir).expect("list the packaging") {
         let path = entry.expect("a packaging entry").path();
         let meta = fs::symlink_metadata(&path).expect("a packaging entry's type");
@@ -81,7 +102,8 @@ fn services(root: &Path, dir: &Path, out: &mut Vec<String>) {
 }
 
 /// Catches a unit whose command line the binary would refuse: an unknown subcommand, a flag it
-/// no longer has, a flag without its value; and any environment set for a command.
+/// no longer has, a flag without its value, a seed line that is not the seed; and any environment
+/// set for a command.
 #[test]
 fn every_unit_command_line_parses_under_the_binarys_own_flags() {
     let mut found = Vec::new();
@@ -99,16 +121,36 @@ fn every_unit_command_line_parses_under_the_binarys_own_flags() {
     let text = read(UNIT);
     let cases = [
         (
-            altered(&text, "--state-dir", "--state-directory"),
+            altered(
+                &text,
+                "toml --state-dir /var/lib/updater/state",
+                "toml --state-directory /var/lib/updater/state",
+            ),
             "--state-directory",
+        ),
+        (
+            altered(&text, "current daemon --config", "current serve --config"),
+            "serve",
         ),
         (
             altered(
                 &text,
-                "hostkeeper daemon --config",
-                "hostkeeper serve --config",
+                "self-update-seed --state-dir",
+                "self-update-sed --state-dir",
             ),
-            "serve",
+            "ExecStartPre= does not parse",
+        ),
+        (
+            altered(&text, " --binary /usr/bin/hostkeeper\n", "\n"),
+            "ExecStartPre= does not parse",
+        ),
+        (
+            altered(
+                &text,
+                "-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper",
+                "-/usr/bin/hostkeeper daemon",
+            ),
+            "not the seed",
         ),
         (
             altered(
@@ -270,8 +312,8 @@ fn packaging_paths_equal_the_daemon_defaults() {
         (
             altered(
                 &unit,
-                "--state-dir /var/lib/updater/state",
-                "--state-dir /var/lib/updater/other",
+                "--state-dir /var/lib/updater/state --packages-dir",
+                "--state-dir /var/lib/updater/other --packages-dir",
             ),
             "--state-dir is",
         ),

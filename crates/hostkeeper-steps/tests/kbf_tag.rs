@@ -14,7 +14,7 @@ use hostkeeper_steps::runner::{
 };
 use hostkeeper_steps::selfupdate::{Layout, START_LIMIT_BURST, fallback_unit, main_dropin};
 use hostkeeper_steps::systemd::unit_name;
-use hostkeeper_steps::{Loaded, Record, RecordStore, RunError, Stamp};
+use hostkeeper_steps::{BootId, Loaded, Record, RecordStore, RunError, Stamp};
 use support::{Rig, Scratch};
 
 const TAG: &str = "v0.0.64";
@@ -30,7 +30,7 @@ fn fixture(name: &str) -> String {
 
 fn stamp(boot_id: &str, mono_secs: u64) -> Stamp {
     Stamp {
-        boot_id: boot_id.to_owned(),
+        boot_id: BootId::new("a test", boot_id).ok(),
         mono_secs,
     }
 }
@@ -437,11 +437,13 @@ fn constants_match_kbf_at_the_tag() {
         "[Unit]\nOnFailure=fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n\
          [Service]\nRestart=always\nRestartSec=1\n"
     );
+    // kbf's text but for one byte, hostkeeper's own: the `-` of `ExecStart=-`, so that a verb
+    // that puts nothing back still lets the unit reset and start the main unit again.
     assert_eq!(
         fallback_unit(&layout, "updater.service"),
         "[Unit]\nDescription=Put the previous updater binary back after the new one failed to \
          start\n\n[Service]\nType=oneshot\n\
-         ExecStart=/opt/updater/previous self-update-fallback --dir /opt/updater\n\
+         ExecStart=-/opt/updater/previous self-update-fallback --dir /opt/updater\n\
          ExecStartPost=/usr/bin/systemctl reset-failed updater.service\n\
          ExecStartPost=/usr/bin/systemctl start --no-block updater.service\n"
     );

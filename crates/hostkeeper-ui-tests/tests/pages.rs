@@ -1,12 +1,13 @@
 //! The six pages, run in the JavaScript engine against the fake gateway of `support`: what each
-//! calls, what it shows, and what each of its buttons sends.
+//! calls, what it shows, and what each of its buttons sends. The Audit page's own tests are in
+//! `audit_page.rs`.
 
 mod support;
 
 use serde_json::{Value, json};
 use support::Ui;
 use support::pages::{
-    assert_shows, bodies, hosts_reply, m, page_driver, render, shown, status_reply,
+    alerts_reply, assert_shows, bodies, hosts_reply, m, page_driver, render, shown, status_reply,
 };
 
 /// Markup in text the API returns: a claim, a reason, a log line.
@@ -15,43 +16,49 @@ const MARKUP: &str = "<img src=x onerror=alert(1)>";
 #[test]
 fn fleet_page_lists_hosts_and_alerts() {
     // Catches: a Fleet page that calls another method, leaves out a host, its role, a service's
-    // version, health or marks, or an alert the API's answers carry.
+    // version, health or marks, or an alert `Alerts.List` answers (its kind, whether it is
+    // critical, its message and when it was first observed), a failed canary among them.
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/List"), hosts_reply());
     ui.reply(&m("Releases/Status"), status_reply());
+    ui.reply(&m("Alerts/List"), alerts_reply());
     let out = ui.run(
         r#"
 import { api, recorder, text } from "../test/kit.js";
-import { render, fleetAlerts } from "./pages/fleet.js";
+import { render } from "./pages/fleet.js";
 export async function main() {
-  const { ctx, seen } = recorder(api("operator-token"), {}, []);
+  const { ctx } = recorder(api("operator-token"), {}, []);
   const tree = await render(ctx);
-  return { text: text(tree), alerts: fleetAlerts(HOSTS.hosts, STATUS), seen };
-}"#
-        .replace("HOSTS", &hosts_reply().to_string())
-        .replace("STATUS", &status_reply().to_string())
-        .as_str(),
+  const box = tree.children.find((child) => child.attrs && child.attrs.class === "alerts");
+  // The kit joins text nodes with a space; the page's DOM does not.
+  const one = (li) => text(li).split(/\s+/).join(" ").replace(" :", ":");
+  return { text: text(tree), alerts: box.children[1].children.map(one) };
+}"#,
     );
-    assert_eq!(ui.methods(), [m("Hosts/List"), m("Releases/Status")]);
+    assert_eq!(
+        ui.methods(),
+        [m("Hosts/List"), m("Releases/Status"), m("Alerts/List")]
+    );
+    assert!(
+        bodies(&ui)
+            .iter()
+            .any(|(method, body)| *method == m("Alerts/List") && *body == json!({}))
+    );
     assert_eq!(
         out["alerts"],
         json!([
-            {"kind": "halt", "text": "api is halted by web-2, check disk_full"},
-            {"kind": "held_on_bad_version", "text": "web-2 is held on api 1.3.0, which is marked bad"},
-            {"kind": "waiting_for_operator", "text": "new-1 is waiting for an operator"},
-            {"kind": "duplicate", "text": "clone-1 shares its identity with another host"},
-            {"kind": "abandoned_while_updating", "text": "db-9 was abandoned while updating api: host gone"},
+            "halt (critical): api is halted at 1.4.0 by web-2, check disk_full (since 2027-01-15 08:00:00 UTC)",
+            "waiting for operator: request ab waits for an operator's approval (since 2027-01-15 08:00:00 UTC)",
+            "failed canary (critical): web-4, a canary of api, failed 1.3.0 (since 2027-01-15 08:00:00 UTC)",
+            "held on bad version: an operator holds web-2 on api 1.3.0 (since 2027-01-15 08:00:00 UTC)",
+            "silent host: new-1 has not heartbeated for 300 s (since 2027-01-15 08:00:00 UTC)",
         ])
     );
     assert_shows(
         &out,
         &[
             "Alerts (5)",
-            "halt",
-            "waiting for operator",
-            "duplicate",
-            "held on bad version",
-            "abandoned while updating",
+            "failed canary",
             "Hosts (4)",
             "web-1",
             "web-2",
@@ -74,8 +81,10 @@ export async function main() {
 
 #[test]
 fn fleet_alerts_show_nothing_when_nothing_needs_a_person() {
-    // Catches: an alert raised by a healthy fleet, or a halt read from a converged service.
+    // Catches: an alert the page makes up when `Alerts.List` answers none (a halt read from the
+    // status, a gate reason of a host).
     let mut ui = Ui::start();
+    ui.reply(&m("Alerts/List"), json!({}));
     ui.reply(
         &m("Hosts/List"),
         json!({"hosts": [{"nodeId": "web-1", "role": "web", "live": true}]}),
@@ -792,64 +801,6 @@ fn enrollment_page_passes_its_page_token() {
     assert_eq!(
         out["seen"]["navigations"],
         json!([{"name": "enrollment", "params": {}}])
-    );
-}
-
-#[test]
-fn audit_page_passes_its_filters_to_the_call() {
-    // Catches: a filter dropped from the request, an empty filter sent, and paging that does not
-    // go on from the last entry.
-    let mut ui = Ui::start();
-    ui.reply(
-        &m("Audit/List"),
-        json!({"entries": [{"seq": "6", "by": "ACTOR_OPERATOR", "action": "hold", "service": "api",
-                            "nodeId": "web-1", "reason": "kernel patch"}],
-               "nextSeq": "6"}),
-    );
-    ui.reply(&m("Audit/List"), json!({}));
-    let out = ui.run(&page_driver(
-        "audit",
-        r#"{ actor: "operator", action: "hold", service: "api", nodeId: "web-1", sinceSeq: "5" }"#,
-        "[]",
-        r#"
-await click(tree, "next-page");
-await click(tree, "first-page");
-type(tree, "service", " ");
-type(tree, "action", "unhold");
-choose(tree, "actor", "ci");
-await click(tree, "show");
-const { ctx: other } = recorder(ctx.api, {}, []);
-return text(await render(other));
-"#,
-    ));
-    assert_eq!(
-        bodies(&ui),
-        [
-            (
-                m("Audit/List"),
-                json!({"sinceSeq": "5", "limit": 100, "actor": "operator", "action": "hold",
-                                      "service": "api", "nodeId": "web-1"})
-            ),
-            (m("Audit/List"), json!({"sinceSeq": "0", "limit": 100})),
-        ]
-    );
-    assert_eq!(
-        out["seen"]["navigations"],
-        json!([
-            {"name": "audit", "params": {"actor": "operator", "action": "hold", "service": "api", "nodeId": "web-1", "sinceSeq": "6"}},
-            {"name": "audit", "params": {"actor": "operator", "action": "hold", "service": "api", "nodeId": "web-1"}},
-            {"name": "audit", "params": {"actor": "ci", "action": "unhold", "nodeId": "web-1"}},
-        ])
-    );
-    assert_shows(
-        &out,
-        &["6", "operator", "hold", "api", "web-1", "kernel patch"],
-    );
-    assert!(
-        out["out"]
-            .as_str()
-            .expect("the second page")
-            .contains("No entry.")
     );
 }
 

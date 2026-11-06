@@ -10,14 +10,15 @@
 //!   followed on the same line by a version comment (`# v1.2.3`; the value may be quoted, and
 //!   the spaces before and after `#` are free), or names a local path (a
 //!   local action or reusable workflow is code this lint does not read);
-//! - a job has no `runs-on`, or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group,
-//!   a custom label (a self-hosted or a paid larger runner), or an expression other than
-//!   `${{ matrix.<key> }}`, whose values are read from the job's own `strategy.matrix` (a list
+//! - a job has no `runs-on` (but a job of [`callers::CALLERS`] that calls the CI client), or a
+//!   runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a custom label (a
+//!   self-hosted or a paid larger runner), or an expression other than `${{ matrix.<key> }}`,
+//!   whose values are read from the job's own `strategy.matrix` (a list
 //!   or an `include` the lint cannot read, such as an expression, is refused);
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
-//!   one the table gives; or grants `id-token: write` in a job that is in neither that table nor
-//!   [`ID_TOKEN_ALLOWED`];
+//!   one the table gives; or grants `id-token: write` in a job that is in none of that table,
+//!   [`ID_TOKEN_ALLOWED`] and [`callers::CALLERS`];
 //! - any key `secrets` has the value `inherit`;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
 //!   `merge_group`) and a job of it is privileged or macOS, whatever its `if:` says, or what
@@ -40,16 +41,19 @@
 //!   file; [`WRITE_ALLOWED`] has no entry for it, so no job of it holds a write scope.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
-//!   ([`release::release_rules`]).
+//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]).
 //!
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
 //!
 //! `set-desired.yml` is also held to the rules of [`set_desired`], which fix the order of its
-//! steps. `self-hosted` in `--deny-self-hosted-runners` names no runner.
+//! steps. Every workflow is held to the rules of [`callers`]: which jobs may call it, and how.
+//! `self-hosted` in `--deny-self-hosted-runners` names no runner.
 //!
 //! Keys are matched exactly. What this does not evaluate it refuses: a YAML tag, a second
 //! document, an alias to an unfinished node, a document that does not parse.
 
+use super::advisories;
+use super::callers;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
 use super::set_desired;
 use super::yaml::{self, Node, Value};
@@ -70,6 +74,8 @@ pub struct Allowed {
 /// - `release.yml` / `publish`: `contents`, to create the release and its tag.
 /// - `release.yml` / `plan`: `issues`, to open or update the one issue that tracks a release
 ///   held by a failed privileged run.
+/// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
+///   lists the security advisories against the dependencies, on a run of main.
 pub const WRITE_ALLOWED: &[Allowed] = &[
     Allowed {
         file: "artifacts.yml",
@@ -95,6 +101,12 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         scope: "issues",
         condition: PLAN_IF,
     },
+    Allowed {
+        file: advisories::FILE,
+        job: advisories::JOB,
+        scope: "issues",
+        condition: advisories::ISSUE_IF,
+    },
 ];
 
 /// The jobs that may hold `id-token: write`, by workflow file and job. The scope writes nothing
@@ -113,7 +125,7 @@ pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
 
 /// The one job of [`PRIVILEGED_WORKFLOW`] that runs on macOS: the device run of the launchd
 /// adapters, the process probe and the package check (`crates/hostkeeper-privileged/tests/
-/// device_mac.rs`).
+/// device_mac.rs`), and hello's update end to end under launchd (`device_mac_e2e.rs`).
 pub const MACOS_DEVICE_JOB: &str = "macos-device";
 
 /// The runners [`MACOS_DEVICE_JOB`] may run on: GitHub's standard hosted arm64 macOS image of a
@@ -311,7 +323,13 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     for (name, job) in jobs {
         let name = name.as_str().unwrap_or_default();
         problems.extend(permission_problems(file, name, job));
-        problems.extend(runner_problems(name, job));
+        // A job of `callers::CALLERS` that calls the CI client runs on that workflow's runner,
+        // which its own rules hold; every other job that calls a reusable workflow is refused.
+        let calls_client = callers::caller(file, name).is_some()
+            && callers::job_uses(job).is_some_and(callers::names_set_desired);
+        if !calls_client {
+            problems.extend(runner_problems(name, job));
+        }
         if on_pull_request {
             problems.extend(pull_request_problems(name, job));
         }
@@ -328,6 +346,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     if file == set_desired::FILE {
         problems.extend(set_desired::problems(&doc));
     }
+    problems.extend(callers::problems(file, &doc));
     problems
 }
 
@@ -368,7 +387,7 @@ fn permission_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
         }
         let id_token = scope == "id-token"
             && level == Some("write")
-            && ID_TOKEN_ALLOWED.contains(&(file, name));
+            && (ID_TOKEN_ALLOWED.contains(&(file, name)) || callers::caller(file, name).is_some());
         if id_token {
             continue;
         }

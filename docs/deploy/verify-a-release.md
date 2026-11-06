@@ -39,12 +39,12 @@ platforms; the installer pkg is for `macos-arm64`.
 | `hello-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hello-<version>-fail-ready-<platform>.tar.zst` | hello's failing build: the same package at the version `<version>-fail-ready`, whose unit (or plists) start `hello` with `--fail-ready`, so that it never reports ready (the build a host is rolled back from); it differs from the hello package only in the manifest's `version` and the command line its unit or plists start it with |
 | `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
-| `hostkeeper_<version>_<deb-arch>.deb` | the deb package |
-| `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package |
+| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, and the pinned `gh` and Sigstore trusted root it checks packages with |
+| `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-coordinator-<version>-<linux-platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
-| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), owned by root and wheel, no scripts; not signed, attested |
+| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel, no scripts; not signed, attested |
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
@@ -57,7 +57,10 @@ index. (`SHA256SUMS` lists every index, so the provenance of a release covers th
 Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
 
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
-distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It is
+distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It
+also holds the operator web app (`ui/` of the commit) at `/usr/share/hostkeeper-coordinator/ui`,
+owned by root, which the coordinator serves under `/ui/` when given no `--ui-dir`; `cargo xtask
+release check-image-ui` refuses an image that does not hold it file for file. It is
 built twice from clean contexts and released only when the two builds are byte for byte equal, so
 anyone can rebuild it from the commit and compare; before it is released it is also loaded and run
 through its entrypoint with `--version`, which must print the coordinator's stamp.
@@ -105,6 +108,49 @@ hello-<version>-fail-ready-<platform>.tar.zst
 hello-<version>-fail-ready-<platform>.tar.zst.sigstore.json
 hello-<version>-fail-ready-<platform>.tar.zst.sha256
 ```
+
+## What the deb and the rpm check packages with
+
+A host checks the attestation of every package before it installs it, its first deploy of a
+service included, with `gh attestation verify` run offline (the commands of step 4). The deb and
+the rpm carry the two files that check runs on, at the paths the daemon reads
+(`crates/hostkeeper-daemon/src/cli.rs`, `GH_BINARY` and `SIGSTORE_TRUSTED_ROOT`):
+
+| path | mode | what |
+|---|---|---|
+| `/usr/lib/hostkeeper/gh` | 0755 | `gh` of the version of the workflow-level `GH_VERSION` of `.github/workflows/artifacts.yml` (the macOS job pins its own), for the package's architecture, taken from cli/cli's release archive `gh_<version>_linux_<deb-arch>.tar.gz` |
+| `/usr/lib/hostkeeper/trusted_root.json` | 0644 | the Sigstore trusted root, as `gh attestation trusted-root` printed it when the release was built: one JSON line for the Sigstore public-good instance and one for GitHub's |
+
+Both are owned by root. The distribution's own `gh` will not do: Ubuntu 24.04 ships gh 2.46.0,
+which has no `gh attestation`. A host without these two files cannot check any package, and every
+check ends `attestation_unavailable`.
+
+Where they come from. The build job of `artifacts.yml` downloads the `gh` archive of each
+architecture and checks it against its pinned SHA-256 (`gh-sha256` in the job's matrix, the digest
+cli/cli publishes in `gh_<version>_checksums.txt`) before anything is unpacked. It then runs that
+`gh` as `gh attestation trusted-root`, which fetches both trusted roots through their TUF
+repositories and verifies them from the TUF root built into `gh`. `cargo xtask release
+nfpm-stage` takes `gh` out of the same archive, checks the archive against the pin again, refuses a
+`gh` that is not a program of the package's architecture and a trusted root with a line that is
+not one, and writes both into `target/nfpm/`, where `packaging/linux/nfpm.yaml` takes them from.
+A missing file or a digest that differs from the pin fails the build, and no deb or rpm is made.
+After nfpm has built them, `cargo xtask release check-linux-pkg` reads the deb and the rpm back
+(the deb's `data.tar.gz`; the rpm's header and payload) and fails the build unless each installs
+both files at these paths, a regular file of exactly this mode, owned by root and group root,
+with the bytes staged.
+
+Bumping the pin: set the workflow-level `GH_VERSION` in `artifacts.yml` to the new release and both `gh-sha256`
+values of the build job's matrix to the SHA-256s of `gh_<version>_linux_amd64.tar.gz` and
+`gh_<version>_linux_arm64.tar.gz` from that release's `gh_<version>_checksums.txt`, in one commit.
+
+The trusted root is captured anew at each build, so each deb and rpm carries the trusted root of
+the day it was built. hostkeeper's self-update does not replace these files, but hostkeeper's own
+package carries the committed root too, and the daemon uses whichever copy was written last (see
+[The trusted root on a host](#the-trusted-root-on-a-host)). A stale trusted root keeps verifying
+bundles signed under the keys it holds. When Sigstore starts signing with a certificate authority
+or a log key the host's trusted root does not hold, every bundle signed after that is refused on
+that host, as not attested by the trusted signer, until a newer root reaches it: an update of
+hostkeeper made while the old root still verifies it, a newer deb or rpm, or a copy by hand.
 
 ## Steps
 
@@ -174,6 +220,9 @@ For a host without access to the GitHub API. Once, on a host that has it:
 gh attestation trusted-root > trusted_root.jsonl
 ```
 
+This saved root is only for checking a release by hand. A hostkeeper host needs no such step: its
+root ships in the packages (see [The trusted root on a host](#the-trusted-root-on-a-host)).
+
 Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` you use, with the
 bundle released next to it (the other assets have no bundle and are verified online, step 3):
 
@@ -230,20 +279,31 @@ What it proves: the binary was built from the pinned commit and reports the vers
 
 Refuse when: the output differs in any character.
 
-### 7. Package digest for desired state
+### 7. Release index digest for desired state
 
 ```sh
+grep "  <service>-index.json$" release/SHA256SUMS
+sha256sum release/<service>-index.json
 cat release/hostkeeper-<version>-<platform>.tar.zst.sha256
 sha256sum release/hostkeeper-<version>-<platform>.tar.zst
 ```
 
-The digest in the first output equals the digest of the package that step 3 (or step 4) verified.
-This SHA-256 is what CI puts in the desired state with the version (design section 4.7); the daemon
-checks the package against it, and checks an attestation for it, before it reads the archive.
+(`index.json` for the hostkeeper packages; `<service>` is `hello` for the hello packages.)
 
-What it proves: the digest placed in desired state is the digest of the attested package.
+The digest of the index in the first two outputs is equal, and the index lists, for
+`<platform>`, the package file and the digest in the last two outputs, which are equal. These
+are what CI puts in the desired state with the version (design section 4.7): the index text and
+its SHA-256, so that each host is ordered the package of its own platform. The coordinator
+checks the index against its digest and keeps each platform's package digest; the daemon checks
+the index it fetches against the digest before it reads it, then the package against the
+index, and checks an attestation for the package, before it reads the archive. A fleet of one
+platform may put the one package digest in the desired state instead.
 
-Refuse when: the two digests differ, or the package did not pass step 3 or step 4.
+What it proves: the digest placed in desired state is the digest of the verified index, and the
+index lists the attested package.
+
+Refuse when: the digests differ, the index lists another digest for the package than the package
+has, or the package did not pass step 3 or step 4.
 
 ## What the release workflow runs
 
@@ -270,6 +330,54 @@ and 3 and the `--version` check of step 6 as written here, on the binary tarball
 `linux-x86_64`. The workflow lint (`cargo test -p xtask --test workflows`) refuses a change to
 those commands, to the tag or to the binary tarball's name in this document that the workflow
 does not follow, and the reverse.
+
+## The trusted root on a host
+
+The daemon checks every package's attestation offline, as step 4 does, against a Sigstore
+trusted root on the host. Nobody runs the command of step 4 on a host. The root comes with the
+packages:
+
+- The release commits the root, as `gh attestation trusted-root` prints it, at
+  `packaging/sigstore/trusted_root.json`.
+- hostkeeper's own package (`hostkeeper-<version>-<platform>.tar.zst`) carries that file as
+  `files/trusted_root.json`. The daemon reads it from
+  `/var/lib/hostkeeper/packages/hostkeeper/current/files/trusted_root.json`, so each update of
+  hostkeeper brings the root of its release.
+- The host's own copy is at `/usr/lib/hostkeeper/trusted_root.json` on Linux, where the deb and
+  the rpm put it ([What the deb and the rpm check packages with](#what-the-deb-and-the-rpm-check-packages-with)),
+  and at `/usr/local/lib/hostkeeper/trusted_root.json` on a Mac, where the installer pkg puts it. It is
+  the root of a host before its first update of hostkeeper, and the place to copy a root by hand.
+
+When both files are present, the daemon uses the one written last; a tie in the same second goes
+to the packaged one. A root an operator copies after a rotation therefore takes over from the
+one an older package carried. The choice goes by when each file reached the host, not by what
+it holds. A later update or rollback of hostkeeper to a version that carries an older root
+brings that root back into use, and so does a copy that keeps its source's time (`cp -p`,
+`rsync -t`). Copy with plain `cp` or `install`, and copy again after such a rollback. When
+neither file is present, `gh` is given the host's path and the check fails there.
+
+A key that Sigstore rotates reaches the hosts with the next release made after the committed root
+changes. That release is checked against the root the hosts already hold, so the update has to
+land while the old root still verifies it. The scheduled workflow `trusted-root.yml` fetches
+the live root once a day and fails when its bytes differ from the committed file. The failed run
+is the notice to commit the new root, and it keeps the live root as its artifact `trusted-root`.
+The comparison is of bytes, so a change in how the runner's `gh` writes the same root also turns
+the run red. The run prints the `gh` version, and the fix is the same: commit the live output.
+
+The admin `Status` reports the root the daemon uses:
+
+- `trusted_root_age_secs`: the seconds since that file was last written on the host (the format
+  has no field for when the root was made). It is absent when there is no file.
+- `trusted_root_reason`: one token, or empty when the root needs no attention:
+
+| reason | when |
+|---|---|
+| `trusted_root_stale` | the root is older than `--trusted-root-max-age-days` (default 90): the host has not taken an update of hostkeeper in that time |
+| `trusted_root_missing` | neither file is present |
+| `trusted_root_unparseable` | the file cannot be read, or is not one or more JSON trusted roots; this wins over `trusted_root_stale` |
+
+The reason is a signal only. A stale root does not stop a package check: the check goes on with
+the root there is, and fails only if that root no longer verifies the package.
 
 ## Refuse
 

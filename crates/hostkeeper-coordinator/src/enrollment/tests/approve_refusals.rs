@@ -219,9 +219,16 @@ async fn every_refusal_of_the_store_is_audited_and_changes_nothing() {
         actions,
         [
             "enroll_approve_refused",
+            "enroll_requested",
             "enroll_approve",
             "enroll_approve_refused",
+            "enroll_requested",
+            "enroll_issued",
+            "enroll_requested",
             "enroll_approve_refused",
+            "enroll_requested",
+            "enroll_issued",
+            "enroll_requested",
             "enroll_approve_refused"
         ]
     );
@@ -301,7 +308,7 @@ async fn a_start_that_cannot_read_what_it_would_audit_again_audits_nothing_again
     // No coordinator yet: the approval stands, and has no entry.
     let alone = enrollment
         .enrollment
-        .approve("operator", approval(&key, "s1"), &|_| true)
+        .approve("operator", approval(&key, "s1"), &|_| true, &[])
         .expect("approved");
     assert_eq!(alone.entry, None);
 

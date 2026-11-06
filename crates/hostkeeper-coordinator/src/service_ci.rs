@@ -31,37 +31,41 @@ impl Coordinator {
     ///
     /// # Errors
     /// [`SetError`], other than the refusals of the token itself.
-    pub(crate) fn set_desired_verified(
+    pub(crate) async fn set_desired_verified(
         &self,
         verified: &Verified,
         body: &[u8],
     ) -> Result<Set, SetError> {
-        self.set_desired_by(&Setter::Ci(verified), body)
+        self.set_desired_by(&Setter::Ci(verified), body).await
     }
 
     /// Sets the desired state from `body` for the operator token named `operator`. It is
     /// [`Self::set_desired_verified`] with no allow-list: the operator may set any service the
-    /// coordinator manages. The refusals are the same and in the same order, and nothing changes
-    /// when one is made. Once the state is recorded, one audit entry `set_desired` by `operator`
-    /// is written (the service, and as its reason the version, followed by `with package digest
-    /// <digest>` when the body named one); then a force of another version ends and a halt the
-    /// updater raised is lifted, both audited by `operator`.
+    /// coordinator manages. The refusals are the same and in the same order (the release channel's
+    /// among them), and nothing changes when one is made. Before the state is recorded, one audit entry `set_desired` by
+    /// `operator` is written (the service, and as its reason the version, followed by `with
+    /// package digest <digest>` when the body named one, or `with release index <digest>` when it
+    /// named an index); then the state is recorded, a force of another version ends and a halt
+    /// the updater raised is lifted, both audited by `operator`.
     ///
     /// # Errors
-    /// [`SetError`], other than the refusals of a token. [`SetError::Ops`] means the desired
-    /// state is set and the audit entry, the end of a force or the lift of a halt could not be
-    /// written; setting the same state again is safe and tries them again.
-    pub(crate) fn set_desired_operator(
+    /// [`SetError`], other than the refusals of a token. [`SetError::Ops`] of
+    /// [`crate::ops::OpsError::AuditUnavailable`] from the `set_desired` entry means nothing is
+    /// set. Any later [`SetError::Ops`] means the desired state is set and the end of a force or
+    /// the lift of a halt could not be written; setting the same state again is safe and tries
+    /// them again.
+    pub(crate) async fn set_desired_operator(
         &self,
         operator: &str,
         body: &[u8],
     ) -> Result<Set, SetError> {
-        self.set_desired_by(&Setter::Operator(operator), body)
+        self.set_desired_by(&Setter::Operator(operator), body).await
     }
 
-    /// The set both callers share: parse, admit the service, then under the fleet's lock refuse,
-    /// record, audit (an operator's) and end a force and lift a halt.
-    fn set_desired_by(&self, setter: &Setter<'_>, body: &[u8]) -> Result<Set, SetError> {
+    /// The set both callers share: parse, admit the service, ask the release channel (with
+    /// `--release-channel`), then under the fleet's lock refuse, audit (an operator's), record,
+    /// and end a force and lift a halt.
+    async fn set_desired_by(&self, setter: &Setter<'_>, body: &[u8]) -> Result<Set, SetError> {
         let (service, desired, dropped_roles) =
             Desired::parse_request_noting(body, &self.services, self.legacy.as_deref())?;
         if let Setter::Ci(verified) = setter {
@@ -78,6 +82,11 @@ impl Coordinator {
                 );
                 return Err(SetError::Forbidden);
             }
+        }
+        // The release channel before the fleet's lock, which is never held across a wait on the
+        // network; a refusal here changes nothing.
+        if let Some(channel) = &self.channel {
+            channel.check(&service, &desired).await?;
         }
         let (actor, set_by) = match setter {
             Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),
@@ -97,17 +106,25 @@ impl Coordinator {
                 .ok_or(SetError::Invalid(DesiredError::UnknownService))?;
             self.refuse(def, &desired)?;
             let marks = self.ops.marks(&service);
-            self.desired
-                .record(&service, desired.clone(), |v| kept(&marks, v))?;
+            // An operator's set is audited before the desired state is written: a set whose
+            // audit line cannot be appended is refused (`audit_unavailable`) with nothing
+            // written.
             if let Setter::Operator(name) = setter {
                 let mut entry = AuditEntry::new(name, "set_desired");
                 entry.service = Some(service.clone());
-                entry.reason = Some(match &desired.release_digest {
-                    Some(digest) => format!("{} with package digest {digest}", desired.version),
-                    None => desired.version.to_string(),
+                entry.reason = Some(match (&desired.release_digest, &desired.release_index) {
+                    (Some(digest), _) => {
+                        format!("{} with package digest {digest}", desired.version)
+                    }
+                    (None, Some(index)) => {
+                        format!("{} with release index {}", desired.version, index.digest)
+                    }
+                    (None, None) => desired.version.to_string(),
                 });
                 self.ops.change(Write::BeforeMemory, entry, |_| {})?;
             }
+            self.desired
+                .record(&service, desired.clone(), |v| kept(&marks, v))?;
             // A set of another version ends a force that stands ([`crate::force`]), before
             // the lift: a lift that fails then leaves no force ordering the old version.
             end_by_setter(&self.ops, &service, &desired.version, actor, &set_by)?;

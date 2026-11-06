@@ -1,7 +1,8 @@
 //! The real package store: the four steps of design section 5.5 behind the [`Packages`] port.
 //!
 //! [`RealPackages::version_dir`] sweeps what a crashed fetch or unpack left, downloads the
-//! package of the order ([`hostkeeper_package::fetch_package`]), proves it
+//! package of the order ([`hostkeeper_package::fetch_package`], which refuses a release index
+//! whose SHA-256 is not the order's index digest, when the order has one), proves it
 //! ([`hostkeeper_package::prove`]), compares the proven archive's SHA-256 with the digest the
 //! order names, then unpacks it ([`hostkeeper_unpack::unpack`]) and seals the version directory.
 //! It takes no lock: the daemon holds the service's lock around the call.
@@ -9,21 +10,25 @@
 //! Every failure of those libraries reaches the daemon as one [`PackageError::Refused`] built by
 //! [`refusal_of`], the one table that maps a library's reason token onto a [`Refusal`]. The
 //! outcome and the class are the library's own.
+//!
+//! The store also reports the Sigstore trusted root its verifier checks attestations with
+//! ([`RealPackages::with_trusted_root`], [`crate::trusted_root`]): its age and, when it needs
+//! attention, a reason, which the admin `Status` carries.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hostkeeper_config::daemon::{Bounds, DaemonConfig, HttpsUrl, TrustedSigners};
+use hostkeeper_config::daemon::{Bounds, DaemonConfig, HttpsUrl, Sha256Hex, TrustedSigners};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_package::fetch::FetchEnv;
 use hostkeeper_package::ports::{Fetcher, Verifier};
 use hostkeeper_package::prove::ProveEnv;
 use hostkeeper_package::{
-    ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_INVALID, NO_PACKAGE_FOR_PLATFORM, NO_SPACE,
-    NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure, PackageOrder, Platform, fetch_package,
-    prove, remove_orphan_fetches,
+    ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_DIGEST_MISMATCH, INDEX_INVALID,
+    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure,
+    PackageOrder, Platform, fetch_package, prove, remove_orphan_fetches,
 };
 use hostkeeper_steps::{Clock, Staged};
 use hostkeeper_unpack::{
@@ -36,6 +41,7 @@ use hostkeeper_unpack::{
 use crate::adapters::PackageCheck;
 use crate::packages::{PackageError, PackageRefusal, Packages, VersionDir};
 use crate::refusal::Refusal;
+use crate::trusted_root::{RootReport, TrustedRoot};
 use crate::verb::PackageDigest;
 
 /// What failed, as [`refusal_of`] takes it.
@@ -51,6 +57,7 @@ pub enum Failure<'a> {
 
 /// The library token of a fetch or a proof, and the refusal it is reported as.
 const PACKAGE_TOKENS: &[(&str, Refusal)] = &[
+    (INDEX_DIGEST_MISMATCH, Refusal::IndexDigestMismatch),
     (INDEX_INVALID, Refusal::IndexInvalid),
     (NO_PACKAGE_FOR_PLATFORM, Refusal::NoPackageForPlatform),
     (PACKAGE_DIGEST_MISMATCH, Refusal::DigestMismatch),
@@ -141,6 +148,7 @@ pub struct RealPackages {
     platform: Platform,
     fs: Arc<dyn PackageFs + Send + Sync>,
     check: PackageCheck,
+    trusted_root: Option<Arc<TrustedRoot>>,
 }
 
 impl RealPackages {
@@ -167,6 +175,7 @@ impl RealPackages {
             platform: Platform::current(),
             fs: Arc::new(fs),
             check: None,
+            trusted_root: None,
         })
     }
 
@@ -174,6 +183,15 @@ impl RealPackages {
     /// quarantine and code-signature check ([`crate::adapters::Adapters`]), none on Linux.
     pub fn with_package_check(self, check: PackageCheck) -> RealPackages {
         RealPackages { check, ..self }
+    }
+
+    /// The same store, reporting `root`, the trusted root its verifier checks attestations
+    /// with ([`Packages::trusted_root`]).
+    pub fn with_trusted_root(self, root: Arc<TrustedRoot>) -> RealPackages {
+        RealPackages {
+            trusted_root: Some(root),
+            ..self
+        }
     }
 }
 
@@ -183,11 +201,13 @@ impl Packages for RealPackages {
         service: &ServiceName,
         version: &Version,
         digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
     ) -> Result<VersionDir, PackageError> {
         self.remove_orphans(service)?;
         let order = PackageOrder {
             service: service.clone(),
             version: version.clone(),
+            index_digest: index_digest.and_then(|d| Sha256Hex::parse(d.as_str())),
         };
         let fetch = FetchEnv {
             fetcher: &*self.fetcher,
@@ -241,5 +261,9 @@ impl Packages for RealPackages {
             .map_err(|error| refused(refusal_of(Failure::Unpack(&error))))?;
         remove_orphan_fetches(&self.root, service)
             .map_err(|error| refused(io_refusal(error.to_string())))
+    }
+
+    fn trusted_root(&self) -> Option<RootReport> {
+        self.trusted_root.as_ref().map(|root| root.report())
     }
 }

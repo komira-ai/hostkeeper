@@ -101,6 +101,9 @@ pub fn beat(running: &str) -> Heartbeat {
         promotion_pending: false,
         deferred: None,
         agent: None,
+        sent_unix: None,
+        cert_not_after_unix: None,
+        last_renew_error: None,
     }
 }
 
@@ -127,6 +130,7 @@ pub fn desired(target: &str, storage: u32, frontend: u32) -> Desired {
         max_updating: RoleLimits::max_updating_default(),
         min_up: RoleLimits::from([("storage", storage), ("frontend", frontend)]),
         release_digest: None,
+        release_index: None,
     }
 }
 

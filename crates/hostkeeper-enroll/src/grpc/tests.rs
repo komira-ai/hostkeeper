@@ -12,7 +12,7 @@ use std::time::Duration;
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::Coordinator;
-use hostkeeper_steps::SystemClock;
+use hostkeeper_steps::{ProcBootId, SystemClock};
 use hostkeeper_testkit::Scratch;
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{DerSignature, VerifyingKey};
@@ -223,7 +223,7 @@ fn open_enroller(dir: &Scratch, port: u16, pinned: &[u8]) -> Enroller {
         claims: Box::new(FixedClaims),
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
-        clock: Box::new(SystemClock),
+        clock: Box::new(SystemClock::new(Box::new(ProcBootId::host()))),
     };
     Enroller::open(settings, ports).expect("open the enroller")
 }

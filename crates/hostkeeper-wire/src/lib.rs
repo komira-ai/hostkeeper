@@ -32,6 +32,8 @@ mod wire_acks_tests;
 #[cfg(test)]
 mod wire_agent_tests;
 #[cfg(test)]
+mod wire_cert_state_tests;
+#[cfg(test)]
 mod wire_dropped_facts_tests;
 #[cfg(test)]
 mod wire_features_tests;

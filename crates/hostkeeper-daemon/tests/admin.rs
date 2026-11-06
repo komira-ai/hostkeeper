@@ -6,7 +6,6 @@ mod support;
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::thread;
 
 use bytes::Bytes;
 use hostkeeper_config::names::ServiceName;
@@ -16,7 +15,9 @@ use hostkeeper_daemon::admin::{self, Peer, step_record, verdict_into};
 use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::halt::HaltStore;
 use hostkeeper_daemon::locks::Package;
-use hostkeeper_daemon::testing::Counted;
+use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
+use hostkeeper_daemon::testing::{Counted, spawn};
+use hostkeeper_daemon::trusted_root::{RootProblem, RootReport};
 use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Dirs};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -104,9 +105,11 @@ async fn status_reports_running_version_last_result_and_held_halt() {
     }
     let running = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("busy", "2.0.0", &d(), 1)))
+        spawn("the order", move || {
+            daemon.order(&update("busy", "2.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&running).expect("the held step is entered");
 
     let status = daemon.status().expect("status");
     assert_eq!(status.version, OWN);
@@ -540,5 +543,99 @@ fn a_status_error_names_the_directory() {
             file.display()
         )),
         "{text}"
+    );
+}
+
+/// A package store that reports `report` as its trusted root, and otherwise is `inner`.
+struct ReportingRoot {
+    inner: Arc<hostkeeper_daemon::testing::FakePackages>,
+    report: Option<RootReport>,
+}
+
+impl Packages for ReportingRoot {
+    fn version_dir(
+        &self,
+        service: &ServiceName,
+        version: &hostkeeper_config::names::Version,
+        digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
+    ) -> Result<VersionDir, PackageError> {
+        self.inner
+            .version_dir(service, version, digest, index_digest)
+    }
+
+    fn trusted_root(&self) -> Option<RootReport> {
+        self.report.clone()
+    }
+}
+
+/// Catches the trusted root's age or reason dropped between the store and the wire, a reason
+/// sent under another token, or one sent for a root that needs no attention: the library's
+/// status holds the store's report, and `Status` carries its age and its reason token, the age
+/// absent for a missing root and the reason empty for a fine one or a store that reports none.
+#[tokio::test]
+async fn status_carries_the_trusted_roots_age_and_reason() {
+    let rig = Rig::new("admin-trusted-root");
+    let path = rig.scratch.path().join("trusted_root.json");
+    let cases = [
+        (None, None, ""),
+        (Some(3600), None, ""),
+        (
+            Some(91 * 86_400),
+            Some(RootProblem::Stale),
+            "trusted_root_stale",
+        ),
+        (None, Some(RootProblem::Missing), "trusted_root_missing"),
+        (
+            Some(60),
+            Some(RootProblem::Unparseable),
+            "trusted_root_unparseable",
+        ),
+    ];
+    for (age_secs, problem, token) in cases {
+        let report = RootReport {
+            path: path.clone(),
+            age_secs,
+            problem,
+        };
+        let packages = ReportingRoot {
+            inner: Arc::clone(&rig.store),
+            report: Some(report.clone()),
+        };
+        let ports = hostkeeper_daemon::Ports {
+            packages: Arc::new(packages),
+            ..rig.ports()
+        };
+        let daemon = Arc::new(Daemon::new(config(), rig.dirs(), ports, OWN));
+        assert_eq!(
+            daemon.status().expect("the status").trusted_root,
+            Some(report)
+        );
+        let (mut client, _) = connect(daemon, Peer { uid: Some(0) });
+        let status = client
+            .status(StatusRequest {})
+            .await
+            .expect("the status")
+            .into_inner();
+        assert_eq!(
+            (
+                status.trusted_root_age_secs,
+                status.trusted_root_reason.as_str()
+            ),
+            (age_secs, token),
+            "{problem:?}"
+        );
+    }
+    let daemon = Arc::new(rig.daemon());
+    assert_eq!(daemon.status().expect("the status").trusted_root, None);
+    let (mut client, _) = connect(daemon, Peer { uid: Some(0) });
+    let status = client
+        .status(StatusRequest {})
+        .await
+        .expect("the status")
+        .into_inner();
+    assert_eq!(
+        (status.trusted_root_age_secs, status.trusted_root_reason),
+        (None, String::new())
     );
 }

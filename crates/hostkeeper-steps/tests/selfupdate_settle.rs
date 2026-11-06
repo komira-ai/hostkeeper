@@ -916,6 +916,6 @@ fn the_generated_dropin_and_fallback_unit_are_unchanged() {
     let layout = Layout::new(Path::new("/var/lib/updater/state/hostkeeper/bin"));
     assert_eq!(
         fallback_unit(&layout, "hostkeeper.service"),
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart=/var/lib/updater/state/hostkeeper/bin/previous self-update-fallback --dir /var/lib/updater/state/hostkeeper/bin\nExecStartPost=/usr/bin/systemctl reset-failed hostkeeper.service\nExecStartPost=/usr/bin/systemctl start --no-block hostkeeper.service\n"
+        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart=-/var/lib/updater/state/hostkeeper/bin/previous self-update-fallback --dir /var/lib/updater/state/hostkeeper/bin\nExecStartPost=/usr/bin/systemctl reset-failed hostkeeper.service\nExecStartPost=/usr/bin/systemctl start --no-block hostkeeper.service\n"
     );
 }

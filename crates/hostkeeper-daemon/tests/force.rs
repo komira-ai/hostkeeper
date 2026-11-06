@@ -6,12 +6,11 @@ mod support;
 
 use std::fs;
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_daemon::checks::{Check, Checks};
 use hostkeeper_daemon::locks::Package;
 use hostkeeper_daemon::packages::PackageError;
-use hostkeeper_daemon::testing::{Log, NoPrune, manifest};
+use hostkeeper_daemon::testing::{Log, NoPrune, manifest, spawn};
 use hostkeeper_daemon::verb::{DIGEST_RULE, HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Placement, Ports, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -326,18 +325,27 @@ fn force_stops_a_running_step_and_closes_its_record_forced_over() {
     let stops = rig.launcher.stops_seen();
     let updating = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update(WEB, "1.0.0", &d(), 1)))
+        spawn("the update", move || {
+            daemon.order(&update(WEB, "1.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&updating).expect("the cutover runs");
     // The force's first wait for the lock is held until the update has ended, so that it stops
     // the step once.
     let waiting = rig.clock.park_next_sleep();
     let forcing = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)))
+        spawn("the force", move || {
+            daemon.order(&force(WEB, "2.0.0", &d(), 2, 0))
+        })
     };
-    assert_eq!(stops.recv().expect("a stop"), "updater-web-cutover-1");
-    waiting.entered();
+    assert_eq!(
+        stops.wait(&forcing).expect("the force stops the step"),
+        "updater-web-cutover-1"
+    );
+    waiting
+        .entered(&forcing)
+        .expect("the force waits for the lock");
     gate.release();
     assert_eq!(
         updating.join().expect("the update"),
@@ -367,16 +375,25 @@ fn force_interrupts_a_running_prepare_and_the_runner_launches_no_rollback() {
     let stops = rig.launcher.stops_seen();
     let updating = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update(WEB, "1.0.0", &d(), 1)))
+        spawn("the update", move || {
+            daemon.order(&update(WEB, "1.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&updating).expect("the prepare runs");
     let waiting = rig.clock.park_next_sleep();
     let forcing = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)))
+        spawn("the force", move || {
+            daemon.order(&force(WEB, "2.0.0", &d(), 2, 0))
+        })
     };
-    assert_eq!(stops.recv().expect("a stop"), "updater-web-prepare-1");
-    waiting.entered();
+    assert_eq!(
+        stops.wait(&forcing).expect("the force stops the step"),
+        "updater-web-prepare-1"
+    );
+    waiting
+        .entered(&forcing)
+        .expect("the force waits for the lock");
     gate.release();
     assert_eq!(
         updating.join().expect("the update"),
@@ -403,9 +420,11 @@ fn force_does_not_wait_for_another_services_step() {
     let gate = rig.launcher.hold("api", Step::Prepare);
     let updating = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("api", "1.0.0", &d(), 1)))
+        spawn("the update", move || {
+            daemon.order(&update("api", "1.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&updating).expect("api's prepare runs");
     let record = rig.state.join("api").join(RECORD_FILE);
     let before = fs::read(&record).expect("api's record");
     assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 1, 0)), succeeded());
@@ -429,9 +448,13 @@ fn force_takes_the_service_lock_only_and_a_second_order_for_the_service_is_busy_
     let parked = rig.clock.park_next_sleep();
     let forcing = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&force(WEB, "2.0.0", &d(), 1, 0)))
+        spawn("the force", move || {
+            daemon.order(&force(WEB, "2.0.0", &d(), 1, 0))
+        })
     };
-    parked.entered();
+    parked
+        .entered(&forcing)
+        .expect("the force waits for its unit");
     assert_eq!(
         daemon.order(&update(WEB, "2.0.0", &d(), 2)),
         Reply::Refused {
@@ -524,13 +547,21 @@ fn force_starts_exactly_the_units_the_target_lists() {
 /// Catches a wait that ends on the first active unit, ends early, or reads another clock: with
 /// `force_start_secs` 60, one unit active at once is asked after once, and another that turns
 /// active on its 61st ask passes, on its 62nd fails `start_failed`; either way the clock moved 60
-/// seconds, by the force's polls alone.
+/// seconds, by the force's polls alone. The same holds on a clock whose boot id cannot be read:
+/// the wait is of this process and ends at its bound, never waits forever nor ends at once.
 #[test]
 fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
     let two = "web-two.service";
     let failed_start = failed(Phase::AfterCommit, Class::Release, "start_failed");
-    for (asks, expected) in [(60, succeeded()), (61, failed_start)] {
+    let cases = [(60, succeeded()), (61, failed_start)];
+    for (lost, (asks, expected)) in [false, true]
+        .into_iter()
+        .flat_map(|lost| cases.clone().into_iter().map(move |case| (lost, case)))
+    {
         let rig = Rig::new("force-wait");
+        if lost {
+            rig.clock.lose_boot_id();
+        }
         let daemon = rig.daemon();
         rig.add_units(WEB, "2.0.0", &[UNIT, two], &[UNIT, two], &[]);
         rig.units.active_after(two, asks);
@@ -538,11 +569,11 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
         assert_eq!(
             daemon.order(&force(WEB, "2.0.0", &d(), 1, 0)),
             expected,
-            "{asks}"
+            "{asks} {lost}"
         );
-        assert_eq!(rig.clock.mono_secs() - began, 60, "{asks}");
-        assert_eq!(asked_active(&rig, UNIT), 1, "{asks}");
-        assert_eq!(asked_active(&rig, two), 61, "{asks}");
+        assert_eq!(rig.clock.mono_secs() - began, 60, "{asks} {lost}");
+        assert_eq!(asked_active(&rig, UNIT), 1, "{asks} {lost}");
+        assert_eq!(asked_active(&rig, two), 61, "{asks} {lost}");
     }
 }
 

@@ -1,0 +1,168 @@
+//! The `gh` the channel-sync deploy test (tests/channel_sync.rs) puts on the `PATH` of the
+//! committed unit's and sidecar's commands. A program of the tests, not shipped; it reaches no
+//! network.
+//!
+//! It answers from `releases/` beside its own file, and appends each command line to `calls`
+//! there:
+//!
+//! - `gh api repos/<o>/<n>/releases?per_page=100` prints `releases/<o>/<n>/list.json`, or `[]`
+//!   when there is none;
+//! - `gh release download <tag> --repo <o>/<n> --pattern <name> --dir <dir>` copies
+//!   `releases/<o>/<n>/<tag>/<name>` into `<dir>`, and fails like GitHub (HTTP 404) when there is
+//!   no such file;
+//! - `gh attestation verify <file> [--bundle <b>] --repo <r> --signer-workflow <w> --source-ref
+//!   <ref> --source-digest <c> ...` prints one attestation of `<file>`'s SHA-256 by `<w>` on
+//!   `<ref>` at `<c>`: every file verifies as signed by whom it is asked about.
+//!
+//! - `gh release list --repo <o>/<n> ... --json tagName --jq <filter>` runs `jq --raw-output
+//!   <filter>` over `releases/<o>/<n>/release-list.json` (`[{"tagName": ...}, ...]`, `[]` when
+//!   there is none) and prints what it prints, as `gh` does with `--jq`.
+//!
+//! Anything else exits 2.
+//!
+//! Started as `curl` (a link named `curl`), it is the fake origin of the release channel test of
+//! release.yml (tests/workflows/channel_run_tests.rs): `curl ... --output <file> https://<rest>`
+//! copies `channel/<rest>` beside its own file to `<file>`, and when there is none fails as curl
+//! does for an HTTP 404 with `--fail` (exit 22). It never waits, whatever retry flags it is given.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use sha2::Digest;
+
+/// The value after `flag` in `args`.
+fn value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let at = args.iter().position(|a| a == flag)?;
+    args.get(at + 1).map(String::as_str)
+}
+
+fn fail(why: &str) -> ExitCode {
+    eprintln!("gh: {why}");
+    ExitCode::from(1)
+}
+
+fn answer(data: &Path, args: &[String]) -> ExitCode {
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        ["api", path] => {
+            let Some(repo) = path
+                .strip_prefix("repos/")
+                .and_then(|p| p.strip_suffix("/releases?per_page=100"))
+            else {
+                return ExitCode::from(2);
+            };
+            let list = std::fs::read(data.join(repo).join("list.json"));
+            let list = list.unwrap_or_else(|_| b"[]".to_vec());
+            if std::io::stdout().write_all(&list).is_err() {
+                return ExitCode::FAILURE;
+            }
+            ExitCode::SUCCESS
+        }
+        ["release", "download", tag, ..] => {
+            let (Some(repo), Some(name), Some(dir)) = (
+                value(args, "--repo"),
+                value(args, "--pattern"),
+                value(args, "--dir"),
+            ) else {
+                return ExitCode::from(2);
+            };
+            let from = data.join(repo).join(tag).join(name);
+            match std::fs::copy(&from, Path::new(dir).join(name)) {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(_) => fail("HTTP 404: Not Found"),
+            }
+        }
+        ["attestation", "verify", file, ..] => {
+            let (Some(workflow), Some(source_ref), Some(commit)) = (
+                value(args, "--signer-workflow"),
+                value(args, "--source-ref"),
+                value(args, "--source-digest"),
+            ) else {
+                return ExitCode::from(2);
+            };
+            let Ok(bytes) = std::fs::read(file) else {
+                return fail("no such file");
+            };
+            let reply = serde_json::json!([{
+                "verificationResult": {
+                    "signature": {"certificate": {
+                        "buildSignerURI": format!("https://github.com/{workflow}@{source_ref}"),
+                        "sourceRepositoryRef": source_ref,
+                        "sourceRepositoryDigest": commit,
+                    }},
+                    "statement": {"subject": [{"digest": {
+                        "sha256": hex::encode(sha2::Sha256::digest(&bytes)),
+                    }}]},
+                }
+            }]);
+            println!("{reply}");
+            ExitCode::SUCCESS
+        }
+        ["release", "list", ..] => {
+            let (Some(repo), Some(filter)) = (value(args, "--repo"), value(args, "--jq")) else {
+                return ExitCode::from(2);
+            };
+            let list = std::fs::read(data.join(repo).join("release-list.json"));
+            let list = list.unwrap_or_else(|_| b"[]".to_vec());
+            let child = std::process::Command::new("jq")
+                .args(["--raw-output", filter])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::inherit())
+                .spawn();
+            let Ok(mut child) = child else {
+                return fail("cannot run jq");
+            };
+            let written = child
+                .stdin
+                .take()
+                .is_some_and(|mut stdin| stdin.write_all(&list).is_ok());
+            match child.wait() {
+                Ok(status) if status.success() && written => ExitCode::SUCCESS,
+                _ => fail("jq failed"),
+            }
+        }
+        _ => ExitCode::from(2),
+    }
+}
+
+/// The fake `curl` of the channel: see the module's documentation.
+fn curl(dir: &Path, args: &[String]) -> ExitCode {
+    let (Some(output), Some(url)) = (value(args, "--output"), args.last()) else {
+        return ExitCode::from(2);
+    };
+    let Some(rest) = url.strip_prefix("https://") else {
+        eprintln!("curl: (1) Protocol not supported or disabled");
+        return ExitCode::from(1);
+    };
+    match std::fs::copy(dir.join("channel").join(rest), output) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(_) => {
+            eprintln!("curl: (22) The requested URL returned error: 404");
+            ExitCode::from(22)
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Ok(exe) = std::env::current_exe() else {
+        return fail("no file of its own");
+    };
+    let Some(dir) = exe.parent() else {
+        return fail("no directory of its own");
+    };
+    if exe.file_name().is_some_and(|name| name == "curl") {
+        return curl(dir, &args);
+    }
+    let data: PathBuf = dir.join("releases");
+    let logged = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data.join("calls"))
+        .and_then(|mut log| writeln!(log, "{}", args.join(" ")));
+    if logged.is_err() {
+        return fail("cannot write calls");
+    }
+    answer(&data, &args)
+}

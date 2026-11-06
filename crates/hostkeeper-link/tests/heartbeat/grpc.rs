@@ -176,6 +176,8 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         agent_version: version("0.9.0"),
         features: ANNOUNCED.to_vec(),
         services,
+        sent_unix: 0,
+        renewal: hostkeeper_link::Renewal::default(),
     }
 }
 
@@ -199,12 +201,14 @@ fn expected_reply() -> Reply {
                 service: service("web"),
                 version: version("2.0"),
                 digest: digest(),
+                index_digest: None,
             }),
         }),
         features: vec![
             Feature::DeferredV1,
             Feature::HaltV1,
             Feature::HeartbeatV2,
+            Feature::ForcedV1,
             Feature::OrderV1,
             Feature::VerdictAcksV1,
             Feature::GrpcV1,
@@ -580,6 +584,7 @@ fn the_grpc_link_refuses_a_heartbeat_one_byte_over_the_bound_and_dials_for_one_a
                 service: service("web"),
                 version: version("2.0"),
                 digest: digest(),
+                index_digest: None,
             }),
         };
         let mut done = verdict(&order, Outcome::Failed);

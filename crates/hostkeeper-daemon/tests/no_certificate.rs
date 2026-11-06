@@ -7,15 +7,17 @@ mod support;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use hostkeeper_daemon::cli::{HostFiles, host_links};
 use hostkeeper_daemon::links::{Links, NO_ENROLLMENT};
 use hostkeeper_daemon::start;
-use hostkeeper_daemon::testing::{FakeNotifier, Log as Events};
+use hostkeeper_daemon::testing::{Ending, FakeNotifier, Log as Events, Notice, Signal};
 use hostkeeper_link::testing::FakeLink;
-use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, Log, PkiCertSource, Sleeper, ThreadDispatch, Tick};
+use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, Dispatch, Job, Log, PkiCertSource, Sleeper, Tick};
 use support::{OWN, Rig};
 
 /// The daemon config of a host as the packaging ships it, before it is filled in.
@@ -58,26 +60,69 @@ fn filled() -> String {
 }
 
 /// Each line of the loops, as it is written.
-struct Lines(Mutex<Sender<String>>);
+struct Lines(Notice<String>);
 
 impl Log for Lines {
     fn line(&self, text: &str) {
-        let sent = self.0.lock().expect("the sender").send(text.to_owned());
-        assert!(sent.is_ok(), "the test reads every line");
+        self.0.send(text.to_owned());
+    }
+}
+
+/// Declares its party over when dropped: when the task that owns it ends, or is cancelled, or
+/// panics.
+struct OverOnDrop(Ending);
+
+impl Drop for OverOnDrop {
+    fn drop(&mut self) {
+        self.0.over("the server ended");
+    }
+}
+
+/// Declares its party over when dropped: when the thread of a loop that owns it ends or panics.
+struct LoopOver {
+    left: Arc<AtomicUsize>,
+    ending: Ending,
+}
+
+impl Drop for LoopOver {
+    fn drop(&mut self) {
+        if self.left.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.ending.over("both loops ended");
+        }
+    }
+}
+
+/// Runs each of the two loops on a thread of its own, and declares `ending` over when both have
+/// ended: the lines and the waits are sent by the loops, so the test waits on them, not only on
+/// the server.
+struct Loops {
+    left: Arc<AtomicUsize>,
+    ending: Ending,
+}
+
+impl Dispatch for Loops {
+    fn start(&self, job: Job) {
+        let over = LoopOver {
+            left: Arc::clone(&self.left),
+            ending: self.ending.clone(),
+        };
+        thread::spawn(move || {
+            let _over = over;
+            job();
+        });
     }
 }
 
 /// The heartbeat loop's wait, stepped by the test: it says how long it would wait, then waits
 /// for the test to say beat or stop.
 struct Stepped {
-    waits: Mutex<Sender<u64>>,
+    waits: Notice<u64>,
     ticks: Mutex<Receiver<Tick>>,
 }
 
 impl Sleeper for Stepped {
     fn sleep(&self, secs: u64) -> Tick {
-        let said = self.waits.lock().expect("the sender").send(secs);
-        assert!(said.is_ok(), "the test reads every wait");
+        self.waits.send(secs);
         self.ticks
             .lock()
             .expect("the ticks")
@@ -109,9 +154,11 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
     assert_eq!(notifier.sent(), 1, "ready");
     let daemon = Arc::clone(started.daemon());
 
-    let (said, lines) = mpsc::channel();
-    let log = Arc::new(Lines(Mutex::new(said)));
-    let (waited, waits) = mpsc::channel();
+    // Over when the server ends, or when both loops have.
+    let serving = Ending::default();
+    let (said, lines) = Signal::new();
+    let log = Arc::new(Lines(said));
+    let (waited, waits) = Signal::new();
     let (step, ticks) = mpsc::channel();
     let link = Arc::new(FakeLink::default());
     let links = Links {
@@ -120,10 +167,13 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
         certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
         log,
         sleeper: Box::new(Stepped {
-            waits: Mutex::new(waited),
+            waits: waited,
             ticks: Mutex::new(ticks),
         }),
-        dispatch: Arc::new(ThreadDispatch),
+        dispatch: Arc::new(Loops {
+            left: Arc::new(AtomicUsize::new(2)),
+            ending: serving.clone(),
+        }),
         ..host_links(
             &daemon,
             &files,
@@ -136,9 +186,16 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
         .enable_all()
         .build()
         .expect("a runtime");
-    let served = runtime.spawn(start::serve(started, links));
+    let over = OverOnDrop(serving.clone());
+    let served = runtime.spawn(async move {
+        let _over = over;
+        start::serve(started, links).await
+    });
 
-    let mut first = vec![lines.recv().expect("a line"), lines.recv().expect("a line")];
+    let mut first = vec![
+        lines.wait(&serving).expect("a line"),
+        lines.wait(&serving).expect("a line"),
+    ];
     first.sort();
     let waiting = format!(
         "not enrolled: waiting for {}",
@@ -153,7 +210,7 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
     );
     for period in 1..=3 {
         assert_eq!(
-            waits.recv().expect("the heartbeat loop waits"),
+            waits.wait(&serving).expect("the heartbeat loop waits"),
             DEFAULT_HEARTBEAT_SECS.get(),
             "a whole period after try {period}"
         );
@@ -164,12 +221,8 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
         step.send(Tick::Beat).expect("the loop takes the tick");
     }
     assert_eq!(
-        waits.recv().expect("the heartbeat loop waits"),
+        waits.wait(&serving).expect("the heartbeat loop waits"),
         DEFAULT_HEARTBEAT_SECS.get()
-    );
-    assert!(
-        lines.try_recv().is_err(),
-        "what it waits for is said once, not at every try"
     );
     assert!(
         link.calls().is_empty(),
@@ -181,4 +234,10 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
     daemon.ctx().restart().request();
     let ended = runtime.block_on(served).expect("the server task");
     assert!(ended.is_ok(), "{ended:?}");
+    // Checked once the server is over, on purpose: a line said again would be queued, so it is
+    // taken at once, and a wait with none fails at once rather than waiting.
+    assert!(
+        lines.wait(&serving).is_err(),
+        "what it waits for is said once, not at every try"
+    );
 }

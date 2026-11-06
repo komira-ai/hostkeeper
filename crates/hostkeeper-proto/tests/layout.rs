@@ -508,12 +508,13 @@ fn the_service_limit_is_the_headers() {
 }
 
 /// The only fields an order may hold at any depth besides its verbs, each with its one type.
-const ORDER_FIELDS: [(&str, Kind); 6] = [
+const ORDER_FIELDS: [(&str, Kind); 7] = [
     ("order_id", Kind::String),
     ("try", Kind::Uint64),
     ("service", Kind::String),
     ("version", Kind::String),
     ("package_digest", Kind::String),
+    ("index_digest", Kind::String),
     ("halt_generation", Kind::Uint64),
 ];
 
@@ -766,7 +767,8 @@ fn every_new_refusal_enum_has_the_zero_value_unspecified_and_a_code_comment_per_
             codes.insert((refusal, token), code);
         }
     }
-    // The package is two files (operator.proto and enrollment.proto); each enum is in one.
+    // The package is three files (operator.proto, enrollment.proto and entry.proto); each enum
+    // is in one.
     let operator: Vec<_> = ours(&built)
         .into_iter()
         .filter(|f| f.package() == "hostkeeper.operator.v1")

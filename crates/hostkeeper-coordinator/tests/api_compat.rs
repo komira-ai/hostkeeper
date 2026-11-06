@@ -128,6 +128,7 @@ async fn the_json_answer_and_the_typed_order_carry_the_same_update() {
                 service: "web".to_owned(),
                 version: "2.0".to_owned(),
                 package_digest: json.package_digest.expect("a digest").as_str().to_owned(),
+                index_digest: String::new(),
             })),
         }
     );

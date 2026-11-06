@@ -9,13 +9,16 @@ use hostkeeper_package::ports::{
     Attest, Attested, Fetcher, Got, Limit, NetError, Sink, Url, Verifier, VerifyError,
 };
 use hostkeeper_package::prove::{ProveEnv, prove};
-use hostkeeper_steps::Clock;
+use hostkeeper_steps::{BootId, BootIdError, Clock};
 
 use super::*;
 use crate::release::Verb;
 use crate::release::fakes::{FakeHistory, Fakes, scratch};
 use crate::release::ports::Adapters;
 use crate::testdir::TestDir;
+
+/// hello and its failing build staged into one tree.
+mod fail_ready;
 
 const SERVICE: &str = "tierstore";
 const VERSION: &str = "1.5.0";
@@ -245,8 +248,8 @@ impl Clock for Still {
         100
     }
 
-    fn boot_id(&self) -> String {
-        "boot".to_owned()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the still clock", "boot")
     }
 
     fn sleep_secs(&self, _secs: u64) {}
@@ -290,6 +293,7 @@ fn fetched(out: &Path, s: &str, v: &str, platform: Platform) -> (Vec<u8>, Vec<St
     let order = PackageOrder {
         service: service(s),
         version: version(v),
+        index_digest: None,
     };
     let staged = fetch_package(&env, &order).expect("the daemon's fetch takes the staged tree");
     let proof = ProveEnv {

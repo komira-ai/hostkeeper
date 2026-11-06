@@ -5,7 +5,8 @@
 
 use std::time::Duration;
 
-use hostkeeper_wire::wire::{ServiceBeat, ServiceReply};
+use hostkeeper_wire::Platform;
+use hostkeeper_wire::wire::ServiceReply;
 
 use super::Coordinator;
 use crate::acks::release_ack;
@@ -14,16 +15,16 @@ use crate::fleet::Fleet;
 use crate::halt;
 use crate::identity::Identity;
 use crate::order_terms::{self, Terms};
-use crate::orders::{Order, install_order_id, next_try};
+use crate::orders::{Order, install_order_id};
 
 /// What the gate's order for one heartbeat is decided from.
 pub(super) struct Asked<'a> {
     /// The host that sent the heartbeat.
     pub(super) who: &'a Identity,
+    /// The platform the heartbeat names: which package of a release index the host is ordered.
+    pub(super) platform: Platform,
     /// The legacy service the heartbeat's top level speaks for, if any.
     pub(super) legacy: Option<&'a str>,
-    /// The services the heartbeat lists.
-    pub(super) announced: &'a [ServiceBeat],
     /// The services a halt the heartbeat raised holds: nothing is ordered of them.
     pub(super) held: &'a [String],
     /// Whether the agent reads order terms (`order-v1`): it is ordered only a version with a
@@ -67,7 +68,14 @@ impl Coordinator {
                     // An agent that reads order terms is ordered only a version with a digest.
                     let terms = asked.order_v1.then(|| {
                         let digests = self.desired.digests(name);
-                        order_terms::of_beat(&digests, name, &version, asked.announced, id)
+                        order_terms::of_beat(
+                            &digests,
+                            name,
+                            &version,
+                            fleet.next_try(name, id),
+                            id,
+                            asked.platform,
+                        )
                     });
                     let Some(terms) = terms.map_or(Some(None), |made| made.map(Some)) else {
                         continue;
@@ -80,23 +88,28 @@ impl Coordinator {
                     let service = (Some(name) != asked.legacy).then(|| name.to_owned());
                     return Some((ServiceReply::Update { service, version }, None, terms));
                 }
-                Decision::Install { version, digest } if asked.orders => {
+                Decision::Install {
+                    version,
+                    digest,
+                    index_digest,
+                } if asked.orders => {
                     if !release_ack(&self.ops, name, id) {
                         continue;
                     }
                     let order_id = install_order_id(&digest);
-                    let order_try = next_try(fleet.get_in(name, id).map(|h| &h.beat), &order_id);
+                    let order_try = fleet.next_try(name, id);
                     fleet.order(name, id.clone(), version.clone(), now);
                     Order::Install {
                         service: name.to_owned(),
                         version,
                         digest,
+                        index_digest,
                         order_id,
                         order_try,
                     }
                 }
                 Decision::Uninstall { order_id, running } if asked.orders => {
-                    let order_try = next_try(fleet.occupant(name, id).map(|h| &h.beat), &order_id);
+                    let order_try = fleet.next_try(name, id);
                     fleet.order_uninstall(name, id.clone(), running, order_id.clone(), now);
                     Order::Uninstall {
                         service: name.to_owned(),

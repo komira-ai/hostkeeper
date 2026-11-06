@@ -32,7 +32,10 @@ cargo xtask release channel-stage \
 | `--out` | The root of the tree; `S/V/` is made under it |
 
 It copies files only. It uploads nothing, holds no credentials, and has no opinion on the
-transport, which is the web server's: the daemon requires `https`.
+transport, which is the web server's: the daemon requires `https`. To stage each new release
+as it is published, run `channel-sync` on the channel's host (see
+[Sync new releases into the channel](#sync-new-releases-into-the-channel)); it stages through
+this same code.
 
 ## What it checks
 
@@ -70,3 +73,78 @@ Serve `--out` so that `{release_channel}/S/V/...` maps to `<out>/S/V/...`, path 
 version with `+` is staged with the `+` in its directory and file names, and the daemon asks for
 it with a literal `+` in the URL path: an origin that reads `+` in a path as a space answers 404,
 which the daemon reports as `fetch_failed` and retries.
+
+## Sync new releases into the channel
+
+A release published in CI does not reach the channel by itself: no workflow can push into the
+host that serves it. `cargo xtask release channel-sync` pulls instead. It runs on that host,
+reads each repository's published releases from GitHub, and stages every new one with
+`channel-stage`:
+
+```sh
+cargo xtask release channel-sync \
+  --repo komira-ai/hostkeeper --repo komira-ai/tierstore \
+  --channel-dir <root of the channel's tree>
+```
+
+| Flag | Meaning |
+|---|---|
+| `--repo` | A repository whose releases are synced, `<owner>/<name>`. Repeat it, or list several after it; they are synced in that order. A repository named twice is refused |
+| `--channel-dir` | The root of the channel's tree, the `--out` of `channel-stage`. It must exist |
+| `--since` | A tag `v<X.Y.Z>`: releases older than it are skipped (it is synced) |
+| `--every-secs` | Sync again this many seconds after each run ends, and never exit (the sidecar). Without it the verb runs once |
+
+It needs `gh` on the `PATH`, with a GitHub token that can read public repositories and nothing
+else (`GH_TOKEN`, gh's own credential). It reads only the 100 newest releases of each repository,
+leaves drafts out, and skips a release whose tag is not `v<X.Y.Z>` or that carries no release
+index (a release of binaries only).
+
+For each release, oldest version first:
+
+1. It downloads the release's indexes (`index.json` and each `<name>-index.json`) and compares
+   each service version they name with the channel. An index must name the service its
+   repository is named for (`komira-ai/tierstore` ships `tierstore`; a hostkeeper release also
+   ships `hello`), and only one index of a release may name a version; otherwise the version is
+   refused. A version whose `S/V/index.json` holds the
+   same bytes, with every package it lists at its size and every bundle beside it, is already
+   there: nothing more is downloaded. A version whose `S/V/index.json` holds other bytes is
+   refused, since a release in the channel never changes; it is left as it is.
+2. If any version is new, or was cut short (`S/V/` without its index, or missing a file), it
+   downloads every other asset and checks the release. A hostkeeper release is checked by
+   `cargo xtask release check` itself: every asset, `SHA256SUMS`, the indexes, and every
+   attestation online and from its bundle. A release of another repository is checked by its
+   `SHA256SUMS` (it lists every asset but itself and the bundles, each at its SHA-256) and the
+   attestation of every asset with a bundle, online and from the bundle, as signed by that
+   repository's own `.github/workflows/artifacts.yml` on `refs/heads/main` at the release's
+   commit. A download that fails or a check that refuses stages nothing of the release.
+3. It stages each new version with `channel-stage`, which requires a package for every platform.
+   A new version is staged in a work directory inside the channel directory and renamed to
+   `S/V/` whole, so a host never fetches a version that is half there. A version that was cut
+   short is finished in place, which writes only what is missing.
+
+The work directory is `.channel-sync-<pid>-<n>/` in the channel directory, removed after each
+release; each run starts by removing any such directory a run that was killed left behind. A run with nothing new downloads
+only the indexes and changes nothing. A run that refuses anything still syncs everything else,
+prints a `refused` line for each refusal, and then fails (exit 1), so the timer or the
+container's log shows it; the next run tries again.
+
+Two runs must not overlap: the timer below starts a run only after the last one ended, and the
+sidecar runs one loop. Packages already in the channel are compared by size only, not hashed on
+every run: the daemon checks each package's SHA-256 against the index as it fetches it.
+
+Two ways to run it, both in [`channel-sync/`](channel-sync/):
+
+- on a host with systemd, [`hostkeeper-channel-sync.service`](channel-sync/hostkeeper-channel-sync.service)
+  runs it once and [`hostkeeper-channel-sync.timer`](channel-sync/hostkeeper-channel-sync.timer)
+  starts it ten minutes after each run ends;
+- in a docker deployment, [`compose.yaml`](channel-sync/compose.yaml) runs it as a sidecar
+  with `--every-secs 600`, writing into the volume the channel's web server serves.
+
+### The order of a release
+
+1. The service's release workflow publishes a signed GitHub release.
+2. `channel-sync` stages it into the channel (within one timer period).
+3. Only then is the desired version set ([ci-client.md](ci-client.md)). A version set before the
+   channel holds it leaves every host failing its fetch (`fetch_failed`) and retrying until it
+   arrives. For hostkeeper's own releases, `release.yml` waits for the channel to serve the
+   release and then sets it ([Deploying hostkeeper from GitHub Actions](github-actions.md)).

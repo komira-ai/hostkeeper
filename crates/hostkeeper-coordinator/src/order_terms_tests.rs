@@ -5,8 +5,8 @@
 use hostkeeper_wire::wire::{Heartbeat, ORDER_FEATURE, OrderId, Outcome, UpdateResult};
 
 use crate::marks_support::{WEB, beat_of, digest, restart, rig, runs, set, start, who};
-use crate::order_terms::{order_id_text, order_try, terms};
-use crate::registry::Digest;
+use crate::order_terms::{order_id_text, terms};
+use crate::registry::{Digest, Package};
 use crate::service::{FEATURES, HeartbeatRefused, sends};
 use crate::testutil::{Log, Rig, ci_token, version};
 
@@ -150,10 +150,12 @@ async fn no_registered_digest_means_no_order_for_an_order_v1_agent_and_no_slot()
 }
 
 /// A host that reported a verdict of try 1 of this order id is sent try 2 when the order is
-/// given again; a verdict of another order id, or of none, leaves the try at 1.
+/// given again; a verdict of another order of the service (an install, an earlier update) at try
+/// 7 raises it to 8, since the daemon keys tries per service (design 8.3).
 ///
-/// Catches: a try that never rises (the verdict would be counted as a replay), one that rises
-/// for another order's verdict, and one that restarts at 1 after a coordinator restart.
+/// Catches: a try that never rises (the verdict would be counted as a replay), one that restarts
+/// at 1 after another order's verdict (the daemon refuses it `try_conflict` or `stale_try`), and
+/// one that restarts at 1 after a coordinator restart.
 #[tokio::test]
 async fn a_reordered_update_after_a_verdict_is_sent_the_next_try() {
     let mut rig = rig("terms-try", "");
@@ -165,7 +167,7 @@ async fn a_reordered_update_after_a_verdict_is_sent_the_next_try() {
     assert_eq!(bytes(&rig, "d1", after(WEB_ORDER, 4)), with_terms(5));
     assert_eq!(
         bytes(&rig, "d1", after("update-someone-else", 7)),
-        with_terms(1)
+        with_terms(8)
     );
 
     // A coordinator that restarted remembers no tries: the host's word is what counts.
@@ -230,29 +232,16 @@ async fn a_plain_agent_is_still_answered_about_the_legacy_service_by_its_top_lev
     );
 }
 
-/// The order id is a function of the service and the version alone, and the try of a verdict
-/// is read only for the same order id.
+/// The order id is a function of the service and the version alone.
 ///
-/// Catches: an id that changes between runs or hosts, one that ignores the service or the
-/// version, a try taken from another order's verdict, and a verdict without a try.
+/// Catches: an id that changes between runs or hosts, and one that ignores the service or the
+/// version.
 #[test]
-fn the_order_id_names_the_update_and_the_try_follows_its_verdict() {
+fn the_order_id_names_the_update() {
     assert_eq!(order_id_text(WEB, &version("2.0")), WEB_ORDER);
     assert_ne!(order_id_text("db", &version("2.0")), WEB_ORDER);
     assert_ne!(order_id_text(WEB, &version("2.1")), WEB_ORDER);
     assert!(OrderId::parse(&order_id_text(WEB, &version("2.0"))).is_some());
-
-    let id = OrderId::parse(WEB_ORDER).expect("an id");
-    assert_eq!(order_try(&id, None), 1);
-    assert_eq!(order_try(&id, Some(&verdict(WEB_ORDER, Some(1)))), 2);
-    assert_eq!(order_try(&id, Some(&verdict(WEB_ORDER, None))), 1);
-    assert_eq!(order_try(&id, Some(&verdict("other", Some(9)))), 1);
-    assert_eq!(
-        order_try(&id, Some(&verdict(WEB_ORDER, Some(u64::MAX)))),
-        u64::MAX
-    );
-    let plain = UpdateResult::new(version("2.0"), Outcome::Failed);
-    assert_eq!(order_try(&id, Some(&plain)), 1);
 }
 
 /// The terms carry the registered digest, the id and the try together.
@@ -260,14 +249,11 @@ fn the_order_id_names_the_update_and_the_try_follows_its_verdict() {
 /// Catches: a digest or id lost in the assembly.
 #[test]
 fn terms_join_the_id_the_try_and_the_registered_digest() {
-    let registered = Digest::parse(&digest(7)).expect("a digest");
-    let made = terms(
-        WEB,
-        &version("2.0"),
-        &registered,
-        Some(&verdict(WEB_ORDER, Some(2))),
-    )
-    .expect("terms");
+    let registered = Package {
+        digest: Digest::parse(&digest(7)).expect("a digest"),
+        index_digest: None,
+    };
+    let made = terms(WEB, &version("2.0"), &registered, 3).expect("terms");
     assert_eq!(made.order_id.as_str(), WEB_ORDER);
     assert_eq!(made.order_try, 3);
     assert_eq!(made.package_digest.as_str(), digest(7));

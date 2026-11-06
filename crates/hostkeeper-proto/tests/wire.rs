@@ -257,6 +257,7 @@ fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
             record_problem: RecordProblem::Unreadable.into(),
             ..ServiceRecord::default()
         }],
+        ..StatusResponse::default()
     };
     let read = StatusResponse::decode(status.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(read.services[0].record_problem(), RecordProblem::Unreadable);
@@ -284,7 +285,7 @@ fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
 }
 
 /// Catches: an order that cannot say one verb with its typed arguments, or that reads back as
-/// another: a force with its digest and halt generation, in a reply.
+/// another: a force with its digests and halt generation, in a reply.
 #[test]
 fn an_order_is_one_verb_with_typed_arguments() {
     let reply = HeartbeatResponse {
@@ -296,6 +297,7 @@ fn an_order_is_one_verb_with_typed_arguments() {
                 version: "1.4".to_owned(),
                 package_digest: "ab".repeat(32),
                 halt_generation: 3,
+                index_digest: "cd".repeat(32),
             })),
         }),
         ..HeartbeatResponse::default()
@@ -306,6 +308,7 @@ fn an_order_is_one_verb_with_typed_arguments() {
         panic!("not a force: {:?}", order.verb);
     };
     assert_eq!(force.package_digest.len(), 64);
+    assert_eq!(force.index_digest, "cd".repeat(32));
     assert_eq!((force.halt_generation, order.r#try), (3, 1));
 }
 
@@ -364,7 +367,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 }
 
 /// The RPCs of the coordinator's services, pinned.
-const RPCS: [(&str, &[&str]); 6] = [
+const RPCS: [(&str, &[&str]); 7] = [
     (
         "hostkeeper.agent.v1.Coordinator",
         &[
@@ -383,6 +386,7 @@ const RPCS: [(&str, &[&str]); 6] = [
             "Include(IncludeRequest) IncludeResponse",
             "SetLabels(SetLabelsRequest) SetLabelsResponse",
             "Abort(AbortRequest) AbortResponse",
+            "Retire(RetireRequest) RetireResponse",
         ],
     ),
     (
@@ -414,6 +418,7 @@ const RPCS: [(&str, &[&str]); 6] = [
         &[
             "List(ListPendingRequest) ListPendingResponse",
             "Approve(ApproveRequest) ApproveResponse",
+            "Reject(RejectRequest) RejectResponse",
             "AddRecord(AddRecordRequest) AddRecordResponse",
             "ListRecords(ListRecordsRequest) ListRecordsResponse",
             "RemoveRecord(RemoveRecordRequest) RemoveRecordResponse",
@@ -423,11 +428,15 @@ const RPCS: [(&str, &[&str]); 6] = [
         "hostkeeper.operator.v1.Audit",
         &["List(ListAuditRequest) ListAuditResponse"],
     ),
+    (
+        "hostkeeper.operator.v1.Alerts",
+        &["List(ListAlertsRequest) ListAlertsResponse"],
+    ),
 ];
 
-/// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
-/// number.
-const FIELDS: [(&str, &[(&str, u32)]); 25] = [
+/// The fields of the enrollment, abort, retire, audit and force-report messages, pinned by name
+/// and number.
+const FIELDS: [(&str, &[(&str, u32)]); 35] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -440,6 +449,29 @@ const FIELDS: [(&str, &[(&str, u32)]); 25] = [
     (
         "hostkeeper.agent.v1.VerdictAck",
         &[("service", 1), ("order_id", 2), ("order_try", 3)],
+    ),
+    (
+        "hostkeeper.local.v1.StatusResponse",
+        &[
+            ("services", 1),
+            ("trusted_root_age_secs", 2),
+            ("trusted_root_reason", 3),
+            ("enrollment", 4),
+            ("link", 5),
+        ],
+    ),
+    (
+        "hostkeeper.local.v1.Enrollment",
+        &[
+            ("state", 1),
+            ("key_sha256", 2),
+            ("host_id", 3),
+            ("not_after_unix", 4),
+        ],
+    ),
+    (
+        "hostkeeper.local.v1.LinkHealth",
+        &[("last_success_unix", 1), ("consecutive_failures", 2)],
     ),
     (
         "hostkeeper.local.v1.ServiceRecord",
@@ -523,6 +555,21 @@ const FIELDS: [(&str, &[(&str, u32)]); 25] = [
             ("action", 4),
             ("service", 5),
             ("node_id", 6),
+            ("by_name", 7),
+            ("newest", 8),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.AuditEntry",
+        &[
+            ("seq", 1),
+            ("by", 2),
+            ("action", 3),
+            ("service", 4),
+            ("node_id", 5),
+            ("reason", 6),
+            ("at_unix", 7),
+            ("by_name", 8),
         ],
     ),
     (
@@ -531,7 +578,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 25] = [
     ),
     (
         "hostkeeper.operator.v1.ListPendingRequest",
-        &[("limit", 1), ("page_token", 2)],
+        &[("limit", 1), ("page_token", 2), ("unenrolled", 3)],
     ),
     (
         "hostkeeper.operator.v1.ListPendingResponse",
@@ -552,6 +599,10 @@ const FIELDS: [(&str, &[(&str, u32)]); 25] = [
             ("record_host_id", 10),
             ("record_role", 11),
             ("candidate_host_ids", 12),
+            ("state", 13),
+            ("unenrolled_reason", 14),
+            ("unenrolled_unix", 15),
+            ("request_ttl_secs", 16),
         ],
     ),
     (
@@ -565,6 +616,33 @@ const FIELDS: [(&str, &[(&str, u32)]); 25] = [
             ("notes", 6),
             ("added_by", 7),
             ("added_unix", 8),
+            ("enrolled", 9),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ListRecordsRequest",
+        &[("limit", 1), ("page_token", 2), ("enrolled", 3)],
+    ),
+    (
+        "hostkeeper.operator.v1.Host",
+        &[
+            ("node_id", 1),
+            ("role", 2),
+            ("live", 3),
+            ("last_heartbeat_unix", 4),
+            ("heartbeat", 5),
+            ("labels", 6),
+            ("exclusions", 7),
+            ("services", 8),
+            ("inventory_record_id", 9),
+            ("data_macs", 10),
+            ("bmc_mac", 11),
+            ("serial", 12),
+            ("enrolled_unix", 13),
+            ("cert_not_after_unix", 14),
+            ("last_renew_error", 15),
+            ("clock_skew_beats", 16),
+            ("first_heartbeat_unix", 17),
         ],
     ),
     (
@@ -581,6 +659,19 @@ const FIELDS: [(&str, &[(&str, u32)]); 25] = [
     (
         "hostkeeper.operator.v1.RemoveRecordRequest",
         &[("host_id", 1), ("reason", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.RejectRequest",
+        &[("request_id", 1), ("reason", 2)],
+    ),
+    ("hostkeeper.operator.v1.RejectResponse", &[("entry", 1)]),
+    (
+        "hostkeeper.operator.v1.RetireRequest",
+        &[("node_id", 1), ("reason", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.RetireResponse",
+        &[("entry", 1), ("update_in_flight", 2)],
     ),
     (
         "hostkeeper.operator.v1.ApproveRequest",
@@ -653,7 +744,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 11] = [
+    let cases: [(&str, &str, &[&str]); 16] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -668,6 +759,31 @@ fn wire_names_are_pinned() {
                 "bad_signature",
                 "renewal_not_allowed",
             ],
+        ),
+        (
+            "hostkeeper.operator.v1.AlertsRefusal",
+            "ALERTS_REFUSAL_",
+            &["unauthorized", "forbidden", "store_failed"],
+        ),
+        (
+            "hostkeeper.operator.v1.AlertKind",
+            "ALERT_KIND_",
+            &[
+                "halt",
+                "waiting_for_operator",
+                "duplicate",
+                "duplicate_claim_pending",
+                "failed_canary",
+                "held_on_bad_version",
+                "abandoned_while_updating",
+                "silent_host",
+                "cert_near_expiry",
+            ],
+        ),
+        (
+            "hostkeeper.operator.v1.AlertSeverity",
+            "ALERT_SEVERITY_",
+            &["critical", "warning"],
         ),
         (
             "hostkeeper.agent.v1.EnrollState",
@@ -690,6 +806,7 @@ fn wire_names_are_pinned() {
                 "unknown_host",
                 "capacity",
                 "store_failed",
+                "audit_unavailable",
             ],
         ),
         (
@@ -713,6 +830,11 @@ fn wire_names_are_pinned() {
                 "already_bad",
                 "already_halted",
                 "unknown_target",
+                "audit_unavailable",
+                "not_in_channel",
+                "channel_digest_mismatch",
+                "index_digest_mismatch",
+                "index_invalid",
             ],
         ),
         (
@@ -729,6 +851,7 @@ fn wire_names_are_pinned() {
                 "store_failed",
                 "unknown_role",
                 "below_min_version",
+                "audit_unavailable",
             ],
         ),
         (
@@ -753,12 +876,19 @@ fn wire_names_are_pinned() {
                 "record_conflict",
                 "no_record",
                 "capacity",
+                "audit_unavailable",
+                "record_mismatch",
             ],
         ),
         (
             "hostkeeper.operator.v1.InventoryMatch",
             "INVENTORY_MATCH_",
             &["matched", "unmatched", "ambiguous"],
+        ),
+        (
+            "hostkeeper.operator.v1.EnrollmentRequestState",
+            "ENROLLMENT_REQUEST_STATE_",
+            &["pending", "unenrolled"],
         ),
         (
             "hostkeeper.operator.v1.AuditRefusal",
@@ -785,6 +915,11 @@ fn wire_names_are_pinned() {
             "hostkeeper.local.v1.Lifecycle",
             "LIFECYCLE_",
             &["absent", "installing", "running", "removing"],
+        ),
+        (
+            "hostkeeper.local.v1.EnrollmentState",
+            "ENROLLMENT_STATE_",
+            &["unenrolled", "pending", "enrolled", "unreadable"],
         ),
     ];
     for (name, prefix, want) in cases {

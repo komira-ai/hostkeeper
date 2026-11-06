@@ -1,18 +1,19 @@
-//! The unit, `hostkeeper.service`: its command line, its account, its restarts and watchdog,
-//! the start limit of the self-update drop-in, the units it conflicts with and the keys it sets.
+//! The unit, `hostkeeper.service`: its command lines, its account, its restart policy, its lack
+//! of a start limit of its own and its watchdog, the units it conflicts with and the keys it sets.
 
 use hostkeeper_link::CALL_SECS;
-use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, START_LIMIT_WINDOW_SECS, main_dropin};
 
 use crate::daemon_flags::parse_flags;
 use crate::unit::{self, Unit};
 use crate::{UNIT, altered, read, refuses};
 
-/// The daemon's command line: the `daemon` verb with each path of design sections 4.1 and 10
-/// spelled out as a flag, and the flag that makes it report ready to systemd. `daemon_flags.rs`
-/// parses this line with the binary's own flag parser.
+/// The daemon's command line: `current` of the binary directory of hostkeeper's own update (the
+/// binary the update chose; `self_update.rs` holds it to the daemon's `binary_dir`), the `daemon`
+/// verb with each path of design sections 4.1 and 10 spelled out as a flag, and the flag that
+/// makes it report ready to systemd. `daemon_flags.rs` parses this line with the binary's own flag
+/// parser.
 const DAEMON_COMMAND: [&str; 11] = [
-    "/usr/bin/hostkeeper",
+    "/var/lib/updater/state/hostkeeper/bin/current",
     "daemon",
     "--config",
     "/etc/hostkeeper/hostkeeper.toml",
@@ -23,6 +24,20 @@ const DAEMON_COMMAND: [&str; 11] = [
     "--admin-socket",
     "/run/hostkeeper/admin.sock",
     "--notify-systemd",
+];
+
+/// The command line run before each start: the binary the package installed gives the binary
+/// directory its first binary when `current` starts none (`self-update-seed`). Its `-` prefix,
+/// the one prefix a line of this unit has, lets the start go on when it fails: an older binary
+/// without the verb, under a unit an update placed, while `current` is already there.
+/// `daemon_flags.rs` parses it with the binary's own flag parser.
+const SEED_COMMAND: [&str; 6] = [
+    "/usr/bin/hostkeeper",
+    "self-update-seed",
+    "--state-dir",
+    "/var/lib/updater/state",
+    "--binary",
+    "/usr/bin/hostkeeper",
 ];
 
 /// kbf's update agent and the root half that serves it, as kbf v0.0.64 names their units in
@@ -54,6 +69,7 @@ const UNIT_KEYS: [(&str, &[&str]); 3] = [
         &[
             "Type",
             "TimeoutStartSec",
+            "ExecStartPre",
             "ExecStart",
             "Restart",
             "RestartSec",
@@ -99,9 +115,9 @@ fn check_command(text: &str) -> Result<(), String> {
                 entry.line
             ));
         }
-        if key.starts_with("Exec") && key != "ExecStart" {
+        if key.starts_with("Exec") && !matches!(key, "ExecStart" | "ExecStartPre") {
             return Err(format!(
-                "line {}: {key}= runs a command besides the daemon",
+                "line {}: {key}= runs a command besides the daemon and its seed",
                 entry.line
             ));
         }
@@ -110,12 +126,25 @@ fn check_command(text: &str) -> Result<(), String> {
     if words != DAEMON_COMMAND {
         return Err(format!("ExecStart= runs {words:?}, not {DAEMON_COMMAND:?}"));
     }
+    let pre = unit.single("Service", "ExecStartPre")?;
+    let seed = pre.strip_prefix('-').ok_or_else(|| {
+        format!("ExecStartPre= has no `-`: a seed that fails would stop the start: {pre:?}")
+    })?;
+    let words = unit::command_words(seed)?;
+    if words != SEED_COMMAND {
+        return Err(format!(
+            "ExecStartPre= runs {words:?}, not {SEED_COMMAND:?}"
+        ));
+    }
     Ok(())
 }
 
-/// Catches a unit whose command line is not the daemon's: a renamed or dropped flag, a flag
-/// without its value, another verb, a second command, a prefix that ignores a failure, a value
-/// taken from the environment, or any environment set for the daemon.
+/// Catches a unit whose command line is not the daemon's: a program other than `current` of the
+/// binary directory (the deb's `/usr/bin/hostkeeper`, `previous`), a renamed or dropped flag, a
+/// flag without its value, another verb, a second command, a prefix that ignores a failure, a
+/// value taken from the environment, or any environment set for the daemon; and a unit whose seed
+/// before the start is missing, can stop the start, or is not the seed of the state directory
+/// with the package's binary.
 #[test]
 fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
     let text = read(UNIT);
@@ -146,9 +175,41 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             altered(
                 &text,
                 line_end,
-                "--notify-systemd\nExecStartPre=/usr/bin/true\n",
+                "--notify-systemd\nExecStartPost=/usr/bin/true\n",
             ),
-            "ExecStartPre= runs a command",
+            "ExecStartPost= runs a command",
+        ),
+        (
+            altered(
+                &text,
+                line_end,
+                "--notify-systemd\nExecStartPre=-/usr/bin/true\n",
+            ),
+            "sets ExecStartPre= 2 times",
+        ),
+        (
+            altered(&text, "ExecStartPre=-/usr/bin/", "ExecStartPre=/usr/bin/"),
+            "ExecStartPre= has no `-`",
+        ),
+        (
+            altered(
+                &text,
+                "self-update-seed --state-dir",
+                "self-update-seed --dir",
+            ),
+            "ExecStartPre= runs",
+        ),
+        (
+            altered(&text, " --binary /usr/bin/hostkeeper\n", "\n"),
+            "ExecStartPre= runs",
+        ),
+        (
+            altered(
+                &text,
+                "ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper\n",
+                "",
+            ),
+            "[Service] has no ExecStartPre=",
         ),
         (
             altered(
@@ -175,7 +236,23 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             "holds `%`",
         ),
         (
-            altered(&text, "--state-dir", "--state-directory"),
+            altered(&text, "current daemon --config", "previous daemon --config"),
+            "ExecStart= runs",
+        ),
+        (
+            altered(
+                &text,
+                "ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon",
+                "ExecStart=/usr/bin/hostkeeper daemon",
+            ),
+            "ExecStart= runs",
+        ),
+        (
+            altered(
+                &text,
+                "daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir",
+                "daemon --config /etc/hostkeeper/hostkeeper.toml --state-directory",
+            ),
             "ExecStart= runs",
         ),
         (
@@ -187,11 +264,7 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             "ExecStart= runs",
         ),
         (
-            altered(
-                &text,
-                "hostkeeper daemon --config",
-                "hostkeeper serve --config",
-            ),
+            altered(&text, "current daemon --config", "current serve --config"),
             "ExecStart= runs",
         ),
         (
@@ -207,7 +280,7 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             "a second command",
         ),
         (
-            altered(&text, "ExecStart=/usr/bin/", "ExecStart=-/usr/bin/"),
+            altered(&text, "ExecStart=/var/lib/", "ExecStart=-/var/lib/"),
             "has a prefix",
         ),
         (
@@ -218,14 +291,14 @@ fn unit_command_line_is_the_daemon_with_its_paths_and_no_environment() {
             altered(
                 &text,
                 line_end,
-                "--notify-systemd\nExecStart=/usr/bin/hostkeeper daemon\n",
+                "--notify-systemd\nExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon\n",
             ),
             "sets ExecStart= 2 times",
         ),
     ];
     refuses(check_command, &cases);
     // A command line continued over two lines is one command line.
-    let continued = altered(&text, " --state-dir", " \\\n    --state-dir");
+    let continued = altered(&text, " --packages-dir", " \\\n    --packages-dir");
     assert_eq!(check_command(&continued), Ok(()));
 }
 
@@ -309,13 +382,6 @@ fn unit_runs_as_root_with_type_notify() {
     refuses(check_root_notify, &cases);
 }
 
-/// The heartbeat period of the unit's command line, in seconds: its `--heartbeat-secs`, or the
-/// binary's default, as the binary's own flag parser reads the line.
-fn heartbeat_secs(unit: &Unit) -> Result<u64, String> {
-    let words = unit::command_words(unit.single("Service", "ExecStart")?)?;
-    Ok(parse_flags(&words)?.link.heartbeat_secs.get())
-}
-
 fn check_limits(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
     for key in ["StartLimitBurst", "StartLimitIntervalSec"] {
@@ -328,18 +394,20 @@ fn check_limits(text: &str) -> Result<(), String> {
     let interval = unit.single("Unit", "StartLimitIntervalSec")?;
     if interval != "0" {
         return Err(format!(
-            "StartLimitIntervalSec={interval}: a daemon that fails its start limit stays stopped; the unit has none (0)"
+            "StartLimitIntervalSec={interval}: the unit has no start limit of its own (0); the self-update drop-in sets it"
         ));
     }
     let restart = unit.single("Service", "Restart")?;
     if restart != "always" {
         return Err(format!(
-            "Restart={restart}, not always: a daemon that exits is started again however it ends"
+            "Restart={restart}, not always: the daemon exits 0 to be started again after its own update"
         ));
     }
     let delay = unit.single("Service", "RestartSec")?;
-    if delay != "5" {
-        return Err(format!("RestartSec={delay}, not 5"));
+    if delay != "1" {
+        return Err(format!(
+            "RestartSec={delay}, not 1, the delay of the self-update drop-in"
+        ));
     }
     let timeout = unit.single("Service", "TimeoutStartSec")?;
     if timeout != "infinity" {
@@ -348,6 +416,13 @@ fn check_limits(text: &str) -> Result<(), String> {
         ));
     }
     check_watchdog(&unit)
+}
+
+/// The heartbeat period of the unit's command line, in seconds: its `--heartbeat-secs`, or the
+/// binary's default, as the binary's own flag parser reads the line.
+fn heartbeat_secs(unit: &Unit) -> Result<u64, String> {
+    let words = unit::command_words(unit.single("Service", "ExecStart")?)?;
+    Ok(parse_flags(&words)?.link.heartbeat_secs.get())
 }
 
 /// The watchdog: `WatchdogSec=` in whole seconds, at least three heartbeat periods of the
@@ -367,14 +442,16 @@ fn check_watchdog(unit: &Unit) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches a unit that leaves the daemon stopped (a start limit, a restart policy that does not
-/// restart a daemon that stopped cleanly or was killed, limits put where systemd does not read
-/// them), a restart delay other than five seconds, a start timeout that would stop a daemon
-/// during a long boot pass (design section 6.5), and a watchdog that is missing, not in plain
-/// seconds, or too short for the heartbeat the command line runs: under three periods, or under
-/// one period and the longest heartbeat call.
+/// Catches a start limit in the unit itself (which, before the daemon has first been ready and
+/// written the self-update drop-in, would leave a daemon that fails three starts failed with no
+/// fallback to start it again), limits put where systemd does not read them, a restart policy
+/// that does not restart a daemon that exited cleanly for its own update (`on-failure`, the
+/// policy that left a self-updated host down), a restart delay other than the drop-in's, a start
+/// timeout that would stop a daemon during a long boot pass (design section 6.5), and a
+/// watchdog that is missing, not in whole seconds, or too short for the heartbeat the command
+/// line runs: under three periods, or under one period and the longest heartbeat call.
 #[test]
-fn unit_restarts_always_with_no_start_limit_and_a_watchdog_over_the_heartbeat() {
+fn unit_restarts_always_with_no_start_limit_of_its_own_and_a_watchdog_over_the_heartbeat() {
     let text = read(UNIT);
     assert_eq!(check_limits(&text), Ok(()));
     let limit = "StartLimitIntervalSec=0\n";
@@ -391,28 +468,10 @@ fn unit_restarts_always_with_no_start_limit_and_a_watchdog_over_the_heartbeat() 
                 "StartLimitIntervalSec=0",
                 "StartLimitIntervalSec=300",
             ),
-            "StartLimitIntervalSec=300",
+            "StartLimitIntervalSec=300: the unit has no start limit",
         ),
         (altered(&text, limit, ""), "has no StartLimitIntervalSec="),
-        (
-            altered(&text, limit, &format!("{limit}StartLimitIntervalSec=0\n")),
-            "sets StartLimitIntervalSec= 2 times",
-        ),
         (moved, "is in [Service]"),
-        (
-            altered(&text, "Restart=always", "Restart=on-failure"),
-            "Restart=on-failure, not always",
-        ),
-        (
-            altered(&text, "Restart=always", "Restart=on-abnormal"),
-            "Restart=on-abnormal, not always",
-        ),
-        (altered(&text, "Restart=always\n", ""), "has no Restart="),
-        (
-            altered(&text, "RestartSec=5", "RestartSec=100ms"),
-            "RestartSec=100ms, not 5",
-        ),
-        (altered(&text, "RestartSec=5\n", ""), "has no RestartSec="),
         (
             altered(&text, "TimeoutStartSec=infinity", "TimeoutStartSec=90"),
             "TimeoutStartSec=90",
@@ -421,6 +480,19 @@ fn unit_restarts_always_with_no_start_limit_and_a_watchdog_over_the_heartbeat() 
             altered(&text, "TimeoutStartSec=infinity\n", ""),
             "has no TimeoutStartSec=",
         ),
+        (
+            altered(&text, "Restart=always", "Restart=on-failure"),
+            "Restart=on-failure, not always",
+        ),
+        (
+            altered(&text, "Restart=always", "Restart=no"),
+            "Restart=no, not always",
+        ),
+        (
+            altered(&text, "RestartSec=1", "RestartSec=30"),
+            "RestartSec=30, not 1",
+        ),
+        (altered(&text, "RestartSec=1\n", ""), "has no RestartSec="),
         (
             altered(&text, "WatchdogSec=60\n", ""),
             "has no WatchdogSec=",
@@ -464,82 +536,6 @@ fn unit_restarts_always_with_no_start_limit_and_a_watchdog_over_the_heartbeat() 
     assert_eq!(
         check_limits(&altered(&short, "WatchdogSec=12", "WatchdogSec=13")),
         Ok(())
-    );
-}
-
-/// The fallback unit the tests name.
-const FALLBACK_UNIT: &str = "hostkeeper-fallback.service";
-
-/// Passes when `dropin`, placed over `base`, bounds the unit's starts the way the self-update
-/// fallback of design section 6.6 is written against: its `[Unit]` sets `OnFailure=` to
-/// `fallback`, and the start limit systemd then reads (a drop-in's assignment of a key replaces
-/// the unit's) is [`START_LIMIT_BURST`] starts within [`START_LIMIT_WINDOW_SECS`] seconds, not 0.
-fn check_dropin(base: &str, dropin: &str, fallback: &str) -> Result<(), String> {
-    let base = Unit::parse(base)?;
-    let dropin = Unit::parse(dropin)?;
-    let on_failure = dropin.single("Unit", "OnFailure")?;
-    if on_failure != fallback {
-        return Err(format!("OnFailure={on_failure}, not {fallback}"));
-    }
-    let effective = |key: &str| -> Result<String, String> {
-        match dropin.values("Unit", key).last() {
-            Some(value) => Ok((*value).to_owned()),
-            None => base.single("Unit", key).map(str::to_owned),
-        }
-    };
-    let window = effective("StartLimitIntervalSec")?;
-    let burst = effective("StartLimitBurst")?;
-    let want = (
-        START_LIMIT_WINDOW_SECS.to_string(),
-        START_LIMIT_BURST.to_string(),
-    );
-    if (window.as_str(), burst.as_str()) != (want.0.as_str(), want.1.as_str()) {
-        return Err(format!(
-            "with the drop-in the unit allows StartLimitBurst={burst} within StartLimitIntervalSec={window}, not {} within {}",
-            want.1, want.0
-        ));
-    }
-    Ok(())
-}
-
-/// Catches the base unit's unlimited restarts reaching the self-update: the drop-in the daemon
-/// writes for its own update (`main_dropin`) still sets its bound, 3 failed starts within 300
-/// seconds, over the unit's `StartLimitIntervalSec=0`, and its `OnFailure=` fallback; a drop-in
-/// that leaves out the window or the burst, or lets the unit's 0 stand, is refused.
-#[test]
-fn the_self_update_dropin_keeps_its_bounded_start_limit_over_the_unit() {
-    let text = read(UNIT);
-    let dropin = main_dropin(FALLBACK_UNIT, START_LIMIT_BURST);
-    assert_eq!(check_dropin(&text, &dropin, FALLBACK_UNIT), Ok(()));
-    assert_eq!((START_LIMIT_BURST, START_LIMIT_WINDOW_SECS), (3, 300));
-    let window = format!("StartLimitIntervalSec={START_LIMIT_WINDOW_SECS}\n");
-    let burst = format!("StartLimitBurst={START_LIMIT_BURST}\n");
-    let check = |dropin: &str| check_dropin(&text, dropin, FALLBACK_UNIT);
-    refuses(
-        check,
-        &[
-            (
-                altered(&dropin, &window, ""),
-                "StartLimitBurst=3 within StartLimitIntervalSec=0",
-            ),
-            (
-                altered(&dropin, &window, "StartLimitIntervalSec=0\n"),
-                "StartLimitBurst=3 within StartLimitIntervalSec=0",
-            ),
-            (altered(&dropin, &burst, ""), "has no StartLimitBurst="),
-            (
-                altered(&dropin, &burst, "StartLimitBurst=5\n"),
-                "StartLimitBurst=5 within",
-            ),
-            (
-                altered(
-                    &dropin,
-                    &format!("OnFailure={FALLBACK_UNIT}\n"),
-                    "OnFailure=other.service\n",
-                ),
-                "OnFailure=other.service, not",
-            ),
-        ],
     );
 }
 
@@ -733,6 +729,14 @@ fn unit_holds_only_the_keys_the_design_names() {
         (
             altered(&text, "WatchdogSec=60\n", ""),
             "[Service] has no WatchdogSec=",
+        ),
+        (
+            altered(
+                &text,
+                "Restart=always\n",
+                "Restart=always\nRestartPreventExitStatus=0\n",
+            ),
+            "[Service] RestartPreventExitStatus= is not",
         ),
         (
             altered(

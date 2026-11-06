@@ -14,7 +14,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hostkeeper_config::daemon::{DaemonConfig, Sha256Hex, TrustedSigners};
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_steps::{Clock, Stamp};
+use hostkeeper_steps::{BootId, BootIdError, Clock, Stamp};
 use hostkeeper_testkit::Scratch;
 use sha2::{Digest, Sha256};
 
@@ -73,7 +73,7 @@ impl FakeClock {
 
     pub(crate) fn stamp(&self, mono_secs: u64) -> Stamp {
         Stamp {
-            boot_id: self.boot_id(),
+            boot_id: self.boot_id().ok(),
             mono_secs,
         }
     }
@@ -84,8 +84,8 @@ impl Clock for FakeClock {
         self.secs.load(Ordering::SeqCst)
     }
 
-    fn boot_id(&self) -> String {
-        self.boot.lock().expect("the boot id").clone()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the fake clock", &self.boot.lock().expect("the boot id"))
     }
 
     fn sleep_secs(&self, secs: u64) {
@@ -145,6 +145,7 @@ pub(crate) fn order(service: &str, version: &str) -> PackageOrder {
     PackageOrder {
         service: ServiceName::new(service).expect("a service name"),
         version: Version::new(version).expect("a version"),
+        index_digest: None,
     }
 }
 

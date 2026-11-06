@@ -428,9 +428,10 @@ async fn a_failed_uninstall_is_left_for_the_operator_and_a_declined_one_waits() 
     assert_eq!(order_to(&rig, "d2", vec![declined.clone()]), None);
     assert_eq!(why_of(&rig, WEB, "d2"), Some(Why::Skip(Skip::Deferred)));
     rig.at(2_400);
+    // The host's last verdict, of `update-0` at try 1, puts the next order of `web` at try 2.
     assert_eq!(
         order_to(&rig, "d2", vec![declined]),
-        Some(uninstall_order(WEB, "uninstall-2", 1))
+        Some(uninstall_order(WEB, "uninstall-2", 2))
     );
 
     let rig = crate::marks_support::rig("uninstall-unsupported", "");

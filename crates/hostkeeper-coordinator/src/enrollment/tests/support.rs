@@ -131,9 +131,26 @@ impl Rig {
         random: Random,
         configure: impl FnOnce(Enrollment) -> Enrollment,
     ) -> Rig {
+        Rig::started(name, fs, random, NOW, configure)
+    }
+
+    /// [`Rig::new`], its clock (and so its CA and server certificate) started at `now`.
+    pub fn at(name: &str, now: u64) -> Rig {
+        Rig::started(name, Arc::new(RealFs), os_random(), now, |enrollment| {
+            enrollment
+        })
+    }
+
+    fn started(
+        name: &str,
+        fs: Arc<dyn Fs>,
+        random: Random,
+        now: u64,
+        configure: impl FnOnce(Enrollment) -> Enrollment,
+    ) -> Rig {
         let dir = scratch(name);
         let files = Files::in_dir(&dir);
-        let clock = FixedClock::at(NOW);
+        let clock = FixedClock::at(now);
         let enrollment = Arc::new(configure(
             files
                 .start(fs, Arc::clone(&clock), random)
@@ -222,6 +239,18 @@ pub fn audited(by: &str, action: &str, node: Option<&str>, reason: &str) -> Audi
         action.to_owned(),
         node.map(str::to_owned),
         Some(reason.to_owned()),
+    )
+}
+
+/// The coordinator's audit entry of a new request of `key`, round 0, in `state` (`pending` or
+/// `duplicate_claim`), renewing `host` if one is named.
+pub fn requested(key: &HostKey, host: Option<&str>, state: &str) -> Audited {
+    let round = u32::from(host.is_some());
+    audited(
+        "coordinator",
+        "enroll_requested",
+        host,
+        &format!("request {}; round {round}; {state}", key.key_hash()),
     )
 }
 

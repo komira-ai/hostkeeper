@@ -4,11 +4,13 @@
 //! update of the release has run its steps and `verify` has succeeded, a follow-on step
 //! ([`follow_on`]) stages the new updater binary beside the old, writes in the step record that
 //! the update waits for the restart ([`AwaitingRestart`]), points `current` at it and tells the
-//! caller to reply and exit cleanly; the unit's `Restart=always` starts the new binary. If the
-//! new binary cannot start, systemd gives up after `StartLimitBurst` starts of the drop-in
-//! ([`main_dropin`]; the base unit has no start limit of its own), the unit fails, and its
-//! `OnFailure=` unit runs the *previous* binary's `self-update-fallback` verb, which calls
-//! [`Layout::flip_back`]: `current` points at the previous binary again and the unit is started.
+//! caller to reply and exit cleanly. The unit (hostkeeper's `packaging/linux/hostkeeper.service`)
+//! starts `current` of the binary directory and has `Restart=always`, so that clean exit starts
+//! the new binary. If the new binary cannot start, systemd gives up after `StartLimitBurst`
+//! starts, the unit fails, and the `OnFailure=` unit of its drop-in ([`main_dropin`], which
+//! the daemon writes with [`fallback_unit`] at its start) runs the *previous* binary's
+//! `self-update-fallback` verb, which calls [`Layout::flip_back`] while the update waits for the
+//! restart: `current` points at the previous binary again and the unit is started.
 //!
 //! The record says `Succeeded` only once the new binary has run (design section 6.6): the step
 //! runner of the update holds its success back ([`crate::StepRunner::with_held_success`]), the
@@ -88,7 +90,7 @@ pub fn should_fall_back(starts: &[Stamp], burst: u32, window_secs: u64) -> bool 
     };
     let within = starts
         .iter()
-        .filter(|start| start.boot_id == latest.boot_id)
+        .filter(|start| start.same_boot(latest))
         .filter(|start| start.mono_secs <= latest.mono_secs)
         .filter(|start| latest.mono_secs - start.mono_secs < window_secs)
         .count();
@@ -709,10 +711,13 @@ pub fn main_dropin(fallback_unit: &str, burst: u32) -> String {
 }
 
 /// The fallback unit: the previous binary flips `current` back and the main unit is started.
+/// The verb's failure is ignored (`ExecStart=-`): when it puts nothing back (no update waits
+/// for its restart, as when a config does not load), the main unit's failed state is still reset
+/// and the unit started again, so a daemon that fails its start limit is never left failed.
 pub fn fallback_unit(layout: &Layout, main_unit: &str) -> String {
     let dir = layout.dir().display();
     format!(
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart={dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
+        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart=-{dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
     )
 }
 

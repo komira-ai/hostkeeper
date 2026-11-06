@@ -7,18 +7,17 @@ mod support;
 
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_daemon::cli::{HostFiles, host_enroller, host_links, image_of};
 use hostkeeper_daemon::links::{Links, NO_ENROLLMENT};
-use hostkeeper_daemon::testing::{FakeNotifier, Log};
+use hostkeeper_daemon::testing::{Ending, FakeNotifier, Log, Notice, Signal};
 use hostkeeper_daemon::unix_clock::SystemUnixClock;
 use hostkeeper_daemon::{NoWatchdog, start};
 use hostkeeper_enroll::{
-    CoordinatorEnroll, EnrollAnswer, EnrollRequest, Enroller, LinuxClaims, OsEntropy, PkiDir, Poll,
+    CoordinatorEnroll, EnrollAnswer, EnrollRequest, LinuxClaims, OsEntropy, PkiDir, Poll,
     PollAnswer, RenewAnswer, RenewRequest, Settings as EnrollSettings, SystemWallClock,
     TransportError,
 };
@@ -28,21 +27,30 @@ use hostkeeper_link::{
     CertSource, CertState, DEFAULT_HEARTBEAT_SECS, Dispatch, Job, StopFlag, Tick, UnixClock,
 };
 use hostkeeper_steps::Clock;
-use support::{OWN, Rig, alerting, lines};
+use support::{OWN, Rig, alerting, lines, open_once};
 
 /// A dispatcher that hands each job to the test, which runs it when and where it likes.
-struct Handed(Mutex<Sender<Job>>);
+struct Handed(Notice<Job>);
 
 impl Dispatch for Handed {
     fn start(&self, job: Job) {
-        let sent = self.0.lock().expect("the sender").send(job);
-        assert!(sent.is_ok(), "the test takes every job");
+        self.0.send(job);
     }
 }
 
-fn handed() -> (Arc<Handed>, Receiver<Job>) {
-    let (sender, jobs) = mpsc::channel();
-    (Arc::new(Handed(Mutex::new(sender))), jobs)
+fn handed() -> (Arc<Handed>, Signal<Job>) {
+    let (notice, jobs) = Signal::new();
+    (Arc::new(Handed(notice)), jobs)
+}
+
+/// Declares its party over when dropped: when the task that owns it ends, or is cancelled, or
+/// panics.
+struct OverOnDrop(Ending);
+
+impl Drop for OverOnDrop {
+    fn drop(&mut self) {
+        self.0.over("the server ended");
+    }
 }
 
 /// The certificate source of a host not enrolled, which notes in `events` that the heartbeat
@@ -79,6 +87,8 @@ fn links_with(
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch,
         stop: StopFlag::default(),
+        enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
+        renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(NoWatchdog),
     }
 }
@@ -120,9 +130,14 @@ fn the_loops_start_only_after_ready_and_the_enrollment_loop_first() {
         .enable_all()
         .build()
         .expect("a runtime");
-    let served = runtime.spawn(start::serve(started, links));
-    let first = jobs.recv().expect("the first loop");
-    let second = jobs.recv().expect("the second loop");
+    let serving = Ending::default();
+    let over = OverOnDrop(serving.clone());
+    let served = runtime.spawn(async move {
+        let _over = over;
+        start::serve(started, links).await
+    });
+    let first = jobs.wait(&serving).expect("the first loop");
+    let second = jobs.wait(&serving).expect("the second loop");
     first();
     second();
     assert_eq!(
@@ -142,7 +157,10 @@ fn the_loops_start_only_after_ready_and_the_enrollment_loop_first() {
     let ended = runtime.block_on(served).expect("the server task");
     assert!(ended.is_ok(), "{ended:?}");
     assert!(stop.is_stopped(), "the loops are told to stop");
-    assert!(jobs.try_recv().is_err(), "nothing else was started");
+    assert!(
+        jobs.wait(&serving).is_err(),
+        "nothing else was started: the server is over, and no other loop was handed over"
+    );
 }
 
 /// The coordinator of the enrollment loop's test: it cannot be reached, and the first time it is
@@ -207,18 +225,24 @@ fn the_enrollment_loop_runs_its_enroller_until_it_is_told_to_stop() {
     let links = Links {
         stop: stop.clone(),
         ..links_with(
-            Box::new(move || Enroller::open(settings, ports).map_err(|e| e.to_string())),
+            open_once(settings, ports),
             Arc::new(NotedCerts(Log::default())),
             Arc::clone(&log),
             dispatch,
         )
     };
     links.start(&daemon);
-    let enrollment = jobs.recv().expect("the enrollment loop");
+    // `start` hands over both loops before it returns.
+    let started = Ending::default();
+    started.over("links.start returned");
+    let enrollment = jobs.wait(&started).expect("the enrollment loop");
     enrollment();
     assert_eq!(asked.load(Ordering::SeqCst), 1, "one step, then stopped");
     assert_eq!(log.lines(), ["the coordinator could not be reached: down"]);
-    assert!(jobs.recv().is_ok(), "the heartbeat loop was started too");
+    assert!(
+        jobs.wait(&started).is_ok(),
+        "the heartbeat loop was started too"
+    );
 }
 
 /// A daemon config's coordinator address that `GrpcEnroll` does not dial.
@@ -312,7 +336,8 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
     assert_eq!(links.sleeper.sleep(5), Tick::Stop);
     links.log.line("a line of a loop");
     assert_eq!(lines(&alerts), ["hostkeeper daemon: a line of a loop"]);
-    let enroller = (links.enroller)();
+    let mut make = links.enroller;
+    let enroller = make();
     assert!(enroller.is_ok(), "{:?}", enroller.err());
 }
 

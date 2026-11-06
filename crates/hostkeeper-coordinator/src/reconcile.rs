@@ -85,8 +85,9 @@ pub enum Change {
     RollBackTo(Version),
     /// Drops the failure ack of the host with this node id.
     DropAck(String),
-    /// The canary host with this node id failed the release of `version`: logged as an alert
-    /// (`alert = "canary_failed"`) with the rollback it starts.
+    /// The canary host with this node id failed the release of `version`: noted in the fleet
+    /// ([`Fleet::note_failed_canary`]), an alert while the version stays marked bad
+    /// ([`crate::alerts`], logged with `alert = "canary_failed"`).
     CanaryFailed {
         /// The canary's node id.
         node_id: String,
@@ -290,6 +291,7 @@ fn apply(
     change: Change,
     ops: &OpsStore,
     store: &DesiredStore,
+    fleet: &mut Fleet,
 ) -> Result<(), Failed> {
     match change {
         Change::LastGood(version) => {
@@ -329,19 +331,15 @@ fn apply(
         Change::RollBackTo(version) => {
             tracing::warn!(%service, from = %want.version, to = %version, "rolling back");
             let mut back = want.clone();
-            // The digest of the version gone back to, as CI registered it, if it did.
-            back.release_digest = store.digests(service).get(&version).cloned();
+            // The release of the version gone back to (its package digest or its release index),
+            // as CI registered it, if it did: the hosts of each platform are ordered that
+            // version's own package.
+            back.set_release(store.digests(service).get(&version).cloned());
             back.version = version;
             store.set(service, back)?;
         }
         Change::CanaryFailed { node_id, version } => {
-            tracing::error!(
-                alert = "canary_failed",
-                %service,
-                %node_id,
-                target = %version,
-                "the canary failed the release: it is marked bad and rolled back"
-            );
+            fleet.note_failed_canary(service, &version, &node_id);
         }
         Change::DropAck(node) => {
             let why = format!("{node} reports something else now");
@@ -358,7 +356,7 @@ pub fn reconcile(
     def: &ServiceDef,
     ops: &OpsStore,
     store: &DesiredStore,
-    fleet: &Fleet,
+    fleet: &mut Fleet,
     now: Duration,
 ) {
     let Some(want) = store.get(&def.name) else {
@@ -366,7 +364,7 @@ pub fn reconcile(
     };
     let state = ops.state();
     for change in plan(def, &want, &ops.marks(&def.name), fleet, &state, now) {
-        if let Err(why) = apply(&def.name, &want, change, ops, store) {
+        if let Err(why) = apply(&def.name, &want, change, ops, store, fleet) {
             tracing::error!(service = %def.name, %why, "a rollback change was not made");
             return;
         }

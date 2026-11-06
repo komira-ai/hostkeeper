@@ -1,7 +1,7 @@
 //! The heartbeat loop of the hostkeeper daemon (docs/design/hostkeeper-design.md, sections 5.2,
 //! 8.2 to 8.4 and 11).
 //!
-//! Every period the [`Heartbeater`] sends the coordinator the facts of every service installed
+//! Every period, and again as soon as a running order ends, the [`Heartbeater`] sends the coordinator the facts of every service installed
 //! on the host, announces its features, hands the order of the reply to the executor, and puts
 //! the verdict of an order in every following heartbeat until the coordinator acknowledges it by
 //! order id and try. It is a function of ports only, each a trait of [`ports`]:
@@ -13,6 +13,7 @@
 //! - [`OrderSink`] and [`Dispatch`]: the executor, run on a worker the dispatcher starts, so
 //!   the loop keeps beating while a step runs;
 //! - [`HeldHalts`]: the persisted halt generations;
+//! - [`RenewalSource`]: what the enrollment loop last said of the host's certificate;
 //! - [`UnixClock`], [`Log`] and [`Sleeper`].
 //!
 //! Its own types are in [`beat`] (what is sent, and the bound it keeps), [`order`] (the order,
@@ -51,7 +52,7 @@ mod wire_map;
 
 pub use beat::{
     ANNOUNCED, Feature, Features, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
-    Observed, OptionalFact, Oversize, Platform, ServiceFacts, fit,
+    Observed, OptionalFact, Oversize, Platform, Renewal, ServiceFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
 pub use dial::{CALL_SECS, TcpDial, TcpTransport};
@@ -68,6 +69,7 @@ pub use order::{
 pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, HeldHalts, Job,
-    LinkError, Log, Observation, OrderSink, RecordedService, ReplyFault, ServiceObserver,
-    ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault, UnixClock, Unsendable,
+    LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, ReplyFault,
+    ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault,
+    UnixClock, Unsendable,
 };

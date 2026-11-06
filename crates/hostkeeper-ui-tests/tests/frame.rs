@@ -18,7 +18,7 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true }});
+  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{token}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
   fire(domNamed(doc.root, "page-{page}"), "click", {{}});
@@ -115,7 +115,8 @@ fn audit_pages_follow_the_cursor_through_the_frame() {
     ui.reply(
         &m("Audit/List"),
         json!({"entries": [
-            {"seq": first, "by": "ACTOR_OPERATOR", "action": "hold", "service": "api", "nodeId": "web-1"},
+            {"seq": first, "atUnix": "1800000000", "by": "ACTOR_OPERATOR", "byName": "alice",
+             "action": "hold", "service": "api", "nodeId": "web-1"},
             {"seq": second, "by": "ACTOR_CI", "action": "unhold", "service": "api", "nodeId": "web-1"},
         ], "nextSeq": second}),
     );
@@ -136,9 +137,9 @@ return rows;"#,
     assert_eq!(
         page,
         json!([
-            "Seq|By|Action|Service|Host|Reason",
-            format!("{first}|operator|hold|api|web-1|-"),
-            format!("{second}|ci|unhold|api|web-1|-"),
+            "Seq|Time|By|Who|Action|Service|Host|Reason",
+            format!("{first}|2027-01-15 08:00:00 UTC|operator|alice|hold|api|web-1|-"),
+            format!("{second}|-|ci|-|unhold|api|web-1|-"),
         ])
     );
     let last = ui.run(&steps(

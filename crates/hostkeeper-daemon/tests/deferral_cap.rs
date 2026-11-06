@@ -40,6 +40,7 @@ fn update() -> Order {
             service: name("web"),
             version: version("2.0.0"),
             digest: PackageDigest::new(&d()).expect("a digest"),
+            index_digest: None,
         }),
     }
 }
@@ -89,6 +90,8 @@ fn a_retry_time_far_ahead_is_capped_at_an_hour_from_now() {
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: dispatch.clone(),
         stop: StopFlag::default(),
+        enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
+        renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
     };
     let mut heartbeater = links.heartbeater(&daemon);

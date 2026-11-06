@@ -4,7 +4,8 @@
 //! socket) and a [`TlsSource`]; what the connections are is the caller's, so a test serves
 //! in-memory ones. Each listener holds a [`TlsSource`], so a certificate the farm CA renewed is picked up
 //! without a restart (the files are looked at every interval, and a pair that does not make
-//! a working configuration leaves the one in use). A heartbeat listener's source requires a
+//! a working configuration leaves the one in use). With enrollment, the same tick first renews
+//! the coordinator's own server certificate when it is due ([`reload_every`]). A heartbeat listener's source requires a
 //! client certificate that chains to the farm CA, or, with enrollment, lets a client without one
 //! through the handshake and admits one of the coordinator's CA too (each route then decides:
 //! only `Enroll` and `Poll` answer a caller without one); the private listener's asks for none. A
@@ -36,6 +37,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{Instant, Sleep};
 use tokio_rustls::TlsAcceptor;
 
+use crate::enrollment::Enrollment;
 use crate::grpc::route;
 use crate::http::{Peer, Surface};
 use crate::service::Coordinator;
@@ -307,9 +309,12 @@ pub async fn connection<S>(
 }
 
 /// Looks at everything that is re-read while the coordinator runs, every `interval`, for as long
-/// as the future is polled: the TLS files of `sources` and the tokens file of `tokens`. It never
-/// returns.
+/// as the future is polled: with `enrollment`, its server certificate file, made again when it
+/// is due ([`Enrollment::renew_server`]), and its requests, expired once they waited longer than
+/// the request TTL ([`Enrollment::expire_requests`]); then the TLS files of `sources` and the
+/// tokens file of `tokens`. It never returns.
 pub async fn reload_every(
+    enrollment: Option<Arc<Enrollment>>,
     sources: Vec<TlsSource>,
     tokens: OperatorTokens,
     interval: Duration,
@@ -319,12 +324,27 @@ pub async fn reload_every(
     ticks.tick().await;
     loop {
         ticks.tick().await;
-        reload_all(&sources, &tokens).await;
+        reload_all(enrollment.as_ref(), &sources, &tokens).await;
     }
 }
 
-/// One look of the tick: each TLS source reloads, then the tokens file is read again.
-pub(crate) async fn reload_all(sources: &[TlsSource], tokens: &OperatorTokens) {
+/// One look of the tick: the server certificate of `enrollment` is renewed when it is due and
+/// its requests older than the request TTL expire, then each TLS source reloads (so a renewed
+/// file is served from this look on), then the tokens file is read again.
+pub(crate) async fn reload_all(
+    enrollment: Option<&Arc<Enrollment>>,
+    sources: &[TlsSource],
+    tokens: &OperatorTokens,
+) {
+    if let Some(enrollment) = enrollment {
+        let enrollment = Arc::clone(enrollment);
+        // File reads, a key, a serial from the store and file writes: off the runtime's threads.
+        let _ = tokio::task::spawn_blocking(move || {
+            enrollment.renew_server();
+            enrollment.expire_requests();
+        })
+        .await;
+    }
     for source in sources {
         let source = source.clone();
         // File reads and a key parse: off the runtime's threads.

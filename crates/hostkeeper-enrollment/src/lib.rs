@@ -7,8 +7,9 @@
 //!   (`serverAuth`, capped), loads or creates its owner-only key file, and gives the CA
 //!   certificate with its SHA-256 ([`ca::CaBundle`]). [`ca::Signer`] is the seam a separate
 //!   signer process would implement.
-//! - [`enroll`]: the durable enrollment store: pending requests, approval, one certificate per
-//!   request id and round, duplicate claims, live-daemon duplicates and deny rows.
+//! - [`enroll`]: the durable enrollment store: pending requests, approval, expiry of a request
+//!   no operator approved in time, one certificate per request id and round, duplicate claims,
+//!   live-daemon duplicates and deny rows.
 //! - [`validity`]: the [`validity::UnixClock`] port, the only place the crate reads the wall
 //!   clock.
 //! - [`fs`]: the [`fs::Fs`] port the store and the key file write through, with a real

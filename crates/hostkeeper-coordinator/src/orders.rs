@@ -23,7 +23,7 @@
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{Heartbeat, PackageDigest};
+use hostkeeper_wire::wire::PackageDigest;
 
 use crate::fleet::Fleet;
 use crate::ops::OpsState;
@@ -50,19 +50,10 @@ pub fn install_order_id(digest: &Digest) -> String {
     format!("install-{digits}")
 }
 
-/// The try of the order `order_id` to send a host whose last word about the service is `beat`:
-/// one more than the try of the verdict it last reported of that order, else the first. A resend
-/// before the host reports keeps the try; a restarted coordinator reads it from the beat, so it
-/// never sends a lower one.
-#[must_use]
-pub fn next_try(beat: Option<&Heartbeat>, order_id: &str) -> u64 {
-    beat.and_then(|b| b.last_update.as_ref())
-        .filter(|r| {
-            r.order_id
-                .as_ref()
-                .is_some_and(|id| id.as_str() == order_id)
-        })
-        .map_or(1, |r| r.order_try.unwrap_or(0).saturating_add(1))
+/// The `index_digest` of an order as the agent's messages say it: the digest, or empty when the
+/// order names no index (the daemon checks none).
+fn index_text(digest: Option<&Digest>) -> String {
+    digest.map(ToString::to_string).unwrap_or_default()
 }
 
 /// An order a heartbeat answer carries as a typed order: an operator's, or the rollout gate's
@@ -77,11 +68,14 @@ pub enum Order {
         service: String,
         /// The version to run.
         version: Version,
-        /// The package digest CI registered for the version.
+        /// The package digest CI registered for the version, for the host's platform.
         digest: PackageDigest,
+        /// The digest of the release index it was taken from; none for a version registered
+        /// with one package digest.
+        index_digest: Option<Digest>,
         /// The order's id ([`crate::order_terms::order_id_text`]).
         order_id: String,
-        /// The try, from 1.
+        /// The try ([`Fleet::next_try`]).
         order_try: u64,
     },
     /// Stop the service's running step and end its order in the halt phase.
@@ -97,12 +91,17 @@ pub enum Order {
         service: String,
         /// The version forced.
         version: Version,
-        /// The package digest CI registered for the version.
+        /// The package digest CI registered for the version, for the host's platform.
         digest: Digest,
+        /// The digest of the release index it was taken from; none for a version registered
+        /// with one package digest.
+        index_digest: Option<Digest>,
         /// Greater than the halt generation the host holds the service under.
         halt_generation: u64,
         /// The force's order id: `force-<generation>`.
         order_id: String,
+        /// The try ([`Fleet::next_try`]).
+        order_try: u64,
     },
     /// Add a service the coordinator assigned to the host, by the update path with no previous
     /// version.
@@ -111,11 +110,14 @@ pub enum Order {
         service: String,
         /// Its desired version.
         version: Version,
-        /// The package digest CI set for the version.
+        /// The package digest CI set for the version, for the host's platform.
         digest: Digest,
+        /// The digest of the release index it was taken from; none for a version set with one
+        /// package digest.
+        index_digest: Option<Digest>,
         /// The order's id ([`install_order_id`]).
         order_id: String,
-        /// The try ([`next_try`]).
+        /// The try ([`Fleet::next_try`]).
         order_try: u64,
     },
     /// Stop the service's units, run its `uninstall` hook and remove its package and placed
@@ -125,14 +127,15 @@ pub enum Order {
         service: String,
         /// The order's id: `uninstall-<generation>` ([`crate::assignment`]).
         order_id: String,
-        /// The try ([`next_try`]).
+        /// The try ([`Fleet::next_try`]).
         order_try: u64,
     },
 }
 
 impl Order {
     /// The order as `hostkeeper.agent.v1` says it: the verb and its typed arguments, the order
-    /// id, and the try (the first, for an operator's order).
+    /// id, and the try (the first, for an `abort`, which the daemon keys by its own order id and
+    /// not by the service's step record).
     #[must_use]
     pub fn to_proto(&self) -> agent::Order {
         let (order_id, order_try, verb) = match self {
@@ -140,6 +143,7 @@ impl Order {
                 service,
                 version,
                 digest,
+                index_digest,
                 order_id,
                 order_try,
             } => (
@@ -149,6 +153,7 @@ impl Order {
                     service: service.clone(),
                     version: version.to_string(),
                     package_digest: digest.as_str().to_owned(),
+                    index_digest: index_text(index_digest.as_ref()),
                 }),
             ),
             Self::Abort { service, order_id } => (
@@ -162,22 +167,26 @@ impl Order {
                 service,
                 version,
                 digest,
+                index_digest,
                 halt_generation,
                 order_id,
+                order_try,
             } => (
                 order_id,
-                1,
+                *order_try,
                 agent::order::Verb::Force(agent::Force {
                     service: service.clone(),
                     version: version.to_string(),
                     package_digest: digest.to_string(),
                     halt_generation: *halt_generation,
+                    index_digest: index_text(index_digest.as_ref()),
                 }),
             ),
             Self::Install {
                 service,
                 version,
                 digest,
+                index_digest,
                 order_id,
                 order_try,
             } => (
@@ -187,6 +196,7 @@ impl Order {
                     service: service.clone(),
                     version: version.to_string(),
                     package_digest: digest.to_string(),
+                    index_digest: index_text(index_digest.as_ref()),
                 }),
             ),
             Self::Uninstall {
@@ -248,11 +258,16 @@ fn force_for(fleet: &Fleet, state: &OpsState, service: &str, id: &HostId) -> Opt
         || reported;
     let ordered = force.hosts.iter().any(|host| host == id.as_str());
     let held = !force.include_held && fleet.is_held(service, id);
+    // The package of the host's own platform; a platform the force's index does not list is
+    // ordered nothing (the plan left such a host out when it was made).
+    let package = force.package_for(host.beat.platform)?;
     (ordered && !done && !held).then(|| Order::Force {
         service: service.to_owned(),
         version: force.version.clone(),
-        digest: force.digest.clone(),
+        digest: package.digest,
+        index_digest: package.index_digest,
         halt_generation: force.halt_generation,
         order_id,
+        order_try: fleet.next_try(service, id),
     })
 }

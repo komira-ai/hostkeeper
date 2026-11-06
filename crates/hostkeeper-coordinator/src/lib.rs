@@ -8,7 +8,9 @@
 //!   coordinator's server certificate, and what the heartbeat path asks of them (who an
 //!   enrolled host's certificate names, whether it is denied, retiring or duplicate);
 //! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically,
-//!   with the [`registry`] of every version CI has set and the digest of its package;
+//!   with the [`registry`] of every version CI has set and its release (the digest of its
+//!   package, or the record of its release index, checked by [`release_index`]: each host is
+//!   ordered the package of its own platform);
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start;
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
 //! - [`verdicts`]: the release failures heard, each counted once per host, order id and try,
@@ -33,8 +35,8 @@
 //!   `uninstall`);
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
 //!   halts, aborts, exclusions, holds, the audit log), and [`assign`], its assignment calls
-//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), and [`operator_enrollment`],
-//!   its `Enrollment.List` and `Enrollment.Approve`;
+//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), [`operator_enrollment`], its
+//!   `Enrollment.List` and `Enrollment.Approve`, and [`hosts`], its `Hosts.List` and `Hosts.Get`;
 //! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`),
 //!   kept in the ops file, and the match of each request `Enrollment.List` shows against it;
 //! - [`ops`]: what operators decide (exclusions, labels, halts cleared), the marks of bad and
@@ -49,16 +51,25 @@
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
 //!   token or an operator token, the status read by the operator token;
+//! - [`channel`]: with `--release-channel`, the check that the release channel holds a version
+//!   before it is set, over the HTTPS fetch of [`channel_https`];
 //! - [`status`]: what an operator reads, and the convergence of a service;
+//! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
+//!   answered by `Alerts.List` and logged with an `alert=` field;
 //! - [`stamp`]: the commit and the version `--version` prints;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them;
 //! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
 //!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
 //!   operator API, and the router that tells them from the frozen JSON routes;
-//! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
+//! - [`ui`]: the static files of `--ui-dir` (by default, for the binary,
+//!   [`config::DEFAULT_UI_DIR`] when it is a directory), which the private surface serves under
+//!   `/ui/`;
 //! - [`config`]: the flags and the start, under the [`lock`] of the state files, with CI's spent
 //!   token ids in the [`jti_file`] beside them.
+//! - [`backup`]: `backup` and `restore`, a copy of the state files and the enrollment store
+//!   taken under the same lock, with the SHA-256 of each file in its manifest, and putting one
+//!   back into targets that hold no state.
 //!
 //! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
 
@@ -69,11 +80,15 @@
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
 pub mod acks;
+pub mod alerts;
 pub mod assign;
 pub mod assignment;
 pub(crate) mod audit_file;
+pub mod backup;
 pub mod bake;
 pub mod canary;
+pub mod channel;
+pub mod channel_https;
 pub mod config;
 pub mod converge;
 pub mod decide;
@@ -85,6 +100,7 @@ pub mod force;
 pub mod grpc;
 pub mod halt;
 pub mod holds;
+pub mod hosts;
 pub mod http;
 pub mod identity;
 pub(crate) mod intents;
@@ -102,6 +118,7 @@ pub mod order_terms;
 pub mod orders;
 pub mod reconcile;
 pub mod registry;
+pub mod release_index;
 pub mod service;
 pub mod services;
 pub mod stamp;
@@ -122,9 +139,27 @@ mod assignment_tests;
 #[cfg(test)]
 mod audit_file_tests;
 #[cfg(test)]
+mod audit_list_tests;
+#[cfg(test)]
+mod audit_refusal_tests;
+#[cfg(test)]
+mod audit_rotation_tests;
+#[cfg(test)]
+mod backup_refusal_tests;
+#[cfg(test)]
+mod backup_segment_tests;
+#[cfg(test)]
+mod backup_tests;
+#[cfg(test)]
 mod bake_canary_tests;
 #[cfg(test)]
 mod bake_review_tests;
+#[cfg(test)]
+mod channel_https_tests;
+#[cfg(test)]
+mod channel_set_tests;
+#[cfg(test)]
+mod channel_tests;
 #[cfg(test)]
 mod converge_tests;
 #[cfg(test)]
@@ -144,6 +179,8 @@ mod desired_tests;
 #[cfg(test)]
 mod extras_dropped_tests;
 #[cfg(test)]
+mod first_heartbeat_tests;
+#[cfg(test)]
 mod force_targets_tests;
 #[cfg(test)]
 mod force_tests;
@@ -155,6 +192,12 @@ mod halt_race_tests;
 mod holds_calls_tests;
 #[cfg(test)]
 mod holds_tests;
+#[cfg(test)]
+mod host_cert_state_tests;
+#[cfg(test)]
+mod host_inventory_tests;
+#[cfg(test)]
+mod hosts_tests;
 #[cfg(test)]
 mod http_tests;
 #[cfg(test)]
@@ -190,6 +233,12 @@ mod recorded_definition_tests;
 #[cfg(test)]
 mod recorded_review_tests;
 #[cfg(test)]
+mod release_index_orders_tests;
+#[cfg(test)]
+mod release_index_support;
+#[cfg(test)]
+mod release_index_tests;
+#[cfg(test)]
 mod rollback_definition_tests;
 #[cfg(test)]
 mod rollback_membership_tests;
@@ -222,7 +271,11 @@ mod tierstore_service_tests;
 #[cfg(test)]
 mod tokens_tests;
 #[cfg(test)]
+mod try_per_service_tests;
+#[cfg(test)]
 mod uninstall_tests;
+#[cfg(test)]
+mod unmark_tests;
 #[cfg(test)]
 mod verdict_acks_tests;
 #[cfg(test)]

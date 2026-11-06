@@ -1,7 +1,8 @@
 //! What the store knows of an approved host: deny rows (design 6.1), renewal, and duplicate
 //! live daemons on one host id (design 5.7, step 4).
 //!
-//! A deny row is written by [`EnrollmentStore::deny`] as retiring: the host is refused at once
+//! A deny row is written by [`EnrollmentStore::deny`] (the operator's `Hosts.Retire`) as
+//! retiring: the host is refused at once
 //! (`is_denied`), and an update may still be in flight on it (`is_retiring`). The coordinator
 //! frees the host's update slot when the host reports that update's record final, and then
 //! calls [`EnrollmentStore::retire`]; the store never touches the slot. A deny row is never
@@ -9,23 +10,27 @@
 
 use std::sync::PoisonError;
 
-use super::files::{DenyState, corrupt};
+use super::files::{DenyState, claims_of_pb, corrupt};
 use super::store::{EnrollmentStore, LIVE_WINDOW_SECS};
-use super::{RequestState, StoreError};
+use super::{EnrolledHost, RequestState, StoreError};
 use crate::names::{HostId, KeyHash, Role};
 
 impl EnrollmentStore {
     /// Denies `host`: a retiring deny row (a row already retiring or retired is kept), and the
-    /// host's request marked denied, so a repost or poll of its key is refused.
+    /// host's request marked denied, so a repost or poll of its key is refused. Returns whether
+    /// the row is new: `false` when the host was denied already, decided under the store's lock,
+    /// so of two calls at once exactly one sees `true`.
     ///
     /// # Errors
     /// [`StoreError`] when a file cannot be read or written.
-    pub fn deny(&self, host: &HostId) -> Result<(), StoreError> {
+    pub fn deny(&self, host: &HostId) -> Result<bool, StoreError> {
         let _held = self.lock()?;
-        if !self.denied(host)? {
+        let new = !self.denied(host)?;
+        if new {
             self.write_deny(host, DenyState::Retiring, &[])?;
         }
-        self.mark_request_denied(host)
+        self.mark_request_denied(host)?;
+        Ok(new)
     }
 
     /// Records that `host` retired: its deny row becomes final (written denied when it was not
@@ -93,6 +98,41 @@ impl EnrollmentStore {
         self.host_role(host)
     }
 
+    /// `host` as enrolled: its host file names the key it was approved for, and the request of
+    /// that key holds what it claimed and when it was approved. `None` for a host id never
+    /// approved, or denied (retiring or retired).
+    ///
+    /// # Errors
+    /// [`StoreError`] when a file cannot be read, or the host's request is missing.
+    pub fn enrolled_host(&self, host: &HostId) -> Result<Option<EnrolledHost>, StoreError> {
+        let Some(row) = self.load_host(host)? else {
+            return Ok(None);
+        };
+        if self.denied(host)? {
+            return Ok(None);
+        }
+        let missing = corrupt(&self.host_path(host), "the host's request is missing");
+        let request = self.load_request(&row.key)?.ok_or(missing)?;
+        Ok(Some(EnrolledHost {
+            host_id: host.clone(),
+            claims: claims_of_pb(request.pb.claims.as_ref()),
+            approved_unix: request.pb.approved.as_ref().map_or(0, |a| a.approved_unix),
+            first_heartbeat_unix: row.pb.first_heartbeat_unix,
+        }))
+    }
+
+    /// Every enrolled host ([`Self::enrolled_host`]), by host id.
+    ///
+    /// # Errors
+    /// [`StoreError`] when a file cannot be read, or a host's request is missing.
+    pub fn enrolled_hosts(&self) -> Result<Vec<EnrolledHost>, StoreError> {
+        let mut enrolled = Vec::new();
+        for host in self.host_ids()? {
+            enrolled.extend(self.enrolled_host(&host)?);
+        }
+        Ok(enrolled)
+    }
+
     /// Whether `host` is denied and may still have an update in flight.
     ///
     /// # Errors
@@ -122,6 +162,35 @@ impl EnrollmentStore {
     /// [`StoreError`] when the host file cannot be read.
     pub fn is_duplicate(&self, host: &HostId) -> Result<bool, StoreError> {
         Ok(self.load_host(host)?.is_some_and(|row| row.pb.duplicate))
+    }
+
+    /// The heartbeat path's report that it accepted a heartbeat of `host` at `now`: the first
+    /// since the host's approval is written into its host file, and every later one leaves it
+    /// as it is. An approval writes the host file without it, so a host approved again (a new
+    /// key, or a renewal) records its next heartbeat. A host id never approved has no file and
+    /// nothing is recorded.
+    ///
+    /// Decided under the store's lock, so of two heartbeats at once exactly one is written. A
+    /// host whose file is known to hold the time already (this store wrote or read it) is
+    /// answered from memory, without the lock or a read; an approval of the host forgets it.
+    ///
+    /// # Errors
+    /// [`StoreError`] when the host file cannot be read or written.
+    pub fn note_heartbeat(&self, host: &HostId, now: u64) -> Result<(), StoreError> {
+        let heard = || self.heard.lock().unwrap_or_else(PoisonError::into_inner);
+        if heard().contains(host) {
+            return Ok(());
+        }
+        let _held = self.lock()?;
+        let Some(mut row) = self.load_host(host)? else {
+            return Ok(());
+        };
+        if row.pb.first_heartbeat_unix.is_none() {
+            row.pb.first_heartbeat_unix = Some(now);
+            self.write_host(&row.pb)?;
+        }
+        heard().insert(host.clone());
+        Ok(())
     }
 
     /// The heartbeat path's report that a daemon on machine `machine_id` speaks for `host` at

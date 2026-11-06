@@ -73,6 +73,8 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 }),
             },
         ],
+        sent_unix: hostkeeper_link::testing::START_UNIX,
+        renewal: hostkeeper_link::Renewal::default(),
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 
@@ -129,14 +131,29 @@ fn a_link_failure_is_logged_and_the_next_period_beats_again() {
 }
 
 /// Catches a loop that waits before its first heartbeat, waits other than its period, or does
-/// not stop when its sleeper says so.
+/// not stop when its sleeper says so; and a heartbeat whose outcome is not handed on, or handed
+/// on for another heartbeat: three heartbeats, one refused by the coordinator between two that
+/// were answered, hand on exactly those three outcomes in that order.
 #[test]
 fn run_beats_at_start_and_after_every_period_until_stopped() {
     let rig = Rig::new("facts-run");
+    let refused = LinkError::Transport(io::ErrorKind::ConnectionRefused);
+    rig.world.link.answer(Ok(Reply::default()));
+    rig.world.link.answer(Err(refused.clone()));
     let sleeper = ScriptedSleeper::new(2);
-    rig.heartbeater().run(&sleeper);
+    let mut seen = Vec::new();
+    rig.heartbeater()
+        .run(&sleeper, &mut |outcome| seen.push(outcome.clone()));
     assert_eq!(rig.world.link.calls().len(), 3);
     assert_eq!(sleeper.waits(), [15, 15, 15]);
+    assert_eq!(
+        seen,
+        [
+            BeatOutcome::Sent,
+            BeatOutcome::NotSent(refused),
+            BeatOutcome::Sent
+        ]
+    );
 }
 
 /// Catches the production sleeper waiting other than the period on its clock, or not stopping
@@ -148,7 +165,7 @@ fn a_clock_sleeper_waits_the_period_on_its_clock_and_stops_when_asked() {
     let sleeper = ClockSleeper::new(clock.clone(), stop.clone());
     assert_eq!(sleeper.sleep(15), Tick::Beat);
     assert_eq!(clock.mono_secs(), 22);
-    assert_eq!(clock.boot_id(), "fake-boot");
+    assert_eq!(clock.boot_id().expect("a boot id").as_str(), "fake-boot");
     assert!(!stop.is_stopped());
     stop.stop();
     assert!(stop.is_stopped());
@@ -214,6 +231,65 @@ fn step_records_that_name_a_service_twice_send_nothing() {
         [
             "error: no heartbeat: the installed services cannot be read: the step records name x \
           twice"
+        ]
+    );
+}
+
+/// Catches a heartbeat that says another time than the host's unix clock at the beat, or another
+/// certificate end or error than the enrollment loop's, or that sends an error past the wire's
+/// bound or an empty one: each beat says the clock of its moment and what the loop's state
+/// holds then, the error cut to the bound at a character boundary, and an empty error as none.
+#[test]
+fn a_heartbeat_says_the_host_clock_and_the_enrollment_loops_word_on_the_certificate() {
+    use hostkeeper_link::Renewal;
+    use hostkeeper_wire::wire::MAX_RENEW_ERROR;
+
+    let rig = Rig::new("facts-renewal");
+    rig.install(Vec::new());
+    let mut heartbeater = rig.heartbeater();
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+
+    rig.world.clock.set_unix(1_234_567_890);
+    let long = format!("a{}", "é".repeat(200));
+    rig.world.renewal.set(Renewal {
+        cert_not_after_unix: Some(1_235_000_000),
+        last_renew_error: Some(long),
+    });
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+
+    rig.world.renewal.set(Renewal {
+        cert_not_after_unix: Some(1_235_000_000),
+        last_renew_error: Some(String::new()),
+    });
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+
+    let said: Vec<(u64, Renewal)> = rig
+        .world
+        .link
+        .beats()
+        .into_iter()
+        .map(|beat| (beat.sent_unix, beat.renewal))
+        .collect();
+    let clipped = format!("a{}", "é".repeat(127));
+    assert_eq!(clipped.len(), MAX_RENEW_ERROR - 1);
+    assert_eq!(
+        said,
+        [
+            (hostkeeper_link::testing::START_UNIX, Renewal::default()),
+            (
+                1_234_567_890,
+                Renewal {
+                    cert_not_after_unix: Some(1_235_000_000),
+                    last_renew_error: Some(clipped),
+                }
+            ),
+            (
+                1_234_567_890,
+                Renewal {
+                    cert_not_after_unix: Some(1_235_000_000),
+                    last_renew_error: None,
+                }
+            ),
         ]
     );
 }

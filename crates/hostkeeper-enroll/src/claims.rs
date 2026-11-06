@@ -6,9 +6,10 @@
 //! Configuration Parameters`, network function 0x0C, command 0x02), asked on channels 1 to 11 in
 //! order through the [`Ipmi`] port; the first channel that answers with a non-zero MAC gives the
 //! claim ([`parse_lan_mac`]). No implementation of [`Ipmi`] is in this crate: reading
-//! `/dev/ipmi0` needs an `ioctl`, and the workspace forbids `unsafe`. The daemon's Linux
-//! construction is to provide one ([`LinuxClaims::with_ipmi`]); [`LinuxClaims::host`] has none,
-//! so its BMC MAC claim is absent.
+//! `/dev/ipmi0` needs root and an `ioctl`. The daemon's reader of `/dev/ipmi0`
+//! (`hostkeeper_daemon::ipmi::DevIpmi`) is given to its Linux claims through
+//! [`LinuxClaims::with_ipmi`]; [`LinuxClaims::host`] alone has none, so its BMC MAC claim is
+//! absent.
 //!
 //! On a Mac the claims are the serial number and the platform UUID that `ioreg` reports.
 //!

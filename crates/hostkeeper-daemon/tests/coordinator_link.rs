@@ -30,7 +30,7 @@ use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, ClientIdentity, CoordinatorLink, Dispatch, Feature, Heartbeat, Job,
-    LinkError, Platform, TrustFault,
+    LinkError, Platform, Renewal, TrustFault,
 };
 use hostkeeper_testkit::Scratch;
 use hostkeeper_tls::TlsSource;
@@ -404,6 +404,8 @@ fn bare_beat() -> Heartbeat {
         agent_version: hostkeeper_config::names::Version::from(OWN),
         features: ANNOUNCED.to_vec(),
         services: Vec::new(),
+        sent_unix: 0,
+        renewal: Renewal::default(),
     }
 }
 
@@ -518,11 +520,12 @@ fn the_link_of_host_links_answers_the_coordinators_reply() {
             Feature::DeferredV1,
             Feature::HaltV1,
             Feature::HeartbeatV2,
+            Feature::ForcedV1,
             Feature::OrderV1,
             Feature::VerdictAcksV1,
             Feature::GrpcV1
         ],
-        "the announced features the coordinator echoes: all but forced-v1, install-v1 and abort-v1"
+        "the announced features the coordinator echoes: all but install-v1 and abort-v1"
     );
 
     let log = Arc::new(RecordingLog::default());

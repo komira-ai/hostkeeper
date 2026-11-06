@@ -676,16 +676,16 @@ fn the_baseline_check_refuses_the_real_set_with_a_field_taken_out() {
     );
 }
 
-/// The real set with one file's descriptors changed by `change`.
+/// The real set with the descriptors of the file `name` changed by `change`.
 fn with_file(
-    package: &str,
+    name: &str,
     change: impl FnOnce(&mut prost_types::FileDescriptorProto),
 ) -> FileDescriptorSet {
     let mut set = current();
     let file = set
         .file
         .iter_mut()
-        .find(|f| f.package() == package)
+        .find(|f| f.name() == name)
         .expect("the file");
     change(file);
     set
@@ -700,7 +700,7 @@ fn the_compat_test_passes_against_the_unchanged_baseline() {
     let baseline = baseline();
     assert_eq!(breaks(&baseline, &current()), Vec::<Break>::new());
 
-    let renamed = with_file("hostkeeper.agent.v1", |agent| {
+    let renamed = with_file("hostkeeper/agent/v1/agent.proto", |agent| {
         let coordinator = agent
             .service
             .iter_mut()
@@ -740,7 +740,7 @@ fn the_compat_test_passes_against_the_unchanged_baseline() {
         ]
     );
 
-    let renumbered = with_file("hostkeeper.operator.v1", |operator| {
+    let renumbered = with_file("hostkeeper/operator/v1/operator.proto", |operator| {
         let exclude = operator
             .message_type
             .iter_mut()

@@ -334,9 +334,11 @@ fn misread(tamper: fn(&mut Release), detail: &str) {
         git: &fakes.git,
         runs: &fakes.runs,
         store: &store,
+        source: &fakes.source,
         verifier: &fakes.verifier,
         run_version: &fakes.run_version,
         pkgbuild: &fakes.pkgbuild,
+        advisories: &fakes.advisories,
     };
     let detail = detail.replace("SUMS_DIGEST", &digest(&dir, "SHA256SUMS"));
     assert_eq!(

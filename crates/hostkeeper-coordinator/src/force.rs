@@ -6,8 +6,8 @@
 //!
 //! [`Coordinator::force`] refuses, before anything changes: the service `hostkeeper`, which
 //! updates itself by its own path (`self_service`); a version below the service's `min_version`
-//! (`below_min_version`; the floor itself is accepted); a version CI registered no package
-//! digest for (`no_digest`); a fleet-wide force whose `confirm_service` is not the service
+//! (`below_min_version`; the floor itself is accepted); a version CI registered no release
+//! (a package digest or a release index) for (`no_digest`); a fleet-wide force whose `confirm_service` is not the service
 //! (`confirm_mismatch`); a role the service does not run on, or a host the coordinator has not
 //! heard from since it started (`unknown_target`).
 //!
@@ -23,8 +23,11 @@
 //! A targeted pair an operator holds is skipped and listed `held`, unless the call sets
 //! `include_held`: then it is ordered, for this call only, and no hold is removed. A target
 //! whose daemon did not announce [`FEATURE`] is listed `skipped` as `daemon_too_old` and gets
-//! nothing from the force; a host named in the call that does not run the service is listed
-//! `skipped` as `unknown_target`.
+//! nothing from the force; a target of a version registered with a release index that lists no
+//! package for its platform is listed `skipped` as `no_package_for_platform`; a host named in
+//! the call that does not run the service is listed `skipped` as `unknown_target`. Each host
+//! ordered gets the package of its own platform, and the digest of the index it was taken from
+//! ([`ForceRecord::package_for`]).
 //!
 //! The force stands until CI or an operator sets another version ([`end_by_ci`],
 //! [`end_by_setter`]) or another force replaces it. While it stands the automatic rollback of the service is suspended
@@ -40,18 +43,19 @@ use std::time::Duration;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::force_request::Targets;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::{HostId, RoleName};
+use hostkeeper_wire::{HostId, Platform, RoleName};
 use serde::{Deserialize, Serialize};
 
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{AuditEntry, HaltAck, OpsError, OpsState, OpsStore, Write};
-use crate::registry::Digest;
+use crate::registry::{Digest, IndexRecord, Package, Release};
 use crate::service::{Coordinator, kept};
 use crate::services::{ServiceDef, Services};
 
-/// The feature a daemon announces to be sent a `force`.
+/// The feature a daemon announces to be sent a `force`. The coordinator advertises it too
+/// ([`crate::service::FEATURES`]): a daemon runs a force only while the reply advertises it.
 pub const FEATURE: &str = "forced-v1";
 
 /// The service no force may name: hostkeeper updates itself by its own path (design 6.6).
@@ -93,8 +97,15 @@ pub struct ForceRecord {
     pub reason: String,
     /// The name of the operator's token that forced it.
     pub by: String,
-    /// The package digest CI registered for the version, which the order names.
+    /// The package digest CI registered for the version, which the order names; for a version
+    /// registered with a release index, the digest of that index (the packages are in
+    /// `release_index`).
     pub digest: Digest,
+    /// The record of the release index CI registered for the version, if it registered one:
+    /// each host is ordered the package it lists for the host's platform. Written only then, so
+    /// the record of a version with one package digest is as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_index: Option<IndexRecord>,
     /// The halt generation the order carries.
     pub halt_generation: u64,
     /// The targets as the call named them.
@@ -111,6 +122,20 @@ impl ForceRecord {
     pub fn order_id(&self) -> String {
         format!("force-{}", self.generation)
     }
+
+    /// The package a host of `platform` is ordered: the one the index lists for it, or, for a
+    /// version registered with one package digest, that digest. None for a platform the index
+    /// does not list.
+    #[must_use]
+    pub fn package_for(&self, platform: Platform) -> Option<Package> {
+        match &self.release_index {
+            Some(record) => record.package_for(platform),
+            None => Some(Package {
+                digest: self.digest.clone(),
+                index_digest: None,
+            }),
+        }
+    }
 }
 
 /// Whom a force orders, as [`plan`] finds them in the fleet.
@@ -121,7 +146,7 @@ pub struct Plan {
     /// The targeted hosts skipped because an operator holds the pair.
     pub held: Vec<String>,
     /// The other targeted hosts not ordered, each with its reason token (`daemon_too_old`,
-    /// `unknown_target`).
+    /// `no_package_for_platform`, `unknown_target`).
     pub skipped: Vec<(String, &'static str)>,
     /// The versions the ordered hosts run that are newer than the version forced: a downgrade
     /// leaves them, and they are marked bad.
@@ -135,16 +160,26 @@ pub struct Plan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnknownTarget;
 
-/// Whom a force of `def` to `version` with `targets` orders in `fleet` at `now`: the hosts of
-/// the service the targets name, less the held pairs (unless `include_held`) and the hosts whose
-/// daemon did not announce [`FEATURE`]. A pure function: it changes nothing.
+/// What a force orders: a version and the release CI registered for it.
+#[derive(Clone, Copy, Debug)]
+pub struct Forced<'a> {
+    /// The version forced.
+    pub version: &'a Version,
+    /// Its package digest, or its release index.
+    pub release: &'a Release,
+}
+
+/// Whom a force of `def` to `forced` with `targets` orders in `fleet` at `now`: the hosts of
+/// the service the targets name, less the held pairs (unless `include_held`), the hosts whose
+/// daemon did not announce [`FEATURE`] and those whose platform the release lists no package
+/// for. A pure function: it changes nothing.
 ///
 /// # Errors
 /// [`UnknownTarget`]: a role `def` does not run on, or a host the fleet has not heard from.
 pub fn plan(
     def: &ServiceDef,
     services: &Services,
-    version: &Version,
+    forced: Forced<'_>,
     targets: &ForceTargets,
     include_held: bool,
     fleet: &Fleet,
@@ -157,9 +192,9 @@ pub fn plan(
             .hosts_of(service)
             .filter(|(_, host)| def.roles.contains(host.role_name()))
     };
-    let targeted: Vec<(HostId, Version)> = match targets {
+    let targeted: Vec<(HostId, Version, Platform)> = match targets {
         ForceTargets::Fleet => members()
-            .map(|(id, host)| (id.clone(), host.beat.version.clone()))
+            .map(|(id, host)| (id.clone(), host.beat.version.clone(), host.beat.platform))
             .collect(),
         ForceTargets::Role(role) => {
             if !def.roles.contains(role) {
@@ -167,7 +202,7 @@ pub fn plan(
             }
             members()
                 .filter(|(_, host)| host.role_name() == role.as_str())
-                .map(|(id, host)| (id.clone(), host.beat.version.clone()))
+                .map(|(id, host)| (id.clone(), host.beat.version.clone(), host.beat.platform))
                 .collect()
         }
         ForceTargets::Hosts(names) => {
@@ -177,20 +212,25 @@ pub fn plan(
                     return Err(UnknownTarget);
                 }
                 match members().find(|(member, _)| **member == id) {
-                    Some((_, host)) => found.push((id.clone(), host.beat.version.clone())),
+                    Some((_, host)) => {
+                        found.push((id.clone(), host.beat.version.clone(), host.beat.platform));
+                    }
                     None => plan.skipped.push((id.to_string(), "unknown_target")),
                 }
             }
             found
         }
     };
-    for (id, running) in targeted {
+    for (id, running, platform) in targeted {
         if !include_held && fleet.is_held(service, &id) {
             plan.held.push(id.to_string());
         } else if !fleet.announced(&id, FEATURE) {
             plan.skipped.push((id.to_string(), "daemon_too_old"));
+        } else if forced.release.package_for(platform).is_none() {
+            plan.skipped
+                .push((id.to_string(), "no_package_for_platform"));
         } else {
-            if !version.at_least(&running) && !plan.left.contains(&running) {
+            if !forced.version.at_least(&running) && !plan.left.contains(&running) {
                 plan.left.push(running);
             }
             plan.ordered.push(id);
@@ -212,7 +252,7 @@ pub fn plan(
 struct Forcing<'a> {
     service: &'a str,
     version: &'a Version,
-    digest: &'a Digest,
+    release: &'a Release,
     by: &'a str,
     reason: &'a str,
     targets: &'a ForceTargets,
@@ -287,7 +327,14 @@ impl Forcing<'_> {
             generation: marks.force_generation,
             reason: self.reason.to_owned(),
             by: self.by.to_owned(),
-            digest: self.digest.clone(),
+            digest: match self.release {
+                Release::Package(digest) => digest.clone(),
+                Release::Index(record) => record.digest.clone(),
+            },
+            release_index: match self.release {
+                Release::Package(_) => None,
+                Release::Index(record) => Some(record.clone()),
+            },
             halt_generation: marks.halt_generation,
             targets: self.targets.clone(),
             include_held: self.include_held,
@@ -395,7 +442,8 @@ impl Coordinator {
     /// The refusal, as `ReleasesRefusal`: `unauthorized` or `forbidden` for a caller that is no
     /// operator, then `self_service`, `unknown_service`, `invalid_request`, `confirm_mismatch`,
     /// `below_min_version`, `no_digest`, `unknown_target`; `store_failed` when the desired state
-    /// or the ops file could not be written.
+    /// or the ops file could not be written; `audit_unavailable` when the force's audit lines
+    /// could not be appended, and the desired state is put back as it was.
     pub fn force(
         &self,
         caller: &Caller,
@@ -422,7 +470,7 @@ impl Coordinator {
         {
             return Err(proto::ReleasesRefusal::BelowMinVersion);
         }
-        let digest = self
+        let release = self
             .desired
             .digests(&def.name)
             .get(&version)
@@ -435,7 +483,10 @@ impl Coordinator {
         let plan = plan(
             def,
             &self.services,
-            &version,
+            Forced {
+                version: &version,
+                release: &release,
+            },
             &targets,
             request.include_held,
             &fleet,
@@ -446,12 +497,13 @@ impl Coordinator {
         // its bad mark standing, so nothing is ordered of it until the force is asked again. A
         // registered digest comes only with a desired state CI set, so there is one; its limits
         // are kept.
-        let mut wanted = self
+        let before = self
             .desired
             .get(&def.name)
             .ok_or(proto::ReleasesRefusal::NoDigest)?;
+        let mut wanted = before.clone();
         wanted.version = version.clone();
-        wanted.release_digest = Some(digest.clone());
+        wanted.set_release(Some(release.clone()));
         let marks = self.ops.marks(&def.name);
         self.desired
             .record(&def.name, wanted, |v| kept(&marks, v))
@@ -459,16 +511,30 @@ impl Coordinator {
         let forcing = Forcing {
             service: &def.name,
             version: &version,
-            digest: &digest,
+            release: &release,
             by,
             reason: &reason,
             targets: &targets,
             include_held: request.include_held,
             plan: &plan,
         };
-        let entries = self.ops.decide_changes(Write::BeforeMemory, |state| {
+        let changed = self.ops.decide_changes(Write::BeforeMemory, |state| {
             Ok::<_, proto::ReleasesRefusal>(forcing.apply(state))
-        })?;
+        });
+        // A force the audit cannot record is not made: its desired state, written above, is put
+        // back (the fleet's lock is still held, so no heartbeat has read it). A put-back that
+        // fails is logged and leaves the target desired with no force, as a failed ops write
+        // does.
+        if changed == Err(proto::ReleasesRefusal::AuditUnavailable)
+            && let Err(why) = self.desired.set(&def.name, before)
+        {
+            tracing::error!(
+                service = %def.name,
+                %why,
+                "a force refused for its audit could not put the desired state back"
+            );
+        }
+        let entries = changed?;
         fleet.set_marks(marks_of(&self.ops.state()));
         tracing::warn!(
             service = %def.name,

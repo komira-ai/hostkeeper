@@ -21,23 +21,26 @@ struct Args {
     verb: Verb,
 }
 
-/// The verb the arguments after the program name spell.
-fn verb(args: &[&str]) -> Verb {
-    Args::try_parse_from(std::iter::once("release").chain(args.iter().copied()))
-        .map(|a| a.verb)
-        .expect("parse the argv")
+/// The verb the arguments after the program name spell, or clap's refusal.
+pub(super) fn parse(args: &[&str]) -> Result<Verb, clap::Error> {
+    Args::try_parse_from(std::iter::once("release").chain(args.iter().copied())).map(|a| a.verb)
 }
 
-fn text(path: &Path) -> &str {
+/// The verb the arguments after the program name spell.
+pub(super) fn verb(args: &[&str]) -> Verb {
+    parse(args).expect("parse the argv")
+}
+
+pub(super) fn text(path: &Path) -> &str {
     path.to_str().expect("a UTF-8 path")
 }
 
-fn empty() -> Fakes {
+pub(super) fn empty() -> Fakes {
     Fakes::over(FakeHistory::default())
 }
 
 /// Runs `v` and tells whether it asked for its adapters.
-fn connects(v: Verb) -> (Result<Vec<String>, Error>, bool) {
+pub(super) fn connects(v: Verb) -> (Result<Vec<String>, Error>, bool) {
     let connected = Cell::new(false);
     let out = run(v, || {
         connected.set(true);
@@ -177,6 +180,10 @@ fn verbs_that_read_no_port_run_with_the_ports_lent_back() {
         "--version",
         "0.1.9",
         "--binary",
+        text(&d.join("a")),
+        "--gh",
+        text(&d.join("a")),
+        "--trusted-root",
         text(&d.join("a")),
     ]);
     assert!(matches!(run_with(check, &ports), Err(Error::Io { .. })));
@@ -367,10 +374,10 @@ fn package_builds_the_package_of_the_service_asked_for_and_hostkeeper_by_default
         assert!(!d.join("out").join(other).exists(), "{other}");
     }
 
-    // Without `--service` the package is hostkeeper's: for macOS it has no unit, and no
-    // `--fail-ready`.
+    // Without `--service` the package is hostkeeper's: for macOS it has no unit, no
+    // `--fail-ready`, and a `--trusted-root` (any file: the verb does not read it as one).
     let (h, _) = one_commit();
-    let out = run(parse(&[]), || Fakes::over(h));
+    let out = run(parse(&["--trusted-root", text(&binary)]), || Fakes::over(h));
     assert!(
         matches!(&out, Ok(lines) if lines[0].starts_with("hostkeeper-0.1.2-macos-arm64.tar.zst:")),
         "{out:?}"
@@ -435,7 +442,6 @@ fn plan_with_the_freeze_set_releases_nothing() {
         "no release: RELEASE_FREEZE is set",
         "release=false",
         "matrix={\"include\":[]}",
-        "reason=RELEASE_FREEZE is set",
     ];
     assert_eq!(out, Ok(lines.iter().map(|l| (*l).to_owned()).collect()));
 }
@@ -494,6 +500,8 @@ fn package_without_its_binary_is_an_io_error() {
             text(&d.join("missing-binary")),
             "--unit",
             text(&d.join("missing-unit")),
+            "--trusted-root",
+            text(&d.join("missing-root")),
             "--out",
             text(&d.join("out")),
         ]),
@@ -765,9 +773,11 @@ fn three_plans_for_one_sha_publish_once() {
 }
 
 #[test]
-fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers() {
-    // Catches: missed commits published newest first, or all under the number of the tip, or a
-    // commit published with the assets of another.
+fn a_plan_from_a_tip_whose_ci_is_pending_publishes_the_done_commits_oldest_first() {
+    // Catches: the plan step of release.yml, as every trigger runs it, planning only the tip
+    // whose ci run has not completed, so the earlier commits whose runs are all done are never
+    // released; or those published newest first, under the number of the tip, or with the
+    // assets of another commit.
     let mut h = FakeHistory::default();
     let root = h.commit(
         None,
@@ -776,6 +786,7 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
     let r = h.commit(Some(&root), &[("src/lib.rs", Some("1"))]);
     let a = h.commit(Some(&r), &[("src/lib.rs", Some("2"))]);
     let b = h.commit(Some(&a), &[("src/lib.rs", Some("3"))]);
+    let tip = h.commit(Some(&b), &[("src/lib.rs", Some("4"))]);
     let fakes = Fakes::over(h);
     fakes.store.insert(Release {
         tag: "v0.1.2".to_owned(),
@@ -785,14 +796,20 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
     });
     green(&fakes, &a);
     green(&fakes, &b);
+    fakes.runs.push("privileged.yml", &tip, "success");
+    fakes.runs.push("artifacts.yml", &tip, "success");
+    fakes.runs.add("ci.yml", &tip, "push", "main", None);
 
     let plan = verb(&[
         "plan",
         "--repo",
         REPO,
         "--commit",
-        b.as_str(),
-        "--scheduled",
+        tip.as_str(),
+        "--version-file",
+        "VERSION",
+        "--freeze",
+        "",
     ]);
     let lines = run_with(plan, &fakes.ports()).expect("plan");
     let matrix = lines
@@ -824,9 +841,11 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
             git: &fakes.git,
             runs: &fakes.runs,
             store: &fakes.store,
+            source: &fakes.source,
             verifier: &verifier,
             run_version: &fakes.run_version,
             pkgbuild: &fakes.pkgbuild,
+            advisories: &fakes.advisories,
         };
         run_with(publish_verb(&dir, &ver, &commit), &ports).expect("publish");
         assert_eq!(fakes.store.all()[i + 1].commit, commit.to_string());
@@ -885,80 +904,12 @@ fn the_wired_adapters_route_each_port_to_its_program() {
             why("gh")
         ))
     );
-    assert_eq!(
-        ports
-            .verifier
-            .verify(Path::new("a.deb"), None, &c)
-            .map_err(|e| e.why),
-        Err(why("gh"))
-    );
+    let signer = contract::Signer::hostkeeper();
+    let verified = ports.verifier.verify(&signer, Path::new("a.deb"), None, &c);
+    assert_eq!(verified.map_err(|e| e.why), Err(why("gh")));
     assert_eq!(
         ports.run_version.version_of(Path::new("bin/x")),
         Err(PortError::new("bin/x --version", why("bin/x")))
-    );
-}
-
-#[test]
-fn check_macos_pkg_reads_the_expanded_pkg_without_asking_for_adapters() {
-    // Catches: the expanded directory, `--version` or `--binary` not reaching the check, or the
-    // verb building the real adapters though it reads no port.
-    let d = scratch("release-check-macos-pkg-verb");
-    let absent = d.join("expanded");
-    let (out, connected) = connects(verb(&[
-        "check-macos-pkg",
-        text(&absent),
-        "--version",
-        "0.1.9",
-        "--binary",
-        text(&d.join("hostkeeper")),
-    ]));
-    assert!(
-        matches!(&out, Err(Error::Io { what, .. }) if *what == format!("read {}", absent.display())),
-        "{out:?}"
-    );
-    assert!(!connected);
-}
-
-#[test]
-fn macos_pkg_builds_through_the_pkgbuild_port_with_its_flags() {
-    // Catches: `--version`, `--binary`, `--stage` or `--out` not reaching the pkg builder, or the
-    // builder run without the pkgbuild port.
-    let d = scratch("release-macos-pkg-verb");
-    std::fs::write(d.join("hostkeeper"), b"bin").expect("write the binary");
-    let fakes = empty();
-    let stage = d.join("root");
-    let out = d.join("dist");
-    let build = verb(&[
-        "macos-pkg",
-        "--version",
-        "0.1.9",
-        "--binary",
-        text(&d.join("hostkeeper")),
-        "--stage",
-        text(&stage),
-        "--out",
-        text(&out),
-    ]);
-    let lines = run_with(build, &fakes.ports()).expect("build");
-    assert_eq!(lines.len(), 1);
-    assert!(lines[0].starts_with("hostkeeper-0.1.9-macos-arm64.pkg: sha256 "));
-    let calls = fakes.pkgbuild.calls.borrow();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(
-        (
-            calls[0].root.as_path(),
-            calls[0].pkg.as_path(),
-            calls[0].version.to_string()
-        ),
-        (
-            stage.as_path(),
-            out.join("hostkeeper-0.1.9-macos-arm64.pkg").as_path(),
-            "0.1.9".to_owned()
-        )
-    );
-    assert_eq!(
-        std::fs::read(stage.join("usr/local/bin/hostkeeper")).expect("the staged binary"),
-        b"bin"
     );
 }
 

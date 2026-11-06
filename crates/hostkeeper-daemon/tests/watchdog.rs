@@ -118,6 +118,8 @@ fn links(
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(Handed(Mutex::new(sender))),
         stop: StopFlag::default(),
+        enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
+        renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog,
     };
     (links, jobs)

@@ -111,7 +111,9 @@ fn enrollment_flags(init: bool) -> Vec<&'static str> {
 }
 
 fn flags_of(args: Vec<OsString>) -> Serve {
-    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command;
+    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
+        panic!("serve")
+    };
     flags
 }
 
@@ -246,6 +248,75 @@ fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
         .enroll(new_request("machine-2"))
         .expect_err("the cap is 1");
     assert_eq!(full.token(), "pending_full");
+}
+
+/// Catches `--enrollment-request-ttl` accepted without enrollment, or with a value that is not
+/// digits and one unit, is no time, or overflows; a unit read as another; a default other than
+/// 72 hours; the TTL not reaching the enrollment the coordinator starts; and the flag missing
+/// from the usage or read from the environment.
+#[test]
+fn the_request_ttl_needs_enrollment_and_a_whole_time() {
+    let with = |extra: &[&'static str]| {
+        let mut flags = enrollment_flags(true);
+        flags.extend_from_slice(extra);
+        flags
+    };
+    let files = Files::new("enrollment-ttl-refused");
+    let mut refused = vec![vec!["--enrollment-request-ttl", "72h"]];
+    for value in [
+        "",
+        "h",
+        "72",
+        "0s",
+        "0d",
+        "72H",
+        "1.5h",
+        "+1h",
+        " 72h",
+        "72 h",
+        "72hh",
+        "72é",
+        "1w",
+        "99999999999999999999s",
+        "213503982334602d",
+    ] {
+        refused.push(with(&["--enrollment-request-ttl", value]));
+    }
+    // A value starting with `-` is given after `=`, so that it reaches the flag's parser.
+    refused.push(with(&["--enrollment-request-ttl=-1h"]));
+    for args in refused {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    for (n, (value, secs)) in [
+        (None, 72 * 3600),
+        (Some("1s"), 1),
+        (Some("90m"), 5400),
+        (Some("72h"), 72 * 3600),
+        (Some("7d"), 7 * 86_400),
+        (Some("213503982334601d"), 213_503_982_334_601 * 86_400),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let files = Files::new(&format!("enrollment-ttl-{n}"));
+        let extra: Vec<&str> = value.map_or_else(Vec::new, |v| vec!["--enrollment-request-ttl", v]);
+        let parts = start(&files, &with(&extra)).expect("started");
+        let enrollment = parts.coordinator.enrollment().expect("enrollment");
+        assert_eq!(enrollment.request_ttl_secs(), secs, "{value:?}");
+    }
+    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    assert!(
+        help.contains("--enrollment-request-ttl <ENROLLMENT_REQUEST_TTL>"),
+        "{help}"
+    );
+    assert!(help.contains("[default: 72h]"), "{help}");
+    assert!(!help.contains("[env:"), "{help}");
 }
 
 /// A host's P-256 key, enrolled as `s1`, a storage host: its certificate, DER, and its key,

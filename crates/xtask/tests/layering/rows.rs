@@ -84,12 +84,10 @@ fn layering_rules_cover_every_surviving_crate() {
         refused("LAYERS has a row for hostkeeper-rights, which is not a crate of the workspace")
     );
     let mut shrunk = metadata.clone();
-    packages(&mut shrunk).retain(|package| package["name"] != "hostkeeper-enrollment");
+    packages(&mut shrunk).retain(|package| package["name"] != "hostkeeper-ui-tests");
     assert_eq!(
         rows_cover(&LAYERS, &shrunk),
-        refused(
-            "LAYERS has a row for hostkeeper-enrollment, which is not a crate of the workspace"
-        )
+        refused("LAYERS has a row for hostkeeper-ui-tests, which is not a crate of the workspace")
     );
 
     let mut more_dev = metadata.clone();

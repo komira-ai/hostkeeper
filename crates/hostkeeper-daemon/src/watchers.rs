@@ -18,8 +18,8 @@ use std::thread::{self, JoinHandle};
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_steps::{
-    Clock, Finished, LaunchError, RunError, StepCall, StepExit, StepLauncher, StepRunner,
-    UpdateOrder,
+    BootId, BootIdError, Clock, Finished, LaunchError, RunError, StepCall, StepExit, StepLauncher,
+    StepRunner, UpdateOrder,
 };
 
 /// What a stopped watcher's launcher answers: the run is not started.
@@ -32,6 +32,23 @@ pub type WatchEnd = Result<Finished, RunError>;
 /// What the daemon does on the watcher's thread with how it ended, before the thread ends.
 pub type Supervise = Box<dyn FnOnce(&WatchEnd) + Send>;
 
+/// What is called with the service at a point of a watcher's life ([`Watchers::on_stop`],
+/// [`Watchers::on_end`]).
+type Hook = Arc<Mutex<Option<Arc<dyn Fn(&ServiceName) + Send + Sync>>>>;
+
+/// Calls the hook in `slot`, when one is set, outside the slot's lock.
+fn call(slot: &Hook, service: &ServiceName) {
+    let hook = slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    if let Some(hook) = hook {
+        hook(service);
+    }
+}
+
+/// Sets the hook in `slot`, in place of any hook set before.
+fn set(slot: &Hook, hook: impl Fn(&ServiceName) + Send + Sync + 'static) {
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(hook));
+}
+
 struct Watcher {
     stop: Arc<AtomicBool>,
     thread: JoinHandle<WatchEnd>,
@@ -41,6 +58,10 @@ struct Watcher {
 #[derive(Default)]
 pub struct Watchers {
     running: Mutex<BTreeMap<String, Watcher>>,
+    /// Told of each watcher a caller of [`Watchers::stop`] has told to stop.
+    on_stop: Hook,
+    /// Told of each watcher whose thread is about to end.
+    on_end: Hook,
 }
 
 impl Watchers {
@@ -67,9 +88,11 @@ impl Watchers {
         if alive {
             return false;
         }
+        let (on_end, ended) = (Arc::clone(&self.on_end), service.clone());
         let thread = thread::spawn(move || {
             let end = runner.run(&order);
             supervise(&end);
+            call(&on_end, &ended);
             end
         });
         // A watcher that had ended is replaced; what it ended with was already reported.
@@ -94,6 +117,7 @@ impl Watchers {
             watcher.stop.store(true, Ordering::Release);
             watcher
         };
+        call(&self.on_stop, service);
         watcher.thread.join().ok()
     }
 
@@ -102,6 +126,22 @@ impl Watchers {
     pub fn wait(&self, service: &ServiceName) -> Option<WatchEnd> {
         let watcher = self.map().remove(service.as_str())?;
         watcher.thread.join().ok()
+    }
+}
+
+impl Watchers {
+    /// Calls `hook` with the service each time [`Watchers::stop`] has told a watcher to stop,
+    /// before it waits for it, in place of any hook set before: what a test watches for to know
+    /// that an order is stopping a watcher.
+    pub fn on_stop(&self, hook: impl Fn(&ServiceName) + Send + Sync + 'static) {
+        set(&self.on_stop, hook);
+    }
+
+    /// Calls `hook` with the service on a watcher's thread as it ends, after the daemon has
+    /// been given how it ended, in place of any hook set before; watchers started before are
+    /// told too.
+    pub fn on_end(&self, hook: impl Fn(&ServiceName) + Send + Sync + 'static) {
+        set(&self.on_end, hook);
     }
 }
 
@@ -150,7 +190,7 @@ impl Clock for SlicedClock {
         self.inner.mono_secs()
     }
 
-    fn boot_id(&self) -> String {
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
         self.inner.boot_id()
     }
 

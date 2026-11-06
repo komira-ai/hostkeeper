@@ -17,7 +17,7 @@ use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::fallback::{self, FallbackError};
 use hostkeeper_daemon::selfupdate::{RELEASE_BINARY, binary_dir, protocol_line};
 use hostkeeper_daemon::start;
-use hostkeeper_daemon::testing::Log;
+use hostkeeper_daemon::testing::{Log, Signal, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply, StoreSeam};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_steps::record::{AwaitingRestart, State};
@@ -195,8 +195,10 @@ fn the_start_settles_before_the_boot_pass_and_goes_on_when_it_cannot() {
     );
 }
 
-/// Catches the old binary's daemon serving on after its own update asked it to exit: the admin
-/// socket's server returns `Ok` once the restart is asked for, for the binary to exit with 0.
+/// Catches the old binary's daemon serving on after its own update asked it to exit, or exiting
+/// with a status its unit's `Restart=` does not restart: the admin socket's server returns `Ok`
+/// once the restart is asked for, which the command line exits with as 0; an error is its own
+/// status.
 #[tokio::test]
 async fn the_daemon_stops_serving_once_its_restart_is_asked() {
     let s = SelfRig::new("su-serve");
@@ -206,6 +208,41 @@ async fn the_daemon_stops_serving_once_its_restart_is_asked() {
     daemon.ctx().restart().request();
     let ended = served.await.expect("the server task");
     assert!(ended.is_ok(), "{ended:?}");
+    assert_eq!(cli::exit_status(&ended), 0);
+    let failed = Err(start::StartError::NoNotifySocket);
+    assert_eq!(cli::exit_status(&failed), EXIT_FAILED);
+}
+
+/// Catches the fallback unit putting back a binary that no update switched in: systemd runs it
+/// whenever the daemon's unit fails its start limit, for any reason (a config that does not
+/// load, a burst of restarts). Once the new binary confirmed its update, the fallback leaves
+/// `current` as it is, writes nothing, and exits non-zero naming why, so the unit's
+/// `ExecStartPost=` lines do not start the daemon again.
+#[test]
+fn the_fallback_leaves_a_binary_no_update_waits_for() {
+    let (s, _old) = swapped("su-fallback-confirmed");
+    assert_eq!(
+        s.daemon_at(NEW).settle_self_update().expect("settled"),
+        Settled::Confirmed
+    );
+    let dir = binary_dir(&s.rig.state);
+    let before = snapshot(&s.rig.state);
+    let err = fallback::fallback(&dir).expect_err("nothing waits");
+    assert!(matches!(err, FallbackError::NothingWaits(_)), "{err:?}");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "no update of hostkeeper waits for its restart, so {} is left as it is: the binary \
+             that runs was not switched in by an update",
+            dir.display()
+        )
+    );
+    assert_eq!(
+        code(fallback::main(&dir)),
+        code(ExitCode::from(EXIT_FAILED))
+    );
+    assert_eq!(snapshot(&s.rig.state), before);
+    assert_eq!(s.current().as_deref(), Some(NEW));
 }
 
 /// The design's named test. Catches a fallback after which the host could be ordered the same
@@ -395,31 +432,34 @@ fn self_update_waits_for_an_idle_step_lock() {
             false
         }))
     });
-    let daemon = s.daemon().with_stores(seam);
+    let daemon = Arc::new(s.daemon().with_stores(seam));
 
     let held = s.rig.launcher.hold("a", Step::Prepare);
-    std::thread::scope(|scope| {
-        let a = scope.spawn(|| daemon.order(&update("a", "2.0", &d(), 1)));
-        held.entered();
-        let refused = daemon.order(&s.order(NEW, 1));
-        assert_eq!(refused.refusal(), Some(Refusal::Busy), "{refused:?}");
-        assert!(hk_record(&s).is_none());
-        assert!(s.probe.asked().is_empty());
-        held.release();
-        assert!(matches!(
-            a.join().expect("a"),
-            Reply::Finished {
-                verdict: Verdict::Succeeded { .. },
-                ..
-            }
-        ));
-    });
+    let a = {
+        let daemon = Arc::clone(&daemon);
+        spawn("a's order", move || {
+            daemon.order(&update("a", "2.0", &d(), 1))
+        })
+    };
+    held.entered(&a).expect("a's prepare runs");
+    let refused = daemon.order(&s.order(NEW, 1));
+    assert_eq!(refused.refusal(), Some(Refusal::Busy), "{refused:?}");
+    assert!(hk_record(&s).is_none());
+    assert!(s.probe.asked().is_empty());
+    held.release();
+    assert!(matches!(
+        a.join().expect("a"),
+        Reply::Finished {
+            verdict: Verdict::Succeeded { .. },
+            ..
+        }
+    ));
 
-    let (probing, probed) = mpsc::channel();
+    let (probing, probed) = Signal::new();
     let (release, released) = mpsc::channel::<()>();
     let released = Mutex::new(released);
     s.probe.set(move || {
-        probing.send(()).unwrap_or_default();
+        probing.send(());
         released
             .lock()
             .expect("the gate")
@@ -427,23 +467,28 @@ fn self_update_waits_for_an_idle_step_lock() {
             .unwrap_or_default();
         Ok(1)
     });
-    let (asked, fetched) = mpsc::channel();
-    s.rig.store.notify(asked);
-    std::thread::scope(|scope| {
-        let swap = scope.spawn(|| daemon.order(&s.order(NEW, 1)));
-        probed.recv().expect("the swap holds the step lock");
-        let b = scope.spawn(|| daemon.order(&update("b", "2.0", &d(), 1)));
-        while fetched.recv().expect("a package") != "b 2.0" {}
-        release.send(()).expect("release the probe");
-        assert_eq!(swap.join().expect("the swap"), awaiting(false));
-        assert!(matches!(
-            b.join().expect("b"),
-            Reply::Finished {
-                verdict: Verdict::Succeeded { .. },
-                ..
-            }
-        ));
-    });
+    let fetched = s.rig.store.notified();
+    let swap = {
+        let (daemon, order) = (Arc::clone(&daemon), s.order(NEW, 1));
+        spawn("the swap", move || daemon.order(&order))
+    };
+    probed.wait(&swap).expect("the swap holds the step lock");
+    let b = {
+        let daemon = Arc::clone(&daemon);
+        spawn("b's order", move || {
+            daemon.order(&update("b", "2.0", &d(), 1))
+        })
+    };
+    while fetched.wait(&b).expect("b has its package") != "b 2.0" {}
+    release.send(()).expect("release the probe");
+    assert_eq!(swap.join().expect("the swap"), awaiting(false));
+    assert!(matches!(
+        b.join().expect("b"),
+        Reply::Finished {
+            verdict: Verdict::Succeeded { .. },
+            ..
+        }
+    ));
     let events = lines(&log);
     let at = |needle: &str| events.iter().position(|line| line.starts_with(needle));
     let waits = at("awaiting").expect("the record waited");
@@ -490,17 +535,18 @@ fn a_follow_on_that_stops_is_interrupted_with_its_token() {
     assert!(!daemon.ctx().restart().requested());
 
     let s = SelfRig::new("su-follow-changed");
-    let daemon = s.daemon();
+    let daemon = Arc::new(s.daemon());
     let held = s.rig.launcher.hold(HK, Step::Cleanup);
     let binary = s.rig.packages.join(HK).join(NEW).join(RELEASE_BINARY);
-    std::thread::scope(|scope| {
-        let swap = scope.spawn(|| daemon.order(&s.order(NEW, 1)));
-        held.entered();
-        fs::write(&binary, "#!another binary\n").expect("change the release");
-        held.release();
-        let reply = swap.join().expect("the swap");
-        assert_eq!(reply.refusal(), Some(Refusal::PackageFailed), "{reply:?}");
-    });
+    let swap = {
+        let (daemon, order) = (Arc::clone(&daemon), s.order(NEW, 1));
+        spawn("the swap", move || daemon.order(&order))
+    };
+    held.entered(&swap).expect("the swap's cleanup runs");
+    fs::write(&binary, "#!another binary\n").expect("change the release");
+    held.release();
+    let reply = swap.join().expect("the swap");
+    assert_eq!(reply.refusal(), Some(Refusal::PackageFailed), "{reply:?}");
     assert_eq!(s.current().as_deref(), Some(OLD));
     assert!(!s.layout().version_path(NEW).exists());
     assert!(!daemon.ctx().restart().requested());

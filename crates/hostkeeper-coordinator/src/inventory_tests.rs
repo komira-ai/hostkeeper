@@ -41,6 +41,7 @@ fn list(rig: &Rig, limit: u32, token: &str) -> Result<proto::ListRecordsResponse
         proto::ListRecordsRequest {
             limit,
             page_token: token.to_owned(),
+            enrolled: None,
         },
     )
 }
@@ -114,6 +115,7 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
         notes: "rack 4, slot 2".to_owned(),
         added_by: "operator".to_owned(),
         added_unix: rig.coordinator.ops.unix_now(),
+        enrolled: false,
     };
     assert_eq!(added.record.as_ref(), Some(&want));
     let entry = added.entry.expect("an audit entry");
@@ -636,4 +638,46 @@ fn a_request_matches_one_record_none_or_several_and_is_never_guessed() {
         match_claims(&mac("C02X1", &[]), &serial_less),
         InventoryMatch::Unmatched
     );
+}
+
+/// Catches: a record the operator left without a BMC MAC refusing a host that reports one (the
+/// claim was compared with the empty text), a record's own BMC MAC no longer refusing another
+/// BMC, and a record with every field empty matching a host.
+#[test]
+fn a_field_absent_from_the_record_does_not_constrain_the_match() {
+    let no_bmc = vec![record("db-1", &["0c:c4:7a:00:00:02"], "", "")];
+    assert!(matches!(
+        match_claims(&linux(&["0c:c4:7a:00:00:02"], "0c:c4:7a:00:00:01"), &no_bmc),
+        InventoryMatch::Matched(r) if r.host_id == "db-1"
+    ));
+    let with_bmc = vec![record(
+        "db-1",
+        &["0c:c4:7a:00:00:02"],
+        "0c:c4:7a:00:00:01",
+        "",
+    )];
+    assert_eq!(
+        match_claims(
+            &linux(&["0c:c4:7a:00:00:02"], "0c:c4:7a:00:00:11"),
+            &with_bmc
+        ),
+        InventoryMatch::Unmatched
+    );
+    let empty = vec![record("db-1", &[], "", "")];
+    for claims in [
+        linux(&["0c:c4:7a:00:00:02"], "0c:c4:7a:00:00:01"),
+        linux(&["0c:c4:7a:00:00:02"], ""),
+        linux(&[], "0c:c4:7a:00:00:01"),
+        linux(&[], ""),
+        Claims {
+            mac_serial: "C02X1".to_owned(),
+            ..Claims::default()
+        },
+    ] {
+        assert_eq!(
+            match_claims(&claims, &empty),
+            InventoryMatch::Unmatched,
+            "{claims:?}"
+        );
+    }
 }

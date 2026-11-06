@@ -1,4 +1,11 @@
-//! The loop: one heartbeat per period, and what the reply asks for.
+//! The loop: one heartbeat per period, one more as soon as a running order ends, and what the
+//! reply asks for.
+//!
+//! **Waits.** After a heartbeat the loop waits one period. While an order runs on a worker it
+//! waits the same period a second at a time, and once the order has ended it beats at once,
+//! with the verdict (and, for an install, the service now listed), then waits a whole period
+//! again: a coordinator learns of an order's end within a second of it, not at the end of the
+//! period, and a host never beats more often than once per period plus one beat after each order that ends.
 //!
 //! Each heartbeat, in this order:
 //!
@@ -70,18 +77,25 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_wire::wire::clip_renew_error;
 
-use crate::beat::{ANNOUNCED, Feature, Features, Heartbeat, Observed, Platform, ServiceFacts, fit};
+use crate::beat::{
+    ANNOUNCED, Feature, Features, Heartbeat, Observed, Platform, Renewal, ServiceFacts, fit,
+};
 use crate::deferral::{Book, Deferral};
 use crate::names::Reason;
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
-    RecordedService, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
+    RecordedService, RenewalSource, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
 pub const DEFAULT_HEARTBEAT_SECS: NonZeroU64 = NonZeroU64::MIN.saturating_add(14);
+
+/// The slice, in seconds, the wait after a heartbeat is cut into while an order runs: how long
+/// the verdict of an order that ended waits for its heartbeat, at most.
+const ORDER_POLL_SECS: u64 = 1;
 
 /// How many acknowledged verdicts the loop remembers per service. The step record keeps one
 /// verdict, the last order's; a service holds at most a few verdicts not yet acknowledged
@@ -92,7 +106,8 @@ pub const ACKED_KEPT: usize = 8;
 /// The loop's flag on the daemon's command line.
 #[derive(Clone, Debug, PartialEq, Eq, clap::Args)]
 pub struct LoopFlags {
-    /// Seconds between two heartbeats, at least 1.
+    /// Seconds between two heartbeats while no order runs, at least 1; the end of an order is
+    /// reported within a second.
     #[arg(long = "heartbeat-secs", default_value_t = DEFAULT_HEARTBEAT_SECS)]
     pub heartbeat_secs: NonZeroU64,
 }
@@ -105,7 +120,7 @@ pub struct LoopConfig {
     pub agent_version: Version,
     /// The directory of the services' step-record directories, where the deferrals live.
     pub state_dir: PathBuf,
-    /// Seconds between two heartbeats; never 0, so the loop always waits.
+    /// Seconds between two heartbeats while no order runs; never 0, so the loop always waits.
     pub period_secs: NonZeroU64,
 }
 
@@ -118,6 +133,7 @@ pub struct Ports {
     pub orders: Arc<dyn OrderSink>,
     pub dispatch: Arc<dyn Dispatch>,
     pub halts: Arc<dyn HeldHalts>,
+    pub renewal: Arc<dyn RenewalSource>,
     pub clock: Arc<dyn UnixClock>,
     pub log: Arc<dyn Log>,
 }
@@ -185,15 +201,40 @@ impl Heartbeater {
         }
     }
 
-    /// Beats now and after every period, until `sleeper` says stop. An order running on a
+    /// Beats now and after every wait ([`Heartbeater::wait`]), until `sleeper` says stop, giving
+    /// `seen` what each heartbeat came to before the wait that follows it. An order running on a
     /// worker when it stops goes on; its verdict is in its step record.
-    pub fn run(mut self, sleeper: &dyn Sleeper) {
+    pub fn run(mut self, sleeper: &dyn Sleeper, seen: &mut dyn FnMut(&BeatOutcome)) {
         loop {
-            self.beat_once();
-            if sleeper.sleep(self.config.period_secs.get()) == Tick::Stop {
+            seen(&self.beat_once());
+            if self.wait(sleeper) == Tick::Stop {
                 return;
             }
         }
+    }
+
+    /// The wait after a heartbeat: one period on `sleeper`. While an order runs, the period is
+    /// waited [`ORDER_POLL_SECS`] at a time, and the wait ends after the slice in which the
+    /// order ended, so its verdict, and the service an install lists, go out at once rather
+    /// than at the end of the period. [`Tick::Stop`] from any slice ends the wait.
+    fn wait(&mut self, sleeper: &dyn Sleeper) -> Tick {
+        let period = self.config.period_secs.get();
+        if self.running.is_none() {
+            return sleeper.sleep(period);
+        }
+        let mut left = period;
+        while left > 0 {
+            let slice = left.min(ORDER_POLL_SECS);
+            if sleeper.sleep(slice) == Tick::Stop {
+                return Tick::Stop;
+            }
+            left -= slice;
+            self.collect();
+            if self.running.is_none() {
+                break;
+            }
+        }
+        Tick::Beat
     }
 
     /// One heartbeat, and what its reply asks for.
@@ -399,11 +440,22 @@ impl Heartbeater {
                 name,
             });
         }
+        let Renewal {
+            cert_not_after_unix,
+            last_renew_error,
+        } = self.ports.renewal.renewal();
         Ok(Heartbeat {
             platform: self.config.platform,
             agent_version: self.config.agent_version.clone(),
             features: ANNOUNCED.to_vec(),
             services,
+            sent_unix: now,
+            renewal: Renewal {
+                cert_not_after_unix,
+                last_renew_error: last_renew_error
+                    .map(|text| clip_renew_error(&text).to_owned())
+                    .filter(|text| !text.is_empty()),
+            },
         })
     }
 

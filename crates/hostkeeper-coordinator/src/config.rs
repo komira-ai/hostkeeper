@@ -1,12 +1,15 @@
 //! `hostkeeper-coordinator serve`'s flags and start-up: read every file, bind both listeners,
-//! print the start line, then serve until SIGTERM or SIGINT.
+//! print the start line, then serve until SIGTERM or SIGINT. The binary's other two verbs,
+//! `backup` and `restore`, copy the state files `serve` keeps and put a copy back
+//! ([`crate::backup`]), under the same lock.
 //!
 //! Everything is a flag; the coordinator reads no environment variable. Without
 //! `--enrollment-dir` it holds no CA key: its certificate and key are files the farm CA issued,
 //! and the CA certificate it checks updaters against is a file too. With it, it is also the
 //! hosts' CA ([`crate::enrollment`]): `--ca-key-file` is the CA's key (made with `--ca-init`),
 //! the heartbeat listener serves the server certificate the start keeps in `--server-cert-file`
-//! for the names of `--server-name`, lets a client without a certificate through the handshake,
+//! for the names of `--server-name` (and the reload tick of `--tls-reload-secs` renews while
+//! the coordinator runs), lets a client without a certificate through the handshake,
 //! and admits a client certificate of its own CA as well as one of `--client-ca`. The handlers
 //! of `Enroll`, `Poll` and `Renew` are served as gRPC on the heartbeat listener
 //! ([`crate::grpc`]). The services it manages are the ones `--rollout-file` defines;
@@ -14,20 +17,27 @@
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
-//! files of that directory under `/ui/` (`crate::ui`).
+//! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
+//! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
+//! a directory ([`Serve::with_default_ui_dir`]). With `--release-channel` a set of the
+//! desired state is refused unless the release channel holds the version (`crate::channel`):
+//! the URL is checked at start (`https://` only), and the channel is fetched only by a set.
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
 //! the whole start can be driven over in-memory connections.
 //!
 //! Before it opens any state file, the start takes the lock of `<state-file>.lock`
 //! ([`crate::lock`]) and holds it for as long as the coordinator runs, so a second `serve` on
 //! the same files is refused. It then refuses to start over a halt that was being written when
-//! the coordinator stopped (`<ops-file>.halts.unfinished`, [`crate::ops::Write::Halt`]), and
+//! the coordinator stopped (`<ops-file>.halts.unfinished`, [`crate::ops::Write::Halt`]) and
+//! over a restore that stopped partway (`<state-file>.restore-unfinished`, [`crate::backup`]),
+//! and
 //! reads the spent ids of CI's tokens (`<state-file>.jti`, [`crate::jti_file`]).
 
 use std::convert::Infallible;
 use std::ffi::OsString;
 use std::io;
 use std::net::SocketAddr;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::process::ExitCode;
@@ -46,11 +56,20 @@ use hostkeeper_wire::identity::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::alerts::{
+    DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
+};
+use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation};
+use crate::backup::{
+    Backup, BackupError, Report, Restore, backup, ops_path, restore, restore_marker,
+};
+use crate::channel::ReleaseChannel;
+use crate::channel_https::{ChannelTlsError, ChannelUrl, ChannelUrlError, HttpsChannel};
 use crate::desired::{DesiredStore, StoreError};
 use crate::enrollment::{
     AllowlistError, MacAllowlist, MacPolicy, NoDeviceState, Setup, SetupError, os_random, setup,
 };
-use crate::fleet::QUIET_START;
+use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::http::Surface;
 use crate::jti_file::{JtiError, JtiFile, jti_path};
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
@@ -161,6 +180,14 @@ pub enum StartError {
         /// The marker file.
         path: PathBuf,
     },
+    /// A restore into these state files stopped before it finished.
+    #[error(
+        "{path}: a restore into these state files stopped before it finished, so they may hold part of a snapshot; remove them and this file, and restore again"
+    )]
+    RestoreUnfinished {
+        /// The marker file.
+        path: PathBuf,
+    },
     /// `--quiet-secs` is below two heartbeat intervals.
     #[error(
         "--quiet-secs: {secs} is below {floor}, two heartbeat intervals: a restarted coordinator would order before it has heard the fleet"
@@ -177,6 +204,12 @@ pub enum StartError {
     /// The file of verdicts is refused.
     #[error(transparent)]
     Verdicts(#[from] VerdictsError),
+    /// `--release-channel` is not an `https://` base URL.
+    #[error("--release-channel: {0}")]
+    ReleaseChannel(#[from] ChannelUrlError),
+    /// The TLS client of the release channel could not be made.
+    #[error("--release-channel: {0}")]
+    ReleaseChannelTls(#[from] ChannelTlsError),
 }
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
@@ -200,9 +233,18 @@ pub struct Cli {
 
 /// The verbs of the binary.
 #[derive(Clone, Debug, Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "parsed once per process from its arguments; boxing `Serve` would change every caller for no saving"
+)]
 pub enum Command {
     /// Serve the heartbeat and private listeners until SIGTERM or SIGINT.
     Serve(Serve),
+    /// Copy the state of a stopped coordinator into a new directory, with the SHA-256 of each
+    /// file in its manifest. The CA's key is not copied.
+    Backup(Backup),
+    /// Put a copy `backup` made back, into targets that hold no state.
+    Restore(Restore),
 }
 
 /// The flags of `serve`.
@@ -253,6 +295,15 @@ pub struct Serve {
     /// coordinator. The audit file `<ops-file>.audit` is beside it.
     #[arg(long)]
     pub ops_file: Option<PathBuf>,
+    /// The most bytes the audit file `<ops-file>.audit` holds before it is rotated: a line that
+    /// would take it past this is written to a fresh file, and the full one is sealed as
+    /// `<ops-file>.audit.<n>`. At least 1; 0 is refused.
+    #[arg(long, default_value_t = DEFAULT_MAX_BYTES)]
+    pub audit_max_bytes: NonZeroU64,
+    /// How many sealed segments of the audit file are kept: at each rotation the oldest beyond
+    /// this are deleted. At least 1; 0 is refused.
+    #[arg(long, default_value_t = DEFAULT_RETAINED)]
+    pub audit_retained_segments: NonZeroUsize,
     /// The rollout file: TOML with a `[[service]]` table for each service the coordinator
     /// manages, the roles it runs on and how its rollout goes (`docs/design/host-updates.md`).
     /// Required; an empty file defines none. Which of them a CI token may set is said by the
@@ -307,6 +358,12 @@ pub struct Serve {
     /// host posting its waiting request again is still answered.
     #[arg(long, requires = "enrollment_dir", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_pending_enrollments: Option<u64>,
+    /// How long an enrollment request waits for an operator before it expires: a whole number
+    /// and a unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second. An expired request
+    /// is no longer approved, and its host is listed unenrolled; the host's key posted again
+    /// waits anew. Requests are looked at every --tls-reload-secs.
+    #[arg(long, default_value = "72h", requires = "enrollment_dir", value_parser = request_ttl_secs)]
+    pub enrollment_request_ttl: u64,
     /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
     /// prefix, role and services of each: a TOML file of `[[mac]]` entries (`serial`,
     /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
@@ -316,7 +373,9 @@ pub struct Serve {
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
     /// The files need no token; the operator API they call does. It must be a directory at
-    /// start. Without it no file is served.
+    /// start. Without it, /usr/share/hostkeeper-coordinator/ui is served when it is a
+    /// directory (the container image holds the web app there), and otherwise no file is
+    /// served.
     #[arg(long)]
     pub ui_dir: Option<PathBuf>,
     /// How long after its start the coordinator orders nothing, in seconds, so that it hears
@@ -324,6 +383,69 @@ pub struct Serve {
     /// intervals (30); a lower value is refused at start.
     #[arg(long, default_value_t = QUIET_START.as_secs())]
     pub quiet_secs: u64,
+    /// How far, in seconds, the time a host's heartbeat says may be from the coordinator's wall
+    /// clock, either way, before the heartbeat counts as skewed: `Hosts.List` and `Hosts.Get`
+    /// answer each host's count since the start (`clock_skew_beats`). Nothing else reads it.
+    #[arg(long, default_value_t = CLOCK_SKEW_AFTER.as_secs())]
+    pub clock_skew_secs: u64,
+    /// The release channel the hosts fetch packages from, as `https://<host>[:<port>][/<path>]`
+    /// (the daemon config's `release_channel`). With it, a set of the desired state is refused
+    /// `not_in_channel` unless `<channel>/<service>/<version>/index.json` is there (retry once
+    /// the channel holds it), and `channel_digest_mismatch` when that index is of another
+    /// service or version or lists no package with the set's digest. Only `https://` is taken;
+    /// another scheme stops the start. Without it nothing is fetched and no set is refused for
+    /// the channel.
+    #[arg(long)]
+    pub release_channel: Option<String>,
+    /// How long the connection to the release channel and its TLS handshake may take, in
+    /// seconds.
+    #[arg(
+        long,
+        default_value_t = 10,
+        requires = "release_channel",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub release_channel_connect_secs: u64,
+    /// How long one fetch from the release channel may take in all, in seconds.
+    #[arg(
+        long,
+        default_value_t = 30,
+        requires = "release_channel",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub release_channel_timeout_secs: u64,
+    /// How long a host the coordinator has heard from may go without a heartbeat before it is an
+    /// alert (`silent_host`), in seconds.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_SILENT_HOST_SECS,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub alert_silent_host_secs: u64,
+    /// How long before the certificate the coordinator serves its hosts expires it is an alert
+    /// (`cert_near_expiry`), in seconds; 0 alerts only once it has expired.
+    #[arg(long, default_value_t = DEFAULT_CERT_WINDOW_SECS)]
+    pub alert_cert_window_secs: u64,
+}
+
+/// The directory the binary serves under `/ui/` when `--ui-dir` is absent and this path is a
+/// directory: where the coordinator's container image holds the operator web app
+/// (`packaging/container/Dockerfile`).
+pub const DEFAULT_UI_DIR: &str = "/usr/share/hostkeeper-coordinator/ui";
+
+impl Serve {
+    /// These flags with `--ui-dir` set to `default` when the flag is absent and `default` is a
+    /// directory (a symbolic link to one included). A `--ui-dir` that was given is kept as
+    /// given, a directory or not, so [`build`] still refuses one that is not. Anything else at
+    /// `default` (nothing, a file, a path that cannot be read) leaves the flag absent, and no
+    /// file is served.
+    #[must_use]
+    pub fn with_default_ui_dir(mut self, default: &Path) -> Self {
+        if self.ui_dir.is_none() && default.is_dir() {
+            self.ui_dir = Some(default.to_owned());
+        }
+        self
+    }
 }
 
 /// Where the listeners are bound.
@@ -361,6 +483,7 @@ pub struct Parts {
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
 /// `--private-listen` is a wildcard address, `--quiet-secs` is below two heartbeat intervals,
+/// `--release-channel` is not an `https://` base URL,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, the legacy service or an
 /// allow-list entry names a service `--rollout-file` does not define, an entry names no
@@ -395,6 +518,19 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let services = Services::from_file(&flags.rollout_file)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
+    let channel = flags
+        .release_channel
+        .as_deref()
+        .map(|text| -> Result<ReleaseChannel, StartError> {
+            let fetcher = HttpsChannel::new(
+                ChannelUrl::parse(text)?,
+                roots.clone(),
+                Duration::from_secs(flags.release_channel_connect_secs),
+                Duration::from_secs(flags.release_channel_timeout_secs),
+            )?;
+            Ok(ReleaseChannel::new(Arc::new(fetcher)))
+        })
+        .transpose()?;
     let legacy = flags.legacy_service.as_deref();
     if let Some(name) = legacy.filter(|name| services.get(name).is_none()) {
         return Err(StartError::LegacyService(name.to_owned()));
@@ -418,12 +554,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     // The lock before any state file: none is opened (an open settles a staged halts file,
     // which is a write) before this process is the one coordinator on them.
     let held = take_lock(lock, &lock_path(&flags.state_file))?;
-    let ops_path = flags.ops_file.clone().unwrap_or_else(|| {
-        let mut name = flags.state_file.clone().into_os_string();
-        name.push(".ops");
-        PathBuf::from(name)
-    });
+    let ops_path = ops_path(&flags.state_file, flags.ops_file.as_deref());
     refuse_unfinished_halt(&ops_path)?;
+    refuse_unfinished_restore(&flags.state_file)?;
     // The wall clock is read for the validity of CI's tokens and the expiry of their spent
     // ids, and for nothing the coordinator decides.
     let oidc_clock = hostkeeper_oidc::system_clock();
@@ -436,7 +569,11 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         Arc::new(spent),
     );
     let desired = DesiredStore::open(&flags.state_file, legacy)?;
-    let ops = OpsStore::open(&ops_path)?;
+    let rotation = Rotation {
+        max_bytes: flags.audit_max_bytes,
+        retained: flags.audit_retained_segments,
+    };
+    let ops = OpsStore::open_with(&ops_path, rotation)?;
     let verdicts = VerdictFile::open(&verdicts_path(&flags.state_file))?;
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
@@ -451,10 +588,15 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_services(services)
         .with_legacy_service(legacy.map(str::to_owned))
         .with_quiet(Duration::from_secs(flags.quiet_secs))
+        .with_clock_skew(Duration::from_secs(flags.clock_skew_secs))
         .with_prefixes(prefixes)
         .with_ops(ops)
         .with_verdicts(verdicts)
-        .with_ui(ui);
+        .with_ui(ui)
+        .with_alert_thresholds(alert_thresholds(flags));
+    if let Some(channel) = channel {
+        coordinator = coordinator.with_release_channel(channel);
+    }
     let heartbeat_tls = match (
         &flags.enrollment_dir,
         &flags.ca_key_file,
@@ -491,6 +633,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 os_random(),
             )?
             .with_max_pending(max_pending)
+            .with_request_ttl(flags.enrollment_request_ttl)
             // The MDM gate is not built into this coordinator: no device is known to it.
             .with_mac(MacPolicy {
                 device_state: Arc::new(NoDeviceState),
@@ -522,6 +665,15 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     })
 }
 
+/// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and
+/// `--alert-cert-window-secs`.
+pub(crate) fn alert_thresholds(flags: &Serve) -> Thresholds {
+    Thresholds {
+        silent_after: Duration::from_secs(flags.alert_silent_host_secs),
+        cert_window_secs: flags.alert_cert_window_secs,
+    }
+}
+
 /// Refuses to start over the marker of a halt that was being written to the ops file at `ops`
 /// when the coordinator stopped ([`crate::ops::Write::Halt`]): the halt may be lost, and the
 /// operator settles the halts file by hand and removes the marker.
@@ -534,6 +686,43 @@ pub(crate) fn refuse_unfinished_halt(ops: &Path) -> Result<(), StartError> {
         return Err(StartError::HaltWriteUnfinished { path: marker });
     }
     Ok(())
+}
+
+/// Refuses to start over the marker of a restore into the state file `state` that did not
+/// finish ([`crate::backup::restore_marker`]): the state files may be part of a snapshot only.
+///
+/// # Errors
+/// [`StartError::RestoreUnfinished`]: the marker is there.
+pub(crate) fn refuse_unfinished_restore(state: &Path) -> Result<(), StartError> {
+    let marker = restore_marker(state);
+    if marker.exists() {
+        return Err(StartError::RestoreUnfinished { path: marker });
+    }
+    Ok(())
+}
+
+/// `--enrollment-request-ttl` in seconds: digits, then one unit of `s`, `m`, `h` or `d`, and at
+/// least one second.
+fn request_ttl_secs(text: &str) -> Result<u64, String> {
+    let wrong = || format!("{text:?} is not a time like 90m or 72h: digits, then s, m, h or d");
+    let (digits, per) = [("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)]
+        .into_iter()
+        .find_map(|(unit, per)| text.strip_suffix(unit).map(|digits| (digits, per)))
+        .ok_or_else(wrong)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(wrong());
+    }
+    let secs = digits
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(per))
+        .ok_or_else(|| format!("{text:?} is more seconds than this coordinator counts"))?;
+    if secs == 0 {
+        return Err(format!(
+            "{text:?} is no time: a request waits at least one second"
+        ));
+    }
+    Ok(secs)
 }
 
 /// The lock of `path`, taken by `lock`.
@@ -611,7 +800,9 @@ where
         surface: Surface::Control,
     };
     let tokens = parts.coordinator.tokens().clone();
+    let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
+    let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let serving = together(
         serve(
             heartbeat,
@@ -621,15 +812,13 @@ where
         ),
         serve(control, coordinator, CLIENT_PATIENCE, MAX_CONNECTIONS),
     );
-    match together(
-        serving,
-        reload_every(
-            vec![parts.heartbeat_tls, parts.control_tls],
-            tokens,
-            parts.reload,
-        ),
-    )
-    .await {}
+    let reloading = reload_every(
+        enrollment,
+        vec![parts.heartbeat_tls, parts.control_tls],
+        tokens,
+        parts.reload,
+    );
+    match together(serving, together(reloading, observing)).await {}
 }
 
 /// Resolves on SIGTERM or SIGINT.
@@ -678,16 +867,19 @@ where
     }
 }
 
-/// Builds the runtime and runs the coordinator on it until a signal.
+/// Builds the runtime and runs the coordinator on it until a signal, serving
+/// [`DEFAULT_UI_DIR`] when `--ui-dir` is absent and that path is a directory.
 fn runtime(flags: Serve) -> Result<(), StartError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+    let flags = flags.with_default_ui_dir(Path::new(DEFAULT_UI_DIR));
     runtime.block_on(start(flags, Roots::System, bind_tcp, signalled()))
 }
 
-/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start is exit 1;
-/// SIGTERM or SIGINT is exit 0.
+/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup or restore
+/// is exit 1; SIGTERM or SIGINT, a backup made and a restore done are exit 0. `serve` without
+/// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
 pub fn main(args: Vec<OsString>) -> ExitCode {
     let cli = match Cli::try_parse_from(args) {
@@ -700,9 +892,27 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .try_init();
-    let Command::Serve(flags) = cli.command;
-    match runtime(flags) {
-        Ok(()) => ExitCode::SUCCESS,
+    match cli.command {
+        Command::Serve(flags) => match runtime(flags) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(why) => {
+                eprintln!("hostkeeper-coordinator: {why}");
+                ExitCode::from(1)
+            }
+        },
+        Command::Backup(flags) => finish(backup(&flags, &FileLock)),
+        Command::Restore(flags) => finish(restore(&flags, &FileLock)),
+    }
+}
+
+/// The exit of a backup or a restore: its report on standard output and exit 0, or why it was
+/// refused on standard error and exit 1.
+fn finish(done: Result<Report, BackupError>) -> ExitCode {
+    match done {
+        Ok(report) => {
+            print!("{report}");
+            ExitCode::SUCCESS
+        }
         Err(why) => {
             eprintln!("hostkeeper-coordinator: {why}");
             ExitCode::from(1)

@@ -17,6 +17,7 @@ use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_steps::Staged;
 
 use crate::refusal::Refusal;
+use crate::trusted_root::RootReport;
 use crate::verb::PackageDigest;
 
 /// The unpacked version directory of one package, sealed: nothing from it runs unless the tree
@@ -132,17 +133,27 @@ impl PackageError {
 
 /// Fetches, verifies, unpacks and seals packages.
 pub trait Packages: Send + Sync {
-    /// The sealed version directory of `service` at `version`, whose package has `digest`.
+    /// The sealed version directory of `service` at `version`, whose package has `digest`. When
+    /// `index_digest` is given, the release index must have that SHA-256 (checked before it is
+    /// read); `None` checks nothing.
     fn version_dir(
         &self,
         service: &ServiceName,
         version: &Version,
         digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
     ) -> Result<VersionDir, PackageError>;
 
     /// Removes what a crashed fetch or unpack of `service` left in its package directory. The
     /// default removes nothing.
     fn remove_orphans(&self, _service: &ServiceName) -> Result<(), PackageError> {
         Ok(())
+    }
+
+    /// The age of the Sigstore trusted root the store checks attestations with, and the reason
+    /// it needs attention, read now: what the admin `Status` reports of it. The default has no
+    /// root to report.
+    fn trusted_root(&self) -> Option<RootReport> {
+        None
     }
 }

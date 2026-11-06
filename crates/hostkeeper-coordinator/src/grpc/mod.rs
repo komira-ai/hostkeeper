@@ -1,5 +1,6 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
-//! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit}` on the private one,
+//! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts}` on the private
+//! one,
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -11,9 +12,9 @@
 //! routes call and have no rule of their own.
 //!
 //! The caller is checked before the request is read ([`admit`]): a heartbeat by the host its
-//! client certificate names, `SetDesired` by CI's token or the operator's (an operator's token
-//! is told first, so it spends no CI token), `Converge` by CI's token only, every other operator
-//! method by the operator's token, and `Enroll`, `Poll` and `Renew` by nothing here (the key a
+//! client certificate names, `SetDesired` and `Converge` by CI's token or the operator's (an
+//! operator's token is told first, so it spends no CI token), every other operator method by the
+//! operator's token, and `Enroll`, `Poll` and `Renew` by nothing here (the key a
 //! host proves, or the certificate `Renew` checks itself). What the check learns goes to the
 //! adapter as [`Admitted`] in the request's extensions, so a bearer is resolved once: a CI token
 //! is good once.
@@ -30,6 +31,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use hostkeeper_oidc::Verified;
 use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServer;
+use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
@@ -46,7 +48,7 @@ use tonic::{Code, Status};
 
 use self::agent::{AgentService, beat_status};
 use self::operator::{
-    AuditService, EnrollmentService, HostsService, ReleasesService, ServicesService,
+    AlertsService, AuditService, EnrollmentService, HostsService, ReleasesService, ServicesService,
 };
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
@@ -72,12 +74,9 @@ mod tests;
 pub const GRPC_FEATURE: &str = "grpc-v1";
 
 /// The gRPC path of every method of the operator API that no handler serves yet: each is
-/// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler.
-pub const PENDING: &[&str] = &[
-    "/hostkeeper.operator.v1.Hosts/List",
-    "/hostkeeper.operator.v1.Hosts/Get",
-    "/hostkeeper.operator.v1.Releases/UnmarkBad",
-];
+/// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. None is:
+/// a method added to a proto is listed here until its handler lands.
+pub const PENDING: &[&str] = &[];
 
 /// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response.
 pub type RouteBody = Either<Full<Bytes>, GrpcBody>;
@@ -94,12 +93,14 @@ const SERVICES: &str = "hostkeeper.operator.v1.Services";
 const ENROLLMENT: &str = "hostkeeper.operator.v1.Enrollment";
 /// The full name of the operator API's `Audit`.
 const AUDIT: &str = "hostkeeper.operator.v1.Audit";
+/// The full name of the operator API's `Alerts`.
+const ALERTS: &str = "hostkeeper.operator.v1.Alerts";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 /// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
-/// The path of `Releases.Converge`, which takes CI's token, not the operator's.
+/// The path of `Releases.Converge`, which takes CI's token or the operator's: it changes nothing.
 const CONVERGE: &str = "/hostkeeper.operator.v1.Releases/Converge";
 
 /// What the router learned of a caller before it read the request; the adapter finds it in the
@@ -118,7 +119,7 @@ pub(crate) enum Admitted {
     },
     /// `SetDesired` and `Converge` with CI's token: the verified token.
     Ci(Verified),
-    /// An operator method with the operator's token (`SetDesired` among them, `Converge` not):
+    /// An operator method with the operator's token (`SetDesired` and `Converge` among them):
     /// the operator, and the bearer it sent.
     Operator {
         /// Who calls.
@@ -175,9 +176,8 @@ enum Served {
 /// # Errors
 /// `UNIMPLEMENTED` for a path whose service this surface does not serve. Otherwise the
 /// refusal of the service the path names, as a status whose message is its token: a
-/// heartbeat's `forbidden` or `denied`; for `SetDesired` with no operator token, and for
-/// `Converge`, CI's `unauthorized` or `keys_unavailable`; the operator's `unauthorized` or
-/// `forbidden`.
+/// heartbeat's `forbidden` or `denied`; for `SetDesired` and `Converge` with no operator token,
+/// CI's `unauthorized` or `keys_unavailable`; the operator's `unauthorized` or `forbidden`.
 pub(crate) async fn admit(
     coordinator: &Coordinator,
     surface: Surface,
@@ -187,7 +187,7 @@ pub(crate) async fn admit(
 ) -> Result<Admitted, Status> {
     let served = match (surface, service_of(path)) {
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
-        (Surface::Control, Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT)) => {
+        (Surface::Control, Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS)) => {
             Served::Operator
         }
         _ => return Err(Status::unimplemented("")),
@@ -201,7 +201,7 @@ pub(crate) async fn admit(
             })
         }
         Served::Agent => Ok(Admitted::Peer(peer.clone())),
-        Served::Operator if path == SET_DESIRED => {
+        Served::Operator if path == SET_DESIRED || path == CONVERGE => {
             // An operator's token is told before CI's is verified: it is no CI token and
             // spends none.
             if let Ok(name) = coordinator.operator(bearer(headers)) {
@@ -210,9 +210,6 @@ pub(crate) async fn admit(
                     bearer: bearer(headers).unwrap_or_default().to_owned(),
                 });
             }
-            ci_token(coordinator, headers).await.map(Admitted::Ci)
-        }
-        Served::Operator if path == CONVERGE => {
             ci_token(coordinator, headers).await.map(Admitted::Ci)
         }
         Served::Operator => operator_token(coordinator, headers).await,
@@ -308,6 +305,11 @@ where
         }
         Some(AUDIT) => {
             let server = AuditServer::new(AuditService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(ALERTS) => {
+            let server = AlertsServer::new(AlertsService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

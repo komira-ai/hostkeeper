@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tonic::Request;
 
 use crate::audit_file::UnixClock;
+use crate::channel::ChannelRefusal;
 use crate::desired::{DesiredError, StoreError};
 use crate::grpc::Admitted;
 use crate::grpc::operator::{
@@ -33,7 +34,7 @@ use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError, Unautho
 use crate::testutil::{OPERATOR, Rig, ci_token, desired, ops_of};
 
 /// The time the audit file of every coordinator of these tests reads.
-const AUDIT_UNIX: u64 = 1_800_000_000;
+pub(super) const AUDIT_UNIX: u64 = 1_800_000_000;
 
 /// The desired state the tests set: version 2.0, one storage and one frontend host up.
 const STATE: &str = r#"{"version":"2.0","min_up":{"storage":1,"frontend":1}}"#;
@@ -156,6 +157,7 @@ pub(super) fn state(version: &str, min_up: &[(&str, u32)]) -> proto::DesiredStat
             .map(|(role, n)| ((*role).to_owned(), *n))
             .collect(),
         package_digest: None,
+        release_index_digest: None,
     }
 }
 
@@ -197,6 +199,8 @@ fn audit(
         service: service.map(str::to_owned),
         node_id: node_id.map(str::to_owned),
         reason: reason.map(str::to_owned),
+        at_unix: None,
+        by_name: Some("operator".to_owned()),
     })
 }
 
@@ -531,6 +535,14 @@ fn every_way_a_set_of_the_desired_state_fails_is_refused_with_its_value() {
         (SetError::DigestConflict, R::InvalidRequest),
         (SetError::BelowMinVersion, R::BelowMinVersion),
         (SetError::BadVersion, R::HeldBad),
+        (
+            SetError::Channel(ChannelRefusal::NotInChannel),
+            R::NotInChannel,
+        ),
+        (
+            SetError::Channel(ChannelRefusal::DigestMismatch),
+            R::ChannelDigestMismatch,
+        ),
         (
             SetError::Store(StoreError::Io {
                 path: "desired.json".into(),

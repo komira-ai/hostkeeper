@@ -7,7 +7,7 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, ReleasesRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -32,6 +32,7 @@ pub(crate) fn hosts(refusal: HostsRefusal) -> Status {
         HostsRefusal::InvalidRequest => Code::InvalidArgument,
         HostsRefusal::UnknownService | HostsRefusal::UnknownHost => Code::NotFound,
         HostsRefusal::Capacity => Code::ResourceExhausted,
+        HostsRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "HOSTS_REFUSAL_")
 }
@@ -42,10 +43,12 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         ReleasesRefusal::Unspecified | ReleasesRefusal::StoreFailed => Code::Internal,
         ReleasesRefusal::Unauthorized => Code::Unauthenticated,
         ReleasesRefusal::Forbidden => Code::PermissionDenied,
-        ReleasesRefusal::KeysUnavailable => Code::Unavailable,
+        ReleasesRefusal::KeysUnavailable | ReleasesRefusal::AuditUnavailable => Code::Unavailable,
         ReleasesRefusal::InvalidRequest
         | ReleasesRefusal::ConfirmMismatch
-        | ReleasesRefusal::UnknownTarget => Code::InvalidArgument,
+        | ReleasesRefusal::UnknownTarget
+        | ReleasesRefusal::IndexDigestMismatch
+        | ReleasesRefusal::IndexInvalid => Code::InvalidArgument,
         ReleasesRefusal::UnknownService => Code::NotFound,
         ReleasesRefusal::GenerationConflict => Code::Aborted,
         ReleasesRefusal::HeldBad
@@ -55,7 +58,9 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::NoDigest
         | ReleasesRefusal::SelfService
         | ReleasesRefusal::AlreadyBad
-        | ReleasesRefusal::AlreadyHalted => Code::FailedPrecondition,
+        | ReleasesRefusal::AlreadyHalted
+        | ReleasesRefusal::NotInChannel
+        | ReleasesRefusal::ChannelDigestMismatch => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "RELEASES_REFUSAL_")
 }
@@ -73,6 +78,7 @@ pub(crate) fn services(refusal: ServicesRefusal) -> Status {
         ServicesRefusal::NotAssigned
         | ServicesRefusal::NotHeld
         | ServicesRefusal::BelowMinVersion => Code::FailedPrecondition,
+        ServicesRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "SERVICES_REFUSAL_")
 }
@@ -87,11 +93,13 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         EnrollmentRefusal::KeyMismatch
         | EnrollmentRefusal::DuplicateClaim
         | EnrollmentRefusal::NotPending
-        | EnrollmentRefusal::Denied => Code::FailedPrecondition,
+        | EnrollmentRefusal::Denied
+        | EnrollmentRefusal::RecordMismatch => Code::FailedPrecondition,
         EnrollmentRefusal::HostIdTaken
         | EnrollmentRefusal::RecordExists
         | EnrollmentRefusal::RecordConflict => Code::AlreadyExists,
         EnrollmentRefusal::PendingFull | EnrollmentRefusal::Capacity => Code::ResourceExhausted,
+        EnrollmentRefusal::AuditUnavailable => Code::Unavailable,
         EnrollmentRefusal::InvalidHostId
         | EnrollmentRefusal::InvalidRole
         | EnrollmentRefusal::InvalidService
@@ -109,4 +117,14 @@ pub(crate) fn audit(refusal: AuditRefusal) -> Status {
         AuditRefusal::InvalidRequest => Code::InvalidArgument,
     };
     refused(code, refusal.as_str_name(), "AUDIT_REFUSAL_")
+}
+
+/// The status of a refusal by `Alerts`.
+pub(crate) fn alerts(refusal: AlertsRefusal) -> Status {
+    let code = match refusal {
+        AlertsRefusal::Unspecified | AlertsRefusal::StoreFailed => Code::Internal,
+        AlertsRefusal::Unauthorized => Code::Unauthenticated,
+        AlertsRefusal::Forbidden => Code::PermissionDenied,
+    };
+    refused(code, refusal.as_str_name(), "ALERTS_REFUSAL_")
 }

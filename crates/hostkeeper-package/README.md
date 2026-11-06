@@ -34,6 +34,7 @@ class `environment`, means nothing changed on the host and the coordinator retri
 | token | outcome, class | when |
 |---|---|---|
 | `index_invalid` | `Failure`, `release` | the release index is over 64 KiB, is not JSON, has a field too many or too few, another schema, service or version, a file name or digest that is not the package's form, no package, or a platform listed twice or out of order |
+| `index_digest_mismatch` | `Failure`, `release` | the order names the SHA-256 of the release index and the index received hashes to another; checked before the index is parsed, and nothing after it is fetched |
 | `no_package_for_platform` | `Failure`, `release` | the index lists no package for the host's platform |
 | `package_digest_mismatch` | `Failure`, `release` | the entry's size is over `max_package_bytes`, the announced length or the bytes received pass the entry's size (the transfer stops at once), or the bytes received are fewer than it or do not hash to its SHA-256 |
 | `fetch_failed` | `Deferred`, `environment` | the index or the package: no connection, a status other than 2xx (a 404 included: the channel may not have the version yet), a body cut short, `fetch_timeout_secs` passed, or a staging file that cannot be made, written or read for a reason other than a full disk |

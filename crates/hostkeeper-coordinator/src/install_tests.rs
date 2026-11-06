@@ -18,8 +18,8 @@ use crate::marks_support::{
     DB, INSTALLER, NEW_DAEMON, WEB, ask, ask_typed, beat_of, digest, hold, operator, restart, rig,
     runs, scope_host, set, unhold, update,
 };
-use crate::orders::{INSTALL_FEATURE, Order, next_try};
-use crate::testutil::{beat, version};
+use crate::orders::{INSTALL_FEATURE, Order};
+use crate::testutil::{beat, id, version};
 
 /// Catches: the old `absent` rule still in force (an absent copy skipped, or ordered `update`
 /// over the JSON route), or an install sent as an update: a daemon that does not run the
@@ -44,6 +44,7 @@ async fn an_assigned_service_not_installed_gets_an_install_order() {
             service: WEB.to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(7),
+            index_digest: String::new(),
         }))
     );
 
@@ -108,14 +109,9 @@ async fn an_install_needs_a_daemon_that_takes_it_and_a_digest() {
     reported.order_try = Some(4);
     let mut said = absent(WEB, "1.0");
     said.last_update = Some(reported);
-    let beat = beat_of(INSTALLER, vec![said]);
-    let one = beat
-        .services
-        .as_ref()
-        .map(|s| s[0].as_heartbeat(beat.platform));
-    assert_eq!(next_try(one.as_ref(), &order_id), 5);
-    assert_eq!(next_try(one.as_ref(), "install-other"), 1);
-    assert_eq!(next_try(None, &order_id), 1);
+    assert_eq!(rig.coordinator.lock_fleet().next_try(WEB, &id("d1")), 1);
+    order_to(&rig, "d1", vec![said]);
+    assert_eq!(rig.coordinator.lock_fleet().next_try(WEB, &id("d1")), 5);
 }
 
 /// Catches: a service ordered to a host it is not assigned to, installed or not, or one ordered

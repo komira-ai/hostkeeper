@@ -49,10 +49,12 @@ fn an_order_cannot_carry_a_command_path_or_url() {
         service: name,
         version: to,
         digest: package,
+        index_digest: index,
     } = target;
     let _: ServiceName = name;
     let _: Version = to;
     let _: PackageDigest = package;
+    let _: Option<PackageDigest> = index;
     let OrderRef { id, order_try } = crate::reference("o-1", 1);
     let _: (OrderId, u64) = (id, order_try);
 
@@ -193,6 +195,8 @@ fn the_heartbeat_json_has_the_wire_names() {
                 version: None,
             }),
         }],
+        sent_unix: 0,
+        renewal: hostkeeper_link::Renewal::default(),
     };
     let expected = serde_json::json!({
         "platform": "darwin-arm64",
@@ -219,6 +223,7 @@ fn the_heartbeat_json_has_the_wire_names() {
             "health_detail": "refused",
             "observed": { "liveness": "transitioning", "version": null },
         }],
+        "sent_unix": 0,
     });
     assert_eq!(beat.to_json(), expected);
     assert_eq!(beat.encoded_len(), expected.to_string().len());

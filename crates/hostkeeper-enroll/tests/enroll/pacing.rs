@@ -1,24 +1,65 @@
 //! The loop: one line per change of state, and one sleep of `RETRY_SECS` on the monotonic clock
 //! after every step, whatever it did.
 
-use hostkeeper_enroll::{Enroller, NOT_ENROLLED, RETRY_SECS};
+use hostkeeper_enroll::{
+    Enroller, Enrollment, HostId, NOT_ENROLLED, RETRY_SECS, RenewalState, RequestId,
+};
 
-use crate::support::{HOST, T0, WEEK, World};
+use crate::support::{HOST, T0, WEEK, World, csr_spki};
 
 /// Runs `enroller`'s loop for `steps` steps, calling `before(n)` before step `n`, and returns
 /// the lines it logged.
-fn run(enroller: &mut Enroller, steps: usize, mut before: impl FnMut(usize)) -> Vec<String> {
+fn run(enroller: &mut Enroller, steps: usize, before: impl FnMut(usize)) -> Vec<String> {
+    run_seeing(enroller, steps, before).0
+}
+
+/// [`run`], with the enrollment the loop reported after each step.
+fn run_seeing(
+    enroller: &mut Enroller,
+    steps: usize,
+    mut before: impl FnMut(usize),
+) -> (Vec<String>, Vec<Enrollment>) {
     let mut lines = Vec::new();
+    let mut seen = Vec::new();
     let mut step = 0;
-    enroller.run_loop(&mut |line: &str| lines.push(line.to_owned()), &mut || {
-        let go = step < steps;
-        if go {
-            before(step);
+    enroller.run_loop(
+        &mut |line: &str| lines.push(line.to_owned()),
+        &mut |enrollment| seen.push(enrollment),
+        &RenewalState::default(),
+        &mut || {
+            let go = step < steps;
+            if go {
+                before(step);
+            }
+            step += 1;
+            go
+        },
+    );
+    (lines, seen)
+}
+
+/// Catches an enrollment not reported after a step, reported before the step it follows, or
+/// reported once for several steps: three steps report three enrollments, pending with the key
+/// the first step posted, and enrolled once the step after the approval stored the
+/// certificate.
+#[test]
+fn the_loop_reports_the_enrollment_after_each_step() {
+    let world = World::new("pacing-seen");
+    let mut enroller = world.open();
+    let (_, seen) = run_seeing(&mut enroller, 3, |step| {
+        if step == 2 {
+            world.coordinator().approve(HOST);
         }
-        step += 1;
-        go
     });
-    lines
+    let pending = Enrollment::Pending {
+        key_sha256: RequestId::of_spki(&csr_spki(&world.coordinator().enrolls[0].csr_der)),
+    };
+    let enrolled = Enrollment::Enrolled {
+        host_id: HostId::new(HOST).expect("a host id"),
+        not_after: T0 + WEEK,
+    };
+    assert_eq!(seen, [pending.clone(), pending, enrolled]);
+    assert_eq!(world.sleeps(), [RETRY_SECS; 3]);
 }
 
 /// Catches a log line per retry, and a retry without a sleep or with a sleep of zero: the

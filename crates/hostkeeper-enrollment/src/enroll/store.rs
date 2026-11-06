@@ -1,6 +1,7 @@
-//! The store itself: its directory, its lock, reading and writing its files, and the two
-//! steps a request takes before issuance: [`EnrollmentStore::post`] and
-//! [`EnrollmentStore::approve`] (or [`EnrollmentStore::approve_recorded`]).
+//! The store itself: its directory, its lock, reading and writing its files, the two steps a
+//! request takes before issuance: [`EnrollmentStore::post`] and [`EnrollmentStore::approve`]
+//! (or [`EnrollmentStore::approve_recorded`]), and the one it takes when no operator approves
+//! it in time: [`EnrollmentStore::expire`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -55,6 +56,10 @@ pub struct EnrollmentStore {
     /// The Mac nonces an approval consumed: read from the approvals at open and added to by
     /// each approval, so a nonce whose own file was not yet marked is still used.
     pub(super) consumed: Mutex<BTreeSet<MacNonceHash>>,
+    /// The hosts whose host file is known to hold a first heartbeat since its approval, so a
+    /// later heartbeat takes neither the lock nor a read ([`EnrollmentStore::note_heartbeat`]).
+    /// An approval of the host takes it out.
+    pub(super) heard: Mutex<BTreeSet<HostId>>,
 }
 
 impl std::fmt::Debug for EnrollmentStore {
@@ -95,6 +100,7 @@ impl EnrollmentStore {
             live: Mutex::new(BTreeMap::new()),
             max_pending: DEFAULT_MAX_PENDING,
             consumed: Mutex::new(BTreeSet::new()),
+            heard: Mutex::new(BTreeSet::new()),
         };
         store.reconcile_mac_nonces()?;
         Ok(store)
@@ -175,6 +181,19 @@ impl EnrollmentStore {
         self.read(&path)?
             .map(|bytes| HostRow::read(&path, &bytes))
             .transpose()
+    }
+
+    /// The host ids of every host file, sorted; a file whose name is no host id is left out.
+    pub(super) fn host_ids(&self) -> Result<Vec<HostId>, StoreError> {
+        let dir = self.dir.join(HOSTS);
+        let names = self.fs.list(&dir).map_err(io_at(&dir))?;
+        let mut ids: Vec<HostId> = names
+            .iter()
+            .filter_map(|name| name.strip_suffix(".pb"))
+            .filter_map(|name| HostId::parse(name).ok())
+            .collect();
+        ids.sort();
+        Ok(ids)
     }
 
     pub(super) fn write_host(&self, host: &pb::Host) -> Result<(), StoreError> {
@@ -268,6 +287,41 @@ impl EnrollmentStore {
             .collect()
     }
 
+    /// The requests that expired ([`Self::expire`]), in the order of their ids.
+    ///
+    /// # Errors
+    /// [`StoreError`] when a file cannot be read.
+    pub fn expired(&self) -> Result<Vec<RequestView>, StoreError> {
+        self.all_requests()?
+            .iter()
+            .filter(|row| row.state == RequestState::Expired)
+            .map(view)
+            .collect()
+    }
+
+    /// Expires every request that has waited for an operator (pending or a duplicate claim)
+    /// more than `ttl_secs` at `now` (unix seconds): one posted at `now - ttl_secs` or later
+    /// still waits. Each is marked [`RequestState::Expired`] at `now`, under the store lock, so
+    /// an approval and the sweep never both take one request, and a request is expired once: a
+    /// later sweep finds it no longer waiting. Returns the requests it expired, in the order of
+    /// their ids, as the store now holds them.
+    ///
+    /// # Errors
+    /// [`StoreError`] when a file cannot be read or written; the requests expired before the
+    /// failure stay expired.
+    pub fn expire(&self, now: u64, ttl_secs: u64) -> Result<Vec<RequestView>, StoreError> {
+        let _held = self.lock()?;
+        let mut expired = Vec::new();
+        for mut row in self.all_requests()? {
+            if row.state.is_pending() && now.saturating_sub(row.pb.posted_unix) > ttl_secs {
+                row.expire(now, ttl_secs);
+                self.write_request(&row)?;
+                expired.push(view(&row)?);
+            }
+        }
+        Ok(expired)
+    }
+
     /// Records `request`, posted at `now` (unix seconds).
     ///
     /// The id is the SHA-256 of the CSR's key, computed here. The same key posted again is the
@@ -278,7 +332,9 @@ impl EnrollmentStore {
     /// `renewal_of` must name an approved host that is not denied and holds this key; it then
     /// waits for one approval like any request, and when the key's certificate was already
     /// issued it starts the next round. Every duplicate claim emits a warn event
-    /// (`duplicate enrollment claim`).
+    /// (`duplicate enrollment claim`). A key whose request expired ([`Self::expire`]) starts
+    /// over as a new request of the same round, waiting from `now`; an expired request's
+    /// machine id makes no other request a duplicate claim.
     ///
     /// A request that would wait while [`Self::max_pending`] requests wait already is refused
     /// and nothing is written: no waiting request is dropped for it, and a repost of a waiting
@@ -301,6 +357,7 @@ impl EnrollmentStore {
                 .as_ref()
                 .is_some_and(|row| row.state == RequestState::Issued);
         let round = match existing {
+            Some(row) if row.state == RequestState::Expired => row.pb.round,
             Some(row) if !next_round => return self.repost(row, &request).map_err(PostError::from),
             Some(row) => row.pb.round + 1,
             None => 0,
@@ -338,6 +395,8 @@ impl EnrollmentStore {
                 round,
                 serial: 0,
                 mac_nonce_presented: request.mac_nonce_presented,
+                expired_unix: 0,
+                expired_after_secs: 0,
             },
             id,
             key: verified.key().clone(),
@@ -576,8 +635,14 @@ impl EnrollmentStore {
             services: services.clone(),
             // Only a new key clears a duplicate mark; a renewal keeps the host's.
             duplicate: renewal.is_some() && current.is_some_and(|h| h.pb.duplicate),
+            // Every approval, a renewal's too, waits for its own first heartbeat.
+            first_heartbeat_unix: None,
         })?;
         self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.heard
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);
@@ -610,9 +675,13 @@ impl EnrollmentStore {
     }
 }
 
-/// Why a new request with `machine_id` is a duplicate claim, if another of `all` has it.
+/// Why a new request with `machine_id` is a duplicate claim, if another of `all` that has not
+/// expired has it (a key whose request expired, posted again, is not another).
 fn machine_id_taken(all: &[RequestRow], machine_id: &str) -> Option<&'static str> {
-    let taken = !machine_id.is_empty() && all.iter().any(|row| row.machine_id() == machine_id);
+    let taken = !machine_id.is_empty()
+        && all
+            .iter()
+            .any(|row| row.state != RequestState::Expired && row.machine_id() == machine_id);
     taken.then_some("another request has this machine id")
 }
 
@@ -623,7 +692,7 @@ fn alert(id: &KeyHash, machine_id: &str, reason: &str) {
 }
 
 /// The public view of a request row.
-fn view(row: &RequestRow) -> Result<RequestView, StoreError> {
+pub(super) fn view(row: &RequestRow) -> Result<RequestView, StoreError> {
     Ok(RequestView {
         request_id: row.id,
         state: row.state,
@@ -634,5 +703,6 @@ fn view(row: &RequestRow) -> Result<RequestView, StoreError> {
         round: row.pb.round,
         host_id: row.host_id()?,
         mac_nonce_presented: row.pb.mac_nonce_presented,
+        expiry: row.expiry(),
     })
 }

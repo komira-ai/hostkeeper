@@ -5,7 +5,7 @@
 //! in-process pipes, with a server thread on the other end (`tls`); `coordinator` puts the real
 //! coordinator's handler behind it; `grpc` runs the gRPC link against the coordinator's listener
 //! code over in-memory streams; `dial` is the test of the blocking transport's socket, on the
-//! loopback address with a port the system chose.
+//! loopback address with a port the system chose; `waits` plays the loop's waits from a script.
 
 mod certs;
 mod coordinator;
@@ -25,6 +25,7 @@ mod size;
 mod tls;
 mod typed_orders;
 mod types;
+mod waits;
 mod wire;
 
 use std::os::unix::fs::PermissionsExt;
@@ -72,6 +73,7 @@ fn target(name: &str, to: &str) -> Target {
         service: service(name),
         version: version(to),
         digest: digest(),
+        index_digest: None,
     }
 }
 

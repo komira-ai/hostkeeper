@@ -7,11 +7,13 @@
 //! refused, never cut short; one with too many bytes loses its optional facts, a group at a
 //! time in the order of [`DROP_ORDER`] (the health detail, then the deferral detail, then the
 //! observer's detail), and is refused when that is not enough. The service, its version, its
-//! health, the update running and the last verdict are never dropped.
+//! health, the update running and the last verdict are never dropped, nor are the host's clock
+//! and certificate facts ([`Heartbeat::sent_unix`], [`Heartbeat::renewal`]), whose one text is
+//! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::order::{DeferredReport, OrderResult};
 
@@ -227,6 +229,18 @@ impl ServiceFacts {
     }
 }
 
+/// What the enrollment loop last said of the host's certificate, which every heartbeat reports
+/// ([`crate::RenewalSource`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Renewal {
+    /// The last second the host's current certificate is valid, in seconds since the epoch;
+    /// none while the host holds no certificate.
+    pub cert_not_after_unix: Option<u64>,
+    /// Why the last step of enrollment or renewal failed, at most
+    /// [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes; none once a step succeeds.
+    pub last_renew_error: Option<String>,
+}
+
 /// One heartbeat.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Heartbeat {
@@ -237,6 +251,11 @@ pub struct Heartbeat {
     pub features: Vec<Feature>,
     /// Every service installed on the host, one entry each.
     pub services: Vec<ServiceFacts>,
+    /// The host's unix clock when the heartbeat was made, which the coordinator holds against
+    /// its own.
+    pub sent_unix: u64,
+    /// The host's certificate, as the enrollment loop last said it.
+    pub renewal: Renewal,
 }
 
 impl Heartbeat {
@@ -244,12 +263,22 @@ impl Heartbeat {
     pub fn to_json(&self) -> Value {
         let features: Vec<&str> = self.features.iter().map(|f| f.as_str()).collect();
         let services: Vec<Value> = self.services.iter().map(ServiceFacts::to_json).collect();
-        json!({
-            "platform": self.platform.as_str(),
-            "agent": { "name": AGENT_NAME, "version": self.agent_version.as_str() },
-            "agent_features": features,
-            "services": services,
-        })
+        let mut beat = Map::new();
+        beat.insert("platform".to_owned(), self.platform.as_str().into());
+        beat.insert(
+            "agent".to_owned(),
+            json!({ "name": AGENT_NAME, "version": self.agent_version.as_str() }),
+        );
+        beat.insert("agent_features".to_owned(), features.into());
+        beat.insert("services".to_owned(), services.into());
+        beat.insert("sent_unix".to_owned(), self.sent_unix.into());
+        if let Some(not_after) = self.renewal.cert_not_after_unix {
+            beat.insert("cert_not_after_unix".to_owned(), not_after.into());
+        }
+        if let Some(error) = &self.renewal.last_renew_error {
+            beat.insert("last_renew_error".to_owned(), error.clone().into());
+        }
+        Value::Object(beat)
     }
 
     /// Its size: the bytes of [`Heartbeat::to_json`].

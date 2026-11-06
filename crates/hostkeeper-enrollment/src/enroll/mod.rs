@@ -17,7 +17,14 @@
 //!   good for [`MAC_NONCE_VALID_SECS`] and one approval.
 //! - [`EnrollmentStore::issue`] makes the certificate of an approved request, once per request
 //!   id and round, whatever fails in between.
+//! - [`EnrollmentStore::expire`] moves a request that waited longer than the request TTL to
+//!   [`RequestState::Expired`]: its host is unenrolled, it is not approved, and it no longer
+//!   counts toward [`EnrollmentStore::max_pending`]. The same key posted again starts it over.
 //! - [`EnrollmentStore::verify_poll`] checks a poll's signed nonce against the request's key.
+//! - [`EnrollmentStore::reject`] is the operator's rejection of a pending request: it is marked
+//!   denied, so its key is refused and it no longer counts toward the pending cap.
+//! - [`EnrollmentStore::note_heartbeat`] records, once, when an approved host's first heartbeat
+//!   since its approval was accepted; each approval starts it over.
 //! - [`EnrollmentStore::deny`], [`EnrollmentStore::retire`], [`EnrollmentStore::report_live`]
 //!   and the questions the heartbeat path asks (`is_denied`, `is_retiring`, `is_duplicate`,
 //!   `renew_allowed`).
@@ -30,6 +37,7 @@ mod hosts;
 mod issue;
 mod mac_nonce;
 mod poll;
+mod reject;
 mod store;
 
 use std::io;
@@ -38,6 +46,7 @@ use std::path::PathBuf;
 pub use issue::IssuedCertificate;
 pub use mac_nonce::{MAC_NONCE_VALID_SECS, MacNonceHash, MacNonceRefusal};
 pub use poll::{MAX_NONCE_BYTES, MIN_NONCE_BYTES, POLL_DOMAIN, poll_message};
+pub use reject::{RejectError, Rejection};
 pub use store::{DEFAULT_MAX_PENDING, EnrollmentStore, FIRST_SERIAL, LIVE_WINDOW_SECS};
 
 use crate::ca::{ProfileError, SignError};
@@ -104,7 +113,8 @@ pub struct NewRequest {
     pub mac_nonce_presented: bool,
 }
 
-/// Where a request is. The numbers are those of `RequestState` in the store's proto.
+/// Where a request is. The numbers are those of `RequestState` in the store's proto, except
+/// [`RequestState::Expired`], which the proto has no number for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
 pub enum RequestState {
@@ -118,6 +128,11 @@ pub enum RequestState {
     Issued = 4,
     /// The host it was approved for is denied.
     Denied = 5,
+    /// It waited for an operator longer than the coordinator's request TTL
+    /// ([`EnrollmentStore::expire`]): its host is unenrolled, and it is never approved. Not a
+    /// state the file's `state` field holds: the file keeps the waiting state it expired in and
+    /// sets `expired_unix`, which a release before expiry ignores.
+    Expired = 6,
 }
 
 impl RequestState {
@@ -129,7 +144,7 @@ impl RequestState {
         RequestState::Denied,
     ];
 
-    /// The state whose proto number is `value`.
+    /// The state whose proto number is `value`; never [`RequestState::Expired`].
     fn from_number(value: i32) -> Option<RequestState> {
         RequestState::ALL
             .into_iter()
@@ -170,6 +185,18 @@ pub struct RequestView {
     pub host_id: Option<HostId>,
     /// The host presented a Mac nonce with the request.
     pub mac_nonce_presented: bool,
+    /// When and under which TTL the request expired; `None` unless its state is
+    /// [`RequestState::Expired`].
+    pub expiry: Option<Expiry>,
+}
+
+/// Why a request is unenrolled: it waited for an operator longer than the request TTL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Expiry {
+    /// Unix seconds: the time the sweep expired it.
+    pub expired_unix: u64,
+    /// The request TTL it expired under, in seconds.
+    pub ttl_secs: u64,
 }
 
 /// The operator's decision on a pending request.
@@ -214,6 +241,21 @@ pub struct RecordedApproval {
     pub claims: Claims,
     /// The approval consumed a Mac nonce.
     pub mac_nonce: bool,
+}
+
+/// A host that holds an approval and is not denied: what the coordinator matches against its
+/// host inventory ([`EnrollmentStore::enrolled_host`], [`EnrollmentStore::enrolled_hosts`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnrolledHost {
+    pub host_id: HostId,
+    /// What the host claimed in the request its key was approved from.
+    pub claims: Claims,
+    /// When that request was last approved, unix seconds; 0 for an approval recorded without
+    /// an approver ([`EnrollmentStore::approve`]).
+    pub approved_unix: u64,
+    /// When the coordinator accepted the host's first heartbeat since that approval, unix
+    /// seconds ([`EnrollmentStore::note_heartbeat`]); `None` until it does.
+    pub first_heartbeat_unix: Option<u64>,
 }
 
 /// A recorded approval.

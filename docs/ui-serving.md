@@ -4,18 +4,27 @@ The operator web app in [`ui/`](../ui) is static files. The coordinator serves t
 private listener, the same listener as the operator API, so the app's calls are same-origin:
 there is no cross-origin access, no cookie and no session.
 
-## Start the coordinator with `--ui-dir`
+## The directory the coordinator serves
 
-Give `hostkeeper-coordinator serve` the directory that holds the app's files, beside its other
-flags:
+The coordinator's container image holds the app at `/usr/share/hostkeeper-coordinator/ui`, and
+`hostkeeper-coordinator serve` serves that directory when it is started without `--ui-dir`. A
+deploy of the image needs no flag for it.
+
+To serve another directory, give `serve` the directory that holds the app's files, beside its
+other flags:
 
 ```sh
 hostkeeper-coordinator serve --private-listen <private-address> --ui-dir <path-to-ui> ...
 ```
 
-The directory must exist and be a directory when the coordinator starts; otherwise the start is
-refused with a message naming `--ui-dir`. Without the flag no file is served. The flag is the only
-way to set it: no environment variable is read.
+- With `--ui-dir`, that directory is served, whatever is at the default path. It must exist and
+  be a directory when the coordinator starts; otherwise the start is refused with a message naming
+  `--ui-dir` (it does not fall back to the default).
+- Without `--ui-dir`, `/usr/share/hostkeeper-coordinator/ui` is served when it is a directory (a
+  symbolic link to one included) when the coordinator starts. When nothing is there, or something
+  other than a directory, the coordinator starts and serves no file: `/ui/` is `404`.
+
+The flag is the only way to set it: no environment variable is read.
 
 ## Open the app
 
@@ -27,8 +36,8 @@ it again.
 
 - **Rollout**: for each service, the roles it is assigned to, the operator's assignments (a
   removal is shown as one), the hosts it is assigned to, the hosts being uninstalled, and the
-  desired version. The same section sets the desired version (a version and, if you have it, the
-  package digest), assigns the service to a role, and unassigns it from a role, with a box to
+  desired version. The same section sets the desired version (a version and, if you have them, the
+  text of the release index and its digest; the text is sent as typed), assigns the service to a role, and unassigns it from a role, with a box to
   uninstall it from each host that loses its last assignment. Setting the desired version and
   unassigning with uninstall ask first.
 - **Host**: the services assigned to that host, how each is assigned (to the host or through its
@@ -54,7 +63,14 @@ it again.
 - The files need no token. The operator API the app calls still needs the operator token on every
   call.
 
-## Not done here
+## Where the app comes from
 
-Packaging the `ui/` directory with the coordinator is the concern of the Linux packaging, and is
-not done by the coordinator or by this page.
+The release's container image
+(`hostkeeper-coordinator-<version>-<linux-platform>.image.tar`) copies the `ui/` of its commit to
+`/usr/share/hostkeeper-coordinator/ui`, owned by root, files `0644` and directories `0755`
+(`packaging/container/Dockerfile`). Before the image is released,
+`cargo xtask release check-image-ui` reads it back and refuses it unless that directory holds
+exactly the files of `ui/`, byte for byte, with that owner and those modes.
+
+The coordinator's release tarball (`hostkeeper-coordinator-<version>-<linux-platform>.tar.gz`)
+does not carry the app; a coordinator run from it serves `/ui/` only with `--ui-dir`.
