@@ -38,6 +38,22 @@ no step before step 7 uses an action, and no step before step 7 can request a to
 lint (`cargo test -p xtask --test workflows`) refuses the file otherwise. A version is set only by a
 program the job has proven was built from the commit you pinned.
 
+## Before it runs: the release must be in the channel
+
+A host fetches the version from the release channel (`{release_channel}/S/V/`), not from GitHub.
+The order is:
+
+1. the service's release workflow publishes the signed GitHub release;
+2. `cargo xtask release channel-sync` on the channel's host stages it into the channel
+   ([release-channel.md](release-channel.md#sync-new-releases-into-the-channel)), within one
+   period of its timer;
+3. then this workflow sets the desired version.
+
+A version set before the channel holds it is not refused by the coordinator: every host ordered
+to it fails its fetch (`fetch_failed`) and retries until the channel has it. Call this workflow
+once the version is in the channel: from a job that runs after the sync (by hand, or after a
+check that `S/V/index.json` is served), not straight after the release is published.
+
 ## Calling it
 
 In the service's release workflow, after the job that publishes the package:

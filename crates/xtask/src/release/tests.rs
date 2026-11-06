@@ -831,6 +831,7 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
             git: &fakes.git,
             runs: &fakes.runs,
             store: &fakes.store,
+            source: &fakes.source,
             verifier: &verifier,
             run_version: &fakes.run_version,
             pkgbuild: &fakes.pkgbuild,
@@ -893,13 +894,9 @@ fn the_wired_adapters_route_each_port_to_its_program() {
             why("gh")
         ))
     );
-    assert_eq!(
-        ports
-            .verifier
-            .verify(Path::new("a.deb"), None, &c)
-            .map_err(|e| e.why),
-        Err(why("gh"))
-    );
+    let signer = contract::Signer::hostkeeper();
+    let verified = ports.verifier.verify(&signer, Path::new("a.deb"), None, &c);
+    assert_eq!(verified.map_err(|e| e.why), Err(why("gh")));
     assert_eq!(
         ports.run_version.version_of(Path::new("bin/x")),
         Err(PortError::new("bin/x --version", why("bin/x")))
