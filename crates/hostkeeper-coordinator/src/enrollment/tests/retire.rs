@@ -61,7 +61,11 @@ fn names(coordinator: &Coordinator, host: &str) -> bool {
         .state()
         .assignments
         .values()
-        .any(|entries| entries.names_host(host))
+        .any(|entries| {
+            entries.hosts.contains_key(host)
+                || entries.host_min_versions.contains_key(host)
+                || entries.uninstall.contains_key(host)
+        })
 }
 
 /// The `host_retire` entries of the audit log of `coordinator` after the first `skip`.

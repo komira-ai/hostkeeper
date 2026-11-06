@@ -94,17 +94,9 @@ impl ServiceAssignments {
             + self.uninstall.len()
     }
 
-    /// Whether it holds an entry of the host `node_id`: its own assignment or exclusion, its
-    /// minimum version, or an uninstall it is ordered.
-    #[must_use]
-    pub fn names_host(&self, node_id: &str) -> bool {
-        self.hosts.contains_key(node_id)
-            || self.host_min_versions.contains_key(node_id)
-            || self.uninstall.contains_key(node_id)
-    }
-
-    /// Drops every entry of the host `node_id` ([`Self::names_host`]); a role's entries, which
-    /// the host's role matches, stay. What a retired host leaves (`Hosts.Retire`).
+    /// Drops every entry of the host `node_id`: its own assignment or exclusion, its minimum
+    /// version, and an uninstall it is ordered; a role's entries, which the host's role matches,
+    /// stay. What a retired host leaves (`Hosts.Retire`).
     pub fn forget_host(&mut self, node_id: &str) {
         self.hosts.remove(node_id);
         self.host_min_versions.remove(node_id);

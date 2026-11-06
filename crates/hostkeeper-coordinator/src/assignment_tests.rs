@@ -314,34 +314,14 @@ fn the_roles_listed_are_the_rollout_files_with_the_operators_entries_on_top() {
     assert_eq!(roles_of(&def, Some(&entries)), ["daemon", "builder"]);
 }
 
-/// Proves: a host is named by each kind of entry of its own (an assignment or exclusion, a
-/// minimum version, an uninstall it is ordered) and by none of another host's or a role's; and
-/// forgetting it drops each of its own entries while another host's and every role's stay.
+/// Proves: forgetting a host drops each kind of entry of its own (an assignment or exclusion, a
+/// minimum version, an uninstall it is ordered), while another host's entries and every role's
+/// stay.
 ///
-/// Catches: a retired host whose minimum version or uninstall intent is left behind (and so
-/// read as still assigned, its retirement audited again at every repeat), and a retirement that
-/// drops a role's entry, which other hosts of the role follow.
+/// Catches: a retired host whose minimum version or uninstall intent is left behind, and a
+/// retirement that drops a role's entry, which other hosts of the role follow.
 #[test]
-fn a_host_is_named_by_each_of_its_own_entries_and_forgetting_it_drops_only_those() {
-    let named = |edit: &dyn Fn(&mut ServiceAssignments)| {
-        let mut entries = ServiceAssignments::default();
-        edit(&mut entries);
-        entries.names_host("s1")
-    };
-    assert!(named(&|e| {
-        e.hosts.insert("s1".to_owned(), Entry::Exclude);
-    }));
-    assert!(named(&|e| {
-        e.host_min_versions.insert("s1".to_owned(), version("1.0"));
-    }));
-    assert!(named(&|e| {
-        e.uninstall.insert("s1".to_owned(), 1);
-    }));
-    assert!(!named(&|e| {
-        e.roles.insert("s1".to_owned(), Entry::Include);
-        e.hosts.insert("s2".to_owned(), Entry::Include);
-    }));
-
+fn forgetting_a_host_drops_only_its_own_entries() {
     let mut entries = ServiceAssignments::default();
     for node in ["s1", "s2"] {
         entries.hosts.insert(node.to_owned(), Entry::Include);
@@ -352,7 +332,11 @@ fn a_host_is_named_by_each_of_its_own_entries_and_forgetting_it_drops_only_those
     }
     entries.roles.insert("storage".to_owned(), Entry::Include);
     entries.forget_host("s1");
-    assert!(!entries.names_host("s1"));
-    assert!(entries.names_host("s2"));
-    assert_eq!(entries.len(), 4, "s2's three entries and the role's stay");
+    let mut kept = ServiceAssignments::default();
+    kept.hosts.insert("s2".to_owned(), Entry::Include);
+    kept.host_min_versions
+        .insert("s2".to_owned(), version("1.0"));
+    kept.uninstall.insert("s2".to_owned(), 2);
+    kept.roles.insert("storage".to_owned(), Entry::Include);
+    assert_eq!(entries, kept);
 }
