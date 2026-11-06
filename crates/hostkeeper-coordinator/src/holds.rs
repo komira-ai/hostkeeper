@@ -14,9 +14,8 @@
 //! host that joins the role later is held and one that leaves it is released. The fleet keeps a
 //! copy of the holds for its decisions, refreshed under its lock ([`crate::fleet::Fleet::is_held`]).
 //!
-//! A held host that runs a version marked bad is an alert: an error-level line with
-//! `alert = "held_on_bad_version"`, once per host, service and version ([`alert_on_bad_version`]),
-//! and the status flags it.
+//! A held host that runs a version marked bad is an alert ([`crate::alerts`]: an error-level line
+//! with `alert = "held_on_bad_version"` once when it appears), and the status flags it.
 
 use std::collections::BTreeSet;
 
@@ -131,7 +130,12 @@ pub fn marks_of(state: &OpsState) -> Marks {
 
 /// The version of `service` the host `id` runs, when an operator holds the pair and the version
 /// is marked bad.
-fn bad_version(fleet: &Fleet, state: &OpsState, service: &str, id: &HostId) -> Option<Version> {
+pub(crate) fn bad_version(
+    fleet: &Fleet,
+    state: &OpsState,
+    service: &str,
+    id: &HostId,
+) -> Option<Version> {
     let version = &fleet.get_in(service, id)?.beat.version;
     let bad = state
         .services
@@ -144,21 +148,4 @@ fn bad_version(fleet: &Fleet, state: &OpsState, service: &str, id: &HostId) -> O
 #[must_use]
 pub fn on_bad_version(fleet: &Fleet, state: &OpsState, service: &str, id: &HostId) -> bool {
     bad_version(fleet, state, service, id).is_some()
-}
-
-/// Raises the alert of a held host that runs a version of `service` marked bad, once per host,
-/// service and version: an error-level line with `alert = "held_on_bad_version"`. Nothing is
-/// ordered: a hold is not reached by a bad mark, and the operator decides.
-pub fn alert_on_bad_version(fleet: &mut Fleet, state: &OpsState, service: &str, id: &HostId) {
-    if let Some(version) = bad_version(fleet, state, service, id)
-        && fleet.first_alert(service, id, &version)
-    {
-        tracing::error!(
-            alert = "held_on_bad_version",
-            service,
-            node_id = %id,
-            version = %version,
-            "an operator holds a host that runs a version marked bad: it is not ordered off it until the hold is released"
-        );
-    }
 }

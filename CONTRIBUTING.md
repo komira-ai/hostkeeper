@@ -100,9 +100,36 @@ The tests, in `crates/hostkeeper-privileged/tests/`, drive the production code:
   `a_unit_name_is_reusable_after_it_failed` and
   `a_long_output_is_kept_to_its_last_bytes_with_the_last_line`;
 - `observer.rs`, the observer's `systemctl show` and `/proc` adapters:
-  `the_observer_reads_active_state_and_the_main_pid_digest_of_a_real_unit`.
+  `the_observer_reads_active_state_and_the_main_pid_digest_of_a_real_unit`;
+- `unit_control.rs`, the Linux unit control's `systemctl`:
+  `the_linux_unit_control_reloads_starts_and_stops_a_real_unit`.
 
-Each of these files starts with `#![cfg(feature = "privileged")]`. The feature is off by default,
+In the job `first-boot`, the programs themselves: the tests start the coordinator and the daemon
+as child processes on loopback and drive them only through their flags, files and `hostkeeper
+ctl` (`tests/support/pair.rs`):
+
+- `first_boot.rs`: `a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts`
+  (enrollment, approval, the host certificate, heartbeats over mutual TLS, a restart of the
+  coordinator and of the daemon), and `a_short_lived_certificate_is_renewed_and_the_heartbeat_goes_on`,
+  ignored until the coordinator has a flag for the host certificates' validity
+  (komira-ai/hostkeeper#100);
+- `install_uninstall.rs`, a package served by a release channel of the test over HTTPS:
+  `an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, and, ignored
+  until the gaps they found are fixed, `a_new_desired_version_is_installed_over_the_installed_one`
+  (komira-ai/hostkeeper#109) and `an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host`
+  (komira-ai/hostkeeper#110).
+
+The daemon fixes paths on the host that these tests cannot move. Both tests claim its pki
+directory `/etc/updater`, its self-update units and `/var/lib/hostkeeper`; `install_uninstall.rs`
+also claims the verifier's directory `/usr/lib/hostkeeper` and the fixture service's unit. A test
+refuses to start if the host already has a path it claims, and removes them when it ends.
+`install_uninstall.rs` appends the release channel's CA to the host's CA bundle and writes the
+bundle back as it was when it ends. The verifier is the one stand-in:
+`/usr/bin/true` in place of `gh`, since an attestation of a package the test builds cannot be made
+without the network.
+
+The files of the job `privileged` start with `#![cfg(feature = "privileged")]`, those of
+`first-boot` with `#![cfg(all(target_os = "linux", feature = "privileged"))]`. The feature is off by default,
 so `cargo test --workspace` and CI's `test` job compile none of them, and they count toward no
 coverage gate; the crate's library (the workload fixture `hostkeeper-fixture-hook`, the host
 check, the rig) is tested without root in the pull-request set like any crate. A privileged test
@@ -118,7 +145,9 @@ cargo test -p hostkeeper-privileged --features privileged --locked --config "tar
 ```
 
 Each test names its units `hostkeeper-ci-<test>-<pid>-<n>` and stops, unlinks and resets them when
-it ends, failed or not; `journalctl --unit 'hostkeeper-ci-*'` shows what they logged.
+it ends, failed or not; `journalctl --unit 'hostkeeper-ci-*'` shows what they logged. The
+first-boot tests also add a CA to the host's CA bundle and write under `/etc`, `/usr/lib` and
+`/var/lib`: run them only on a throwaway VM, never on a host that runs hostkeeper.
 
 ## Tests
 

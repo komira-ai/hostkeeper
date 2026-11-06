@@ -1,8 +1,9 @@
-//! The five services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
-//! `Services`, `Enrollment` and `Audit`.
+//! The six services of `hostkeeper.operator.v1` over [`Coordinator`]: `Hosts`, `Releases`,
+//! `Services`, `Enrollment`, `Audit` and `Alerts`.
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
-//! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`]) calls it with
+//! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
+//! [`crate::alerts`]) calls it with
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
@@ -14,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::Alerts as AlertsApi;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::Audit as AuditApi;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::Enrollment as EnrollmentApi;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::Hosts as HostsApi;
@@ -629,5 +631,31 @@ impl AuditApi for AuditService {
             .audit_list(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::audit)
+    }
+}
+
+/// The service of `Alerts`.
+pub(crate) struct AlertsService {
+    coordinator: Arc<Coordinator>,
+}
+
+impl AlertsService {
+    /// The service over `coordinator`.
+    pub(crate) fn new(coordinator: Arc<Coordinator>) -> Self {
+        Self { coordinator }
+    }
+}
+
+#[tonic::async_trait]
+impl AlertsApi for AlertsService {
+    async fn list(
+        &self,
+        request: Request<proto::ListAlertsRequest>,
+    ) -> Result<Response<proto::ListAlertsResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .list_alerts(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::alerts)
     }
 }

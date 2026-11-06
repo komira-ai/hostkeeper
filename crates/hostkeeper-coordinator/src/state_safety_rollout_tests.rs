@@ -142,6 +142,8 @@ async fn a_canary_release_failure_meets_the_rollback_threshold_and_alerts() {
     round(&rig, 2_015, &[("d1", verdict("o-1", 1))]);
     assert_eq!(wanted(&rig), version("1.0"));
     assert_eq!(marks(&rig).bad, vec![version("2.0")]);
+    rig.coordinator.observe_alerts().expect("observed");
+    rig.coordinator.observe_alerts().expect("observed");
     let text = log.text();
     let alert = text
         .lines()
@@ -150,7 +152,7 @@ async fn a_canary_release_failure_meets_the_rollback_threshold_and_alerts() {
     assert!(alert.contains("ERROR"), "{alert}");
     assert!(alert.contains("service=kbf"), "{alert}");
     assert!(alert.contains("node_id=d1"), "{alert}");
-    assert!(alert.contains("target=2.0"), "{alert}");
+    assert!(alert.contains("version=2.0"), "{alert}");
     assert_eq!(text.matches("canary_failed").count(), 1, "{text}");
 }
 

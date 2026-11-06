@@ -78,6 +78,7 @@ roles = ["storage"]
 /// [`ROLLOUT`], a role of it, a host id, a reason. A host or request id no heartbeat or
 /// enrollment named is answered `NOT_FOUND` or the like, which passes.
 const REQUESTS: &[(&str, &str)] = &[
+    ("hostkeeper.operator.v1.Alerts/List", "{}"),
     (
         "hostkeeper.operator.v1.Audit/List",
         r#"{"sinceSeq": "0", "limit": 100, "service": "kbf"}"#,

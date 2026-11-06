@@ -98,7 +98,8 @@ refusals!(
     ReleasesRefusal,
     ServicesRefusal,
     EnrollmentRefusal,
-    AuditRefusal
+    AuditRefusal,
+    AlertsRefusal
 );
 
 changing!(
@@ -406,8 +407,9 @@ impl Coordinator {
 
     /// `Hosts.Exclude`: takes the host out of the service, as `/v1/operator`'s `exclude` does.
     /// Its slot stays held until its own beats or its order's age free it; with `abandon`, for a
-    /// host that is gone, the slot is freed now, the entry is `exclude_abandon` with
-    /// `possibly_mid_update` in its reason, and an alert is logged (`alert = "exclude_abandon"`).
+    /// host that is gone, the slot is freed now, and the entry is `exclude_abandon` with
+    /// `possibly_mid_update` in its reason: an alert while the host stays excluded
+    /// ([`crate::alerts`], logged with `alert = "exclude_abandon"`).
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `unknown_service`, `invalid_request` (the node id or the
@@ -445,13 +447,7 @@ impl Coordinator {
             crate::operate::exclude(&self.ops, exclusion, audit, proto::HostsRefusal::Capacity)?;
         if request.abandon {
             let held = fleet.abandon_in(&def.name, &id, now);
-            tracing::error!(
-                alert = "exclude_abandon",
-                service = %def.name,
-                node_id = %id,
-                held_slot = held,
-                "an operator abandoned a host that may be mid-update: its update slot is free now"
-            );
+            tracing::info!(service = %def.name, node_id = %id, held_slot = held, "abandoned");
         } else {
             fleet.forget_in(&def.name, &id);
         }
