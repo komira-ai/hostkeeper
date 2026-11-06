@@ -6,9 +6,9 @@
 # bound: the event happened at most one poll interval earlier.
 # kind	id	value	unit	how	cells
 raw	bootstrap-apply	34	s	adopt and bootstrap apply on the operator's machine, start to end: record the host, stop the old updater, install the package, write the config, start the daemon, leave it pending enrollment	m-bootstrap
-raw	enroll-request-to-enrolled	38	s	audit enroll_requested (whole seconds) to the journal line "enrolled as host" (38.08 s); includes the operator's approval	m-enroll
-raw	enroll-operator-wait	37	s	audit enroll_requested to audit enroll_approve, both whole seconds: the operator's time, not hostkeeper's	m-enroll
-raw	approve-to-enrolled	1	s	audit enroll_approve (whole seconds) to the journal line "enrolled as host" (1.08 s, so at most about 2 s)	m-enroll
+raw	enroll-request-to-enrolled	38	s	audit enroll_requested (whole seconds) to the journal line "enrolled as host" (38.08 s, so between 37.1 s and 38.1 s); includes the operator's approval	m-enroll
+raw	enroll-operator-wait	37	s	audit enroll_requested to audit enroll_approve, both whole seconds, so within a second either way: the operator's time, not hostkeeper's	m-enroll
+raw	approve-to-enrolled	1	s	audit enroll_approve (whole seconds) to the journal line "enrolled as host" (1.08 s; the stamp is cut to whole seconds, so between 0.08 s and 1.08 s)	m-enroll
 raw	install-to-ready	7.4	s	hello v1 install: set-desired to the first poll answering readiness 200 with the new version (7.43 s); upper bound	m-converge-install
 raw	install-poll	3	s	interval of the ssh poll during the install	m-converge-install
 raw	update-to-ready	10.1	s	hello v1 to v2: set-desired to the first poll answering the new version (10.14 s); upper bound	m-converge-update

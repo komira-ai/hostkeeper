@@ -202,7 +202,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <tbody>
 <tr><td>Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment</td><td>Built and tested in process</td></tr>
 <tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hostkeeper ctl</code>; web UI</td><td>Built; every declared method has a handler (<a href="#apis">the two APIs</a>)</td></tr>
-<tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both, but has no link (below)</td></tr>
+<tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both over its link (below)</td></tr>
 <tr><td>Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop</td><td>Built and running in the shipped binary; the enrollment loop&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts (<a href="#n-h5">h5</a>)</td></tr>
 <tr><td>Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune</td><td>Built; reachable only through an order</td></tr>
 <tr><td>Daemon heartbeat to the coordinator</td><td>Built and running in the shipped binary: JSON, then gRPC once the coordinator advertises it, over mutual TLS; the coordinator&rsquo;s orders reach an enrolled host</td></tr>
@@ -617,7 +617,7 @@ token request variables in <code>hostkeeper ci</code>.</p>
 <text x="782" y="440" class="t-s t-m">index, package, attestation bundle</text>
 <path class="ln ln-dash" marker-end="url(#aa)" d="M880 370V398"/>
 <text x="864" y="390" text-anchor="end" class="t-s t-m">fetched and verified, only inside an order</text>
-</svg></div><figcaption><strong>The parts, and which way each connection goes.</strong> Every connection to the coordinator is made by its caller; the coordinator never connects to a host. The red dashed line is the gap that matters most on <code>main</code>: the daemon&rsquo;s heartbeat client exists but the shipped daemon does not use it.</figcaption></figure>
+</svg></div><figcaption><strong>The parts, and which way each connection goes.</strong> Every connection to the coordinator is made by its caller; the coordinator never connects to a host.</figcaption></figure>
 <p><strong>The coordinator</strong> has two TLS listeners
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/config.rs">crates/hostkeeper-coordinator/src/config.rs</a>,
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#43-the-coordinator">design: The coordinator</a>):</p>
@@ -651,7 +651,7 @@ The coordinator cannot change it. The daemon&rsquo;s local interface is a unix s
 <code>hostkeeper.local.v1.Admin</code> (<code>Status</code>, <code>Abort</code>, <code>ClearRecord</code>) to root only
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/admin.rs">crates/hostkeeper-daemon/src/admin.rs</a>).
 <code>hostkeeper ctl</code> has no command for it, so a root user needs a gRPC client of their own.</p>
-<p><strong>The gap that matters most.</strong> The heartbeat client is in
+<p><strong>The heartbeat link.</strong> The heartbeat client is in
 <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-link">crates/hostkeeper-link</a>, with gRPC over mutual TLS
 (<code>GrpcMtlsLink</code>), a JSON form and one that negotiates between them. Each call is bounded to
 <span data-cell="c-call" data-source="crates/hostkeeper-link/src/dial.rs" data-item="CALL_SECS">10 s</span>.
@@ -1416,7 +1416,7 @@ are not planned there (<a href="https://github.com/komira-ai/hostkeeper/blob/mai
 <tr><td>Time to enroll a host, from the daemon&rsquo;s first <code>Enroll</code> to its certificate</td><td><span data-cell="m-enroll" data-result="farm-canary-node-5.tsv">38 s, of which 37 s was the operator&rsquo;s time before approving; about 1 s from approval to the certificate</span></td></tr>
 <tr><td>Time from enrollment to the host&rsquo;s first heartbeat</td><td><span data-cell="m-first-heartbeat" data-open="a first-heartbeat time in the coordinator&rsquo;s host record">open: the coordinator does not record it yet</span></td></tr>
 <tr><td>Desired-version change to converged: hello v1 install</td><td><span data-cell="m-converge-install" data-result="farm-canary-node-5.tsv">at most 7.4 s to serving v1 (polled every 3 s)</span></td></tr>
-<tr><td>Desired-version change to converged: hello v1 to v2 update</td><td><span data-cell="m-converge-update" data-result="farm-canary-node-5.tsv">at most 10.1 s to serving v2 (polled every 2 s); the coordinator recorded the service converged about 70 s after the change</span></td></tr>
+<tr><td>Desired-version change to converged: hello v1 to v2 update</td><td><span data-cell="m-converge-update" data-result="farm-canary-node-5.tsv">at most 10.1 s to serving v2 (polled every 2 s); the coordinator recorded the service converged about 70 s after the change, from later heartbeats; this run did not break that time down</span></td></tr>
 <tr><td>Desired-version change to rolled back: hello failed <code>verify</code>, automatic rollback</td><td><span data-cell="m-converge-rollback" data-result="farm-canary-node-5.tsv">at most 6.0 s to serving the previous build again, and at most 2.6 s from the failed verify (polled every 2 s)</span></td></tr>
 <tr><td>tierstore forced first deploy, from <code>Releases.Force</code> to every target running</td><td><span data-cell="m-tierstore-force-first" data-open="farm run">open</span></td></tr>
 <tr><td>Coordinator CPU at the six-node fleet</td><td><span data-cell="m-coordinator-cpu" data-open="farm run">open</span></td></tr>
