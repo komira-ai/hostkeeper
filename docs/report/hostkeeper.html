@@ -1095,8 +1095,8 @@ itself and falls back after
 starts within
 <span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
 The timer job meant to run it is rendered but not installed.</li>
-<li>The installer is an unsigned <code>.pkg</code> holding the binary and the daemon&rsquo;s plist, with no scripts. The
-operator writes <code>hostkeeper.toml</code>.</li>
+<li>The installer is an unsigned <code>.pkg</code> holding the binary, the daemon&rsquo;s plist, the pinned <code>gh</code>
+and the Sigstore trusted root, with no scripts. The operator writes <code>hostkeeper.toml</code>.</li>
 </ul>
 <p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine
