@@ -13,6 +13,7 @@
 //! - [`OrderSink`] and [`Dispatch`]: the executor, run on a worker the dispatcher starts, so
 //!   the loop keeps beating while a step runs;
 //! - [`HeldHalts`]: the persisted halt generations;
+//! - [`RenewalSource`]: what the enrollment loop last said of the host's certificate;
 //! - [`UnixClock`], [`Log`] and [`Sleeper`].
 //!
 //! Its own types are in [`beat`] (what is sent, and the bound it keeps), [`order`] (the order,
@@ -51,7 +52,7 @@ mod wire_map;
 
 pub use beat::{
     ANNOUNCED, Feature, Features, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
-    Observed, OptionalFact, Oversize, Platform, ServiceFacts, fit,
+    Observed, OptionalFact, Oversize, Platform, Renewal, ServiceFacts, fit,
 };
 pub use deferral::{Deferral, DeferralError, Deferrals};
 pub use dial::{CALL_SECS, TcpDial, TcpTransport};
@@ -68,6 +69,7 @@ pub use order::{
 pub use pki::PkiCertSource;
 pub use ports::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch, HeldHalts, Job,
-    LinkError, Log, Observation, OrderSink, RecordedService, ReplyFault, ServiceObserver,
-    ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault, UnixClock, Unsendable,
+    LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, ReplyFault,
+    ServiceObserver, ServiceRecords, Sleeper, StopFlag, ThreadDispatch, Tick, TrustFault,
+    UnixClock, Unsendable,
 };

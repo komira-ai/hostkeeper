@@ -21,8 +21,8 @@ with a reason; `Services.Unhold` releases it. A hold freezes the service where i
   blocks the others. An update the host was already running, or had been ordered, when the
   hold was set finishes, and holds the slot until it ends (`Hosts.Abort` stops it).
 - Automatic rollback and a version marked bad do not reach a held pair. A held host that runs a
-  version marked bad is an alert: an error-level log line with `alert=held_on_bad_version`, and
-  the status flags the host.
+  version marked bad is an alert: `Alerts.List` lists it, an error-level log line with
+  `alert=held_on_bad_version` is logged once when it appears, and the status flags the host.
 - Holds are kept in the ops file and survive a restart. `Services.List` shows them.
 - Holding the same service in the same scope again replaces the reason. `Unhold` releases the
   pairs to the desired version at their next heartbeat.
@@ -49,7 +49,8 @@ host, as before.
   reads. No host is ordered it again, and CI cannot set it, until `UnmarkBad` or a force lifts
   the mark. A second mark of the same version is refused with `already_bad`.
 - `Releases.Halt` halts a service by hand, as a host's halt report does: no host of it is
-  ordered until `ClearHalt` (or a force). It is logged as an alert (`alert=halt`). A service with
+  ordered until `ClearHalt` (or a force). It is an alert (`Alerts.List`, and an `alert=halt`
+  line logged once when it appears). A service with
   no desired version has nothing to halt and is refused with `invalid_request`; a service that
   is halted already, with `already_halted`.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
@@ -58,7 +59,8 @@ host, as before.
 - `Hosts.Exclude` takes a host out of a service. Its update slot stays held until the host's own
   heartbeats or its order's age free it. With `abandon`, for a host that is gone mid-update,
   the slot is freed at once; the audit entry is `exclude_abandon` with `possibly_mid_update` in
-  its reason, and an `alert=exclude_abandon` line is logged.
+  its reason. It is an alert while the host stays excluded (`Alerts.List`, and an
+  `alert=exclude_abandon` line logged once when it appears).
 
 ## Force
 

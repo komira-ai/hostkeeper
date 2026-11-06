@@ -1,5 +1,6 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
-//! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit}` on the private one,
+//! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts}` on the private
+//! one,
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -30,6 +31,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use hostkeeper_oidc::Verified;
 use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServer;
+use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
@@ -46,7 +48,7 @@ use tonic::{Code, Status};
 
 use self::agent::{AgentService, beat_status};
 use self::operator::{
-    AuditService, EnrollmentService, HostsService, ReleasesService, ServicesService,
+    AlertsService, AuditService, EnrollmentService, HostsService, ReleasesService, ServicesService,
 };
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
@@ -91,6 +93,8 @@ const SERVICES: &str = "hostkeeper.operator.v1.Services";
 const ENROLLMENT: &str = "hostkeeper.operator.v1.Enrollment";
 /// The full name of the operator API's `Audit`.
 const AUDIT: &str = "hostkeeper.operator.v1.Audit";
+/// The full name of the operator API's `Alerts`.
+const ALERTS: &str = "hostkeeper.operator.v1.Alerts";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -183,7 +187,7 @@ pub(crate) async fn admit(
 ) -> Result<Admitted, Status> {
     let served = match (surface, service_of(path)) {
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
-        (Surface::Control, Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT)) => {
+        (Surface::Control, Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS)) => {
             Served::Operator
         }
         _ => return Err(Status::unimplemented("")),
@@ -301,6 +305,11 @@ where
         }
         Some(AUDIT) => {
             let server = AuditServer::new(AuditService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(ALERTS) => {
+            let server = AlertsServer::new(AlertsService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

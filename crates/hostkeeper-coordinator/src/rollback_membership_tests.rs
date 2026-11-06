@@ -43,7 +43,12 @@ fn fleet(n: usize) -> Fleet {
                 platform: Platform::LinuxX86_64,
                 seen: secs(2_000),
                 announced: BTreeMap::from([("kbf".to_owned(), Health::Healthy)]),
+                sent_unix: None,
+                cert_not_after_unix: None,
+                last_renew_error: None,
+                skewed_beats: 0,
             },
+            0,
         );
     }
     fleet

@@ -767,7 +767,8 @@ fn every_new_refusal_enum_has_the_zero_value_unspecified_and_a_code_comment_per_
             codes.insert((refusal, token), code);
         }
     }
-    // The package is two files (operator.proto and enrollment.proto); each enum is in one.
+    // The package is three files (operator.proto, enrollment.proto and entry.proto); each enum
+    // is in one.
     let operator: Vec<_> = ours(&built)
         .into_iter()
         .filter(|f| f.package() == "hostkeeper.operator.v1")

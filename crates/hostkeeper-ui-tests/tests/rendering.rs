@@ -123,6 +123,10 @@ fn the_host_page_shows_a_host_of_the_coordinators_own_reply() {
             ["Serial", "-"],
             ["Enrolled", "not enrolled"],
             ["", ""],
+            ["Ends", "not reported"],
+            ["Last renewal error", "-"],
+            ["Heartbeats with the clock off", "0"],
+            ["", ""],
             ["Installed version", "1.0"],
             ["Health", "healthy"],
             ["Up", "yes"],
@@ -206,6 +210,8 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             "exclusions": [{"service": "metrics", "reason": "noisy"}],
             "inventoryRecordId": "web-2", "dataMacs": ["0c:c4:7a:00:00:02", "0c:c4:7a:00:00:03"],
             "bmcMac": "0c:c4:7a:00:00:01", "serial": "SN-2", "enrolledUnix": "1800000000",
+            "certNotAfterUnix": "1800604800", "lastRenewError": "renewal refused: host_excluded",
+            "clockSkewBeats": "2",
             "services": [
                 {"service": "api", "up": false, "holdsSlot": true, "gateReason": "GATE_REASON_HELD",
                  "membership": "MEMBERSHIP_PRESENT", "installedVersion": "1.3.0", "health": "HEALTH_UNHEALTHY",
@@ -240,6 +246,10 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             ["BMC MAC", "0c:c4:7a:00:00:01"],
             ["Serial", "SN-2"],
             ["Enrolled", AT],
+            ["", ""],
+            ["Ends", "2027-01-22 08:00:00 UTC"],
+            ["Last renewal error", "renewal refused: host_excluded"],
+            ["Heartbeats with the clock off", "2"],
             ["", ""],
             ["Installed version", "1.3.0"],
             ["Health", "unhealthy"],
@@ -313,9 +323,10 @@ fn the_enrollment_page_shows_every_claim_and_fact_beside_its_label() {
 }
 
 #[test]
-fn the_fleet_page_shows_a_failed_status_call_and_a_halt_without_marks() {
-    // Catches: a Fleet page that hides the failure of its second call, and a halt alert that
-    // needs the halt's marks when the state alone says the service is halted.
+fn the_fleet_page_shows_a_failed_status_call_and_a_refused_alerts_call() {
+    // Catches: a Fleet page that hides the failure of its second call; and one that hides a
+    // refused `Alerts.List` (an empty box would read as "nothing needs a person") or drops the
+    // hosts because of it.
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/List"), hosts_reply());
     ui.refuse(&m("Releases/Status"), 500, "INTERNAL", "store_failed");
@@ -324,14 +335,45 @@ fn the_fleet_page_shows_a_failed_status_call_and_a_halt_without_marks() {
     assert_eq!(ui.methods(), [m("Hosts/List"), m("Releases/Status")]);
 
     let mut ui = Ui::start();
-    let alerts = ui.run(
-        r#"
-import { fleetAlerts } from "./pages/fleet.js";
-export async function main() {
-  return fleetAlerts([], { services: [{ service: "api", convergence: { state: "CONVERGENCE_STATE_HALTED" } }] });
-}"#,
+    ui.reply(&m("Hosts/List"), hosts_reply());
+    ui.reply(&m("Releases/Status"), status_reply());
+    ui.refuse(&m("Alerts/List"), 500, "INTERNAL", "store_failed");
+    let out = render(&mut ui, "fleet", "{}");
+    let text = shown(&out);
+    assert!(
+        text.contains("Alerts The alerts could not be read: INTERNAL store_failed"),
+        "{text}"
     );
-    assert_eq!(alerts, json!([{"kind": "halt", "text": "api is halted"}]));
+    assert!(!text.contains("Nothing needs a person."), "{text}");
+    assert!(text.contains("Hosts (4)"), "{text}");
+}
+
+/// The reply to `Alerts.List` the coordinator gives for a canary of kbf that failed 2.0. The
+/// coordinator's test of `Alerts.List` end to end (in `src/grpc/tests/alerts.rs`) fails when its
+/// answer and this file part.
+const ALERTS_LIST: &str = include_str!("fixtures/alerts_list.json");
+
+#[test]
+fn the_fleet_page_shows_the_failed_canary_of_the_coordinators_own_reply() {
+    // Catches: a failed canary missing from the Fleet page (it derived its alerts itself and
+    // could not name a canary), and a page that renders only the replies written for it, not
+    // the one the coordinator gives.
+    let mut ui = Ui::start();
+    ui.reply(&m("Hosts/List"), json!({}));
+    ui.reply(&m("Releases/Status"), json!({}));
+    ui.reply(
+        &m("Alerts/List"),
+        serde_json::from_str(ALERTS_LIST).expect("the fixture is JSON"),
+    );
+    let out = render(&mut ui, "fleet", "{}");
+    let text = shown(&out).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        text.contains(
+            "Alerts (1) failed canary (critical): d1, a canary of kbf, failed 2.0: it is marked \
+             bad and rolled back (since 2027-01-15 08:00:00 UTC)"
+        ),
+        "{text}"
+    );
 }
 
 #[test]
@@ -356,6 +398,13 @@ fn a_reply_from_a_newer_coordinator_still_renders() {
                 "extra": [1]})
         .to_string(),
     );
+    ui.reply_raw(
+        &m("Alerts/List"),
+        200,
+        &json!({"alerts": [{"kind": 42, "severity": 9, "message": "something new", "later": true}],
+                "extra": 1})
+        .to_string(),
+    );
     let fleet = rows(&mut ui, "fleet", "{}");
     assert_eq!(
         fleet,
@@ -364,7 +413,10 @@ fn a_reply_from_a_newer_coordinator_still_renders() {
             ["web-1", "web", "live", "-", "api 1.4.0, -"],
         ])
     );
-    assert_eq!(ui.methods(), [m("Hosts/List"), m("Releases/Status")]);
+    assert_eq!(
+        ui.methods(),
+        [m("Hosts/List"), m("Releases/Status"), m("Alerts/List")]
+    );
     let labels = ui.run(
         r#"
 import { enumLabel } from "./view.js";

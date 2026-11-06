@@ -308,7 +308,13 @@ fn force_back_to_previous_needs_no_fetch() {
     });
     let update = s.last_update();
     assert_eq!(update["outcome"], "OUTCOME_SUCCEEDED", "{update}");
-    assert_eq!(s.convergence()["force"]["version"], V1, "the force stands");
+    // `releases status` reports the standing force in the service's convergence; `releases
+    // converge` leaves it out.
+    assert_eq!(
+        s.status()["convergence"]["force"]["version"],
+        V1,
+        "the force stands"
+    );
     assert_eq!(s.channel.total(), requests, "the force fetched nothing");
 
     assert_eq!(s.link("current").as_deref(), Some(V1));

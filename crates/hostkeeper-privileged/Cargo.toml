@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The tests that run as root against the real service manager of a host (systemd, and launchd on a Mac), in .github/workflows/privileged.yml only, and the workload fixture they drive."
+description = "The tests that run as root against the real service manager of a host (systemd, and launchd on a Mac) and that run the coordinator and the daemon as programs, in .github/workflows/privileged.yml only, and the workload fixture they drive."
 
 # The one place where the adapters behind the fakes of the pull-request set meet the real host:
 # the step launcher's transient units, the dead-man's stop by name, the observer's systemd and
@@ -18,9 +18,13 @@ description = "The tests that run as root against the real service manager of a 
 # root (the fixture's arguments and modes, the host check, the names and files of the rig), and
 # is measured by the 99% gate like any crate.
 [dependencies]
-# The daemon of the macOS device tests' program `hostkeeper-device-daemon`, which forwards to its
-# command line as the `hostkeeper` binary does.
+# The daemon of the program `hostkeeper-device-daemon` (the macOS device tests' daemon, and the
+# first-boot tests' daemon and ctl), which forwards to its command line as the `hostkeeper`
+# binary does.
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
+# The coordinator of the first-boot tests' program `hostkeeper-privileged-coordinator`, which
+# forwards to its command line as the `hostkeeper-coordinator` binary does.
+hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 # The hook contract the fixture speaks: the step, its arguments, the params file, the last line.
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 # The SHA-256 of the fixture's own executable (mode `print-pid`).
@@ -49,11 +53,20 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 name = "hostkeeper-fixture-hook"
 path = "tests/bin/fixture_hook.rs"
 
-# The daemon the macOS device tests start as a launchd job: `hostkeeper`, built here so that the
-# tests have its path. It only forwards to `hostkeeper_daemon::cli::main`.
+# The daemon the macOS device tests start as a launchd job, and the first-boot tests as a child
+# process (and run as `hostkeeper ctl`): `hostkeeper`, built here so that the tests have its path.
+# It only forwards to `hostkeeper_daemon::cli::main`.
 [[bin]]
 name = "hostkeeper-device-daemon"
 path = "tests/bin/device_daemon.rs"
+
+# The coordinator the first-boot tests (`tests/first_boot.rs`, `tests/install_uninstall.rs`) start
+# as a child process: `hostkeeper-coordinator`, built here so that the tests have its path (cargo
+# gives a test the path of its own package's programs only). It only forwards to
+# `hostkeeper_coordinator::config::main`.
+[[bin]]
+name = "hostkeeper-privileged-coordinator"
+path = "tests/bin/coordinator.rs"
 
 # The `hostkeeper` binary of the Linux self-update tests (`tests/self_update.rs`): the daemon of
 # `hostkeeper_daemon` with the package store and the coordinator link of the test, its version
@@ -76,19 +89,16 @@ privileged = []
 
 [dev-dependencies]
 # The end-to-end rig of `tests/tierstore_shaped.rs` and `tests/tierstore_rig.rs` (`tests/e2e/`):
-# the real coordinator in process with its fake OIDC issuer's config (`testkit`), the production
-# attestation verifier (`gh` with a test trust root) and package fetch, the certificates of the
-# loopback release channel (rcgen, rustls, ureq for its test client), the package archive (tar,
-# ruzstd), and the Sigstore bundle of the fixture signer (p256, base64, getrandom).
-base64.workspace = true
+# the real coordinator in process (a normal dependency, above) with its fake OIDC issuer's
+# config (`testkit`), the production attestation verifier (`gh` with a test trust root) and
+# package fetch, the certificates of the loopback release channel (rcgen, rustls, below; ureq
+# for its test client), the package archive (tar, ruzstd), and the Sigstore bundle of the
+# fixture signer (p256, getrandom, and base64 below).
 getrandom.workspace = true
-hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-package = { path = "../hostkeeper-package" }
 p256.workspace = true
-rcgen.workspace = true
 ruzstd.workspace = true
-rustls.workspace = true
 rustls-pki-types.workspace = true
 tar.workspace = true
 ureq.workspace = true
@@ -110,6 +120,15 @@ tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tonic = { workspace = true, features = ["channel"] }
 tower = { workspace = true, features = ["util"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+# The first-boot and end-to-end tests: the attestation bundle of the fixture package (base64),
+# the test CA of the coordinator's private listener and of the release
+# channel (rcgen), the release channel's TLS server (rustls), the JSON the ctl prints (serde_json),
+# and the subject, serial and key of the certificate the daemon was issued (x509-parser).
+base64.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+x509-parser.workspace = true
 # The effective uid the privileged tests check before they act.
 rustix = { workspace = true, features = ["fs", "process"] }
 

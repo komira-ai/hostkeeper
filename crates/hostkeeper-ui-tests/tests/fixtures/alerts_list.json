@@ -1,0 +1,13 @@
+{
+  "alerts": [
+    {
+      "kind": "ALERT_KIND_FAILED_CANARY",
+      "severity": "ALERT_SEVERITY_CRITICAL",
+      "hostId": "d1",
+      "service": "kbf",
+      "version": "2.0",
+      "message": "d1, a canary of kbf, failed 2.0: it is marked bad and rolled back",
+      "firstObservedUnix": "1800000000"
+    }
+  ]
+}

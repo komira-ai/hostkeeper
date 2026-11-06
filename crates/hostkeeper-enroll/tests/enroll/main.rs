@@ -17,6 +17,8 @@
 //! - `mac.rs`: the claims of a Mac, read from `ioreg` output, and a request refused without them;
 //! - `pacing.rs`: the loop's log and sleeps, and the enrollment it reports after each step;
 //! - `enrollment.rs`: the host's enrollment as the enroller reads it from the pki directory.
+//! - `renewal_state.rs`: what the loop notes after each step for the heartbeat: the end of the
+//!   current certificate and the step's error.
 
 mod acceptance;
 mod bmc;
@@ -27,6 +29,7 @@ mod host;
 mod mac;
 mod pacing;
 mod refusals;
+mod renewal_state;
 mod returns;
 mod store;
 mod support;

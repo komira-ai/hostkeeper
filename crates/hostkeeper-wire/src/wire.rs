@@ -190,6 +190,57 @@ pub struct Heartbeat {
     /// counted as [`LEGACY_AGENT_NAME`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<Agent>,
+    /// The host's clock when it made the heartbeat, in seconds since the epoch: what the
+    /// coordinator holds against its own clock to count the heartbeats of a host whose clock is
+    /// off. Absent from an agent that predates it; a value that is no whole number reads as
+    /// `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub sent_unix: Option<u64>,
+    /// The last second the host's current certificate is valid, in seconds since the epoch.
+    /// Absent from an agent that predates it and from a host that holds no certificate; a value
+    /// that is no whole number reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub cert_not_after_unix: Option<u64>,
+    /// Why the host's last step of enrollment or renewal failed, as the host words it; absent
+    /// once a step succeeds, and from an agent that predates it. A reader keeps at most
+    /// [`MAX_RENEW_ERROR`] bytes of it ([`clip_renew_error`]); an empty text, or a value that is
+    /// no text, reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "renew_error_text"
+    )]
+    pub last_renew_error: Option<String>,
+}
+
+/// The most bytes of a heartbeat's `last_renew_error` that are sent and read.
+pub const MAX_RENEW_ERROR: usize = 256;
+
+/// `text` cut to at most [`MAX_RENEW_ERROR`] bytes, at a character boundary.
+#[must_use]
+pub fn clip_renew_error(text: &str) -> &str {
+    let mut end = text.len().min(MAX_RENEW_ERROR);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// A `last_renew_error` as it is read: a text cut by [`clip_renew_error`], `None` when it is
+/// empty or no text.
+fn renew_error_text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let read: Option<String> = lenient(d)?;
+    Ok(read
+        .map(|text| clip_renew_error(&text).to_owned())
+        .filter(|text| !text.is_empty()))
 }
 
 /// The agent that sent a heartbeat: its name and the version it runs.
@@ -319,6 +370,9 @@ impl ServiceBeat {
             promotion_pending: self.promotion_pending,
             deferred: self.deferred.clone(),
             agent: None,
+            sent_unix: None,
+            cert_not_after_unix: None,
+            last_renew_error: None,
         }
     }
 }
@@ -471,6 +525,13 @@ struct HeartbeatLoose {
     deferred: Option<serde_json::Value>,
     #[serde(default)]
     agent: Option<serde_json::Value>,
+    // Read as the strict read reads them: a bad value is `None` there too, never a refusal.
+    #[serde(default, deserialize_with = "lenient")]
+    sent_unix: Option<u64>,
+    #[serde(default, deserialize_with = "lenient")]
+    cert_not_after_unix: Option<u64>,
+    #[serde(default, deserialize_with = "renew_error_text")]
+    last_renew_error: Option<String>,
 }
 
 /// One droppable value read as `T`: its default, and the reason, when it is bad.
@@ -561,6 +622,9 @@ fn without_droppable(bytes: &[u8]) -> Option<HeartbeatRead> {
         promotion_pending: loose("promotion_pending", rest.promotion_pending, &mut extras),
         deferred: loose("deferred", rest.deferred, &mut extras),
         agent: loose("agent", rest.agent, &mut extras),
+        sent_unix: rest.sent_unix,
+        cert_not_after_unix: rest.cert_not_after_unix,
+        last_renew_error: rest.last_renew_error,
     };
     let mut facts: Vec<&'static str> = extras.iter().map(|(fact, _)| *fact).collect();
     facts.sort_unstable();

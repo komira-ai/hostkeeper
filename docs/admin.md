@@ -45,7 +45,7 @@ match them:
 
 | key | value |
 |---|---|
-| `enrollment` | `unenrolled`, `pending`, `enrolled` or `unreadable` (see below); `unknown` before the enrollment loop's first step has ended, and when the loop does not run |
+| `enrollment` | `unenrolled`, `pending`, `enrolled` or `unreadable` (see below); `unknown` before the enrollment loop's first step has ended, including while the loop cannot make its enroller (it logs `the enrollment loop cannot start yet` and tries again after 5 s, doubling up to 300 s) |
 | `enrollment.key_sha256` | only when `pending`: the SHA-256 of the pending key's DER SubjectPublicKeyInfo, 64 lower-case hex digits |
 | `enrollment.host_id` | only when `enrolled`: the host id the certificate names |
 | `enrollment.not_after_unix` | only when `enrolled`: the last unix second the certificate is valid |
