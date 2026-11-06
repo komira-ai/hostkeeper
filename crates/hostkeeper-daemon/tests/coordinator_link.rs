@@ -508,11 +508,12 @@ fn the_link_of_host_links_answers_the_coordinators_reply() {
             Feature::DeferredV1,
             Feature::HaltV1,
             Feature::HeartbeatV2,
+            Feature::ForcedV1,
             Feature::OrderV1,
             Feature::VerdictAcksV1,
             Feature::GrpcV1
         ],
-        "the announced features the coordinator echoes: all but forced-v1, install-v1 and abort-v1"
+        "the announced features the coordinator echoes: all but install-v1 and abort-v1"
     );
 
     let log = Arc::new(RecordingLog::default());

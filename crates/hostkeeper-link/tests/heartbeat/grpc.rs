@@ -208,6 +208,7 @@ fn expected_reply() -> Reply {
             Feature::DeferredV1,
             Feature::HaltV1,
             Feature::HeartbeatV2,
+            Feature::ForcedV1,
             Feature::OrderV1,
             Feature::VerdictAcksV1,
             Feature::GrpcV1,

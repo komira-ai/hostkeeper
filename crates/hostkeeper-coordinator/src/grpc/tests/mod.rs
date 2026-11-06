@@ -9,6 +9,7 @@ mod channel;
 mod credentials;
 mod ctl;
 mod enrollment;
+mod force;
 mod gateway;
 mod heartbeat;
 mod hosts;

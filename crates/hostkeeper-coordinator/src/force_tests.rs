@@ -849,3 +849,52 @@ async fn force_audit_entry_names_token_targets_and_slot_holders_passed() {
         Some("fix the farm; version 2.0; targets fleet; passed d4:db")
     );
 }
+
+/// Catches: `forced-v1` left out of what the coordinator advertises while it sends the force
+/// orders a daemon runs only when it is advertised. A forced daemon's typed heartbeat is answered
+/// with the force and with `forced-v1` among the features, in the coordinator's order; the same
+/// heartbeat without `forced-v1` is answered with no force and is not told it.
+pub(crate) async fn forced_v1_is_acted_on() {
+    let rig = rig("force-feature", "");
+    introduce(&rig, &[("d1", DAEMON, web_only("1.0"))]);
+    registered(&rig, &[("1.0", 1), ("2.0", 2)]).await;
+    force_fleet(&rig, "2.0", false);
+
+    let (answer, order) = rig
+        .coordinator
+        .heartbeat_with_orders(who("d1", DAEMON), web_only("1.0"))
+        .expect("answered");
+    assert_eq!(order, Some(forced("2.0", 2, 1, 1)));
+    assert_eq!(
+        answer.features.as_deref(),
+        Some(&["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1"].map(String::from)[..])
+    );
+
+    let unannounced: Vec<&str> = NEW_DAEMON
+        .iter()
+        .copied()
+        .filter(|name| *name != crate::force::FEATURE)
+        .collect();
+    let (answer, order) = rig
+        .coordinator
+        .heartbeat_with_orders(
+            who("d1", DAEMON),
+            beat_of(&unannounced, vec![runs(WEB, "1.0")]),
+        )
+        .expect("answered");
+    assert!(
+        !matches!(order, Some(Order::Force { .. })),
+        "no force for a daemon that did not announce forced-v1: {order:?}"
+    );
+    assert_eq!(
+        answer.features.as_deref(),
+        Some(&["deferred-v1", "halt-v1", "heartbeat-v2"].map(String::from)[..])
+    );
+}
+
+/// The coordinator advertises `forced-v1` ([`forced_v1_is_acted_on`]).
+#[tokio::test]
+async fn a_forced_daemon_is_told_forced_v1_with_the_force() {
+    assert!(crate::service::FEATURES.contains(&crate::force::FEATURE));
+    forced_v1_is_acted_on().await;
+}
