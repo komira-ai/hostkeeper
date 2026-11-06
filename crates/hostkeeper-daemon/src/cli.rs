@@ -1,12 +1,13 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags,
 //! `hostkeeper ctl`, which hands every argument after it to `hostkeeper-ctl`, `hostkeeper ci`, the
 //! CI client a service's release job runs once it has verified this binary (`hostkeeper_ci`,
-//! docs/deploy/ci-client.md), and the two plumbing verbs of hostkeeper's own update (design
+//! docs/deploy/ci-client.md), and the three plumbing verbs of hostkeeper's own update (design
 //! section 6.6), which no operator runs: `hostkeeper self-update-fallback --dir <dir>`, what the
-//! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]), and
-//! `hostkeeper self-update-protocol`,
-//! which prints this binary's self-update protocol and does nothing else
-//! ([`crate::selfupdate::protocol_line`]). Configuration comes in as flags only, never from the
+//! generated fallback unit runs, and on a Mac the fallback timer job ([`crate::fallback`]);
+//! `hostkeeper self-update-protocol`, which prints this binary's self-update protocol and does
+//! nothing else ([`crate::selfupdate::protocol_line`]); and `hostkeeper self-update-seed
+//! --state-dir <dir> --binary <file>`, which the daemon's unit runs before each start to give the
+//! binary directory its first binary ([`crate::seed`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
 //!
 //! The one value read from the environment is the address of systemd's notify socket, a
@@ -134,6 +135,20 @@ pub enum Command {
     /// Print this binary's self-update protocol and nothing else (run by the daemon before it
     /// stages a new binary).
     SelfUpdateProtocol,
+    /// Give the binary directory of hostkeeper's own update its first binary when its `current`
+    /// starts none (run by the daemon's unit before each start).
+    SelfUpdateSeed(SeedFlags),
+}
+
+/// The flags of `hostkeeper self-update-seed`.
+#[derive(Clone, Debug, PartialEq, Eq, Args)]
+pub struct SeedFlags {
+    /// The daemon's state directory: the binary directory is `hostkeeper/bin` in it.
+    #[arg(long)]
+    pub state_dir: PathBuf,
+    /// The binary put in as this binary's version: the one the package installed.
+    #[arg(long)]
+    pub binary: PathBuf,
 }
 
 /// The flags of `hostkeeper self-update-fallback`.
@@ -209,6 +224,9 @@ pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
         Command::Daemon(flags) => flags,
         Command::Ctl { args } => return ExitCode::from(ctl_on_terminal(args)),
         Command::SelfUpdateFallback(flags) => return crate::fallback::main(&flags.dir),
+        Command::SelfUpdateSeed(flags) => {
+            return crate::seed::main(&flags.state_dir, &flags.binary);
+        }
         Command::SelfUpdateProtocol => {
             print!("{}", crate::selfupdate::protocol_line());
             return ExitCode::SUCCESS;
@@ -216,9 +234,23 @@ pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
         Command::Ci(command) => return hostkeeper_ci::run(command),
     };
     let period = flags.link.heartbeat_secs;
-    let started = notifier(&flags, notify_socket)
+    let served = notifier(&flags, notify_socket)
         .and_then(|notifier| daemon(&flags.settings(), period, notifier.as_ref()));
-    started.err().map_or(ExitCode::SUCCESS, report)
+    ExitCode::from(exit_status(&served))
+}
+
+/// The exit status of `hostkeeper daemon` once it has served: 0 when it returned to be started
+/// again, as after its own update asked it to exit ([`start::serve`]), which the unit's
+/// `Restart=always` restarts; the error's status ([`StartError::exit_code`]), said on standard
+/// error, otherwise.
+pub fn exit_status(served: &Result<(), StartError>) -> u8 {
+    match served {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("hostkeeper daemon: {error}");
+            error.exit_code()
+        }
+    }
 }
 
 /// Runs `hostkeeper ctl` with `args`, the arguments after `ctl`, and returns its exit code
@@ -258,11 +290,6 @@ pub fn notifier(
         (true, Some(socket)) => Ok(Box::new(SystemdNotifier::new(socket))),
         (true, None) => Err(StartError::NoNotifySocket),
     }
-}
-
-fn report(error: StartError) -> ExitCode {
-    eprintln!("hostkeeper daemon: {error}");
-    ExitCode::from(error.exit_code())
 }
 
 /// Starts the daemon and serves it, beating every `period` seconds, returning only on an error

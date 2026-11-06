@@ -212,10 +212,10 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.deb-arch }}
         run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target dist
-      # The package's unit starts the package's own binary, through the `current` link of the
-      # package layout (packaging/linux/package/hostkeeper.service).
+      # The package carries the unit the deb and the rpm install (packaging/linux/hostkeeper.service),
+      # the one unit file of the daemon: it starts the binary the self-update switches.
       - name: hostkeeper's own package and its SHA-256
-        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --unit packaging/linux/package/hostkeeper.service --out dist
+        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --unit packaging/linux/hostkeeper.service --out dist
       - name: hello's package and its SHA-256
         run: cargo xtask release package --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       # The same binary and units, started with --fail-ready: a build whose verify fails, so that
