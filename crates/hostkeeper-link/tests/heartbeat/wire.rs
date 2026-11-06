@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use hostkeeper_link::testing::{RecordingLog, verdict};
+use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_link::{
     ANNOUNCED, CoordinatorLink, DeferredReport, Health, Heartbeat, LinkError, Liveness,
     MAX_HEARTBEAT_BYTES, Observed, OrderResult, Outcome, Platform, Reason, Reply, ServiceFacts,
@@ -16,6 +16,7 @@ use hostkeeper_wire::wire;
 use serde_json::{Value, json};
 
 use crate::tls::{Close, Farm, PipeTransport, Pki, Request, http, link, serve};
+use crate::verdict;
 use crate::{service, update, version};
 
 /// The recorded fixtures of the coordinator import: kbf's coordinator at `v0.0.64`.
@@ -118,7 +119,7 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
     );
     let mut expected = recorded.trim_end_matches('}').to_owned();
     expected.push_str(&format!(
-        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}}}}"#
+        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}}}}"#
     ));
     assert!(recorded.ends_with("}]}"), "{recorded}");
     assert_eq!(
@@ -156,7 +157,9 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
             "forced-v1",
             "order-v1",
             "verdict-acks-v1",
-            "grpc-v1"
+            "grpc-v1",
+            "install-v1",
+            "abort-v1"
         ]
     );
     assert_eq!(ours.agent_name(), "hostkeeper");
@@ -281,7 +284,8 @@ fn every_word_of_a_heartbeat_is_the_wires() {
                     "deferred": { "target": "2.0", "reason": "drain_bound", "retry_after_secs": 60 },
                 },
             ],
-            "agent_features": ["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1","order-v1", "verdict-acks-v1", "grpc-v1"],
+            "agent_features": ["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1","order-v1", "verdict-acks-v1", "grpc-v1",
+                "install-v1", "abort-v1"],
             "agent": { "name": "hostkeeper", "version": "0.9.0" },
         })
     );

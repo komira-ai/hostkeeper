@@ -1,0 +1,1510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>hostkeeper: updating the services of a small Linux and macOS fleet from CI, one host at a time</title>
+<meta name="description" content="hostkeeper is one root daemon per host and one coordinator for a small fleet of Linux and macOS machines. CI sets the desired version of a service, each host pulls a signed package and runs the service&rsquo;s own update hook through a fixed contract of steps, and the coordinator lets one host update at a time. Why we built it, how it compares with the tools that exist, what is built on main, and our lab as the worked example.">
+<style>
+/* Tokens. Light by default; dark by prefers-color-scheme. Every drawing takes its colours from these, so it reads in both. */
+:root{color-scheme:light dark;--bg:#fbfaf7;--bg-soft:#f4f1ea;--surface:#ffffff;--surface-2:#f6f4ef;--code:#f3efe7;--fg:#16141a;--fg-2:#3a3641;--muted:#5d5867;--rule:#e2ddd3;--rule-strong:#c9c1b4;--accent:#c2410c;--accent-strong:#9a3412;--accent-soft:#fff1e6;--blue:#1d4ed8;--blue-soft:#e8efff;--ok:#15803d;--ok-soft:#e7f6ec;--bad:#b91c1c;--bad-soft:#fdeceb;--warn:#a16207;--warn-soft:#fff6dc;--link:#1d4ed8;--sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","Noto Sans",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#0c0b0f;--bg-soft:#121017;--surface:#16141b;--surface-2:#1c1a22;--code:#17151c;--fg:#eeecf2;--fg-2:#d3d0da;--muted:#a49fb0;--rule:#2c2933;--rule-strong:#48434f;--accent:#fb923c;--accent-strong:#fdba74;--accent-soft:#2a1a10;--blue:#8ab4ff;--blue-soft:#141d33;--ok:#4ade80;--ok-soft:#10251a;--bad:#f87171;--bad-soft:#2c1414;--warn:#facc15;--warn-soft:#2a2410;--link:#8ab4ff}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:1.0625rem/1.65 var(--sans)}
+a{color:var(--link);text-decoration-thickness:.06em;text-underline-offset:.15em}
+code,pre{font-family:var(--mono);font-size:.88em}
+code{background:var(--code);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--code);padding:.8rem 1rem;border-radius:4px;border-left:3px solid var(--blue);overflow-x:auto;line-height:1.5}
+pre code{background:none;padding:0}
+h1,h2,h3{line-height:1.25;color:var(--fg)}
+h1{font-size:clamp(1.7rem,4vw,2.5rem);margin:.4rem 0 1rem;letter-spacing:-.01em}
+h2{font-size:1.55rem;margin:2.6rem 0 .8rem}
+main{counter-reset:sec}
+main>section:not(#summary)>h2::before{counter-increment:sec;content:counter(sec) ". "}
+main>section#sources>h2::before{content:none}
+h3{font-size:1.15rem;margin:1.9rem 0 .5rem}
+p,li{color:var(--fg-2)}
+strong{color:var(--fg)}
+/* Header band */
+.band{background:var(--bg-soft);border-bottom:1px solid var(--rule)}
+.band-in{max-width:46rem;margin:0 auto;padding:2.2rem 1rem 1.6rem}
+.kicker{margin:0;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.byline{margin:0;color:var(--muted);font-size:.95rem}
+/* Layout: one text column of 46rem; figures and tables break out to 72rem on wide screens */
+main{max-width:46rem;margin:0 auto;padding:0 1rem 4rem;display:flex;flex-direction:column}
+main>*{min-width:0}
+main>#summary{order:0}
+main>nav.toc{order:1}
+main>section:not(#summary){order:2}
+section{scroll-margin-top:1rem}
+[id]{scroll-margin-top:1rem}
+.lede{font-size:1.25rem;line-height:1.55;color:var(--fg)}
+.bar{display:block;width:3rem;height:3px;background:var(--blue);margin-top:2.6rem}
+section>.bar+h2,section>.bar+.eyebrow-case{margin-top:.6rem}
+section.case-sec>.bar{background:var(--accent)}
+.eyebrow-case{display:inline-block;margin:.6rem 0 0;padding:.1rem .55rem;font-size:.72rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-strong);border:1px solid var(--accent);border-radius:2px;background:var(--accent-soft)}
+section.case-sec>h2{margin-top:.3rem}
+nav.toc{margin:1.5rem 0 0;padding:.8rem 1rem;border:1px solid var(--rule);border-radius:4px;background:var(--surface)}
+nav.toc p{margin:0 0 .3rem;font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+nav.toc ol{margin:0;padding-left:1.4rem}
+nav.toc li{margin:.15rem 0}
+/* Tables */
+.tblw{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:1.2rem 0}
+.tbl{border-collapse:collapse;width:100%;font-size:.95rem;background:var(--surface)}
+.tbl th,.tbl td{border:1px solid var(--rule);padding:.45rem .6rem;text-align:left;vertical-align:top}
+.tbl th{background:var(--surface-2);color:var(--fg);font-weight:600}
+.tbl td{color:var(--fg-2)}
+.mx td,.mx th{white-space:nowrap;font-size:.88rem}
+.mx td:first-child{white-space:normal;min-width:12rem}
+.v-meets{color:var(--ok);font-weight:600}
+.v-partial{color:var(--warn);font-weight:600}
+.v-no{color:var(--bad);font-weight:600}
+.v-na{color:var(--muted)}
+.mx .hk{background:var(--accent-soft)}
+/* Figures */
+figure{margin:1.6rem 0}
+.fig-wrap{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:.6rem;overflow-x:auto}
+.fig-wrap svg{display:block;width:100%;height:auto;max-width:56rem;margin:0 auto}
+.fig-wrap.scroll svg{min-width:640px}
+figcaption{font-size:.92rem;color:var(--muted);margin-top:.5rem;line-height:1.5}
+figcaption strong{color:var(--fg-2)}
+/* Drawing classes: the SVGs use only these, so light and dark both hold */
+svg text{fill:var(--fg);font-family:var(--sans);font-size:13px}
+svg .t-m{fill:var(--muted)}
+svg .t-s{font-size:11.5px}
+svg .t-b{font-weight:600}
+svg .t-mono{font-family:var(--mono);font-size:12px}
+svg .t-ok{fill:var(--ok)}
+svg .t-bad{fill:var(--bad)}
+svg .t-warn{fill:var(--warn)}
+svg .t-acc{fill:var(--accent)}
+svg .t-blue{fill:var(--blue)}
+svg .box{fill:var(--surface-2);stroke:var(--rule-strong);stroke-width:1}
+svg .box-w{fill:var(--surface);stroke:var(--rule-strong);stroke-width:1}
+svg .box-acc{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2}
+svg .box-blue{fill:var(--blue-soft);stroke:var(--blue);stroke-width:1.2}
+svg .box-ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:1.2}
+svg .box-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.2}
+svg .box-warn{fill:var(--warn-soft);stroke:var(--warn);stroke-width:1.2}
+svg .zone{fill:none;stroke:var(--rule-strong);stroke-width:1;stroke-dasharray:5 4}
+svg .ln{fill:none;stroke:var(--muted);stroke-width:1.4}
+svg .ln-acc{fill:none;stroke:var(--accent);stroke-width:1.6}
+svg .ln-blue{fill:none;stroke:var(--blue);stroke-width:1.6}
+svg .ln-bad{fill:none;stroke:var(--bad);stroke-width:1.6}
+svg .ln-ok{fill:none;stroke:var(--ok);stroke-width:1.6}
+svg .ln-dash{stroke-dasharray:5 4}
+svg .life{fill:none;stroke:var(--rule-strong);stroke-width:1;stroke-dasharray:3 4}
+svg .mk{fill:var(--muted)}
+svg .mk-acc{fill:var(--accent)}
+svg .mk-blue{fill:var(--blue)}
+svg .mk-bad{fill:var(--bad)}
+svg .bar-ok{fill:var(--ok)}
+svg .bar-bad{fill:var(--bad)}
+svg .bar-m{fill:var(--rule-strong)}
+/* Notes, details, cells */
+.note{border-left:3px solid var(--blue);background:var(--surface);padding:.6rem .9rem;margin:1.2rem 0;border-radius:0 4px 4px 0}
+.note.case{border-left-color:var(--accent)}
+.note p{margin:.3rem 0;font-size:.95rem}
+.card-k{font-size:.72rem!important;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-strong)!important;font-weight:600}
+details{margin:1.2rem 0;border:1px solid var(--rule);border-radius:4px;background:var(--surface)}
+details>summary{cursor:pointer;padding:.55rem .9rem;font-weight:500;color:var(--muted)}
+details>summary:hover{color:var(--fg)}
+details[open]>summary{border-bottom:1px solid var(--rule)}
+details>:not(summary){margin-left:.9rem;margin-right:.9rem}
+details>:last-child{margin-bottom:.9rem}
+[data-cell]{font-variant-numeric:tabular-nums}
+[data-open]{color:var(--accent-strong);font-weight:600;border-bottom:1px dashed var(--accent)}
+[data-result]{color:var(--accent-strong);font-weight:600}
+.src{font-size:.9rem;color:var(--muted)}
+ol.src-list li,ul.src-list li{font-size:.9rem;overflow-wrap:anywhere}
+/* UI mock-ups: drawn after ui/app.css */
+.mock{border:1px solid var(--rule-strong);border-radius:6px;background:var(--surface);overflow:hidden;font-size:.86rem}
+.mock-top{display:flex;flex-wrap:wrap;gap:.2rem .9rem;align-items:center;padding:.45rem .8rem;background:var(--surface-2);border-bottom:1px solid var(--rule)}
+.mock-top .brand{font-weight:700;color:var(--fg);margin-right:.4rem}
+.mock-top .nav{color:var(--muted)}
+.mock-top .nav.on{color:var(--fg);font-weight:600;border-bottom:2px solid var(--accent)}
+.mock-body{padding:.7rem .9rem}
+.mock-body h4{margin:.2rem 0 .5rem;font-size:1.05rem;color:var(--fg)}
+.mock-body h5{margin:.8rem 0 .35rem;font-size:.92rem;color:var(--fg)}
+.mock table{border-collapse:collapse;width:auto;margin:.3rem 0}
+.mock th,.mock td{border-bottom:1px solid var(--rule);padding:.3rem .45rem;text-align:left;white-space:nowrap;color:var(--fg-2)}
+.mock th{color:var(--muted);font-weight:600;font-size:.8rem}
+.mock .btn{display:inline-block;padding:.12rem .55rem;border:1px solid var(--rule-strong);border-radius:4px;background:var(--surface-2);color:var(--fg);font-size:.8rem;margin:.1rem .2rem .1rem 0}
+.mock .btn.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.mock .fld{display:block;margin:.25rem 0;font-size:.82rem;color:var(--fg-2)}
+.mock .fld .inp{margin-left:.5rem}
+.mock .inp{display:inline-block;min-width:7rem;padding:.1rem .4rem;border:1px solid var(--rule-strong);border-radius:3px;background:var(--bg);color:var(--fg-2);font-size:.82rem}
+.mock .badge{display:inline-block;padding:0 .4rem;border-radius:9px;font-size:.76rem;font-weight:600}
+.mock .b-ok{background:var(--ok-soft);color:var(--ok)}
+.mock .b-bad{background:var(--bad-soft);color:var(--bad)}
+.mock .b-warn{background:var(--warn-soft);color:var(--warn)}
+.mock .b-m{background:var(--surface-2);color:var(--muted)}
+.mock .err{color:var(--bad);margin:.4rem 0}
+.mock .ph{color:var(--muted);font-style:italic}
+.mock-wrap{overflow-x:auto}
+.mock .card{border:1px solid var(--rule);border-radius:4px;padding:.4rem .7rem;margin:.6rem 0}
+.mock fieldset{border:1px solid var(--rule);border-radius:4px;margin:.5rem 0;padding:.3rem .6rem}
+.mock legend{font-size:.8rem;color:var(--fg-2);padding:0 .3rem}
+.mock .confirm{border:2px solid var(--bad);border-radius:4px;padding:.4rem .7rem;margin:.5rem 0}
+.mock .confirm p{margin:.2rem 0;font-size:.85rem}
+.mock .alerts{border-left:4px solid var(--bad);background:var(--bad-soft);padding:.2rem .7rem;margin:.4rem 0}
+.mock .alerts p{margin:.2rem 0;font-size:.85rem}
+.mock .mnote,.mock-note{color:var(--muted);font-size:.85rem;margin:.3rem 0}
+.mock-note{font-style:italic}
+.mock .lk{color:var(--link);text-decoration:underline}
+.mock .btn.off{color:var(--muted);border-style:dashed}
+.mock code.lbl{background:none;padding:0;font:inherit;color:inherit}
+.mock td strong{color:var(--fg)}
+.ui-q{font-weight:600}
+@media (min-width:50rem){
+main p,main li{font-size:1.09rem;line-height:1.68}
+main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3rem));max-width:none;margin-left:calc((100% - min(72rem,calc(100vw - 3rem)))/2)}
+}
+@media print{nav.toc{display:none}details{border:none}}
+</style>
+</head>
+<body>
+<header class="band"><div class="band-in">
+<p class="kicker">Technical report</p>
+<h1>hostkeeper: updating the services of a small Linux and macOS fleet from CI, one host at a time</h1>
+<p class="byline">The hostkeeper repository, <a href="https://github.com/komira-ai/hostkeeper">komira-ai/hostkeeper</a>. This page describes the code on <code>main</code>.</p>
+</div></header>
+<main>
+<nav class="toc" aria-label="Contents">
+<p>Contents</p>
+<ol>
+<li><a href="#problem">A few servers, kept by hand: the problem</a></li>
+<li><a href="#why">Why we built it: where existing tools fall short</a></li>
+<li><a href="#design">The design, as it is on main</a></li>
+<li><a href="#lab">Our lab, the worked example</a></li>
+<li><a href="#correct">Correctness and failure handling</a></li>
+<li><a href="#limits">What is not built yet</a></li>
+<li><a href="#open">What we have not measured yet</a></li>
+<li><a href="#sources">Sources</a></li>
+</ol>
+</nav>
+<section id="summary">
+<p class="lede">A small fleet is easy to start and hard to keep. Every service on every machine has to be on the right version, an update must not take a host down when it fails, and somebody has to be able to say who changed what. Most small fleets are kept with a loop of ssh commands, and they drift. hostkeeper is one root daemon on each host and one coordinator for the fleet. CI sets the desired version of a service, each host fetches the signed package and runs the service&rsquo;s own update hook through a fixed contract of steps, and the coordinator lets one host update at a time.</p>
+<p><strong>The problem.</strong> Without a tool built for it, hosts end up on different versions, an update is a hand-run loop that stops where a connection drops, a run that stops midway leaves a host half updated, nothing records who changed what, Linux and macOS each need their own scripts, and a restart drops the requests a service was serving.</p>
+<p><strong>The hypotheses.</strong></p>
+<ol>
+<li>If every host dials out and the coordinator only answers, CI needs no ssh key and no host opens a port.</li>
+<li>If a service&rsquo;s update is a fixed contract of bounded steps, and the daemon records each step before it runs it, a run that stops midway can be finished or undone at the next start.</li>
+<li>If only one ordinary update is live across the fleet at a time, a bad version reaches one host first, and a failed verify rolls that host back before the next one starts.</li>
+<li>One daemon, compiled for Linux and for macOS with the differences behind adapters, gives both kinds of host one model, one API and one audit trail.</li>
+<li>A hand-off with no dropped requests is the service&rsquo;s own knowledge, so the hook does it and the contract gives it the steps to do it in.</li>
+</ol>
+<p><strong>The solution.</strong> The daemon is one Rust binary that runs as root under systemd or launchd and listens on no network port. It enrolls with the coordinator&rsquo;s certificate authority, and an operator approves it by its key. The coordinator keeps its state in plain files, serves an operator API over gRPC and an HTTP/JSON gateway, a generated command line and a small web UI, and writes an append-only audit file. CI signs in with its GitHub Actions OIDC token and sets the desired version. The coordinator&rsquo;s rollout gate orders one update at a time, with a canary, a bake, holds, a halt, a fleet-wide force and an automatic rollback.</p>
+<p><strong>Where it stands.</strong> hostkeeper is early. Its parts are built and tested one by one, and releases are published from <code>main</code>, but on <code>main</code> they are not yet joined into a path that updates a real host: the shipped daemon does not send heartbeats, and on Linux it does not yet control units. The table says what is built; <a href="#limits">what is not built yet</a> lists what is missing, and every measurement in <a href="#open">what we have not measured yet</a> is still open.</p>
+<div class="tblw"><table class="tbl">
+<thead><tr><th>Piece</th><th>State on <code>main</code></th></tr></thead>
+<tbody>
+<tr><td>Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment</td><td>Built and tested in process</td></tr>
+<tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hostkeeper ctl</code>; web UI</td><td>Built; three declared methods answer <code>UNIMPLEMENTED</code> (<a href="#apis">the two APIs</a>)</td></tr>
+<tr><td>Assignment of services to roles and hosts; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both, but has no link (below)</td></tr>
+<tr><td>Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop</td><td>Built and running in the shipped binary; read from the code, the CA refuses the enrollment loop&rsquo;s certificate request (<a href="#n-h5">h5</a>), which has not been run to confirm</td></tr>
+<tr><td>Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune</td><td>Built; reachable only through an order</td></tr>
+<tr><td>Daemon heartbeat to the coordinator</td><td>Built and running in the shipped binary: JSON, then gRPC once the coordinator advertises it, over mutual TLS; the coordinator&rsquo;s orders reach an enrolled host</td></tr>
+<tr><td>Linux unit control (daemon-reload, start, stop) for linked units</td><td><strong>Not wired</strong>: the Linux adapter set uses <code>Unwired</code>, which refuses every call; the step launcher is wired</td></tr>
+<tr><td>macOS daemon under launchd</td><td>Built; a device run starts it under launchd and asks its status; no update has run on a Mac</td></tr>
+<tr><td>Releases</td><td>Published from <code>main</code> as GitHub releases by <code>release.yml</code>; no hosted release channel</td></tr>
+</tbody></table></div>
+<p>This report is about hostkeeper, its design and the evidence for it. Our lab is the worked example, so <a href="#lab">its section</a> is a case study and carries a Case study label. The sections run from the problem, through a comparison with the tools that exist and the design as it is on <code>main</code>, to the lab, correctness and testing, what is not built and what we have not measured.</p>
+<details class="method"><summary>How to read the numbers in this report</summary>
+<p>Every number in this report sits in a named cell, and a test holds each cell to its source. A cell of the code names the constant it quotes, so a constant changed in the code fails the test until the report follows. A cell of a measurement names the result file that holds the run. A measurement not yet taken is an open cell that prints <span class="v-na">open</span> and no number. A cell that quotes another tool&rsquo;s documentation names the page, which is in the <a href="#sources">sources</a>; the test cannot fetch that page, so it checks only that the page is cited. Versions are written with a leading v and are names, not numbers. The test is <code>cargo test -p xtask --test report</code> (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/xtask/tests/report">crates/xtask/tests/report</a>), and it lists the open cells. Result files live in <a href="https://github.com/komira-ai/hostkeeper/tree/main/docs/report/results">docs/report/results</a>.</p>
+</details>
+</section>
+
+<section id="problem">
+<span class="bar" aria-hidden="true"></span>
+<h2>A few servers, kept by hand: the problem</h2>
+<p>Take a fleet the size of ours: a handful of Linux servers and a couple of Macs, each running a few long-lived services that other machines depend on. Nothing about it is large, and that is the trouble. It is too small to justify a cluster and its control plane, and too large to update by hand without mistakes. This section shows what keeping such a fleet is like without a tool built for it. Each problem is one that hostkeeper is built to remove, and the figures draw the four that are easiest to miss.</p>
+
+<h3 id="p-drift">Version drift across hosts, from hand-run ssh loops</h3>
+<p>The usual update is a loop on an operator&rsquo;s laptop that runs a script on each host over ssh. It runs hosts one after another, it stops at the first failure (or carries on past it, which is worse), and it updates only the hosts that were reachable and listed. After a few such runs no two hosts are certain to be on the same version, and the only way to know is to log in to each and look.</p>
+<figure class="wide" data-figure="problem" id="fig-drift"><div class="fig-wrap scroll"><svg viewBox="0 0 760 300" role="img" aria-label="An operator&rsquo;s laptop runs a for-loop over ssh against node-1 to node-6. The connection to node-4 times out in the middle of its run and the loop stops. Afterwards node-1, node-2 and node-3 run v2, node-4 is half updated, node-5 and node-6 still run v1, and the two Macs, which the loop does not cover, run whatever a separate script left. The only record is the terminal&rsquo;s scrollback."><defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker></defs>
+<rect class="box-w" x="10" y="20" width="262" height="226" rx="4"/>
+<text x="141" y="42" text-anchor="middle" class="t-b">An operator&rsquo;s laptop</text>
+<rect class="box" x="22" y="54" width="238" height="116" rx="3"/>
+<text x="32" y="76" class="t-mono">$ for h in node-1 &hellip; node-6; do</text>
+<text x="32" y="94" class="t-mono">    ssh $h ./upgrade.sh v2 || break</text>
+<text x="32" y="112" class="t-mono">  done</text>
+<text x="32" y="136" class="t-mono t-ok">node-1 ok  node-2 ok  node-3 ok</text>
+<text x="32" y="156" class="t-mono t-bad">node-4: connection timed out</text>
+<text x="22" y="196" class="t-s t-m">The only record of this run is</text>
+<text x="22" y="212" class="t-s t-m">the scrollback of this terminal.</text>
+<text x="22" y="228" class="t-s t-m">Who ran it, and why, is not written.</text>
+<path class="ln" marker-end="url(#a1)" d="M274 110H318"/>
+<text x="296" y="100" text-anchor="middle" class="t-s t-m">ssh</text>
+<rect class="box-ok" x="326" y="20" width="132" height="64" rx="4"/>
+<text x="392" y="42" text-anchor="middle" class="t-b">node-1</text>
+<text x="392" y="62" text-anchor="middle" class="t-s t-ok">v2</text>
+<rect class="box-ok" x="472" y="20" width="132" height="64" rx="4"/>
+<text x="538" y="42" text-anchor="middle" class="t-b">node-2</text>
+<text x="538" y="62" text-anchor="middle" class="t-s t-ok">v2</text>
+<rect class="box-ok" x="618" y="20" width="132" height="64" rx="4"/>
+<text x="684" y="42" text-anchor="middle" class="t-b">node-3</text>
+<text x="684" y="62" text-anchor="middle" class="t-s t-ok">v2</text>
+<rect class="box-bad" x="326" y="100" width="132" height="64" rx="4"/>
+<text x="392" y="120" text-anchor="middle" class="t-b">node-4</text>
+<text x="392" y="138" text-anchor="middle" class="t-s t-bad">half updated:</text>
+<text x="392" y="154" text-anchor="middle" class="t-s t-bad">binary v2, config v1</text>
+<rect class="box-warn" x="472" y="100" width="132" height="64" rx="4"/>
+<text x="538" y="120" text-anchor="middle" class="t-b">node-5</text>
+<text x="538" y="138" text-anchor="middle" class="t-s t-warn">v1: the loop</text>
+<text x="538" y="154" text-anchor="middle" class="t-s t-warn">stopped before it</text>
+<rect class="box-warn" x="618" y="100" width="132" height="64" rx="4"/>
+<text x="684" y="120" text-anchor="middle" class="t-b">node-6</text>
+<text x="684" y="138" text-anchor="middle" class="t-s t-warn">v1: never</text>
+<text x="684" y="154" text-anchor="middle" class="t-s t-warn">reached</text>
+<rect class="zone" x="326" y="182" width="278" height="64" rx="4"/>
+<rect class="box" x="336" y="192" width="122" height="44" rx="4"/>
+<text x="397" y="210" text-anchor="middle" class="t-b">mac-1</text>
+<text x="397" y="226" text-anchor="middle" class="t-s t-m">a separate script</text>
+<rect class="box" x="472" y="192" width="122" height="44" rx="4"/>
+<text x="533" y="210" text-anchor="middle" class="t-b">mac-2</text>
+<text x="533" y="226" text-anchor="middle" class="t-s t-m">a separate script</text>
+<text x="618" y="204" class="t-s t-m">launchd, not systemd:</text>
+<text x="618" y="220" class="t-s t-m">the loop does not</text>
+<text x="618" y="236" class="t-s t-m">cover the Macs</text>
+<text x="10" y="284" class="t-s">After the run: three hosts on v2, one half updated, two on v1, and the Macs on whatever their own script last left.</text>
+</svg></div><figcaption><strong>Drift from a hand-run loop.</strong> One dropped connection splits the fleet into four states, and the loop&rsquo;s output is the only record of which is which. The Macs are not in the loop at all.</figcaption></figure>
+
+<h3 id="p-half">An update half applied when a run stops midway</h3>
+<p>An update is several steps: stop the service, unpack the new release, put its files in place, change its configuration, start it. A script that stops between two of them, because a connection dropped, the laptop slept or a command failed, leaves the host in a state that is neither release. Running the script again starts from the top, over a host that is no longer where the script assumes it begins.</p>
+<figure class="wide" data-figure="problem" id="fig-half"><div class="fig-wrap scroll"><svg viewBox="0 0 760 240" role="img" aria-label="The steps of an update on node-4, left to right: stop the service, unpack v2, copy the new binary, edit the configuration, start the service. The first three complete. The ssh session drops while the configuration is being edited, so the last step never runs. node-4 is left with the v2 binary, the v1 configuration and the service stopped, and nothing on the host records how far the run got."><defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker></defs>
+<text x="10" y="24" class="t-b">The update script on node-4, step by step</text>
+<rect class="box-ok" x="10" y="44" width="128" height="56" rx="4"/>
+<text x="74" y="68" text-anchor="middle">stop the service</text>
+<text x="74" y="88" text-anchor="middle" class="t-s t-ok">done</text>
+<path class="ln" marker-end="url(#a2)" d="M140 72H158"/>
+<rect class="box-ok" x="160" y="44" width="128" height="56" rx="4"/>
+<text x="224" y="68" text-anchor="middle">unpack v2</text>
+<text x="224" y="88" text-anchor="middle" class="t-s t-ok">done</text>
+<path class="ln" marker-end="url(#a2)" d="M290 72H308"/>
+<rect class="box-ok" x="310" y="44" width="128" height="56" rx="4"/>
+<text x="374" y="68" text-anchor="middle">copy the binary</text>
+<text x="374" y="88" text-anchor="middle" class="t-s t-ok">done</text>
+<path class="ln" marker-end="url(#a2)" d="M440 72H458"/>
+<rect class="box-bad" x="460" y="44" width="128" height="56" rx="4"/>
+<text x="524" y="68" text-anchor="middle">edit the config</text>
+<text x="524" y="88" text-anchor="middle" class="t-s t-bad">session drops</text>
+<path class="ln ln-dash" d="M590 72H608"/>
+<rect class="zone" x="610" y="44" width="140" height="56" rx="4"/>
+<text x="680" y="68" text-anchor="middle" class="t-m">start the service</text>
+<text x="680" y="88" text-anchor="middle" class="t-s t-m">never runs</text>
+<rect class="box-w" x="10" y="124" width="740" height="104" rx="4"/>
+<text x="24" y="148" class="t-b">What node-4 is left with</text>
+<text x="24" y="172">binary <tspan class="t-bad">v2</tspan>, configuration <tspan class="t-bad">v1</tspan>, service <tspan class="t-bad">stopped</tspan></text>
+<text x="24" y="196" class="t-s t-m">Nothing on the host says how far the run got. A second run stops a service that is already stopped</text>
+<text x="24" y="214" class="t-s t-m">and copies a binary that is already new; going back to v1 by hand means knowing which steps ran.</text>
+</svg></div><figcaption><strong>A run that stops midway.</strong> The host is between releases, and only the person who ran the script can guess where. The fix is to write each step down before it runs, so that the next start can finish the update or undo it.</figcaption></figure>
+
+<h3 id="p-record">No record of who changed what</h3>
+<p>When a service misbehaves the first question is what changed. With hand-run updates the answer is spread over shell histories on laptops, a chat thread and each host&rsquo;s own logs, if it was written down at all. A pause on one host, a forced version or an exception made during an incident is known only to the person who made it.</p>
+
+<h3 id="p-two">Linux and macOS, each with its own tooling</h3>
+<p>A Mac runs its services under launchd, a Linux server under systemd. They differ in how a service is defined, started, stopped and inspected, in where its logs go and in how a binary is trusted. Tools that manage Linux servers seldom treat a Mac as a host of the same kind, and tools that manage Macs manage the operating system and its apps, not a fleet&rsquo;s own services. A mixed fleet ends up with two update paths to write, test and audit for every service that runs on both.</p>
+<figure class="wide" data-figure="problem" id="fig-two"><div class="fig-wrap scroll"><svg viewBox="0 0 760 250" role="img" aria-label="Two columns for the same service. Linux hosts, node-1 to node-6: systemd units, an ssh loop or a package to update, systemctl to check, journald for logs. Mac Studios, mac-1 and mac-2: launchd jobs, a second script or an MDM profile to update, launchctl to check, the unified log for logs. Between them: one service, two update paths to write, test and audit, and no shared answer to who changed which host."><rect class="box-w" x="10" y="16" width="300" height="190" rx="4"/>
+<text x="160" y="40" text-anchor="middle" class="t-b">Linux hosts: node-1 &hellip; node-6</text>
+<text x="26" y="72" class="t-m t-s">service manager</text><text x="140" y="72">systemd units</text>
+<text x="26" y="104" class="t-m t-s">update by</text><text x="140" y="104">an ssh loop, a package</text>
+<text x="26" y="136" class="t-m t-s">check with</text><text x="140" y="136" class="t-mono">systemctl status</text>
+<text x="26" y="168" class="t-m t-s">logs in</text><text x="140" y="168">journald, per host</text>
+<rect class="box-w" x="450" y="16" width="300" height="190" rx="4"/>
+<text x="600" y="40" text-anchor="middle" class="t-b">Mac Studios: mac-1, mac-2</text>
+<text x="466" y="72" class="t-m t-s">service manager</text><text x="580" y="72">launchd jobs</text>
+<text x="466" y="104" class="t-m t-s">update by</text><text x="580" y="104">a second script, MDM</text>
+<text x="466" y="136" class="t-m t-s">check with</text><text x="580" y="136" class="t-mono">launchctl print</text>
+<text x="466" y="168" class="t-m t-s">logs in</text><text x="580" y="168">unified log, per Mac</text>
+<rect class="box-bad" x="322" y="70" width="116" height="84" rx="4"/>
+<text x="380" y="96" text-anchor="middle" class="t-s t-bad t-b">one service,</text>
+<text x="380" y="114" text-anchor="middle" class="t-s t-bad t-b">two update paths</text>
+<text x="380" y="132" text-anchor="middle" class="t-s t-bad">to write, test</text>
+<text x="380" y="148" text-anchor="middle" class="t-s t-bad">and audit</text>
+<text x="380" y="236" text-anchor="middle" class="t-s t-m">Neither column answers the question of the subsection above: who changed which host, and why.</text>
+</svg></div><figcaption><strong>Two kinds of host, two toolchains.</strong> The service is the same on both, but how it is started, checked, updated and logged is not, so every change is made and recorded twice, in two places.</figcaption></figure>
+
+<h3 id="p-restart">A restart that drops live work</h3>
+<p>The simplest update stops the old process and starts the new one. Every request in flight when the old process stops is cut, and every request that arrives before the new one is ready is refused. For a service that other machines lean on, a storage front or a build cache, each update is a small outage that its clients see as errors. Avoiding it needs the old and new processes to overlap and hand the listening socket over, and only the service knows how to do that.</p>
+<figure class="wide" data-figure="problem" id="fig-restart"><div class="fig-wrap scroll"><svg viewBox="0 0 760 250" role="img" aria-label="A timeline of one service and the requests it serves. The old process runs until a restart. Requests that are in flight when it stops are reset. Requests that arrive while the new process starts are refused. Only requests that arrive after the new process is ready are answered."><rect class="box-ok" x="110" y="28" width="300" height="30" rx="3"/>
+<text x="260" y="48" text-anchor="middle" class="t-s">old process, v1</text>
+<rect class="zone" x="410" y="28" width="90" height="30" rx="3"/>
+<text x="455" y="48" text-anchor="middle" class="t-s t-m">starting</text>
+<rect class="box-ok" x="500" y="28" width="250" height="30" rx="3"/>
+<text x="625" y="48" text-anchor="middle" class="t-s">new process, v2, ready</text>
+<text x="10" y="48" class="t-s t-m">the service</text>
+<path class="ln-bad ln-dash" d="M410 18V236"/>
+<text x="414" y="16" class="t-s t-bad">restart</text>
+<text x="10" y="92" class="t-s t-m">requests</text>
+<rect class="bar-ok" x="130" y="80" width="150" height="10" rx="2"/>
+<rect class="bar-ok" x="200" y="100" width="120" height="10" rx="2"/>
+<rect class="bar-bad" x="300" y="120" width="110" height="10" rx="2"/>
+<text x="420" y="130" class="t-s t-bad">reset in flight</text>
+<rect class="bar-bad" x="350" y="140" width="60" height="10" rx="2"/>
+<text x="420" y="150" class="t-s t-bad">reset in flight</text>
+<rect class="bar-bad" x="430" y="160" width="10" height="10" rx="2"/>
+<rect class="bar-bad" x="470" y="180" width="10" height="10" rx="2"/>
+<text x="494" y="180" class="t-s t-bad">refused: nothing listens yet</text>
+<rect class="bar-ok" x="540" y="200" width="140" height="10" rx="2"/>
+<rect class="bar-ok" x="600" y="220" width="130" height="10" rx="2"/>
+<text x="110" y="246" class="t-s t-m">time runs left to right; each bar is one request from its arrival to its answer</text>
+</svg></div><figcaption><strong>A plain restart.</strong> The red bars are requests a client sees fail. Removing them takes an overlap of the old and new process and a hand-over of the listening socket, which the service, not the updater, knows how to do.</figcaption></figure>
+
+<h3 id="p-ask">What the fleet needed</h3>
+<p>Put together, the fleet needed one updater for both kinds of host, driven from CI with no ssh key and no inbound port; an update made of named, bounded steps written down before each runs, so a stopped run is finished or undone; one update live at a time across the fleet, with a way to hold, force and abort; a hook that the service ships, so a service that can hand over its socket does; and one audit trail of who changed what. It also needed none of this to require a cluster to run. <a href="#why">The comparison</a> checks the tools that exist against that list, and <a href="#design">the design</a> describes what hostkeeper builds for it.</p>
+</section>
+
+<section id="why">
+<span class="bar" aria-hidden="true"></span>
+<h2>Why we built it: where existing tools fall short</h2>
+<p>Before writing an updater we checked the tools that exist against what the fleet needed. This section is that check. Each claim about another tool was read against that tool&rsquo;s own current documentation, and the page is in the <a href="#sources">sources</a>; a version is named where the page names one. The hostkeeper column describes <code>main</code> as this report does, including what is built but not wired. The aim is a fair comparison: most of these tools do far more than hostkeeper, and the last part of this section says where one of them is the better choice.</p>
+
+<h3 id="gaps">The gaps</h3>
+<p>The eight gaps are the needs of <a href="#p-ask">the problem</a>, each worded so that a tool either documents it or does not:</p>
+<ul>
+<li><strong><a href="#g1">G1</a> macOS as a first-class host</strong> next to Linux, under launchd, in the same model and the same tool.</li>
+<li><strong><a href="#g2">G2</a> Deploying from GitHub Actions:</strong> CI publishes a signed release and sets the desired version, with no ssh key in CI, no inbound access to a host and no person at a terminal.</li>
+<li><strong><a href="#g3">G3</a> Live updates:</strong> a hook contract (prepare, cutover, verify, rollback, cleanup), a hand-off with no dropped requests, and an automatic rollback when verify fails.</li>
+<li><strong><a href="#g4">G4</a> Fleet-wide safety:</strong> one live update at a time across the fleet, holds, force and abort, and a canary.</li>
+<li><strong><a href="#g5">G5</a> Identity and enrollment:</strong> a host known by its hardware (MAC address, with BMC inventory) rather than its hostname, enrolled with a certificate authority and approved by a person.</li>
+<li><strong><a href="#g6">G6</a> One root daemon per host</strong> with its verbs compiled in and no language runtime to install and patch.</li>
+<li><strong><a href="#g7">G7</a> An API</strong> with generated clients and a command line, a simple UI, and an audit trail of who changed what.</li>
+<li><strong><a href="#g8">G8</a> No cluster control plane</strong> to run for a fleet of a few hosts.</li>
+</ul>
+<p><strong>Reading the matrix.</strong> <span class="v-meets">meets</span>: documented and sufficient for the gap as worded. <span class="v-partial">partial</span>: some of the gap is met, or it is met only in one tier, edition or platform. <span class="v-no">no</span>: not met. <span class="v-no">no&dagger;</span>: not found in the pages read, which is an absence from the documentation checked and not proof that the feature does not exist. <span class="v-na">&ndash;</span>: not assessed. A letter or an h-mark after a verdict leads to its note below the tables. The hostkeeper column is <span class="v-partial">partial</span> in most rows for one reason: the parts are built, but on <code>main</code> they do not yet run end to end on a host.</p>
+<div class="tblw wide"><table class="tbl mx">
+<caption class="src">Configuration management and Nix tools</caption>
+<thead><tr><th>Gap</th><th class="hk">hostkeeper (main)</th><th>Ansible</th><th>Salt</th><th>Puppet</th><th>Chef</th><th>nixos-rebuild<sup><a href="#n-a">a</a></sup></th><th>deploy-rs</th><th>Colmena</th><th>Cachix Deploy</th><th>comin</th></tr></thead>
+<tbody>
+<tr><td><a href="#g1">G1</a> macOS a first-class host</td><td class="v-partial hk">partial<sup><a href="#n-h1">h1</a></sup></td><td class="v-partial">partial</td><td class="v-meets">meets</td><td class="v-meets">meets</td><td class="v-meets">meets</td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-no">no&dagger;</td><td class="v-meets">meets</td><td class="v-meets">meets</td></tr>
+<tr><td><a href="#g2">G2</a> GitHub Actions deploy, OIDC, hosts pull</td><td class="v-partial hk">partial<sup><a href="#n-h2">h2</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-no">no</td><td class="v-no">no</td><td class="v-partial">partial<sup><a href="#n-b">b</a></sup></td><td class="v-partial">partial<sup><a href="#n-b">b</a></sup></td></tr>
+<tr><td><a href="#g3">G3</a> Hook contract, hand-off, automatic rollback</td><td class="v-partial hk">partial<sup><a href="#n-h3">h3</a></sup></td><td class="v-no">no</td><td class="v-no">no<sup><a href="#n-c">c</a></sup></td><td class="v-no">no&dagger;</td><td class="v-partial">partial<sup><a href="#n-d">d</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial<sup><a href="#n-e">e</a></sup></td><td class="v-no">no&dagger;</td><td class="v-partial">partial<sup><a href="#n-f">f</a></sup></td><td class="v-na">&ndash;</td></tr>
+<tr><td><a href="#g4">G4</a> One at a time, hold, force, abort, canary</td><td class="v-partial hk">partial<sup><a href="#n-h4">h4</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial<sup><a href="#n-f">f</a></sup></td><td class="v-na">&ndash;</td></tr>
+<tr><td><a href="#g5">G5</a> Hardware identity, CA enrollment, approval</td><td class="v-partial hk">partial<sup><a href="#n-h5">h5</a></sup></td><td class="v-no">no&dagger;</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-no">no</td><td class="v-no">no</td><td class="v-no">no</td><td class="v-na">&ndash;</td><td class="v-na">&ndash;</td></tr>
+<tr><td><a href="#g6">G6</a> One root daemon, compiled verbs, no runtime</td><td class="v-meets hk">meets<sup><a href="#n-h6">h6</a></sup></td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-no">no</td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-na">&ndash;</td><td class="v-na">&ndash;</td></tr>
+<tr><td><a href="#g7">G7</a> API, generated clients and CLI, UI, audit</td><td class="v-partial hk">partial<sup><a href="#n-h7">h7</a></sup></td><td class="v-partial">partial<sup><a href="#n-g">g</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial<sup><a href="#n-h">h</a></sup></td><td class="v-partial">partial</td><td class="v-no">no</td><td class="v-no">no</td><td class="v-no">no</td><td class="v-no">no&dagger;</td><td class="v-na">&ndash;</td></tr>
+<tr><td><a href="#g8">G8</a> No control plane to run</td><td class="v-meets hk">meets<sup><a href="#n-h8">h8</a></sup></td><td class="v-partial">partial</td><td class="v-meets">meets</td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-meets">meets</td><td class="v-meets">meets</td><td class="v-meets">meets</td><td class="v-partial">partial</td><td class="v-meets">meets</td></tr>
+</tbody></table></div>
+<div class="tblw wide"><table class="tbl mx">
+<caption class="src">Orchestrators, image updaters and device management</caption>
+<thead><tr><th>Gap</th><th class="hk">hostkeeper (main)</th><th>Kubernetes, k3s</th><th>Nomad</th><th>systemd-sysupdate<sup><a href="#n-i">i</a></sup></th><th>Mender</th><th>balena</th><th>MDM (Jamf Pro, NanoMDM)</th><th>Fleet (osquery)</th></tr></thead>
+<tbody>
+<tr><td><a href="#g1">G1</a> macOS a first-class host</td><td class="v-partial hk">partial<sup><a href="#n-h1">h1</a></sup></td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-no">no</td><td class="v-no">no</td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-meets">meets</td></tr>
+<tr><td><a href="#g2">G2</a> GitHub Actions deploy, OIDC, hosts pull</td><td class="v-partial hk">partial<sup><a href="#n-h2">h2</a></sup></td><td class="v-partial">partial</td><td class="v-meets">meets</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td></tr>
+<tr><td><a href="#g3">G3</a> Hook contract, hand-off, automatic rollback</td><td class="v-partial hk">partial<sup><a href="#n-h3">h3</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-no">no&dagger;</td><td class="v-no">no</td></tr>
+<tr><td><a href="#g4">G4</a> One at a time, hold, force, abort, canary</td><td class="v-partial hk">partial<sup><a href="#n-h4">h4</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td></tr>
+<tr><td><a href="#g5">G5</a> Hardware identity, CA enrollment, approval</td><td class="v-partial hk">partial<sup><a href="#n-h5">h5</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-no">no&dagger;</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td></tr>
+<tr><td><a href="#g6">G6</a> One root daemon, compiled verbs, no runtime</td><td class="v-meets hk">meets<sup><a href="#n-h6">h6</a></sup></td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td></tr>
+<tr><td><a href="#g7">G7</a> API, generated clients and CLI, UI, audit</td><td class="v-partial hk">partial<sup><a href="#n-h7">h7</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-meets">meets</td></tr>
+<tr><td><a href="#g8">G8</a> No control plane to run</td><td class="v-meets hk">meets<sup><a href="#n-h8">h8</a></sup></td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-meets">meets</td><td class="v-no">no</td><td class="v-partial">partial</td><td class="v-partial">partial</td><td class="v-no">no</td></tr>
+</tbody></table></div>
+
+<details class="method" open><summary>Notes to the matrix: hostkeeper (h-marks) and the other tools (letters)</summary>
+<ul>
+<li id="n-h1"><strong>h1.</strong> A daemon runs under launchd on a Mac: a device test starts it and asks its status. No update, linked unit or enrollment has run on a Mac. On Linux the unit control is <code>Unwired</code>, so no update has run there either.</li>
+<li id="n-h2"><strong>h2.</strong> CI authenticates to the coordinator with a GitHub Actions OIDC token on <code>Releases.SetDesired</code> and <code>Releases.Converge</code>, and an operator&rsquo;s token may also set the desired version. Packages are attested in CI, and hosts only dial out. CI needs network reach to the coordinator&rsquo;s private listener, not to any host. Releases are published from <code>main</code> as GitHub releases, but no release channel that the daemon reads is hosted: the operator stages and serves one. The shipped daemon&rsquo;s heartbeat reaches the coordinator over mutual TLS once the host is enrolled, so a desired version reaches it in the reply.</li>
+<li id="n-h3"><strong>h3.</strong> The step contract (prepare, cutover, verify, cleanup, rollback), the rollback after a failed verify and the dead-man are built and tested in process. The service&rsquo;s hook does the hand-off; the daemon does not enforce zero dropped requests. On Linux a hooked update stops before cutover, because unit control is unwired, and until the CA accepts the daemon&rsquo;s certificate request (<a href="#n-h5">h5</a>) no host has the certificate its heartbeat, and so its orders, need.</li>
+<li id="n-h4"><strong>h4.</strong> The one-at-a-time gate, the canary, the bake, holds and force are built in the coordinator. <code>Hosts.Abort</code> does not reach the shipped daemon; an abort is done on the host through the admin socket. The group sizes <code>max_updating</code> and <code>min_up</code> are stored but no decision reads them.</li>
+<li id="n-h5"><strong>h5.</strong> A host id is chosen by the operator and bound to the host&rsquo;s key at approval. It is not derived from a MAC address. MAC addresses, serials and the machine id travel as claims that help match an inventory record and authorise nothing. The BMC claim&rsquo;s parser and wire field are built, but no IPMI reader is, so the shipped daemon never sends a BMC MAC. The CA, approval, renewal and the pinned CA hash are built. Read from the code, the daemon&rsquo;s certificate request has an empty subject, which the CA refuses; this has not been run to confirm.</li>
+<li id="n-h6"><strong>h6.</strong> One root daemon, in Rust, with its verbs compiled in and no interpreter on the host. Hooks are executables that services ship. The coordinator is a second program.</li>
+<li id="n-h7"><strong>h7.</strong> gRPC and an HTTP/JSON gateway serve every operator method except <code>Hosts.List</code>, <code>Hosts.Get</code> and <code>Releases.UnmarkBad</code>, which answer <code>UNIMPLEMENTED</code>, so the Fleet and Host pages get refusals (the Host page still lists the services assigned to the host). <code>hostkeeper ctl</code> is generated from the protos, the web UI is built and the audit file is append-only. A <code>SetDesired</code> by CI writes no audit entry of its own; one by an operator writes a <code>set_desired</code> entry.</li>
+<li id="n-h8"><strong>h8.</strong> State is plain files, with one coordinator and no database. There is no failover, and the operator supervises the coordinator.</li>
+<li id="n-a"><strong>a.</strong> nixos-rebuild was re-checked against the NixOS manual (stable, v26.05; the first part of that long page was read) and against the nixos-rebuild man page and the <code>system.autoUpgrade</code> module in nixpkgs, whose sources name no release. G2 is <span class="v-partial">partial</span>: <code>system.autoUpgrade</code> runs a systemd timer that rebuilds the host from a flake or a channel, a real pull mode, with no OIDC, no desired version set by CI and no signature check. A push with <code>--target-host</code> needs ssh.</li>
+<li id="n-b"><strong>b.</strong> Cachix Deploy: the agent connects to the vendor&rsquo;s backend over websockets and waits for a deployment, and CI starts one with a vendor-issued activate token (<code>CACHIX_ACTIVATE_TOKEN</code>). No OIDC appears in the pages read. comin polls git repositories and can check GPG and SSH commit signatures; it has no CI step.</li>
+<li id="n-c"><strong>c.</strong> Salt has the <code>onfail</code>, <code>onfail_any</code> and <code>prereq</code> requisites, and its orchestrate runner has <code>batch</code>, <code>subset</code>, <code>failhard</code> and <code>concurrent</code>. It has no service update contract that it enforces; any such sequence is written by the user.</li>
+<li id="n-d"><strong>d.</strong> Chef Habitat has per-service hooks and a rolling strategy, but no documented automatic rollback or hand-off in the pages read, and its Supervisor is not supported on macOS as of its v2.1.23 notes.</li>
+<li id="n-e"><strong>e.</strong> deploy-rs checks reachability only, as documented. Its magic rollback and auto rollback are on by default.</li>
+<li id="n-f"><strong>f.</strong> Cachix Deploy has an optional <code>rollbackScript</code> (reference page; added in cachix v1.0.0): a non-zero exit rolls the deployment back. The v1.0.0 changelog also lists an automatic rollback when the agent loses its backend, and a lock so that only one deployment is active at a time; the reference page mentions neither. The G4 verdict rests on that changelog line. No hold, abort or canary was found.</li>
+<li id="n-g"><strong>g.</strong> The Ansible G7 verdict is for AWX and Red Hat Ansible Automation Platform only; plain <code>ansible-core</code> and <code>ansible-pull</code> are described without an API, UI or audit trail. The AWX documentation describes a REST API with a browsable interface, and an <code>awx</code> command line that follows the API&rsquo;s naming. We could not read AWX&rsquo;s activity stream or UI pages, and we did not confirm a published API schema or that the command line is generated from it. Those features are widely used; the verdict records what we could confirm, not their absence.</li>
+<li id="n-h"><strong>h.</strong> Puppet G7 needs Puppet Enterprise (commercial; documentation edition v2026.0.1). Its activity service records changes to RBAC (users, directory groups, roles), orchestrator agent and task runs, and directory-service settings; the pages read list no code deploy or node classification event, which are the changes most central to configuration management, and no clients generated from a schema. That is why the verdict is <span class="v-partial">partial</span> here; the comparison input had <span class="v-meets">meets</span>. Open-source Puppet and OpenVox were not assessed for G7.</li>
+<li id="n-i"><strong>i.</strong> The systemd-sysupdate manual marks the component experimental and subject to change without notice. That applies to every sysupdate verdict.</li>
+</ul>
+</details>
+
+<h3 id="g1">G1: macOS as a first-class host</h3>
+<p>A mixed fleet of Linux and Mac hosts should be kept by one tool and one model. A second tool for the Macs doubles the update path to learn and audit.</p>
+<ul>
+<li>hostkeeper runs one binary on both systems, with a systemd launcher and a launchd launcher. On a Mac only the daemon&rsquo;s start under launchd is exercised today.</li>
+<li>Salt, Puppet, Chef and Fleet document macOS agents under launchd, in the same model as Linux. Chef lists <span data-cell="x-chef-macos" data-cite="https://docs.chef.io/platforms/">macOS 14, 15 and 26</span>, Puppet lists <span data-cell="x-puppet-macos" data-cite="https://help.puppet.com/osp/current/Content/PuppetCore/supported_operating_systems.htm">macOS 14, 15 and 26</span> on x86_64 and ARM, and Fleet lists <span data-cell="x-fleet-macos" data-cite="https://fleetdm.com/docs/using-fleet/supported-host-operating-systems">macOS 15</span> and later.</li>
+<li>Ansible manages launchd services through a module of <code>community.general</code>, a collection separate from <code>ansible-core</code>, and needs Python on the managed host. Its install guide names macOS only as a control node.</li>
+<li>Nomad ships macOS binaries and its <code>raw_exec</code> driver runs natively, but its production requirements are Linux-specific and no launchd management was found.</li>
+<li>Nix tools reach macOS through nix-darwin, which has its own <code>darwin-rebuild</code>; the <code>nixos-rebuild</code> man page names neither darwin nor macOS. deploy-rs has an <code>activate.darwin</code> helper with no documented support matrix, comin and Cachix Deploy support nix-darwin (both need Nix on the Mac, and neither page mentions launchd), and Colmena documents NixOS only.</li>
+<li>Kubernetes, k3s, Mender, balena and systemd-sysupdate document no macOS hosts.</li>
+<li>MDM is first-class on Macs and manages no Linux.</li>
+</ul>
+
+<h3 id="g2">G2: deploying from GitHub Actions without ssh keys, inbound access or a person</h3>
+<p>CI should publish a signed release and set the desired version, and hosts should pull it. Static keys in CI and open inbound ports are the usual weak points.</p>
+<ul>
+<li>hostkeeper&rsquo;s design fits: CI&rsquo;s OIDC token is checked against an allow-list, is good once, and reaches only <code>SetDesired</code> and <code>Converge</code>. Hosts dial out. The gap on <code>main</code> is that the host side is not fully wired (Linux unit control, a certificate request the CA accepts) and no release channel is hosted.</li>
+<li>Nomad&rsquo;s documentation shows an OIDC path for CI: its JWT auth method validates tokens against a discovery URL and maps claims to ACL rules. Its pages do not name GitHub, and the runner must reach the servers.</li>
+<li>Kubernetes can validate external OIDC and JWT tokens in the API server, and GitHub issues per-job OIDC tokens. A pull model needs an add-on such as Flux.</li>
+<li>Ansible&rsquo;s <code>ansible-pull</code> is a real pull model that can pin a ref and verify a GPG signature. It needs Ansible on every host, and CI would hold a controller token. We found no OIDC sign-in in the pages read; that is a keyword search, not proof.</li>
+<li>Puppet and Chef pull from a server, but CI uses a static token or an API key. Salt&rsquo;s <code>salt-api</code> uses eauth credentials or a token, and its pages mention no OIDC or JWT.</li>
+<li>Mender, balena and Fleet pull from a server and have CI actions or GitOps, authenticated by a stored token.</li>
+<li>comin and Cachix Deploy avoid ssh keys and inbound access. comin&rsquo;s release is a git commit, optionally signature-checked; Cachix&rsquo;s is started by a vendor-issued activate token that CI holds. Neither documents OIDC.</li>
+<li>systemd-sysupdate pulls signed manifests from static storage, but has no CI step and picks the newest version.</li>
+<li><code>nixos-rebuild --target-host</code> is ssh push, and the man page says the remote host needs to be reachable over ssh. Its <code>system.autoUpgrade</code> module is a pull mode: a systemd timer rebuilds from a flake or a channel, with no OIDC, no desired version set by CI and no signature check. deploy-rs and Colmena are ssh push.</li>
+</ul>
+
+<h3 id="g3">G3: live updates with a hook contract, a hand-off and automatic rollback</h3>
+<p>A service update should have defined phases, so that a failed verify restores the old version without dropping requests. Most tools run tasks or swap images and leave this to scripts.</p>
+<ul>
+<li>hostkeeper defines <code>prepare</code>, <code>cutover</code>, <code>verify</code>, <code>cleanup</code> and <code>rollback</code>, with bounded steps, a dead-man, crash resume and a rollback on a failed <code>verify</code>. The hand-off is the hook&rsquo;s: <a href="https://github.com/komira-ai/tierstore/blob/main/crates/tierstore/docs/update-hook.md">tierstore&rsquo;s hook</a> starts a second instance at <code>cutover</code> that takes the listening sockets from the first, which drains, and tierstore&rsquo;s own tests show the take-over refusing no connection; on macOS its hook restarts the job, with a gap. The daemon does not enforce a hand-off, and the path does not yet run end to end on <code>main</code>.</li>
+<li>Mender has the closest contract, with update-module states that include <code>ArtifactInstall</code>, <code>ArtifactCommit</code> and <code>ArtifactRollback</code>. Rollback runs only if the module declares <code>SupportsRollback</code>, and the pages describe no zero-downtime hand-off.</li>
+<li>balena has a real container hand-over strategy: the new container signals readiness by creating a file, with a <span data-cell="x-balena-timeout" data-cite="https://docs.balena.io/learn/deploy/release-strategy/update-strategies">60 s</span> default timeout. Rollback on a failed verification is not documented.</li>
+<li>Nomad has health-gated updates with <code>auto_revert</code> and canaries. Its <code>lifecycle</code> block orders tasks inside an allocation and defines no cutover or verify contract.</li>
+<li>Chef Habitat has hooks and rolling updates, but no documented automatic rollback in the pages read.</li>
+<li>Kubernetes has <code>PreStop</code> and <code>PostStart</code> hooks and rolling updates; a DaemonSet rollback is manual.</li>
+<li>deploy-rs rolls back automatically if the host does not confirm, which checks reachability only. Cachix Deploy runs a <code>rollbackScript</code> and rolls back if the agent loses its backend.</li>
+<li><code>nixos-rebuild</code> switches to a new generation, can go back with <code>--rollback</code> or from the boot menu, and defines no hook contract or automatic rollback on a failed check.</li>
+<li>Ansible, Salt, Puppet, Fleet and MDM run tasks. Salt has <code>onfail</code> and <code>prereq</code>, and Ansible has <code>block</code> and <code>rescue</code>, but any prepare, cutover, verify and rollback sequence is written per playbook or state. systemd-sysupdate keeps old versions and has a boot-assessment fallback only for boot-entry targets, with no per-service hooks.</li>
+</ul>
+
+<h3 id="g4">G4: fleet-wide safety</h3>
+<p>On a small fleet one bad version should not reach every host. That needs a single update in flight, operator holds, a way to force or abort, and a canary.</p>
+<ul>
+<li>hostkeeper&rsquo;s gate allows one ordinary update at a time across all services and hosts, with a canary count, a bake, holds, force and an automatic rollback. The rollout is serial, so its length grows with the fleet. An abort does not reach the shipped daemon.</li>
+<li>Nomad (<code>max_parallel</code>, a canary count), Kubernetes (<code>maxUnavailable</code>, <code>OnDelete</code>), Ansible (<code>serial</code>), Salt (<code>batch</code>, <code>subset</code>) and Mender (phased rollouts, abort) throttle a run or a job and stage it like a canary. The pages read describe no fleet-wide single-flight lock with hold, force and abort verbs. Ansible&rsquo;s <code>ansible-pull</code> page says runs are not designed to be concurrent and tells users to add locking.</li>
+<li>Cachix Deploy&rsquo;s changelog lists a lock so that only one deployment is active at a time; no hold, abort or canary was found.</li>
+<li>Fleet groups, Jamf smart groups, balena&rsquo;s per-device pinning and Colmena&rsquo;s tags allow a manual canary.</li>
+<li><code>nixos-rebuild</code> documents no fleet coordination (<code>--target-host</code> acts on one host per run), and systemd-sysupdate is single-host.</li>
+</ul>
+
+<h3 id="g5">G5: hardware identity and enrollment with a CA and operator approval</h3>
+<p>Hostnames get reused and cloned. A host should prove which machine it is, and a person should approve it.</p>
+<ul>
+<li>hostkeeper binds a host id to the host&rsquo;s key at approval, with a CA that issues short-lived client certificates. Claims (MAC addresses, serial, machine id) are matched against an operator&rsquo;s inventory of MAC addresses, BMC MACs and serials, and by design authorise nothing. The BMC reader is not built, and a real enrollment is blocked on <code>main</code> by the certificate request&rsquo;s empty subject (<a href="#n-h5">h5</a>).</li>
+<li>Mender identifies devices by identity attributes, a MAC by default, with accept and reject states. Fleet uses hardware identifiers and enroll secrets. MDM ties enrollment to Apple hardware serials through Automated Device Enrollment and issues certificates over SCEP.</li>
+<li>Puppet has a CA with manual signing of requests, though the identity is the certname. Kubernetes has CA-signed node certificates with approval of requests, with the identity from the node name.</li>
+<li>Salt has key acceptance by an operator, with the minion id as the identity. It has an <code>ipmi</code> module and a BMC extension, but they are modules that use supplied credentials, not a built-in identity.</li>
+<li>Ansible, Chef, balena and Nomad identify hosts by inventory names, client names or generated ids. Nomad also documents client introduction tokens.</li>
+<li>The Nix ssh tools identify hosts by ssh destination. The Ansible G5 verdict is <span class="v-no">no&dagger;</span>: we found no hardware-keyed identity in the pages read.</li>
+</ul>
+
+<h3 id="g6">G6: one root daemon per host and no language runtime</h3>
+<p>Fewer moving parts on each host means less to patch and less to attack.</p>
+<ul>
+<li>hostkeeper is a single compiled root daemon. Hook executables are supplied by each service.</li>
+<li>Puppet and Chef each run a bundled Ruby on every host, and Puppet Enterprise adds a second agent for orchestration. Salt&rsquo;s minion is a Python application with a bundled interpreter. Ansible needs Python and ssh on managed hosts.</li>
+<li>Kubernetes needs a kubelet and a container runtime. Mender, balena and Fleet run one agent but add pieces beside it (update-module executables, a container engine, osquery).</li>
+<li>The Nix ssh tools and systemd-sysupdate leave no extra daemon on the host, and have no resident service with verbs either; the verbs of the ssh tools are shell commands run as root.</li>
+<li>MDM uses the Mac&rsquo;s built-in client, usually with other management agents beside it.</li>
+</ul>
+
+<h3 id="g7">G7: an API, generated clients and a command line, a UI, an audit trail</h3>
+<p>An operator should see every host and know who changed what.</p>
+<ul>
+<li>hostkeeper has gRPC and an HTTP/JSON gateway over the same methods, a command line generated from the protos, a web UI and an append-only audit file. Three methods are not served yet, so the Fleet and Host pages do not show hosts, and a desired version set by CI is not itself an audit entry (<a href="#n-h7">h7</a>).</li>
+<li>Fleet matches the shape: a REST API, a command line, a UI and an activity feed; its streaming of activities is a Premium feature. Puppet Enterprise has an API, a console and an orchestrator command line, and its activity service covers RBAC changes and orchestrator runs, not code deploys or classification (<a href="#n-h">note h</a>).</li>
+<li>Ansible has an API and a UI only in AWX and Automation Platform (<a href="#n-g">note g</a>). Salt has an HTTP API and an event stream, but we found no UI or attributed audit in its open-source pages.</li>
+<li>Nomad has a UI and an API with ACLs, and its audit logging is Enterprise-only. Mender&rsquo;s audit logs are Enterprise-only. Jamf&rsquo;s change-management log exports to a file or syslog only on premises, and Jamf Cloud log streaming is a premium add-on.</li>
+<li>Kubernetes has client libraries and an audit log (off unless a policy is set), and its official Dashboard repository is archived.</li>
+<li>The Nix tools are command-line only.</li>
+<li>None of the tools reviewed documents clients generated from one schema end to end; we did not confirm it for any of them.</li>
+</ul>
+
+<h3 id="g8">G8: no control plane for a small fleet</h3>
+<p>A fleet of three hosts should not need Kubernetes or a database to operate.</p>
+<ul>
+<li>hostkeeper keeps plain files, so there is no database to run. It does have one coordinator with no failover, and the operator must supervise it.</li>
+<li><code>nixos-rebuild</code>, deploy-rs, Colmena, systemd-sysupdate and comin document no control plane. Salt&rsquo;s open-source master is a single service with no external database in the pages read, though it is a server to run and scale.</li>
+<li>Kubernetes (k3s on SQLite) and Nomad both need a server tier that must be kept up. Ansible&rsquo;s UI and audit tier (AWX) runs on Kubernetes with PostgreSQL.</li>
+<li>Chef Infra Server and Puppet Enterprise need a server with PostgreSQL. Fleet needs MySQL and Redis. Mender&rsquo;s production path is Kubernetes with MongoDB, NATS and object storage.</li>
+<li>Cachix Deploy is a hosted backend that agents connect to. balenaCloud, Jamf Cloud, Fleet&rsquo;s cloud service and hosted Mender likewise remove the control plane at the price of a hosted dependency.</li>
+</ul>
+
+<h3 id="better">Where another tool is the better choice</h3>
+<p><strong>Ansible.</strong> Better for general configuration management and orchestration where ssh access and Python already exist and rollouts are supervised by a person. It has a large module library, agentless operation and a huge community, and with Automation Platform it adds RBAC, an activity stream and a mature UI.</p>
+<p><strong>Salt.</strong> Better for a resident, event-driven system with fast fan-out and targeting by grains. It has a first-party macOS minion and needs no database for the open-source master, and it covers remote execution and declarative state far beyond updating a service.</p>
+<p><strong>Puppet.</strong> Better for continuous convergence of a large, varied fleet, where its module ecosystem, declarative resources, reporting and RBAC justify a server and a Ruby runtime. It supports current macOS releases.</p>
+<p><strong>Chef.</strong> Better for teams that want a programmable Ruby DSL with deep cookbook coverage, policy versioning and compliance scanning. Habitat is a real packaging and supervision system for Linux and Windows application fleets. Chef Infra Server is scheduled for end of life, so a new adopter would be evaluating <span data-cell="x-chef360" data-cite="https://docs.chef.io/release_notes/360/">Chef 360</span>.</p>
+<p><strong>nixos-rebuild, deploy-rs, Colmena, Cachix Deploy and comin.</strong> For a fleet that is already NixOS (or nix-darwin) and described in a flake, these are better than a new updater. They bring atomic generations, rollback and nothing extra to run; <code>system.autoUpgrade</code> adds a pull on a timer, deploy-rs adds magic rollback, Colmena adds parallel deploys selected by tag, and comin and Cachix Deploy add pull mode. They do not suit hosts whose services are not built by Nix.</p>
+<p><strong>Kubernetes and k3s.</strong> Better when the fleet is Linux and the workloads are already containers. They bring declarative reconciliation, RBAC, OIDC authentication, audit and mature clients. A host updater is the better fit only with macOS hosts, native host services or no appetite for a control plane.</p>
+<p><strong>Nomad.</strong> Better for mixed workloads that need bin-packing, placement and service discovery, or for a team that already runs Nomad. Its health-gated rolling updates with canaries and <code>auto_revert</code>, and its JWT and OIDC sign-in, are a richer deployment engine than hostkeeper&rsquo;s.</p>
+<p><strong>systemd-sysupdate.</strong> Better for Linux hosts whose unit of update is a whole OS image, partition or extension tree. It is already on the host, verifies signed manifests, keeps older versions and needs only static hosting. Its man page calls it experimental.</p>
+<p><strong>Mender.</strong> Better for embedded and IoT Linux fleets that need full-image A/B updates with bootloader rollback, delta updates, Yocto integration, large fleets, phased rollouts and hosted support. Its audit logging is Enterprise-only.</p>
+<p><strong>balena.</strong> Better for fleets of containerised apps on single-board computers and gateways. It offers a managed dashboard, delta image updates, a prebuilt balenaOS and a built-in hand-over strategy for container swaps with no downtime.</p>
+<p><strong>MDM (Jamf Pro, NanoMDM).</strong> For Mac device and OS management (enrollment, configuration profiles, OS update enforcement, FileVault, app distribution), MDM is the right and often the only supported channel. Jamf Pro is mature and supported. NanoMDM is a small open-source core to build on, but it needs your own SCEP server and APNs certificate, and MicroMDM&rsquo;s README says it is in maintenance mode and points to NanoMDM. hostkeeper does not replace MDM on a Mac: it updates the fleet&rsquo;s own services beside it.</p>
+<p><strong>Fleet (osquery).</strong> Better for visibility, security and compliance across a mixed fleet of laptops and servers. It brings osquery queries and live inventory, policies, vulnerability reports, Mac MDM, GitOps configuration and large-scale operation, and it is a much broader product than an updater.</p>
+<p><strong>So why build hostkeeper.</strong> No tool we checked meets G1, G2 and G3 together for native services on Linux and macOS: the tools strong on macOS (Salt, Puppet, Chef, Fleet, MDM) run tasks rather than a hook contract and authenticate CI with a stored token, the tools with a real update contract or hand-off document no macOS hosts (Mender, balena, Kubernetes) or no launchd management (Nomad), and the Nix tools need every service built by Nix. hostkeeper is the narrow tool for that intersection, small enough to run without a control plane, and the column above says honestly how much of it runs on <code>main</code> today.</p>
+</section>
+
+<section id="design">
+<span class="bar" aria-hidden="true"></span>
+<h2>The design, as it is on main</h2>
+<p>hostkeeper is one root daemon per host and one coordinator for the fleet. It knows no service by name: each service ships an update hook in its own package, and the daemon runs that hook through a fixed contract of steps (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#1-problem">design: Problem</a>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#21-goals">goals</a>). This section describes the code on <code>main</code>. Every claim links to the code or to the section of the design that states the intent, and where the design says more than the code does, this section follows the code and says what is missing.</p>
+<h3 id="programs">Two programs</h3>
+<p>Two programs are built (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper">crates/hostkeeper</a>,
+<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-coordinator">crates/hostkeeper-coordinator</a>):</p>
+<ul>
+<li><code>hostkeeper</code>, the host program. Its verbs are <code>daemon</code>, <code>ctl</code> (the generated command line),
+<code>ci set-desired</code> (the CI client), and two plumbing verbs of its own update
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>).</li>
+<li><code>hostkeeper-coordinator serve</code>, the coordinator, shipped as a tarball and a container image
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/packaging/container/Dockerfile">packaging/container/Dockerfile</a>). No systemd unit for it
+is packaged, so the operator supervises it.</li>
+</ul>
+<p>Both programs take their configuration from flags and files, not environment variables. The only
+environment reads are platform-set: <code>NOTIFY_SOCKET</code> for <code>--notify-systemd</code>, and the GitHub Actions
+token request variables in <code>hostkeeper ci</code>.</p>
+<h3 id="architecture">Architecture</h3>
+<figure class="wide" id="fig-arch"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 470" role="img" aria-label="The parts of hostkeeper. On the left, CI&rsquo;s release job, hostkeeper ctl and the web UI call the coordinator&rsquo;s private listener: CI with its OIDC token, the others with an operator token. In the middle, the coordinator has a private listener, a heartbeat listener, a CA and enrollment store, and plain files. On the right, each host runs the hostkeeper daemon as root, with an admin socket, one transient unit or launchd job per hook step, and its packages. The daemon dials the heartbeat listener for enrollment, polling and renewal, and for its heartbeat. The daemon fetches and verifies packages from a release channel over HTTPS, only inside an order."><defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-bad" d="M0 0L10 5L0 10z"/></marker></defs>
+<text x="10" y="30" class="t-s t-m">operators and CI</text>
+<rect class="box" x="10" y="40" width="240" height="72" rx="4"/>
+<text x="22" y="62" class="t-b">CI release job</text>
+<text x="22" y="80" class="t-mono">hostkeeper ci set-desired</text>
+<text x="22" y="100" class="t-s">Releases.SetDesired, Releases.Converge</text>
+<rect class="box" x="10" y="130" width="240" height="48" rx="4"/>
+<text x="22" y="150" class="t-b">hostkeeper ctl</text>
+<text x="22" y="168" class="t-s t-m">generated from the protos</text>
+<rect class="box" x="10" y="196" width="240" height="48" rx="4"/>
+<text x="22" y="216" class="t-b">web UI</text>
+<text x="22" y="234" class="t-s t-m">static files, served with --ui-dir</text>
+<path class="ln" marker-end="url(#aa)" d="M250 76L342 92"/>
+<text x="296" y="70" text-anchor="middle" class="t-s t-m">OIDC token</text>
+<path class="ln" marker-end="url(#aa)" d="M250 154L342 104"/>
+<text x="296" y="148" text-anchor="middle" class="t-s t-m">operator</text>
+<path class="ln" marker-end="url(#aa)" d="M250 220L342 114"/>
+<text x="296" y="214" text-anchor="middle" class="t-s t-m">token</text>
+<rect class="box-w" x="344" y="40" width="270" height="330" rx="4"/>
+<text x="479" y="60" text-anchor="middle" class="t-b">hostkeeper-coordinator serve</text>
+<rect class="box-blue" x="356" y="72" width="246" height="58" rx="4"/>
+<text x="368" y="92">private listener, TLS</text>
+<text x="368" y="108" class="t-s t-m">operator API over gRPC and the</text>
+<text x="368" y="122" class="t-s t-m">HTTP/JSON gateway; the UI files</text>
+<rect class="box-blue" x="356" y="144" width="246" height="58" rx="4"/>
+<text x="368" y="164">heartbeat listener, mutual TLS</text>
+<text x="368" y="180" class="t-s t-m">the agent API; enrollment needs</text>
+<text x="368" y="194" class="t-s t-m">no client certificate</text>
+<rect class="box" x="356" y="216" width="246" height="40" rx="4"/>
+<text x="368" y="241">CA and enrollment store</text>
+<rect class="box" x="356" y="270" width="246" height="88" rx="4"/>
+<text x="368" y="290" class="t-b">plain files</text>
+<text x="368" y="308" class="t-s t-m">desired state, ops, halts, verdicts,</text>
+<text x="368" y="324" class="t-s t-m">spent CI token ids, the audit file</text>
+<text x="368" y="340" class="t-s t-m">(append-only); a lock: one coordinator</text>
+<path class="ln" marker-end="url(#aa)" d="M780 166H606"/>
+<text x="693" y="124" text-anchor="middle" class="t-s">Coordinator.Enroll,</text>
+<text x="693" y="138" text-anchor="middle" class="t-s">Coordinator.Poll,</text>
+<text x="693" y="152" text-anchor="middle" class="t-s">Coordinator.Renew</text>
+<path class="ln" marker-end="url(#aa)" d="M780 186H606"/>
+<text x="693" y="204" text-anchor="middle" class="t-s">Coordinator.Heartbeat, or</text>
+<text x="693" y="218" text-anchor="middle" class="t-s">POST /v1/heartbeat</text>
+<text x="878" y="30" text-anchor="middle" class="t-s t-m">each host, as root</text>
+<rect class="box-w" x="770" y="40" width="220" height="330" rx="4"/>
+<rect class="box" x="782" y="56" width="196" height="72" rx="4"/>
+<text x="794" y="76">admin socket, root only</text>
+<text x="794" y="94" class="t-s">Admin.Status, Admin.Abort,</text>
+<text x="794" y="110" class="t-s">Admin.ClearRecord</text>
+<rect class="box-acc" x="782" y="146" width="196" height="56" rx="4"/>
+<text x="794" y="168" class="t-b">hostkeeper daemon</text>
+<text x="794" y="186" class="t-s t-m">listens on no network port</text>
+<rect class="box" x="782" y="220" width="196" height="56" rx="4"/>
+<text x="794" y="242" class="t-s">one transient unit or launchd</text>
+<text x="794" y="258" class="t-s">job per hook step</text>
+<rect class="box" x="782" y="294" width="196" height="64" rx="4"/>
+<text x="794" y="314">packages</text>
+<text x="794" y="332" class="t-s t-m">versions, with current and</text>
+<text x="794" y="346" class="t-s t-m">previous links</text>
+<path class="ln" d="M880 128V146"/>
+<path class="ln" marker-end="url(#aa)" d="M880 202V218"/>
+<path class="ln" marker-end="url(#aa)" d="M880 276V292"/>
+<rect class="box-w" x="770" y="400" width="220" height="58" rx="4"/>
+<text x="782" y="422">release channel, over HTTPS</text>
+<text x="782" y="440" class="t-s t-m">index, package, attestation bundle</text>
+<path class="ln ln-dash" marker-end="url(#aa)" d="M880 370V398"/>
+<text x="864" y="390" text-anchor="end" class="t-s t-m">fetched and verified, only inside an order</text>
+</svg></div><figcaption><strong>The parts, and which way each connection goes.</strong> Every connection to the coordinator is made by its caller; the coordinator never connects to a host. The red dashed line is the gap that matters most on <code>main</code>: the daemon&rsquo;s heartbeat client exists but the shipped daemon does not use it.</figcaption></figure>
+<p><strong>The coordinator</strong> has two TLS listeners
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/config.rs">crates/hostkeeper-coordinator/src/config.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#43-the-coordinator">design: The coordinator</a>):</p>
+<ul>
+<li>the <strong>heartbeat listener</strong> serves the agent API, <code>hostkeeper.agent.v1.Coordinator</code>, with
+<code>Heartbeat</code>, <code>Enroll</code>, <code>Poll</code> and <code>Renew</code>, and the frozen JSON heartbeat route. A heartbeat
+needs a client certificate that names a host. Enrollment is switched on by <code>--enrollment-dir</code>
+(with the CA&rsquo;s flags); then <code>Enroll</code> and <code>Poll</code> need no certificate, because the caller proves
+it holds its key. Without it they answer <code>UNAVAILABLE</code> and every connection needs a client
+certificate.</li>
+<li>the <strong>private listener</strong> serves the operator API (<code>hostkeeper.operator.v1</code>), the HTTP/JSON gateway
+over the same methods, a few frozen JSON routes kept for compatibility, and, with <code>--ui-dir</code>, the
+web UI&rsquo;s files. It refuses a wildcard address, so it binds one interface.</li>
+</ul>
+<p>Its state is plain files, not a database. The desired state is in <code>--state-file</code>. Exclusions,
+labels, holds, assignments and minimum versions, uninstall intents, bad marks, the last good
+version, a standing force and the inventory are in the ops file, and beside it sit the halts file
+and an append-only audit file. Spent CI token ids and acknowledged verdicts have files of their
+own. An exclusive lock file makes a second coordinator on the same files refuse to start. The fleet
+itself (each host&rsquo;s last heartbeat, outstanding orders, bake counts) is in memory and is rebuilt
+from heartbeats after a restart
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#10-state-where-each-thing-lives-and-who-writes-it">design: State</a>).</p>
+<p><strong>The daemon</strong> is one root process. It listens on no network port and always dials the
+coordinator, so the coordinator never connects to a host
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#3-the-design-in-one-picture">design: The design in one picture</a>).
+Its one trust root is the root-owned config <code>/etc/hostkeeper/hostkeeper.toml</code>. That file names the
+coordinator&rsquo;s address, the SHA-256 of the fleet&rsquo;s CA certificate (<code>ca_sha256</code>), the release
+channel, the trusted signers and the daemon&rsquo;s bounds. A strict loader refuses unknown keys
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-config/src/daemon.rs">crates/hostkeeper-config/src/daemon.rs</a>).
+The coordinator cannot change it. The daemon&rsquo;s local interface is a unix socket that serves
+<code>hostkeeper.local.v1.Admin</code> (<code>Status</code>, <code>Abort</code>, <code>ClearRecord</code>) to root only
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/admin.rs">crates/hostkeeper-daemon/src/admin.rs</a>).
+<code>hostkeeper ctl</code> has no command for it, so a root user needs a gRPC client of their own.</p>
+<p><strong>The gap that matters most.</strong> The heartbeat client is in
+<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-link">crates/hostkeeper-link</a>, with gRPC over mutual TLS
+(<code>GrpcMtlsLink</code>), a JSON form and one that negotiates between them. Each call is bounded to
+<span data-cell="c-call" data-source="crates/hostkeeper-link/src/dial.rs" data-item="CALL_SECS">10 s</span>.
+The shipped daemon uses the negotiating one: <code>host_links</code> gives the heartbeat loop <code>HostLink</code>,
+which makes it at the first heartbeat of an enrolled host, to the config&rsquo;s <code>coordinator</code>, pinned
+to its <code>ca_sha256</code>, with the certificate and CA bundle of the pki directory
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/links.rs">crates/hostkeeper-daemon/src/links.rs</a>). Both loops
+are wired and talk to the coordinator. The loop runs the
+<code>update</code>, <code>force</code>, <code>install</code>, <code>uninstall</code> and <code>abort</code> orders, the abort beside the order it stops,
+and announces <code>install-v1</code> and <code>abort-v1</code>, the features the coordinator requires before it sends
+an install, an uninstall or an abort
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-link/src/beat.rs">crates/hostkeeper-link/src/beat.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-link/src/heartbeater.rs">crates/hostkeeper-link/src/heartbeater.rs</a>).</p>
+<h3 id="identity">Identity and enrollment</h3>
+<p><strong>What a host&rsquo;s identity is.</strong> A host is named by an <strong>operator-chosen host id</strong> (a DNS label of at
+most
+<span data-cell="c-host-id" data-source="crates/hostkeeper-wire/src/names.rs" data-item="MAX_LEN">63</span>
+bytes of <code>a-z0-9-</code>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-wire/src/names.rs">crates/hostkeeper-wire/src/names.rs</a>). The id is bound
+to the host&rsquo;s own key by the SHA-256 of that key, at the moment an operator approves the
+request. The identity is not derived from a MAC address. MAC addresses, the DMI serial, the
+machine id and (on a Mac) the serial number and platform UUID travel as <strong>claims</strong>. Claims help an
+operator recognise the machine and match it against the inventory, but they authorise nothing
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-enroll/src/claims.rs">crates/hostkeeper-enroll/src/claims.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/inventory.rs">crates/hostkeeper-coordinator/src/inventory.rs</a>).</p>
+<p><strong>The inventory</strong> is a table the operator keeps (<code>Enrollment.AddRecord</code>, <code>ListRecords</code>,
+<code>RemoveRecord</code>, and the UI&rsquo;s Inventory page): host id, role, data MACs, BMC MAC, serial and notes,
+at most
+<span data-cell="c-inventory" data-source="crates/hostkeeper-coordinator/src/inventory.rs" data-item="MAX_RECORDS">10,000</span>
+records. <code>Enrollment.List</code> marks each pending request as matched, unmatched or ambiguous against
+it. A match fills the approval form but approves nothing; a request matching one record is approved
+under that record's host id, and another host id needs <code>replace</code>. The daemon has the logic to read the BMC
+MAC over IPMI, but no IPMI reader is built, so the shipped daemon never sends a BMC MAC
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#57-enrollment-and-remote-install">design: Enrollment and remote install</a>).</p>
+<p><strong>The CA</strong> is a module of the coordinator, not a separate process
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-enrollment/src/ca">crates/hostkeeper-enrollment/src/ca</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/enrollment-coordinator.md">docs/enrollment-coordinator.md</a>). Its key is one P-256 <code>PKCS#8</code> file
+of mode <code>0600</code> (<code>--ca-key-file</code>), made once with <code>--ca-init</code>. Its self-signed certificate is valid for
+<span data-cell="c-ca" data-source="crates/hostkeeper-enrollment/src/ca/issue.rs" data-item="CA_VALIDITY_SECS">20 years</span>,
+and every daemon pins its SHA-256. It issues host client certificates (subject <code>CN=host:&lt;id&gt;</code>,
+client authentication only) valid for
+<span data-cell="c-host-cert" data-source="crates/hostkeeper-enrollment/src/ca/issue.rs" data-item="HOST_VALIDITY_SECS">7 days</span>,
+and the coordinator&rsquo;s own server certificate, valid for at most
+<span data-cell="c-server-cert" data-source="crates/hostkeeper-enrollment/src/ca/issue.rs" data-item="SERVER_VALIDITY_CAP_SECS">90 days</span>.
+The server certificate is remade only at a start that finds it missing or in the last third of its
+life; nothing renews it while the coordinator runs, so the coordinator must be restarted within
+that life. Rotating the CA, revocation lists and backups are not built: backup is a written procedure
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/ca-backup.md">docs/operations/ca-backup.md</a>).</p>
+<figure class="wide" id="fig-enroll"><div class="fig-wrap scroll"><svg viewBox="0 0 980 560" role="img" aria-label="Enrollment as a sequence. The daemon&rsquo;s enrollment loop checks the coordinator&rsquo;s CA against its pinned hash, makes a key and posts Coordinator.Enroll with its request and claims. The coordinator stores a pending request and answers pending. The daemon polls with Coordinator.Poll, signing a fresh nonce, until an operator approves with Enrollment.Approve. At the next signed poll the coordinator issues the certificate once, and the daemon checks it and stores it. From half its life the daemon renews with Coordinator.Renew over mutual TLS, with no operator step."><defs><marker id="ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker></defs>
+<rect class="box-acc" x="20" y="14" width="180" height="40" rx="4"/><text x="110" y="39" text-anchor="middle" class="t-s t-b">daemon, enrollment loop</text>
+<rect class="box-blue" x="270" y="14" width="180" height="40" rx="4"/><text x="360" y="39" text-anchor="middle" class="t-s t-b">coordinator, heartbeat listener</text>
+<rect class="box" x="520" y="14" width="180" height="40" rx="4"/><text x="610" y="39" text-anchor="middle" class="t-s t-b">CA and enrollment store</text>
+<rect class="box" x="770" y="14" width="180" height="40" rx="4"/><text x="860" y="39" text-anchor="middle" class="t-s t-b">operator, ctl or UI</text>
+<path class="life" d="M110 54V540"/><path class="life" d="M360 54V540"/><path class="life" d="M610 54V540"/><path class="life" d="M860 54V540"/>
+<path class="ln" marker-end="url(#ae)" d="M110 90H356"/><text x="118" y="84" class="t-s">TLS probe: the CA&rsquo;s hash must equal ca_sha256, else nothing is sent</text>
+<rect class="box-w" x="120" y="102" width="330" height="24" rx="3"/><text x="130" y="119" class="t-s">makes a P-256 key and writes it before posting</text>
+<path class="ln" marker-end="url(#ae)" d="M110 156H356"/><text x="118" y="150" class="t-s">Coordinator.Enroll: the request, the claims, the image name</text>
+<path class="ln" marker-end="url(#ae)" d="M360 186H606"/><text x="368" y="180" class="t-s">stores the request; its id is the SHA-256 of the key</text>
+<path class="ln ln-dash" marker-end="url(#ae)" d="M360 214H114"/><text x="352" y="208" text-anchor="end" class="t-s">PENDING</text>
+<rect class="zone" x="40" y="228" width="420" height="96" rx="4"/><text x="48" y="244" class="t-s t-m">until an operator approves</text>
+<path class="ln" marker-end="url(#ae)" d="M110 266H356"/><text x="118" y="260" class="t-s">Coordinator.Poll, unsigned, for a nonce</text>
+<path class="ln" marker-end="url(#ae)" d="M110 292H356"/><text x="118" y="286" class="t-s">Coordinator.Poll, the nonce signed by the key</text>
+<path class="ln ln-dash" marker-end="url(#ae)" d="M360 314H114"/><text x="352" y="309" text-anchor="end" class="t-s">PENDING</text>
+<path class="ln" marker-end="url(#ae)" d="M860 354H614"/><text x="852" y="348" text-anchor="end" class="t-s">Enrollment.List, then Enrollment.Approve: host id, key hash, role, services</text>
+<path class="ln" marker-end="url(#ae)" d="M110 386H356"/><text x="118" y="380" class="t-s">Coordinator.Poll, signed</text>
+<path class="ln" marker-end="url(#ae)" d="M360 416H606"/><text x="368" y="410" class="t-s">issues the certificate for the host id, once per request</text>
+<path class="ln ln-dash" marker-end="url(#ae)" d="M360 446H114"/><text x="352" y="440" text-anchor="end" class="t-s">ISSUED: the certificate and the CA bundle</text>
+<rect class="box-w" x="120" y="458" width="420" height="24" rx="3"/><text x="130" y="475" class="t-s">checks it against the pinned CA and its own key; stores a new generation</text>
+<rect class="box-ok" x="40" y="500" width="420" height="30" rx="3"/><text x="50" y="520" class="t-s">from half its life: Coordinator.Renew over mutual TLS, no operator step</text>
+</svg></div><figcaption><strong>Enrollment.</strong> The poll needs no clock on the host: it signs a fresh nonce. The operator approves by the key hash the request shows; a claim (a MAC address, a serial) only helps the operator recognise the machine.</figcaption></figure>
+<p>The steps, in the code (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-enroll">crates/hostkeeper-enroll</a>,
+<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-coordinator/src/enrollment">crates/hostkeeper-coordinator/src/enrollment</a>):</p>
+<ul>
+<li>The daemon checks the coordinator&rsquo;s CA against <code>ca_sha256</code> before it sends anything. It then
+makes a P-256 key, writes it durably, and posts <code>Enroll</code>. A reposted key is the same request.</li>
+<li>It polls every
+<span data-cell="c-enroll-retry" data-source="crates/hostkeeper-enroll/src/enroller.rs" data-item="RETRY_SECS">5 s</span>
+(each call bounded to
+<span data-cell="c-enroll-timeout" data-source="crates/hostkeeper-daemon/src/cli.rs" data-item="ENROLL_TIMEOUT">30 s</span>).
+A poll is signed over a fresh nonce of
+<span data-cell="c-nonce" data-source="crates/hostkeeper-coordinator/src/enrollment/nonce.rs" data-item="NONCE_BYTES">32</span>
+bytes, so polling needs no clock. The host does need a correct wall clock: it refuses a
+certificate that is not valid now, and it decides renewal and expiry by that clock. At most
+<span data-cell="c-pending" data-source="crates/hostkeeper-enrollment/src/enroll/store.rs" data-item="DEFAULT_MAX_PENDING">256</span>
+requests may be pending (<code>--max-pending-enrollments</code>). Pending requests do not expire.</li>
+<li>An operator approves with <code>Enrollment.Approve</code>, giving the request id, the key hash shown by
+<code>Enrollment.List</code>, the host id, the role, the services to assign to the host and a reason. The
+approval is one durable write, followed by an audit entry (<code>enroll_approve</code>, or <code>enroll_replace</code>)
+and an <code>assign</code> entry per service. The certificate is made at the next signed poll, once per
+request.</li>
+<li>The daemon checks the certificate against the pinned CA and its own key, then stores it as a new
+generation under <code>/etc/updater/pki</code> with a <code>current</code> link.</li>
+<li>From half its life the daemon renews over mutual TLS with no operator step. A host that was away
+past expiry posts a new request for the same host id with the same key, and an operator approves
+it again.</li>
+</ul>
+<p>A request is marked <code>DUPLICATE_CLAIM</code> when it presents a machine id, or a globally unique MAC,
+already bound to an enrolled host, as a re-imaged or cloned machine does; it is approved only with
+<code>replace</code>. <code>Approve</code> with <code>replace</code> moves a host id to a new key, after which the old key&rsquo;s
+certificate no longer identifies the host. There is no operator call to deny or retire a host.
+The coordinator has the deny and retire states, but nothing outside its tests writes them. Mac auto-approval by a
+one-use MDM nonce (valid
+<span data-cell="c-mac-nonce" data-source="crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs" data-item="MAC_NONCE_VALID_SECS">3600 s</span>)
+is built in the coordinator&rsquo;s library. The shipped coordinator wires its device check to
+<code>NoDeviceState</code> and the daemon never sends a nonce, so a Mac is approved by an operator like any
+host.</p>
+<p><strong>A defect found while writing this report, by reading the code.</strong> The daemon builds its
+certificate request with an empty subject
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-enroll/src/key.rs">crates/hostkeeper-enroll/src/key.rs</a>, <code>csr_der</code>).
+The CA&rsquo;s profile accepts only a subject that is exactly one <code>CN=host:&lt;id&gt;</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-enrollment/src/ca/profile.rs">crates/hostkeeper-enrollment/src/ca/profile.rs</a>,
+<code>check_request</code>), and refuses anything else as <code>bad_csr</code>. Every coordinator test builds its request
+with <code>host:pending</code>, and no test sends the daemon&rsquo;s own request to the CA. Read this way, a real
+daemon&rsquo;s first <code>Enroll</code> is refused. It has not been run to confirm.</p>
+<h3 id="apis">The two APIs</h3>
+<p>Every API is a protobuf service in <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-proto">crates/hostkeeper-proto</a>,
+compiled in pure Rust with nothing generated checked in
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#48-the-operator-api">design: The operator API</a>):</p>
+<ul>
+<li><code>hostkeeper.agent.v1</code>: <code>Coordinator</code> with <code>Heartbeat</code>, <code>Enroll</code>, <code>Poll</code> and <code>Renew</code>;</li>
+<li><code>hostkeeper.operator.v1</code>: <code>Hosts</code>, <code>Releases</code>, <code>Services</code>, <code>Enrollment</code> and <code>Audit</code>;</li>
+<li><code>hostkeeper.local.v1</code>: <code>Admin</code> on the daemon&rsquo;s socket.</li>
+</ul>
+<p><strong>gRPC and HTTP/JSON, both full.</strong> The private listener serves every unary method of
+<code>hostkeeper.operator.v1</code> a second time as <code>POST /hostkeeper.operator.v1.&lt;Service&gt;/&lt;Method&gt;</code>, with a
+proto3 canonical JSON body and <code>Authorization: Bearer &lt;token&gt;</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/grpc/gateway.rs">crates/hostkeeper-coordinator/src/grpc/gateway.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/gateway.md">docs/gateway.md</a>). The gateway is generic. A path is a gateway path when it names a
+unary method of that package in the embedded descriptors, and the call goes to the same in-process
+service as gRPC, through the same credential check. So no method exists on one surface and not the
+other. A body is at most
+<span data-cell="c-operator-bytes" data-source="crates/hostkeeper-coordinator/src/http.rs" data-item="MAX_OPERATOR_BYTES">4096</span>
+bytes. A test holds <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/gateway.md">docs/gateway.md</a>&rsquo;s status table equal to the code&rsquo;s.</p>
+<p><strong>What the operator API does not do yet.</strong> Three declared methods answer <code>UNIMPLEMENTED</code>:
+<code>Hosts.List</code>, <code>Hosts.Get</code> and <code>Releases.UnmarkBad</code> (the <code>PENDING</code> list in
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/grpc/mod.rs">crates/hostkeeper-coordinator/src/grpc/mod.rs</a>).
+A test fails if any other method answers so.</p>
+<p><strong>Credentials.</strong> CI authenticates with a GitHub Actions OIDC token, checked against an allow-list
+(<code>--oidc-config</code>) by <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-oidc">crates/hostkeeper-oidc</a>. It allows a clock
+leeway of
+<span data-cell="c-oidc-leeway" data-source="crates/hostkeeper-oidc/src/config.rs" data-item="LEEWAY_SECS">60 s</span>
+and a token lifetime of at most
+<span data-cell="c-oidc-lifetime" data-source="crates/hostkeeper-oidc/src/config.rs" data-item="DEFAULT_MAX_LIFETIME_SECS">600 s</span>
+by default, and each token is good once. Within the operator API, CI&rsquo;s token reaches only
+<code>Releases.SetDesired</code> and <code>Releases.Converge</code> (and their two frozen JSON routes). An operator uses
+a named bearer token (<code>--tokens-file</code>: names and SHA-256 hashes, re-read while running, so revoking one needs no restart). A token either operates or does
+not, with no per-token grants. An operator&rsquo;s token is also admitted on <code>SetDesired</code>, under every refusal
+CI&rsquo;s set gets, and is refused on <code>Converge</code>, which stays CI&rsquo;s
+(<code>admit</code> in <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/grpc/mod.rs">crates/hostkeeper-coordinator/src/grpc/mod.rs</a>).</p>
+<p><strong><code>hostkeeper ctl</code> is generated from the protos.</strong> The build of <code>hostkeeper-proto</code> writes one
+command per method of every non-local service. <code>hostkeeper ctl</code> builds its command tree from that
+table at run time and calls over gRPC or the gateway (<code>--transport</code>)
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-ctl">crates/hostkeeper-ctl</a>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/ctl.md">docs/ctl.md</a>). The test
+<code>docs_ctl_md_is_current</code> regenerates <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/ctl.md">docs/ctl.md</a> and fails when it differs, and a
+golden command tree makes a removed flag or a changed exit code fail. <code>hostkeeper ci set-desired</code>
+wraps <code>ctl releases set-desired</code> and <code>releases converge</code> for a release job
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/ci-client.md">docs/deploy/ci-client.md</a>).</p>
+<p><strong>The web UI is built on the gateway.</strong> <a href="https://github.com/komira-ai/hostkeeper/tree/main/ui">ui/</a> is static HTML, one stylesheet and
+JavaScript modules, with no framework and no build step. Its pages are Fleet, Host, Rollout, Holds,
+Enrollment, Inventory and Audit, and each button is one gateway call made with the operator&rsquo;s token,
+held in page memory only. The coordinator serves the files under <code>/ui/</code> of its private listener when
+started with <code>--ui-dir</code> (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/ui-serving.md">docs/ui-serving.md</a>). The packages do not include the
+files. The Rollout page sets a service&rsquo;s desired version with the operator&rsquo;s token and assigns or unassigns it
+for a role, and the Host page lists the services assigned to the host from <code>Services.List</code>. Because
+<code>Hosts.List</code> and <code>Hosts.Get</code> are not served, the Fleet page, the rest of the Host page and the Rollout
+page&rsquo;s force dialog get a refusal instead of data. The Rollout page&rsquo;s convergence button sends
+<code>Releases.Converge</code> with the operator&rsquo;s token, which the coordinator refuses, and its unmark button
+calls <code>Releases.UnmarkBad</code>, which is not served. The UI tests run the app in a JavaScript engine
+against a fake gateway (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-ui-tests">crates/hostkeeper-ui-tests</a>), so they
+catch none of these. <a href="#ui">The lab section</a> draws each page.</p>
+<p><strong>Wire compatibility.</strong> <code>the_protos_keep_every_rule_against_the_baseline</code> compares the compiled
+descriptors with a committed baseline and fails on any removed, renumbered, renamed or retyped
+field, method or enum value
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-proto/src/compat.rs">crates/hostkeeper-proto/src/compat.rs</a>).</p>
+<h3 id="packages">Packages</h3>
+<p>A service version ships as <strong>one package per platform</strong>, <code>&lt;service&gt;-&lt;version&gt;-&lt;platform&gt;.tar.zst</code>.
+A package is one zstd frame holding one tar archive whose top level is <code>manifest.toml</code>, <code>bin/</code>,
+<code>units/</code> and <code>files/</code> (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/package-format.md">docs/package-format.md</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#47-the-package">design: The package</a>). The platforms are a closed
+set, <code>linux-x86_64</code>, <code>linux-arm64</code> and <code>macos-arm64</code>. The daemon knows its own from the target it
+was compiled for (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-config/src/platform.rs">crates/hostkeeper-config/src/platform.rs</a>).</p>
+<p><strong>The release index and the channel layout.</strong> An order names a service and a version only. The
+daemon reads <code>&lt;release_channel&gt;/&lt;service&gt;/&lt;version&gt;/index.json</code>, takes the entry for its platform,
+then fetches the archive and its attestation bundle (<code>.sigstore.json</code>) beside it
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-package">crates/hostkeeper-package</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#55-fetching-verifying-and-unpacking-a-package">design: Fetching, verifying and unpacking</a>).
+The index is a lookup, not a trust anchor, and is read up to
+<span data-cell="c-index" data-source="crates/hostkeeper-package/src/index.rs" data-item="MAX_INDEX_BYTES">64 KiB</span>.
+<code>cargo xtask release channel-stage</code> lays one release out in that tree and checks it with the
+daemon&rsquo;s own parser (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/release-channel.md">docs/deploy/release-channel.md</a>). No workflow
+uploads a channel. The operator stages it and serves it over HTTPS.</p>
+<p><strong>Fetch.</strong> HTTPS only, no redirects, no proxy, a connect timeout of
+<span data-cell="c-connect" data-source="crates/hostkeeper-package/src/stage.rs" data-item="CONNECT_TIMEOUT">30 s</span>
+and a whole-fetch deadline from the config&rsquo;s <code>[bounds]</code>. The archive is hashed as it arrives and the
+transfer stops once it passes the indexed size. Its size and SHA-256 must equal the index entry,
+and its SHA-256 must also equal the order&rsquo;s <code>package_digest</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/real_packages.rs">crates/hostkeeper-daemon/src/real_packages.rs</a>).
+The config is refused when its largest package could not arrive in its fetch deadline at
+<span data-cell="c-min-rate" data-source="crates/hostkeeper-config/src/daemon.rs" data-item="MIN_FETCH_BYTES_PER_SEC">262,144</span>
+bytes per second.</p>
+<p><strong>Signing.</strong> Packages are attested in CI. Per commit, <code>artifacts.yml</code> builds the binaries, the
+packages, deb and rpm, an SBOM, a coordinator image built twice and compared, and an unsigned
+macOS installer. It attests every file it sums, with a bundle beside each archive, package and
+installer, and SBOM attestations for the binaries. <code>release.yml</code> publishes a release from <code>main</code>
+with no manual tag step, once <code>ci</code>, <code>privileged</code> and <code>artifacts</code> have passed on the commit; a
+failed <code>privileged</code> run holds later releases
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/artifacts.yml">.github/workflows/artifacts.yml</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/release.yml">.github/workflows/release.yml</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/verify-a-release.md">docs/deploy/verify-a-release.md</a>). On the host, a pinned <code>gh
+attestation verify</code> runs offline against the Sigstore trusted root and the config&rsquo;s one
+<code>[trusted_signers]</code> entry (organisation, workflow, ref globs, hosted runner). There is no unsigned
+mode. The bundle is read up to
+<span data-cell="c-bundle" data-source="crates/hostkeeper-package/src/bundle.rs" data-item="MAX_BUNDLE_BYTES">1 MiB</span>.
+The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>), but no
+package of this repository installs them. Until an operator places them, every package check ends
+<code>attestation_unavailable</code>.</p>
+<p><strong>Unpack.</strong> One streaming pass (zstd, tar, a SHA-256 per file) writes into a private staging
+directory, under hard bounds: a zstd window of at most
+<span data-cell="c-window" data-source="crates/hostkeeper-unpack/src/archive.rs" data-item="MAX_WINDOW_BYTES">8 MiB</span>,
+names at most
+<span data-cell="c-depth" data-source="crates/hostkeeper-unpack/src/archive.rs" data-item="MAX_DEPTH">16</span>
+components deep, a manifest of at most
+<span data-cell="c-manifest" data-source="crates/hostkeeper-config/src/manifest.rs" data-item="MAX_MANIFEST_BYTES">65,536</span>
+bytes, and the config&rsquo;s bounds on unpacked bytes and entries. Only regular files and directories
+are accepted, with no setuid bits and no names that collide when case is folded. The tree is made
+root-owned and read-only, then sealed: a seal file records its tree digest and package digest, and
+the version directory appears by rename
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-unpack">crates/hostkeeper-unpack</a>). Before every step the runner
+re-hashes the staged tree and compares it with the digest taken when the order began.</p>
+<p><strong>Versions and links.</strong> Each service keeps <code>current</code> and <code>previous</code> links under
+<code>/var/lib/hostkeeper/packages/&lt;service&gt;/</code>. After a confirmed switch the daemon prunes every other
+version that nothing still needs. Units are linked from <code>current</code> into the unit directory
+(<code>/etc/systemd/system</code>, or <code>/Library/LaunchDaemons</code> on a Mac) and files to the paths the manifest
+names, so one switch of <code>current</code> re-points them all. A write-ahead record, <code>placed.json</code>, lets
+a crash be repaired at the next start
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-placed">crates/hostkeeper-placed</a>).</p>
+<h3 id="rollout">Rollout</h3>
+<p><strong>Roles and assignment.</strong> The coordinator reads a rollout file at start, with one <code>[[service]]</code>
+table per managed service and at most
+<span data-cell="c-services" data-source="crates/hostkeeper-wire/src/wire.rs" data-item="MAX_SERVICES">16</span>
+services (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/services.rs">crates/hostkeeper-coordinator/src/services.rs</a>).
+A change to it needs a restart. The rollout file assigns each service to the hosts of its <code>roles</code>,
+or to the hosts its selector of roles and operator-set labels picks. The operator&rsquo;s entries go on
+top, and the first that applies decides: an entry of the host itself, then an entry of the host&rsquo;s
+role, then the rollout file (<code>Services.Assign</code>, <code>Services.Unassign</code>, kept in the ops file;
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/assignments.md">docs/operations/assignments.md</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/assignment.rs">crates/hostkeeper-coordinator/src/assignment.rs</a>).
+An enrollment approval assigns the services it names to the new host the same way.
+<code>Services.SetMinVersion</code> sets a floor for a role or a host. A host assigned a service it does not
+run is ordered <code>install</code> of the desired version, under every rule of an update. <code>Unassign</code> with
+<code>uninstall</code> orders the hosts that lose the service to uninstall it. Both orders go only to a daemon
+that announces <code>install-v1</code>, which the daemon&rsquo;s heartbeat loop does (its features are in
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-link/src/beat.rs">crates/hostkeeper-link/src/beat.rs</a>); they reach a host
+once that loop has a link.</p>
+<p><strong>Desired versions.</strong> CI sets a service&rsquo;s desired version with <code>Releases.SetDesired</code> and its OIDC
+token, and an operator may set it the same way with the operator&rsquo;s token. The coordinator keeps it, and the package digest of every version set, in the
+state file. It refuses a version marked bad or below the service&rsquo;s <code>min_version</code>. A new desired
+version ends a standing force and lifts a halt the updater raised, but not one a hook or an
+operator raised (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/desired.rs">crates/hostkeeper-coordinator/src/desired.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#54-the-rollout-gate-which-hosts-may-update-now">design: The rollout gate</a>).</p>
+<p><strong>One live update at a time, fleet-wide.</strong> Each heartbeat is decided under one lock, and a reply
+carries at most one order. The gate allows <strong>one ordinary update at a time across every service and
+every host</strong> (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/decide.rs">crates/hostkeeper-coordinator/src/decide.rs</a>).
+A host holds that slot from the moment it is ordered until it has finished and baked. An order the
+host never reports frees the slot after
+<span data-cell="c-order-age" data-source="crates/hostkeeper-coordinator/src/fleet.rs" data-item="ORDER_AGE">120 s</span>.
+The gate&rsquo;s rules, first closed rule wins, are halted, held, quiet start, bad version, below
+<code>min_version</code>, updating, busy with another service, failed here, deferred, canary wait, no slot and
+baking. <code>Releases.Status</code> shows each host&rsquo;s reason. There is no group size: <code>max_updating</code> and
+<code>min_up</code> are stored but no decision reads them. A rollout is therefore serial across hosts and
+services, and its length grows with the fleet.</p>
+<p><strong>Canary, bake and automatic rollback.</strong> <code>canary = { count = n }</code> offers the version to the first
+<code>n</code> hosts by node id before the rest. <code>bake_beats</code> keeps an updated host&rsquo;s slot until it sends that
+many healthy heartbeats in a row at the desired version, at most
+<span data-cell="c-bake" data-source="crates/hostkeeper-coordinator/src/bake.rs" data-item="MAX_BAKE_BEATS">100</span>.
+The count is kept in memory, so after a coordinator restart every host bakes again.
+With <code>rollback = "automatic"</code>, release-class failures reaching the larger of a percentage of live
+hosts and a minimum count mark the desired version bad and set desired back to the last version that
+converged and baked (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/reconcile.rs">crates/hostkeeper-coordinator/src/reconcile.rs</a>).
+That rollback goes out as an ordinary <code>update</code> to the lower version. The daemon refuses an <code>update</code>
+below the version it runs (<code>below_running</code>), so a host that already took the bad version is not
+moved back by it. <code>Releases.Force</code> is the operator&rsquo;s repair.</p>
+<p><strong>Holds.</strong> <code>Services.Hold</code> holds one service on one host, on a role or on the whole fleet, with a
+reason (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/holds-and-force.md">docs/operations/holds-and-force.md</a>). A held pair is
+ordered nothing, takes no slot and is never a canary. At most
+<span data-cell="c-holds" data-source="crates/hostkeeper-coordinator/src/holds.rs" data-item="MAX_HOLDS">4096</span>
+holds are kept in the ops file, and they survive a restart. <code>Hosts.Exclude</code> takes a host out of a
+service (with <code>abandon</code>, it also frees the host&rsquo;s slot at once).</p>
+<p><strong>Force and abort.</strong> <code>Releases.Force</code> orders a hookless <code>force</code> of a service to a version on the
+whole fleet, a role or named hosts, at each target&rsquo;s next heartbeat, past the single slot, canary,
+bake, bad marks and halts. The daemon fetches the package if needed, stops the old units, switches
+<code>current</code>, links, starts the new units and reports, running no hook
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/force.rs">crates/hostkeeper-coordinator/src/force.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-daemon/src/verbs/force">crates/hostkeeper-daemon/src/verbs/force</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#56-force-the-fleet-wide-fix">design: Force</a>). A force reaches only
+hosts that have already announced the service in a heartbeat. It is refused for the <code>hostkeeper</code>
+service itself and for a version no set ever registered a digest for. <code>Hosts.Abort</code> is accepted and
+audited. The coordinator sends it only to a daemon that announced <code>abort-v1</code>. The daemon&rsquo;s heartbeat
+loop announces it and runs the abort beside the order it stops, whose verdict then reports the
+halt; on a host the coordinator cannot reach, an abort is done through the admin socket.</p>
+<p><strong>The audit trail.</strong> Every change to the ops store is one entry: who (operator token name, <code>ci</code> or
+<code>coordinator</code>), the action, the service, the host and the reason. The entries go to an append-only
+audit file, one JSON line each, fsynced, never rotated. The file is a copy, not a gate: a line
+that cannot be appended is logged as an error and the change stands. The ops file keeps the last
+<span data-cell="c-audit-ring" data-source="crates/hostkeeper-coordinator/src/ops.rs" data-item="AUDIT_RING">64</span>
+entries for <code>Releases.Status</code>. <code>Audit.List</code> filters the whole file, at most
+<span data-cell="c-audit-page" data-source="crates/hostkeeper-coordinator/src/operator.rs" data-item="MAX_AUDIT_PAGE">256</span>
+entries a page (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/audit_file.rs">crates/hostkeeper-coordinator/src/audit_file.rs</a>).
+A <code>SetDesired</code> by CI writes no audit entry of its own (only the force it ends, <code>force_ended</code>, and
+the halt it lifts, <code>lift_halt</code>, are audited as <code>ci</code>); one made with an operator&rsquo;s token is a
+<code>set_desired</code> entry under the token&rsquo;s name
+(<code>set_desired_by</code> in <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/service_ci.rs">crates/hostkeeper-coordinator/src/service_ci.rs</a>).
+A wire entry carries no time: the time is only in the file.</p>
+<h3 id="hooks">Update hooks</h3>
+<p><strong>The step contract</strong> is in <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-hook">crates/hostkeeper-hook</a>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#53-how-a-hook-runs">design: How a hook runs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/host-updates.md#32-the-step-contract">host-updates: The step contract</a>). A service&rsquo;s
+hook is an executable in its package, named by the manifest&rsquo;s <code>[hook] command</code>. An update runs
+<code>prepare</code>, <code>cutover</code>, <code>verify</code> and <code>cleanup</code>, and runs <code>rollback</code> after a failure. Each step gets
+the step word, the staged release (to <code>prepare</code> only) and <code>--params &lt;file&gt;</code>, a TOML file of the
+manifest&rsquo;s <code>[params]</code> plus reserved <code>updater.*</code> keys. The leading arguments of the manifest&rsquo;s
+<code>command</code> are not passed to these steps, only to the <code>boot</code> and <code>uninstall</code> steps
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/verbs/update.rs">crates/hostkeeper-daemon/src/verbs/update.rs</a>),
+so a hook must accept the bare step word. Its exit code is
+<span data-cell="c-exit-ok" data-source="crates/hostkeeper-hook/src/exit.rs" data-item="EXIT_OK">0</span>
+for success,
+<span data-cell="c-exit-failure" data-source="crates/hostkeeper-hook/src/exit.rs" data-item="EXIT_FAILURE">1</span>
+for failure,
+<span data-cell="c-exit-deferred" data-source="crates/hostkeeper-hook/src/exit.rs" data-item="EXIT_DEFERRED">75</span>
+for deferred and
+<span data-cell="c-exit-halt" data-source="crates/hostkeeper-hook/src/exit.rs" data-item="EXIT_HALT">76</span>
+for halt. Any other code, a signal or a timeout is a failure. The last stdout line, read up to
+<span data-cell="c-last-line" data-source="crates/hostkeeper-steps/src/capture.rs" data-item="LAST_LINE_MAX">64 KiB</span>,
+is an optional JSON report: class <code>release</code> or <code>environment</code>, a reason, <code>retry_after_secs</code>,
+<code>reversible</code> and <code>promotion_pending</code>. The last
+<span data-cell="c-ring" data-source="crates/hostkeeper-steps/src/capture.rs" data-item="RING_BYTES">1024 KiB</span>
+of each stream is kept. Each step&rsquo;s bound comes from the manifest&rsquo;s <code>[hook.timeout_secs]</code>. Only
+<code>prepare</code> may be unbounded, and the daemon has no default. The phase of a failure is decided by the
+updater, never by the hook: before commit, at the gate, after commit (once a step said
+<code>reversible: false</code>), or halt.</p>
+<p><strong>The step launcher.</strong> On Linux, <code>SystemdLauncher</code> runs each step as root in a transient unit,
+<code>systemd-run --system --wait --collect --pipe --unit=updater-&lt;service&gt;-&lt;step&gt;-&lt;generation&gt;
+--property=RuntimeMaxSec=&lt;secs|infinity&gt;</code>, with no other property: no user, no capabilities, no
+sandbox (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-steps/src/systemd.rs">crates/hostkeeper-steps/src/systemd.rs</a>). A
+dead-man thread polls every
+<span data-cell="c-deadman" data-source="crates/hostkeeper-daemon/src/cli.rs" data-item="DEADMAN_POLL_SECS">1 s</span>
+and stops a unit by name at its deadline, and <code>RuntimeMaxSec</code> still ends it if the daemon has died
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#63-the-dead-man">design: The dead-man</a>). On macOS,
+<code>LaunchdLauncher</code> runs each step as a transient launchd job in the system domain. launchd has no
+<code>RuntimeMaxSec</code>, so the launcher polls the job every
+<span data-cell="c-launchd-poll" data-source="crates/hostkeeper-launchd/src/launcher.rs" data-item="POLL">500 ms</span>
+and boots it out at its bound (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-launchd/src/launcher.rs">crates/hostkeeper-launchd/src/launcher.rs</a>).
+That bound is the launcher&rsquo;s alone: if the daemon dies, a bounded step runs on until the restarted
+daemon finds it in its record and stops it.
+Either way a step stopped at its bound has no exit code and is a failure. Neither launcher runs the
+"additive" steps yet (a manifest&rsquo;s <code>boot</code> step, the hook&rsquo;s <code>uninstall</code> step, the self-update probe):
+both refuse to start them.</p>
+<p><strong>The step record</strong> (<code>step-record.json</code> under <code>/var/lib/updater/state/&lt;service&gt;/</code>) is written
+<code>running</code> before each step and <code>done</code> after it, with an fsync and a rename. After a daemon crash the
+running step&rsquo;s unit is stopped by name and the step runs again. After a reboot (a new boot id), an
+uncommitted update is rolled back and a committed one goes on to <code>verify</code> with a fresh window
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-steps/src/resume.rs">crates/hostkeeper-steps/src/resume.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#62-the-step-runner">design: The step runner</a>).</p>
+<figure class="wide" id="fig-update"><div class="fig-wrap scroll"><svg data-diagram="update" viewBox="0 0 980 620" role="img" aria-label="An update as a sequence. The coordinator&rsquo;s order reaches the daemon in a heartbeat reply. The daemon fetches the release index, the package and its attestation bundle, checks them, unpacks and seals the tree, and runs the hook&rsquo;s prepare step. It links the new units and files and switches current, then runs cutover and verify. If verify passes it runs cleanup, commits and prunes, and reports success. If verify fails or overruns its bound, it switches current back, relinks the previous release, runs rollback and reports the failure."><defs><marker id="au" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="av" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-acc" d="M0 0L10 5L0 10z"/></marker></defs>
+<rect class="box-blue" x="20" y="14" width="170" height="40" rx="4"/><text x="105" y="39" text-anchor="middle" class="t-s t-b">coordinator</text>
+<rect class="box-acc" x="260" y="14" width="170" height="40" rx="4"/><text x="345" y="39" text-anchor="middle" class="t-s t-b">daemon</text>
+<rect class="box" x="500" y="14" width="170" height="40" rx="4"/><text x="585" y="39" text-anchor="middle" class="t-s t-b">release channel</text>
+<rect class="box" x="740" y="14" width="210" height="40" rx="4"/><text x="845" y="39" text-anchor="middle" class="t-s t-b">hook, one unit per step</text>
+<path class="life" d="M105 54V604"/><path class="life" d="M345 54V604"/><path class="life" d="M585 54V604"/><path class="life" d="M845 54V604"/>
+<path class="ln" marker-end="url(#au)" d="M105 88H341"/><text x="113" y="82" class="t-s">update order in a heartbeat reply</text>
+<path class="ln" marker-end="url(#au)" d="M345 118H581"/><text x="353" y="112" class="t-s">GET index.json, the package, its attestation bundle</text>
+<rect class="box-w" x="355" y="128" width="470" height="24" rx="3"/><text x="365" y="145" class="t-s">size and digest against the index and the order; gh attestation verify; unpack and seal</text>
+<path class="ln-acc" marker-end="url(#av)" d="M345 180H841"/><text x="595" y="174" text-anchor="middle" class="t-b">prepare</text>
+<rect class="box-w" x="355" y="192" width="380" height="24" rx="3"/><text x="365" y="209" class="t-s">link units and files, switch current, daemon-reload</text>
+<path class="ln-acc" marker-end="url(#av)" d="M345 244H841"/><text x="595" y="238" text-anchor="middle" class="t-b">cutover</text>
+<path class="ln-acc" marker-end="url(#av)" d="M345 280H841"/><text x="595" y="274" text-anchor="middle" class="t-b">verify</text>
+<rect class="zone" x="40" y="296" width="920" height="138" rx="4"/><text x="50" y="314" class="t-s t-ok t-b">verify passes</text>
+<path class="ln-acc" marker-end="url(#av)" d="M345 340H841"/><text x="595" y="334" text-anchor="middle" class="t-b">cleanup</text>
+<rect class="box-w" x="355" y="352" width="380" height="24" rx="3"/><text x="365" y="369" class="t-s">commit the links; prune to current and previous</text>
+<path class="ln ln-dash" marker-end="url(#au)" d="M345 410H109"/><text x="337" y="404" text-anchor="end" class="t-s">Succeeded, in every heartbeat until acknowledged</text>
+<rect class="zone" x="40" y="446" width="920" height="150" rx="4"/><text x="50" y="464" class="t-s t-bad t-b">verify fails, or overruns its bound</text>
+<rect class="box-w" x="355" y="478" width="380" height="24" rx="3"/><text x="365" y="495" class="t-s">switch current back; relink the previous release</text>
+<path class="ln-acc" marker-end="url(#av)" d="M345 532H841"/><text x="595" y="526" text-anchor="middle" class="t-b">rollback</text>
+<path class="ln ln-dash" marker-end="url(#au)" d="M345 574H109"/><text x="337" y="568" text-anchor="end" class="t-s">Failed at the gate, in every heartbeat until acknowledged</text>
+</svg></div><figcaption><strong>One update, step by step.</strong> The orange arrows are the five steps of the hook contract. Each is a transient unit (a launchd job on a Mac) bounded by its own deadline, and the step record is written before each one, so a daemon that restarts mid-update knows where it was.</figcaption></figure>
+<p><strong>How a failed verify rolls back</strong> (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-hook/src/next.rs">crates/hostkeeper-hook/src/next.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/place.rs">crates/hostkeeper-daemon/src/place.rs</a>):
+<code>verify</code> has its own window, from the end of <code>cutover</code> to <code>verify_deadline_secs</code>. A <code>verify</code> that
+exits non-zero, or still defers when the window ends, sends the runner to <code>rollback</code>. Before
+running the hook&rsquo;s <code>rollback</code>, the daemon points <code>current</code> back at the previous version and relinks
+that release&rsquo;s units and files. On a first install it removes the links instead. Then it runs the
+new release&rsquo;s <code>rollback</code> step, and the host reports <code>Failed</code> at the gate phase (after the commit, if a step had said
+<code>reversible: false</code>) with the rollback&rsquo;s reason, or else <code>verify</code>&rsquo;s. Restarting the old service is the hook&rsquo;s job. A deferred <code>rollback</code> is retried
+<span data-cell="c-rollback-attempts" data-source="crates/hostkeeper-steps/src/runner.rs" data-item="ROLLBACK_ATTEMPTS">3</span>
+times, after <code>retry_after_secs</code> or
+<span data-cell="c-retry" data-source="crates/hostkeeper-steps/src/runner.rs" data-item="DEFAULT_RETRY_SECS">60 s</span>
+by default, and never more than
+<span data-cell="c-max-retry" data-source="crates/hostkeeper-steps/src/runner.rs" data-item="MAX_RETRY_SECS">3600 s</span>.
+A <code>rollback</code> that fails, or still defers after those retries, is a halt (the service takes no
+further order until the halt is cleared), unless its report says <code>reversible: false</code>, which makes it
+<code>Failed</code> after the commit; a first install whose <code>rollback</code> declines with <code>no_previous_release</code>
+ends <code>Failed</code>. A failed <code>cleanup</code> that says <code>reversible: true</code> before any commit sends the update to
+<code>rollback</code>; any other failed <code>cleanup</code> is retried
+<span data-cell="c-cleanup-retries" data-source="crates/hostkeeper-config/src/manifest.rs" data-item="DEFAULT_CLEANUP_RETRIES">3</span>
+times by default (the manifest&rsquo;s <code>cleanup_retries</code>), then ends <code>Failed</code> after the commit. A hook
+that reports <code>promotion_pending</code> is watched after success: <code>verify</code> runs again after its
+<code>retry_after_secs</code>, or every
+<span data-cell="c-watch" data-source="crates/hostkeeper-steps/src/runner.rs" data-item="WATCH_POLL_SECS">30 s</span>
+by default, until it passes without the flag. Any other result, or the ceiling, ends the update
+<code>Failed</code> after the commit (or a halt), and the watcher never rolls back
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#64-the-post-success-watcher">design: The post-success watcher</a>).</p>
+<p><strong>On a Linux host built from <code>main</code> a hooked update stops before <code>cutover</code>.</strong> The switch before
+<code>cutover</code> runs <code>daemon-reload</code> through the adapter set&rsquo;s unit control, and on Linux that is
+<code>Unwired</code>, which refuses every call
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/adapters.rs">crates/hostkeeper-daemon/src/adapters.rs</a>).
+<code>hostkeeper-placed</code> has a <code>systemctl</code> unit control, but the daemon does not use it. The macOS
+adapter set has a real launchd unit control.</p>
+<p><strong>The example service.</strong> <a href="https://github.com/komira-ai/hostkeeper/tree/main/examples/hello">examples/hello</a> is a loopback HTTP server with an
+update hook and two unit slots that it swaps at <code>cutover</code> (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/hello.md">docs/hello.md</a>). Its
+<code>-fail-ready</code> build answers its readiness check with an error, so its <code>verify</code> fails and its
+<code>rollback</code> restarts the old slot. That is the case the rollback measurement uses. <code>hello</code> is not
+run through the conformance harness in this repository.</p>
+<h3 id="macos">macOS specifics</h3>
+<p>The same daemon runs on Apple silicon (<code>macos-arm64</code>; an Intel Mac is not a platform). The adapter
+set is chosen when the binary is compiled
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/adapters.rs">crates/hostkeeper-daemon/src/adapters.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#59-macos">design: macOS</a>):</p>
+<ul>
+<li>launchd runs the daemon as <code>dev.hostkeeper.hostkeeper</code> from <code>/Library/LaunchDaemons</code>, with
+<code>KeepAlive</code>. Hook steps are transient launchd jobs bounded by the launcher, as above
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-launchd">crates/hostkeeper-launchd</a>).</li>
+<li>Service state comes from <code>launchctl print</code>. A process is identified by its pid and start time,
+and its executable by the device and inode of the image it runs, so a binary renamed over while it
+runs is not mistaken for the running one.</li>
+<li>Every unpacked package is checked for the quarantine attribute, and every Mach-O file must carry
+a valid code signature (ad-hoc accepted; no team identity or notarisation check).</li>
+<li>Enrollment claims are the serial number and platform UUID from <code>ioreg</code>.</li>
+<li>Self-update: launchd has no start limit, so <code>hostkeeper self-update-fallback</code> counts starts
+itself and falls back after
+<span data-cell="c-burst" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_BURST">3</span>
+starts within
+<span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
+The timer job meant to run it is rendered but not installed.</li>
+<li>The installer is an unsigned <code>.pkg</code> holding the binary and the daemon&rsquo;s plist, with no scripts. The
+operator writes <code>hostkeeper.toml</code>.</li>
+</ul>
+<p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
+runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine
+verdicts, the process identity check, launchd job states, a fixture hook stopped at its bound, and
+the daemon started under launchd answering <code>Status</code>. No update, no linked unit and no enrollment has
+run on a Mac. Not built for Macs: MDM, the boot id that tells a reboot from a daemon restart (it is
+read from a Linux path), version confirmation by executable digest, and support files at macOS
+paths (the CA bundle, <code>gh</code> and the trusted root use their Linux paths).</p>
+</section>
+
+<section id="lab" class="case-sec">
+<span class="bar" aria-hidden="true"></span>
+<p class="eyebrow-case">Case study</p>
+<h2>Our lab, the worked example</h2>
+<p>Our lab is where hostkeeper will first run, and where the measurements of <a href="#open">the last section</a> will be taken. This section shows how the lab is laid out, how its machines are described to hostkeeper, and how an operator sees it in the UI. The lab is described generically: the machines are named node-1 to node-6 and mac-1 and mac-2, and no hostname, address or serial of a real machine appears. On <code>main</code> the daemon does not yet send heartbeats, so what follows is the lab as hostkeeper is set up to keep it, not a record of updates it has made there.</p>
+
+<h3 id="topology">The topology</h3>
+<p>The lab has six Linux servers that are both build and storage nodes, and two Mac Studios. A management network reaches every machine and every server&rsquo;s BMC. A separate storage network joins the six Linux nodes, for the storage traffic between them. The coordinator runs in a container on a separate development machine on the management network. CI runs on GitHub-hosted runners outside the lab and reaches the coordinator&rsquo;s private listener, and nothing else: no host has an inbound port, and the runners hold no ssh key.</p>
+<figure class="wide" id="fig-lab"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 520" role="img" aria-label="The lab. Outside it, GitHub-hosted runners run the release job, which reaches the coordinator&rsquo;s private listener; a release channel serves packages over HTTPS. Inside the lab, a development machine runs the coordinator in a container with a heartbeat listener and a private listener. A management network joins the development machine, the two Mac Studios mac-1 and mac-2, and the six Linux nodes node-1 to node-6 with their BMCs. A separate storage network joins the six Linux nodes. Every daemon dials the heartbeat listener; no host listens."><defs><marker id="al" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker><marker id="al2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-blue" d="M0 0L10 5L0 10z"/></marker></defs>
+<rect class="box" x="20" y="14" width="300" height="62" rx="4"/>
+<text x="32" y="36" class="t-b">GitHub-hosted runners</text>
+<text x="32" y="54" class="t-s">a service&rsquo;s release job runs</text>
+<text x="32" y="68" class="t-mono">hostkeeper ci set-desired</text>
+<rect class="box" x="680" y="14" width="300" height="62" rx="4"/>
+<text x="692" y="36" class="t-b">release channel, over HTTPS</text>
+<text x="692" y="54" class="t-s">staged by the operator; packages and</text>
+<text x="692" y="68" class="t-s">their attestations are made in CI</text>
+<rect class="zone" x="10" y="100" width="980" height="410" rx="6"/>
+<text x="22" y="120" class="t-s t-m">the lab</text>
+<rect class="box-w" x="30" y="132" width="300" height="130" rx="4"/>
+<text x="42" y="152" class="t-b">development machine</text>
+<rect class="box-blue" x="42" y="162" width="276" height="88" rx="4"/>
+<text x="54" y="182" class="t-s t-b">container: hostkeeper-coordinator serve</text>
+<text x="54" y="202" class="t-s">private listener: operator API, UI, CI</text>
+<text x="54" y="220" class="t-s">heartbeat listener: the daemons</text>
+<text x="54" y="238" class="t-s t-m">state in plain files, on a volume</text>
+<path class="ln-blue" marker-end="url(#al2)" d="M345 76V197H322"/>
+<text x="353" y="92" class="t-s t-blue">OIDC token, to the private listener only</text>
+<path class="ln" d="M180 262V300"/>
+<path class="ln" d="M20 300H980"/>
+<text x="350" y="292" class="t-s t-b">management network</text>
+<text x="520" y="292" class="t-s t-m">every daemon dials the heartbeat listener here; no host listens</text>
+<rect class="box-acc" x="30" y="330" width="130" height="86" rx="4"/>
+<text x="95" y="352" text-anchor="middle" class="t-b">mac-1</text>
+<text x="95" y="370" text-anchor="middle" class="t-s">Mac Studio</text>
+<text x="95" y="386" text-anchor="middle" class="t-s t-m">launchd</text>
+<text x="95" y="402" text-anchor="middle" class="t-s t-m">no BMC</text>
+<rect class="box-acc" x="176" y="330" width="130" height="86" rx="4"/>
+<text x="241" y="352" text-anchor="middle" class="t-b">mac-2</text>
+<text x="241" y="370" text-anchor="middle" class="t-s">Mac Studio</text>
+<text x="241" y="386" text-anchor="middle" class="t-s t-m">launchd</text>
+<text x="241" y="402" text-anchor="middle" class="t-s t-m">no BMC</text>
+<path class="ln" d="M95 300V330"/><path class="ln" d="M241 300V330"/>
+<rect class="box-w" x="340" y="330" width="100" height="86" rx="4"/><text x="390" y="352" text-anchor="middle" class="t-b">node-1</text><text x="390" y="370" text-anchor="middle" class="t-s">Linux</text><text x="390" y="386" text-anchor="middle" class="t-s t-m">systemd</text><text x="390" y="402" text-anchor="middle" class="t-s t-m">BMC</text>
+<rect class="box-w" x="446" y="330" width="100" height="86" rx="4"/><text x="496" y="352" text-anchor="middle" class="t-b">node-2</text><text x="496" y="370" text-anchor="middle" class="t-s">Linux</text><text x="496" y="386" text-anchor="middle" class="t-s t-m">systemd</text><text x="496" y="402" text-anchor="middle" class="t-s t-m">BMC</text>
+<rect class="box-w" x="552" y="330" width="100" height="86" rx="4"/><text x="602" y="352" text-anchor="middle" class="t-b">node-3</text><text x="602" y="370" text-anchor="middle" class="t-s">Linux</text><text x="602" y="386" text-anchor="middle" class="t-s t-m">systemd</text><text x="602" y="402" text-anchor="middle" class="t-s t-m">BMC</text>
+<rect class="box-w" x="658" y="330" width="100" height="86" rx="4"/><text x="708" y="352" text-anchor="middle" class="t-b">node-4</text><text x="708" y="370" text-anchor="middle" class="t-s">Linux</text><text x="708" y="386" text-anchor="middle" class="t-s t-m">systemd</text><text x="708" y="402" text-anchor="middle" class="t-s t-m">BMC</text>
+<rect class="box-w" x="764" y="330" width="100" height="86" rx="4"/><text x="814" y="352" text-anchor="middle" class="t-b">node-5</text><text x="814" y="370" text-anchor="middle" class="t-s">Linux</text><text x="814" y="386" text-anchor="middle" class="t-s t-m">systemd</text><text x="814" y="402" text-anchor="middle" class="t-s t-m">BMC</text>
+<rect class="box-w" x="870" y="330" width="100" height="86" rx="4"/><text x="920" y="352" text-anchor="middle" class="t-b">node-6</text><text x="920" y="370" text-anchor="middle" class="t-s">Linux</text><text x="920" y="386" text-anchor="middle" class="t-s t-m">systemd</text><text x="920" y="402" text-anchor="middle" class="t-s t-m">BMC</text>
+<path class="ln" d="M390 300V330"/><path class="ln" d="M496 300V330"/><path class="ln" d="M602 300V330"/><path class="ln" d="M708 300V330"/><path class="ln" d="M814 300V330"/><path class="ln" d="M920 300V330"/>
+<path class="ln-acc" d="M390 416V460"/><path class="ln-acc" d="M496 416V460"/><path class="ln-acc" d="M602 416V460"/><path class="ln-acc" d="M708 416V460"/><path class="ln-acc" d="M814 416V460"/><path class="ln-acc" d="M920 416V460"/>
+<path class="ln-acc" d="M340 460H980"/>
+<text x="350" y="482" class="t-s t-acc t-b">storage network</text>
+<text x="480" y="482" class="t-s t-m">between the six Linux nodes only</text>
+</svg></div><figcaption><strong>The lab.</strong> The blue line is the only path from outside the lab to the coordinator, and it reaches only the private listener; how the lab routes it is the lab&rsquo;s choice and not hostkeeper&rsquo;s. The hosts fetch packages from the release channel, and only inside an order.</figcaption></figure>
+<aside class="note case" aria-label="Case study: the lab"><p class="card-k">Case study</p><p>The coordinator in a container is the shipped image (<a href="https://github.com/komira-ai/hostkeeper/blob/main/packaging/container/Dockerfile">packaging/container/Dockerfile</a>): a distroless image that runs as a non-root user, takes all its configuration as arguments and sets no environment variable. Its private listener refuses a wildcard address, so it binds one interface of the development machine. The reusable workflow that CI calls is described in <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/ci-client.md">docs/deploy/ci-client.md</a>.</p></aside>
+
+<h3 id="labels">How machines are labelled: MAC address, host record, role, services</h3>
+<p>A machine is known to hostkeeper in four steps, each kept by a different hand:</p>
+<ol>
+<li><strong>MAC address and serial.</strong> When a server is built, the operator records its data MACs and its BMC MAC, and for a Mac its serial. These are what the machine says it is when it asks to enroll: a Linux daemon claims its network addresses, machine id and DMI serial, and a Mac claims its serial and platform UUID. A claim is written by the requester, so it proves nothing.</li>
+<li><strong>Host record.</strong> The record (<code>Enrollment.AddRecord</code>, the Inventory page) gives the machine its host id and its expected role. A pending request whose claimed addresses include a record&rsquo;s data MAC (or, for a Mac, whose serial is the record&rsquo;s) shows that record&rsquo;s host id and role on the Enrollment page. The match fills in the approval form and approves nothing.</li>
+<li><strong>Role.</strong> The operator approves the request by its key hash, with a host id and a role. The role goes into the host&rsquo;s certificate, and the coordinator reads it from there on every connection.</li>
+<li><strong>Assigned services.</strong> The rollout file assigns each service to roles, and the operator&rsquo;s entries (<code>Services.Assign</code>, <code>Services.Unassign</code>) go on top, first for the host itself, then for its role. Labels the operator sets on a host can narrow a service further.</li>
+</ol>
+<figure class="wide" id="fig-labels"><div class="fig-wrap scroll"><svg viewBox="0 0 1000 250" role="img" aria-label="Four boxes from left to right. The MAC address: what node-1 claims, its data MACs, with its BMC MAC on the record. The host record: host id node-1, role storage, data MACs, BMC MAC, kept by the operator. The role: storage, in node-1&rsquo;s certificate after the operator approves it by its key hash. The assigned services: tierstore from the rollout file for the role storage, and hello because the operator labelled node-1. Below, the same chain for mac-1: its serial, the record mac-1, the role mac, and tierstore."><defs><marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0 0L10 5L0 10z"/></marker></defs>
+<text x="20" y="22" class="t-s t-m">claimed by the host</text><text x="270" y="22" class="t-s t-m">kept by the operator</text><text x="520" y="22" class="t-s t-m">set at approval</text><text x="770" y="22" class="t-s t-m">rollout file, then operator</text>
+<rect class="box-w" x="20" y="32" width="220" height="92" rx="4"/><text x="32" y="54" class="t-b">MAC address</text><text x="32" y="74" class="t-s">node-1 claims its data MACs</text><text x="32" y="92" class="t-s t-m">(and its machine id and DMI</text><text x="32" y="108" class="t-s t-m">serial, shown, not matched)</text>
+<path class="ln" marker-end="url(#am)" d="M242 78H266"/>
+<rect class="box-blue" x="270" y="32" width="220" height="92" rx="4"/><text x="282" y="54" class="t-b">host record</text><text x="282" y="74" class="t-s">node-1, role storage</text><text x="282" y="92" class="t-s t-m">data MACs and the BMC MAC</text><text x="282" y="108" class="t-s t-m">match: fills the form only</text>
+<path class="ln" marker-end="url(#am)" d="M492 78H516"/>
+<rect class="box-acc" x="520" y="32" width="220" height="92" rx="4"/><text x="532" y="54" class="t-b">role</text><text x="532" y="74" class="t-s">storage</text><text x="532" y="92" class="t-s t-m">approved by the key hash,</text><text x="532" y="108" class="t-s t-m">carried in the certificate</text>
+<path class="ln" marker-end="url(#am)" d="M742 78H766"/>
+<rect class="box-ok" x="770" y="32" width="210" height="92" rx="4"/><text x="782" y="54" class="t-b">assigned services</text><text x="782" y="74" class="t-s">tierstore: role storage</text><text x="782" y="92" class="t-s">hello: the label demo=yes</text><text x="782" y="108" class="t-s t-m">that the operator set</text>
+<rect class="box-w" x="20" y="148" width="220" height="78" rx="4"/><text x="32" y="170" class="t-b">serial</text><text x="32" y="190" class="t-s">mac-1 claims its serial</text><text x="32" y="208" class="t-s t-m">and platform UUID</text>
+<path class="ln" marker-end="url(#am)" d="M242 187H266"/>
+<rect class="box-blue" x="270" y="148" width="220" height="78" rx="4"/><text x="282" y="170" class="t-b">host record</text><text x="282" y="190" class="t-s">mac-1, role mac</text><text x="282" y="208" class="t-s t-m">matched by serial only</text>
+<path class="ln" marker-end="url(#am)" d="M492 187H516"/>
+<rect class="box-acc" x="520" y="148" width="220" height="78" rx="4"/><text x="532" y="170" class="t-b">role</text><text x="532" y="190" class="t-s">mac</text><text x="532" y="208" class="t-s t-m">approved by an operator</text>
+<path class="ln" marker-end="url(#am)" d="M742 187H766"/>
+<rect class="box-ok" x="770" y="148" width="210" height="78" rx="4"/><text x="782" y="170" class="t-b">assigned services</text><text x="782" y="190" class="t-s">tierstore: role mac</text>
+</svg></div><figcaption><strong>From a MAC address to a service.</strong> Only the approval binds anything: the host id and role are bound to the host&rsquo;s key, and the services follow the role. Nothing on the left of the role authorises the machine.</figcaption></figure>
+<p>The whole lab, described that way:</p>
+<div class="tblw"><table class="tbl">
+<thead><tr><th>Host id</th><th>Machine</th><th>Its record is matched by</th><th>Role</th><th>Services assigned</th></tr></thead>
+<tbody>
+<tr><td>node-1</td><td>Linux server, systemd</td><td>a data MAC (the BMC MAC is recorded too)</td><td>storage</td><td>tierstore; hello, through the label <code>demo=yes</code></td></tr>
+<tr><td>node-2 to node-6</td><td>Linux servers, systemd</td><td>a data MAC (the BMC MAC is recorded too)</td><td>storage</td><td>tierstore</td></tr>
+<tr><td>mac-1, mac-2</td><td>Mac Studios, launchd</td><td>the serial</td><td>mac</td><td>tierstore</td></tr>
+</tbody></table></div>
+<p>The rollout file that says so. It is read once, when the coordinator starts:</p>
+<pre><code># the rollout file (--rollout-file): mode 0600, owned by the coordinator's user
+[[service]]
+name = "tierstore"
+roles = ["storage", "mac"]
+bake_beats = 3
+canary = { count = 1 }
+rollback = "automatic"
+
+[[service]]
+name = "hello"
+roles = ["storage"]
+canary = { count = 1 }
+
+[service.selector]
+labels = { demo = "yes" }</code></pre>
+<p>With it, tierstore goes first to one canary, which bakes for three healthy heartbeats, and then to the other hosts one at a time, Linux and Mac alike; a failed release on two of them (the default threshold) marks the version bad and sets the desired version back. hello goes only to hosts the operator labels <code>demo=yes</code> (<code>hostkeeper ctl hosts set-labels</code>). The BMC MAC on each server&rsquo;s record is there for the operator and for a future reader: the shipped daemon sends no BMC MAC, so today a server is matched on its data MACs alone.</p>
+<details class="edge"><summary>Edge cases: what the lab cannot do yet on <code>main</code></summary>
+<ul>
+<li>A host is first given a service by an <code>install</code> order, which the coordinator sends only to a daemon that announces <code>install-v1</code>. The daemon&rsquo;s heartbeat loop announces it and runs the install, but the CA refuses the daemon&rsquo;s certificate request (<a href="#n-h5">h5</a>), so the lab&rsquo;s first deploy of tierstore is planned as a forced one (<code>Releases.Force</code>), which <a href="#open">the measurements</a> time; a force reaches only hosts that already announce the service.</li>
+<li>The daemon&rsquo;s certificate request has an empty subject, which the CA refuses (<a href="#identity">identity and enrollment</a>), so a lab host cannot enroll until that is fixed.</li>
+<li>On the Macs, tierstore&rsquo;s hook restarts its launchd job; the socket hand-off is Linux-only. Every Mac update of tierstore is therefore a short gap in serving.</li>
+<li>The rollout is serial across the eight hosts and every service, so a fleet-wide update of tierstore takes eight bakes.</li>
+</ul>
+</details>
+
+<h3 id="ui">How an operator sees the fleet</h3>
+<p>The web UI is a few static files that the coordinator serves on its private listener. The operator pastes a token, which the page keeps in memory only, and every button is one gateway call made with it. The drawings below follow the page modules under <a href="https://github.com/komira-ai/hostkeeper/tree/main/ui/pages">ui/pages</a>: the headings, column names, field labels and button texts are the strings of those modules (the test of this report checks that each one is), and the rows are the lab&rsquo;s. Where a page gets a refusal on <code>main</code>, the drawing shows it. Words in italics stand for data.</p>
+<figure class="wide" id="ui-fleet"><div class="mock-wrap"><div class="mock" data-ui-page="fleet"><div class="mock-top"><span class="brand ui-t">hostkeeper</span><span class="nav on ui-t">Fleet</span><span class="nav ui-t">Host</span><span class="nav ui-t">Rollout</span><span class="nav ui-t">Holds</span><span class="nav ui-t">Enrollment</span><span class="nav ui-t">Inventory</span><span class="nav ui-t">Audit</span><span class="nav ui-t">Sign out</span></div><div class="mock-body"><p class="mock-note">On <code>main</code>:</p><h4 class="ui-t">Fleet</h4><p class="err">UNIMPLEMENTED</p><p class="mock-note">As the page&rsquo;s code draws it once <code>Hosts.List</code> is served:</p><h4 class="ui-t">Fleet</h4><div class="alerts"><h5 class="ui-t">Alerts (<span class="ph">n</span>)</h5><p class="ui-t">Nothing needs a person.</p></div><h5 class="ui-t">Hosts (<span class="ph">n</span>)</h5><table><thead><tr><th class="ui-t">Host</th><th class="ui-t">Role</th><th class="ui-t">Heartbeat</th><th class="ui-t">Last heartbeat</th><th class="ui-t">Services</th></tr></thead><tbody><tr><td><span class="lk">node-1</span></td><td>storage</td><td>live</td><td><span class="ph">time</span></td><td><strong>tierstore</strong> <span class="ph">version</span>, healthy<br><strong>hello</strong> <span class="ph">version</span>, healthy</td></tr><tr><td><span class="lk">node-4</span></td><td>storage</td><td>live</td><td><span class="ph">time</span></td><td><strong>tierstore</strong> <span class="ph">version</span>, healthy <span class="ph">[holds the update slot, baking]</span></td></tr><tr><td><span class="lk">mac-1</span></td><td>mac</td><td>silent</td><td><span class="ph">time</span></td><td><strong>tierstore</strong> <span class="ph">version</span>, healthy <span class="ph">[held]</span></td></tr></tbody></table></div></div></div><figcaption><strong>Fleet.</strong> The page calls <code>Hosts.List</code> and then <code>Releases.Status</code>. On <code>main</code> the first is not served, so the page is its heading and the refusal. The alert box lists halts, hosts waiting for an operator, duplicate identities, hosts held on a version marked bad and hosts abandoned while updating. Italic text stands for data.</figcaption></figure>
+<figure class="wide" id="ui-host"><div class="mock-wrap"><div class="mock" data-ui-page="host"><div class="mock-top"><span class="brand ui-t">hostkeeper</span><span class="nav ui-t">Fleet</span><span class="nav on ui-t">Host</span><span class="nav ui-t">Rollout</span><span class="nav ui-t">Holds</span><span class="nav ui-t">Enrollment</span><span class="nav ui-t">Inventory</span><span class="nav ui-t">Audit</span><span class="nav ui-t">Sign out</span></div><div class="mock-body"><h4>Host node-4</h4><p class="err">UNIMPLEMENTED</p><h5 class="ui-t">Assigned services</h5><table><thead><tr><th class="ui-t">Service</th><th class="ui-t">Through</th><th class="ui-t">Installed</th><th class="ui-t">Desired</th><th class="ui-t">State</th><th class="ui-t">Minimum</th></tr></thead><tbody><tr><td>tierstore</td><td>role storage</td><td><span class="ph">version</span></td><td><span class="ph">version</span></td><td>behind</td><td>-</td></tr></tbody></table><p class="mock-note">Once <code>Hosts.Get</code> is served, the host&rsquo;s facts follow, then one card per service:</p><table><tbody><tr><th class="ui-t">Role</th><td>storage</td></tr><tr><th class="ui-t">Heartbeat</th><td>live</td></tr><tr><th class="ui-t">Last heartbeat</th><td><span class="ph">time</span></td></tr><tr><th class="ui-t">Agent</th><td><span class="ph">name and version</span></td></tr><tr><th class="ui-t">Labels</th><td>-</td></tr><tr><th class="ui-t">Excluded from</th><td>-</td></tr></tbody></table><fieldset><legend class="ui-t">Labels</legend><span class="fld"><span class="ui-t">Labels (key=value, separated by commas)</span><span class="inp">&nbsp;</span></span><span class="btn ui-t">Set labels</span></fieldset><h5>tierstore</h5><table><tbody><tr><th class="ui-t">Installed version</th><td><span class="ph">version</span></td></tr><tr><th class="ui-t">Health</th><td>healthy</td></tr><tr><th class="ui-t">Up</th><td>yes</td></tr><tr><th class="ui-t">Update slot</th><td>holds the update slot</td></tr><tr><th class="ui-t">Gate</th><td>baking</td></tr><tr><th class="ui-t">Membership</th><td><span class="ph">membership</span></td></tr><tr><th class="ui-t">Excluded</th><td>no</td></tr></tbody></table><fieldset><legend class="ui-t">Act on tierstore here</legend><span class="fld"><span class="ui-t">Reason</span><span class="inp">&nbsp;</span></span><span class="fld">&#9744; <span class="ui-t">Abandon: also free the update slot this host holds for the service (the host is gone)</span></span><br><span class="btn ui-t">Exclude</span><span class="btn ui-t">Include</span><span class="btn ui-t">Abort the running update</span><span class="btn ui-t">Hold here</span><span class="btn ui-t">Release the hold here</span></fieldset></div></div></div><figcaption><strong>Host.</strong> The page calls <code>Hosts.Get</code> and then <code>Services.List</code>, the second even when the first fails. On <code>main</code> it shows the refusal and the services assigned to the host, which is the first part of this drawing. Each service card also shows its holds and its last update with the hook&rsquo;s log lines. The abort button queues an order that the shipped daemon never receives.</figcaption></figure>
+<figure class="wide" id="ui-rollout"><div class="mock-wrap"><div class="mock" data-ui-page="rollout"><div class="mock-top"><span class="brand ui-t">hostkeeper</span><span class="nav ui-t">Fleet</span><span class="nav ui-t">Host</span><span class="nav on ui-t">Rollout</span><span class="nav ui-t">Holds</span><span class="nav ui-t">Enrollment</span><span class="nav ui-t">Inventory</span><span class="nav ui-t">Audit</span><span class="nav ui-t">Sign out</span></div><div class="mock-body"><h4 class="ui-t">Rollout</h4><p class="ui-t mnote">CI or an operator sets the desired version: an operator sets it here.</p><div class="card"><h5>tierstore</h5><table><tbody><tr><th class="ui-t">Desired</th><td><span class="ph">version</span></td></tr><tr><th class="ui-t">Assigned roles</th><td>storage, mac</td></tr><tr><th class="ui-t">Operator assignments</th><td>-</td></tr><tr><th class="ui-t">Hosts assigned</th><td><span class="ph">n</span></td></tr><tr><th class="ui-t">Uninstalling</th><td>-</td></tr><tr><th class="ui-t">State</th><td>in_progress</td></tr><tr><th class="ui-t">Up</th><td><span class="ph">n hosts</span></td></tr><tr><th class="ui-t">Update slot</th><td>held by node-4</td></tr><tr><th class="ui-t">Waiting for the canary</th><td>-</td></tr><tr><th class="ui-t">Baking</th><td>node-4</td></tr><tr><th class="ui-t">Halt</th><td>-</td></tr><tr><th class="ui-t">Last good</th><td><span class="ph">version</span></td></tr><tr><th class="ui-t">Bad versions</th><td>-</td></tr><tr><th class="ui-t">Bad, left by a force</th><td>-</td></tr><tr><th class="ui-t">Force standing</th><td>-</td></tr></tbody></table><table><thead><tr><th class="ui-t">Role</th><th class="ui-t">At desired</th><th class="ui-t">Updating</th><th class="ui-t">Failed</th><th class="ui-t">Down</th></tr></thead><tbody><tr><td>storage</td><td><span class="ph">n</span></td><td><span class="ph">n</span></td><td><span class="ph">n</span></td><td><span class="ph">n</span></td></tr><tr><td>mac</td><td><span class="ph">n</span></td><td><span class="ph">n</span></td><td><span class="ph">n</span></td><td><span class="ph">n</span></td></tr></tbody></table><fieldset><legend class="ui-t">Assign and set the desired version of tierstore</legend><span class="fld"><span class="ui-t">Version</span><span class="inp">&nbsp;</span></span><span class="fld"><code class="lbl">Package digest (64 hex characters)</code><span class="inp">&nbsp;</span></span><span class="btn ui-t">Set desired</span><span class="fld"><span class="ui-t">Role</span><span class="inp">&nbsp;</span></span><span class="fld">&#9744; <span class="ui-t">Uninstall from each host that loses its last assignment</span></span><span class="btn ui-t">Assign to the role</span><span class="btn ui-t">Unassign from the role</span></fieldset><fieldset><legend class="ui-t">Act on tierstore</legend><span class="fld"><span class="ui-t">Reason</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Version to mark bad</span><span class="inp">&nbsp;</span></span><span class="btn ui-t">Mark bad</span><span class="btn ui-t">Halt</span><span class="btn ui-t">Check convergence</span></fieldset></div><div class="card"><h5 class="ui-t">Force a version</h5><p class="ui-t">Switches the service on every targeted host at once, with no hook, past the update slot, the canary and the bake.</p><span class="fld"><span class="ui-t">Service</span><span class="inp">tierstore</span></span><span class="fld"><span class="ui-t">Version</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Reason</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Target</span><span class="inp">the whole fleet</span></span><span class="fld"><span class="ui-t">Role (for a role)</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Hosts (for listed hosts, separated by commas)</span><span class="inp">&nbsp;</span></span><span class="fld">&#9744; <span class="ui-t">Include held hosts, for this force only (no hold is removed)</span></span><span class="btn ui-t">Count the hosts</span><div class="confirm"><p>The hosts could not be counted (UNIMPLEMENTED), so the force cannot be confirmed.</p><span class="btn off ui-t">Force</span><span class="btn ui-t">Cancel</span></div></div></div></div></div><figcaption><strong>Rollout.</strong> One card per service from <code>Releases.Status</code>, with the assignment rows from <code>Services.List</code>. The operator sets the desired version here, assigns or unassigns a role, marks a version bad, halts, and forces. On <code>main</code> two buttons get refusals: <span class="ui-q">Check convergence</span> sends <code>Releases.Converge</code>, which takes only CI&rsquo;s token, and each unmark button calls <code>Releases.UnmarkBad</code>, which is not served. The force dialog counts the hosts with <code>Hosts.List</code> before it lets the operator confirm, so on <code>main</code> it stops at the refusal drawn here.</figcaption></figure>
+<figure class="wide" id="ui-holds"><div class="mock-wrap"><div class="mock" data-ui-page="holds"><div class="mock-top"><span class="brand ui-t">hostkeeper</span><span class="nav ui-t">Fleet</span><span class="nav ui-t">Host</span><span class="nav ui-t">Rollout</span><span class="nav on ui-t">Holds</span><span class="nav ui-t">Enrollment</span><span class="nav ui-t">Inventory</span><span class="nav ui-t">Audit</span><span class="nav ui-t">Sign out</span></div><div class="mock-body"><h4 class="ui-t">Holds</h4><p class="ui-t mnote">A held service is ordered nothing where it is held: no update, install, rollback, uninstall or force without include held.</p><h5 class="ui-t">Holds that stand (<span class="ph">n</span>)</h5><table><thead><tr><th class="ui-t">Service</th><th class="ui-t">Scope</th><th class="ui-t">Reason</th><th class="ui-t">Set by</th><th class="ui-t">Set at</th><th></th></tr></thead><tbody><tr><td>tierstore</td><td>host mac-1</td><td><span class="ph">the reason given</span></td><td><span class="ph">token name</span></td><td><span class="ph">time</span></td><td><span class="btn ui-t">Release</span></td></tr></tbody></table><span class="fld"><span class="ui-t">Reason for a release</span><span class="inp">&nbsp;</span></span><fieldset><legend class="ui-t">Hold a service</legend><span class="fld"><span class="ui-t">Service</span><span class="inp">tierstore</span></span><span class="fld"><span class="ui-t">Scope</span><span class="inp">a host</span></span><span class="fld"><span class="ui-t">Host or role</span><span class="inp">mac-1</span></span><span class="fld"><span class="ui-t">Reason (required)</span><span class="inp">&nbsp;</span></span><span class="btn ui-t">Hold</span></fieldset></div></div></div><figcaption><strong>Holds.</strong> Every hold that stands, from <code>Services.List</code>, and a form for <code>Services.Hold</code> on a host, a role or the whole fleet. A hold needs a reason and survives a coordinator restart.</figcaption></figure>
+<figure class="wide" id="ui-enrollment"><div class="mock-wrap"><div class="mock" data-ui-page="enrollment"><div class="mock-top"><span class="brand ui-t">hostkeeper</span><span class="nav ui-t">Fleet</span><span class="nav ui-t">Host</span><span class="nav ui-t">Rollout</span><span class="nav ui-t">Holds</span><span class="nav on ui-t">Enrollment</span><span class="nav ui-t">Inventory</span><span class="nav ui-t">Audit</span><span class="nav ui-t">Sign out</span></div><div class="mock-body"><h4 class="ui-t">Enrollment</h4><p class="ui-t mnote">Claims are what a host says it is; they prove nothing. Approve names the key hash shown.</p><div class="card"><h5>Request <span class="ph">id</span></h5><p class="mnote">Matches the record of node-4 (role storage).</p><table><tbody><tr><th class="ui-t">Key SHA-256</th><td><span class="ph">hash</span></td></tr><tr><th class="ui-t">Image</th><td><span class="ph">image name</span></td></tr><tr><th class="ui-t">First seen</th><td><span class="ph">time</span></td></tr><tr><th class="ui-t">Renewal of</th><td>-</td></tr><tr><th class="ui-t">Mac nonce presented</th><td>no</td></tr></tbody></table><table><thead><tr><th class="ui-t">Claim</th><th></th></tr></thead><tbody><tr><td><span class="ui-t">Machine id</span></td><td><span class="ph">machine id</span></td></tr><tr><td><span class="ui-t">DMI serial</span></td><td><span class="ph">serial</span></td></tr><tr><td><span class="ui-t">Addresses</span></td><td><span class="ph">data MACs</span></td></tr></tbody></table><fieldset><legend class="ui-t">Approve</legend><span class="fld"><span class="ui-t">Host id</span><span class="inp">node-4</span></span><span class="fld"><span class="ui-t">Role</span><span class="inp">storage</span></span><span class="fld"><span class="ui-t">Services (separated by commas, may be empty)</span><span class="inp">tierstore</span></span><span class="fld"><span class="ui-t">Reason</span><span class="inp">&nbsp;</span></span><span class="fld">&#9744; <span class="ui-t">Replace</span></span><span class="btn ui-t">Approve</span></fieldset></div></div></div></div><figcaption><strong>Enrollment.</strong> Each pending request from <code>Enrollment.List</code>, its match against the inventory, its claims and the approval form. The form is filled from the matched record; the operator still approves by the key hash shown, with <code>Enrollment.Approve</code>. A request whose claims belong to an enrolled host is marked as a duplicate claim and needs <span class="ui-q">Replace</span>.</figcaption></figure>
+<figure class="wide" id="ui-inventory"><div class="mock-wrap"><div class="mock" data-ui-page="inventory"><div class="mock-top"><span class="brand ui-t">hostkeeper</span><span class="nav ui-t">Fleet</span><span class="nav ui-t">Host</span><span class="nav ui-t">Rollout</span><span class="nav ui-t">Holds</span><span class="nav ui-t">Enrollment</span><span class="nav on ui-t">Inventory</span><span class="nav ui-t">Audit</span><span class="nav ui-t">Sign out</span></div><div class="mock-body"><h4 class="ui-t">Inventory</h4><table><thead><tr><th class="ui-t">Host id</th><th class="ui-t">Role</th><th class="ui-t">Data MACs</th><th class="ui-t">BMC MAC</th><th class="ui-t">Serial</th><th class="ui-t">Notes</th><th class="ui-t">Added by</th><th class="ui-t">Added at</th><th></th></tr></thead><tbody><tr><td>node-1</td><td>storage</td><td><span class="ph">MACs</span></td><td><span class="ph">MAC</span></td><td>-</td><td>-</td><td><span class="ph">token name</span></td><td><span class="ph">time</span></td><td><span class="btn ui-t">Remove</span></td></tr><tr><td>mac-1</td><td>mac</td><td>-</td><td>-</td><td><span class="ph">serial</span></td><td>-</td><td><span class="ph">token name</span></td><td><span class="ph">time</span></td><td><span class="btn ui-t">Remove</span></td></tr></tbody></table><span class="fld"><span class="ui-t">Reason for a removal</span><span class="inp">&nbsp;</span></span><span class="btn ui-t">Next page</span><fieldset><legend class="ui-t">Record a server</legend><span class="fld"><span class="ui-t">Host id</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Role (may be empty)</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Data MACs (separated by commas)</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">BMC MAC (may be empty)</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Serial (a Mac's is what it is matched by)</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Notes</span><span class="inp">&nbsp;</span></span><span class="btn ui-t">Record</span></fieldset></div></div></div><figcaption><strong>Inventory.</strong> The operator&rsquo;s records, from <code>Enrollment.ListRecords</code>, with <code>Enrollment.AddRecord</code> and <code>Enrollment.RemoveRecord</code>. A server is recorded with its data MACs and its BMC MAC, a Mac with its serial, which is what it is matched by.</figcaption></figure>
+<figure class="wide" id="ui-audit"><div class="mock-wrap"><div class="mock" data-ui-page="audit"><div class="mock-top"><span class="brand ui-t">hostkeeper</span><span class="nav ui-t">Fleet</span><span class="nav ui-t">Host</span><span class="nav ui-t">Rollout</span><span class="nav ui-t">Holds</span><span class="nav ui-t">Enrollment</span><span class="nav ui-t">Inventory</span><span class="nav on ui-t">Audit</span><span class="nav ui-t">Sign out</span></div><div class="mock-body"><h4 class="ui-t">Audit</h4><fieldset><legend class="ui-t">Filter</legend><span class="fld"><span class="ui-t">Actor</span><span class="inp">anyone</span></span><span class="fld"><span class="ui-t">Action</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Service</span><span class="inp">&nbsp;</span></span><span class="fld"><span class="ui-t">Host</span><span class="inp">&nbsp;</span></span><span class="btn ui-t">Show</span></fieldset><table><thead><tr><th class="ui-t">Seq</th><th class="ui-t">By</th><th class="ui-t">Action</th><th class="ui-t">Service</th><th class="ui-t">Host</th><th class="ui-t">Reason</th></tr></thead><tbody><tr><td><span class="ph">n</span></td><td>ci</td><td>lift_halt</td><td>tierstore</td><td>-</td><td><span class="ph">reason</span></td></tr><tr><td><span class="ph">n</span></td><td>operator</td><td>set_desired</td><td>tierstore</td><td>-</td><td><span class="ph">version</span></td></tr><tr><td><span class="ph">n</span></td><td>operator</td><td>hold</td><td>tierstore</td><td>mac-1</td><td><span class="ph">the reason given</span></td></tr><tr><td><span class="ph">n</span></td><td>operator</td><td>enroll_approve</td><td>-</td><td>node-4</td><td><span class="ph">the reason given</span></td></tr><tr><td><span class="ph">n</span></td><td>coordinator</td><td>last_good</td><td>tierstore</td><td>-</td><td><span class="ph">version</span></td></tr></tbody></table><span class="btn ui-t">From the oldest</span><span class="btn ui-t">Newer</span></div></div></div><figcaption><strong>Audit.</strong> The audit file through <code>Audit.List</code>, filtered by actor, action, service and host. The By column is the kind of actor; the operator token&rsquo;s name is in the file. The action names here are ones the coordinator writes, chosen for the drawing.</figcaption></figure>
+
+</section>
+
+<section id="correct">
+<span class="bar" aria-hidden="true"></span>
+<h2>Correctness and failure handling</h2>
+<p>What the code does when a part fails, and how it is tested. The failure cases are the ones <a href="#problem">the problem</a> starts from: a run that stops midway, a host or a coordinator that dies, a hook that hangs or lies, and two updates at once.</p>
+<h3 id="failures">Failure model</h3>
+<p>What the code does, by failure
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#8-races-and-failures">design: Races and failures</a>):</p>
+<ul>
+<li><strong>The coordinator dies or is unreachable.</strong> Steps already running need no coordinator. Each runs
+on its own thread, bounded by the dead-man and its unit, and its verdict waits in memory to be sent
+with a heartbeat that works. The heartbeat loop beats on a fixed period, with no backoff. A
+restarted coordinator keeps its files (desired state, ops, halts, verdicts, spent tokens,
+enrollment store) and forgets the fleet. Its rollout gate and automatic rollback order nothing
+for a quiet start of at least
+<span data-cell="c-quiet" data-source="crates/hostkeeper-coordinator/src/fleet.rs" data-item="QUIET_START">30 s</span>,
+while it hears every host again; a standing force is resent at once. Bake counts, deferral
+backoff and queued aborts start from zero. A halt is written under a marker, and a start that finds the marker is refused until an operator
+settles it. There is one coordinator and no failover.</li>
+<li><strong>A host dies or reboots mid-step.</strong> The step record and the boot id decide (see
+<a href="#hooks">Update hooks</a>). A second daemon on the same state directory exits at once on the
+state lock. On the coordinator, a host silent for
+<span data-cell="c-down" data-source="crates/hostkeeper-coordinator/src/fleet.rs" data-item="DOWN_AFTER">45 s</span>
+is <code>down</code>. A down host that was updating keeps the one update slot until it returns or an operator
+excludes it with <code>abandon</code>.</li>
+<li><strong>A hook hangs, fails or lies.</strong> A hang is stopped at its bound and is a failure. A failure before
+commit is rolled back. The halt exit code, or a rollback that fails (see
+<a href="#hooks">Update hooks</a>), halts the service on that host until cleared, and the
+coordinator halts the service fleet-wide. A step that cannot be stopped keeps the service locked until an operator aborts it through the host&rsquo;s admin socket (the coordinator&rsquo;s
+<code>Hosts.Abort</code> does not reach the shipped daemon), and an abort tries the stop
+<span data-cell="c-abort" data-source="crates/hostkeeper-daemon/src/verbs/abort.rs" data-item="ABORT_STOP_ATTEMPTS">3</span>
+times. A hook that passes <code>verify</code> while its service is down is not caught by the daemon. The
+coordinator notices it only through bake (<code>bake_beats</code> above zero), and automatic rollback reads
+reported failures, never unhealthy heartbeats. Nothing confines a hook: it is root, and its limits
+are the trusted signers and the conformance suite, not the daemon.</li>
+<li><strong>The network fails.</strong> The daemon resends a verdict in every heartbeat until the coordinator
+acknowledges it, but the resend queue is in memory, so after a daemon restart the verdict comes
+back from the step record when the coordinator orders again. A heartbeat is at most
+<span data-cell="c-heartbeat-bytes" data-source="crates/hostkeeper-link/src/beat.rs" data-item="MAX_HEARTBEAT_BYTES">16 KiB</span>.
+A host away past its certificate&rsquo;s expiry must be approved again, and a coordinator left running
+past its server certificate&rsquo;s life is refused by every daemon until it restarts.</li>
+<li><strong>A bad package.</strong> Fetch, digest, attestation and unpack failures refuse the order before any hook
+runs. One difference from the design: on a hooked order, a transient fetch or attestation failure
+reaches the coordinator as <code>Failed</code> with the reason, not as <code>Deferred</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/link_adapters.rs">crates/hostkeeper-daemon/src/link_adapters.rs</a>).</li>
+<li><strong>Two updates at once.</strong> A host runs one order per service at a time and one step at a time. The
+fleet runs one ordinary update at a time. A force takes over from a running update by stopping its
+step, with no rollback.</li>
+</ul>
+<h3 id="testing">Testing</h3>
+<p>Every crate of the workspace must reach <code>Percent::TARGET</code>,
+<span data-cell="c-coverage" data-source="crates/coverage-gate/src/lib.rs" data-item="TARGET">9,900</span>
+hundredths of a percent, of its lines and of its branches, judged by <code>coverage-gate</code> in CI&rsquo;s
+<code>test</code> job with no exclusion list
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/coverage-gate">crates/coverage-gate</a>, <a href="https://github.com/komira-ai/hostkeeper/blob/main/AGENTS.md">AGENTS.md</a>).</p>
+<ul>
+<li><strong>The privileged real-systemd suite.</strong> <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
+runs as root on a hosted Ubuntu runner after each merge to <code>main</code>. It is never run on a pull
+request and counts toward no coverage gate, but a release waits for it to pass on its commit.
+Its tests (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-privileged/tests">crates/hostkeeper-privileged/tests</a>) drive the
+production adapters against real systemd: a step in a real transient unit ended at its bound with
+its whole control group, <code>RuntimeMaxSec</code> as the only property, an unbounded <code>prepare</code>, the
+dead-man stopping a unit by name, a unit name reused after a failure, long output kept to its last
+bytes, and the observer reading a real unit&rsquo;s state and its main process&rsquo;s executable digest.
+The workload is <code>hostkeeper-fixture-hook</code>. This suite does not run the daemon, an enrollment or a
+whole update under systemd. On macOS, the <code>macos-device</code> job above is the only test that runs the
+daemon binary under a real service manager.</li>
+<li><strong>End to end, in process.</strong> <a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/tests/end_to_end.rs">crates/hostkeeper-daemon/tests/end_to_end.rs</a>
+runs the real coordinator, heartbeat loop, executor, step runner and boot pass together, with
+fakes for the transport, the service manager and the package source: a desired version set on
+the coordinator reaches a fixture hook and reads converged.
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/tests/hello.rs">crates/hostkeeper-daemon/tests/hello.rs</a> runs
+hello&rsquo;s real hook through the daemon for an install, an update and a failed update that rolls back.
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/tests/farm.rs">crates/hostkeeper-coordinator/tests/farm.rs</a>
+runs the coordinator behind real mutual TLS over in-memory streams. No test runs a daemon and a
+coordinator as two processes over a network.</li>
+<li><strong>Conformance.</strong> A service tests its own hook with the harness behind the <code>conformance</code> feature
+of <code>hostkeeper-hook</code> (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/conformance.md">docs/conformance.md</a>). The harness runs the real hook
+executable against the service&rsquo;s fake and checks exit codes and reports, repeated steps,
+rollback restoring the world, a kill at every kill point, the updater&rsquo;s next-step table, and the
+record-directory lock. It is shown refusing deliberately flawed hooks
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-hook/tests/conformance.rs">crates/hostkeeper-hook/tests/conformance.rs</a>).</li>
+<li><strong>Lints run as tests in <code>xtask</code>.</strong> The workflow lint pins runners, triggers, permissions and action
+pins, and keeps root jobs in <code>privileged.yml</code>. The wall-clock lint allows a wall-clock read only
+where a reason is listed. The hygiene lint covers this public repository&rsquo;s text. The layering
+lint holds each crate&rsquo;s dependencies. This report&rsquo;s own check is also among them.</li>
+</ul>
+</section>
+<section id="limits">
+<span class="bar" aria-hidden="true"></span>
+<h2>What is not built yet</h2>
+<p>What is not built, plainly:</p>
+<ul>
+<li><strong>The CA refuses the daemon&rsquo;s enrollment request</strong>, read from the code (<a href="#n-h5">h5</a>), so a host gets no certificate for its heartbeat, and on Linux the unit control
+(daemon-reload, start, stop) is not wired; the step launcher is. Together these mean no host
+built from <code>main</code> can be updated by the coordinator, although the heartbeat link is wired.</li>
+<li><strong>Orders the daemon takes:</strong> the heartbeat loop runs <code>update</code>, <code>force</code>, <code>install</code>, <code>uninstall</code>
+and <code>abort</code>, and announces <code>install-v1</code> and <code>abort-v1</code>, so the coordinator&rsquo;s install, uninstall
+and <code>Hosts.Abort</code> are sent to it over the heartbeat link, once the host has a certificate (above). The loop
+runs no <code>force_rollback</code> or <code>clear_halt</code>, and the coordinator never orders them.</li>
+<li><strong>Host listing and unmarking:</strong> <code>Hosts.List</code>, <code>Hosts.Get</code> and <code>Releases.UnmarkBad</code> answer
+<code>UNIMPLEMENTED</code>.</li>
+<li><strong>Additive steps:</strong> a manifest&rsquo;s <code>boot</code> step, the hook&rsquo;s <code>uninstall</code> step and the self-update
+probe cannot start on either real launcher, so uninstall and self-update do not complete on a
+host.</li>
+<li><strong>Rollout shape:</strong> one ordinary update at a time across the whole fleet, with no groups. Automatic
+rollback cannot move a host back below the version it runs.</li>
+<li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no expiry of pending
+requests, no CA rotation or revocation lists, and the certificate-request defect above.</li>
+<li><strong>Operations:</strong> a single coordinator with no failover; the rollout file is read only at start; the
+audit file is never rotated; there is no metrics endpoint and no pager (conditions that need a
+person are <code>alert=</code> log lines).</li>
+<li><strong>macOS:</strong> no MDM, no update run on a device, no signed installer.</li>
+<li><strong>A hook is root and is not confined.</strong> This is by design: the trust is in the signed package and
+the conformance suite (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#11-limits">design: Limits</a>).</li>
+<li><strong>Distribution:</strong> releases are published as GitHub releases, but no release channel is hosted,
+and no package installs the pinned <code>gh</code> and trusted root the daemon&rsquo;s attestation check needs.</li>
+</ul>
+<p>The design&rsquo;s plan for the rest is its build order
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#122-build-order-from-todays-code-to-done">design: Build order</a>).
+High availability for the coordinator, hardware-backed identity and power control through the BMC
+are not planned there (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#121-not-planned-in-this-document">design: Not planned</a>).</p>
+
+</section>
+<section id="open">
+<span class="bar" aria-hidden="true"></span>
+<h2>What we have not measured yet</h2>
+<p>The headline numbers are missing: how long a host takes to enroll, how long a desired version takes to reach the fleet, how long a failed verify takes to roll back, and what the coordinator and the daemon cost to run. Each is an open cell below, and each stays open until a run on the lab fills it from a result file. None is estimated.</p>
+<p>Every cell below is open: no farm run has measured hostkeeper yet. The farm run writes its rows to
+a result file in <a href="https://github.com/komira-ai/hostkeeper/tree/main/docs/report/results">docs/report/results</a> and fills each cell from it.</p>
+<div class="tblw"><table class="tbl">
+<thead><tr><th>Measurement</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>Time to enroll a host, from the daemon&rsquo;s first <code>Enroll</code> to its certificate</td><td><span data-cell="m-enroll" data-open="farm run">open</span></td></tr>
+<tr><td>Desired-version change to converged: hello v1 install</td><td><span data-cell="m-converge-install" data-open="farm run">open</span></td></tr>
+<tr><td>Desired-version change to converged: hello v1 to v2 update</td><td><span data-cell="m-converge-update" data-open="farm run">open</span></td></tr>
+<tr><td>Desired-version change to rolled back: hello failed <code>verify</code>, automatic rollback</td><td><span data-cell="m-converge-rollback" data-open="farm run">open</span></td></tr>
+<tr><td>tierstore forced first deploy, from <code>Releases.Force</code> to every target running</td><td><span data-cell="m-tierstore-force-first" data-open="farm run">open</span></td></tr>
+<tr><td>Coordinator CPU at the six-node fleet</td><td><span data-cell="m-coordinator-cpu" data-open="farm run">open</span></td></tr>
+<tr><td>Coordinator memory at the six-node fleet</td><td><span data-cell="m-coordinator-memory" data-open="farm run">open</span></td></tr>
+<tr><td>Daemon resident memory per host</td><td><span data-cell="m-daemon-rss" data-open="farm run">open</span></td></tr>
+</tbody></table></div>
+<p><strong>Where the numbers will come from.</strong> hostkeeper exports no metrics, and the daemon does not fill
+the step durations its wire format has room for. So the times come from outside: the time between
+the CI client&rsquo;s poll lines and the audit file&rsquo;s <code>at_unix</code> stamps (for <code>last_good</code>, <code>mark_bad</code> and
+<code>force</code>) on the coordinator, and each host&rsquo;s journal. CPU and memory come from the hosts&rsquo; own
+process or cgroup accounting. The coordinator&rsquo;s six-host behaviour (canary, one host at a time,
+rollback at two failures of six) is already tested in process
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/tierstore_service_tests.rs">crates/hostkeeper-coordinator/src/tierstore_service_tests.rs</a>).
+That test asserts behaviour, not time.</p>
+<p><strong>What the farm run needs first, from the code on <code>main</code>:</strong></p>
+<ul>
+<li>a systemd unit control in the Linux adapter set in place of <code>Unwired</code>;</li>
+<li>a daemon certificate request the CA accepts (see <a href="#identity">Identity and enrollment</a>);</li>
+<li>for a first install, the heartbeat link above: the loop announces <code>install-v1</code> and runs the
+<code>install</code> order, and a force reaches only hosts that already announce the service;</li>
+<li>the pinned <code>gh</code> and the Sigstore trusted root on every host, and a staged release channel.</li>
+</ul>
+</section>
+<section id="sources">
+<span class="bar" aria-hidden="true"></span>
+<h2>Sources</h2>
+<p>The hostkeeper column rests on the code of <code>main</code>, cited where each claim is made, and on the design (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md">docs/design/hostkeeper-design.md</a>). For the other tools, every page below was read for this comparison and read a second time to check each verdict, unless it is marked read once. A page that names its version or edition is listed under it. A mirror or a blog post supports no verdict and is not listed.</p>
+<p><strong>Ansible (documentation &ldquo;latest&rdquo;)</strong></p><ul class="src-list">
+<li><a href="https://docs.ansible.com/ansible/latest/collections/community/general/launchd_module.html">the launchd module, community.general</a></li>
+<li><a href="https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html">installation guide</a></li>
+<li><a href="https://docs.ansible.com/ansible/latest/cli/ansible-pull.html">ansible-pull</a></li>
+<li><a href="https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_blocks.html">blocks: block and rescue</a></li>
+<li><a href="https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_strategies.html">strategies and serial</a></li>
+<li><a href="https://docs.ansible.com/projects/awx/en/latest/rest_api/index.html">AWX REST API reference</a></li>
+<li><a href="https://raw.githubusercontent.com/ansible/awx/devel/awxkit/awxkit/cli/docs/source/index.rst">the awx command line</a></li>
+<li><a href="https://ansible.readthedocs.io/projects/awx/en/latest/userguide/applications_auth.html">AWX: applications and authentication</a> (read once)</li>
+<li><a href="https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.5/html/access_management_and_authentication/gw-configure-authentication">Automation Platform: authentication</a> (read once)</li>
+</ul>
+<p><strong>Salt (documentation &ldquo;latest&rdquo;, the v3006 and v3008 lines)</strong></p><ul class="src-list">
+<li><a href="https://docs.saltproject.io/salt/install-guide/en/latest/topics/install-by-operating-system/macos.html">install on macOS</a> (read once)</li>
+<li><a href="https://docs.saltproject.io/en/master/ref/modules/all/salt.modules.mac_service.html">the mac_service module</a> (read once)</li>
+<li><a href="https://docs.saltproject.io/en/latest/ref/netapi/all/salt.netapi.rest_cherrypy.html">rest_cherrypy, the HTTP API</a></li>
+<li><a href="https://docs.saltproject.io/en/latest/topics/eauth/">external authentication</a></li>
+<li><a href="https://docs.saltproject.io/en/latest/topics/orchestrate/orchestrate_runner.html">the orchestrate runner</a></li>
+<li><a href="https://docs.saltproject.io/en/latest/ref/states/requisites.html">requisites</a></li>
+<li><a href="https://docs.saltproject.io/en/latest/topics/tutorials/walkthrough.html">the walkthrough: key acceptance</a> (read once)</li>
+<li><a href="https://docs.saltproject.io/en/latest/topics/event/">the event system</a> (read once)</li>
+</ul>
+<p><strong>Puppet (Puppet Core v8.18.0; Puppet Enterprise documentation edition v2026.0.1)</strong></p><ul class="src-list">
+<li><a href="https://help.puppet.com/osp/current/Content/PuppetCore/supported_operating_systems.htm">supported operating systems</a></li>
+<li><a href="https://help.puppet.com/pe/current/topics/code_mgr_webhook.htm">Code Manager webhook</a></li>
+<li><a href="https://www.puppet.com/docs/puppet/8/ssl_autosign">SSL autosigning</a></li>
+<li><a href="https://help.puppet.com/pe/current/topics/puppet_job_run_command_options.htm">puppet job run options</a></li>
+<li><a href="https://help.puppet.com/pe/current/topics/activity_api.htm">the activity service API</a></li>
+<li><a href="https://help.puppet.com/pe/current/topics/activity_api_event_types.htm">activity API event types</a></li>
+<li><a href="https://help.puppet.com/pe/current/topics/orchestrator_api_v1_endpoints.htm">orchestrator API endpoints</a> (read once)</li>
+<li><a href="https://github.com/puppetlabs/puppet-agent">puppet-agent repository</a></li>
+</ul>
+<p><strong>Chef (Infra Client v19, Habitat v2.1.23)</strong></p><ul class="src-list">
+<li><a href="https://docs.chef.io/platforms/">platforms</a></li>
+<li><a href="https://docs.chef.io/resources/launchd/">the launchd resource</a></li>
+<li><a href="https://docs.chef.io/server/install_server_pre/">Infra Server prerequisites</a></li>
+<li><a href="https://docs.chef.io/habitat/2.1/reference/application_lifecycle_hooks">Habitat application lifecycle hooks</a></li>
+<li><a href="https://docs.chef.io/habitat/latest/services/service_group_updates/">Habitat service group updates</a></li>
+<li><a href="https://docs.chef.io/release_notes/habitat/">Habitat release notes</a></li>
+<li><a href="https://docs.chef.io/release_notes/360/">Chef&rsquo;s release notes for its successor to Infra Server</a></li>
+</ul>
+<p><strong>Nix tools</strong></p><ul class="src-list">
+<li><a href="https://nixos.org/manual/nixos/stable/index.html">the NixOS manual, stable (v26.05)</a> (the first part of the page read)</li>
+<li><a href="https://raw.githubusercontent.com/NixOS/nixpkgs/master/pkgs/by-name/ni/nixos-rebuild-ng/nixos-rebuild.8.scd">the nixos-rebuild man page source, nixpkgs</a> (unversioned)</li>
+<li><a href="https://raw.githubusercontent.com/NixOS/nixpkgs/master/nixos/modules/tasks/auto-upgrade.nix">the system.autoUpgrade module, nixpkgs</a> (unversioned)</li>
+<li><a href="https://github.com/serokell/deploy-rs">deploy-rs README</a></li>
+<li><a href="https://colmena.cli.rs/unstable/introduction.html">Colmena manual, introduction (unstable)</a></li>
+<li><a href="https://colmena.cli.rs/unstable/reference/deployment.html">Colmena deployment reference (unstable)</a></li>
+<li><a href="https://docs.cachix.org/deploy/">Cachix Deploy overview</a></li>
+<li><a href="https://docs.cachix.org/deploy/reference.html">Cachix Deploy reference</a></li>
+<li><a href="https://docs.cachix.org/deploy/running-an-agent/">Cachix Deploy: running an agent</a></li>
+<li><a href="https://docs.cachix.org/deploy/deploying-to-agents/">Cachix Deploy: deploying to agents</a></li>
+<li><a href="https://hackage.haskell.org/package/cachix-1.7/changelog">cachix changelog</a></li>
+<li><a href="https://github.com/nlewo/comin">comin README</a></li>
+</ul>
+<p><strong>Kubernetes and k3s (documentation of the v1.3x line)</strong></p><ul class="src-list">
+<li><a href="https://kubernetes.io/docs/tasks/manage-daemon/update-daemon-set/">DaemonSet rolling update</a></li>
+<li><a href="https://kubernetes.io/docs/tasks/manage-daemon/rollback-daemon-set/">DaemonSet rollback</a> (read once)</li>
+<li><a href="https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/">container lifecycle hooks</a> (read once)</li>
+<li><a href="https://kubernetes.io/docs/reference/access-authn-authz/authentication/">authentication</a> (read once)</li>
+<li><a href="https://kubernetes.io/docs/reference/access-authn-authz/kubelet-tls-bootstrapping/">kubelet TLS bootstrapping</a> (read once)</li>
+<li><a href="https://kubernetes.io/docs/reference/using-api/client-libraries/">client libraries</a> (read once)</li>
+<li><a href="https://kubernetes.io/docs/tasks/debug/debug-cluster/audit/">auditing</a> (read once)</li>
+<li><a href="https://github.com/kubernetes/dashboard">the Dashboard repository</a> (read once)</li>
+<li><a href="https://docs.k3s.io/installation/requirements">k3s requirements</a></li>
+<li><a href="https://docs.k3s.io/datastore">k3s datastore</a> (read once)</li>
+<li><a href="https://fluxcd.io/flux/concepts/">Flux concepts</a> (read once)</li>
+<li><a href="https://docs.github.com/en/actions/concepts/security/openid-connect">GitHub Actions OpenID Connect</a> (read once)</li>
+</ul>
+<p><strong>Nomad</strong></p><ul class="src-list">
+<li><a href="https://developer.hashicorp.com/nomad/docs/job-specification/update">the update block</a></li>
+<li><a href="https://developer.hashicorp.com/nomad/docs/job-specification/lifecycle">the lifecycle block</a> (read once)</li>
+<li><a href="https://developer.hashicorp.com/nomad/docs/deploy/production/requirements">production requirements</a></li>
+<li><a href="https://developer.hashicorp.com/nomad/docs/secure/authentication/jwt">JWT authentication</a> (read once)</li>
+<li><a href="https://developer.hashicorp.com/nomad/docs/configuration/audit">audit logging</a> (read once)</li>
+<li><a href="https://developer.hashicorp.com/nomad/docs/deploy/task-driver/raw_exec">the raw_exec driver</a> (read once)</li>
+<li><a href="https://developer.hashicorp.com/nomad/install">install</a> (read once)</li>
+</ul>
+<p><strong>systemd-sysupdate (man pages, &ldquo;latest&rdquo;, marked experimental)</strong></p><ul class="src-list">
+<li><a href="https://www.freedesktop.org/software/systemd/man/latest/systemd-sysupdate.html">systemd-sysupdate</a></li>
+<li><a href="https://www.freedesktop.org/software/systemd/man/latest/sysupdate.d.html">sysupdate.d</a></li>
+</ul>
+<p><strong>Mender</strong></p><ul class="src-list">
+<li><a href="https://docs.mender.io/devices">devices</a></li>
+<li><a href="https://docs.mender.io/overview/deployment">deployments</a></li>
+<li><a href="https://docs.mender.io/overview/audit-logs">audit logs</a></li>
+<li><a href="https://docs.mender.io/artifact-creation/create-a-custom-update-module">creating an update module</a></li>
+<li><a href="https://docs.mender.io/artifact-creation/ci-cd/github-actions">GitHub Actions</a></li>
+<li><a href="https://docs.mender.io/server-installation/production-installation-with-kubernetes">production installation with Kubernetes</a></li>
+</ul>
+<p><strong>balena</strong></p><ul class="src-list">
+<li><a href="https://docs.balena.io/learn/deploy/release-strategy/update-strategies">update strategies</a></li>
+<li><a href="https://github.com/balena-io/open-balena">openBalena</a></li>
+</ul>
+<p><strong>MDM</strong></p><ul class="src-list">
+<li><a href="https://github.com/micromdm/nanomdm">NanoMDM</a></li>
+<li><a href="https://github.com/micromdm/micromdm">MicroMDM</a></li>
+<li><a href="https://learn.jamf.com/r/en-US/jamf-pro-documentation-current/Change_Management">Jamf Pro: change management</a></li>
+</ul>
+<p><strong>Fleet</strong></p><ul class="src-list">
+<li><a href="https://fleetdm.com/docs/using-fleet/supported-host-operating-systems">supported host operating systems</a></li>
+<li><a href="https://fleetdm.com/docs/deploy/reference-architectures">reference architectures</a></li>
+<li><a href="https://fleetdm.com/guides/deploy-software-packages">deploying software packages</a></li>
+<li><a href="https://fleetdm.com/docs/Using-Fleet/Audit-logs">audit logs</a> (read once)</li>
+</ul>
+<p><strong>tierstore</strong></p><ul class="src-list"><li><a href="https://github.com/komira-ai/tierstore/blob/main/crates/tierstore/docs/update-hook.md">the update hook</a>, and its socket hand-off tests in the tierstore repository</li></ul>
+</section>
+
+</main>
+</body>
+</html>

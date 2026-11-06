@@ -8,23 +8,35 @@ use crate::release::fakes::{FakeExec, FakePkgbuild, PkgCall, scratch, tree_of};
 use crate::testdir::TestDir;
 
 /// The binary the pkg holds; nothing runs it.
-const BINARY: &[u8] = b"the macos-arm64 hostkeeper binary";
+pub(super) const BINARY: &[u8] = b"the macos-arm64 hostkeeper binary";
 
-const PLIST: &str = "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist";
+pub(super) const PLIST: &str = "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist";
 const BIN: &str = "usr/local/bin/hostkeeper";
+pub(super) const NEWSYSLOG: &str = "private/etc/newsyslog.d/hostkeeper.conf";
+pub(super) const LOG_DIR: &str = "private/var/log/hostkeeper";
+
+/// The index of the binary's entry in [`good_entries`].
+pub(super) const BIN_AT: usize = 14;
 
 /// The paths of the payload, from the install location, with `/` after a directory's.
-const TREE: [&str; 7] = [
+const TREE: [&str; 14] = [
     "Library/",
     "Library/LaunchDaemons/",
     "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist",
+    "private/",
+    "private/etc/",
+    "private/etc/newsyslog.d/",
+    "private/etc/newsyslog.d/hostkeeper.conf",
+    "private/var/",
+    "private/var/log/",
+    "private/var/log/hostkeeper/",
     "usr/",
     "usr/local/",
     "usr/local/bin/",
     "usr/local/bin/hostkeeper",
 ];
 
-fn version() -> Version {
+pub(super) fn version() -> Version {
     "0.1.5".parse().expect("a version")
 }
 
@@ -48,7 +60,7 @@ fn package_info() -> String {
 }
 
 /// One portable (`odc`) cpio entry: a header, the name and its NUL, the data.
-fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> {
+pub(super) fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> {
     let header = format!(
         "070707{:06o}{:06o}{mode:06o}{uid:06o}{gid:06o}{:06o}{:06o}{:011o}{:06o}{:011o}",
         1,
@@ -64,31 +76,45 @@ fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> 
 }
 
 /// A cpio archive of `entries`, then the trailer, then a block's padding.
-fn odc(entries: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn odc(entries: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = entries.concat();
     bytes.extend(odc_entry(TRAILER, 0, 0, 0, b""));
     bytes.extend([0_u8; 120]);
     bytes
 }
 
-fn gzip(bytes: &[u8]) -> Vec<u8> {
+pub(super) fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     gz.write_all(bytes).expect("compress");
     gz.finish().expect("compress")
 }
 
-fn dir_entry(name: &str) -> Vec<u8> {
+pub(super) fn dir_entry(name: &str) -> Vec<u8> {
     odc_entry(name, 0o040_755, 0, 0, b"")
 }
 
 /// The payload `pkgbuild` writes for the binary `binary`: every entry, in its order.
-fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
+pub(super) fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
     let plist = plist_text().expect("the plist");
+    let newsyslog = newsyslog_text();
     vec![
         dir_entry("."),
         dir_entry("./Library"),
         dir_entry("./Library/LaunchDaemons"),
         odc_entry(&format!("./{PLIST}"), 0o100_644, 0, 0, plist.as_bytes()),
+        dir_entry("./private"),
+        dir_entry("./private/etc"),
+        dir_entry("./private/etc/newsyslog.d"),
+        odc_entry(
+            &format!("./{NEWSYSLOG}"),
+            0o100_644,
+            0,
+            0,
+            newsyslog.as_bytes(),
+        ),
+        dir_entry("./private/var"),
+        dir_entry("./private/var/log"),
+        dir_entry(&format!("./{LOG_DIR}")),
         dir_entry("./usr"),
         dir_entry("./usr/local"),
         dir_entry("./usr/local/bin"),
@@ -98,12 +124,12 @@ fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
 
 /// A pkg expanded as `pkgutil --expand` leaves it, with `entries` as its payload, and the binary
 /// it is checked against, in a scratch directory of its own.
-struct Expanded {
-    dir: TestDir,
+pub(super) struct Expanded {
+    pub(super) dir: TestDir,
 }
 
 impl Expanded {
-    fn new(name: &str, entries: &[Vec<u8>]) -> Expanded {
+    pub(super) fn new(name: &str, entries: &[Vec<u8>]) -> Expanded {
         let dir = scratch(name);
         std::fs::create_dir(dir.join("pkg")).expect("the expanded pkg");
         std::fs::write(dir.join("hostkeeper"), BINARY).expect("the binary");
@@ -114,27 +140,27 @@ impl Expanded {
         expanded
     }
 
-    fn good(name: &str) -> Expanded {
+    pub(super) fn good(name: &str) -> Expanded {
         Expanded::new(name, &good_entries(BINARY))
     }
 
-    fn pkg(&self) -> PathBuf {
+    pub(super) fn pkg(&self) -> PathBuf {
         self.dir.join("pkg")
     }
 
-    fn binary(&self) -> PathBuf {
+    pub(super) fn binary(&self) -> PathBuf {
         self.dir.join("hostkeeper")
     }
 
-    fn write(&self, file: &str, bytes: &[u8]) {
+    pub(super) fn write(&self, file: &str, bytes: &[u8]) {
         std::fs::write(self.pkg().join(file), bytes).expect("write a file of the pkg");
     }
 
-    fn check(&self) -> Result<Vec<String>, Error> {
+    pub(super) fn check(&self) -> Result<Vec<String>, Error> {
         check(&self.pkg(), &version(), &self.binary())
     }
 
-    fn problems(&self) -> Vec<String> {
+    pub(super) fn problems(&self) -> Vec<String> {
         match self.check() {
             Err(Error::Refused(lines)) => lines,
             other => panic!("expected a refusal, got {other:?}"),
@@ -169,6 +195,13 @@ fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launch
             "Library",
             "Library/LaunchDaemons",
             PLIST,
+            "private",
+            "private/etc",
+            "private/etc/newsyslog.d",
+            NEWSYSLOG,
+            "private/var",
+            "private/var/log",
+            LOG_DIR,
             "usr",
             "usr/local",
             "usr/local/bin",
@@ -224,7 +257,7 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
     // Catches: the read-back accepting a plist launchd would not load, or one for another job.
     let at = format!("/{PLIST}");
     let text = plist_text().expect("the plist");
-    let cases: [(String, Vec<String>); 5] = [
+    let cases: [(String, Vec<String>); 6] = [
         (
             "<plist><dict><key>Label</key>".to_owned(),
             vec![format!("{at} does not parse as a plist: ")],
@@ -247,11 +280,30 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
             )],
         ),
         (
+            text.replace(
+                "/var/log/hostkeeper/daemon.err.log",
+                "/var/log/daemon.err.log",
+            ),
+            vec![format!(
+                "{at}: StandardErrorPath is Some(\"/var/log/daemon.err.log\"), not \
+                 \"/var/log/hostkeeper/daemon.err.log\", the file the pkg's newsyslog entry \
+                 rotates in the directory the pkg makes"
+            )],
+        ),
+        (
             "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict></dict></plist>".to_owned(),
             vec![
                 format!("{at}: the label is None, not \"dev.hostkeeper.hostkeeper\""),
                 format!(
                     "{at}: the job runs None, not the pkg's binary \"/usr/local/bin/hostkeeper\""
+                ),
+                format!(
+                    "{at}: StandardOutPath is None, not \"/var/log/hostkeeper/daemon.out.log\", \
+                     the file the pkg's newsyslog entry rotates in the directory the pkg makes"
+                ),
+                format!(
+                    "{at}: StandardErrorPath is None, not \"/var/log/hostkeeper/daemon.err.log\", \
+                     the file the pkg's newsyslog entry rotates in the directory the pkg makes"
                 ),
             ],
         ),
@@ -282,8 +334,8 @@ fn mode_of(path: &Path) -> u32 {
 }
 
 #[test]
-fn build_lays_out_exactly_the_binary_and_the_plist_with_their_modes_and_runs_pkgbuild_once() {
-    // Catches: a pkg with anything but the binary and the plist (a script, a config, a stray
+fn build_lays_out_exactly_the_payload_with_its_modes_and_runs_pkgbuild_once() {
+    // Catches: a pkg with anything but its payload (a script, a config, a stray
     // file), a mode launchd or the installer would refuse or that would change a system
     // directory, or pkgbuild asked for another identifier, version or file name.
     let dir = scratch("macos-pkg-build");
@@ -313,7 +365,7 @@ fn build_lays_out_exactly_the_binary_and_the_plist_with_their_modes_and_runs_pkg
     for path in TREE {
         let at = r.stage.join(path.trim_end_matches('/'));
         let want = match path {
-            PLIST => 0o644,
+            PLIST | NEWSYSLOG => 0o644,
             _ => 0o755,
         };
         assert_eq!(mode_of(&at), want, "{path}");
@@ -326,6 +378,12 @@ fn build_lays_out_exactly_the_binary_and_the_plist_with_their_modes_and_runs_pkg
         std::fs::read_to_string(r.stage.join(PLIST)).expect("the plist"),
         plist_text().expect("the plist")
     );
+    assert_eq!(
+        std::fs::read_to_string(r.stage.join(NEWSYSLOG)).expect("the newsyslog file"),
+        newsyslog_text()
+    );
+    let log_dir = std::fs::read_dir(r.stage.join(LOG_DIR)).expect("the log directory");
+    assert_eq!(log_dir.count(), 0);
 }
 
 #[test]
@@ -605,9 +663,11 @@ fn a_good_expanded_pkg_passes_the_check() {
     assert_eq!(
         expanded.check(),
         Ok(vec![format!(
-            "check-macos-pkg: {} installs exactly /usr/local/bin/hostkeeper (755) and \
-             /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist (644), owned by root and \
-             wheel, with the label dev.hostkeeper.hostkeeper, version 0.1.5 and no scripts",
+            "check-macos-pkg: {} installs exactly /usr/local/bin/hostkeeper (755), \
+             /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist (644), \
+             /private/etc/newsyslog.d/hostkeeper.conf (644) and the directory \
+             /private/var/log/hostkeeper (755), owned by root and wheel, with the label \
+             dev.hostkeeper.hostkeeper, version 0.1.5 and no scripts",
             expanded.pkg().display()
         )])
     );
@@ -740,9 +800,10 @@ fn a_payload_that_is_not_a_gzip_cpio_is_refused() {
 
 #[test]
 fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each() {
-    // Catches: a payload with a file beyond the binary and the plist, one of them missing, an
-    // entry not owned by root and wheel, a writable or setuid mode, a link or directory in
-    // place of a file (or the reverse), or other bytes than the released binary and plist.
+    // Catches: a payload with a file beyond its own, one of its files missing, an entry not
+    // owned by root and wheel, a writable or setuid mode, a link or directory in place of a file
+    // (or the reverse), or other bytes than the released binary and plist; the log directory and
+    // the newsyslog file have their own cases in `logs`.
     let good = good_entries(BINARY);
     let plist = plist_text().expect("the plist");
     let with = |n: usize, entry: Vec<u8>| {
@@ -759,12 +820,13 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
             .concat(),
             vec![
                 "/etc/hostkeeper.toml (\"./etc/hostkeeper.toml\") is in the payload, which holds \
-                 only the binary, the plist and their directories, each once"
+                 only the binary, the plist, the newsyslog file, the log directory and their \
+                 directories, each once"
                     .to_owned(),
             ],
         ),
         (
-            good[..7].to_vec(),
+            good[..BIN_AT].to_vec(),
             vec!["missing /usr/local/bin/hostkeeper in the payload".to_owned()],
         ),
         (
@@ -776,7 +838,7 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
         ),
         (
             with(
-                7,
+                BIN_AT,
                 odc_entry(&format!("./{BIN}"), 0o100_755, 501, 20, BINARY),
             ),
             vec![
@@ -786,7 +848,10 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
             ],
         ),
         (
-            with(7, odc_entry(&format!("./{BIN}"), 0o104_755, 0, 0, BINARY)),
+            with(
+                BIN_AT,
+                odc_entry(&format!("./{BIN}"), 0o104_755, 0, 0, BINARY),
+            ),
             vec!["/usr/local/bin/hostkeeper: mode 4755, not 755".to_owned()],
         ),
         (
@@ -805,18 +870,21 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
         ),
         (
             with(
-                7,
+                BIN_AT,
                 odc_entry(&format!("./{BIN}"), 0o120_755, 0, 0, b"/elsewhere"),
             ),
             vec!["/usr/local/bin/hostkeeper: of type 120000, not a regular file".to_owned()],
         ),
         (
-            with(6, odc_entry("./usr/local/bin", 0o100_755, 0, 0, b"")),
+            with(
+                BIN_AT - 1,
+                odc_entry("./usr/local/bin", 0o100_755, 0, 0, b""),
+            ),
             vec!["/usr/local/bin: of type 100000, not a directory".to_owned()],
         ),
         (
             with(
-                7,
+                BIN_AT,
                 odc_entry(&format!("./{BIN}"), 0o100_755, 0, 0, b"another binary"),
             ),
             vec![format!(
@@ -863,15 +931,19 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
             ],
         ),
         (
-            [good.clone(), vec![good[7].clone()]].concat(),
+            [good.clone(), vec![good[BIN_AT].clone()]].concat(),
             vec![
                 "/usr/local/bin/hostkeeper (\"./usr/local/bin/hostkeeper\") is in the payload, \
-                 which holds only the binary, the plist and their directories, each once"
+                 which holds only the binary, the plist, the newsyslog file, the log directory and \
+                 their directories, each once"
                     .to_owned(),
             ],
         ),
         // A name without `./` is the same path: pkgbuild writes `./`, other tools may not.
-        (with(7, odc_entry(BIN, 0o100_755, 0, 0, BINARY)), vec![]),
+        (
+            with(BIN_AT, odc_entry(BIN, 0o100_755, 0, 0, BINARY)),
+            vec![],
+        ),
     ];
     for (n, (entries, want)) in cases.into_iter().enumerate() {
         let expanded = Expanded::new(&format!("macos-pkg-check-payload-{n}"), &entries);
@@ -896,13 +968,13 @@ fn a_name_without_the_dot_slash_prefix_or_with_another_one_is_not_a_payload_path
     assert_eq!(payload_path("../usr"), "../usr");
     assert_eq!(payload_path("/usr"), "/usr");
     let mut entries = good_entries(BINARY);
-    entries[4] = dir_entry("../usr");
+    entries[BIN_AT - 3] = dir_entry("../usr");
     let expanded = Expanded::new("macos-pkg-check-dotdot", &entries);
     assert_eq!(
         expanded.problems(),
         [
-            "/../usr (\"../usr\") is in the payload, which holds only the binary, the plist and \
-             their directories, each once",
+            "/../usr (\"../usr\") is in the payload, which holds only the binary, the plist, the \
+             newsyslog file, the log directory and their directories, each once",
             "missing /usr in the payload",
         ]
     );
@@ -922,3 +994,5 @@ fn an_unreadable_directory_or_binary_is_an_io_error_naming_it() {
         Err(Error::Io { what, .. }) if what == format!("read {}", absent.display())
     ));
 }
+
+mod logs;

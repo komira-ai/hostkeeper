@@ -4,10 +4,9 @@
 //! coordinator's heartbeat with an explicit host identity), the service manager and the package
 //! source (`FakePackages`, the scripted launcher).
 //!
-//! The JSON heartbeat answer names a version and no package digest; the transport that carries
-//! typed orders gives the daemon the digest CI registered for it. The in-process link stands in
-//! for that transport: it gives the order of the answer the digest this test set with the
-//! desired version.
+//! The daemon announces `order-v1`, so the coordinator's update carries its order terms: the
+//! order id, the try and the package digest CI registered with the desired version. The
+//! in-process link reads the order from those terms, as the daemon's JSON link does.
 
 mod support;
 
@@ -199,20 +198,31 @@ fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
     }
 }
 
-/// The coordinator's answer as the loop reads it: its update an order of the version, under the
-/// digest `digest`, its features and its halt generations.
-fn reply_of(answer: &Answer, digest: &str) -> Reply {
-    let order = match &answer.reply {
-        ServiceReply::Update {
-            service: Some(service),
-            version,
-        } => Some(Order {
-            id: OrderId::new(&format!("update-{service}-{}", version.as_str())).expect("an id"),
-            order_try: 1,
+/// The coordinator's answer as the loop reads it: its update an order of the version under the
+/// answer's order terms (an update without them is no order), its features, its halt
+/// generations and its acknowledgements.
+fn reply_of(answer: &Answer) -> Reply {
+    let order = match (
+        &answer.reply,
+        &answer.order_id,
+        answer.order_try,
+        &answer.package_digest,
+    ) {
+        (
+            ServiceReply::Update {
+                service: Some(service),
+                version,
+            },
+            Some(id),
+            Some(order_try),
+            Some(digest),
+        ) => Some(Order {
+            id: OrderId::new(id.as_str()).expect("an id"),
+            order_try,
             verb: Verb::Update(Target {
                 service: ServiceName::new(service).expect("a service"),
                 version: Version::new(version.as_str()).expect("a version"),
-                digest: PackageDigest::new(digest).expect("a digest"),
+                digest: PackageDigest::new(digest.as_str()).expect("a digest"),
             }),
         }),
         _ => None,
@@ -250,7 +260,6 @@ fn reply_of(answer: &Answer, digest: &str) -> Reply {
 /// the host `host-1` of the role `daemon`, whatever certificate the loop presents.
 struct InProcess {
     coordinator: Arc<Coordinator>,
-    digest: String,
     /// What each heartbeat said of the service and what its answer ordered, in order.
     seen: Arc<Mutex<Vec<Seen>>>,
 }
@@ -272,7 +281,7 @@ impl CoordinatorLink for InProcess {
         let reply = self
             .coordinator
             .heartbeat(who, wire_beat(beat))
-            .map(|answer| reply_of(&answer, &self.digest))
+            .map(|answer| reply_of(&answer))
             .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))?;
         self.seen
             .lock()
@@ -381,7 +390,6 @@ fn scenario(name: &str, stub: Stub) -> Ran {
         Stub::Coordinator => Arc::new(FakeLink::default()),
         _ => Arc::new(InProcess {
             coordinator: Arc::clone(&coordinator),
-            digest: d(),
             seen: Arc::clone(&seen),
         }),
     };

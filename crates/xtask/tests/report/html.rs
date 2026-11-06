@@ -1,8 +1,9 @@
 //! The tags, attributes, text and numbers of the report, read the way the cell rules need them.
 //!
 //! This is not an HTML parser. A tag is a `<` followed by a letter or `/`, up to the first `>`
-//! outside quotes on the same line; a `<` with no such `>` is text, and so is everything else. That is enough for the report, whose only tags are
-//! the `<span>` and `<br>` elements its cells are written with.
+//! outside quotes on the same line; a `<` with no such `>` is text, and so is everything else. So
+//! every tag of the report is written on one line. An element ends at the end tag of its name (in
+//! any letter case) that closes it, counting the elements of that name opened inside it.
 
 /// Elements that have no end tag.
 const VOID: &[&str] = &[
@@ -159,7 +160,7 @@ pub fn element_end(tags: &[Tag<'_>], k: usize) -> Option<usize> {
     let first = &tags[k];
     let mut depth = 1usize;
     for tag in &tags[k + 1..] {
-        if tag.name != first.name {
+        if !tag.name.eq_ignore_ascii_case(first.name) {
             continue;
         }
         if tag.closing {
