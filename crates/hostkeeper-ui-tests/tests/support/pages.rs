@@ -17,7 +17,7 @@ pub fn m(method: &str) -> String {
 pub fn page_driver(page: &str, params: &str, answers: &str, then: &str) -> String {
     format!(
         r#"
-import {{ api, recorder, text, named, type, tick, choose, click, nodes }} from "../test/kit.js";
+import {{ api, recorder, text, named, type, tick, choose, click, nodes, rows, cell }} from "../test/kit.js";
 import {{ render }} from "./pages/{page}.js";
 export async function main() {{
   const {{ ctx, seen }} = recorder(api("operator-token"), {params}, {answers});

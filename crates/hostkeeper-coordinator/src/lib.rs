@@ -186,6 +186,8 @@ mod holds_calls_tests;
 #[cfg(test)]
 mod holds_tests;
 #[cfg(test)]
+mod host_inventory_tests;
+#[cfg(test)]
 mod hosts_tests;
 #[cfg(test)]
 mod http_tests;

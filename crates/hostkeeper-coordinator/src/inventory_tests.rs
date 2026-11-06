@@ -41,6 +41,7 @@ fn list(rig: &Rig, limit: u32, token: &str) -> Result<proto::ListRecordsResponse
         proto::ListRecordsRequest {
             limit,
             page_token: token.to_owned(),
+            enrolled: None,
         },
     )
 }
@@ -114,6 +115,7 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
         notes: "rack 4, slot 2".to_owned(),
         added_by: "operator".to_owned(),
         added_unix: rig.coordinator.ops.unix_now(),
+        enrolled: false,
     };
     assert_eq!(added.record.as_ref(), Some(&want));
     let entry = added.entry.expect("an audit entry");

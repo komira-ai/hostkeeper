@@ -45,7 +45,10 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 ```
 
 `list-records` lists the records by host id, at most 256 a page; when `next_page_token` is set,
-pass it as `--page-token` for the next page. There is no call that reads one record by host id:
+pass it as `--page-token` for the next page. Each record says `enrolled: true` when a host is
+enrolled against it (the claims of the request the host's key was approved from match this record
+and no other, and the host is not denied); `--enrolled true` lists only those records, and
+`--enrolled false` only the others, which is the list of servers still to come online. There is no call that reads one record by host id:
 list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
 
 ## Bootstrap a Linux node
@@ -245,7 +248,10 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
     releases status --service api
 ```
 
-`hosts list` and `hosts get` answer `UNIMPLEMENTED` in this build.
+`hosts get --node-id <host id>` answers the host once it has heartbeated, with the inventory record
+its enrollment matched (`inventory_record_id`, `data_macs`, `bmc_mac`, `serial`; empty when none
+or several match) and when it was approved (`enrolled_unix`); `hosts list` answers every host the
+same way, a page at a time.
 
 ## Renewal
 

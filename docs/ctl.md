@@ -169,12 +169,14 @@ holds, is refused; remove the record first.
 
 `/hostkeeper.operator.v1.Enrollment/ListRecords`
 
-The records, by host id, a page at a time.
+The records, by host id, a page at a time; all of them, or only those a host is enrolled
+against, or only the others.
 
 | flag | value | meaning |
 |---|---|---|
 | `--limit` | UINT32 | The most records to return; capped at 256, and 0 means the cap. |
 | `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
+| `--enrolled` | true\|false | Unset for every record; true for only the records a host is enrolled against (`InventoryRecord.enrolled`), false for only the others. |
 
 #### `hostkeeper ctl enrollment remove-record`
 
