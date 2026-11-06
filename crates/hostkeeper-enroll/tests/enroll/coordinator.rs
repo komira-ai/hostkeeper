@@ -307,6 +307,8 @@ fn a_daemon_enrolls_and_renews_with_the_coordinators_own_enrollment_and_ca() {
                 reason: "new rack".to_owned(),
             },
             &|_| false,
+            // No host inventory: the request is approved as the host id named.
+            &[],
         )
         .expect("approved");
     assert_eq!(approved.host_id.as_str(), HOST);
