@@ -24,10 +24,28 @@ with no client certificate asked of `Enroll` and `Poll`.
 | `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--enrollment-dir`. |
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
-start logs it at info as `ca_sha256`. At each start the server certificate is made again when
-its file is missing, does not start with a certificate, or has less than a third of its 90 days
-left; delete the file to make one sooner (for new `--server-name` values, say). Nothing renews it
-while the coordinator runs: restart it within the certificate's validity.
+start logs it at info as `ca_sha256`. The server certificate is made again when its file is
+missing, does not start with a certificate, or has less than a third of its 90 days left (60 days
+after it was made): at the start, and while the coordinator runs, at each look of the reload tick
+(`--tls-reload-secs`, 60 seconds when not given), before the tick reloads the TLS files, so the
+heartbeat listener serves the new certificate from that same tick. A restart is not needed. The
+new file, with a new key and a serial from the store, is written whole: a temporary file
+`<file>.tmp` beside it (mode 0600), fsync, rename over the old one, fsync of the directory. Delete
+the file to have one made sooner (for new `--server-name` values, say): the next tick makes it.
+
+A renewal that fails (the file cannot be read, or the new one cannot be made or written) changes
+nothing that is served: the temporary file is removed, the old file stays as it was, and the
+listener keeps serving the old certificate. The failure is logged at error level ("cannot renew
+the coordinator's server certificate") and shown in `GET /v1/status`, which with enrollment has
+
+```json
+"server_certificate": { "not_after": 1807776000, "renewal_error": "No space left on device (os error 28)" }
+```
+
+`not_after` is the end of the certificate in the file, in unix seconds, as the last tick that
+read it found it; `renewal_error` is why the last tick failed, and `null` once a tick finds the
+certificate not due or renews it. Each tick tries again. Without `--enrollment-dir` the status
+has no `server_certificate`. `Releases.Status` over gRPC does not carry it.
 
 With enrollment the heartbeat listener lets a client without a certificate through the TLS
 handshake, and admits a client certificate of the coordinator's CA as well as one that chains to

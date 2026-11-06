@@ -198,14 +198,22 @@ impl<E: Exec> GitHubRuns for Gh<E> {
         Ok(matches!(status.as_str(), "identical" | "behind"))
     }
 
+    /// Every page of the list: an issue past the first hundred is still found, so a caller
+    /// that looks for its one issue by title never opens a second. `--slurp` prints the pages
+    /// as one list of lists.
     fn open_issues(&self, repo: &Repo) -> Result<Vec<Issue>, PortError> {
-        let (value, what) = self.api(&format!("repos/{repo}/issues?state=open&per_page=100"))?;
+        let path = format!("repos/{repo}/issues?state=open&per_page=100");
+        let (value, what) = self.json(&["api", "--paginate", "--slurp", &path])?;
         let r = Reader { what: &what };
-        r.list(&value, "the reply")?
-            .iter()
-            .filter(|item| item.get("pull_request").is_none())
-            .map(|issue| parse_issue(&r, issue))
-            .collect()
+        let mut issues = Vec::new();
+        for page in r.list(&value, "the reply")? {
+            for item in r.list(page, "a page")? {
+                if item.get("pull_request").is_none() {
+                    issues.push(parse_issue(&r, item)?);
+                }
+            }
+        }
+        Ok(issues)
     }
 
     fn open_issue(&self, repo: &Repo, title: &str, body: &str) -> Result<u64, PortError> {
@@ -232,6 +240,30 @@ impl<E: Exec> GitHubRuns for Gh<E> {
             &path,
             "-f",
             &format!("body={body}"),
+        ])
+        .map(drop)
+    }
+
+    fn close_issue(&self, repo: &Repo, number: u64, comment: &str) -> Result<(), PortError> {
+        let path = format!("repos/{repo}/issues/{number}");
+        let comments = format!("{path}/comments");
+        self.call(&[
+            "api",
+            "--method",
+            "POST",
+            &comments,
+            "-f",
+            &format!("body={comment}"),
+        ])?;
+        self.call(&[
+            "api",
+            "--method",
+            "PATCH",
+            &path,
+            "-f",
+            "state=closed",
+            "-f",
+            "state_reason=completed",
         ])
         .map(drop)
     }
