@@ -10,7 +10,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     PollResponse, PollState, RenewRequest, RenewResponse, VerdictAck,
 };
 use hostkeeper_proto::hostkeeper::local::v1::{
-    Lifecycle, ServiceRecord, StatusResponse, StepRecord,
+    Enrollment, EnrollmentState, Lifecycle, LinkHealth, ServiceRecord, StatusResponse, StepRecord,
 };
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
 
@@ -256,7 +256,26 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
             }),
         ),
         ("hostkeeper.agent.v1.VerdictAck", round_trip(&verdict_ack())),
+        ("hostkeeper.local.v1.Enrollment", round_trip(&enrolled())),
+        ("hostkeeper.local.v1.LinkHealth", round_trip(&link())),
     ]
+}
+
+/// An enrolled host, every field set.
+fn enrolled() -> Enrollment {
+    Enrollment {
+        state: EnrollmentState::Enrolled.into(),
+        key_sha256: "ab".repeat(32),
+        host_id: "web-17".to_owned(),
+        not_after_unix: Some(1_900_604_800),
+    }
+}
+
+fn link() -> LinkHealth {
+    LinkHealth {
+        last_success_unix: Some(1_900_000_015),
+        consecutive_failures: 3,
+    }
 }
 
 fn verdict_ack() -> VerdictAck {
@@ -344,7 +363,7 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 24);
+    assert_eq!(messages.len(), 26);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
@@ -391,6 +410,49 @@ fn an_older_admin_reader_keeps_the_lifecycle_of_a_service() {
     assert_eq!(read.lifecycle(), Lifecycle::Unspecified);
 }
 
+/// Catches the host's enrollment or link that an admin client of the release before cannot read
+/// past, or drops: a `StatusResponse` with a service, an enrollment and a link is read by the
+/// baseline's `StatusResponse`, which has neither, with its service, and written back with both
+/// kept; a status of the release before reads with neither, and an `Enrollment` of an enrollment
+/// state the reader does not know reads as UNSPECIFIED.
+#[test]
+fn an_older_admin_reader_keeps_the_enrollment_and_link_of_a_status() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.StatusResponse")
+        .expect("released");
+    assert!(message.get_field_by_name("enrollment").is_none());
+    assert!(message.get_field_by_name("link").is_none());
+    let status = StatusResponse {
+        services: vec![ServiceRecord {
+            service: "web".to_owned(),
+            ..ServiceRecord::default()
+        }],
+        enrollment: Some(enrolled()),
+        link: Some(link()),
+        ..StatusResponse::default()
+    };
+    let read = DynamicMessage::decode(message, round_trip(&status).as_slice()).expect("decodes");
+    let services = read.get_field_by_name("services").expect("known");
+    assert_eq!(services.as_list().map(<[Value]>::len), Some(1));
+    let back = StatusResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, status);
+
+    let before = StatusResponse {
+        services: status.services.clone(),
+        ..StatusResponse::default()
+    };
+    let read = StatusResponse::decode(round_trip(&before).as_slice()).expect("decodes");
+    assert_eq!((read.enrollment, read.link), (None, None));
+
+    let later = Enrollment {
+        state: 99,
+        ..Enrollment::default()
+    };
+    let read = Enrollment::decode(round_trip(&later).as_slice()).expect("decodes");
+    assert_eq!(read.state(), EnrollmentState::Unspecified);
+}
+
 /// Catches the trusted root's age and reason in `Status` that an admin client of the release
 /// before cannot read past, or drops, and a status of the release before read as a root of age
 /// 0: a `StatusResponse` with both is read by the baseline's, which has neither, with its
@@ -410,6 +472,7 @@ fn an_older_admin_reader_keeps_the_trusted_roots_age_and_reason() {
         }],
         trusted_root_age_secs: Some(91 * 86_400),
         trusted_root_reason: "trusted_root_stale".to_owned(),
+        ..StatusResponse::default()
     };
     let read = DynamicMessage::decode(message, round_trip(&stale).as_slice()).expect("decodes");
     let services = read.get_field_by_name("services").expect("the services");

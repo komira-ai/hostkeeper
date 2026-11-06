@@ -36,7 +36,8 @@ pub use claims::{
     MacClaims, MacIds, parse_ioreg, parse_lan_mac,
 };
 pub use enroller::{
-    Enroller, Error, Identity, NOT_ENROLLED, Outcome, Ports, ProtocolError, RETRY_SECS, Settings,
+    Enroller, Enrollment, Error, Identity, NOT_ENROLLED, Outcome, Ports, ProtocolError, RETRY_SECS,
+    Settings,
 };
 pub use grpc::{GrpcEnroll, GrpcError};
 pub use key::{Entropy, EntropyError, KEY_DRAWS, KeyError, OsEntropy};

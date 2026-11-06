@@ -3,9 +3,10 @@
 //
 // Served by: the daemon (`hostkeeper.service`, run as root), on the unix socket
 // `/run/hostkeeper/admin.sock`, mode 0600, in a directory of mode 0700. It carries exactly three
-// calls, because they must work with the coordinator down: see what the daemon is doing
-// (`Status`), stop a step (`Abort`), and clear a corrupt step record (`ClearRecord`). None of them
-// can install, update or switch a version; only the coordinator's orders do that.
+// calls, because they must work with the coordinator down: see what the daemon is doing, how
+// far the host's enrollment is and whether its heartbeats reach the coordinator (`Status`), stop a
+// step (`Abort`), and clear a corrupt step record (`ClearRecord`). None of them can install,
+// update or switch a version; only the coordinator's orders do that.
 //
 // Authentication: the peer's credentials on the socket (`SO_PEERCRED`; on macOS
 // `LOCAL_PEERCRED`), read on each connection before any request. Only uid 0 may connect: a
@@ -34,7 +35,8 @@ package hostkeeper.local.v1;
 import "hostkeeper/agent/v1/agent.proto";
 
 service Admin {
-  // What the daemon holds: each installed service's step records and state. Changes nothing.
+  // What the daemon holds: each installed service's step records and state, the host's
+  // enrollment, and the heartbeat loop's link to the coordinator. Changes nothing.
   rpc Status(StatusRequest) returns (StatusResponse);
   // Stop the service's running step, and end its order in the halt phase, as the coordinator's
   // `abort` verb does.
@@ -74,6 +76,54 @@ message StatusResponse {
   // `trusted_root_unparseable` (a file that cannot be read or is not trusted roots). Empty when
   // the root needs none. A signal only: package checks go on with the root there is.
   string trusted_root_reason = 3;
+  // The host's enrollment, as the enrollment loop read the pki directory after its last step.
+  // Absent before the loop's first step ends, and when the loop does not run.
+  Enrollment enrollment = 4;
+  // The heartbeat loop's link to the coordinator. Absent before the loop's first heartbeat ends,
+  // and when the loop does not run.
+  LinkHealth link = 5;
+}
+
+// Where the host is in its enrollment, from the pki directory (`/etc/updater/pki`).
+enum EnrollmentState {
+  ENROLLMENT_STATE_UNSPECIFIED = 0;
+  // No certificate and no pending key: no request was made yet.
+  ENROLLMENT_STATE_UNENROLLED = 1;
+  // No certificate, and a pending key: its request waits for approval, or is not posted yet.
+  ENROLLMENT_STATE_PENDING = 2;
+  // `current` is a certificate of this host, valid or expired.
+  ENROLLMENT_STATE_ENROLLED = 3;
+  // The pki directory cannot be read, or its `current` generation or pending key is not a
+  // certificate and key of this host. The daemon's log says why.
+  ENROLLMENT_STATE_UNREADABLE = 4;
+}
+
+// The host's enrollment.
+message Enrollment {
+  EnrollmentState state = 1;
+  // PENDING: the SHA-256 of the pending key's DER SubjectPublicKeyInfo, the `key_sha256` that
+  // `hostkeeper.operator.v1.Enrollment.List` shows for the request and `Approve` compares.
+  // Empty in every other state.
+  string key_sha256 = 2;
+  // ENROLLED: the host id the certificate names, without the `host:` prefix. Empty in every other
+  // state.
+  string host_id = 3;
+  // ENROLLED: the last second the certificate is valid. Earlier than now for an expired
+  // certificate, which the enrollment loop replaces through a new request `renewal_of` the host.
+  // Absent in every other state.
+  optional uint64 not_after_unix = 4;
+}
+
+// The heartbeat loop's link to the coordinator, since the daemon started. A heartbeat the loop
+// did not try to send (the host has no certificate yet, or its installed services cannot be read)
+// changes neither field.
+message LinkHealth {
+  // The last heartbeat the coordinator answered, by the host's wall clock. Absent when none was
+  // answered since the daemon started.
+  optional uint64 last_success_unix = 1;
+  // The heartbeats in a row that were not sent or not answered, since the last one answered (or
+  // since the daemon started).
+  uint64 consecutive_failures = 2;
 }
 
 message AbortRequest {

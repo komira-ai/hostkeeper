@@ -428,7 +428,7 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 26] = [
+const FIELDS: [(&str, &[(&str, u32)]); 28] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -448,7 +448,22 @@ const FIELDS: [(&str, &[(&str, u32)]); 26] = [
             ("services", 1),
             ("trusted_root_age_secs", 2),
             ("trusted_root_reason", 3),
+            ("enrollment", 4),
+            ("link", 5),
         ],
+    ),
+    (
+        "hostkeeper.local.v1.Enrollment",
+        &[
+            ("state", 1),
+            ("key_sha256", 2),
+            ("host_id", 3),
+            ("not_after_unix", 4),
+        ],
+    ),
+    (
+        "hostkeeper.local.v1.LinkHealth",
+        &[("last_success_unix", 1), ("consecutive_failures", 2)],
     ),
     (
         "hostkeeper.local.v1.ServiceRecord",
@@ -662,7 +677,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 11] = [
+    let cases: [(&str, &str, &[&str]); 12] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -801,6 +816,11 @@ fn wire_names_are_pinned() {
             "hostkeeper.local.v1.Lifecycle",
             "LIFECYCLE_",
             &["absent", "installing", "running", "removing"],
+        ),
+        (
+            "hostkeeper.local.v1.EnrollmentState",
+            "ENROLLMENT_STATE_",
+            &["unenrolled", "pending", "enrolled", "unreadable"],
         ),
     ];
     for (name, prefix, want) in cases {

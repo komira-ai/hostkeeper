@@ -120,3 +120,17 @@ the binary directory at the first start), and
 fills `etc/hostkeeper/hostkeeper.toml.template` into `etc/hostkeeper/hostkeeper.toml` in the
 image, root's, mode 0600, as above. Nothing else. The overlay files are the files of this
 directory, byte for byte; the test above fails when they differ.
+
+## Debugging a wedged node
+
+On the host, as root, `hostkeeper admin status` asks the running daemon over its admin socket
+(`/run/hostkeeper/admin.sock`) what it holds, with the coordinator up or down: whether the host
+is enrolled (and the `key_sha256` of a pending request, to check against
+`hostkeeper ctl enrollment list` before approving it), when its certificate expires
+(`enrollment.not_after_unix`), whether its heartbeats reach the coordinator
+(`link.last_success_unix`, `link.consecutive_failures`), and each service's lifecycle, health
+and step records. `hostkeeper admin abort <service>` stops a hung step and
+`hostkeeper admin clear-record <service>` clears a step record that cannot be read.
+`docs/admin.md` describes each line of the output and the exit codes. When the command cannot
+connect, the daemon is not running: `systemctl status hostkeeper.service` and
+`journalctl -u hostkeeper.service` say why.
