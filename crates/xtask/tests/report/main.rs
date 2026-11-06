@@ -31,7 +31,8 @@
 //!   literal of that page or of the shared modules (see [`figures`]).
 //!
 //! Each rule is shown refusing its defect on a small text in `check_tests.rs` and
-//! `escape_tests.rs`.
+//! `escape_tests.rs`, and on the committed report against the first farm canary's results in
+//! `canary_tests.rs`.
 //!
 //! Catches: a number edited in the report without its source; a constant changed in the code
 //! without the report; a measurement filled with a number no result holds; a promised
@@ -39,6 +40,7 @@
 //! heading that was moved; a diagram naming a method that does not exist; an update diagram that
 //! lost a step of the contract; a mock-up of a page, button or column the UI does not have.
 
+mod canary_tests;
 mod cells;
 mod check_tests;
 mod escape_tests;
@@ -81,14 +83,18 @@ const UI_SHARED_HTML: &[&str] = &["ui/index.html"];
 
 /// The measurements the report promises: each is a cell, filled from a result or open.
 const MEASUREMENTS: &[&str] = &[
+    "m-bootstrap",
     "m-enroll",
+    "m-first-heartbeat",
     "m-converge-install",
     "m-converge-update",
     "m-converge-rollback",
     "m-tierstore-force-first",
     "m-coordinator-cpu",
     "m-coordinator-memory",
+    "m-coordinator-memory-one-host",
     "m-daemon-rss",
+    "m-channel-memory",
 ];
 
 fn repo_root() -> PathBuf {
@@ -176,10 +182,19 @@ fn ui_texts(root: &Path) -> Ui {
     Ui { pages, shared }
 }
 
+/// The report as committed.
+fn report_text() -> String {
+    std::fs::read_to_string(repo_root().join(REPORT)).expect("read the report")
+}
+
 /// The report checked against the repository.
 fn check_report() -> (Vec<Cell>, Vec<String>) {
+    check_report_text(&report_text(), &repo_root().join(RESULTS))
+}
+
+/// The report `text` checked against the repository, with its result files read from `results`.
+fn check_report_text(text: &str, results: &Path) -> (Vec<Cell>, Vec<String>) {
     let root = repo_root();
-    let text = std::fs::read_to_string(root.join(REPORT)).expect("read the report");
     let protos = proto_texts(&root.join(PROTOS));
     let rpcs = rpcs(protos.iter().map(String::as_str));
     let steps = step_words(&std::fs::read_to_string(root.join(STEPS)).expect("read the steps"));
@@ -191,14 +206,14 @@ fn check_report() -> (Vec<Cell>, Vec<String>) {
     let ui = ui_texts(&root);
     let world = World {
         root: &root,
-        results: &root.join(RESULTS),
+        results,
         exists: &exists,
         rpcs: &rpcs,
         steps: &steps,
         read: &read,
         ui: &ui,
     };
-    check(&text, &world)
+    check(text, &world)
 }
 
 #[test]

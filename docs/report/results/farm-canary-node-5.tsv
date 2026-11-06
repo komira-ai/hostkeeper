@@ -1,0 +1,21 @@
+# The first farm canary: one run of hostkeeper on one Linux node of the lab, node-5, with the
+# coordinator in a container on the lab's development machine and the daemon and coordinator at
+# the same release. Each run below was done once. Times are differences between stamps of the
+# coordinator's audit file, the daemon's journal, the operator's own commands and an ssh poll of
+# the hello service (its readiness and version routes). A time that ends at a poll is an upper
+# bound: the event happened at most one poll interval earlier.
+# kind	id	value	unit	how	cells
+raw	bootstrap-apply	34	s	adopt and bootstrap apply on the operator's machine, start to end: record the host, stop the old updater, install the package, write the config, start the daemon, leave it pending enrollment	m-bootstrap
+raw	enroll-request-to-enrolled	38	s	audit enroll_requested (whole seconds) to the journal line "enrolled as host" (38.08 s); includes the operator's approval	m-enroll
+raw	enroll-operator-wait	37	s	audit enroll_requested to audit enroll_approve, both whole seconds: the operator's time, not hostkeeper's	m-enroll
+raw	approve-to-enrolled	1	s	audit enroll_approve (whole seconds) to the journal line "enrolled as host" (1.08 s, so at most about 2 s)	m-enroll
+raw	install-to-ready	7.4	s	hello v1 install: set-desired to the first poll answering readiness 200 with the new version (7.43 s); upper bound	m-converge-install
+raw	install-poll	3	s	interval of the ssh poll during the install	m-converge-install
+raw	update-to-ready	10.1	s	hello v1 to v2: set-desired to the first poll answering the new version (10.14 s); upper bound	m-converge-update
+raw	update-to-converged	70	s	hello v1 to v2: set-desired to the coordinator's CONVERGENCE_STATE_CONVERGED stamp, which is in whole seconds, so between 69.1 s and 70.1 s	m-converge-update
+raw	update-poll	2	s	interval of the ssh poll during the update and the rollback	m-converge-update,m-converge-rollback
+raw	rollback-to-serving	6.0	s	hello v2 to a build failing readiness: set-desired to the first poll answering readiness 200 on the previous build again (6.03 s); upper bound	m-converge-rollback
+raw	verify-fail-to-serving	2.6	s	the journal's verify line "GET /readyz answered 503" to that same poll (2.61 s); upper bound	m-converge-rollback
+raw	daemon-rss	15.4	MiB	resident set of the hostkeeper daemon on node-5 after the runs, idle (15728 KiB)	m-daemon-rss
+raw	coordinator-memory	6.67	MiB	memory of the coordinator's container after the runs, one host enrolled, idle	m-coordinator-memory-one-host
+raw	channel-memory	2.45	MiB	memory of the release channel's web server container after the runs, idle	m-channel-memory
