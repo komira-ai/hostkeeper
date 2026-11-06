@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_daemon::cli::{HostFiles, host_enroller, host_links, image_of};
-use hostkeeper_daemon::links::{Links, NO_ENROLLMENT, NoLink};
+use hostkeeper_daemon::links::{Links, NO_ENROLLMENT};
 use hostkeeper_daemon::start;
 use hostkeeper_daemon::testing::{FakeNotifier, Log};
 use hostkeeper_daemon::unix_clock::SystemUnixClock;
@@ -23,10 +23,9 @@ use hostkeeper_enroll::{
     TransportError,
 };
 use hostkeeper_launchd::PlatformKind;
-use hostkeeper_link::testing::{FakeLink, RecordingLog, ScriptedSleeper, identity};
+use hostkeeper_link::testing::{FakeLink, RecordingLog, ScriptedSleeper};
 use hostkeeper_link::{
-    ANNOUNCED, CertSource, CertState, CoordinatorLink, DEFAULT_HEARTBEAT_SECS, Dispatch, Heartbeat,
-    Job, LinkError, Platform, StopFlag, Tick, UnixClock,
+    CertSource, CertState, DEFAULT_HEARTBEAT_SECS, Dispatch, Job, StopFlag, Tick, UnixClock,
 };
 use hostkeeper_steps::Clock;
 use support::{OWN, Rig, alerting, lines};
@@ -276,9 +275,9 @@ fn files_under(root: &Path) -> HostFiles {
 
 /// Catches the host's links built from something else than the pki directory, the flag and the
 /// daemon: the certificate is read under the pki directory's `current` link; the period is the
-/// one given; every heartbeat ends unsent while this build has no coordinator link; the wait is
-/// the daemon's clock and ends the loop once it is told to stop; the lines go through the
-/// daemon's alert sink; and the enroller is the config's.
+/// one given; the wait is the daemon's clock and ends the loop once it is told to stop; the
+/// lines go through the daemon's alert sink; and the enroller is the config's. The heartbeat
+/// link is tested against a real coordinator in `tests/coordinator_link.rs`.
 #[test]
 fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
     let rig = Rig::new("links-host");
@@ -293,16 +292,6 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
         CertState::NotEnrolled {
             waiting_for: files.pki.join("current"),
         }
-    );
-    let beat = Heartbeat {
-        platform: Platform::LinuxX86_64,
-        agent_version: hostkeeper_config::names::Version::from(OWN),
-        features: ANNOUNCED.to_vec(),
-        services: Vec::new(),
-    };
-    assert_eq!(
-        links.link.heartbeat(&identity("host"), &beat),
-        Err(LinkError::Transport(std::io::ErrorKind::Unsupported))
     );
     assert!(links.clock.unix_secs() > 0);
     let before = rig.clock.mono_secs();
@@ -320,20 +309,9 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
     assert!(enroller.is_ok(), "{:?}", enroller.err());
 }
 
-/// Catches the deferrals' clock read from somewhere else than the wall clock, or the link of a
-/// build without one sending anything: the unix clock is past the epoch, and `NoLink` refuses
-/// every heartbeat as unsupported.
+/// Catches the deferrals' clock read from somewhere else than the wall clock: the unix clock is
+/// past the epoch.
 #[test]
-fn the_unix_clock_is_the_wall_clock_and_no_link_sends_nothing() {
+fn the_unix_clock_is_the_wall_clock() {
     assert!(SystemUnixClock.unix_secs() > 0);
-    let beat = Heartbeat {
-        platform: Platform::LinuxX86_64,
-        agent_version: hostkeeper_config::names::Version::from(OWN),
-        features: Vec::new(),
-        services: Vec::new(),
-    };
-    assert_eq!(
-        NoLink.heartbeat(&identity("host"), &beat),
-        Err(LinkError::Transport(std::io::ErrorKind::Unsupported))
-    );
 }
