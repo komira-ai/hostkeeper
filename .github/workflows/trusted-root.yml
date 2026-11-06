@@ -6,8 +6,10 @@
 # while the old root still verifies that release. This workflow fetches the live root with the
 # runner's `gh` (`gh attestation trusted-root`, as docs/deploy/verify-a-release.md does) once a
 # day and fails when its bytes are not the committed file's: the red run is the notice to commit
-# the new root, and the failed run keeps the live root as its artifact `trusted-root`. It changes
-# nothing and holds no write scope.
+# the new root, and the failed run keeps the live root as its artifact `trusted-root`. The
+# comparison is of bytes, so a new `gh` on the runner that writes the same root differently turns
+# the run red too; the run prints the `gh` version, and the fix is the same: commit the live
+# output. It changes nothing and holds no write scope.
 name: trusted-root
 
 on:
@@ -27,6 +29,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - run: gh --version
       - name: The live trusted root
         env:
           GH_TOKEN: ${{ github.token }}

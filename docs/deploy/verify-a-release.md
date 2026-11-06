@@ -291,14 +291,20 @@ packages:
 
 When both files are present, the daemon uses the one written last; a tie in the same second goes
 to the packaged one. A root an operator copies after a rotation therefore takes over from the
-one an older package carried. When neither file is present, `gh` is given the
-`/usr/lib/hostkeeper/` path and the check fails there.
+one an older package carried. The choice goes by when each file reached the host, not by what
+it holds. A later update or rollback of hostkeeper to a version that carries an older root
+brings that root back into use, and so does a copy that keeps its source's time (`cp -p`,
+`rsync -t`). Copy with plain `cp` or `install`, and copy again after such a rollback. When
+neither file is present, `gh` is given the `/usr/lib/hostkeeper/` path and the check fails
+there.
 
 A key that Sigstore rotates reaches the hosts with the next release made after the committed root
 changes. That release is checked against the root the hosts already hold, so the update has to
 land while the old root still verifies it. The scheduled workflow `trusted-root.yml` fetches
 the live root once a day and fails when its bytes differ from the committed file. The failed run
 is the notice to commit the new root, and it keeps the live root as its artifact `trusted-root`.
+The comparison is of bytes, so a change in how the runner's `gh` writes the same root also turns
+the run red. The run prints the `gh` version, and the fix is the same: commit the live output.
 
 The admin `Status` reports the root the daemon uses:
 

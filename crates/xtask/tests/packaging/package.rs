@@ -127,7 +127,7 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
     refuses(check_nfpm_keys, &cases);
 }
 
-/// The five files of the package, sorted as [`Config::files`] sorts them.
+/// The four files of the package, sorted as [`Config::files`] sorts them.
 fn package_files() -> Vec<nfpm::File> {
     let file = |dst: &str, src: &str, mode: &str| nfpm::File {
         dst: dst.to_owned(),
@@ -148,11 +148,6 @@ fn package_files() -> Vec<nfpm::File> {
             "/usr/share/hostkeeper/hostkeeper.toml.template",
             "packaging/linux/hostkeeper.toml.template",
             "0644",
-        ),
-        file(
-            "/usr/lib/hostkeeper/trusted_root.json",
-            "packaging/sigstore/trusted_root.json",
-            "0444",
         ),
     ];
     files.sort();
@@ -203,11 +198,10 @@ fn check_manifest(
     Ok(())
 }
 
-/// The text of a package source that is a file of this repository (under `packaging/`); `None`
-/// for the daemon, which cargo builds.
+/// The text of a package source that is a file of this repository; `None` for the daemon,
+/// which cargo builds.
 fn repo_source(src: &str) -> Option<String> {
-    src.strip_prefix("packaging/")
-        .map(|rest| read(&format!("../{rest}")))
+    src.strip_prefix("packaging/linux/").map(read)
 }
 
 /// One more `contents` entry, before `scripts:`.
@@ -276,18 +270,6 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
         ),
         (
             altered(&text, "      mode: 0755\n", "      mode: 0700\n"),
-            "not [",
-        ),
-        (
-            altered(&text, "      mode: 0444\n", "      mode: 0644\n"),
-            "not [",
-        ),
-        (
-            altered(
-                &text,
-                "dst: /usr/lib/hostkeeper/trusted_root.json",
-                "dst: /usr/share/hostkeeper/trusted_root.json",
-            ),
             "not [",
         ),
         (

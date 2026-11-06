@@ -9,7 +9,11 @@
 //! daemon uses the one written last; a tie in the same second goes to the packaged file. So a
 //! root an operator places after a key rotation beats the one an older package carried, and the
 //! next update's root beats both. With neither present, `gh` is given the host path, and the
-//! check is refused there as it was before any package carried a root.
+//! check is refused there as it was before any package carried a root. The choice goes by when
+//! each copy reached the host, not by what it holds. An unpack of an older hostkeeper version
+//! after an operator's copy brings that version's root back into use, and so does a copy that
+//! keeps its source's old time (`cp -p`). The operator then copies the root again, without
+//! keeping its time.
 //!
 //! The root's age is the number of seconds since the chosen file's modification time, counted on
 //! the daemon's unix clock. A trusted root has no field that says when it was made, so the
