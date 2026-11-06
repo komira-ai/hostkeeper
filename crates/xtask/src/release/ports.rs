@@ -1,9 +1,9 @@
 //! The ports of the release verbs: everything they ask of git, of GitHub and of a binary, as
 //! traits, so that every verb runs in a test against fakes (`fakes`).
 //!
-//! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]),
-//! `github::Gh` ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]) and
-//! `check_binary::VersionOf` ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`]) and
+//! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]), `github::Gh`
+//! ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]), `check_binary::VersionOf` ([`RunVersion`]),
+//! `macos_pkg::PkgbuildCli` ([`BuildPkg`]) and
 //! `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
