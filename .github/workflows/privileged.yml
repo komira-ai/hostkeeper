@@ -7,7 +7,7 @@
 # (daemon-reload, start, stop, is-active), and hostkeeper's update of itself as a unit made of
 # packaging/linux/hostkeeper.service with its drop-in and fallback unit (the restart into the
 # new binary, the start limit, OnFailure=, the fallback's flip back, the settle at start, a
-# SIGKILL between the switch and the exit); on the Mac the daemon started as a
+# SIGKILL before and after the switch while the update waits for its restart); on the Mac the daemon started as a
 # launchd job and answering on its admin socket, a hook step as a launchd job stopped at its
 # bound, the observer's launchd and proc_pidpath adapters, and the package check's codesign and
 # quarantine verdicts.

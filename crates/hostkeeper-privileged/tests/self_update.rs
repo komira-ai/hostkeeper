@@ -10,8 +10,9 @@
 //!   `OnFailure=` runs the fallback, which puts the previous binary back (`flip_back`) and
 //!   records the update `Failed` and the version bad, and the unit runs the previous binary;
 //! - the version that fell back, offered again, is refused from the bad list and nothing moves;
-//! - a daemon killed with `SIGKILL` after the follow-on switched `current` and before the exit
-//!   it asked for is started again by systemd, and that start settles the update.
+//! - a daemon killed with `SIGKILL` while its update waits for the restart is started again by
+//!   systemd, and that start settles the update: `Succeeded` when the kill came after the
+//!   follow-on's switch, `Failed(self_update_fallback)` when it came before it.
 //!
 //! Every wait polls systemd or the files for a state (`support::wait_until`) and stops at once
 //! when the state can no longer come; no test asserts how long anything took.
@@ -196,21 +197,10 @@ fn the_version_that_fell_back_offered_again_is_refused_from_the_bad_list_and_not
     );
 }
 
-/// Catches a self-update left in progress when its daemon is killed between the switch and the
-/// exit (a record that keeps waiting, a unit that is not started again after `SIGKILL`, a start
-/// that does not settle): at the kill the record waits for the restart into the new version
-/// and `current` names it; after it, systemd starts the unit again, and that start settles the
-/// record to a verdict that agrees with what runs (`Succeeded` with the new binary, here, where
-/// `current` already named it), never one still waiting.
-#[test]
-fn a_daemon_killed_between_the_switch_and_its_exit_is_settled_by_the_next_start() {
-    let host = Host::start(
-        "su_kill",
-        Plan {
-            hold_exit: true,
-            ..Plan::default()
-        },
-    );
+/// The daemon of a host started with `hold_exit`, ordered to [`NEXT`] and held between the
+/// follow-on's switch and its exit: checks that the record waits for the restart into
+/// [`NEXT`] and that `current` names it, and gives the daemon's pid.
+fn held_after_the_switch(host: &Host) -> u32 {
     host.runs(N);
     host.offer(1);
     let held = host.paths().held;
@@ -224,7 +214,6 @@ fn a_daemon_killed_between_the_switch_and_its_exit_is_settled_by_the_next_start(
         pid.is_some()
     });
     let pid = pid.expect("the pid of the held daemon");
-
     assert_eq!(
         pid,
         host.main_pid(),
@@ -246,21 +235,76 @@ fn a_daemon_killed_between_the_switch_and_its_exit_is_settled_by_the_next_start(
         "{waiting:?}"
     );
     assert_eq!(host.current().as_deref(), Some(NEXT));
+    pid
+}
 
+/// `SIGKILL` to `pid`, then checks systemd saw its unit's main process killed once the record
+/// settled: the record is finished and waits for nothing.
+fn kill_and_settle(host: &Host, pid: u32) -> Record {
     let raw = i32::try_from(pid).expect("a pid");
     kill_process(Pid::from_raw(raw).expect("a pid"), Signal::KILL)
         .expect("the held daemon is there to kill");
-
     let rec = host.settled();
-    let ran = match &rec.state {
-        State::Finished { verdict, .. } if *verdict == succeeded() => NEXT,
-        _ => N,
-    };
-    host.runs(ran);
-    assert_finished(&rec, succeeded(), None);
     let main = journal(&host.main);
     assert!(
         main.contains("status=9/KILL"),
         "systemd saw the main process killed\n{main}"
     );
+    rec
+}
+
+/// Catches a self-update left in progress when its daemon is killed after the follow-on's
+/// switch and before its exit (a record that keeps waiting, a unit not started again after
+/// `SIGKILL`, a start that does not settle): systemd starts `current`, now the new binary, and
+/// its start settles the record `Succeeded`; the unit runs the new binary.
+#[test]
+fn a_daemon_killed_after_the_switch_is_settled_succeeded_by_the_new_binarys_start() {
+    let host = Host::start(
+        "su_kill_switched",
+        Plan {
+            hold_exit: true,
+            ..Plan::default()
+        },
+    );
+    let pid = held_after_the_switch(&host);
+    let rec = kill_and_settle(&host, pid);
+    assert_finished(&rec, succeeded(), None);
+    host.runs(NEXT);
+    assert!(!host.next_is_bad());
+}
+
+/// Catches a self-update left in progress, or confirmed by the wrong binary, when its daemon is
+/// killed after the follow-on wrote the record and before its switch: the binary directory is
+/// put back as it was before the switch (`current` names the old version and there is no
+/// `previous`; the switch is the rename of those links, so a kill before it leaves exactly
+/// this), then the daemon is killed. systemd starts the old binary, and its start settles the
+/// record `Failed(self_update_fallback)` and the version bad; the unit runs the old binary.
+#[test]
+fn a_daemon_killed_before_the_switch_is_settled_fell_back_by_the_old_binarys_start() {
+    let host = Host::start(
+        "su_kill_unswitched",
+        Plan {
+            hold_exit: true,
+            ..Plan::default()
+        },
+    );
+    let pid = held_after_the_switch(&host);
+    let layout = host.layout();
+    let tmp = layout.dir().join("current.rewind");
+    std::os::unix::fs::symlink(
+        layout
+            .version_path(N)
+            .strip_prefix(layout.dir())
+            .expect("in the directory"),
+        &tmp,
+    )
+    .expect("a link to the old binary");
+    fs::rename(&tmp, layout.current_path()).expect("current back on the old binary");
+    fs::remove_file(layout.previous_path()).expect("no previous");
+    assert_eq!(host.current().as_deref(), Some(N));
+
+    let rec = kill_and_settle(&host, pid);
+    assert_finished(&rec, fell_back(), Some(FALLBACK_REASON));
+    assert!(host.next_is_bad());
+    host.runs(N);
 }
