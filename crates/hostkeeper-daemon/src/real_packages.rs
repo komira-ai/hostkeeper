@@ -10,6 +10,10 @@
 //! Every failure of those libraries reaches the daemon as one [`PackageError::Refused`] built by
 //! [`refusal_of`], the one table that maps a library's reason token onto a [`Refusal`]. The
 //! outcome and the class are the library's own.
+//!
+//! The store also reports the Sigstore trusted root its verifier checks attestations with
+//! ([`RealPackages::with_trusted_root`], [`crate::trusted_root`]): its age and, when it needs
+//! attention, a reason, which the admin `Status` carries.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -37,6 +41,7 @@ use hostkeeper_unpack::{
 use crate::adapters::PackageCheck;
 use crate::packages::{PackageError, PackageRefusal, Packages, VersionDir};
 use crate::refusal::Refusal;
+use crate::trusted_root::{RootReport, TrustedRoot};
 use crate::verb::PackageDigest;
 
 /// What failed, as [`refusal_of`] takes it.
@@ -143,6 +148,7 @@ pub struct RealPackages {
     platform: Platform,
     fs: Arc<dyn PackageFs + Send + Sync>,
     check: PackageCheck,
+    trusted_root: Option<Arc<TrustedRoot>>,
 }
 
 impl RealPackages {
@@ -169,6 +175,7 @@ impl RealPackages {
             platform: Platform::current(),
             fs: Arc::new(fs),
             check: None,
+            trusted_root: None,
         })
     }
 
@@ -176,6 +183,15 @@ impl RealPackages {
     /// quarantine and code-signature check ([`crate::adapters::Adapters`]), none on Linux.
     pub fn with_package_check(self, check: PackageCheck) -> RealPackages {
         RealPackages { check, ..self }
+    }
+
+    /// The same store, reporting `root`, the trusted root its verifier checks attestations
+    /// with ([`Packages::trusted_root`]).
+    pub fn with_trusted_root(self, root: Arc<TrustedRoot>) -> RealPackages {
+        RealPackages {
+            trusted_root: Some(root),
+            ..self
+        }
     }
 }
 
@@ -245,5 +261,9 @@ impl Packages for RealPackages {
             .map_err(|error| refused(refusal_of(Failure::Unpack(&error))))?;
         remove_orphan_fetches(&self.root, service)
             .map_err(|error| refused(io_refusal(error.to_string())))
+    }
+
+    fn trusted_root(&self) -> Option<RootReport> {
+        self.trusted_root.as_ref().map(|root| root.report())
     }
 }

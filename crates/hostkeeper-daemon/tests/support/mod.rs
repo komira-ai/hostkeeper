@@ -16,6 +16,7 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
+use hostkeeper_daemon::cli::DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS;
 use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
@@ -389,6 +390,7 @@ impl Rig {
             packages_dir: self.packages.clone(),
             admin_socket: self.socket.clone(),
             trusted_uid: my_uid(),
+            trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
         }
     }
 

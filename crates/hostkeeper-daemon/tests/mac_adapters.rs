@@ -12,12 +12,13 @@ use std::sync::Arc;
 
 use hostkeeper_daemon::adapters::{Adapters, host_boot_id, host_claims, host_clock};
 use hostkeeper_daemon::cli::{DEFAULT_ADMIN_SOCKET, UNWIRED, Unwired};
+use hostkeeper_daemon::ipmi::DevIpmi;
 use hostkeeper_daemon::mac::{
     CODESIGN, HostIoreg, HostMacVerify, IOREG, NOT_SIGNED, QUARANTINE_ATTRIBUTE, TOOL_DEADLINE,
     codesign_args, codesign_verdict, has_attribute, ioreg_args,
 };
 use hostkeeper_daemon::start::StartError;
-use hostkeeper_enroll::{Claims, Ioreg};
+use hostkeeper_enroll::{Claims, Ioreg, LinuxClaims};
 use hostkeeper_launchd::launchctl::print_args;
 use hostkeeper_launchd::{
     FakeLaunchctl, Label, LaunchctlError, LaunchctlOutput, PidInfo, PidInfoError, Platform,
@@ -327,9 +328,14 @@ impl Ioreg for FakeIoreg {
 /// UUID `ioreg` gives, and nothing else.
 #[test]
 fn a_macs_claims_are_its_serial_and_platform_uuid_alone() {
-    let claims = host_claims(PlatformKind::Macos, Box::new(FakeIoreg))
-        .claims()
-        .expect("the claims");
+    let claims = host_claims(
+        PlatformKind::Macos,
+        LinuxClaims::host(),
+        Box::new(FakeIoreg),
+        Arc::new(DevIpmi::host()),
+    )
+    .claims()
+    .expect("the claims");
     assert_eq!(
         claims,
         Claims {
@@ -339,7 +345,12 @@ fn a_macs_claims_are_its_serial_and_platform_uuid_alone() {
         }
     );
     // A Linux host's claims are its own collectors'; making them reads nothing.
-    let _linux = host_claims(PlatformKind::Linux, Box::new(FakeIoreg));
+    let _linux = host_claims(
+        PlatformKind::Linux,
+        LinuxClaims::host(),
+        Box::new(FakeIoreg),
+        Arc::new(DevIpmi::host()),
+    );
 }
 
 /// A pid lookup with fixed answers.

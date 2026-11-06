@@ -257,6 +257,7 @@ fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
             record_problem: RecordProblem::Unreadable.into(),
             ..ServiceRecord::default()
         }],
+        ..StatusResponse::default()
     };
     let read = StatusResponse::decode(status.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(read.services[0].record_problem(), RecordProblem::Unreadable);
@@ -429,7 +430,7 @@ const RPCS: [(&str, &[&str]); 6] = [
 
 /// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 25] = [
+const FIELDS: [(&str, &[(&str, u32)]); 26] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -442,6 +443,14 @@ const FIELDS: [(&str, &[(&str, u32)]); 25] = [
     (
         "hostkeeper.agent.v1.VerdictAck",
         &[("service", 1), ("order_id", 2), ("order_try", 3)],
+    ),
+    (
+        "hostkeeper.local.v1.StatusResponse",
+        &[
+            ("services", 1),
+            ("trusted_root_age_secs", 2),
+            ("trusted_root_reason", 3),
+        ],
     ),
     (
         "hostkeeper.local.v1.ServiceRecord",

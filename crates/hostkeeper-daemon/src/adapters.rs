@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hostkeeper_enroll::{ClaimsSource, Ioreg, LinuxClaims, MacClaims};
+use hostkeeper_enroll::{ClaimsSource, Ioreg, Ipmi, LinuxClaims, MacClaims};
 use hostkeeper_launchd::{
     Launchctl, LaunchdProcessProbe, LaunchdServiceManager, LaunchdUnitControl, PidInfo, Platform,
     PlatformKind, StdFileIdentity,
@@ -164,11 +164,20 @@ pub fn host_boot_id() -> Box<dyn BootIdSource> {
     Box::new(hostkeeper_steps::ProcBootId::host())
 }
 
-/// The enrollment claims of a host of `kind`: [`LinuxClaims::host`] on Linux; on macOS the serial
-/// and the platform UUID that `ioreg` gives ([`MacClaims`]), and nothing of Linux's.
-pub fn host_claims(kind: PlatformKind, ioreg: Box<dyn Ioreg>) -> Box<dyn ClaimsSource> {
+/// The enrollment claims of a host of `kind`. On Linux, the files of `linux` (the host's own:
+/// [`LinuxClaims::host`]) and the BMC's MAC asked of `bmc` (the host's: [`DevIpmi::host`]), so a
+/// host with a BMC claims its MAC and a host with none claims the rest; on macOS the serial and
+/// the platform UUID that `ioreg` gives ([`MacClaims`]), and nothing of Linux's.
+///
+/// [`DevIpmi::host`]: crate::ipmi::DevIpmi::host
+pub fn host_claims(
+    kind: PlatformKind,
+    linux: LinuxClaims,
+    ioreg: Box<dyn Ioreg>,
+    bmc: Arc<dyn Ipmi>,
+) -> Box<dyn ClaimsSource> {
     match kind {
-        PlatformKind::Linux => Box::new(LinuxClaims::host()),
+        PlatformKind::Linux => Box::new(linux.with_ipmi(bmc)),
         PlatformKind::Macos => Box::new(MacClaims::new(ioreg)),
     }
 }

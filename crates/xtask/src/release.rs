@@ -179,6 +179,12 @@ pub(crate) enum Verb {
         /// `--fail-ready`, so it never reports ready. Refused for hostkeeper.
         #[arg(long)]
         fail_ready: bool,
+        /// The Sigstore trusted root, as `gh attestation trusted-root` prints it:
+        /// `files/trusted_root.json` in the package, which the daemon checks attestations
+        /// against. Required for hostkeeper on every platform (the release passes
+        /// `packaging/sigstore/trusted_root.json`); refused for hello.
+        #[arg(long)]
+        trusted_root: Option<PathBuf>,
         /// The directory the package and its `.sha256` are written to.
         #[arg(long)]
         out: PathBuf,
@@ -474,6 +480,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             binary,
             unit,
             fail_ready,
+            trusted_root,
             out,
         } => package::package(
             ports.git,
@@ -485,6 +492,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 binary,
                 unit,
                 fail_ready,
+                trusted_root,
                 out,
             },
         ),

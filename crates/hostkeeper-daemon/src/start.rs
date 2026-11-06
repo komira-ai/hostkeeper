@@ -29,6 +29,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::num::NonZeroU64;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
@@ -73,6 +74,9 @@ pub struct Settings {
     pub admin_socket: PathBuf,
     /// The account the daemon config must be owned by: root (0) on a host.
     pub trusted_uid: u32,
+    /// Days after which the Sigstore trusted root is reported stale
+    /// (`--trusted-root-max-age-days`).
+    pub trusted_root_max_age_days: NonZeroU64,
 }
 
 impl Settings {

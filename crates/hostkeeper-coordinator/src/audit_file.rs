@@ -208,7 +208,7 @@ pub(crate) fn segment_path(active: &Path, number: u64) -> PathBuf {
 
 /// The number of the sealed segment named `name`, if it is one of the audit file named `active`:
 /// `active`, a dot, and a number with no leading zero.
-fn segment_number(active: &OsStr, name: &OsStr) -> Option<u64> {
+pub(crate) fn segment_number(active: &OsStr, name: &OsStr) -> Option<u64> {
     let digits = name
         .as_encoded_bytes()
         .strip_prefix(active.as_encoded_bytes())?

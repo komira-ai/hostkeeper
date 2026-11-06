@@ -123,6 +123,8 @@ Every change is one JSON line of the audit file `<ops-file>.audit`, appended and
   filters, paging and `since_seq` cursor as over one file. A `since_seq` in a segment already
   deleted answers from the oldest entry kept; nothing in the answer says that older entries
   were deleted (the response has no field for it).
+- `hostkeeper-coordinator backup` copies the active file and every segment kept, and `restore`
+  writes them back under their numbers ([coordinator-state.md](coordinator-state.md)).
 
 A change is not made without its audit line. When the line cannot be appended (a full disk, a
 file that cannot be opened), the call is refused with `audit_unavailable` (gRPC `UNAVAILABLE`)
