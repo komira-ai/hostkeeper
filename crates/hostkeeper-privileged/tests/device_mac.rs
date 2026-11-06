@@ -269,9 +269,9 @@ impl Drop for Made {
 /// Catches a sealed package refused as `artifact_changed` on a Mac because its packages
 /// directory is reached through `/var`, which is a link to `/private/var` (every install
 /// halted at `prepare` so): a tree made, closed and sealed under `/var` the way the daemon's
-/// `/var/lib/hostkeeper/packages` is, is accepted by the check every step makes, which returns
-/// the hook on the real path under `/private/var`; the same tree with one byte of a file
-/// changed is `Changed`.
+/// `/var/lib/hostkeeper/packages` is, is named by its real path under `/private/var` and
+/// accepted by the check every step makes; the same tree with one byte of a file changed is
+/// `Changed`.
 #[test]
 fn a_tree_sealed_under_var_passes_its_check_and_a_changed_one_does_not() {
     as_root();
@@ -298,10 +298,10 @@ fn a_tree_sealed_under_var_passes_its_check_and_a_changed_one_does_not() {
     let real = fs::canonicalize(&base.0)
         .expect("the real path")
         .join("1.0.0");
-    println!("{} is {}", tree.display(), real.display());
     assert!(real.starts_with("/private/var"), "{}", real.display());
 
     let staged = Staged::seal(&tree).expect("sealed");
+    assert_eq!(staged.dir(), real);
     let hook = Path::new("bin/hook");
     assert_eq!(
         staged.check(hook).expect("the check passes"),

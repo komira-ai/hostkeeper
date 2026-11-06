@@ -7,11 +7,11 @@
 //! anyway (a bad restore, a disk fault, a root that was tricked), and the runner treats it as a
 //! `halt`.
 //!
-//! The parents are judged on their real path: a link above the tree is resolved once, at each
-//! check, and the place, the digest and the hook are then all read on that path, which holds no
-//! link. On macOS `/var` is a link to `/private/var`, so the packages directory
-//! `/var/lib/hostkeeper/packages` is checked as `/private/var/lib/hostkeeper/packages`. The tree
-//! itself is never a link.
+//! A staged tree is named by its real path: [`Staged::seal`] resolves the links above the tree
+//! once, so the check, the hook it returns and every reader of [`Staged::dir`] use one path that
+//! holds no link. On macOS `/var` is a link to `/private/var`, so a version under
+//! `/var/lib/hostkeeper/packages` is `/private/var/lib/hostkeeper/packages/...` from its seal on.
+//! The tree itself is never a link.
 //!
 //! # The tree digest
 //!
@@ -108,21 +108,29 @@ impl Staged {
     /// The tree at `dir` as it is now. Called by the step that verified the release, once, right
     /// after the verification and before anything else touches the tree.
     ///
-    /// `dir` must be absolute and made of plain names ([`ArtifactError::Untrusted`] otherwise):
-    /// the checks of its ancestors would else be made on something else than the tree that runs.
-    /// A tree holding a link or anything else that is neither a regular file nor a directory is
-    /// [`ArtifactError::Unsupported`].
+    /// `dir` must be absolute, made of plain names and not the root ([`ArtifactError::Untrusted`]
+    /// otherwise): the checks of its ancestors would else be made on something else than the
+    /// tree that runs. The links above the tree are resolved here, once: the `Staged` names the
+    /// real path of its parent joined with the tree's own name, which is not resolved, so a tree
+    /// that is itself a link stays one and [`Staged::check`] refuses it. A parent that cannot be
+    /// resolved is [`ArtifactError::Io`]. A tree holding a link or anything else that is neither a
+    /// regular file nor a directory is [`ArtifactError::Unsupported`].
     pub fn seal(dir: &Path) -> Result<Staged, ArtifactError> {
+        let untrusted = || ArtifactError::Untrusted(dir.to_path_buf());
         if !dir.is_absolute() || !dir.components().skip(1).all(is_plain) {
-            return Err(ArtifactError::Untrusted(dir.to_path_buf()));
+            return Err(untrusted());
         }
+        let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+            return Err(untrusted());
+        };
+        let dir = fs::canonicalize(parent)?.join(name);
         Ok(Staged {
-            dir: dir.to_path_buf(),
-            digest: tree_digest(dir)?,
+            digest: tree_digest(&dir)?,
+            dir,
         })
     }
 
-    /// The absolute path of the tree.
+    /// The absolute path of the tree: its real path, as [`Staged::seal`] resolved it.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -135,10 +143,9 @@ impl Staged {
     /// Checks the tree still has its digest and returns the hook executable inside it.
     ///
     /// **What the launcher may rely on:** the returned path is a regular file of a tree that was
-    /// not changed since it was sealed, on the tree's real path (the links above the tree
-    /// resolved; the path returned holds none), and the tree and every directory of that path
-    /// were, at this check, real directories owned by the running user or root and closed to
-    /// group and others. The updater's staged trees are root-owned, read-only and in root-owned
+    /// not changed since it was sealed, and the tree and every directory above it were, at this
+    /// check, real directories (no link) owned by the running user or root and closed to group
+    /// and others. The updater's staged trees are root-owned, read-only and in root-owned
     /// parents, so the digest and the place together mean the file cannot be swapped before the
     /// exec. A launcher that runs the path must run it from here, not from a path it built.
     ///
@@ -152,21 +159,18 @@ impl Staged {
     /// [`Staged::check`] with the trusted owners and the way an owner is read given, so that a
     /// test can refuse a foreign owner without a second user.
     ///
-    /// Besides the digest: the links above the tree are resolved first ([`real_place`]); the
-    /// tree and every directory of that real path must be real directories owned by a trusted
-    /// user and not writable by group or others, and every entry inside the tree must be a
-    /// regular file or a directory (no link), owned by a trusted user, not setuid or setgid, and
-    /// not writable by group or others ([`ArtifactError::Untrusted`] naming the entry). The
-    /// digest is read and the hook returned on that real path.
+    /// Besides the digest: the tree and every directory above it must be real directories owned
+    /// by a trusted user and not writable by group or others, and every entry inside the tree must
+    /// be a regular file or a directory (no link), owned by a trusted user, not setuid or setgid,
+    /// and not writable by group or others ([`ArtifactError::Untrusted`] naming the entry).
     pub fn check_as(
         &self,
         hook: &Path,
         trusted: &[u32],
         owner: &dyn Fn(&fs::Metadata) -> (u32, u32),
     ) -> Result<PathBuf, ArtifactError> {
-        let dir = real_place(&self.dir)?;
-        check_place(&dir, trusted, owner)?;
-        let found = walk(&dir, Some((trusted, owner)))?.digest;
+        check_place(&self.dir, trusted, owner)?;
+        let found = walk(&self.dir, Some((trusted, owner)))?.digest;
         if found != self.digest {
             return Err(ArtifactError::Changed {
                 expected: self.digest.clone(),
@@ -178,7 +182,7 @@ impl Staged {
         }
         // The walk above refused every link in the tree and `hook` is plain names, so no
         // component on the way is a link; the last is looked at without following it.
-        let at = dir.join(hook);
+        let at = self.dir.join(hook);
         if !fs::symlink_metadata(&at).is_ok_and(|meta| meta.is_file()) {
             return Err(ArtifactError::HookMissing(hook.to_path_buf()));
         }
@@ -195,18 +199,9 @@ pub(crate) fn host_owner(meta: &fs::Metadata) -> (u32, u32) {
     (meta.uid(), meta.gid())
 }
 
-/// `dir` with every link above it resolved: the real path of its parent, then its own name,
-/// which is not resolved, so a tree that is itself a link stays one and [`check_place`] refuses
-/// it. `dir` is absolute and made of plain names ([`Staged::seal`] makes no other); the root has
-/// no parent and is its own real path.
-fn real_place(dir: &Path) -> io::Result<PathBuf> {
-    let parent = fs::canonicalize(dir.parent().unwrap_or(dir))?;
-    Ok(parent.join(dir.file_name().unwrap_or_default()))
-}
-
 /// The tree and every directory above it are real directories (not links) owned by a trusted
 /// user and not writable by group or others. The path is absolute and made of plain names:
-/// [`real_place`] makes no other.
+/// [`Staged::seal`] makes no other.
 fn check_place(
     dir: &Path,
     trusted: &[u32],

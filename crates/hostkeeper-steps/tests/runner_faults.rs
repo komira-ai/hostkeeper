@@ -110,9 +110,9 @@ fn a_changed_untrusted_or_unsupported_release_still_halts() {
 
 /// Catches a release reached through a link above it being halted as `artifact_changed`, as
 /// every package was on macOS, where `/var` is a link to `/private/var`: both releases sealed
-/// through a linked parent run every step to `Succeeded`, each hook run from the real path (no
-/// link in it) while the step is still given the directory it was sealed as; the same release
-/// with one byte of a file changed still halts with nothing run.
+/// through a linked parent run every step to `Succeeded`, each hook run from the real path and
+/// `prepare` given the real path as its artifact (no link in either); the same release with
+/// one byte of a file changed still halts with nothing run.
 #[test]
 fn a_release_behind_a_linked_parent_runs_and_a_changed_one_still_halts() {
     let rig = Rig::new("runf-linked-parent");
@@ -122,7 +122,7 @@ fn a_release_behind_a_linked_parent_runs_and_a_changed_one_still_halts() {
     let mut order = rig.order();
     order.staged = Staged::seal(&var.join("new")).unwrap();
     order.previous = Some(Staged::seal(&var.join("old")).unwrap());
-    assert_eq!(order.staged.dir(), var.join("new"));
+    assert_eq!(order.staged.dir(), real.join("new"));
 
     let got = rig.runner().run(&order).unwrap();
     assert_eq!(got.verdict, succeeded());
@@ -141,7 +141,7 @@ fn a_release_behind_a_linked_parent_runs_and_a_changed_one_still_halts() {
             unreachable!("runs() holds runs only")
         };
         assert_eq!(executable, real.join("new/hook"), "{step:?}");
-        let sealed_as = (step == Step::Prepare).then(|| var.join("new"));
+        let sealed_as = (step == Step::Prepare).then(|| real.join("new"));
         assert_eq!(artifact, sealed_as, "{step:?}");
     }
 

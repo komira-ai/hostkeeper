@@ -185,12 +185,12 @@ fn the_tree_and_its_parents_must_be_closed() {
     staged.check(hook).unwrap();
 }
 
-/// Catches the place check judging the link above a tree rather than the directories the tree
-/// is in, which halted every package on macOS (`/var` is a link to `/private/var`): a tree
-/// sealed through a linked parent passes and its hook is returned on the real path, with the
-/// digest of the same tree sealed directly; the real path's parents are still judged (one open
-/// to others is `Untrusted`, named by its real path), a byte changed is still `Changed`, and a
-/// tree that is itself a link is still `Untrusted`.
+/// Catches a tree sealed through a link above it being refused, which halted every package on
+/// macOS (`/var` is a link to `/private/var`): the seal names the tree by its real path, with
+/// the digest of the same tree sealed directly, and the check passes and returns the hook on
+/// that path; the real parents are still judged (one open to others is `Untrusted`, named by
+/// its real path), a byte changed is still `Changed`, and a tree that is itself a link is still
+/// `Untrusted`, sealed directly or through the linked parent.
 #[test]
 fn a_linked_parent_is_judged_by_its_real_path() {
     let s = Scratch::new("art-linked-parent");
@@ -204,7 +204,7 @@ fn a_linked_parent_is_judged_by_its_real_path() {
     let hook = Path::new("bin/hook");
 
     let through = Staged::seal(&var.join("inner")).unwrap();
-    assert_eq!(through.dir(), var.join("inner"));
+    assert_eq!(through.dir(), inner);
     assert_eq!(through.digest(), Staged::seal(&inner).unwrap().digest());
     assert_eq!(through.check(hook).unwrap(), inner.join("bin/hook"));
 
@@ -236,17 +236,12 @@ fn a_linked_parent_is_judged_by_its_real_path() {
     ));
 }
 
-/// Catches a tree whose parent is gone being judged as changed: the check cannot resolve the
-/// real path and says so as an I/O error, which the runner tries again.
+/// A tree whose parent does not exist (so its real path cannot be resolved) cannot be sealed:
+/// an I/O error, `NotFound`, as for any tree that cannot be read.
 #[test]
-fn a_tree_whose_parent_is_gone_is_unreadable() {
-    let s = tree("art-parent-gone");
-    let dir = fs::canonicalize(s.path()).unwrap().join("gone/tree");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("hook"), "#!hook\n").unwrap();
-    let staged = Staged::seal(&dir).unwrap();
-    fs::remove_dir_all(dir.parent().unwrap()).unwrap();
-    let err = staged.check(Path::new("hook")).unwrap_err();
+fn a_tree_whose_parent_is_missing_cannot_be_sealed() {
+    let s = Scratch::new("art-parent-missing");
+    let err = Staged::seal(&s.path().join("missing/tree")).unwrap_err();
     assert!(
         matches!(&err, ArtifactError::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
         "{err:?}"
@@ -382,7 +377,7 @@ fn a_tree_with_setuid_or_writable_entries_is_refused() {
 /// then be made on something else than the tree that is run, so it is not even sealed.
 #[test]
 fn the_staged_directory_must_be_absolute_and_plain() {
-    for dir in ["relative/tree", "/a/../b", ""] {
+    for dir in ["relative/tree", "/a/../b", "", "/"] {
         let err = Staged::seal(Path::new(dir)).unwrap_err();
         assert!(
             matches!(err, ArtifactError::Untrusted(_)),
