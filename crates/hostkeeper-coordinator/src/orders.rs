@@ -91,7 +91,7 @@ pub enum Order {
         index_digest: Option<Digest>,
         /// The order's id ([`crate::order_terms::order_id_text`]).
         order_id: String,
-        /// The try, from 1.
+        /// The try ([`next_try`]).
         order_try: u64,
     },
     /// Stop the service's running step and end its order in the halt phase.
