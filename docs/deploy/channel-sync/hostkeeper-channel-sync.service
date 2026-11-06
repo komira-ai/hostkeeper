@@ -1,7 +1,7 @@
 # The release channel's sync on the host that serves the channel (docs/deploy/release-channel.md,
 # "Sync new releases into the channel"): one run of `cargo xtask release channel-sync`, which
-# copies each new published release of the repositories below into the channel's tree, after its
-# check, and changes nothing already there. hostkeeper-channel-sync.timer starts it.
+# copies each new published release of the services of the trust list into the channel's tree,
+# after its check, and changes nothing already there. hostkeeper-channel-sync.timer starts it.
 #
 # Install:
 #   - the xtask binary of a hostkeeper checkout (`cargo build --release -p xtask`) as
@@ -9,16 +9,19 @@
 #   - a system user `hostkeeper-channel` that can write the channel's tree, with
 #     /var/lib/hostkeeper-channel-sync as its home (gh and the attestation verifier keep their
 #     caches there);
+#   - the trust list, trust-list.toml beside this file with the services the channel serves, as
+#     /etc/hostkeeper/channel-sync-trust.toml, mode 0644, owned by root;
 #   - /etc/hostkeeper/channel-sync.env, mode 0600, owned by root, holding one line
 #     `GH_TOKEN=<token>`: a GitHub token that can read public repositories and nothing else. It
 #     is gh's credential; the sync reads no environment variable.
 # Then `systemctl enable --now hostkeeper-channel-sync.timer`.
 #
-# A run that refuses something (a release that fails its check, a version already in the channel
-# with other bytes) syncs everything else and then fails: `systemctl status` and the journal show
-# each refusal on its own line.
+# A run that refuses something (a release that fails its check, a service the trust list does not
+# trust from its repository, a package not signed by its service's signer, a version already in
+# the channel with other bytes) syncs everything else and then fails: `systemctl status` and the
+# journal show each refusal on its own line.
 [Unit]
-Description=Copy new published hostkeeper releases into the release channel
+Description=Copy new published releases of the trusted services into the release channel
 Wants=network-online.target
 After=network-online.target
 
@@ -28,7 +31,7 @@ User=hostkeeper-channel
 Group=hostkeeper-channel
 StateDirectory=hostkeeper-channel-sync
 EnvironmentFile=/etc/hostkeeper/channel-sync.env
-ExecStart=/usr/local/libexec/hostkeeper/xtask release channel-sync --repo komira-ai/hostkeeper --repo komira-ai/tierstore --channel-dir /srv/hostkeeper/channel
+ExecStart=/usr/local/libexec/hostkeeper/xtask release channel-sync --trust-list /etc/hostkeeper/channel-sync-trust.toml --channel-dir /srv/hostkeeper/channel
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes

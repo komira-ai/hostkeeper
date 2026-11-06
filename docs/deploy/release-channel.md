@@ -78,18 +78,18 @@ which the daemon reports as `fetch_failed` and retries.
 
 A release published in CI does not reach the channel by itself: no workflow can push into the
 host that serves it. `cargo xtask release channel-sync` pulls instead. It runs on that host,
-reads each repository's published releases from GitHub, and stages every new one with
-`channel-stage`:
+reads the published releases of each repository its trust list names from GitHub, and stages
+every new version of a trusted service with `channel-stage`:
 
 ```sh
 cargo xtask release channel-sync \
-  --repo komira-ai/hostkeeper --repo komira-ai/tierstore \
+  --trust-list /etc/hostkeeper/channel-sync-trust.toml \
   --channel-dir <root of the channel's tree>
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--repo` | A repository whose releases are synced, `<owner>/<name>`. Repeat it, or list several after it; they are synced in that order. A repository named twice is refused |
+| `--trust-list` | The trust list: which services the channel stages, from which repository, signed by whom (see [The trust list](#the-trust-list)). Required |
 | `--channel-dir` | The root of the channel's tree, the `--out` of `channel-stage`. It must exist |
 | `--since` | A tag `v<X.Y.Z>`: releases older than it are skipped (it is synced) |
 | `--every-secs` | Sync again this many seconds after each run ends, and never exit (the sidecar). Without it the verb runs once |
@@ -99,46 +99,105 @@ else (`GH_TOKEN`, gh's own credential). It reads only the 100 newest releases of
 leaves drafts out, and skips a release whose tag is not `v<X.Y.Z>` or that carries no release
 index (a release of binaries only).
 
+### The trust list
+
+The trust list is a TOML file with one `[[service]]` table per service the channel stages. The
+committed [`channel-sync/trust-list.toml`](channel-sync/trust-list.toml) lists hostkeeper, hello,
+tierstore and js-agent:
+
+```toml
+# tierstore: its own repository, signed by its artifacts.yml on each push to main.
+[[service]]
+name          = "tierstore"
+repository    = "komira-ai/tierstore"
+workflow      = ".github/workflows/artifacts.yml"
+refs          = ["refs/heads/main"]
+hosted_runner = true
+
+# js-agent: a service of jobscheduler, whose release.yml builds, signs and publishes it.
+[[service]]
+name          = "js-agent"
+repository    = "komira-ai/jobscheduler"
+workflow      = ".github/workflows/release.yml"
+refs          = ["refs/heads/main"]
+hosted_runner = true
+```
+
+| Key | Meaning |
+|---|---|
+| `name` | The service, as its release index names it (`"service"`), in the daemon's grammar for a service name. It need not be its repository's name |
+| `repository` | The one repository, `<owner>/<name>`, whose releases may carry the service |
+| `workflow` | The path, in that repository, of the workflow whose attestation each package must carry |
+| `refs` | The refs that workflow's run may have been on, at least one; `*` matches any run of characters within one `/`-separated part (`refs/tags/v*`) |
+| `hosted_runner` | Whether the run must have been on a GitHub-hosted runner |
+
+`workflow`, `refs` and `hosted_runner` are the keys of the daemon config's `[trusted_signers]`
+(design section 4.1), read by the same code into the same type, with the repository's owner as
+its `organisation`: a signer is written, and its refs matched, the same way in both files. Every
+key is required, an unknown key is refused naming it and its table, a service is listed once,
+and a list with no service is refused; any of these stops the run before GitHub is asked
+anything (exit 1). A release that should reach a host must also pass that host's own
+`[trusted_signers]`: listing a signer here that the daemons do not trust stages packages every
+host refuses to unpack.
+
+Install the list owned by root and writable by nobody else: it decides what the channel serves.
+To add a service, add its table and let the next run pick it up; every repository the list names
+is synced, in the order each is first named.
+
+### What a run does
+
 For each release, oldest version first:
 
 1. It downloads the release's indexes (`index.json` and each `<name>-index.json`) and compares
-   each service version they name with the channel. An index must name the service its
-   repository is named for (`komira-ai/tierstore` ships `tierstore`; a hostkeeper release also
-   ships `hello`), and only one index of a release may name a version; otherwise the version is
-   refused. A version whose `S/V/index.json` holds the
+   each service version they name with the channel. The index's service must be in the trust
+   list, listed for this release's repository; otherwise the version is refused, naming the
+   service and why (`index.json is the index of jobscheduler, a service the trust list does not
+   list`, or `... of js-agent, which the trust list trusts from komira-ai/jobscheduler only`).
+   Only one index of a release may name a version. A version whose `S/V/index.json` holds the
    same bytes, with every package it lists at its size and every bundle beside it, is already
    there: nothing more is downloaded. A version whose `S/V/index.json` holds other bytes is
    refused, since a release in the channel never changes; it is left as it is.
 2. If any version is new, or was cut short (`S/V/` without its index, or missing a file), it
    downloads every other asset and checks the release. A hostkeeper release is checked by
    `cargo xtask release check` itself: every asset, `SHA256SUMS`, the indexes, and every
-   attestation online and from its bundle. A release of another repository is checked by its
-   `SHA256SUMS` (it lists every asset but itself and the bundles, each at its SHA-256) and the
-   attestation of every asset with a bundle, online and from the bundle, as signed by that
-   repository's own `.github/workflows/artifacts.yml` on `refs/heads/main` at the release's
-   commit. A download that fails or a check that refuses stages nothing of the release.
-3. It stages each new version with `channel-stage`, which requires a package for every platform.
-   A new version is staged in a work directory inside the channel directory and renamed to
-   `S/V/` whole, so a host never fetches a version that is half there. A version that was cut
+   attestation online and from its bundle by hostkeeper's `artifacts.yml`. A release of another
+   repository is checked by its `SHA256SUMS`: it lists every asset but itself and the bundles,
+   each at its SHA-256. A download that fails or a check that refuses stages nothing of the
+   release.
+3. It verifies, for each new version, every package its index lists, online and from its bundle
+   (`gh attestation verify`), as signed by the trust list's signer of its service at the
+   release's commit: that repository, that workflow, a ref one of its `refs` matches, and a
+   hosted runner when `hosted_runner` is true. A version with a package not so signed is refused,
+   naming the service, the signer it requires and what each attestation said, for example
+   `not signed as the trust list requires of js-agent, by
+   komira-ai/jobscheduler/.github/workflows/release.yml on refs/heads/main:
+   js-agent-0.1.176-linux-x86_64.tar.zst (online): signed by
+   komira-ai/jobscheduler/.github/workflows/ci.yml, not ...`. The release's other versions go on.
+4. It stages each verified version with `channel-stage`, which requires a package for every
+   platform. A new version is staged in a work directory inside the channel directory and renamed
+   to `S/V/` whole, so a host never fetches a version that is half there. A version that was cut
    short is finished in place, which writes only what is missing.
 
 The work directory is `.channel-sync-<pid>-<n>/` in the channel directory, removed after each
-release; each run starts by removing any such directory a run that was killed left behind. A run with nothing new downloads
-only the indexes and changes nothing. A run that refuses anything still syncs everything else,
-prints a `refused` line for each refusal, and then fails (exit 1), so the timer or the
-container's log shows it; the next run tries again.
+release; each run starts by removing any such directory a run that was killed left behind. A run
+with nothing new downloads only the indexes and changes nothing. A run that refuses anything
+still syncs everything else, prints a `refused` line for each refusal, and then fails (exit 1),
+so the timer or the container's log shows it; the next run tries again.
 
 Two runs must not overlap: the timer below starts a run only after the last one ended, and the
 sidecar runs one loop. Packages already in the channel are compared by size only, not hashed on
 every run: the daemon checks each package's SHA-256 against the index as it fetches it.
 
-Two ways to run it, both in [`channel-sync/`](channel-sync/):
+Two ways to run it, both in [`channel-sync/`](channel-sync/) and both reading the trust list at
+`/etc/hostkeeper/channel-sync-trust.toml`:
 
 - on a host with systemd, [`hostkeeper-channel-sync.service`](channel-sync/hostkeeper-channel-sync.service)
   runs it once and [`hostkeeper-channel-sync.timer`](channel-sync/hostkeeper-channel-sync.timer)
-  starts it ten minutes after each run ends;
+  starts it ten minutes after each run ends; install
+  [`trust-list.toml`](channel-sync/trust-list.toml) at that path;
 - in a docker deployment, [`compose.yaml`](channel-sync/compose.yaml) runs it as a sidecar
-  with `--every-secs 600`, writing into the volume the channel's web server serves.
+  with `--every-secs 600`, writing into the volume the channel's web server serves, with
+  `trust-list.toml` beside it mounted read-only at that path.
 
 ### The order of a release
 

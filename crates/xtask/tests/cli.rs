@@ -361,17 +361,26 @@ fn release_channel_stage_stages_a_release_once_and_then_changes_nothing_with_sta
 }
 
 #[test]
-fn release_channel_sync_without_its_channel_fails_with_status_1_and_bad_flags_status_2() {
-    // Catches: a missing channel directory made, synced into or reported as success (the
-    // request is refused before GitHub is asked anything), or a bad flag read as a failure.
+fn release_channel_sync_without_its_channel_or_trust_list_fails_with_status_1_and_bad_flags_status_2()
+ {
+    // Catches: a missing channel directory made, synced into or reported as success, or a
+    // missing trust list read as an empty one (the request is refused before GitHub is asked
+    // anything), or a bad flag read as a failure.
     let d = dir("channel-sync");
+    std::fs::write(
+        d.join("trust.toml"),
+        "[[service]]\nname = \"tierstore\"\nrepository = \"komira-ai/tierstore\"\n\
+         workflow = \".github/workflows/artifacts.yml\"\nrefs = [\"refs/heads/main\"]\n\
+         hosted_runner = true\n",
+    )
+    .expect("write the trust list");
     let o = run(
         &d,
         &[
             "release",
             "channel-sync",
-            "--repo",
-            "komira-ai/tierstore",
+            "--trust-list",
+            "trust.toml",
             "--channel-dir",
             "missing",
         ],
@@ -383,12 +392,29 @@ fn release_channel_sync_without_its_channel_fails_with_status_1_and_bad_flags_st
         stderr(&o)
     );
     assert!(!d.join("missing").exists());
+    let o = run(
+        &d,
+        &[
+            "release",
+            "channel-sync",
+            "--trust-list",
+            "no-such.toml",
+            "--channel-dir",
+            ".",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).starts_with("xtask: --trust-list no-such.toml: "),
+        "{}",
+        stderr(&o)
+    );
     for bad in [
-        ["--repo", "no-slash", "--channel-dir", "."],
+        ["--repo", "komira-ai/tierstore", "--channel-dir", "."],
         ["--since", "0.1.0", "--channel-dir", "."],
         ["--every-secs", "0", "--channel-dir", "."],
     ] {
-        let mut argv = vec!["release", "channel-sync", "--repo", "a/b"];
+        let mut argv = vec!["release", "channel-sync", "--trust-list", "trust.toml"];
         argv.extend(bad);
         let o = run(&d, &argv);
         assert_eq!(o.status.code(), Some(2), "{bad:?}: {}", stderr(&o));

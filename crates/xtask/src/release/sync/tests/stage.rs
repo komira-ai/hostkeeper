@@ -26,8 +26,9 @@ fn a_new_release_with_good_sums_and_attestations_is_staged_with_its_exact_bytes(
             "channel-sync: 1 versions staged, 0 already in the channel, 0 refused".to_owned(),
         ]
     );
-    // Online and from its bundle, each of the three packages and the tarball.
-    assert_eq!(verifier.calls.borrow().len(), 8);
+    // Online and from its bundle, each of the three packages the index lists; the tarball, which
+    // is not staged, is checked by the sums only.
+    assert_eq!(verifier.calls.borrow().len(), 6);
     assert!(
         verifier
             .signers
@@ -67,9 +68,10 @@ fn a_hostkeeper_release_is_checked_by_release_check_and_each_of_its_services_sta
             .iter()
             .all(|s| s == SIGNER_WORKFLOW)
     );
-    // Every attested asset of the release, as `release check` verifies them.
+    // Every attested asset of the release, as `release check` verifies them; then the three
+    // packages of each of the three versions, by the trust list's signer of its service.
     let attested = crate::release::contract::attested_names(&version).len();
-    assert_eq!(verifier.calls.borrow().len(), 2 * attested);
+    assert_eq!(verifier.calls.borrow().len(), 2 * attested + 2 * 9);
 }
 
 #[test]

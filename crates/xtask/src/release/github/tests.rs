@@ -925,38 +925,4 @@ fn download_asks_gh_for_the_one_asset_into_the_directory() {
     );
 }
 
-#[test]
-fn verify_for_another_repository_pins_its_own_signer() {
-    // Catches: another repository's asset verified against hostkeeper's signer, so that no
-    // release of it ever verifies (or one signed by hostkeeper's workflow does).
-    let tierstore: Repo = "komira-ai/tierstore".parse().expect("a repository");
-    let signer = Signer::of(&tierstore);
-    let line = words(&[
-        "gh",
-        "attestation",
-        "verify",
-        "/x/asset",
-        "--repo",
-        "komira-ai/tierstore",
-        "--signer-workflow",
-        "komira-ai/tierstore/.github/workflows/artifacts.yml",
-        "--source-ref",
-        "refs/heads/main",
-        "--source-digest",
-        commit().as_str(),
-        "--deny-self-hosted-runners",
-        "--format",
-        "json",
-    ]);
-    let uri =
-        "https://github.com/komira-ai/tierstore/.github/workflows/artifacts.yml@refs/heads/main";
-    let api = scripted(&line, &json!([element(uri)]).to_string());
-    let got = api.verify(&signer, Path::new("/x/asset"), None, &commit());
-    assert_eq!(
-        got.map(|list| list
-            .into_iter()
-            .map(|a| a.signer_workflow)
-            .collect::<Vec<_>>()),
-        Ok(vec![signer.workflow.clone()])
-    );
-}
+mod signer;

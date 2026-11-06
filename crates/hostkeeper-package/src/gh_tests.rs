@@ -330,41 +330,6 @@ fn each_configured_ref_pattern_is_matched_and_a_ref_outside_them_is_rejected_wit
     }
 }
 
-/// The glob table: `*` stays within one component, matches any run including none, backtracks,
-/// and everything else is literal.
-/// Catches a `*` that crosses a `/`, a missing backtrack and a leftover pattern accepted.
-#[test]
-fn ref_matches_follows_the_glob_rules() {
-    let table = [
-        ("refs/tags/*", "refs/tags/v1.2.3", true),
-        ("refs/tags/*", "refs/tags", false),
-        ("refs/tags/*", "refs/tags/a/b", false),
-        ("refs/tags/*", "refs/heads/main", false),
-        ("refs/tags/v*.3", "refs/tags/v1.2.3", true),
-        ("refs/tags/v*.3", "refs/tags/v1.2.4", false),
-        ("refs/heads/main", "refs/heads/main", true),
-        ("refs/heads/main", "refs/heads/mainx", false),
-        ("a", "b", false),
-        ("a", "", false),
-        ("ab", "a", false),
-        ("a", "ab", false),
-        ("", "", true),
-        ("*", "", true),
-        ("*a", "b", false),
-        ("a*", "a", true),
-        ("**", "x", true),
-        ("a*b*c", "axxbyyc", true),
-        ("a*b*c", "axxbyy", false),
-        ("*.yml", "x.yml.yml", true),
-        ("refs/*/x", "refs/y/x", true),
-        ("refs/*", "refs/", true),
-        ("refs//x", "refs//x", true),
-    ];
-    for (pattern, text, want) in table {
-        assert_eq!(ref_matches(pattern, text), want, "{pattern} against {text}");
-    }
-}
-
 /// Every regular-expression metacharacter is preceded by one backslash and nothing else changes,
 /// in the quoting and in the identity built from the config.
 /// Catches a workflow or organisation interpolated into the pattern unescaped.
