@@ -1,7 +1,10 @@
 // Host: one host's services, holds, marks and last update, and what an operator may do to it.
 // Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
-// when Hosts.Get fails, and each failure is shown as is); on a button, one of Hosts.Exclude,
-// Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold and Services.Unhold.
+// when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
+// host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
+// cancelled; on
+// a button, one of Hosts.Exclude, Hosts.Include, Hosts.Abort, Hosts.SetLabels, Services.Hold and
+// Services.Unhold.
 
 import {
   h, action, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, reasonProblem, scopeLabel, table,
@@ -134,8 +137,27 @@ function serviceSection(ctx, nodeId, view) {
         })))));
 }
 
+// The audit actions that end an uninstall: the host reported the service gone, or the service
+// was assigned to the host again before it did.
+const UNINSTALLED = "uninstalled";
+const UNINSTALL_CANCELLED = "uninstall_cancelled";
+
+// The services whose last uninstall on `nodeId` was cancelled, from the entries of Audit.List
+// (newest last): a later `uninstalled` of the same service ends the mark.
+function cancelledUninstalls(entries, nodeId) {
+  const last = new Map();
+  for (const entry of entries) {
+    if (entry.nodeId === nodeId && typeof entry.service === "string"
+      && (entry.action === UNINSTALLED || entry.action === UNINSTALL_CANCELLED)) {
+      last.set(entry.service, entry.action);
+    }
+  }
+  return new Set(Array.from(last).filter(([, action]) => action === UNINSTALL_CANCELLED).map(([s]) => s));
+}
+
 // The rows of the services Services.List assigns to `nodeId`, or orders it to uninstall.
-function assignedRows(entries, nodeId) {
+// `cancelled` names the assigned services whose last uninstall was cancelled.
+function assignedRows(entries, nodeId, cancelled) {
   const rows = [];
   for (const entry of entries) {
     const desired = typeof entry.desiredVersion === "string" ? entry.desiredVersion : null;
@@ -151,6 +173,9 @@ function assignedRows(entries, nodeId) {
       } else if (installed === desired) {
         state = "at desired";
       }
+      if (cancelled.has(entry.service)) {
+        state = `${state}; uninstall cancelled`;
+      }
       rows.push([entry.service, direct ? "this host" : `role ${mine.role}`, installed || "not installed",
         desired || "none set", state, mine.minVersion || "-"]);
     } else if (list(entry, "uninstalling").includes(nodeId)) {
@@ -160,18 +185,55 @@ function assignedRows(entries, nodeId) {
   return rows;
 }
 
-// `listing` is `{entries}` of Services.List, or `{error}` when it failed.
-function assignedSection(listing, nodeId) {
+// Whether Services.List assigns any service to `nodeId`.
+function assignsAny(entries, nodeId) {
+  return entries.some((entry) => list(entry, "assigned").some((a) => a.nodeId === nodeId));
+}
+
+// The host's ended uninstalls, read only when a service is assigned to it (a cancelled uninstall
+// is one whose service was assigned again): `{cancelled}`, a set of services, or `{cancelled,
+// error}` when Audit.List failed, with none marked. Audit.List answers the oldest entries first,
+// a page at a time, so the pages are read from the first, each from the `nextSeq` of the one
+// before, until a page is empty or `nextSeq` does not move.
+async function uninstallEnds(ctx, listing, nodeId) {
+  if (listing.error || !assignsAny(listing.entries, nodeId)) {
+    return { cancelled: new Set() };
+  }
+  const entries = [];
+  try {
+    let request = { nodeId };
+    for (;;) {
+      const page = await ctx.api.call("hostkeeper.operator.v1.Audit/List", request);
+      const got = list(page, "entries");
+      entries.push(...got);
+      const next = typeof page.nextSeq === "string" ? page.nextSeq : "0";
+      if (got.length === 0 || next === (request.sinceSeq || "0")) {
+        break;
+      }
+      request = { nodeId, sinceSeq: next };
+    }
+  } catch (error) {
+    return { cancelled: new Set(), error };
+  }
+  return { cancelled: cancelledUninstalls(entries, nodeId) };
+}
+
+// `listing` is `{entries}` of Services.List, or `{error}` when it failed; `ends` is what
+// `uninstallEnds` read.
+function assignedSection(listing, nodeId, ends) {
   if (listing.error) {
     return h("section", { class: "assigned" }, h("h3", {}, "Assigned services"),
       h("p", { class: "error", role: "alert" }, describeError(listing.error)));
   }
-  const rows = assignedRows(listing.entries, nodeId);
+  const rows = assignedRows(listing.entries, nodeId, ends.cancelled);
   return h("section", { class: "assigned" }, h("h3", {}, "Assigned services"),
     rows.length === 0
       ? h("p", {}, "No service is assigned to this host.")
       : table(["Service", "Through", "Installed", "Desired", "State", "Minimum"],
-        rows.map((cells) => h("tr", {}, cells.map((c) => h("td", {}, c))))));
+        rows.map((cells) => h("tr", {}, cells.map((c) => h("td", {}, c))))),
+    ends.error
+      ? h("p", { class: "note" }, `Cancelled uninstalls could not be read: ${describeError(ends.error)}`)
+      : null);
 }
 
 function chooser(ctx) {
@@ -207,9 +269,10 @@ export async function render(ctx) {
   } catch (error) {
     listing = { error };
   }
+  const ends = await uninstallEnds(ctx, listing, nodeId);
   if (failure !== null) {
     return h("section", { class: "page" },
-      errorView(`Host ${nodeId}`, failure).children, assignedSection(listing, nodeId));
+      errorView(`Host ${nodeId}`, failure).children, assignedSection(listing, nodeId, ends));
   }
   const agent = host.heartbeat && host.heartbeat.agent;
   const labelsForm = {
@@ -243,6 +306,6 @@ export async function render(ctx) {
         ctx.refresh();
         return `Labels of ${nodeId} set.`;
       })),
-    assignedSection(listing, nodeId),
+    assignedSection(listing, nodeId, ends),
     list(host, "services").map((view) => serviceSection(ctx, nodeId, view)));
 }

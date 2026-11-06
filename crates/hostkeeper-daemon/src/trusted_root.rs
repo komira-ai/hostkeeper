@@ -4,8 +4,9 @@
 //! Two files can hold the root. Hostkeeper's own package carries `files/trusted_root.json`, so
 //! each update of hostkeeper brings the root its release was built with. On the host that file
 //! is `<packages-dir>/hostkeeper/current/files/trusted_root.json` ([`PACKAGED_TRUSTED_ROOT`]).
-//! The second file sits at the host path `crate::cli::SIGSTORE_TRUSTED_ROOT`, which the deb and
-//! the rpm install and where an operator can place a root by hand. When both are present, the
+//! The second is the host's own copy (`crate::cli::SIGSTORE_TRUSTED_ROOT` on Linux,
+//! `crate::cli::SIGSTORE_TRUSTED_ROOT_MACOS` on a Mac), which an installer puts there and where
+//! an operator can place a root by hand. When both are present, the
 //! daemon uses the one written last; a tie in the same second goes to the packaged file. So a
 //! root an operator places after a key rotation beats the one an older package carried, and the
 //! next update's root beats both. With neither present, `gh` is given the host path, and the

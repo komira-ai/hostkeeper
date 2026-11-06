@@ -44,7 +44,7 @@ platforms; the installer pkg is for `macos-arm64`.
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-coordinator-<version>-<linux-platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
-| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755) and `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), owned by root and wheel, no scripts; not signed, attested |
+| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel, no scripts; not signed, attested |
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
@@ -286,7 +286,8 @@ packages:
   `files/trusted_root.json`. The daemon reads it from
   `/var/lib/hostkeeper/packages/hostkeeper/current/files/trusted_root.json`, so each update of
   hostkeeper brings the root of its release.
-- The deb and the rpm install the same file at `/usr/lib/hostkeeper/trusted_root.json`. That is
+- The host's own copy is at `/usr/lib/hostkeeper/trusted_root.json` on Linux and at
+  `/usr/local/lib/hostkeeper/trusted_root.json` on a Mac, where the installer pkg puts it. It is
   the root of a host before its first update of hostkeeper, and the place to copy a root by hand.
 
 When both files are present, the daemon uses the one written last; a tie in the same second goes
@@ -295,8 +296,7 @@ one an older package carried. The choice goes by when each file reached the host
 it holds. A later update or rollback of hostkeeper to a version that carries an older root
 brings that root back into use, and so does a copy that keeps its source's time (`cp -p`,
 `rsync -t`). Copy with plain `cp` or `install`, and copy again after such a rollback. When
-neither file is present, `gh` is given the `/usr/lib/hostkeeper/` path and the check fails
-there.
+neither file is present, `gh` is given the host's path and the check fails there.
 
 A key that Sigstore rotates reaches the hosts with the next release made after the committed root
 changes. That release is checked against the root the hosts already hold, so the update has to

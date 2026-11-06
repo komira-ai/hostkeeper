@@ -653,7 +653,7 @@ fn the_unit_check_holds_each_service_to_its_own_current_path() {
     assert_eq!(
         refused("hostkeeper", hello),
         Err(Error::Failed(
-            "u has no ExecStart line naming /var/lib/hostkeeper/packages/hostkeeper/current/bin/hostkeeper"
+            "u has no ExecStart line naming /var/lib/updater/state/hostkeeper/bin/current"
                 .to_owned()
         ))
     );

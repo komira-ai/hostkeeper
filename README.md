@@ -28,7 +28,8 @@ Every API is a protobuf service, and the command line is generated from those de
 
 **hostkeeper is pre-release.** There is no release yet. Two programs are built from source: the
 one host program, `hostkeeper daemon`, which serves its admin socket (`Status`, `Abort`,
-`ClearRecord`) and runs no order yet (see [Running the daemon](#running-the-daemon)), and the
+`ClearRecord`) and runs the orders the coordinator sends in its heartbeat replies (see
+[Running the daemon](#running-the-daemon)), and the
 update coordinator, `hostkeeper-coordinator serve`. The parts are being moved here from
 [kbf](https://github.com/komira-ai/kbf), where they were developed first
 ([MIGRATION.md](MIGRATION.md)).
@@ -86,15 +87,17 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   runs each hook step through), B20 (the verbs `abort`, `clear_halt` and `clear_record`, see
   [Operator verbs on the host](#operator-verbs-on-the-host)).
 - **Packages and placement.** Built: B5 (fetch, verify, unpack, seal), B27 (placed-path
-  linking), B28 (hookless force), B23's `install` and `uninstall` orders in the daemon. Partly
-  built: B23's assignment of services by the coordinator (roles in the rollout file; the
-  operator API declares `Services.Assign` and `Services.Unassign`, which answer `UNIMPLEMENTED`).
+  linking), B28 (hookless force), B23 (the `install` and `uninstall` orders in the daemon, and
+  the assignment of services by the coordinator: roles in the rollout file, and the operator
+  API's `Services.Assign` and `Services.Unassign`, which are served).
 - **Coordinator and rollout.** Built: B6 (the coordinator, its rollout file and operator tokens),
   B7 (holds, halts, abort, exclude, force with targets, set-desired refusals).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
 - **Operator surfaces.** Built: B1 (the protobuf services), B10 (generated `hostkeeper ctl`,
-  gRPC beside the gateway), B24 (the CI client), B25 (the UI).
+  gRPC beside the gateway), B24 (the CI client), B25 (the UI). The operator API declares
+  `Hosts.List`, `Hosts.Get` and `Releases.UnmarkBad`, which answer `UNIMPLEMENTED` until a
+  handler serves them.
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a
@@ -139,8 +142,9 @@ new binary. This build fetches, verifies and unpacks packages, runs each step of
 transient systemd unit of its own (the hook's standard error goes to the daemon's journal, under
 the unit's name), and observes each service for `Status`. It has no service manager wired in,
 its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
-protocol probe (each fails without starting), and it has no coordinator link for its heartbeats yet, so no order
-reaches it from the coordinator.
+protocol probe (each fails without starting). Once the host is enrolled, its heartbeats go to the
+config's `coordinator` over mutual TLS, pinned to `ca_sha256` (JSON, then gRPC once the coordinator
+advertises it), and the coordinator's orders come back in the replies.
 
 | exit status | meaning |
 |---|---|

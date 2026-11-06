@@ -1,12 +1,12 @@
 //! The verdict of an order: in every heartbeat until the coordinator acknowledges it by order id
 //! and try, and again after a restart.
 
-use hostkeeper_link::testing::verdict;
+use crate::verdict;
 use hostkeeper_link::{
     ACKED_KEPT, Acknowledged, Feature, OrderResult, Outcome, RecordedService, Reply,
 };
 
-use crate::{Rig, recorded, reference, reply, service, update};
+use crate::{Rig, recorded, reference, reply, service, update, version};
 
 /// A reply acknowledging `refs`, each as a verdict about service `x`.
 fn acknowledging(refs: Vec<hostkeeper_link::OrderRef>) -> Reply {
@@ -153,7 +153,7 @@ fn every_verdict_of_a_service_is_sent_until_acknowledged() {
     // The busy answer to the second, then the first's verdict, before the next heartbeat.
     assert!(rig.world.dispatch.run_next());
     let done = verdict(&first, Outcome::Succeeded);
-    let busy = OrderResult::busy(&second);
+    let busy = OrderResult::busy(&second, version("3.0"));
     rig.world
         .link
         .answer(Ok(acknowledging(vec![reference("o-1", 1)])));

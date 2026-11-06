@@ -17,9 +17,10 @@
 //! services the daemon could run (a name outside its grammar names none), in the order of the
 //! service names. The `acks` are the verdicts the coordinator stored, each kept when the
 //! daemon's grammars read its service name and order id and dropped otherwise. An order is the loop's
-//! when its verb is `update` or `force` and the daemon's grammars read every word of it. Any
-//! other order (a verb the daemon does not run, no verb, or a word the daemon cannot read) is not
-//! run: it is returned beside the reply ([`Mapped::dropped`]), with why, for the link to log.
+//! when its verb is `update`, `force`, `install`, `uninstall` or `abort` and the daemon's grammars
+//! read every word of it. Any other order (a verb the daemon does not run, no verb, or a word the
+//! daemon cannot read) is not run: it is returned beside the reply ([`Mapped::dropped`]), with
+//! why, for the link to log.
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
@@ -34,7 +35,8 @@ use crate::ports::Unsendable;
 use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
-pub(crate) const NOT_RUN: &str = "the daemon runs only update and force orders";
+pub(crate) const NOT_RUN: &str =
+    "the daemon runs only update, force, install, uninstall and abort orders";
 /// Why an order whose words the daemon's grammars refuse is not run.
 pub(crate) const NOT_READ: &str =
     "its service, version, order id or digest is not one the daemon reads";
@@ -219,6 +221,12 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
     }
 }
 
+/// What a protobuf verb names: a version and package, or the service alone.
+enum Terms {
+    Target(fn(Target) -> Verb, (String, String, String)),
+    Service(fn(ServiceName) -> Verb, String),
+}
+
 /// The loop's order of the protobuf order, or why it is not run.
 fn order_of(order: pb::Order) -> (Option<Order>, Option<Dropped>) {
     let pb::Order {
@@ -226,13 +234,23 @@ fn order_of(order: pb::Order) -> (Option<Order>, Option<Dropped>) {
         r#try: order_try,
         verb,
     } = order;
-    let (name, forced, terms) = match verb {
-        Some(pb::order::Verb::Update(a)) => {
-            ("update", false, (a.service, a.version, a.package_digest))
+    let (name, terms) = match verb {
+        Some(pb::order::Verb::Update(a)) => (
+            "update",
+            Terms::Target(Verb::Update, (a.service, a.version, a.package_digest)),
+        ),
+        Some(pb::order::Verb::Force(a)) => (
+            "force",
+            Terms::Target(Verb::Force, (a.service, a.version, a.package_digest)),
+        ),
+        Some(pb::order::Verb::Install(a)) => (
+            "install",
+            Terms::Target(Verb::Install, (a.service, a.version, a.package_digest)),
+        ),
+        Some(pb::order::Verb::Uninstall(a)) => {
+            ("uninstall", Terms::Service(Verb::Uninstall, a.service))
         }
-        Some(pb::order::Verb::Force(a)) => {
-            ("force", true, (a.service, a.version, a.package_digest))
-        }
+        Some(pb::order::Verb::Abort(a)) => ("abort", Terms::Service(Verb::Abort, a.service)),
         _ => {
             let dropped = Dropped {
                 what: format!("order {order_id:?}"),
@@ -241,13 +259,12 @@ fn order_of(order: pb::Order) -> (Option<Order>, Option<Dropped>) {
             return (None, Some(dropped));
         }
     };
-    match (target(&terms), OrderId::new(&order_id)) {
-        (Some(target), Ok(id)) => {
-            let verb = if forced {
-                Verb::Force(target)
-            } else {
-                Verb::Update(target)
-            };
+    let verb = match terms {
+        Terms::Target(verb, terms) => target(&terms).map(verb),
+        Terms::Service(verb, service) => ServiceName::new(&service).ok().map(verb),
+    };
+    match (verb, OrderId::new(&order_id)) {
+        (Some(verb), Ok(id)) => {
             let order = Order {
                 id,
                 order_try,
@@ -406,7 +423,9 @@ mod tests {
                     "forced-v1",
                     "order-v1",
                     "verdict-acks-v1",
-                    "grpc-v1"
+                    "grpc-v1",
+                    "install-v1",
+                    "abort-v1"
                 ]
                 .map(str::to_owned)
                 .to_vec(),
@@ -636,10 +655,11 @@ mod tests {
         );
     }
 
-    /// Proves an `update` order is the loop's update order with its id, try and terms, and a
-    /// `force` order is the loop's forced one.
+    /// Proves an `update` order is the loop's update order with its id, try and terms, a `force`
+    /// order is the loop's forced one, an `install` its install with the same terms, and an
+    /// `uninstall` and an `abort` the loop's of the service they name.
     #[test]
-    fn update_and_force_orders_are_the_loops_orders() {
+    fn every_verb_the_loop_runs_is_its_order() {
         let target = Target {
             service: name("web"),
             version: version("2.0"),
@@ -670,22 +690,55 @@ mod tests {
             Some(Order {
                 id: OrderId::new("o-1").expect("an order id"),
                 order_try: 2,
-                verb: Verb::Force(target),
+                verb: Verb::Force(target.clone()),
             })
         );
         assert_eq!(forced.dropped, None);
+        let installed = reply(order(pb::order::Verb::Install(pb::Install {
+            service: "web".to_owned(),
+            version: "2.0".to_owned(),
+            package_digest: digest(),
+        })));
+        let uninstalled = reply(order(pb::order::Verb::Uninstall(pb::Uninstall {
+            service: "web".to_owned(),
+        })));
+        let aborted = reply(order(pb::order::Verb::Abort(pb::Abort {
+            service: "web".to_owned(),
+        })));
+        let verbs = [
+            (installed, Verb::Install(target)),
+            (uninstalled, Verb::Uninstall(name("web"))),
+            (aborted, Verb::Abort(name("web"))),
+        ];
+        for (mapped, verb) in verbs {
+            assert_eq!(
+                mapped.reply.order,
+                Some(Order {
+                    id: OrderId::new("o-1").expect("an order id"),
+                    order_try: 2,
+                    verb,
+                })
+            );
+            assert_eq!(mapped.dropped, None);
+        }
     }
 
     /// Proves an order of a verb the daemon does not run, and one with no verb, is not given to
     /// the loop and comes back with why and which.
     #[test]
     fn an_order_of_another_verb_or_none_is_dropped_with_why() {
-        let abort = reply(order(pb::order::Verb::Abort(pb::Abort {
+        let rollback = reply(order(pb::order::Verb::ForceRollback(pb::ForceRollback {
             service: "web".to_owned(),
+            version: "1.0".to_owned(),
+            package_digest: digest(),
+        })));
+        let clear = reply(order(pb::order::Verb::ClearHalt(pb::ClearHalt {
+            service: "web".to_owned(),
+            halt_generation: 2,
         })));
         let mut none = order(pb::order::Verb::Abort(pb::Abort::default()));
         none.order.as_mut().expect("an order").verb = None;
-        for mapped in [abort, reply(none)] {
+        for mapped in [rollback, clear, reply(none)] {
             assert_eq!(mapped.reply.order, None);
             let dropped = mapped.dropped.expect("dropped");
             assert_eq!(dropped.what, "order \"o-1\"");
@@ -693,8 +746,9 @@ mod tests {
         }
     }
 
-    /// Proves an update or force order with a word the daemon's grammars refuse (service,
-    /// version, digest or order id) is not given to the loop and comes back naming the verb.
+    /// Proves an order of any verb the loop runs with a word the daemon's grammars refuse
+    /// (service, version, digest or order id) is not given to the loop and comes back naming the
+    /// verb.
     #[test]
     fn an_order_with_an_unreadable_word_is_dropped_with_why() {
         let cases = [
@@ -721,5 +775,34 @@ mod tests {
         let dropped = mapped.dropped.expect("dropped");
         assert_eq!(dropped.what, "force order \".hidden\"");
         assert_eq!(dropped.why, NOT_READ);
+        let named = [
+            (
+                pb::order::Verb::Install(pb::Install {
+                    service: "web".to_owned(),
+                    version: "2.0".to_owned(),
+                    package_digest: "not-a-digest".to_owned(),
+                }),
+                "install order \"o-1\"",
+            ),
+            (
+                pb::order::Verb::Uninstall(pb::Uninstall {
+                    service: "a/b".to_owned(),
+                }),
+                "uninstall order \"o-1\"",
+            ),
+            (
+                pb::order::Verb::Abort(pb::Abort {
+                    service: String::new(),
+                }),
+                "abort order \"o-1\"",
+            ),
+        ];
+        for (verb, what) in named {
+            let mapped = reply(order(verb));
+            assert_eq!(mapped.reply.order, None, "{what}");
+            let dropped = mapped.dropped.expect("dropped");
+            assert_eq!(dropped.what, what);
+            assert_eq!(dropped.why, NOT_READ);
+        }
     }
 }

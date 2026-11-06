@@ -5,8 +5,9 @@
 //! service name, a version and a package digest, each a word with a grammar. No field of it, at
 //! any depth, is a free string, so an order cannot carry a command, a path or a URL; the daemon
 //! finds everything else in its own configuration and in the manifest of the package whose
-//! digest verified. Only `update` and the forced update reach a daemon today; the other verbs
-//! of the protobuf `Order` are added here when a link can carry them.
+//! digest verified. The verbs are those of the protobuf `Order` the loop runs: `update`, the
+//! forced update, `install`, `uninstall` and `abort`; `force_rollback` and `clear_halt` are added
+//! here when the loop runs them.
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
@@ -42,7 +43,7 @@ pub struct Target {
     pub digest: PackageDigest,
 }
 
-/// The verbs a reply carries today.
+/// The verbs the loop runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verb {
     /// Fetch, verify and unpack the package, read its manifest and run its hook's steps.
@@ -50,6 +51,14 @@ pub enum Verb {
     /// The hookless update (`forced` in a JSON reply), run only while the coordinator's last
     /// reply advertised `forced-v1`.
     Force(Target),
+    /// Add a service the host does not run, by the update path with no previous version.
+    Install(Target),
+    /// Stop the service's units, run its `uninstall` hook and remove its package and placed
+    /// paths. Its verdict names the version the service ran.
+    Uninstall(ServiceName),
+    /// Stop the service's running step and end its order in the halt phase. It is not an order
+    /// of its own for the verdicts: the order it stops reports how it ended.
+    Abort(ServiceName),
 }
 
 /// One order of the coordinator.
@@ -62,10 +71,20 @@ pub struct Order {
 }
 
 impl Order {
-    /// What the order acts on.
-    pub fn target(&self) -> &Target {
+    /// The service the order is about.
+    pub fn service(&self) -> &ServiceName {
         match &self.verb {
-            Verb::Update(target) | Verb::Force(target) => target,
+            Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => &target.service,
+            Verb::Uninstall(service) | Verb::Abort(service) => service,
+        }
+    }
+
+    /// The version and package the order runs; none for an `uninstall` and an `abort`, which
+    /// name only the service.
+    pub fn target(&self) -> Option<&Target> {
+        match &self.verb {
+            Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => Some(target),
+            Verb::Uninstall(_) | Verb::Abort(_) => None,
         }
     }
 
@@ -137,11 +156,12 @@ pub struct OrderResult {
 
 impl OrderResult {
     /// The answer to an order that arrived while another one ran: it is not started, and it
-    /// fails with the reason `busy`, the answer the executor gives for the same case.
-    pub fn busy(order: &Order) -> OrderResult {
+    /// fails with the reason `busy`, the answer the executor gives for the same case. `target`
+    /// is the version the verdict names: the order's own, or the one an `uninstall` would remove.
+    pub fn busy(order: &Order, target: Version) -> OrderResult {
         OrderResult {
             order: order.reference(),
-            target: order.target().version.clone(),
+            target,
             outcome: Outcome::Failed,
             phase: None,
             class: None,

@@ -1,7 +1,7 @@
 # The Sigstore trusted root hostkeeper's package carries, held against the live one. The daemon
 # checks every package's attestation against the root its own package brought
-# (`files/trusted_root.json`, from packaging/sigstore/trusted_root.json; the deb and the rpm
-# install the same file at /usr/lib/hostkeeper/trusted_root.json), so a key that Sigstore rotates
+# (`files/trusted_root.json`, from packaging/sigstore/trusted_root.json) or the host's own copy,
+# whichever was written last, so a key that Sigstore rotates
 # reaches the hosts with the next release of hostkeeper made after the committed root changes,
 # while the old root still verifies that release. This workflow fetches the live root with the
 # runner's `gh` (`gh attestation trusted-root`, as docs/deploy/verify-a-release.md does) once a

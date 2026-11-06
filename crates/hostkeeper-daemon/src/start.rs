@@ -6,7 +6,8 @@
 //! second daemon on the same state directory gets [`StartError::Locked`]); remove the
 //! registration socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is
 //! touched; [`settle_self_update`]; [`before_records`] and [`boot_pass`]; bind the admin socket,
-//! removing a stale socket only now that the lock is held; [`after_boot`]. [`serve`] then starts
+//! removing a stale socket only now that the lock is held; [`after_boot`]; and, once the daemon
+//! is ready, [`install_self_units`] for the host's platform. [`serve`] then starts
 //! the enrollment and heartbeat loops ([`crate::links`]) and serves the admin socket, until the
 //! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
 //!
@@ -36,6 +37,7 @@ use std::sync::Arc;
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
+use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_observe::unlink_stale_registration_socket;
 use hostkeeper_placed::BootView;
 
@@ -46,6 +48,7 @@ use crate::files;
 use crate::installed;
 use crate::links::Links;
 use crate::notify::{NoNotifier, ReadyNotifier};
+use crate::selfunits::ALERT_SELF_UNITS;
 use crate::socket;
 
 /// The lock file in the state directory.
@@ -242,6 +245,7 @@ pub fn startup_notifying(
     boot_pass(&daemon, &mut report)?;
     let listener = socket::bind(&settings.admin_socket).map_err(io_at(&settings.admin_socket))?;
     after_boot(&daemon, &mut report, notifier);
+    install_self_units(&daemon, Platform::host().kind, &mut report);
     Ok(Started {
         daemon,
         listener,
@@ -318,6 +322,22 @@ fn boot_pass(daemon: &Daemon, report: &mut BootReport) -> Result<(), StartError>
 /// (design section 6.5, [`Daemon::after_boot`]).
 fn after_boot(daemon: &Daemon, report: &mut BootReport, notifier: &dyn ReadyNotifier) {
     daemon.after_boot(report, notifier);
+}
+
+/// Once the daemon is ready: the units of hostkeeper's own update for a host of `kind`, written
+/// where they differ ([`Daemon::install_self_units`]). One that could not be installed is an
+/// alert, and the start goes on. A file that could not be written is written by the next start;
+/// files written whose reload failed stay, and the next start, finding them in place, does not
+/// reload again: systemd reads them at its next reload or boot.
+fn install_self_units(daemon: &Daemon, kind: PlatformKind, report: &mut BootReport) {
+    let installed = daemon
+        .install_self_units(kind)
+        .map_err(|error| error.to_string());
+    if let Err(error) = &installed {
+        daemon.ctx().alert(ALERT_SELF_UNITS, error);
+    }
+    report.self_units = Some(installed);
+    report.stages.push(Stage::SelfUnits);
 }
 
 /// Serves a started daemon, holding its lock: starts its enrollment and heartbeat loops

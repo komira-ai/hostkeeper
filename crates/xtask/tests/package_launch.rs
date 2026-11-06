@@ -1,11 +1,12 @@
-//! The unit hostkeeper's own package carries (`packaging/linux/package/hostkeeper.service`),
-//! started for real: a runnable program (`tests/bin/exec_fixture.rs`) is packaged as
+//! The daemon's unit (`packaging/linux/hostkeeper.service`, which hostkeeper's own package
+//! carries), started for real: a runnable program (`tests/bin/exec_fixture.rs`) is packaged as
 //! `bin/hostkeeper` with the committed unit, as `cargo xtask release package` builds a package;
 //! the daemon's own unpacker (design 5.5, `hostkeeper-unpack`) installs it into a scratch packages
-//! directory; `current` is linked to its version; and the `ExecStart=` of the unpacked unit,
-//! with its `--packages-dir` moved onto the scratch directory, is executed. The program reports
-//! the path it was started by and the arguments it received, and its exit status says whether
-//! it was started as the daemon.
+//! directory; the self-update's follow-on stages the package's binary into the binary directory
+//! under a scratch state directory and switches `current` to it; and the `ExecStart=` of the
+//! unpacked unit, with its `--state-dir` moved onto the scratch directory, is executed. The
+//! program reports the path it was started by and the arguments it received, and its exit status
+//! says whether it was started as the daemon.
 
 #[path = "../src/testdir.rs"]
 mod testdir;
@@ -14,13 +15,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_daemon::selfupdate::binary_dir;
+use hostkeeper_steps::Layout;
 use testdir::TestDir;
 
 /// The packaged program: it prints how it was started.
 const FIXTURE: &str = env!("CARGO_BIN_EXE_xtask-exec-fixture");
 
-/// The unit of hostkeeper's own package, as committed.
-const PACKAGE_UNIT: &str = "../../packaging/linux/package/hostkeeper.service";
+/// The daemon's one unit, as committed: the deb, the rpm, the overlay and hostkeeper's own
+/// package carry it.
+const UNIT: &str = "../../packaging/linux/hostkeeper.service";
 
 /// The Sigstore trusted root the release packages, as committed.
 const TRUSTED_ROOT: &str = "../../packaging/sigstore/trusted_root.json";
@@ -28,9 +32,6 @@ const TRUSTED_ROOT: &str = "../../packaging/sigstore/trusted_root.json";
 /// Where the daemon reads the packaged trusted root, from the packages directory
 /// (`hostkeeper_daemon::trusted_root::PACKAGED_TRUSTED_ROOT`).
 const PACKAGED_TRUSTED_ROOT: &str = "hostkeeper/current/files/trusted_root.json";
-
-/// The unit the deb and the rpm install, as committed.
-const DEB_UNIT: &str = "../../packaging/linux/hostkeeper.service";
 
 /// A commit time for every entry of the archive.
 const MTIME: u64 = 1_800_000_000;
@@ -47,8 +48,8 @@ fn scratch(name: &str) -> TestDir {
 }
 
 /// The program and the arguments of the `ExecStart=` of `unit`, with the program's
-/// `--packages-dir` prefix replaced by `packages`; or what the unit lacks for that.
-fn exec_start(unit: &str, packages: &Path) -> Result<(PathBuf, Vec<String>), String> {
+/// `--state-dir` prefix replaced by `state`; or what the unit lacks for that.
+fn exec_start(unit: &str, state: &Path) -> Result<(PathBuf, Vec<String>), String> {
     let line = unit
         .lines()
         .find_map(|l| l.strip_prefix("ExecStart="))
@@ -58,16 +59,16 @@ fn exec_start(unit: &str, packages: &Path) -> Result<(PathBuf, Vec<String>), Str
     let args: Vec<String> = words.collect();
     let dir = args
         .windows(2)
-        .find(|w| w[0] == "--packages-dir")
+        .find(|w| w[0] == "--state-dir")
         .map(|w| format!("{}/", w[1]))
-        .ok_or("ExecStart= has no --packages-dir")?;
+        .ok_or("ExecStart= has no --state-dir")?;
     let inside = program
         .strip_prefix(&dir)
-        .ok_or_else(|| format!("{program} is not under the --packages-dir {dir}"))?;
-    Ok((packages.join(inside), args))
+        .ok_or_else(|| format!("{program} is not under the --state-dir {dir}"))?;
+    Ok((state.join(inside), args))
 }
 
-/// The package of the running daemon's version over the fixture and the committed package unit,
+/// The package of the running daemon's version over the fixture and the committed unit,
 /// installed by the daemon's unpacker into `dir/packages`; that directory, and the version.
 fn installed(dir: &Path) -> (PathBuf, String) {
     let version = hostkeeper_unpack::running_hostkeeper().to_string();
@@ -75,7 +76,7 @@ fn installed(dir: &Path) -> (PathBuf, String) {
     xtask::test_support::linux_package(
         &version,
         Path::new(FIXTURE),
-        &repo_file(PACKAGE_UNIT),
+        &repo_file(UNIT),
         &repo_file(TRUSTED_ROOT),
         &out,
         MTIME,
@@ -132,30 +133,35 @@ fn unseal(dir: &Path) {
     }
 }
 
-/// Catches a package unit whose ExecStart does not start the binary the package carries once the
-/// daemon has installed it and `current` names its version (the deb's /usr/bin path, a path
-/// outside --packages-dir, a link that does not resolve), or that starts it with other arguments
-/// or as anything but the daemon.
+/// Catches a unit whose ExecStart does not start the binary the self-update staged from the
+/// package once `current` names its version (the deb's /usr/bin path, the package's own
+/// `current/bin`, a path outside --state-dir, a link that does not resolve), or that starts it
+/// with other arguments or as anything but the daemon.
 #[test]
-fn the_committed_package_unit_starts_the_packaged_program_through_current() {
+fn the_committed_unit_starts_the_packaged_program_through_the_binary_directory() {
     let dir = scratch("unit");
     let (packages, version) = installed(&dir);
-    let service = packages.join("hostkeeper");
-    let unit = std::fs::read_to_string(service.join(&version).join("units/hostkeeper.service"))
+    let release = packages.join("hostkeeper").join(&version);
+    let unit = std::fs::read_to_string(release.join("units/hostkeeper.service"))
         .expect("the unpacked unit");
     assert_eq!(
         unit,
-        std::fs::read_to_string(repo_file(PACKAGE_UNIT)).expect("the committed unit")
+        std::fs::read_to_string(repo_file(UNIT)).expect("the committed unit")
     );
-    let (program, args) = exec_start(&unit, &packages).expect("the unit's ExecStart");
-    assert_eq!(program, service.join("current/bin/hostkeeper"));
+    let state = dir.join("state");
+    let (program, args) = exec_start(&unit, &state).expect("the unit's ExecStart");
+    let layout = Layout::new(&binary_dir(&state));
+    assert_eq!(program, layout.current_path());
     assert_eq!(args.first().map(String::as_str), Some("daemon"));
 
     // Before `current` names a version, there is nothing to start.
     let missing = run(&program, &args).expect_err("no current yet");
     assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
 
-    std::os::unix::fs::symlink(&version, service.join("current")).expect("link current");
+    layout
+        .stage(&version, &release.join("bin/hostkeeper"))
+        .expect("staged");
+    layout.switch(&version).expect("switched");
     let started = run(&program, &args).expect("start the packaged program");
     assert_eq!(started.status.code(), Some(0), "{started:?}");
     let mut want = vec![program.to_string_lossy().into_owned()];
@@ -169,23 +175,21 @@ fn the_committed_package_unit_starts_the_packaged_program_through_current() {
     let other = run(&program, &["serve".to_owned()]).expect("start it otherwise");
     assert_eq!(other.status.code(), Some(64), "{other:?}");
 
-    // The deb's unit starts no packaged program, and units without what the start needs are
-    // refused by name.
-    let deb = std::fs::read_to_string(repo_file(DEB_UNIT)).expect("the deb's unit");
-    let refused = exec_start(&deb, &packages).expect_err("the deb's unit");
-    assert!(
-        refused.starts_with("/usr/bin/hostkeeper is not under the --packages-dir"),
-        "{refused}"
-    );
+    // Units without what the start needs, or starting a program outside the state directory,
+    // are refused by name.
     for (text, why) in [
         ("[Service]\nType=notify\n", "the unit has no ExecStart="),
         ("[Service]\nExecStart=\n", "ExecStart= names no program"),
         (
             "[Service]\nExecStart=/opt/hostkeeper daemon\n",
-            "ExecStart= has no --packages-dir",
+            "ExecStart= has no --state-dir",
+        ),
+        (
+            "[Service]\nExecStart=/usr/bin/hostkeeper daemon --state-dir /var/lib/updater/state\n",
+            "/usr/bin/hostkeeper is not under the --state-dir /var/lib/updater/state/",
         ),
     ] {
-        assert_eq!(exec_start(text, &packages), Err(why.to_owned()));
+        assert_eq!(exec_start(text, &state), Err(why.to_owned()));
     }
     unseal(&packages);
 }
