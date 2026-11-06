@@ -9,8 +9,9 @@
 //! ([`crate::selfupdate::protocol_line`]). Configuration comes in as flags only, never from the
 //! environment (AGENTS.md S2); every default is a constant here.
 //!
-//! The one value read from the environment is the address of systemd's notify socket, a
-//! platform-set marker, and only `--notify-systemd` makes the daemon use it.
+//! The two values read from the environment are platform-set markers of systemd, and only
+//! `--notify-systemd` makes the daemon use them ([`SystemdVars`]): the address of the notify
+//! socket, and `WATCHDOG_USEC`, which says systemd runs a watchdog for the unit.
 //!
 //! Exit status of `hostkeeper daemon`: [`EXIT_FAILED`] when the daemon could not start or serve,
 //! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
@@ -53,7 +54,9 @@ use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
 use crate::links::{DaemonLog, Links, NoLink};
 use crate::mac::HostIoreg;
-use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
+use crate::notify::{
+    NoNotifier, NoWatchdog, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
+};
 use crate::observer::observer_with;
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
@@ -79,6 +82,9 @@ pub const DEFAULT_ADMIN_SOCKET: &str = if cfg!(target_os = "macos") {
 };
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
+/// The variable systemd sets for a unit with `WatchdogSec=`: the watchdog's timeout in
+/// microseconds. The daemon reads only whether it is set.
+pub const WATCHDOG_USEC: &str = "WATCHDOG_USEC";
 /// The host's CA bundle (PEM): the roots the package fetch's HTTPS client trusts.
 pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 /// The pinned `gh` that checks a package's attestation.
@@ -173,29 +179,42 @@ impl DaemonFlags {
     }
 }
 
+/// What systemd set in the environment of the process for its unit: platform-set markers, not
+/// configuration (AGENTS.md S2). The daemon uses them with `--notify-systemd` only.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SystemdVars {
+    /// `NOTIFY_SOCKET`: the address of the notify socket of a `Type=notify` unit.
+    pub notify_socket: Option<OsString>,
+    /// `WATCHDOG_USEC`: set when the unit has `WatchdogSec=`.
+    pub watchdog_usec: Option<OsString>,
+}
+
 /// The entry point of the `hostkeeper` binary.
 pub fn main() -> ExitCode {
-    run_with(Cli::parse(), notify_socket())
+    run_with(Cli::parse(), systemd_vars())
 }
 
-/// The address of the notify socket systemd set for the process, if any: a platform-set marker,
-/// not configuration (AGENTS.md S2). It is used only with `--notify-systemd`.
+/// What systemd set for the process, if anything: the notify socket's address and the
+/// watchdog's timeout. It is used only with `--notify-systemd`.
 #[expect(
     clippy::disallowed_methods,
-    reason = "NOTIFY_SOCKET is the platform-set marker of a Type=notify unit, which AGENTS.md S2 allows; the flag --notify-systemd decides whether it is used"
+    reason = "NOTIFY_SOCKET and WATCHDOG_USEC are the platform-set markers of a Type=notify unit and of its watchdog, which AGENTS.md S2 allows; the flag --notify-systemd decides whether they are used"
 )]
-fn notify_socket() -> Option<OsString> {
-    std::env::var_os(NOTIFY_SOCKET)
+fn systemd_vars() -> SystemdVars {
+    SystemdVars {
+        notify_socket: std::env::var_os(NOTIFY_SOCKET),
+        watchdog_usec: std::env::var_os(WATCHDOG_USEC),
+    }
 }
 
-/// Runs a parsed command line to its exit status, with no notify socket.
+/// Runs a parsed command line to its exit status, with nothing set by systemd.
 pub fn run(cli: Cli) -> ExitCode {
-    run_with(cli, None)
+    run_with(cli, SystemdVars::default())
 }
 
-/// Runs a parsed command line to its exit status; `notify_socket` is the address of the notify
-/// socket systemd set for the process, used with `--notify-systemd` only.
-pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
+/// Runs a parsed command line to its exit status; `systemd` is what systemd set for the process,
+/// used with `--notify-systemd` only.
+pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
     let flags = match cli.command {
         Command::Daemon(flags) => flags,
         Command::Ctl { args } => return ExitCode::from(ctl_on_terminal(args)),
@@ -207,8 +226,9 @@ pub fn run_with(cli: Cli, notify_socket: Option<OsString>) -> ExitCode {
         Command::Ci(command) => return hostkeeper_ci::run(command),
     };
     let period = flags.link.heartbeat_secs;
-    let started = notifier(&flags, notify_socket)
-        .and_then(|notifier| daemon(&flags.settings(), period, notifier.as_ref()));
+    let watchdog = watchdog(&flags, &systemd);
+    let started = notifier(&flags, systemd.notify_socket)
+        .and_then(|notifier| daemon(&flags.settings(), period, notifier.as_ref(), watchdog));
     started.err().map_or(ExitCode::SUCCESS, report)
 }
 
@@ -251,17 +271,31 @@ pub fn notifier(
     }
 }
 
+/// The watchdog the flags and systemd ask for: systemd's with `--notify-systemd` and a notify
+/// socket, which sends its notice only when `WATCHDOG_USEC` is set; none otherwise (without a
+/// notify socket, [`notifier`] refuses the start).
+pub fn watchdog(flags: &DaemonFlags, systemd: &SystemdVars) -> Box<dyn Watchdog> {
+    match (flags.notify_systemd, &systemd.notify_socket) {
+        (true, Some(socket)) => Box::new(SystemdWatchdog::new(
+            socket.clone(),
+            systemd.watchdog_usec.as_deref(),
+        )),
+        _ => Box::new(NoWatchdog),
+    }
+}
+
 fn report(error: StartError) -> ExitCode {
     eprintln!("hostkeeper daemon: {error}");
     ExitCode::from(error.exit_code())
 }
 
-/// Starts the daemon and serves it, beating every `period` seconds, returning only on an error
-/// or for its own update.
+/// Starts the daemon and serves it, beating every `period` seconds and telling `watchdog` after
+/// each heartbeat, returning only on an error or for its own update.
 fn daemon(
     settings: &Settings,
     period: NonZeroU64,
     notifier: &dyn ReadyNotifier,
+    watchdog: Box<dyn Watchdog>,
 ) -> Result<(), StartError> {
     let own_version = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION"))?;
     note_start(settings, Platform::host().kind, own_version, &SystemClock);
@@ -269,7 +303,13 @@ fn daemon(
         .enable_all()
         .build();
     let runtime = runtime.map_err(StartError::Runtime)?;
-    runtime.block_on(start_and_serve(settings, period, own_version, notifier))
+    runtime.block_on(start_and_serve(
+        settings,
+        period,
+        own_version,
+        notifier,
+        watchdog,
+    ))
 }
 
 /// Adds this start to the start log the fallback on macOS judges the burst by
@@ -292,11 +332,12 @@ async fn start_and_serve(
     period: NonZeroU64,
     own_version: HostkeeperVersion,
     notifier: &dyn ReadyNotifier,
+    watchdog: Box<dyn Watchdog>,
 ) -> Result<(), StartError> {
     let files = HostFiles::host();
     let platform = Platform::host();
     let started = start_with(settings, &files, own_version, notifier, &platform)?;
-    let links = host_links(started.daemon(), &files, period, platform.kind);
+    let links = host_links(started.daemon(), &files, period, platform.kind, watchdog);
     start::serve(started, links).await
 }
 
@@ -310,12 +351,14 @@ async fn start_and_serve(
 ///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock;
 ///   this build has no coordinator link yet ([`NoLink`]), so every heartbeat ends unsent;
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
-/// - both loops log through the daemon's alert sink ([`DaemonLog`]).
+/// - both loops log through the daemon's alert sink ([`DaemonLog`]);
+/// - the heartbeat loop tells `watchdog` after each heartbeat that it is alive.
 pub fn host_links(
     daemon: &Arc<Daemon>,
     files: &HostFiles,
     period: NonZeroU64,
     kind: PlatformKind,
+    watchdog: Box<dyn Watchdog>,
 ) -> Links {
     let ctx = daemon.ctx();
     let log = Arc::new(DaemonLog::new(Arc::clone(daemon)));
@@ -336,6 +379,7 @@ pub fn host_links(
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,
+        watchdog,
     }
 }
 

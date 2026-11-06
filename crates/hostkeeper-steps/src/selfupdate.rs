@@ -5,8 +5,9 @@
 //! ([`follow_on`]) stages the new updater binary beside the old, writes in the step record that
 //! the update waits for the restart ([`AwaitingRestart`]), points `current` at it and tells the
 //! caller to reply and exit cleanly; the unit's `Restart=always` starts the new binary. If the
-//! new binary cannot start, systemd gives up after `StartLimitBurst` starts, the unit fails, and
-//! its `OnFailure=` unit runs the *previous* binary's `self-update-fallback` verb, which calls
+//! new binary cannot start, systemd gives up after `StartLimitBurst` starts of the drop-in
+//! ([`main_dropin`]; the base unit has no start limit of its own), the unit fails, and its
+//! `OnFailure=` unit runs the *previous* binary's `self-update-fallback` verb, which calls
 //! [`Layout::flip_back`]: `current` points at the previous binary again and the unit is started.
 //!
 //! The record says `Succeeded` only once the new binary has run (design section 6.6): the step

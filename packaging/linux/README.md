@@ -7,7 +7,7 @@ image, network boot, signing and publishing the packages are not here.
 
 | file | what |
 |---|---|
-| `hostkeeper.service` | the unit: the daemon as root, `Type=notify`, with its paths as flags; it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other |
+| `hostkeeper.service` | the unit: the daemon as root, `Type=notify`, with its paths as flags; started again 5 seconds after it ends however it ends, with no start limit (`Restart=always`, `StartLimitIntervalSec=0`), and restarted by a 60-second watchdog that its heartbeat loop feeds (`WatchdogSec=`, four heartbeat periods); it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other |
 | `hostkeeper.tmpfiles.conf` | the daemon's directories and their modes, as `/usr/lib/tmpfiles.d/hostkeeper.conf` |
 | `hostkeeper.toml.template` | the daemon config with a `@@NAME@@` placeholder in each value that belongs to a site |
 | `nfpm.yaml` | the deb and the rpm, for nfpm |
@@ -51,8 +51,8 @@ host's config. Whoever installs the package places it:
 The file holds no secret. The config loader (`crates/hostkeeper-config`) refuses it while a
 placeholder is left, while it is owned by another account or writable by the group or others,
 or when it holds a key it does not know, and a daemon whose config does not load does not start
-(design section 4.1); systemd then stops trying after three failed starts within 300 seconds
-(`systemctl reset-failed hostkeeper.service` clears that). What the daemon does on a host that
+(design section 4.1); systemd starts it again every 5 seconds, with no start limit, so it
+starts once the config is fixed, with nothing to reset. What the daemon does on a host that
 has a config but no certificate yet, its enrollment, is design section 5.7.
 
 ## The boot-image overlay

@@ -3868,6 +3868,7 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-daemon",
  "hostkeeper-launchd",
+ "hostkeeper-link",
  "hostkeeper-package",
  "hostkeeper-steps",
  "hostkeeper-unpack",

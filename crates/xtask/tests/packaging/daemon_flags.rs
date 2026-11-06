@@ -28,7 +28,7 @@ const ENVIRONMENT_KEYS: [&str; 4] = [
 
 /// The flags of a command line, as the binary parses them: `words` are the words of the line,
 /// the program first. The program's path is dropped and the binary's own name stands in for it.
-fn parse_flags(words: &[String]) -> Result<DaemonFlags, String> {
+pub fn parse_flags(words: &[String]) -> Result<DaemonFlags, String> {
     let args = std::iter::once("hostkeeper").chain(words.iter().skip(1).map(String::as_str));
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
     match cli.command {

@@ -64,8 +64,20 @@ fn the_package_unit_is_the_deb_unit_but_for_the_binary_it_starts() {
                 "differs from the deb's at its setting",
             ),
             (
-                altered(&package, "Restart=on-failure\n", "Restart=always\n"),
-                "`Restart=always`, not `Restart=on-failure`",
+                altered(&package, "Restart=always\n", "Restart=on-failure\n"),
+                "`Restart=on-failure`, not `Restart=always`",
+            ),
+            (
+                altered(&package, "WatchdogSec=60\n", "WatchdogSec=45\n"),
+                "`WatchdogSec=45`, not `WatchdogSec=60`",
+            ),
+            (
+                altered(
+                    &package,
+                    "StartLimitIntervalSec=0\n",
+                    "StartLimitIntervalSec=300\n",
+                ),
+                "`StartLimitIntervalSec=300`, not `StartLimitIntervalSec=0`",
             ),
             (
                 altered(&package, "WantedBy=multi-user.target\n", ""),

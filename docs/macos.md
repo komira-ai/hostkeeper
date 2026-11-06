@@ -55,7 +55,8 @@ The token is `hostkeeper_hook::REASON_LEASES_LIVE`, beside `drain_bound`.
 ### Self-update fallback
 
 On Linux the daemon's unit restarts it, and an `OnFailure=` unit runs the previous binary's
-`self-update-fallback` verb once the new binary has failed its start limit. launchd has neither
+`self-update-fallback` verb once the new binary has failed the start limit of the self-update
+drop-in (the base unit has none: it restarts the daemon for good). launchd has neither
 a start limit nor `OnFailure=`, so on a Mac the same verb is run by a timer job. Two plists
 serve it:
 

@@ -404,6 +404,7 @@ fn scenario(name: &str, stub: Stub) -> Ran {
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: dispatch.clone(),
         stop: StopFlag::default(),
+        watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
     };
     match stub {
         Stub::Loop => {
