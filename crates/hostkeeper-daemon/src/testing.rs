@@ -659,9 +659,9 @@ pub fn lock_waits(locks: &ServiceLocks) -> Signal<String> {
     signal
 }
 
-/// A signal of the service of each watcher a caller has told to stop ([`Watchers::stop`]): an
-/// order that replaces a watcher, or the daemon's end. It takes the place of any `on_stop` hook
-/// set on `watchers` before.
+/// A signal of the service of each watcher a caller has told to stop ([`Watchers::stop`]), such
+/// as an order that replaces a watcher; the daemon's own end stops its watchers without it. It
+/// takes the place of any `on_stop` hook set on `watchers` before.
 pub fn watcher_stops(watchers: &Watchers) -> Signal<String> {
     let (notice, signal) = Signal::new();
     watchers.on_stop(move |service| notice.send(service.to_string()));

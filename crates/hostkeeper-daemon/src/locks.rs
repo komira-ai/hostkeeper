@@ -162,7 +162,7 @@ impl ServiceLocks {
     /// Waits until the lock of `service` is free, or held for good by a step that could not be
     /// stopped: the order holding it has ended.
     pub fn wait_let_go(&self, service: &ServiceName) {
-        // Called outside the hook's lock: the hook may block on nothing of the locks'.
+        // Called once the hook's lock is let go of, so the hook never runs under it.
         let hook = self
             .on_wait
             .0
