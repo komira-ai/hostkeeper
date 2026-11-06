@@ -86,15 +86,17 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   runs each hook step through), B20 (the verbs `abort`, `clear_halt` and `clear_record`, see
   [Operator verbs on the host](#operator-verbs-on-the-host)).
 - **Packages and placement.** Built: B5 (fetch, verify, unpack, seal), B27 (placed-path
-  linking), B28 (hookless force), B23's `install` and `uninstall` orders in the daemon. Partly
-  built: B23's assignment of services by the coordinator (roles in the rollout file; the
-  operator API declares `Services.Assign` and `Services.Unassign`, which answer `UNIMPLEMENTED`).
+  linking), B28 (hookless force), B23 (the `install` and `uninstall` orders in the daemon, and
+  the assignment of services by the coordinator: roles in the rollout file, and the operator
+  API's `Services.Assign` and `Services.Unassign`, which are served).
 - **Coordinator and rollout.** Built: B6 (the coordinator, its rollout file and operator tokens),
   B7 (holds, halts, abort, exclude, force with targets, set-desired refusals).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
 - **Operator surfaces.** Built: B1 (the protobuf services), B10 (generated `hostkeeper ctl`,
-  gRPC beside the gateway), B24 (the CI client), B25 (the UI).
+  gRPC beside the gateway), B24 (the CI client), B25 (the UI). The operator API declares
+  `Hosts.List`, `Hosts.Get` and `Releases.UnmarkBad`, which answer `UNIMPLEMENTED` until a
+  handler serves them.
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a
