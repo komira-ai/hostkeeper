@@ -233,7 +233,9 @@ pub(crate) fn flags(dir: &Path) -> SetDesiredFlags {
     SetDesiredFlags {
         service: "svc".to_owned(),
         service_version: "1.2.3".to_owned(),
-        package_digest: "a".repeat(64),
+        package_digest: Some("a".repeat(64)),
+        release_index_file: None,
+        release_index_digest: None,
         endpoint: "https://coordinator.example".to_owned(),
         ca_file: dir.join("ca.pem"),
         audience: "hostkeeper-ci".to_owned(),

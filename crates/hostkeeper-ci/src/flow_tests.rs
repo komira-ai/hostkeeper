@@ -137,6 +137,79 @@ fn a_converged_fleet_ends_converged_with_one_token_per_call() {
     assert_eq!(request, r#"{"desired":{"version":"1.2.3"}}"#);
 }
 
+/// Catches an index request that loses the index text or its digest, sends the text changed,
+/// still sends a package digest, or changes how the rest of the flow runs.
+#[test]
+fn an_index_release_is_sent_whole_with_its_digest_and_no_package_digest() {
+    let text = "{\r\n \"service\": \"svc\", \"note\": \"caf\u{e9} \\\" \u{1f680}\"\r\n}\n\n";
+    let index_digest = "c".repeat(64);
+    let ran = run_case(
+        "index-release",
+        stored("1.2.3"),
+        vec![converged()],
+        false,
+        |f| {
+            let file = f.work_dir.join("index.json");
+            std::fs::write(&file, text).expect("write the index");
+            f.package_digest = None;
+            f.release_index_file = Some(file);
+            f.release_index_digest = Some("c".repeat(64));
+        },
+    );
+    assert_eq!(ran.code, 0);
+    assert_eq!(
+        ran.events(),
+        ["token 1", "SetDesired", "token 2", "Converge"]
+    );
+    let log = ran.log.lock().expect("lock");
+    let set = SetDesiredRequest::decode(log.calls[0].request.clone()).expect("a SetDesired");
+    assert_eq!(set.service, "svc");
+    assert_eq!(set.package_digest, None);
+    assert_eq!(set.release_index.as_deref(), Some(text));
+    assert_eq!(
+        set.release_index_digest.as_deref(),
+        Some(index_digest.as_str())
+    );
+    assert_eq!(set.desired.expect("desired").version, "1.2.3");
+    drop(log);
+    let request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(ran.dir.path().join("set-desired.json")).expect("file"),
+    )
+    .expect("JSON");
+    assert_eq!(request["releaseIndex"], text);
+    assert_eq!(request["releaseIndexDigest"], index_digest);
+    assert_eq!(request["desired"]["version"], "1.2.3");
+    assert_eq!(request.as_object().expect("an object").len(), 3);
+}
+
+/// Catches the coordinator's index refusals being reported as anything but their token, with the
+/// version not set and no convergence read.
+#[test]
+fn a_refused_index_is_reported_with_its_token() {
+    for token in ["index_digest_mismatch", "index_invalid"] {
+        let ran = run_case(
+            token,
+            Err(Status::invalid_argument(token)),
+            vec![converged()],
+            false,
+            |f| {
+                let file = f.work_dir.join("index.json");
+                std::fs::write(&file, "{}").expect("write the index");
+                f.package_digest = None;
+                f.release_index_file = Some(file);
+                f.release_index_digest = Some("c".repeat(64));
+            },
+        );
+        assert_eq!(ran.code, 1, "{token}");
+        assert_eq!(ran.events(), ["token 1", "SetDesired"], "{token}");
+        assert_eq!(
+            ran.outputs.as_deref(),
+            Some(format!("desired_version=\nconverged=false\nreason={token}\n").as_str()),
+            "{token}"
+        );
+    }
+}
+
 /// Catches a poll loop that reads more or fewer than `--max-polls` times, pauses before the
 /// first read or after the last, or ends a fleet that never converged as a success.
 #[test]

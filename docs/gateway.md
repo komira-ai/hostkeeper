@@ -28,8 +28,11 @@ OIDC token or an operator token; `Releases.Converge` takes CI's OIDC token only.
 good once, and an operator token spends none. With CI's token `SetDesired` sets only the services
 the admitting allow-list entry names. With an operator token it sets any service the coordinator
 manages, and the set is one audit entry, `set_desired`, under the token's name (the service, and
-as its reason the version, followed by `with package digest <digest>` when the call named one).
-The JSON route `POST /v1/desired` stays CI's only. Every other method takes an operator token
+as its reason the version, followed by `with package digest <digest>` when the call named one, or
+`with release index <digest>` when it named a release index, the digest being the index's).
+The JSON route `POST /v1/desired` stays CI's only; its body takes the same fields as the call,
+including `releaseIndex` and `releaseIndexDigest`, and a refused index is a 400 with the reason
+`index_digest_mismatch` or `index_invalid`. Every other method takes an operator token
 only. TLS authenticates the server only; there is no client certificate and no cookie.
 
 ## Request and response

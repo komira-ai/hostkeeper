@@ -24,7 +24,8 @@
 # Only then does the verified program run, as one command: `hostkeeper ci set-desired`
 # (crates/hostkeeper-ci). It requests one OIDC token per call to the coordinator (each is good
 # once), keeps it in a file only the runner user can read and removes it after the call, calls
-# `releases set-desired`, reads `releases converge` at most `max_polls` times, and writes the
+# `releases set-desired` (with the one package digest, or with the release index and its digest,
+# which the coordinator checks), reads `releases converge` at most `max_polls` times, and writes the
 # job's outputs.
 #
 # The names of the release's assets are written once, in the job's `env`.
@@ -42,9 +43,17 @@ on:
         type: string
         required: true
       package_digest:
-        description: The SHA-256 of the service's package for this version, 64 lower-case hex digits.
+        description: The SHA-256 of the one package of this version that every host is ordered, 64 lower-case hex digits. For a fleet of one platform. Give this, or release_index with release_index_digest.
         type: string
-        required: true
+        required: false
+      release_index:
+        description: The text of the version's release index (index.json), byte for byte, at most 64 KiB. Each host is ordered the package its platform has in it. Comes with release_index_digest; not with package_digest.
+        type: string
+        required: false
+      release_index_digest:
+        description: The SHA-256 of release_index, 64 lower-case hex digits, as the release job that published the index wrote it down.
+        type: string
+        required: false
       hostkeeper_version:
         description: The hostkeeper release whose program makes the calls, X.Y.Z, pinned by the caller.
         type: string
@@ -161,6 +170,15 @@ jobs:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: test "$("$RUNNER_TEMP/hostkeeper-bin/hostkeeper" --version)" = "hostkeeper $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}"
 
+      # The index is written exactly as given (printf, no newline added, the text in the
+      # environment and never in the script). A job that gave none writes an empty file, which
+      # the next step does not pass.
+      - name: Write the release index
+        id: index
+        env:
+          RELEASE_INDEX: ${{ inputs.release_index }}
+        run: printf '%s' "$RELEASE_INDEX" > "$RUNNER_TEMP/hostkeeper-release-index.json"
+
       - name: Write the coordinator's CA
         id: ca
         env:
@@ -174,6 +192,9 @@ jobs:
           SERVICE: ${{ inputs.service }}
           VERSION: ${{ inputs.version }}
           PACKAGE_DIGEST: ${{ inputs.package_digest }}
+          # The index file only when an index was given; an empty value is a flag left out.
+          RELEASE_INDEX_FILE: ${{ inputs.release_index != '' && format('{0}/hostkeeper-release-index.json', runner.temp) || '' }}
+          RELEASE_INDEX_DIGEST: ${{ inputs.release_index_digest }}
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
           WAIT: ${{ inputs.wait }}
@@ -183,6 +204,8 @@ jobs:
             --service "$SERVICE" \
             --version "$VERSION" \
             --package-digest "$PACKAGE_DIGEST" \
+            --release-index-file "$RELEASE_INDEX_FILE" \
+            --release-index-digest "$RELEASE_INDEX_DIGEST" \
             --endpoint "$COORDINATOR_URL" \
             --ca-file "$RUNNER_TEMP/hostkeeper-coordinator-ca.pem" \
             --audience "$AUDIENCE" \
