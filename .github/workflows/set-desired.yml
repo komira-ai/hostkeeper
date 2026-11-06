@@ -21,12 +21,26 @@
 # variables or runs the hostkeeper program. A verification that fails stops the job before any
 # token exists: the version is not set.
 #
+# A GitHub-hosted runner is not on the private network the coordinator's private listener is
+# bound to. With `join_tailnet` true, one step after the verification joins the runner to the
+# tailnet as an ephemeral node tagged `tag:hk-ci` (docs/deploy/ci-client.md, "Reaching the
+# coordinator"). It is the one action of the job, pinned to a commit, and authenticates with a
+# GitHub OIDC token exchanged by the tailnet's federated identity: no secret is stored. No step
+# before it uses an action.
+#
 # Only then does the verified program run, as one command: `hostkeeper ci set-desired`
 # (crates/hostkeeper-ci). It requests one OIDC token per call to the coordinator (each is good
 # once), keeps it in a file only the runner user can read and removes it after the call, calls
 # `releases set-desired` (with the one package digest, or with the release index and its digest,
 # which the coordinator checks), reads `releases converge` at most `max_polls` times, and writes the
 # job's outputs.
+#
+# Call it only once the release of the service is in the release channel: a host fetches the
+# version from the channel, and `cargo xtask release channel-sync` stages a published release
+# there (docs/deploy/release-channel.md, "Sync new releases into the channel"). The order is:
+# the release is published, channel-sync stages it, then this workflow sets the desired version.
+# A version set before the channel holds it leaves every host failing its fetch (`fetch_failed`)
+# and retrying until it arrives.
 #
 # The names of the release's assets are written once, in the job's `env`.
 name: set-desired
@@ -47,7 +61,7 @@ on:
         type: string
         required: false
       release_index:
-        description: The text of the version's release index (index.json), byte for byte, at most 64 KiB. Each host is ordered the package its platform has in it. Comes with release_index_digest; not with package_digest.
+        description: The text of the version's release index (index.json), byte for byte, at most 3 KiB (the coordinator takes a request of at most 4 KiB). Each host is ordered the package its platform has in it. Comes with release_index_digest; not with package_digest.
         type: string
         required: false
       release_index_digest:
@@ -84,6 +98,26 @@ on:
         type: number
         required: false
         default: 180
+      join_tailnet:
+        description: Whether to join the tailnet, after the verification, to reach a coordinator_url on it.
+        type: boolean
+        required: false
+        default: false
+      tailnet_client_id:
+        description: The client ID of the tailnet's federated identity for this repository; not a secret.
+        type: string
+        required: false
+        default: ""
+      tailnet_audience:
+        description: The audience of that federated identity; not a secret.
+        type: string
+        required: false
+        default: ""
+      tailnet_coordinator:
+        description: The coordinator's name or address on the tailnet, which the join pings until it answers.
+        type: string
+        required: false
+        default: ""
     outputs:
       desired_version:
         description: The desired version the coordinator stored; empty when it stored none.
@@ -170,6 +204,30 @@ jobs:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: test "$("$RUNNER_TEMP/hostkeeper-bin/hostkeeper" --version)" = "hostkeeper $HOSTKEEPER_VERSION+${HOSTKEEPER_COMMIT:0:12}"
 
+      # Only with `join_tailnet`: the runner joins the tailnet, so that it can reach the private
+      # listener. The first action of the job, after every verification step. The node is
+      # ephemeral and tagged `tag:hk-ci`; it authenticates with a GitHub OIDC token for the
+      # federated identity's audience, and the tailnet's ACL lets that tag reach the coordinator's
+      # private listener and nothing else. The Tailscale tarball is pinned by version and SHA-256.
+      - name: Join the tailnet
+        id: tailnet
+        if: ${{ inputs.join_tailnet }}
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ inputs.tailnet_client_id }}
+          audience: ${{ inputs.tailnet_audience }}
+          tags: tag:hk-ci
+          version: 1.94.2
+          sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
+          use-cache: false
+          ping: ${{ inputs.tailnet_coordinator }}
+
+      - name: Write the coordinator's CA
+        id: ca
+        env:
+          COORDINATOR_CA: ${{ inputs.coordinator_ca }}
+        run: printf '%s\n' "$COORDINATOR_CA" > "$RUNNER_TEMP/hostkeeper-coordinator-ca.pem"
+
       # The index is written exactly as given (printf, no newline added, the text in the
       # environment and never in the script). A job that gave none writes an empty file, which
       # the next step does not pass.
@@ -179,13 +237,8 @@ jobs:
           RELEASE_INDEX: ${{ inputs.release_index }}
         run: printf '%s' "$RELEASE_INDEX" > "$RUNNER_TEMP/hostkeeper-release-index.json"
 
-      - name: Write the coordinator's CA
-        id: ca
-        env:
-          COORDINATOR_CA: ${{ inputs.coordinator_ca }}
-        run: printf '%s\n' "$COORDINATOR_CA" > "$RUNNER_TEMP/hostkeeper-coordinator-ca.pem"
-
-      # The first step that can hold an OIDC token: the verified program, as one command.
+      # The first step that requests an OIDC token for the coordinator: the verified program, as
+      # one command.
       - name: Set the desired version and wait for the fleet
         id: set-desired
         env:

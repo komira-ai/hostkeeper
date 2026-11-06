@@ -35,7 +35,9 @@
 //!
 //! A force record with no verdict is the journal of a force under way. A resend of the same
 //! order, and the start pass ([`resume`]), run steps 7 to 16 again from its top with the recorded
-//! target, fetching it again (under the same checks) only when its directory is gone.
+//! target, fetching it again only when its directory is gone: a resend under the same checks as
+//! the order; the start pass, whose record keeps no index digest, against the package digest, the
+//! index entry and the attestation, with no check of the index's own SHA-256.
 
 mod switch;
 

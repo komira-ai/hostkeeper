@@ -344,3 +344,26 @@ async fn an_operators_set_over_an_index_is_audited_with_the_index_digest() {
         )
     );
 }
+
+/// With a canary of one, a host whose platform the index lists no package for is no canary: the
+/// host after it, of a listed platform, is ordered at once, though the unlisted host has the
+/// smaller id and has not started.
+///
+/// Catches: the canary gate counting a host that is never ordered the version, which holds every
+/// other host at `canary_wait` and keeps the rollout from ever starting.
+#[tokio::test]
+async fn a_host_the_index_has_no_package_for_is_no_canary() {
+    let rig = rig("index-canary", "canary = { count = 1 }");
+    let index = set_index(&rig, WEB, "2.0", &ALL[..2]).await;
+    assert_eq!(
+        ask_typed(&rig, "d1", "daemon", web_at(MAC, "1.0")),
+        (ServiceReply::Nothing, None)
+    );
+    let (reply, order) = ask_typed(&rig, "d2", "daemon", web_at(X86, "1.0"));
+    assert_eq!(reply, update(WEB, "2.0"));
+    assert_eq!(verb_of(order), update_verb(WEB, "2.0", &digest(1), &index));
+    assert_eq!(
+        why_of(&rig, WEB, "d1"),
+        Some(Why::Skip(Skip::NoPackageForPlatform))
+    );
+}

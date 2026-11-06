@@ -19,7 +19,7 @@ use hostkeeper_daemon::testing::FakeClock;
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_steps::record::{AwaitingRestart, State};
 use hostkeeper_steps::{
-    BadVersions, DaemonStart, Settled, Stamp, StartLog, StartLogError, starts::STARTS_FILE,
+    BadVersions, BootId, DaemonStart, Settled, Stamp, StartLog, StartLogError, starts::STARTS_FILE,
 };
 use support::selfupdate::{HK, NEW, OLD, SelfRig, awaiting, fell_back, own, put_record, record_of};
 use support::snapshot;
@@ -39,7 +39,7 @@ fn started(s: &SelfRig, version: &str, monos: &[u64]) {
         log.record(DaemonStart {
             version: version.to_owned(),
             at: Stamp {
-                boot_id: "boot".to_owned(),
+                boot_id: BootId::new("a test", "boot").ok(),
                 mono_secs: *mono,
             },
         })
@@ -158,7 +158,7 @@ fn a_mac_fallback_is_refused_while_another_services_step_runs_or_waits_for_the_l
     started(&s, NEW, &[100, 110, 120]);
     let running = State::Running {
         started: Stamp {
-            boot_id: "boot".to_owned(),
+            boot_id: BootId::new("a test", "boot").ok(),
             mono_secs: 90,
         },
         deadline_secs: 400,
@@ -307,7 +307,7 @@ fn started_in_this_boot(s: &SelfRig, version: &str, monos: &[u64]) {
         log.record(DaemonStart {
             version: version.to_owned(),
             at: Stamp {
-                boot_id: "boot-1".to_owned(),
+                boot_id: BootId::new("a test", "boot-1").ok(),
                 mono_secs: *mono,
             },
         })
@@ -369,4 +369,29 @@ fn a_mac_fallback_over_a_record_it_cannot_use_or_no_previous_changes_nothing() {
     );
     assert_eq!(s.current().as_deref(), Some(NEW));
     assert_eq!(hk_record(&s).progress.awaiting_restart, waiting_for(NEW));
+}
+
+/// Catches starts of an unknown boot counted as one burst: three starts within the window whose
+/// boot id could not be read (stored with an empty `boot_id`, as older releases wrote on a Mac)
+/// may be of different boots, so they are not a burst and nothing falls back.
+#[test]
+fn starts_of_an_unknown_boot_are_not_a_burst() {
+    let s = swapped("mac-fallback-unknown-boot");
+    let dir = binary_dir(&s.rig.state);
+    let mut log = StartLog::load(&s.hk_state()).expect("the start log");
+    for mono in [990, 995, 999] {
+        log.record(DaemonStart {
+            version: NEW.to_owned(),
+            at: Stamp {
+                boot_id: None,
+                mono_secs: mono,
+            },
+        })
+        .expect("a start");
+    }
+    assert_eq!(
+        fallback_after_burst(&dir, &*FakeClock::new()).expect("judged"),
+        Judged::NotYet { starts: 3 }
+    );
+    assert_eq!(s.current().as_deref(), Some(NEW));
 }

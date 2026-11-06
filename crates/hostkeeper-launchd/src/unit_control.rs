@@ -1,8 +1,10 @@
 //! The linking side's [`UnitControl`] over `launchctl`.
 //!
 //! The plists hostkeeper placed are the entries of the unit directory named `<label>.plist` that
-//! are symbolic links (placed paths are links into `current`); a regular file there belongs to
-//! other software and is never read or touched. `daemon_reload` has no launchd counterpart, so
+//! are symbolic links (placed paths are links into `current`); `daemon_reload` never reads or
+//! touches a regular file there. `stop_unit` and `start_unit` act on the label they are given,
+//! whatever its plist is: the daemon's own fallback job, a regular file it writes itself, is
+//! loaded again that way. `daemon_reload` has no launchd counterpart, so
 //! the control keeps a snapshot of those links, each with the device and inode of the file it
 //! resolves to, and acts on what differs from the snapshot of the last successful reload: a job
 //! that is loaded and whose link is new, re-pointed or gone is booted out, and bootstrapped again

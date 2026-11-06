@@ -9,7 +9,7 @@ use hostkeeper_package::ports::{
     Attest, Attested, Fetcher, Got, Limit, NetError, Sink, Url, Verifier, VerifyError,
 };
 use hostkeeper_package::prove::{ProveEnv, prove};
-use hostkeeper_steps::Clock;
+use hostkeeper_steps::{BootId, BootIdError, Clock};
 
 use super::*;
 use crate::release::Verb;
@@ -245,8 +245,8 @@ impl Clock for Still {
         100
     }
 
-    fn boot_id(&self) -> String {
-        "boot".to_owned()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the still clock", "boot")
     }
 
     fn sleep_secs(&self, _secs: u64) {}

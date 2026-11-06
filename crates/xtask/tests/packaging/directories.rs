@@ -256,8 +256,8 @@ fn unit_flags_and_tmpfiles_name_the_same_directories() {
         (
             altered(
                 &unit,
-                "--state-dir /var/lib/updater/state",
-                "--state-dir /var/lib/hostkeeper/state",
+                "--state-dir /var/lib/updater/state --packages-dir",
+                "--state-dir /var/lib/hostkeeper/state --packages-dir",
             ),
             "/var/lib/hostkeeper/state, on the unit's command line",
         ),

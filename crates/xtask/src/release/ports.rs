@@ -1,15 +1,16 @@
 //! The ports of the release verbs: everything they ask of git, of GitHub and of a binary, as
 //! traits, so that every verb runs in a test against fakes (`fakes`).
 //!
-//! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]),
-//! `github::Gh` ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]) and
-//! `check_binary::VersionOf` ([`RunVersion`]) and `macos_pkg::PkgbuildCli` ([`BuildPkg`]). Each runs its program through an [`Exec`], and the
+//! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]), `github::Gh`
+//! ([`GitHubRuns`], [`ReleaseStore`], [`ReleaseSource`], [`Verifier`]), `check_binary::VersionOf`
+//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`]) and
+//! `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
 
 use std::path::Path;
 
-use super::contract::{Commit, Repo, Version};
+use super::contract::{Commit, Repo, Signer, Version};
 
 /// Why a port could not answer: what was asked and why it failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -84,6 +85,8 @@ pub(crate) trait GitHubRuns {
     fn open_issue(&self, repo: &Repo, title: &str, body: &str) -> Result<u64, PortError>;
     /// Replaces the body of issue `number`.
     fn edit_issue(&self, repo: &Repo, number: u64, body: &str) -> Result<(), PortError>;
+    /// Comments `comment` on issue `number`, then closes it as completed.
+    fn close_issue(&self, repo: &Repo, number: u64, comment: &str) -> Result<(), PortError>;
 }
 
 /// One asset of a release, as the store holds it.
@@ -139,15 +142,26 @@ pub(crate) struct Attestation {
 /// Verifies the attestations of a file: online (the verifier fetches them), or offline from a
 /// bundle file.
 pub(crate) trait Verifier {
-    /// The attestations of `file` that verify as attestations of the source commit `commit`,
-    /// read from `bundle` when one is given. An error is a file with no attestation that
-    /// verifies, or a verifier that could not run.
+    /// The attestations of `file` that verify as attestations by `signer` of the source commit
+    /// `commit`, read from `bundle` when one is given. An error is a file with no attestation
+    /// that verifies, or a verifier that could not run.
     fn verify(
         &self,
+        signer: &Signer,
         file: &Path,
         bundle: Option<&Path>,
         commit: &Commit,
     ) -> Result<Vec<Attestation>, PortError>;
+}
+
+/// Where `release channel-sync` reads the published releases of a repository and their assets:
+/// reads only, of public release assets.
+pub(crate) trait ReleaseSource {
+    /// Every release, drafts included (the caller leaves drafts out).
+    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError>;
+    /// Writes the asset `name` of the release `tag` to `dir/<name>`. `name` is a plain file name
+    /// (no `/`, no glob character); `dir` exists and does not hold it.
+    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError>;
 }
 
 /// What a program printed and how it ended.
@@ -161,6 +175,14 @@ pub(crate) struct Said {
 /// Runs a binary with `--version`.
 pub(crate) trait RunVersion {
     fn version_of(&self, binary: &Path) -> Result<Said, PortError>;
+}
+
+/// Checks the dependencies in `Cargo.lock` against the advisory database
+/// (`cargo deny check advisories`, read by `advisories`).
+pub(crate) trait AdvisoryCheck {
+    /// What the check printed and whether it exited 0. cargo-deny writes its JSON records to
+    /// stderr.
+    fn check_advisories(&self) -> Result<Said, PortError>;
 }
 
 /// Builds a flat macOS installer package from a directory tree (`pkgbuild`).
@@ -195,9 +217,11 @@ pub(crate) struct Ports<'a> {
     pub(crate) git: &'a dyn GitHistory,
     pub(crate) runs: &'a dyn GitHubRuns,
     pub(crate) store: &'a dyn ReleaseStore,
+    pub(crate) source: &'a dyn ReleaseSource,
     pub(crate) verifier: &'a dyn Verifier,
     pub(crate) run_version: &'a dyn RunVersion,
     pub(crate) pkgbuild: &'a dyn BuildPkg,
+    pub(crate) advisories: &'a dyn AdvisoryCheck,
 }
 
 /// What owns a set of adapters and lends them as [`Ports`]: the wired adapters (`Wired`, over

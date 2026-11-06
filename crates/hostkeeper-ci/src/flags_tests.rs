@@ -353,7 +353,7 @@ fn an_index_file_that_cannot_be_used_is_refused_before_any_token() {
     assert_eq!(
         validate(&big).expect_err("too large").to_string(),
         format!(
-            "--release-index-file {}: is larger than 65536 bytes",
+            "--release-index-file {}: is larger than 3072 bytes",
             path.display()
         )
     );

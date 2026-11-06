@@ -100,3 +100,43 @@ take no update slot.
 
 The `force` and `abort` orders travel only on the typed heartbeat of `hostkeeper.agent.v1`; the
 JSON heartbeat route carries neither.
+
+## The audit file
+
+Every change is one JSON line of the audit file `<ops-file>.audit`, appended and fsynced;
+`Audit.List` reads it back. The file is rotated by size:
+
+- When a line would take a file that is not empty past `--audit-max-bytes` (default 16 MiB), the
+  file is sealed: renamed to `<ops-file>.audit.<n>`, `n` one past the newest segment's (1 for the
+  first), and the line starts a fresh `<ops-file>.audit`. A line is never split across files,
+  and a sealed segment is never written again. A line longer than the maximum is written whole,
+  alone in its file.
+- At each rotation the oldest segments beyond `--audit-retained-segments` (default 8) are
+  deleted, so the audit holds at most the active file and that many segments. A segment that
+  cannot be deleted is logged as a warning and tried again at the next rotation. Both flags
+  refuse 0 at start.
+- The entry numbers (`seq`) go on across files: the first line of a fresh file is the last
+  number plus one. At start the coordinator reads the last number of the newest file that holds
+  a line, so the numbers go on after a restart, also when the active file is empty or missing
+  right after a rotation.
+- `Audit.List` reads the active file and the segments kept, in number order, with the same
+  filters, paging and `since_seq` cursor as over one file. A `since_seq` in a segment already
+  deleted answers from the oldest entry kept; nothing in the answer says that older entries
+  were deleted (the response has no field for it).
+
+A change is not made without its audit line. When the line cannot be appended (a full disk, a
+file that cannot be opened), the call is refused with `audit_unavailable` (gRPC `UNAVAILABLE`)
+and changes nothing: `Releases.Force`, `Services.Hold`, `Releases.SetDesired` by an operator,
+and every other call above that changes the ops state. Asking again once the disk has room is
+safe. The line is appended before the ops file is written, so an audit line can name a change
+whose ops-file write then failed (`store_failed`), or the first lines of a force refused at a
+later one, never the other way round; a force, which
+writes the desired state first, puts it back. On the JSON routes, whose answers are frozen, the
+same refusal is `500 internal`.
+
+Two calls still stand when their line cannot be appended, so that an operator can stop a rollout
+on a full disk: `Hosts.Abort` and `Releases.Halt`. Each logs the failed append as an error and
+keeps its entry in the ring of the ops file (`Releases.Status` shows the last 64); its line is
+not in the audit file. The coordinator's own changes that raise protection (a halt a host
+reports, a version marked bad by its failures) stand the same way. Read-only calls, `Audit.List`
+included, are not affected.

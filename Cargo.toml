@@ -96,6 +96,9 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 # The operator token compared in constant time (hostkeeper-coordinator).
 subtle = "2.6.1"
+# `sysctlbyname` behind a safe interface (MIT): the boot id of a Mac, `kern.bootsessionuuid`
+# (hostkeeper-launchd), a macOS-only target dependency, never compiled on Linux.
+sysctl = "0.7.1"
 tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
 # The validity of a certificate, in the type rcgen takes (hostkeeper-enrollment).

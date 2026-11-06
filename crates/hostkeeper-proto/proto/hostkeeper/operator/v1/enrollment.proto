@@ -86,6 +86,9 @@ enum EnrollmentRefusal {
   ENROLLMENT_REFUSAL_NO_RECORD = 17;
   // RESOURCE_EXHAUSTED: `AddRecord` past the 10000 records the coordinator keeps.
   ENROLLMENT_REFUSAL_CAPACITY = 18;
+  // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
+  // changed, and asking again is safe once the file takes lines again.
+  ENROLLMENT_REFUSAL_AUDIT_UNAVAILABLE = 19;
 }
 
 message ListPendingRequest {

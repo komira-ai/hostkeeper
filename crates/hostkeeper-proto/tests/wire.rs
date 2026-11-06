@@ -692,6 +692,7 @@ fn wire_names_are_pinned() {
                 "unknown_host",
                 "capacity",
                 "store_failed",
+                "audit_unavailable",
             ],
         ),
         (
@@ -715,6 +716,7 @@ fn wire_names_are_pinned() {
                 "already_bad",
                 "already_halted",
                 "unknown_target",
+                "audit_unavailable",
                 "index_digest_mismatch",
                 "index_invalid",
             ],
@@ -733,6 +735,7 @@ fn wire_names_are_pinned() {
                 "store_failed",
                 "unknown_role",
                 "below_min_version",
+                "audit_unavailable",
             ],
         ),
         (
@@ -757,6 +760,7 @@ fn wire_names_are_pinned() {
                 "record_conflict",
                 "no_record",
                 "capacity",
+                "audit_unavailable",
             ],
         ),
         (

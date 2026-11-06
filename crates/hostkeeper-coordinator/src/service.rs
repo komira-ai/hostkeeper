@@ -935,6 +935,10 @@ impl Coordinator {
                 .clone(),
             hosts,
             commit: crate::BUILD_COMMIT,
+            server_certificate: self
+                .enrollment
+                .as_deref()
+                .map(Enrollment::server_certificate),
         })
     }
 

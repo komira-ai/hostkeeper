@@ -24,8 +24,8 @@ pub struct SetDesiredFlags {
     /// the same as the flag absent.
     #[arg(long)]
     pub package_digest: Option<String>,
-    /// The file that holds the release index of the version (`index.json`), at most 64 KiB of
-    /// UTF-8, sent byte for byte: each host is ordered the package its platform has in it. Comes
+    /// The file that holds the release index of the version (`index.json`), at most 3 KiB of
+    /// UTF-8 (so that the request, the index in it, fits the coordinator's 4 KiB), sent byte for byte: each host is ordered the package its platform has in it. Comes
     /// with `--release-index-digest`; an empty value is the same as the flag absent.
     #[arg(long)]
     pub release_index_file: Option<PathBuf>,
@@ -66,7 +66,7 @@ pub struct SetDesiredFlags {
 }
 
 /// The most bytes of a release index the client reads.
-pub(crate) const MAX_INDEX_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_INDEX_BYTES: usize = 3 * 1024;
 
 /// What the desired version names as its release.
 #[derive(Debug, Clone, PartialEq, Eq)]

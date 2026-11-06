@@ -132,7 +132,7 @@ pub fn resume(rec: &mut Record, rebooted: bool, clock: &dyn Clock) -> (ResumeAct
     let now = Stamp::now(clock);
     let started_now = matches!(
         &rec.state,
-        State::Running { started, .. } if started.boot_id == now.boot_id
+        State::Running { started, .. } if started.same_boot(&now)
     );
     let action = resume_action(rec, rebooted & !started_now);
     if action == ResumeAction::NothingFinished {
@@ -200,9 +200,9 @@ fn restart(rec: &mut Record) {
     }
 }
 
-/// A stamp of another boot becomes `now`.
+/// A stamp of another boot, or of an unknown one, becomes `now`.
 fn restamp(stamp: &mut Option<Stamp>, now: &Stamp) {
-    if let Some(stale) = stamp.as_mut().filter(|stamp| stamp.boot_id != now.boot_id) {
+    if let Some(stale) = stamp.as_mut().filter(|stamp| !stamp.same_boot(now)) {
         *stale = now.clone();
     }
 }

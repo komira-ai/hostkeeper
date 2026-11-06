@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use hostkeeper_privileged::rig::{self, service_unit};
 use hostkeeper_privileged::{Rig, SYSTEMD_RUNTIME_DIR, check_host};
-use hostkeeper_steps::Clock;
 use hostkeeper_steps::systemd::{SYSTEMCTL, SYSTEMD_RUN};
+use hostkeeper_steps::{BootId, BootIdError, Clock};
 use hostkeeper_testkit::Scratch;
 
 /// The fixture program, built by cargo with these tests.
@@ -189,8 +189,8 @@ impl Clock for FakeClock {
         self.0.load(Ordering::SeqCst)
     }
 
-    fn boot_id(&self) -> String {
-        "privileged-test-boot".to_owned()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the fake clock", "privileged-test-boot")
     }
 
     fn sleep_secs(&self, _secs: u64) {}

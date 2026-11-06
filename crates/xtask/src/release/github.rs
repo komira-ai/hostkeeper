@@ -1,4 +1,5 @@
-//! The GitHub adapter: answers [`GitHubRuns`], [`ReleaseStore`] and [`Verifier`] by running `gh`
+//! The GitHub adapter: answers [`GitHubRuns`], [`ReleaseStore`], [`ReleaseSource`] and
+//! [`Verifier`] by running `gh`
 //! through an [`Exec`]. Every argument list and every parse of GitHub's JSON is here, so a test
 //! scripts the [`Exec`] with realistic JSON and checks them all without a network.
 //!
@@ -9,11 +10,11 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::contract::{Commit, MAIN, REPO, Repo, SIGNER_REF, SIGNER_WORKFLOW};
+use super::contract::{Commit, MAIN, Repo, Signer};
 use super::git::stdout_of;
 use super::ports::{
-    Attestation, Exec, GitHubRuns, Issue, PortError, Release, ReleaseStore, Run, StoredAsset,
-    Verifier,
+    Attestation, Exec, GitHubRuns, Issue, PortError, Release, ReleaseSource, ReleaseStore, Run,
+    StoredAsset, Verifier,
 };
 
 /// What `gh api` prints on stderr for a path GitHub does not have.
@@ -198,14 +199,22 @@ impl<E: Exec> GitHubRuns for Gh<E> {
         Ok(matches!(status.as_str(), "identical" | "behind"))
     }
 
+    /// Every page of the list: an issue past the first hundred is still found, so a caller
+    /// that looks for its one issue by title never opens a second. `--slurp` prints the pages
+    /// as one list of lists.
     fn open_issues(&self, repo: &Repo) -> Result<Vec<Issue>, PortError> {
-        let (value, what) = self.api(&format!("repos/{repo}/issues?state=open&per_page=100"))?;
+        let path = format!("repos/{repo}/issues?state=open&per_page=100");
+        let (value, what) = self.json(&["api", "--paginate", "--slurp", &path])?;
         let r = Reader { what: &what };
-        r.list(&value, "the reply")?
-            .iter()
-            .filter(|item| item.get("pull_request").is_none())
-            .map(|issue| parse_issue(&r, issue))
-            .collect()
+        let mut issues = Vec::new();
+        for page in r.list(&value, "the reply")? {
+            for item in r.list(page, "a page")? {
+                if item.get("pull_request").is_none() {
+                    issues.push(parse_issue(&r, item)?);
+                }
+            }
+        }
+        Ok(issues)
     }
 
     fn open_issue(&self, repo: &Repo, title: &str, body: &str) -> Result<u64, PortError> {
@@ -235,16 +244,47 @@ impl<E: Exec> GitHubRuns for Gh<E> {
         ])
         .map(drop)
     }
+
+    fn close_issue(&self, repo: &Repo, number: u64, comment: &str) -> Result<(), PortError> {
+        let path = format!("repos/{repo}/issues/{number}");
+        let comments = format!("{path}/comments");
+        self.call(&[
+            "api",
+            "--method",
+            "POST",
+            &comments,
+            "-f",
+            &format!("body={comment}"),
+        ])?;
+        self.call(&[
+            "api",
+            "--method",
+            "PATCH",
+            &path,
+            "-f",
+            "state=closed",
+            "-f",
+            "state_reason=completed",
+        ])
+        .map(drop)
+    }
 }
 
-impl<E: Exec> ReleaseStore for Gh<E> {
-    fn releases(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
+impl<E: Exec> Gh<E> {
+    /// The newest 100 releases of `repo`, drafts included.
+    fn list_releases(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
         let (value, what) = self.api(&format!("repos/{repo}/releases?per_page=100"))?;
         let r = Reader { what: &what };
         r.list(&value, "the reply")?
             .iter()
             .map(|release| parse_release(&r, release))
             .collect()
+    }
+}
+
+impl<E: Exec> ReleaseStore for Gh<E> {
+    fn releases(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
+        self.list_releases(repo)
     }
 
     fn create_draft(
@@ -290,12 +330,39 @@ impl<E: Exec> ReleaseStore for Gh<E> {
     }
 }
 
+impl<E: Exec> ReleaseSource for Gh<E> {
+    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
+        self.list_releases(repo)
+    }
+
+    /// `gh release download` with the asset's name as its pattern: the caller passes a plain
+    /// name, which as a pattern matches only itself.
+    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError> {
+        let dir = utf8_path("gh release download", dir)?;
+        self.call(&[
+            "release",
+            "download",
+            tag,
+            "--repo",
+            repo.as_str(),
+            "--pattern",
+            name,
+            "--dir",
+            dir,
+        ])
+        .map(drop)
+    }
+}
+
 impl<E: Exec> Verifier for Gh<E> {
     /// Runs the commands of docs/deploy/verify-a-release.md: step 3 online, step 4 with the
     /// bundle (without its `--custom-trusted-root`: the runner fetches the trusted root), each
     /// with `--format json` so that the attestations it verified are read back and checked again.
+    /// For [`Signer::hostkeeper`] these are that page's commands word for word; another signer
+    /// puts its own repository and workflow in place of hostkeeper's.
     fn verify(
         &self,
+        signer: &Signer,
         file: &Path,
         bundle: Option<&Path>,
         commit: &Commit,
@@ -311,11 +378,11 @@ impl<E: Exec> Verifier for Gh<E> {
         }
         args.extend([
             "--repo",
-            REPO,
+            &signer.repo,
             "--signer-workflow",
-            SIGNER_WORKFLOW,
+            &signer.workflow,
             "--source-ref",
-            SIGNER_REF,
+            signer.source_ref,
             "--source-digest",
             commit.as_str(),
             "--deny-self-hosted-runners",

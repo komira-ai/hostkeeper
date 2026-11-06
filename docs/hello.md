@@ -19,7 +19,7 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Mac | `LaunchdLauncher` (`hostkeeper-launchd`) | the daemon running its steps through it (`docs/macos.md`) |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
 | assigning to a role | the rollout file's `roles`, `Services.Assign` (komira-ai/hostkeeper#45), the Rollout page's Assign, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host |
-| setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow, the Rollout page's Set desired (through the gateway) | — |
+| setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow and its hello caller `hello-desired.yml`, the Rollout page's Set desired (through the gateway) | — |
 | unassigning with uninstall | the daemon's uninstall verb, hello's `uninstall` step, `Services.Unassign` (komira-ai/hostkeeper#45), the Rollout page's Unassign, and the daemon's heartbeat loop, which runs the uninstall | the daemon's heartbeat link to the coordinator (`NoLink`) |
 
 ## The package
@@ -82,7 +82,10 @@ makes that directory, owner only, on its first step.
    and restart the coordinator. `cargo test -p hostkeeper-coordinator --test hello_rollout`
    checks that the coordinator accepts this entry.
 4. **CI's allow-list.** If CI sets the desired version, the allow-list entry that admits its
-   token names `hello` (`services = ["hello"]`, see `docs/deploy/ci-client.md`).
+   token names `hello` (`services = ["hello"]`). The entry for `hello-desired.yml`, below, is in
+   `docs/deploy/ci-client.md`, "The allow-list entry". The workflow also reads three repository
+   variables: `HOSTKEEPER_COORDINATOR_URL`, `HOSTKEEPER_COORDINATOR_CA` (the PEM of the
+   coordinator's CA) and `HOSTKEEPER_CI_AUDIENCE` (the entry's `audience`).
 
 ## 1. Assign hello to a role
 
@@ -121,8 +124,8 @@ hostkeeper ctl --endpoint <coordinator> --ca-file <ca.pem> --token-file <token> 
 index whose SHA-256 is not the digest (`index_digest_mismatch`) and one that is not hello's at
 `<v1>` (`index_invalid`).
 
-Or let CI do it with the set-desired workflow (`docs/deploy/ci-client.md`), with
-`service: hello`.
+Or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` and `variant` `hello`
+(see "The proof from CI" below).
 
 Or use the Rollout page, section `hello`: type `<v1>` in `Version`, the SHA-256 of the index in `Release
 index digest` and the text of `hello-index.json` in `Release index`, press `Set desired` and
@@ -152,7 +155,8 @@ that served `<v1>` is stopped. When the hosts have baked, `<v2>` is the last goo
 ## 4. A failing build: watch the automatic rollback
 
 Set the desired version to `<v2>-fail-ready`, with the digest of its package (the Rollout page's
-`Set desired` does it). That build runs
+`Set desired` does it, or dispatch `hello-desired.yml` with `version` `<v2>` and `variant`
+`fail-ready`). That build runs
 the server with `--fail-ready`, so `/readyz` answers 503. (Its `/version` answers `<v2>`: `verify`
 stops at the 503 and never compares it.)
 
@@ -168,6 +172,45 @@ stops at the 503 and never compares it.)
 
 One failed host is enough for the rollback: the entry sets `rollback_after_failed` to
 `min_hosts = 1`.
+
+## The proof from CI: hello-desired.yml
+
+`.github/workflows/hello-desired.yml` sets hello's desired version through the CI client
+(`set-desired.yml`) with the OIDC token GitHub issues to the job. That is the path a service's
+release job takes, so a run of it proves that path, from CI to the coordinator, on hello before a
+real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Run workflow`, or
+`gh workflow run hello-desired.yml --ref main -f version=<v> -f variant=<variant>`). Its inputs:
+
+| input | values | meaning |
+|---|---|---|
+| `version` | a release of this repository, `X.Y.Z` | The release whose hello package is set. |
+| `variant` | `hello` or `fail-ready` | `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose `/readyz` answers 503. |
+| `platform` | `linux-x86_64` (default), `linux-arm64`, `macos-arm64` | The platform of the proof's hosts: the digest set is that platform's one package digest (see "The release index"). |
+
+Its first job reads the SHA-256 of the package from the release's `.sha256` file beside it. Its
+second calls `set-desired.yml` pinned to a hostkeeper release, as any service pins it
+(`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait` left at `true`: the job waits for
+the fleet. The packages must be in the channel first ("Before you start", step 1).
+
+Run it twice, in this order, with the same `version`, a release the hosts are not already at:
+
+1. **`variant: hello`.** The coordinator stores `<version>` as hello's desired version. The canary
+   host updates first, bakes, then the others one at a time, as in step 2. The job ends green,
+   with the outputs `desired_version` `<version>`, `converged` `true` and `reason` `converged`. The
+   job's log prints a line `poll <n>: <state>` each time what a read reports changes, and ends with
+   `The hosts of hello run <version>`.
+2. **`variant: fail-ready`.** The coordinator stores `<version>-fail-ready`. The canary host fails
+   its `verify` (`not_ready`, phase `gate_release`) and rolls itself back. The coordinator marks
+   `<version>-fail-ready` bad and sets the desired version back to `<version>`, the last good one,
+   as in step 4, and orders no other host. The job fails, with `desired_version`
+   `<version>-fail-ready`, `converged` `false` and `reason` `superseded`: another desired version
+   replaced the one it set. That failure is the proof's expected outcome. A second run of the same
+   `fail-ready` version fails at once with `reason` `held_bad`, because the version is marked bad;
+   use the next release for another run.
+
+A run refused before anything is set says so in its `reason` (`docs/deploy/ci-client.md`, "When it
+fails"): `unauthorized` or `forbidden` when the allow-list entry does not admit the token, for
+example when `job_workflow_ref` does not name the commit of the `uses:` line.
 
 ## 5. Unassign with uninstall
 
@@ -195,4 +238,5 @@ and the Host page's `Assigned services` shows hello with `State` `uninstalling`.
 - A hand-off without a gap: hello restarts. tierstore's port forward is its own (design
   `docs/design/host-updates.md`, section 4.1).
 - The macOS hosts: the daemon does not run its steps through launchd yet (`docs/macos.md`).
-- More than one platform in one rollout: see "One platform" above.
+- More than one platform in one proof from CI: `hello-desired.yml` sets one platform's package
+  digest. An operator can name the release index instead (see "The release index" above).

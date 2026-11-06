@@ -24,8 +24,15 @@
 //! Hostkeeper's package refuses `--fail-ready`, a missing `--unit` on Linux and any `--unit` on
 //! macOS; hello's refuses `--unit`, and builds for every platform. Before the archive is built,
 //! every systemd unit is checked (design section 4.7: a unit names package files only through the
-//! service's own `current`) and the entry list is checked against the rules of section 5.5 that
-//! apply to a list this module builds ([`check_entries`]).
+//! service's own `current`; hello's unit starts its binary through that `current`, and
+//! hostkeeper's starts [`SELF_UPDATE_CURRENT`], the binary its own update switches) and the entry
+//! list is checked against the rules of section 5.5 that apply to a list this module builds
+//! ([`check_entries`]).
+//!
+//! The child [`nfpm_stage`] is `release nfpm-stage`: the pinned `gh` and the Sigstore trusted
+//! root, checked and laid out for the deb and the rpm that `packaging/linux/nfpm.yaml` builds;
+//! [`linux_check`] is `release check-linux-pkg`, which reads a built deb or rpm back and checks
+//! that it installs both as staged.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -37,6 +44,8 @@ use super::contract::{Commit, DIGEST_SUFFIX, Package, Platform, Service, Version
 use super::ports::GitHistory;
 
 mod hello;
+pub(super) mod linux_check;
+pub(super) mod nfpm_stage;
 
 /// Why a Linux package of hostkeeper needs `--unit`.
 const LINUX_NEEDS_UNIT: &str =
@@ -101,9 +110,25 @@ fn current(service: &str) -> String {
     format!("{service}/current/")
 }
 
-/// The binary the unit of `service` must start.
+/// The binary of `service` in its package, through `current`.
 fn binary_path(service: &str) -> String {
     format!("{PACKAGES}{}bin/{service}", current(service))
+}
+
+/// What hostkeeper's own unit starts: `current` of the binary directory of its own update, under
+/// the daemon's default state directory (`hostkeeper_daemon::selfupdate::binary_dir`, which the
+/// packaging test holds this to). The self-update stages each new binary there and switches this
+/// link, and its fallback switches it back (design section 6.6), so the unit always starts the
+/// binary the update chose; the package's own `bin/hostkeeper` is what the update stages.
+pub(crate) const SELF_UPDATE_CURRENT: &str = "/var/lib/updater/state/hostkeeper/bin/current";
+
+/// The program the unit of `service` must start: [`SELF_UPDATE_CURRENT`] for hostkeeper, the
+/// service's binary through its `current` ([`binary_path`]) for any other.
+fn started_program(service: &str) -> String {
+    match service == Service::Hostkeeper.name() {
+        true => SELF_UPDATE_CURRENT.to_owned(),
+        false => binary_path(service),
+    }
 }
 
 /// The top-level names a package may hold (design section 5.5).
@@ -274,16 +299,18 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     std::fs::write(path, bytes).map_err(Error::io(format!("write {}", path.display())))
 }
 
-/// Refuses a unit of `service` that is not UTF-8 text, does not start the service's binary
-/// through its `current`, or names a package file by any other path (design section 4.7). `origin`
-/// names the unit in the refusal.
+/// Refuses a unit of `service` that is not UTF-8 text, has no `ExecStart=` whose program is the
+/// one it must start ([`started_program`]), or names a package file by any other path than the
+/// service's `current` (design section 4.7). `origin` names the unit in the refusal.
 fn check_unit(service: &str, origin: &str, unit: &[u8]) -> Result<(), Error> {
     let text = std::str::from_utf8(unit)
         .map_err(|_| Error::Failed(format!("{origin} is not UTF-8 text")))?;
-    let binary = binary_path(service);
-    let starts_it = text
-        .lines()
-        .any(|l| l.starts_with("ExecStart") & l.contains(&binary));
+    let binary = started_program(service);
+    let starts_it = text.lines().any(|l| {
+        l.strip_prefix("ExecStart=")
+            .and_then(|command| command.split_whitespace().next())
+            == Some(binary.as_str())
+    });
     if !starts_it {
         return Err(Error::Failed(format!(
             "{origin} has no ExecStart line naming {binary}"
@@ -394,3 +421,5 @@ fn archive(entries: &[Entry], mtime: u64) -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod unit_tests;

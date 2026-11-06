@@ -2,8 +2,8 @@
 // halt, the bad versions and the holder of the update slot; and the operator's overrides.
 // Calls: Releases.Status, then Services.List for each service's roles, assignments and hosts; on a
 // button, one of Releases.MarkBad, Releases.UnmarkBad, Releases.Halt, Releases.ClearHalt,
-// Releases.Converge, Releases.Force, Releases.SetDesired, Services.Assign and Services.Unassign,
-// and Hosts.List to count a force's hosts. The desired version is set here or by CI.
+// Releases.Converge, Releases.Force, Releases.SetDesired, Services.Assign, Services.Unassign and
+// Services.SetMinVersion, and Hosts.List to count a force's hosts. The desired version is set here or by CI.
 
 import {
   h, action, area, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select, table,
@@ -309,11 +309,30 @@ function unassignButton(ctx, service, form) {
   });
 }
 
+// Sets the minimum version of `service` for the role the form names. The API refuses a minimum
+// above the desired version; the refusal is shown as it comes.
+function minVersionButton(ctx, service, form) {
+  return action(ctx, "Set the role's minimum version", "set-min-version", async () => {
+    const role = trimmed(form.role);
+    const version = trimmed(form.minVersion);
+    if (role === "" || version === "") {
+      return "Name the role and the minimum version.";
+    }
+    if (!ctx.confirm(`Set the minimum version of ${service} for role ${role} to ${version}? No host of the role is ordered below it, rollbacks included.`)) {
+      return "Minimum version not changed.";
+    }
+    await ctx.api.call("hostkeeper.operator.v1.Services/SetMinVersion",
+      { service, minVersion: { role, version } });
+    ctx.refresh();
+    return `Set the minimum version of ${service} for role ${role} to ${version}.`;
+  });
+}
+
 // The role, version, digest and release index grammar is the API's to check: the form only
 // refuses a blank version and role.
 function assignFieldset(ctx, svc) {
   const service = svc.service;
-  const form = { version: "", indexDigest: "", index: "", role: "", uninstall: false };
+  const form = { version: "", indexDigest: "", index: "", role: "", uninstall: false, minVersion: "" };
   return h("fieldset", {},
     h("legend", {}, `Assign and set the desired version of ${service}`),
     field("Version", "desired-version", form, "version"),
@@ -322,7 +341,15 @@ function assignFieldset(ctx, svc) {
     h("div", { class: "buttons" }, setDesired(ctx, svc, form)),
     field("Role", "assign-role", form, "role"),
     checkbox("Uninstall from each host that loses its last assignment", "unassign-uninstall", form, "uninstall"),
-    h("div", { class: "buttons" }, assignButton(ctx, service, form), unassignButton(ctx, service, form)));
+    h("div", { class: "buttons" }, assignButton(ctx, service, form), unassignButton(ctx, service, form)),
+    field("Minimum version for the role", "min-version", form, "minVersion"),
+    h("div", { class: "buttons" }, minVersionButton(ctx, service, form)));
+}
+
+// A minimum version of Services.List, by its scope: `role web 1.2.0`.
+function minVersionLabel(min) {
+  const scope = typeof min["host"] === "string" ? `host ${min["host"]}` : `role ${min.role}`;
+  return `${scope} ${min.version}`;
 }
 
 // The rows of the assignments of `service` from Services.List; `entries` are its services. A
@@ -339,6 +366,7 @@ function assignmentRows(entries, service) {
     ["Operator assignments", assignments.join(", ") || "-"],
     ["Hosts assigned", String(assigned.length > 0 ? assigned.length : list(entry, "hosts").length)],
     ["Uninstalling", list(entry, "uninstalling").join(", ") || "-"],
+    ["Minimum versions", list(entry, "minVersions").map(minVersionLabel).join(", ") || "-"],
   ];
 }
 
