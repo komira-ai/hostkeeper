@@ -3,10 +3,12 @@
 Data recorded from kbf's update coordinator at its tag `v0.0.64` (commit
 `8f90d0604794f3fee057e71647c7e1c1e034fa2e`). The tests in `crates/hostkeeper-coordinator/tests`
 read them as they are; none is generated at test time. A file is changed only to record kbf
-again, never to make a test pass. Two kinds of change are the exception, and say so where they
+again, never to make a test pass. Three kinds of change are the exception, and say so where they
 are: the services files are written as rollout files of this coordinator (the data they record
-is kbf's service and tierstore's), and the sequences `24` to `30` are not recordings: each is a
-case where a rule this coordinator cut decided, with its own answer and kbf's beside it.
+is kbf's service and tierstore's); the sequences `24` to `30` are not recordings: each is a
+case where a rule this coordinator cut decided, with its own answer and kbf's beside it; and one
+step of `17`, whose list of nine feature names kbf's bound of 8 dropped and this coordinator's
+bound of 16 reads, keeps kbf's answer beside this coordinator's.
 
 ## Services and flags
 
@@ -107,9 +109,10 @@ here, and so is the reason.
 | `28-cut-convergence-does-not-need-min-up` | the convergence minimum | `in_progress` (0 of the 1 storage host required up) | `converged` |
 | `29-cut-service-order-does-not-delay-an-order` | a service's `after` | `nothing`, `waiting_for_service` (a host of `first`, which `second` came after, was behind and live) | `update` of `second` |
 | `30-cut-require-min-up-does-not-refuse-a-body` | `require_min_up` | 400 `bad_request` (`min_up lacks storage`) | 200 and the echo of the state, with `min_up` written `{"storage":0,"frontend":0}` |
+| `17-features-a-bad-announcement-is-dropped`, step 5 | the bound of 8 feature names, raised to 16 | `nothing` with no `features` (the list of nine is dropped) | `nothing` and `features: []` (nine names read, none supported) |
 
 `kbf_status` and `kbf_body` of a step keep kbf's answer; the replay never compares them.
-`tests/replay.rs` lists the seven in `CHANGED` and `check_changed_list` fails when a sequence
+`tests/replay.rs` lists these eight in `CHANGED` and `check_changed_list` fails when a sequence
 keeps kbf's answer and is not listed, or is listed and keeps none, or keeps an answer equal to
 this coordinator's.
 

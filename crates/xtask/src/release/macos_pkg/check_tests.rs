@@ -1,10 +1,7 @@
 //! The read-back of an expanded pkg: its parts, its `PackageInfo` and its payload, checked
 //! against the binary, `gh` and trusted root it must hold.
 
-use super::tests::{
-    BIN, BINARY, Expanded, GH, GH_BYTES, PLIST, ROOT, ROOT_BYTES, dir_entry, good_entries, gzip,
-    odc_entry, package_info, package_info_with, version,
-};
+use super::tests::*;
 use super::*;
 
 #[test]
@@ -16,9 +13,10 @@ fn a_good_expanded_pkg_passes_the_check() {
         Ok(vec![format!(
             "check-macos-pkg: {} installs exactly /usr/local/bin/hostkeeper (755), \
              /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist (644), \
-             /usr/local/lib/hostkeeper/gh (755) and \
-             /usr/local/lib/hostkeeper/trusted_root.json (644), owned by root and wheel, with \
-             the label dev.hostkeeper.hostkeeper, version 0.1.5 and no scripts",
+             /private/etc/newsyslog.d/hostkeeper.conf (644), /usr/local/lib/hostkeeper/gh \
+             (755), /usr/local/lib/hostkeeper/trusted_root.json (644) and the directory \
+             /private/var/log/hostkeeper (755), owned by root and wheel, with the label \
+             dev.hostkeeper.hostkeeper, version 0.1.5 and no scripts",
             expanded.pkg().display()
         )])
     );
@@ -151,11 +149,11 @@ fn a_payload_that_is_not_a_gzip_cpio_is_refused() {
 
 #[test]
 fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each() {
-    // Catches: a payload with a file beyond the binary, the plist, gh and the trusted root, one
-    // of them missing (gh or the trusted root among them), an entry not owned by root and wheel,
-    // a writable or setuid mode, a gh that cannot run, a link or directory in place of a file
-    // (or the reverse), or other bytes than the released binary and plist and the pinned gh and
-    // trusted root.
+    // Catches: a payload with a file beyond its own, one of its files missing (gh or the
+    // trusted root among them), an entry not owned by root and wheel, a writable or setuid mode,
+    // a gh that cannot run, a link or directory in place of a file (or the reverse), or other
+    // bytes than the released binary and plist and the pinned gh and trusted root; the log
+    // directory and the newsyslog file have their own cases in `logs`.
     let good = good_entries(BINARY);
     let plist = plist_text().expect("the plist");
     let with = |n: usize, entry: Vec<u8>| {
@@ -172,13 +170,13 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
             .concat(),
             vec![
                 "/etc/hostkeeper.toml (\"./etc/hostkeeper.toml\") is in the payload, which holds \
-                 only the binary, the plist, gh, the trusted root and their directories, each \
-                 once"
+                 only the binary, the plist, the newsyslog file, the log directory, gh, the trusted root and their \
+                 directories, each once"
                     .to_owned(),
             ],
         ),
         (
-            [&good[..7], &good[8..]].concat(),
+            [&good[..BIN_AT], &good[BIN_AT + 1..]].concat(),
             vec!["missing /usr/local/bin/hostkeeper in the payload".to_owned()],
         ),
         (
@@ -190,7 +188,7 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
         ),
         (
             with(
-                7,
+                BIN_AT,
                 odc_entry(&format!("./{BIN}"), 0o100_755, 501, 20, BINARY),
             ),
             vec![
@@ -200,7 +198,10 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
             ],
         ),
         (
-            with(7, odc_entry(&format!("./{BIN}"), 0o104_755, 0, 0, BINARY)),
+            with(
+                BIN_AT,
+                odc_entry(&format!("./{BIN}"), 0o104_755, 0, 0, BINARY),
+            ),
             vec!["/usr/local/bin/hostkeeper: mode 4755, not 755".to_owned()],
         ),
         (
@@ -219,18 +220,21 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
         ),
         (
             with(
-                7,
+                BIN_AT,
                 odc_entry(&format!("./{BIN}"), 0o120_755, 0, 0, b"/elsewhere"),
             ),
             vec!["/usr/local/bin/hostkeeper: of type 120000, not a regular file".to_owned()],
         ),
         (
-            with(6, odc_entry("./usr/local/bin", 0o100_755, 0, 0, b"")),
+            with(
+                BIN_AT - 1,
+                odc_entry("./usr/local/bin", 0o100_755, 0, 0, b""),
+            ),
             vec!["/usr/local/bin: of type 100000, not a directory".to_owned()],
         ),
         (
             with(
-                7,
+                BIN_AT,
                 odc_entry(&format!("./{BIN}"), 0o100_755, 0, 0, b"another binary"),
             ),
             vec![format!(
@@ -277,50 +281,50 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
             ],
         ),
         (
-            [good.clone(), vec![good[7].clone()]].concat(),
+            [good.clone(), vec![good[BIN_AT].clone()]].concat(),
             vec![
                 "/usr/local/bin/hostkeeper (\"./usr/local/bin/hostkeeper\") is in the payload, \
-                 which holds only the binary, the plist, gh, the trusted root and their \
-                 directories, each once"
+                 which holds only the binary, the plist, the newsyslog file, the log directory, gh, the trusted root and \
+                 their directories, each once"
                     .to_owned(),
             ],
         ),
         (
-            good[..10].to_vec(),
+            good[..GH_AT].to_vec(),
             vec![
                 "missing /usr/local/lib/hostkeeper/gh in the payload".to_owned(),
                 "missing /usr/local/lib/hostkeeper/trusted_root.json in the payload".to_owned(),
             ],
         ),
         (
-            [&good[..10], &good[11..]].concat(),
+            [&good[..GH_AT], &good[ROOT_AT..]].concat(),
             vec!["missing /usr/local/lib/hostkeeper/gh in the payload".to_owned()],
         ),
         (
-            good[..11].to_vec(),
+            good[..ROOT_AT].to_vec(),
             vec!["missing /usr/local/lib/hostkeeper/trusted_root.json in the payload".to_owned()],
         ),
         (
-            with(10, odc_entry(&format!("./{GH}"), 0o100_644, 0, 0, GH_BYTES)),
+            with(GH_AT, odc_entry(&format!("./{GH}"), 0o100_644, 0, 0, GH_BYTES)),
             vec!["/usr/local/lib/hostkeeper/gh: mode 644, not 755".to_owned()],
         ),
         (
             with(
-                11,
+                ROOT_AT,
                 odc_entry(&format!("./{ROOT}"), 0o100_666, 0, 0, ROOT_BYTES),
             ),
             vec!["/usr/local/lib/hostkeeper/trusted_root.json: mode 666, not 644".to_owned()],
         ),
         (
             with(
-                10,
+                GH_AT,
                 odc_entry(&format!("./{GH}"), 0o100_755, 0, 0, b"another gh"),
             ),
             vec!["/usr/local/lib/hostkeeper/gh: not the bytes of {gh}".to_owned()],
         ),
         (
             with(
-                11,
+                ROOT_AT,
                 odc_entry(&format!("./{ROOT}"), 0o100_644, 0, 0, b"{\"another\":1}\n"),
             ),
             vec![
@@ -330,13 +334,16 @@ fn a_payload_with_another_entry_owner_kind_mode_or_bytes_is_refused_naming_each(
         ),
         (
             with(
-                9,
+                GH_AT - 1,
                 odc_entry("./usr/local/lib/hostkeeper", 0o040_700, 0, 0, b""),
             ),
             vec!["/usr/local/lib/hostkeeper: mode 700, not 755".to_owned()],
         ),
         // A name without `./` is the same path: pkgbuild writes `./`, other tools may not.
-        (with(7, odc_entry(BIN, 0o100_755, 0, 0, BINARY)), vec![]),
+        (
+            with(BIN_AT, odc_entry(BIN, 0o100_755, 0, 0, BINARY)),
+            vec![],
+        ),
     ];
     for (n, (entries, want)) in cases.into_iter().enumerate() {
         let expanded = Expanded::new(&format!("macos-pkg-check-payload-{n}"), &entries);
@@ -369,13 +376,14 @@ fn a_name_without_the_dot_slash_prefix_or_with_another_one_is_not_a_payload_path
     assert_eq!(payload_path("../usr"), "../usr");
     assert_eq!(payload_path("/usr"), "/usr");
     let mut entries = good_entries(BINARY);
-    entries[4] = dir_entry("../usr");
+    entries[BIN_AT - 3] = dir_entry("../usr");
     let expanded = Expanded::new("macos-pkg-check-dotdot", &entries);
     assert_eq!(
         expanded.problems(),
         [
-            "/../usr (\"../usr\") is in the payload, which holds only the binary, the plist, gh, \
-             the trusted root and their directories, each once",
+            "/../usr (\"../usr\") is in the payload, which holds only the binary, the plist, the \
+             newsyslog file, the log directory, gh, the trusted root and their directories, \
+             each once",
             "missing /usr in the payload",
         ]
     );

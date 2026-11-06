@@ -190,8 +190,8 @@ pub(crate) enum Verb {
         dir: PathBuf,
     },
     /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary, its
-    /// launchd plist, the pinned `gh` and the Sigstore trusted root, nothing else, and no
-    /// scripts.
+    /// launchd plist, its log directory and newsyslog file, the pinned `gh` and the Sigstore
+    /// trusted root, nothing else, and no scripts.
     MacosPkg {
         #[arg(long)]
         version: Version,
@@ -213,8 +213,8 @@ pub(crate) enum Verb {
         out: PathBuf,
     },
     /// Check a pkg that `pkgutil --expand` expanded into a directory: no scripts, and a payload
-    /// of exactly the binary, the daemon's plist, `gh` and the trusted root with their modes,
-    /// owners and bytes.
+    /// of exactly the binary, the daemon's plist, its log directory and newsyslog file, `gh` and
+    /// the trusted root with their modes, owners and bytes.
     CheckMacosPkg {
         /// The directory `pkgutil --expand` wrote.
         expanded: PathBuf,

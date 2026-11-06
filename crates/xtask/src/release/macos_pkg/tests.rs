@@ -9,22 +9,36 @@ use crate::testdir::TestDir;
 
 /// The binary the pkg holds; nothing runs it.
 pub(super) const BINARY: &[u8] = b"the macos-arm64 hostkeeper binary";
+
+pub(super) const PLIST: &str = "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist";
+pub(super) const BIN: &str = "usr/local/bin/hostkeeper";
+pub(super) const NEWSYSLOG: &str = "private/etc/newsyslog.d/hostkeeper.conf";
+pub(super) const GH: &str = "usr/local/lib/hostkeeper/gh";
+pub(super) const ROOT: &str = "usr/local/lib/hostkeeper/trusted_root.json";
 /// The `gh` the pkg holds; nothing runs it.
 pub(super) const GH_BYTES: &[u8] = b"the pinned darwin-arm64 gh";
 /// The trusted root the pkg holds, one JSON object per line as `gh attestation trusted-root`
 /// prints it.
 pub(super) const ROOT_BYTES: &[u8] = b"{\"mediaType\":\"trusted-root\"}\n";
+pub(super) const LOG_DIR: &str = "private/var/log/hostkeeper";
 
-pub(super) const PLIST: &str = "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist";
-pub(super) const BIN: &str = "usr/local/bin/hostkeeper";
-pub(super) const GH: &str = "usr/local/lib/hostkeeper/gh";
-pub(super) const ROOT: &str = "usr/local/lib/hostkeeper/trusted_root.json";
+/// The index of the binary's entry in [`good_entries`], and of `gh` and the trusted root.
+pub(super) const BIN_AT: usize = 14;
+pub(super) const GH_AT: usize = 17;
+pub(super) const ROOT_AT: usize = 18;
 
 /// The paths of the payload, from the install location, with `/` after a directory's.
-const TREE: [&str; 11] = [
+const TREE: [&str; 18] = [
     "Library/",
     "Library/LaunchDaemons/",
     "Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist",
+    "private/",
+    "private/etc/",
+    "private/etc/newsyslog.d/",
+    "private/etc/newsyslog.d/hostkeeper.conf",
+    "private/var/",
+    "private/var/log/",
+    "private/var/log/hostkeeper/",
     "usr/",
     "usr/local/",
     "usr/local/bin/",
@@ -92,16 +106,28 @@ pub(super) fn dir_entry(name: &str) -> Vec<u8> {
     odc_entry(name, 0o040_755, 0, 0, b"")
 }
 
-/// The payload `pkgbuild` writes for the binary `binary`: every entry, in its order. The entry
-/// of the binary is the 8th (index 7), of `gh` the 11th (index 10) and of the trusted root the
-/// 12th (index 11).
+/// The payload `pkgbuild` writes for the binary `binary`: every entry, in its order.
 pub(super) fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
     let plist = plist_text().expect("the plist");
+    let newsyslog = newsyslog_text();
     vec![
         dir_entry("."),
         dir_entry("./Library"),
         dir_entry("./Library/LaunchDaemons"),
         odc_entry(&format!("./{PLIST}"), 0o100_644, 0, 0, plist.as_bytes()),
+        dir_entry("./private"),
+        dir_entry("./private/etc"),
+        dir_entry("./private/etc/newsyslog.d"),
+        odc_entry(
+            &format!("./{NEWSYSLOG}"),
+            0o100_644,
+            0,
+            0,
+            newsyslog.as_bytes(),
+        ),
+        dir_entry("./private/var"),
+        dir_entry("./private/var/log"),
+        dir_entry(&format!("./{LOG_DIR}")),
         dir_entry("./usr"),
         dir_entry("./usr/local"),
         dir_entry("./usr/local/bin"),
@@ -113,7 +139,18 @@ pub(super) fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
     ]
 }
 
-/// The sources of the pkg as written under `dir` by [`write_sources`].
+/// The bytes of the payload's given files: `binary`, `plist`, and the test's `gh` and trusted
+/// root.
+pub(super) fn contents(binary: &[u8], plist: &[u8]) -> Contents {
+    Contents {
+        binary: binary.to_vec(),
+        plist: plist.to_vec(),
+        gh: GH_BYTES.to_vec(),
+        trusted_root: ROOT_BYTES.to_vec(),
+    }
+}
+
+/// The sources of the pkg as [`write_sources`] writes them under `dir`.
 pub(super) fn sources_in(dir: &Path) -> Sources {
     Sources {
         binary: dir.join("hostkeeper"),
@@ -195,12 +232,7 @@ fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launch
     );
     assert_eq!(identifier(), "dev.hostkeeper.hostkeeper");
     assert_eq!(identifier(), Label::daemon().as_str());
-    let want = payload(Contents {
-        binary: BINARY.to_vec(),
-        plist: b"plist".to_vec(),
-        gh: GH_BYTES.to_vec(),
-        trusted_root: ROOT_BYTES.to_vec(),
-    });
+    let want = payload(contents(BINARY, b"plist"));
     let paths: Vec<&str> = want.keys().map(String::as_str).collect();
     assert_eq!(
         paths,
@@ -209,6 +241,13 @@ fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launch
             "Library",
             "Library/LaunchDaemons",
             PLIST,
+            "private",
+            "private/etc",
+            "private/etc/newsyslog.d",
+            NEWSYSLOG,
+            "private/var",
+            "private/var/log",
+            LOG_DIR,
             "usr",
             "usr/local",
             "usr/local/bin",
@@ -300,7 +339,7 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
     // Catches: the read-back accepting a plist launchd would not load, or one for another job.
     let at = format!("/{PLIST}");
     let text = plist_text().expect("the plist");
-    let cases: [(String, Vec<String>); 5] = [
+    let cases: [(String, Vec<String>); 6] = [
         (
             "<plist><dict><key>Label</key>".to_owned(),
             vec![format!("{at} does not parse as a plist: ")],
@@ -323,11 +362,30 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
             )],
         ),
         (
+            text.replace(
+                "/var/log/hostkeeper/daemon.err.log",
+                "/var/log/daemon.err.log",
+            ),
+            vec![format!(
+                "{at}: StandardErrorPath is Some(\"/var/log/daemon.err.log\"), not \
+                 \"/var/log/hostkeeper/daemon.err.log\", the file the pkg's newsyslog entry \
+                 rotates in the directory the pkg makes"
+            )],
+        ),
+        (
             "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict></dict></plist>".to_owned(),
             vec![
                 format!("{at}: the label is None, not \"dev.hostkeeper.hostkeeper\""),
                 format!(
                     "{at}: the job runs None, not the pkg's binary \"/usr/local/bin/hostkeeper\""
+                ),
+                format!(
+                    "{at}: StandardOutPath is None, not \"/var/log/hostkeeper/daemon.out.log\", \
+                     the file the pkg's newsyslog entry rotates in the directory the pkg makes"
+                ),
+                format!(
+                    "{at}: StandardErrorPath is None, not \"/var/log/hostkeeper/daemon.err.log\", \
+                     the file the pkg's newsyslog entry rotates in the directory the pkg makes"
                 ),
             ],
         ),
@@ -357,11 +415,11 @@ fn mode_of(path: &Path) -> u32 {
 }
 
 #[test]
-fn build_lays_out_exactly_the_binary_the_plist_gh_and_the_trusted_root_and_runs_pkgbuild_once() {
-    // Catches: a pkg with anything but the binary, the plist, gh and the trusted root (a
-    // script, a config, a stray file), or without one of them; a mode launchd or the installer
-    // would refuse, a gh that cannot run, or a mode that would change a system directory; or
-    // pkgbuild asked for another identifier, version or file name.
+fn build_lays_out_exactly_the_payload_with_its_modes_and_runs_pkgbuild_once() {
+    // Catches: a pkg with anything but its payload (a script, a config, a stray
+    // file) or without gh or the trusted root, a mode launchd or the installer would refuse, a
+    // gh that cannot run, or a mode that would change a system directory, or pkgbuild asked for
+    // another identifier, version or file name.
     let dir = scratch("macos-pkg-build");
     let r = request(&dir);
     let fake = FakePkgbuild::default();
@@ -389,7 +447,7 @@ fn build_lays_out_exactly_the_binary_the_plist_gh_and_the_trusted_root_and_runs_
     for path in TREE {
         let at = r.stage.join(path.trim_end_matches('/'));
         let want = match path {
-            PLIST | ROOT => 0o644,
+            PLIST | NEWSYSLOG | ROOT => 0o644,
             _ => 0o755,
         };
         assert_eq!(mode_of(&at), want, "{path}");
@@ -402,6 +460,12 @@ fn build_lays_out_exactly_the_binary_the_plist_gh_and_the_trusted_root_and_runs_
         std::fs::read_to_string(r.stage.join(PLIST)).expect("the plist"),
         plist_text().expect("the plist")
     );
+    assert_eq!(
+        std::fs::read_to_string(r.stage.join(NEWSYSLOG)).expect("the newsyslog file"),
+        newsyslog_text()
+    );
+    let log_dir = std::fs::read_dir(r.stage.join(LOG_DIR)).expect("the log directory");
+    assert_eq!(log_dir.count(), 0);
     assert_eq!(std::fs::read(r.stage.join(GH)).expect("gh"), GH_BYTES);
     assert_eq!(
         std::fs::read(r.stage.join(ROOT)).expect("the trusted root"),
@@ -686,3 +750,5 @@ fn an_odc_archive_that_is_cut_short_or_malformed_is_refused_with_where() {
         Err("the name at byte 76 does not end in NUL".to_owned())
     );
 }
+
+mod logs;
