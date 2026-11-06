@@ -162,6 +162,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::ListPendingRequest {
                 limit: 10,
                 page_token: "p2".to_owned(),
+                unenrolled: true,
             }),
         ),
         (
@@ -180,6 +181,10 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                     record_host_id: "db-1".to_owned(),
                     record_role: "storage".to_owned(),
                     candidate_host_ids: vec!["db-1".to_owned(), "db-2".to_owned()],
+                    state: op::EnrollmentRequestState::Unenrolled.into(),
+                    unenrolled_reason: "request_expired".to_owned(),
+                    unenrolled_unix: 1_800_259_201,
+                    request_ttl_secs: 259_200,
                 }],
                 next_page_token: "p3".to_owned(),
             }),

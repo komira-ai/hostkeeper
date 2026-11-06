@@ -353,6 +353,12 @@ pub struct Serve {
     /// host posting its waiting request again is still answered.
     #[arg(long, requires = "enrollment_dir", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_pending_enrollments: Option<u64>,
+    /// How long an enrollment request waits for an operator before it expires: a whole number
+    /// and a unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second. An expired request
+    /// is no longer approved, and its host is listed unenrolled; the host's key posted again
+    /// waits anew. Requests are looked at every --tls-reload-secs.
+    #[arg(long, default_value = "72h", requires = "enrollment_dir", value_parser = request_ttl_secs)]
+    pub enrollment_request_ttl: u64,
     /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
     /// prefix, role and services of each: a TOML file of `[[mac]]` entries (`serial`,
     /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
@@ -581,6 +587,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 os_random(),
             )?
             .with_max_pending(max_pending)
+            .with_request_ttl(flags.enrollment_request_ttl)
             // The MDM gate is not built into this coordinator: no device is known to it.
             .with_mac(MacPolicy {
                 device_state: Arc::new(NoDeviceState),
@@ -640,6 +647,30 @@ pub(crate) fn refuse_unfinished_restore(state: &Path) -> Result<(), StartError> 
 }
 
 /// The lock of `path`, taken by `lock`.
+/// `--enrollment-request-ttl` in seconds: digits, then one unit of `s`, `m`, `h` or `d`, and at
+/// least one second.
+fn request_ttl_secs(text: &str) -> Result<u64, String> {
+    let wrong = || format!("{text:?} is not a time like 90m or 72h: digits, then s, m, h or d");
+    let (digits, per) = [("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)]
+        .into_iter()
+        .find_map(|(unit, per)| text.strip_suffix(unit).map(|digits| (digits, per)))
+        .ok_or_else(wrong)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(wrong());
+    }
+    let secs = digits
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(per))
+        .ok_or_else(|| format!("{text:?} is more seconds than this coordinator counts"))?;
+    if secs == 0 {
+        return Err(format!(
+            "{text:?} is no time: a request waits at least one second"
+        ));
+    }
+    Ok(secs)
+}
+
 fn take_lock(lock: &dyn StateLock, path: &Path) -> Result<LockGuard, StartError> {
     lock.acquire(path).map_err(|why| match why {
         LockError::Held => StartError::Locked {

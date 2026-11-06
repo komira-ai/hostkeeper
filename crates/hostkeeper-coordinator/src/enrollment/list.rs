@@ -1,5 +1,6 @@
 //! `Enrollment.List` as a plain function over the store: the requests waiting for an operator,
-//! oldest first, a page at a time.
+//! oldest first, a page at a time; or, asked with `unenrolled`, the requests that expired, in
+//! the same order, each with why its host is unenrolled.
 //!
 //! The order is stable: the time the coordinator first received a request, then its id. A
 //! page token names the last request of the page before (`<first seen>-<request id>`), so a
@@ -14,6 +15,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 
 use super::Enrollment;
+use super::expiry::REASON_EXPIRED;
 
 /// The most requests one page lists: a `limit` of 0, or above it, is this.
 pub const MAX_PENDING_PAGE: usize = 256;
@@ -53,8 +55,18 @@ fn claims_proto(claims: Claims) -> agent::Claims {
     }
 }
 
-/// `view` as the list shows it: its key hash is its id, the one an approval names.
+/// `view` as the list shows it: its key hash is its id, the one an approval names. An expired
+/// request is unenrolled, with its reason, when and under which TTL.
 fn pending_proto(view: RequestView) -> proto::PendingEnrollment {
+    let (state, unenrolled_reason, unenrolled_unix, request_ttl_secs) = match view.expiry {
+        Some(expiry) => (
+            proto::EnrollmentRequestState::Unenrolled,
+            REASON_EXPIRED.to_owned(),
+            expiry.expired_unix,
+            expiry.ttl_secs,
+        ),
+        None => (proto::EnrollmentRequestState::Pending, String::new(), 0, 0),
+    };
     proto::PendingEnrollment {
         request_id: view.request_id.to_hex(),
         key_sha256: view.request_id.to_hex(),
@@ -67,14 +79,18 @@ fn pending_proto(view: RequestView) -> proto::PendingEnrollment {
             .unwrap_or_default(),
         duplicate_claim: view.state == RequestState::DuplicateClaim,
         mac_nonce_presented: view.mac_nonce_presented,
+        state: state.into(),
+        unenrolled_reason,
+        unenrolled_unix,
+        request_ttl_secs,
         ..proto::PendingEnrollment::default()
     }
 }
 
 impl Enrollment {
-    /// `Enrollment.List`: the pending requests after the page token, oldest first, at most
-    /// `limit` ([`MAX_PENDING_PAGE`] for 0 or more), and the token of the next page (empty on
-    /// the last). Changes nothing.
+    /// `Enrollment.List`: the pending requests (or with `unenrolled`, the expired ones) after the
+    /// page token, oldest first, at most `limit` ([`MAX_PENDING_PAGE`] for 0 or more), and the
+    /// token of the next page (empty on the last). Changes nothing.
     ///
     /// # Errors
     /// `invalid_request` (a page token this coordinator did not give), `store_failed` (a
@@ -91,8 +107,13 @@ impl Enrollment {
             0 => MAX_PENDING_PAGE,
             limit => limit.min(MAX_PENDING_PAGE),
         };
-        let mut pending = self.store.pending().map_err(|why| {
-            tracing::error!(%why, "cannot read the pending requests");
+        let listed = if request.unenrolled {
+            self.store.expired()
+        } else {
+            self.store.pending()
+        };
+        let mut pending = listed.map_err(|why| {
+            tracing::error!(%why, "cannot read the enrollment requests");
             EnrollmentRefusal::StoreFailed
         })?;
         pending.sort_by_key(place_of);

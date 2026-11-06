@@ -95,6 +95,14 @@ message Request {
   uint64 serial = 12;
   // The host presented a Mac nonce with the request (the nonce itself is not kept here).
   bool mac_nonce_presented = 13;
+  // When the request expired: it waited for an operator longer than `expired_after_secs`, and
+  // its host is unenrolled. 0 while it has not. `state` keeps the waiting state it expired in
+  // (PENDING or DUPLICATE_CLAIM), so that a release that does not know this field reads the
+  // request as still waiting instead of refusing the file. A request that expired is never
+  // approved; the same key posted again starts it over, waiting from the time of that post.
+  uint64 expired_unix = 14;
+  // The coordinator's request TTL the request expired under, in seconds; 0 while it has not.
+  uint64 expired_after_secs = 15;
 }
 
 // The certificate made for one round of a request.

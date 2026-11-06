@@ -126,6 +126,7 @@ request-file coordinator renew csr_der
 command enrollment list /hostkeeper.operator.v1.Enrollment/List
 flag enrollment list --limit UINT32
 flag enrollment list --page-token STRING
+flag enrollment list --unenrolled true|false
 command enrollment approve /hostkeeper.operator.v1.Enrollment/Approve
 flag enrollment approve --request-id STRING
 flag enrollment approve --key-sha256 STRING

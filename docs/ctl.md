@@ -124,12 +124,14 @@ The service `Enrollment` of the package `hostkeeper.operator.v1`. The hosts wait
 
 `/hostkeeper.operator.v1.Enrollment/List`
 
-The pending requests, oldest first, a page at a time.
+The pending requests, oldest first, a page at a time; with `unenrolled`, the requests that
+expired instead.
 
 | flag | value | meaning |
 |---|---|---|
 | `--limit` | UINT32 | The most requests to return; capped at 256, and 0 means the cap. |
 | `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
+| `--unenrolled` | true\|false | List the requests that expired, whose hosts are unenrolled, in place of the pending ones: each waited for an operator longer than the coordinator's `--enrollment-request-ttl` and is no longer approved. The order and the page tokens are the same. A coordinator before expiry ignores the field and lists the pending requests, each with `state` UNSPECIFIED. |
 
 #### `hostkeeper ctl enrollment approve`
 
