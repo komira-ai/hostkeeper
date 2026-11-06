@@ -464,6 +464,7 @@ pub fn start_with(
     platform: &Platform,
 ) -> Result<start::Started, StartError> {
     let config = start::load_config(settings)?;
+    crate::layout::ensure_state_dirs(settings)?;
     Adapters::for_platform(platform)
         .and_then(|adapters| host_ports(&config, settings, files, own_version, adapters))
         .and_then(|ports| start::startup_notifying(settings, ports, own_version, notifier))
