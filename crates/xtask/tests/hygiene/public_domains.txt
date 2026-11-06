@@ -6,6 +6,8 @@
 # Where the code and its dependencies live.
 github.com
 crates.io
+# The page of a RustSec advisory, which the advisories issue links each advisory to.
+rustsec.org
 
 # What a package attestation names (hostkeeper-package): the OIDC issuer of GitHub Actions
 # (token.actions.githubusercontent.com), which the coordinator's OIDC allow-list tests name too,

@@ -24,15 +24,18 @@ its tables: a change to either file alone is refused.
 5. Unpack the verified `hostkeeper`.
 6. Check that `hostkeeper --version` prints `hostkeeper <hostkeeper_version>+<the first 12 hex
    digits of hostkeeper_commit>`, exactly.
-7. Only then run the verified program's CI client, `hostkeeper ci set-desired`, as one command.
+7. Only when `join_tailnet` is true: join the tailnet, so that the runner can reach the
+   coordinator's private listener ([Reaching the coordinator](#reaching-the-coordinator)). This is
+   the first step that uses an action, and it runs after every check above.
+8. Only then run the verified program's CI client, `hostkeeper ci set-desired`, as one command.
    It requests an OIDC token for the coordinator, writes it to a file only the runner can read,
    and calls `hostkeeper ctl releases set-desired` with it. When `wait` is true it then reads
    `hostkeeper ctl releases converge` until the fleet has converged, is halted, or the call is
    refused, at most `max_polls` times, and writes the job's outputs.
 
-**A failed verification means the version is not set.** Steps 1 to 4 run nothing of hostkeeper's
-and no step before step 7 can request a token: the workflow lint
-(`cargo test -p xtask --test workflows`) refuses the file otherwise. A version is set only by a
+**A failed verification means the version is not set.** Steps 1 to 4 run nothing of hostkeeper's,
+no step before step 7 uses an action, and no step before step 7 can request a token: the workflow
+lint (`cargo test -p xtask --test workflows`) refuses the file otherwise. A version is set only by a
 program the job has proven was built from the commit you pinned.
 
 ## Before it runs: the release must be in the channel
@@ -95,6 +98,10 @@ only of the services its entry names).
 | `audience` | string | yes |  | The audience of the OIDC token, as the coordinator's allow-list entry for the calling repository names it. |
 | `wait` | boolean | no | `true` | Whether to wait for the fleet to converge on the version. |
 | `max_polls` | number | no | `180` | The most convergence reads before the job fails, from 1 to 1000. One read every 10 seconds, so the default waits about half an hour. |
+| `join_tailnet` | boolean | no | `false` | Whether to join the tailnet after the verification, so that a GitHub-hosted runner can reach a `coordinator_url` on it ([Reaching the coordinator](#reaching-the-coordinator)). |
+| `tailnet_client_id` | string | no |  | The client ID of the tailnet's federated identity for the calling repository. Not a secret. Needed when `join_tailnet` is true. |
+| `tailnet_audience` | string | no |  | The audience of that federated identity. Not a secret. Needed when `join_tailnet` is true. |
+| `tailnet_coordinator` | string | no |  | The coordinator's name or address on the tailnet. With `join_tailnet`, the join waits until it answers a `tailscale ping` (at most 3 minutes), so the first call does not race the tailnet's spread of the new node. Empty: no wait. |
 
 ## Outputs
 
@@ -117,6 +124,113 @@ Why: the downloaded hostkeeper program holds your OIDC token. A pin means a new 
 or a moved tag, cannot change what runs with that token until you change the pin. The commit is
 what the attestation proves: the job refuses a release whose attestation names any other source
 commit, so a release replaced after you pinned it is refused, not run.
+
+## Reaching the coordinator
+
+`coordinator_url` is the coordinator's private listener, the one CI's OIDC tokens are presented to.
+It is bound to the private network, off the public one (design, section 4.3). The workflow runs on
+a GitHub-hosted runner (`ubuntu-24.04`), which is not on that network, and no other kind of runner
+is used. So without a way in, every call gets no answer and the job ends with `reason` set to
+`no_answer`.
+
+The way in is the tailnet. With `join_tailnet: true` the job joins the runner to it, after every
+verification step and before the client runs:
+
+- the step uses `tailscale/github-action`, pinned in `set-desired.yml` to a full commit, and the
+  Tailscale tarball it installs is pinned by version and SHA-256;
+- it authenticates with workload identity federation: the action asks GitHub for an OIDC token
+  for the federated identity's audience and exchanges it with Tailscale. No auth key or OAuth
+  secret exists, in this repository or in the caller's secrets;
+- the node is ephemeral and pre-approved, tagged `tag:hk-ci`, and logged out when the job ends;
+  Tailscale removes it soon after.
+
+Leave `join_tailnet` false when the coordinator's private listener is reachable from the runner
+some other way; then the step is skipped and no action runs in the job.
+
+### Calling it with the join
+
+```yaml
+    with:
+      # ... the inputs of "Calling it" above, with coordinator_url naming the coordinator
+      # by the name it has on the tailnet and in its certificate.
+      join_tailnet: true
+      tailnet_client_id: ${{ vars.HOSTKEEPER_TAILNET_CLIENT_ID }}
+      tailnet_audience: ${{ vars.HOSTKEEPER_TAILNET_AUDIENCE }}
+      tailnet_coordinator: hk-coordinator
+```
+
+The client ID and the audience are not secrets (Tailscale shows both in its admin console), so
+they are repository variables, not secrets. The coordinator's certificate must name the host
+`coordinator_url` names, and its `--private-listen` must be the address the runner reaches on the
+tailnet.
+
+### The tag and the ACL
+
+`tag:hk-ci` is the one tag of the CI nodes. It may reach the coordinator's private listener and
+nothing else. Tag the coordinator's machine `tag:hk-coordinator`, and give the tailnet policy file
+this stanza, with the port of `coordinator_url` (443 when the URL names none):
+
+```jsonc
+{
+  "tagOwners": {
+    "tag:hk-ci": ["autogroup:admin"],
+    "tag:hk-coordinator": ["autogroup:admin"],
+  },
+  "grants": [
+    // CI runners reach the coordinator's private listener, and nothing else.
+    {"src": ["tag:hk-ci"], "dst": ["tag:hk-coordinator"], "ip": ["tcp:443"]},
+  ],
+  "tests": [
+    {"src": "tag:hk-ci", "accept": ["tag:hk-coordinator:443"], "deny": ["tag:hk-coordinator:22"]},
+  ],
+}
+```
+
+The policy is default-deny only once the default allow-all grant (`{"src": ["*"], "dst": ["*"], "ip": ["*"]}`) is
+removed: while it is there, `tag:hk-ci` reaches every node. The `tests` entry makes Tailscale
+refuse a policy edit under which the tag can reach the coordinator's SSH port or cannot reach the
+listener. The heartbeat listener needs no grant for CI.
+
+### The federation, set up once by a tailnet admin
+
+This is a manual step in the Tailscale admin console, done once per service repository that
+calls the workflow. Nothing in this repository runs it.
+
+1. Add the stanza above to the tailnet policy file, and tag the coordinator's machine
+   `tag:hk-coordinator`.
+2. Under **Settings**, **Trust credentials**, add a credential of kind **OpenID Connect**:
+   - issuer: **GitHub** (`https://token.actions.githubusercontent.com`);
+   - subject: the `sub` claim of the service's release job, for example
+     `repo:<owner>/<service-repo>:ref:refs/heads/main`, or
+     `repo:<owner>/<service-repo>:environment:<name>` when the job uses an environment. Name one
+     repository, never a wildcard over owners or repositories;
+   - optionally a custom claim `job_workflow_ref` that names
+     `komira-ai/hostkeeper/.github/workflows/set-desired.yml` at the commit the service pins, so
+     only this workflow can join;
+   - scope: **Auth Keys**, write, with the one tag `tag:hk-ci`.
+3. Copy the credential's client ID and audience into the service repository's variables
+   `HOSTKEEPER_TAILNET_CLIENT_ID` and `HOSTKEEPER_TAILNET_AUDIENCE`.
+
+To revoke CI's access, delete the credential; nodes it made are ephemeral and go away on their
+own.
+
+### What the join is trusted with
+
+The job holds `id-token: write`, so the join action can ask GitHub for an OIDC token for any
+audience, the coordinator's included, and can write the runner's files, the verified hostkeeper
+program included. That is why it runs only after every verification step (it cannot change what
+was verified, only what runs after), only when `join_tailnet` is true, and only at the commit
+`set-desired.yml` pins: moving that pin is a reviewed change to this repository, and a service
+picks it up only when it moves its own pin of `set-desired.yml`. The tailnet token the action gets
+can add only ephemeral `tag:hk-ci` nodes, which reach only the coordinator's private listener.
+
+### Not chosen: a reverse proxy
+
+A reverse proxy on the public network that forwards CI's calls to the private listener would let
+a hosted runner call the coordinator without joining anything, and no action would run in the
+job. It is not done here: it puts the private listener's CI path on the public network, against
+the design's private listener, and needs a new deployed component. It is the alternative a later
+change can take up.
 
 ## The calls
 
@@ -159,8 +273,9 @@ counts as one of the `max_polls` reads.
 | Compare the attested source commit | An attestation names another source commit than `hostkeeper_commit` (`jq` prints `false`). The version is not set. | As above. |
 | Unpack the verified hostkeeper | The verified tarball holds no `hostkeeper`. The version is not set. | Report it. |
 | Check the version of the verified hostkeeper | The program does not say `hostkeeper <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
+| Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a tag other than `tag:hk-ci` on the credential), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
 | Set the desired version and wait for the fleet: before the call | An input breaks its rule (exit 2): a service name or version with other characters, a digest that is not 64 lower-case hex digits, a URL that is not `https://`, a `max_polls` outside 1 to 1000. Or GitHub issued no token (`reason` is `no_answer`): the calling job does not grant `id-token: write`. The version is not set. | Fix the input, or grant `id-token: write` to the calling job. |
-| Set the desired version and wait for the fleet: the set | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request`, `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later). `no_answer`: the coordinator could not be reached. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `releases converge` before you retry. | Fix what the token names, then run the job again. |
+| Set the desired version and wait for the fleet: the set | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request`, `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later). `no_answer`: the coordinator could not be reached; with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it ([Reaching the coordinator](#reaching-the-coordinator)). `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `releases converge` before you retry. | Fix what the token names, then run the job again. |
 | Set the desired version and wait for the fleet: the wait | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt. `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` reads passed and the fleet had not converged; the roll goes on. A refusal token: the read was refused. | Look at the service in the coordinator's UI or with `hostkeeper ctl releases status`. |
 
 ## What it does not do

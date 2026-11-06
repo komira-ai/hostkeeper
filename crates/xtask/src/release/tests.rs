@@ -4,7 +4,6 @@ use std::path::Path;
 use clap::Parser;
 
 use super::*;
-use crate::release::contract::Signer;
 use crate::release::fakes::{
     FakeHistory, FakeStore, FakeVerifier, Fakes, nth_commit, scratch, write_assets,
 };
@@ -829,6 +828,7 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
             verifier: &verifier,
             run_version: &fakes.run_version,
             pkgbuild: &fakes.pkgbuild,
+            advisories: &fakes.advisories,
         };
         run_with(publish_verb(&dir, &ver, &commit), &ports).expect("publish");
         assert_eq!(fakes.store.all()[i + 1].commit, commit.to_string());
@@ -887,13 +887,9 @@ fn the_wired_adapters_route_each_port_to_its_program() {
             why("gh")
         ))
     );
-    assert_eq!(
-        ports
-            .verifier
-            .verify(&Signer::hostkeeper(), Path::new("a.deb"), None, &c)
-            .map_err(|e| e.why),
-        Err(why("gh"))
-    );
+    let signer = contract::Signer::hostkeeper();
+    let verified = ports.verifier.verify(&signer, Path::new("a.deb"), None, &c);
+    assert_eq!(verified.map_err(|e| e.why), Err(why("gh")));
     assert_eq!(
         ports.run_version.version_of(Path::new("bin/x")),
         Err(PortError::new("bin/x --version", why("bin/x")))

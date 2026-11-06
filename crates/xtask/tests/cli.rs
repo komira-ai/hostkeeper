@@ -422,3 +422,30 @@ fn release_channel_stage_refusals_are_failures_with_status_1_and_bad_names_statu
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert_eq!(stdout(&o), "");
 }
+
+#[test]
+fn advisories_reaches_cargo_deny_first_and_fails_with_status_1_when_it_cannot_start() {
+    // Catches: `advisories` not dispatched to the verb, a GitHub call made before the check
+    // ran, a cargo that cannot start reported as "no advisories" (status 0, which would close
+    // the issue), and a bad `--repo` accepted. The PATH holds no program, so nothing is run.
+    let d = dir("advisories");
+    let empty = d.join("empty-path");
+    std::fs::create_dir(&empty).expect("an empty PATH directory");
+    let o = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(&d)
+        .env("PATH", &empty)
+        .args(["advisories", "--repo", "komira-ai/hostkeeper"])
+        .output()
+        .expect("run xtask");
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
+    assert_eq!(
+        stderr(&o),
+        "xtask: cargo deny --log-level warn --format json --manifest-path ./Cargo.toml \
+         --all-features check advisories: No such file or directory (os error 2)\n"
+    );
+
+    let o = run(&d, &["advisories", "--repo", "not a repository"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
+}
