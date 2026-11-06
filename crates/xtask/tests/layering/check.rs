@@ -62,7 +62,9 @@ pub type Layer = (
 /// read the Mac's enrollment claims (`hostkeeper-enroll`'s `MacClaims`) from the real `ioreg`;
 /// their program `hostkeeper-selfupdate-daemon` runs the daemon on the Linux adapters with a
 /// package store and a heartbeat link of its own, so it needs the config, the launchd crate's
-/// platform, the link, the placement roots and the step crate as normal dependencies.
+/// platform, the link, the placement roots and the step crate as normal dependencies; and the
+/// first-boot tests start the coordinator and the daemon as child processes (the coordinator is
+/// their program `hostkeeper-privileged-coordinator`, which needs it as a normal dependency).
 pub const LAYERS: [Layer; 23] = [
     (BINARY, &[DAEMON], &[PROTO]),
     (CI, &[CTL], &[PROTO]),
@@ -97,7 +99,16 @@ pub const LAYERS: [Layer; 23] = [
     (PLACED, &[CONFIG], &[]),
     (
         PRIVILEGED,
-        &[CONFIG, DAEMON, HOOK, LAUNCHD, LINK, PLACED, STEPS],
+        &[
+            CONFIG,
+            COORDINATOR,
+            DAEMON,
+            HOOK,
+            LAUNCHD,
+            LINK,
+            PLACED,
+            STEPS,
+        ],
         &[ENROLL, OBSERVE, PROTO, UNPACK],
     ),
     (PROTO, &[], &[]),

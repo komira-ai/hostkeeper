@@ -446,6 +446,11 @@ fn job_shape_problems(job: &Node, targets: &BTreeSet<String>) -> Vec<String> {
 
 /// The first line of a privileged test file of the Linux job: the tests against systemd.
 const LINUX_FIRST_LINE: &str = "#![cfg(feature = \"privileged\")]";
+/// The job of the first-boot tests: the coordinator and the daemon started as programs, which
+/// change the paths the daemon fixes on the host, on a runner of their own.
+const FIRST_BOOT_JOB: &str = "first-boot";
+/// The first line of a privileged test file of [`FIRST_BOOT_JOB`].
+const FIRST_BOOT_FIRST_LINE: &str = "#![cfg(all(target_os = \"linux\", feature = \"privileged\"))]";
 /// The first line of a privileged test file of [`MACOS_DEVICE_JOB`]: the tests against launchd.
 const MACOS_FIRST_LINE: &str = "#![cfg(all(target_os = \"macos\", feature = \"privileged\"))]";
 
@@ -470,10 +475,12 @@ fn privileged_targets(first: &str) -> BTreeSet<String> {
     found
 }
 
-/// The jobs of privileged.yml and the targets of each: the Linux job's and the macOS job's.
+/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's and
+/// the macOS job's.
 fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
     BTreeMap::from([
         ("privileged", privileged_targets(LINUX_FIRST_LINE)),
+        (FIRST_BOOT_JOB, privileged_targets(FIRST_BOOT_FIRST_LINE)),
         (MACOS_DEVICE_JOB, privileged_targets(MACOS_FIRST_LINE)),
     ])
 }
@@ -482,7 +489,8 @@ fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
 fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     // Catches: privileged.yml missing, failing a rule, named otherwise than the release waits for,
     // with a second step as root or its build moved under root, leaving out a privileged test
-    // file (or naming one that is not), and a job that runs as root in any other workflow.
+    // file (or naming one that is not, or one of another job), the first-boot job missing, and a
+    // job that runs as root in any other workflow.
     let all = workflows();
     let text = &all
         .iter()
@@ -510,6 +518,10 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
             "transient_unit".to_owned(),
             "unit_control".to_owned()
         ])
+    );
+    assert_eq!(
+        targets[FIRST_BOOT_JOB],
+        BTreeSet::from(["first_boot".to_owned(), "install_uninstall".to_owned()])
     );
     assert_eq!(
         targets[MACOS_DEVICE_JOB],
