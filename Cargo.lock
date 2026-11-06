@@ -1340,6 +1340,7 @@ dependencies = [
  "clap",
  "futures",
  "getrandom 0.4.3",
+ "hostkeeper-config",
  "hostkeeper-ctl",
  "hostkeeper-enrollment",
  "hostkeeper-oidc",

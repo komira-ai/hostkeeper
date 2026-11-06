@@ -2,7 +2,7 @@
 //! order (design 4.1 and 5.2).
 //!
 //! An [`Order`] is a verb and typed arguments only: an order id, a try, and a [`Target`] of a
-//! service name, a version and a package digest, each a word with a grammar. No field of it, at
+//! service name, a version, a package digest and optionally an index digest, each a word with a grammar. No field of it, at
 //! any depth, is a free string, so an order cannot carry a command, a path or a URL; the daemon
 //! finds everything else in its own configuration and in the manifest of the package whose
 //! digest verified. The verbs are those of the protobuf `Order` the loop runs: `update`, the
@@ -41,6 +41,10 @@ pub struct Target {
     pub version: Version,
     /// The digest its package must have; nothing runs from a package that does not match it.
     pub digest: PackageDigest,
+    /// The SHA-256 of the release index its package was listed in: the daemon refuses an index
+    /// that hashes to another. None from a coordinator that does not send one (and on the JSON
+    /// route): the index is not checked.
+    pub index_digest: Option<PackageDigest>,
 }
 
 /// The verbs the loop runs.

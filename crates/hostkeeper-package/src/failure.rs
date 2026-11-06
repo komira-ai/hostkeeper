@@ -8,6 +8,9 @@ use hostkeeper_hook::{Class, Outcome};
 /// service or version, a field too many or too few, a file or digest that is not one, a platform
 /// listed twice or out of order, or no package. Also an index over 64 KiB.
 pub const INDEX_INVALID: &str = "index_invalid";
+/// The release index received does not hash to the SHA-256 the order names for it. Checked before
+/// the index is parsed.
+pub const INDEX_DIGEST_MISMATCH: &str = "index_digest_mismatch";
 /// The release index lists no package for this host's platform.
 pub const NO_PACKAGE_FOR_PLATFORM: &str = "no_package_for_platform";
 /// The package's size or SHA-256 is not what the index says, or its size is over
@@ -28,8 +31,9 @@ pub const NOT_ATTESTED: &str = "not_attested";
 
 /// Every reason token this crate reports. The crate README lists the same set; a token is only
 /// ever added (`outcome_tokens_are_the_documented_set`).
-pub const REASONS: [&str; 7] = [
+pub const REASONS: [&str; 8] = [
     INDEX_INVALID,
+    INDEX_DIGEST_MISMATCH,
     NO_PACKAGE_FOR_PLATFORM,
     PACKAGE_DIGEST_MISMATCH,
     FETCH_FAILED,

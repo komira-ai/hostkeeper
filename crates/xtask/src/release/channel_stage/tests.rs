@@ -290,6 +290,7 @@ fn fetched(out: &Path, s: &str, v: &str, platform: Platform) -> (Vec<u8>, Vec<St
     let order = PackageOrder {
         service: service(s),
         version: version(v),
+        index_digest: None,
     };
     let staged = fetch_package(&env, &order).expect("the daemon's fetch takes the staged tree");
     let proof = ProveEnv {

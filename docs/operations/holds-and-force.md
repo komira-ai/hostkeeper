@@ -31,6 +31,18 @@ The ops file gains a `holds` key once a hold is set. A coordinator of an earlier
 to start on such a file rather than ignore the holds; a file that never held one keeps the shape
 earlier releases read.
 
+## A platform the release has no package for
+
+A version set with a release index is ordered to each host as the package its platform has in the
+index. A host whose platform the index does not list is ordered nothing for that version (no
+update, no install, no automatic rollback, and no force: a force lists it as skipped with the
+reason `no_package_for_platform`). The rollout status shows the host's hold as
+`no_package_for_platform`, and the typed gate reason is `GATE_REASON_NO_PACKAGE_FOR_PLATFORM`.
+This is not a failed update: the host is never counted as failed, and it never halts the service
+or triggers an automatic rollback. It keeps what it runs, and is ordered again when a version
+whose index lists its platform is set. A version set with one package digest is ordered to every
+host, as before.
+
 ## Marks
 
 - `Releases.MarkBad` marks a version of a service bad, any version the service's version scheme
@@ -62,7 +74,7 @@ a role, or a list of hosts. The coordinator refuses, changing nothing:
 |---|---|
 | `self_service` | the service is `hostkeeper`, which updates itself by its own path |
 | `below_min_version` | the version is below the service's `min_version` (the floor itself is accepted) |
-| `no_digest` | CI never registered a package digest for the version |
+| `no_digest` | CI never registered a package digest or a release index for the version |
 | `confirm_mismatch` | a fleet-wide force whose `confirm_service` is not the service |
 | `unknown_target` | a role the service does not run on, or a host the coordinator has not heard from |
 
@@ -76,7 +88,8 @@ that the force passed.
 The reply lists the hosts ordered (`targeted`), the held pairs it skipped (`held`), and the
 other hosts it does not order with a reason: `daemon_too_old` for a daemon that did not
 announce the `forced-v1` feature, `unknown_target` for a listed host that does not run the
-service. A held pair is ordered only when the call sets `include_held`, for that call only, and
+service, `no_package_for_platform` for a host whose platform the version's release index lists
+no package for. A held pair is ordered only when the call sets `include_held`, for that call only, and
 no hold is removed.
 
 A host that reports the force failed is not ordered again; a second force, to another version,

@@ -11,11 +11,11 @@ import { ApiError } from "./api.js";
 const TAGS = new Set([
   "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
   "legend", "li", "main", "nav", "option", "p", "pre", "section", "select", "small", "span",
-  "strong", "table", "tbody", "td", "th", "thead", "tr", "ul",
+  "strong", "table", "tbody", "td", "textarea", "th", "thead", "tr", "ul",
 ]);
 const ATTRIBUTES = new Set([
   "aria-label", "autocomplete", "class", "id", "inputmode", "maxlength", "name", "placeholder",
-  "role", "spellcheck", "type",
+  "role", "rows", "spellcheck", "type",
 ]);
 // Set as properties, not attributes: what the element shows now.
 const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);
@@ -178,6 +178,20 @@ export async function allPages(page, key) {
 export function field(label, name, state, key, extra) {
   const input = h("input", Object.assign({
     type: "text", name, autocomplete: "off", spellcheck: "false", value: state[key] || "",
+  }, extra || {}));
+  input.on = {
+    input: (e) => {
+      state[key] = e.target.value;
+      input.attrs.value = state[key];
+    },
+  };
+  return h("label", {}, label, input);
+}
+
+// A multi-line text field bound to `state[key]`: it keeps the line breaks that a text field drops.
+export function area(label, name, state, key, extra) {
+  const input = h("textarea", Object.assign({
+    name, autocomplete: "off", spellcheck: "false", rows: 6, value: state[key] || "",
   }, extra || {}));
   input.on = {
     input: (e) => {

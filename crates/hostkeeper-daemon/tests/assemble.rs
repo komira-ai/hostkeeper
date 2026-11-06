@@ -85,8 +85,9 @@ impl Packages for SweepFails {
         service: &ServiceName,
         version: &Version,
         digest: &PackageDigest,
+        index_digest: Option<&PackageDigest>,
     ) -> Result<VersionDir, PackageError> {
-        self.0.version_dir(service, version, digest)
+        self.0.version_dir(service, version, digest, index_digest)
     }
 
     fn remove_orphans(&self, _service: &ServiceName) -> Result<(), PackageError> {

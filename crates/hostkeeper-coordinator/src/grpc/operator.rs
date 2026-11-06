@@ -96,6 +96,10 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::Unavailable => proto::ReleasesRefusal::KeysUnavailable,
         SetError::Forbidden => proto::ReleasesRefusal::Forbidden,
         SetError::Invalid(DesiredError::UnknownService) => proto::ReleasesRefusal::UnknownService,
+        SetError::Invalid(DesiredError::IndexInvalid(_)) => proto::ReleasesRefusal::IndexInvalid,
+        SetError::Invalid(DesiredError::IndexDigestMismatch) => {
+            proto::ReleasesRefusal::IndexDigestMismatch
+        }
         SetError::Invalid(_) | SetError::UnparseableVersion | SetError::DigestConflict => {
             proto::ReleasesRefusal::InvalidRequest
         }
@@ -132,7 +136,9 @@ pub(crate) fn converge_refusal(why: ConvergenceError) -> proto::ReleasesRefusal 
 /// `invalid_request`: no desired state; a precondition (`if_generation`) or a write id, which
 /// the desired-state store keeps no generation or id for and so cannot honour; or two package
 /// digests that differ. An empty `service` names none, which the JSON route reads as the legacy
-/// service.
+/// service. A release index and its digest are passed as the keys `release_index` and
+/// `release_index_digest`, which the route checks (an index beside a package digest, or one of
+/// the pair alone, is its `index_invalid`).
 pub(crate) fn desired_body(
     request: proto::SetDesiredRequest,
 ) -> Result<Vec<u8>, proto::ReleasesRefusal> {
@@ -156,6 +162,12 @@ pub(crate) fn desired_body(
     if let Some(digest) = digest {
         body["release_digest"] = digest.into();
     }
+    if let Some(index) = request.release_index {
+        body["release_index"] = index.into();
+    }
+    if let Some(digest) = request.release_index_digest {
+        body["release_index_digest"] = digest.into();
+    }
     Ok(serde_json::to_vec(&body).unwrap_or_default())
 }
 
@@ -174,6 +186,10 @@ pub(crate) fn desired_proto(desired: &Desired) -> proto::DesiredState {
         max_updating: limits("max_updating"),
         min_up: limits("min_up"),
         package_digest: desired.release_digest.as_ref().map(ToString::to_string),
+        release_index_digest: desired
+            .release_index
+            .as_ref()
+            .map(|record| record.digest.to_string()),
     }
 }
 

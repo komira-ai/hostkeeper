@@ -50,6 +50,10 @@ pub(crate) fn closed_to(
             .filter(|(_, h)| def.roles.contains(h.role_name()))
             // A pair an operator holds is never a canary, and neither counts as one nor bakes.
             .filter(|(o, _)| !fleet.is_held(service, o))
+            // Nor a host whose platform the release index lists no package for: it is never
+            // ordered the version (`no_package_for_platform`), so it would wait for a canary
+            // slot it can never take, and hold up every host behind it.
+            .filter(|(_, h)| !want.lacks_package_for(h.beat.platform))
     };
     let started = |o: &HostId, h: &Host| {
         h.beat.updating.is_some()

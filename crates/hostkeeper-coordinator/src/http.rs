@@ -33,7 +33,10 @@
 //! answered with its reason as the code: `unparseable_version` (400), and
 //! `below_min_version`, `bad_version` and `digest_conflict` (409), and, with
 //! `--release-channel`, `not_in_channel` and `channel_digest_mismatch` (409,
-//! [`crate::channel`]). A heartbeat that lists no
+//! [`crate::channel`]). A desired state may instead name the release index of its version
+//! (`release_index`, the text of its `index.json`, with `release_index_digest`, its SHA-256),
+//! from which each host is ordered the package of its own platform; one the coordinator refuses
+//! is answered `index_invalid` or `index_digest_mismatch` (400). A heartbeat that lists no
 //! services, at a coordinator with no legacy service, is a bad request. An agent that announces
 //! `order-v1` is answered with the order terms of [`crate::order_terms`] on an update, and its
 //! heartbeat's top level is never read as the legacy service.
@@ -370,8 +373,7 @@ where
         Err(SetError::Unauthorized(_)) => error(StatusCode::UNAUTHORIZED, "unauthorized"),
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
-        Err(SetError::Invalid(_)) => error(StatusCode::BAD_REQUEST, "bad_request"),
-        Err(why @ SetError::UnparseableVersion) => error(
+        Err(why @ (SetError::Invalid(_) | SetError::UnparseableVersion)) => error(
             StatusCode::BAD_REQUEST,
             why.reason().unwrap_or("bad_request"),
         ),

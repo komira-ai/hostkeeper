@@ -508,12 +508,13 @@ fn the_service_limit_is_the_headers() {
 }
 
 /// The only fields an order may hold at any depth besides its verbs, each with its one type.
-const ORDER_FIELDS: [(&str, Kind); 6] = [
+const ORDER_FIELDS: [(&str, Kind); 7] = [
     ("order_id", Kind::String),
     ("try", Kind::Uint64),
     ("service", Kind::String),
     ("version", Kind::String),
     ("package_digest", Kind::String),
+    ("index_digest", Kind::String),
     ("halt_generation", Kind::Uint64),
 ];
 

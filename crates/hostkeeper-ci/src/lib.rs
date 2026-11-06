@@ -7,7 +7,9 @@
 //! once), masks it in the runner's log, keeps it only in a file created fresh with mode 0600
 //! under the runner's temp directory, runs `hostkeeper ctl` in-process on that file, and removes
 //! the file whatever the call returned: the token is never an argument or an environment
-//! variable of any process. The calls are `releases set-desired`, and, unless told not to wait,
+//! variable of any process. The calls are `releases set-desired` (naming the release by the one
+//! package digest, or by the release index file, read whole before any token, and its digest, both
+//! checked by the coordinator and not by this client), and, unless told not to wait,
 //! `releases converge` read at a fixed pause up to a bound, until the fleet has converged on the
 //! version, is halted, or has been given another version.
 //!

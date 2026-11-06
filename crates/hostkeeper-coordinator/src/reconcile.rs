@@ -329,8 +329,10 @@ fn apply(
         Change::RollBackTo(version) => {
             tracing::warn!(%service, from = %want.version, to = %version, "rolling back");
             let mut back = want.clone();
-            // The digest of the version gone back to, as CI registered it, if it did.
-            back.release_digest = store.digests(service).get(&version).cloned();
+            // The release of the version gone back to (its package digest or its release index),
+            // as CI registered it, if it did: the hosts of each platform are ordered that
+            // version's own package.
+            back.set_release(store.digests(service).get(&version).cloned());
             back.version = version;
             store.set(service, back)?;
         }

@@ -46,7 +46,9 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         ReleasesRefusal::KeysUnavailable | ReleasesRefusal::AuditUnavailable => Code::Unavailable,
         ReleasesRefusal::InvalidRequest
         | ReleasesRefusal::ConfirmMismatch
-        | ReleasesRefusal::UnknownTarget => Code::InvalidArgument,
+        | ReleasesRefusal::UnknownTarget
+        | ReleasesRefusal::IndexDigestMismatch
+        | ReleasesRefusal::IndexInvalid => Code::InvalidArgument,
         ReleasesRefusal::UnknownService => Code::NotFound,
         ReleasesRefusal::GenerationConflict => Code::Aborted,
         ReleasesRefusal::HeldBad
