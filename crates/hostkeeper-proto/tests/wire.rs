@@ -386,6 +386,7 @@ const RPCS: [(&str, &[&str]); 6] = [
             "Include(IncludeRequest) IncludeResponse",
             "SetLabels(SetLabelsRequest) SetLabelsResponse",
             "Abort(AbortRequest) AbortResponse",
+            "Retire(RetireRequest) RetireResponse",
         ],
     ),
     (
@@ -417,6 +418,7 @@ const RPCS: [(&str, &[&str]); 6] = [
         &[
             "List(ListPendingRequest) ListPendingResponse",
             "Approve(ApproveRequest) ApproveResponse",
+            "Reject(RejectRequest) RejectResponse",
             "AddRecord(AddRecordRequest) AddRecordResponse",
             "ListRecords(ListRecordsRequest) ListRecordsResponse",
             "RemoveRecord(RemoveRecordRequest) RemoveRecordResponse",
@@ -428,9 +430,9 @@ const RPCS: [(&str, &[&str]); 6] = [
     ),
 ];
 
-/// The fields of the enrollment, abort, audit and force-report messages, pinned by name and
-/// number.
-const FIELDS: [(&str, &[(&str, u32)]); 29] = [
+/// The fields of the enrollment, abort, retire, audit and force-report messages, pinned by name
+/// and number.
+const FIELDS: [(&str, &[(&str, u32)]); 33] = [
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -622,6 +624,19 @@ const FIELDS: [(&str, &[(&str, u32)]); 29] = [
     (
         "hostkeeper.operator.v1.RemoveRecordRequest",
         &[("host_id", 1), ("reason", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.RejectRequest",
+        &[("request_id", 1), ("reason", 2)],
+    ),
+    ("hostkeeper.operator.v1.RejectResponse", &[("entry", 1)]),
+    (
+        "hostkeeper.operator.v1.RetireRequest",
+        &[("node_id", 1), ("reason", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.RetireResponse",
+        &[("entry", 1), ("update_in_flight", 2)],
     ),
     (
         "hostkeeper.operator.v1.ApproveRequest",

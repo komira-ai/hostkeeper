@@ -260,6 +260,33 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 entry: Some(audit_entry("record_remove")),
             }),
         ),
+        (
+            "hostkeeper.operator.v1.RejectRequest",
+            round_trip(&op::RejectRequest {
+                request_id: "cd".repeat(32),
+                reason: "not one of ours".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.RejectResponse",
+            round_trip(&op::RejectResponse {
+                entry: Some(audit_entry("enroll_reject")),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.RetireRequest",
+            round_trip(&op::RetireRequest {
+                node_id: "db-1".to_owned(),
+                reason: "board failed".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.RetireResponse",
+            round_trip(&op::RetireResponse {
+                entry: Some(audit_entry("host_retire")),
+                update_in_flight: true,
+            }),
+        ),
         ("hostkeeper.agent.v1.VerdictAck", round_trip(&verdict_ack())),
         ("hostkeeper.local.v1.Enrollment", round_trip(&enrolled())),
         ("hostkeeper.local.v1.LinkHealth", round_trip(&link())),
@@ -381,7 +408,7 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 26);
+    assert_eq!(messages.len(), 30);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

@@ -1,7 +1,8 @@
 //! What the store knows of an approved host: deny rows (design 6.1), renewal, and duplicate
 //! live daemons on one host id (design 5.7, step 4).
 //!
-//! A deny row is written by [`EnrollmentStore::deny`] as retiring: the host is refused at once
+//! A deny row is written by [`EnrollmentStore::deny`] (the operator's `Hosts.Retire`) as
+//! retiring: the host is refused at once
 //! (`is_denied`), and an update may still be in flight on it (`is_retiring`). The coordinator
 //! frees the host's update slot when the host reports that update's record final, and then
 //! calls [`EnrollmentStore::retire`]; the store never touches the slot. A deny row is never
@@ -16,16 +17,20 @@ use crate::names::{HostId, KeyHash, Role};
 
 impl EnrollmentStore {
     /// Denies `host`: a retiring deny row (a row already retiring or retired is kept), and the
-    /// host's request marked denied, so a repost or poll of its key is refused.
+    /// host's request marked denied, so a repost or poll of its key is refused. Returns whether
+    /// the row is new: `false` when the host was denied already, decided under the store's lock,
+    /// so of two calls at once exactly one sees `true`.
     ///
     /// # Errors
     /// [`StoreError`] when a file cannot be read or written.
-    pub fn deny(&self, host: &HostId) -> Result<(), StoreError> {
+    pub fn deny(&self, host: &HostId) -> Result<bool, StoreError> {
         let _held = self.lock()?;
-        if !self.denied(host)? {
+        let new = !self.denied(host)?;
+        if new {
             self.write_deny(host, DenyState::Retiring, &[])?;
         }
-        self.mark_request_denied(host)
+        self.mark_request_denied(host)?;
+        Ok(new)
     }
 
     /// Records that `host` retired: its deny row becomes final (written denied when it was not

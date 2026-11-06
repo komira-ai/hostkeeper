@@ -156,3 +156,9 @@ flag hosts abort --service STRING
 flag hosts abort --reason STRING
 flag releases set-desired --release-index STRING
 flag releases set-desired --release-index-digest STRING
+command enrollment reject /hostkeeper.operator.v1.Enrollment/Reject
+flag enrollment reject --request-id STRING
+flag enrollment reject --reason STRING
+command hosts retire /hostkeeper.operator.v1.Hosts/Retire
+flag hosts retire --node-id STRING
+flag hosts retire --reason STRING

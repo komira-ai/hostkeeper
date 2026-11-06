@@ -206,7 +206,7 @@ fn quoted(text: &str) -> String {
 }
 
 /// The claims of a request, as an audit entry summarises them: the ones it made.
-fn claims_summary(claims: &Claims) -> String {
+pub(super) fn claims_summary(claims: &Claims) -> String {
     let addresses = claims
         .addresses
         .iter()

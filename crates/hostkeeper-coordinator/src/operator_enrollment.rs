@@ -1,13 +1,14 @@
-//! `Enrollment.List` and `Enrollment.Approve` of `hostkeeper.operator.v1`, as plain functions
-//! over its messages, as the other operator calls are ([`crate::operator`]). A transport (the
+//! `Enrollment.List`, `Enrollment.Approve` and `Enrollment.Reject` of `hostkeeper.operator.v1`,
+//! as plain functions over its messages, as the other operator calls are ([`crate::operator`]). A transport (the
 //! gRPC services, or the JSON gateway) finds the caller from the bearer
 //! ([`Coordinator::caller`]) before it reads the request, and hands the call here.
 //!
-//! Both take the operator token only: a valid CI token is `forbidden`, and no token or any
+//! They take the operator token only: a valid CI token is `forbidden`, and no token or any
 //! other `unauthorized`, before the request is looked at; nothing is audited for them, since
-//! no operator made the call. The work is [`Enrollment::list`] and [`Enrollment::approve`],
-//! which audits each approval and each refused one under the name of the operator's token. A
-//! coordinator without `--enrollment-dir` has no pending request.
+//! no operator made the call. The work is [`Enrollment::list`], [`Enrollment::approve`], which
+//! audits each approval and each refused one under the name of the operator's token, and
+//! [`Enrollment::reject`], which audits the first rejection of a request. A coordinator without
+//! `--enrollment-dir` has no pending request.
 //!
 //! An approval of a request that matches one record of the host inventory is made as that
 //! record's host id, read from the ops file when the call is made: an empty host id is it, and
@@ -91,6 +92,25 @@ impl Coordinator {
             host_id: approved.host_id.to_string(),
             certificate_issued_at_poll: true,
             entry: approved.entry.as_ref().map(entry_proto),
+        })
+    }
+
+    /// `Enrollment.Reject`: rejects a pending request ([`Enrollment::reject`]); the answer
+    /// carries the `enroll_reject` entry of the first rejection, none for a repeat.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, and the refusals of [`Enrollment::reject`]; without
+    /// enrollment, `unknown_request`.
+    pub fn enrollment_reject(
+        &self,
+        caller: &Caller,
+        request: &proto::RejectRequest,
+    ) -> Result<proto::RejectResponse, EnrollmentRefusal> {
+        let by = caller.operator()?;
+        let enrollment = self.enrollment().ok_or(EnrollmentRefusal::UnknownRequest)?;
+        let entry = enrollment.reject(by, request)?;
+        Ok(proto::RejectResponse {
+            entry: entry.as_ref().map(entry_proto),
         })
     }
 }

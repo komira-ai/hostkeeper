@@ -24,6 +24,7 @@ struct Seen {
     records: BTreeMap<String, proto::InventoryRecord>,
     adds: Vec<proto::AddRecordRequest>,
     removes: Vec<proto::RemoveRecordRequest>,
+    rejects: Vec<proto::RejectRequest>,
     bearers: Vec<String>,
 }
 
@@ -63,6 +64,16 @@ impl Enrollment for Records {
         request: Request<proto::ApproveRequest>,
     ) -> Result<Response<proto::ApproveResponse>, Status> {
         self.bearer(&request);
+        Err(Status::new(Code::NotFound, "unknown_request"))
+    }
+
+    async fn reject(
+        &self,
+        request: Request<proto::RejectRequest>,
+    ) -> Result<Response<proto::RejectResponse>, Status> {
+        self.bearer(&request);
+        let reject = request.into_inner();
+        self.seen(|s| s.rejects.push(reject));
         Err(Status::new(Code::NotFound, "unknown_request"))
     }
 
@@ -173,7 +184,8 @@ fn json_of(ran: &Ran) -> Value {
 /// its field (the repeated `--data-macs` above all), a call routed to another method or sent
 /// without the operator's token, a reply not printed, and a refusal not ending the run with its
 /// token on stderr. Add, list, a second add of the host id, remove and list again run in order
-/// against one server.
+/// against one server; then the pending view, an approval and a rejection (its request id and
+/// reason reaching the server as given) on the same service.
 #[test]
 fn the_inventory_commands_add_list_and_remove_a_record_through_the_grpc_route() {
     let dir = hostkeeper_testkit::Scratch::under(
@@ -307,9 +319,35 @@ fn the_inventory_commands_add_list_and_remove_a_record_through_the_grpc_route() 
         "{}",
         approve.stderr
     );
+    let reject = ctl(
+        &memory,
+        token_file,
+        &[
+            "enrollment",
+            "reject",
+            "--request-id",
+            "cd",
+            "--reason",
+            "not ours",
+        ],
+    );
+    assert_eq!(reject.code, exit::FAILURE);
+    assert!(
+        reject.stderr.contains("unknown_request"),
+        "{}",
+        reject.stderr
+    );
+    let rejects = records.seen(|s| s.rejects.clone());
+    assert_eq!(
+        rejects,
+        [proto::RejectRequest {
+            request_id: "cd".to_owned(),
+            reason: "not ours".to_owned(),
+        }]
+    );
 
     let bearers = records.seen(|s| s.bearers.clone());
-    assert_eq!(bearers.len(), 8);
+    assert_eq!(bearers.len(), 9);
     assert!(
         bearers.iter().all(|b| *b == format!("Bearer {TOKEN}")),
         "{bearers:?}"

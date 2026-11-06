@@ -1,6 +1,7 @@
 // Enrollment: the hosts waiting for an operator, with what they claim, the inventory record each
-// matches, and Approve. Calls: Enrollment.List; on a button, Enrollment.Approve, which sends back
-// the key hash the list gave for the request. Claims authorise nothing: they help an operator
+// matches, Approve and Reject. Calls: Enrollment.List; on a button, Enrollment.Approve, which sends
+// back the key hash the list gave for the request, or Enrollment.Reject, after a confirm, which
+// takes the request out of the queue and refuses its key from then on. Claims authorise nothing: they help an operator
 // recognise a machine. A match against one record (the Inventory page) fills in the host id and
 // role; it approves nothing, and several matching records fill in nothing. A request (not a
 // renewal) that matches one record is approved as that record's host id: an empty host id is sent
@@ -153,7 +154,30 @@ function pending(ctx, request) {
         const reply = await ctx.api.call("hostkeeper.operator.v1.Enrollment/Approve", body);
         ctx.refresh();
         return `Approved ${reply.hostId || named}: the host gets its certificate at its next poll.`;
-      })));
+      })),
+    rejectSection(ctx, request));
+}
+
+// Reject: the reason is optional; the request leaves the queue and its key is refused, so it asks
+// first.
+function rejectSection(ctx, request) {
+  const form = { reason: "" };
+  return h("fieldset", {},
+    h("legend", {}, "Reject"),
+    field("Reason (optional)", "reject-reason", form, "reason", { maxlength: 256 }),
+    action(ctx, "Reject", "reject", async () => {
+      const reason = trimmed(form.reason);
+      const problem = reason === "" ? null : reasonProblem(reason);
+      if (problem) {
+        return problem;
+      }
+      if (!ctx.confirm(`Reject request ${request.requestId}? Its key is refused from then on.`)) {
+        return "Not rejected.";
+      }
+      await ctx.api.call("hostkeeper.operator.v1.Enrollment/Reject", { requestId: request.requestId, reason });
+      ctx.refresh();
+      return `Rejected request ${request.requestId}.`;
+    }));
 }
 
 export async function render(ctx) {

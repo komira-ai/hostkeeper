@@ -86,6 +86,11 @@ async fn every_method_refuses_a_caller_that_is_not_the_operator() {
             code,
             token,
         );
+        let reject = proto::RejectRequest {
+            request_id: key.key_hash().to_hex(),
+            reason: String::new(),
+        };
+        assert_refused(s.reject(caller(anonymous, reject)).await, code, token);
         assert_refused(
             s.add_record(caller(anonymous, add_of("db-1", "0c:c4:7a:00:00:02")))
                 .await,

@@ -81,6 +81,12 @@ service Hosts {
   // Queue an `abort` order of a service for the host's next heartbeat; it takes no slot. An
   // abort of a host that runs nothing of the service is accepted and changes nothing.
   rpc Abort(AbortRequest) returns (AbortResponse);
+  // Retire an enrolled host: a deny row is written, so its heartbeats and its `Renew` are
+  // refused `denied` at once, and its own service assignments (`Services.Assign` of the host)
+  // are dropped. An update in flight on it keeps its slot until the host reports the update's
+  // record final; a host with none frees it now. The host is sent no `uninstall`. Retiring a
+  // host already retired is answered as retired and audited once.
+  rpc Retire(RetireRequest) returns (RetireResponse);
 }
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
@@ -155,7 +161,8 @@ enum HostsRefusal {
   HOSTS_REFUSAL_INVALID_REQUEST = 3;
   // NOT_FOUND: the service is not one the coordinator manages.
   HOSTS_REFUSAL_UNKNOWN_SERVICE = 4;
-  // NOT_FOUND: the coordinator has not heard from the host since it started.
+  // NOT_FOUND: the coordinator has not heard from the host since it started (`Retire`: the
+  // coordinator enrolled no host with the id).
   HOSTS_REFUSAL_UNKNOWN_HOST = 5;
   // RESOURCE_EXHAUSTED: the change would hold more than 4096 exclusions, or labels for more than
   // 4096 hosts.
@@ -463,6 +470,22 @@ message AbortResponse {
   // The `abort` order waits for the host's next heartbeat.
   bool queued = 1;
   AuditEntry entry = 2;
+}
+
+message RetireRequest {
+  // The host id the host was enrolled as.
+  string node_id = 1;
+  // Why, for the audit log: 1 to 256 bytes with no control character, or empty for none.
+  string reason = 2;
+}
+
+message RetireResponse {
+  // The `host_retire` entry; absent when the host was already retired (nothing is audited
+  // twice).
+  AuditEntry entry = 1;
+  // An update is in flight on the host: its slot is freed when the host reports the update's
+  // record final, or by `Exclude` with `abandon` if the host is gone.
+  bool update_in_flight = 2;
 }
 
 // What a service's hosts should run, and how fast they get there.

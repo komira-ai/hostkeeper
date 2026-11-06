@@ -623,7 +623,7 @@ fn alert(id: &KeyHash, machine_id: &str, reason: &str) {
 }
 
 /// The public view of a request row.
-fn view(row: &RequestRow) -> Result<RequestView, StoreError> {
+pub(super) fn view(row: &RequestRow) -> Result<RequestView, StoreError> {
     Ok(RequestView {
         request_id: row.id,
         state: row.state,

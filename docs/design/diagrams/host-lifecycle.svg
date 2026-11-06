@@ -43,6 +43,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M155,242 L110,242 L110,142 L155,142" class="ln-d" marker-end="url(#host-lifecycle-ak)"/>
 <text x="102" y="188" class="t-m lbl" text-anchor="end">request</text>
 <text x="102" y="202" class="t-m lbl" text-anchor="end">expired</text>
+<text x="102" y="216" class="t-m lbl" text-anchor="end">or rejected</text>
 <path d="M305,332 L350,332 L350,352 L305,352" class="ln" marker-end="url(#host-lifecycle-ak)"/>
 <text x="358" y="338" class="t-m lbl" text-anchor="start">renew at</text>
 <text x="358" y="352" class="t-m lbl" text-anchor="start">half life</text>

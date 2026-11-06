@@ -142,8 +142,8 @@ administered unicast MACs count), a renewal claims another machine id than the h
 same key came back with another machine id. The coordinator logs `duplicate enrollment claim` at
 warn level with the request id, the machine id and which of these it was. A server rebuilt with
 a new key, or a cloned disk, looks like this. Approving it needs `--replace true`. A request
-that is not one of your servers is not approved: no call denies or removes a pending request, so
-it keeps its place in the queue.
+that is not one of your servers is not approved: [reject it](#reject), which takes it out of the
+queue and refuses its key.
 
 ## The Mac path
 
@@ -228,6 +228,24 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
     services assign --node-id web-17 --service api
 ```
 
+## Reject
+
+A rejection names the request, and a reason if you give one (1 to 256 bytes; it may be left
+out). It asks nothing of the node: the request leaves the queue, which frees its place under the
+[cap](#the-pending-enrollment-cap), and its key is refused from then on. The node's next `Poll`
+is answered `DENIED`, and a repost of the same key changes nothing. The rejection is audited
+`enroll_reject` with the request id, the claims and the reason; rejecting a request already
+rejected succeeds and audits nothing.
+
+```
+hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment reject --request-id <request-id> --reason "not one of ours"
+```
+
+A request already approved or issued is `not_pending`: that host is retired, not rejected. A
+rejected node gets in again only under a new key, as in [enrolling a node
+again](#enrolling-a-node-again).
+
 ## The first heartbeat
 
 On the node, the journal shows `enrolled as host:web-17 (generation 1)` once the certificate is
@@ -262,6 +280,28 @@ equal to `renewal_of`, the role again and the services again: they replace the h
 then logs `enrolled as host:<id> (generation <n>)`. A request whose `renewal_of` names a host that
 is unknown, denied or certified for another key is refused `renewal_not_allowed`.
 
+## Retire a node
+
+Retire a node that is lost, dead or replaced. A deny row is written for its host id: its
+heartbeats and its `Renew` are refused `denied` at once, though its certificate stays valid until
+it expires (7 days at most). Its own service assignments (`services assign --node-id`) are
+dropped; what its role or the rollout file assigns is not. It is sent no `uninstall`: what it runs
+stays as it is. The reason may be left out.
+
+```
+hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    hosts retire --node-id web-17 --reason "board failed, replaced by web-23"
+```
+
+The answer's `update_in_flight` says whether the node was updating. If it was, it keeps the one
+live update slot until its heartbeat reports the update's record final; a node that is gone never
+does, so free its slot with `hosts exclude --abandon true` for the service it was updating. A node
+with no update in flight frees its slot at once. The retirement is audited `host_retire`;
+retiring a node already retired succeeds and audits nothing. A host id no host was enrolled as is
+`unknown_host` (NOT_FOUND).
+
+A retired host id is taken again only by an approval with `--replace true`.
+
 ## Enrolling a node again
 
 A node whose key no longer names a host (its host id was approved for another key, or the
@@ -284,13 +324,14 @@ default), `duplicate_claim` ones included. At the cap a new request, and a retur
 request, is refused `pending_full` and nothing is written: the requests already pending are kept,
 and a host whose request is already pending is still answered. The refused daemon logs the
 refusal once and posts again every 5 seconds, so it gets in when a place frees. A pending request
-does not expire, and no call removes one: only an approval frees its place. A queue full of
-requests nobody will approve needs a larger `--max-pending-enrollments`, set at the coordinator's
-next start.
+does not expire: an approval or a [rejection](#reject) frees its place. Reject the requests nobody
+will approve; a farm that needs more places at once needs a larger `--max-pending-enrollments`,
+set at the coordinator's next start.
 
 ## Refusals of the operator calls
 
-The `Enrollment` service (`list`, `approve`, `add-record`, `list-records`, `remove-record`)
+The `Enrollment` service (`list`, `approve`, `reject`, `add-record`, `list-records`,
+`remove-record`)
 refuses with exactly one of these tokens; `hostkeeper ctl` exits 2 on INVALID_ARGUMENT and
 FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the others.
 
@@ -307,8 +348,8 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_role` | INVALID_ARGUMENT | the role is missing or breaks its rule | pass `--role`: 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
 | `invalid_service` | INVALID_ARGUMENT | a service name breaks its rule or names no service the rollout file defines | name only services of the rollout file |
 | `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial or notes | correct the field; `--reason` is 1 to 256 bytes |
-| `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied | list again; nothing is left to do for it |
-| `denied` | FAILED_PRECONDITION | the host id was denied; no call of this build denies one | `--replace true`, or another host id |
+| `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied; a `reject` of a request approved or issued | list again; nothing is left to do for it (retire an enrolled host with `hosts retire`) |
+| `denied` | FAILED_PRECONDITION | the host id was retired (`hosts retire`) | `--replace true`, or another host id |
 | `store_failed` | INTERNAL | the change could not be written; nothing changed | read the coordinator's log and ask again |
 | `record_exists` | ALREADY_EXISTS | `add-record` for a host id that has a record | remove the record first |
 | `record_conflict` | ALREADY_EXISTS | `add-record` with a MAC or a serial another record holds | remove or correct the other record |
@@ -330,7 +371,7 @@ every 5 seconds.
 | `pending_full` | RESOURCE_EXHAUSTED | an `Enroll` of a new request while the pending queue is full | approve waiting requests, or raise `--max-pending-enrollments` |
 | `key_not_p256` | INVALID_ARGUMENT | the request's key is not an ECDSA P-256 key | none from a hostkeeper daemon, which makes only P-256 keys |
 | `bad_csr` | INVALID_ARGUMENT | the CSR is over 4096 bytes, does not parse, is not signed by its own key, or its subject is not one `host:<id>` | none from a hostkeeper daemon; report it |
-| `denied` | PERMISSION_DENIED | a `Renew` by a denied host | none in this build: no call denies a host |
+| `denied` | PERMISSION_DENIED | a `Renew` by a host an operator retired (`hosts retire`) | none on the node: it was retired; it comes back only under a new key, approved with `--replace true` |
 | `unknown_request` | NOT_FOUND | a `Poll` for a request the coordinator does not hold | restart the unit: the daemon posts its request again at its start |
 | `bad_signature` | UNAUTHENTICATED | a `Poll` whose signature does not verify, or whose nonce is not one the coordinator gave or was used | none: the daemon asks for a new nonce on its next try |
 | `renewal_not_allowed` | FAILED_PRECONDITION | an `Enroll` whose `renewal_of` names a host that is unknown, denied or certified for another key; a `Renew` for another key than the certificate's, by a host whose host id went to another key, or by a host marked duplicate (two machines heartbeating under one host id; no path of this build sets that mark) | the node's key no longer names a host: [enroll it again](#enrolling-a-node-again); only such an approval, with `--replace true`, clears a duplicate mark |
