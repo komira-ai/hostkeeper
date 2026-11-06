@@ -349,6 +349,15 @@ message Host {
   repeated Exclusion exclusions = 7;
   // How each service the coordinator manages sees it.
   repeated HostService services = 8;
+  // The last second the host's current certificate is valid, as its last heartbeat said; absent
+  // when it said none (no certificate, or an agent that predates the field).
+  optional uint64 cert_not_after_unix = 9;
+  // Why the host's last step of enrollment or renewal failed, as its last heartbeat said; absent
+  // when that step succeeded.
+  optional string last_renew_error = 10;
+  // How many of its heartbeats since the coordinator started said a time further from the
+  // coordinator's clock than `--clock-skew-secs`, either way.
+  uint64 clock_skew_beats = 11;
 }
 
 // A host taken out of a service.

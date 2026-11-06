@@ -398,7 +398,7 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true }});
+  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
 }}"#
@@ -482,7 +482,7 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true }});
+  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
 }}"#
@@ -512,7 +512,7 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true }});
+  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
   fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
 }}"#

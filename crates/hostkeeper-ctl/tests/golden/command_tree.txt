@@ -156,3 +156,6 @@ flag hosts abort --service STRING
 flag hosts abort --reason STRING
 flag releases set-desired --release-index STRING
 flag releases set-desired --release-index-digest STRING
+flag coordinator heartbeat --sent-unix UINT64
+flag coordinator heartbeat --cert-not-after-unix UINT64
+flag coordinator heartbeat --last-renew-error STRING

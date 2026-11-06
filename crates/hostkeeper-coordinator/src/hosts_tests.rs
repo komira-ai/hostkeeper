@@ -229,6 +229,9 @@ fn a_host_is_what_the_status_holds_of_it() {
                 health: agent::Health::Healthy.into(),
                 ..agent::ServiceBeat::default()
             }],
+            sent_unix: None,
+            cert_not_after_unix: None,
+            last_renew_error: None,
         }),
         labels: HashMap::from([("rack".to_owned(), "r1".to_owned())]),
         exclusions: vec![proto::Exclusion {
@@ -244,6 +247,9 @@ fn a_host_is_what_the_status_holds_of_it() {
             },
             web,
         ],
+        cert_not_after_unix: None,
+        last_renew_error: None,
+        clock_skew_beats: 0,
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 
-use crate::beat::{Health, Heartbeat, Liveness, Platform};
+use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::order::{Order, OrderResult, Outcome, Reply};
 use crate::ports::{
     CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, HeldHalts, Job, LinkError,
-    Log, Observation, OrderSink, RecordedService, ServiceObserver, ServiceRecords, Sleeper, Tick,
-    UnixClock,
+    Log, Observation, OrderSink, RecordedService, RenewalSource, ServiceObserver, ServiceRecords,
+    Sleeper, Tick, UnixClock,
 };
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
@@ -385,6 +385,24 @@ impl Sleeper for ScriptedSleeper {
     }
 }
 
+/// The enrollment loop's word on the certificate, as a test sets it: none until it does.
+#[derive(Default)]
+pub struct FakeRenewal {
+    renewal: Mutex<Renewal>,
+}
+
+impl FakeRenewal {
+    pub fn set(&self, renewal: Renewal) {
+        *lock(&self.renewal) = renewal;
+    }
+}
+
+impl RenewalSource for FakeRenewal {
+    fn renewal(&self) -> Renewal {
+        lock(&self.renewal).clone()
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -401,6 +419,7 @@ pub struct World {
     pub orders: Arc<FakeSink>,
     pub dispatch: Arc<ManualDispatch>,
     pub halts: Arc<FakeHalts>,
+    pub renewal: Arc<FakeRenewal>,
     pub clock: Arc<FakeClock>,
     pub log: Arc<RecordingLog>,
 }
@@ -422,6 +441,7 @@ impl World {
             orders: Arc::new(orders),
             dispatch: Arc::default(),
             halts: Arc::default(),
+            renewal: Arc::default(),
             clock: Arc::new(FakeClock::new(START_UNIX, START_MONO)),
             log: Arc::default(),
         }
@@ -437,6 +457,7 @@ impl World {
             orders: self.orders.clone(),
             dispatch: self.dispatch.clone(),
             halts: self.halts.clone(),
+            renewal: self.renewal.clone(),
             clock: self.clock.clone(),
             log: self.log.clone(),
         }

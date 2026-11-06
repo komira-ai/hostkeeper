@@ -605,6 +605,10 @@ impl Coordinator {
                 .into_iter()
                 .chain(announced.iter().map(|one| (one.name.clone(), one.health)))
                 .collect(),
+            sent_unix: beat.sent_unix,
+            cert_not_after_unix: beat.cert_not_after_unix,
+            last_renew_error: beat.last_renew_error.clone(),
+            skewed_beats: 0,
         };
         // The halts are noted under the fleet's lock, which every decision and order below is
         // made under: a halt is never raised between another heartbeat's decision to order and
@@ -686,7 +690,7 @@ impl Coordinator {
                 _ => {}
             }
         }
-        fleet.note_node(who.host_id.clone(), node);
+        fleet.note_node(who.host_id.clone(), node, self.ops.unix_now());
         if turn == Turn::Hold {
             return (ServiceReply::Nothing, None, None, Vec::new());
         }

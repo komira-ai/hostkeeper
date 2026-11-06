@@ -16,6 +16,14 @@
 //! heartbeat loop at the end of its wait (`hostkeeper_link::ClockSleeper`). An order running on
 //! a worker goes on; its verdict is in its step record.
 //!
+//! An enroller that cannot be made (the coordinator's address refused, the pki directory locked
+//! or unreadable) is made again, for the life of the process: after a wait on
+//! [`Links::enroll_sleeper`] of [`OPEN_RETRY_FIRST_SECS`], doubled after each failure up to
+//! [`OPEN_RETRY_MAX_SECS`]. Each failure is noted in [`Links::renewal`], the enrollment loop's
+//! state that every heartbeat reports ([`crate::link_adapters::DaemonRenewal`]), with the end of
+//! the current certificate and the error of the enroller's last step, which the enroller notes
+//! once it runs.
+//!
 //! The heartbeat loop's link to the coordinator is [`HostLink`]: the [`NegotiatedLink`] of
 //! [`coordinator_link`] (the JSON route and gRPC, both over mutual TLS), made at the first
 //! heartbeat the loop sends, on the loop's own worker.
@@ -27,27 +35,40 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::names::Version;
-use hostkeeper_enroll::Enroller;
+use hostkeeper_enroll::{Enroller, RETRY_SECS, RenewalState};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
     Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports, Reply,
-    Sleeper, StopFlag, TcpDial, TcpTransport, UnixClock,
+    Sleeper, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_steps::Clock;
 
 use crate::executor::Daemon;
-use crate::link_adapters::{DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords};
+use crate::link_adapters::{
+    DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal,
+};
 use crate::node::NodeState;
 
 pub use hostkeeper_link::Log;
 
 /// Makes the enroller of the enrollment loop, on the loop's own worker: the enroller's transport
 /// may own an async runtime, which must be made, used and dropped outside the daemon's. An
-/// `Err` says why there is no enrollment; the loop logs it and ends.
-pub type MakeEnroller = Box<dyn FnOnce() -> Result<Enroller, String> + Send>;
+/// `Err` says why there is no enroller yet; the loop logs it, notes it, and makes it again after
+/// its wait ([`OPEN_RETRY_FIRST_SECS`]).
+pub type MakeEnroller = Box<dyn FnMut() -> Result<Enroller, String> + Send>;
 
 /// The line the enrollment loop logs when it has no enroller, before the reason.
-pub const NO_ENROLLMENT: &str = "error: the enrollment loop does not run: ";
+pub const NO_ENROLLMENT: &str = "error: the enrollment loop cannot start yet: ";
+
+/// The wait, in seconds, after the first failure to make the enroller: the pace of the
+/// enroller's own steps ([`RETRY_SECS`]).
+pub const OPEN_RETRY_FIRST_SECS: u64 = RETRY_SECS;
+
+/// The longest wait, in seconds, between two tries to make the enroller: five minutes, so a host
+/// whose enroller could not be made (its coordinator briefly away, its clock wrong at boot) tries
+/// again within five minutes of the cause going away, and one that cannot make it at all tries
+/// twelve times an hour.
+pub const OPEN_RETRY_MAX_SECS: u64 = 300;
 
 /// What the two loops need besides the daemon.
 pub struct Links {
@@ -63,6 +84,11 @@ pub struct Links {
     pub log: Arc<dyn Log>,
     /// The heartbeat loop's wait between two heartbeats.
     pub sleeper: Box<dyn Sleeper + Send>,
+    /// The enrollment loop's wait between two tries to make its enroller; [`Tick::Stop`] ends the
+    /// loop.
+    pub enroll_sleeper: Box<dyn Sleeper + Send>,
+    /// What the enrollment loop last said of the certificate, which every heartbeat reports.
+    pub renewal: RenewalState,
     /// Seconds between two heartbeats (`--heartbeat-secs`).
     pub period: NonZeroU64,
     /// Starts each loop, and each order of the heartbeat loop, on a worker of its own.
@@ -80,17 +106,26 @@ impl Links {
     pub fn start(self, daemon: &Arc<Daemon>) {
         let heartbeater = self.heartbeater(daemon);
         let Links {
-            enroller,
+            mut enroller,
             clock,
             log,
             sleeper,
+            enroll_sleeper,
+            renewal,
             dispatch,
             stop,
             ..
         } = self;
         let enrolling = Arc::clone(daemon);
         dispatch.start(Box::new(move || {
-            enroll(enroller, log.as_ref(), &enrolling.ctx().node, &stop);
+            let loop_ports = EnrollLoop {
+                log: log.as_ref(),
+                node: &enrolling.ctx().node,
+                renewal: &renewal,
+                sleeper: &*enroll_sleeper,
+                stop: &stop,
+            };
+            loop_ports.run(&mut enroller);
         }));
         let beating = Arc::clone(daemon);
         dispatch.start(Box::new(move || {
@@ -122,6 +157,7 @@ impl Links {
                 orders: Arc::new(DaemonOrders::new(Arc::clone(daemon))),
                 dispatch: Arc::clone(&self.dispatch),
                 halts: Arc::new(DaemonHalts::new(Arc::clone(daemon))),
+                renewal: Arc::new(DaemonRenewal::new(self.renewal.clone())),
                 clock: Arc::clone(&self.clock),
                 log: Arc::clone(&self.log),
             },
@@ -129,17 +165,51 @@ impl Links {
     }
 }
 
-/// The enrollment loop: the enroller made, then its steps until `stop` is set, the host's
-/// enrollment after each held in `node`; without an enroller, the reason logged once
-/// ([`NO_ENROLLMENT`]), and `node` left without an enrollment.
-fn enroll(make: MakeEnroller, log: &dyn Log, node: &NodeState, stop: &StopFlag) {
-    match make() {
-        Ok(mut enroller) => enroller.run_loop(
-            &mut |line: &str| log.line(line),
-            &mut |enrollment| node.set_enrollment(enrollment),
-            &mut || !stop.is_stopped(),
-        ),
-        Err(why) => log.line(&format!("{NO_ENROLLMENT}{why}")),
+/// What the enrollment loop works with besides its enroller.
+struct EnrollLoop<'a> {
+    log: &'a dyn Log,
+    node: &'a NodeState,
+    renewal: &'a RenewalState,
+    sleeper: &'a dyn Sleeper,
+    stop: &'a StopFlag,
+}
+
+impl EnrollLoop<'_> {
+    /// The enrollment loop: the enroller made, then its steps until `stop` is set, the host's
+    /// enrollment after each held in `node` and its certificate's end and error in `renewal`.
+    /// While the enroller cannot be made, each failure is noted in `renewal` and logged
+    /// ([`NO_ENROLLMENT`], once, and again when the reason changes), and the enroller is made
+    /// again after a wait on `sleeper` of [`OPEN_RETRY_FIRST_SECS`], doubled after each failure
+    /// up to [`OPEN_RETRY_MAX_SECS`]; `node` is left without an enrollment meanwhile. The loop
+    /// ends when `stop` is set before a try, or the wait says [`Tick::Stop`].
+    fn run(&self, make: &mut MakeEnroller) {
+        let mut wait = OPEN_RETRY_FIRST_SECS;
+        let mut logged: Option<String> = None;
+        while !self.stop.is_stopped() {
+            match make() {
+                Ok(mut enroller) => {
+                    enroller.run_loop(
+                        &mut |line: &str| self.log.line(line),
+                        &mut |enrollment| self.node.set_enrollment(enrollment),
+                        self.renewal,
+                        &mut || !self.stop.is_stopped(),
+                    );
+                    return;
+                }
+                Err(why) => {
+                    if logged.as_deref() != Some(why.as_str()) {
+                        self.log.line(&format!("{NO_ENROLLMENT}{why}"));
+                    }
+                    self.renewal
+                        .failed(format!("the enroller cannot be opened: {why}"));
+                    logged = Some(why);
+                    if self.sleeper.sleep(wait) == Tick::Stop {
+                        return;
+                    }
+                    wait = wait.saturating_mul(2).min(OPEN_RETRY_MAX_SECS);
+                }
+            }
+        }
     }
 }
 

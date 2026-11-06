@@ -976,6 +976,19 @@ fn quiet_below_two_heartbeat_intervals_is_refused() {
     build_given(&flags_of(floor)).expect("the floor starts");
 }
 
+/// Catches `--clock-skew-secs` without its default or not taken as given: two minutes when
+/// absent, the number given otherwise, and a coordinator given one starts.
+#[test]
+fn the_clock_skew_bound_defaults_to_two_minutes_and_takes_a_value() {
+    let files = Files::new("config-clock-skew");
+    assert_eq!(flags_of(files.args()).clock_skew_secs, 120);
+    let mut given = files.args();
+    given.extend(["--clock-skew-secs".into(), "30".into()]);
+    let flags = flags_of(given);
+    assert_eq!(flags.clock_skew_secs, 30);
+    build_given(&flags).expect("it starts");
+}
+
 /// `args` with `--ui-dir path` added.
 fn with_ui_dir(args: &[OsString], path: &std::path::Path) -> Vec<OsString> {
     let mut args = args.to_vec();

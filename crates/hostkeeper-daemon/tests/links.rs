@@ -17,7 +17,7 @@ use hostkeeper_daemon::start;
 use hostkeeper_daemon::testing::{Ending, FakeNotifier, Log, Notice, Signal};
 use hostkeeper_daemon::unix_clock::SystemUnixClock;
 use hostkeeper_enroll::{
-    CoordinatorEnroll, EnrollAnswer, EnrollRequest, Enroller, LinuxClaims, OsEntropy, PkiDir, Poll,
+    CoordinatorEnroll, EnrollAnswer, EnrollRequest, LinuxClaims, OsEntropy, PkiDir, Poll,
     PollAnswer, RenewAnswer, RenewRequest, Settings as EnrollSettings, SystemWallClock,
     TransportError,
 };
@@ -27,7 +27,7 @@ use hostkeeper_link::{
     CertSource, CertState, DEFAULT_HEARTBEAT_SECS, Dispatch, Job, StopFlag, Tick, UnixClock,
 };
 use hostkeeper_steps::Clock;
-use support::{OWN, Rig, alerting, lines};
+use support::{OWN, Rig, alerting, lines, open_once};
 
 /// A dispatcher that hands each job to the test, which runs it when and where it likes.
 struct Handed(Notice<Job>);
@@ -87,6 +87,8 @@ fn links_with(
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch,
         stop: StopFlag::default(),
+        enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
+        renewal: hostkeeper_enroll::RenewalState::default(),
     }
 }
 
@@ -222,7 +224,7 @@ fn the_enrollment_loop_runs_its_enroller_until_it_is_told_to_stop() {
     let links = Links {
         stop: stop.clone(),
         ..links_with(
-            Box::new(move || Enroller::open(settings, ports).map_err(|e| e.to_string())),
+            open_once(settings, ports),
             Arc::new(NotedCerts(Log::default())),
             Arc::clone(&log),
             dispatch,
@@ -327,7 +329,8 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
     assert_eq!(links.sleeper.sleep(5), Tick::Stop);
     links.log.line("a line of a loop");
     assert_eq!(lines(&alerts), ["hostkeeper daemon: a line of a loop"]);
-    let enroller = (links.enroller)();
+    let mut make = links.enroller;
+    let enroller = make();
     assert!(enroller.is_ok(), "{:?}", enroller.err());
 }
 
