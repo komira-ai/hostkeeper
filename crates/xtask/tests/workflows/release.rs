@@ -6,13 +6,15 @@
 //!   the repository).
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
 //!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
-//!   `plan`, `verify` and `publish` under their exact `if:`, checks both shipped binaries
+//!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the two jobs
+//!   of hostkeeper's own deploy, held to [`desired::problems`]; checks both shipped binaries
 //!   ([`SHIPPED_BINARIES`]) in `verify`, and
 //!   has no step that builds or signs ([`build_problems`]).
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
 //!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
-//!   the coordinator's image twice, compares the two and runs the image's entrypoint
-//!   ([`IMAGE_BUILD`], [`IMAGE_COMPARE`], [`IMAGE_RUN`]), and its `attest` job, under its exact
+//!   the coordinator's image twice, compares the two, checks that the image holds the operator
+//!   web app and runs the image's entrypoint ([`IMAGE_BUILD`], [`IMAGE_COMPARE`],
+//!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
 //!   [`PACKAGES`] for every platform of [`PLATFORMS`] and copies the bundle of each beside it
@@ -21,6 +23,7 @@
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
+use super::desired;
 use super::lint::{entries, entry, runs_on_pull_requests, triggers};
 use super::yaml::{self, Node, Value};
 
@@ -48,6 +51,10 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
     "builds and attests one commit and never tags or publishes; its own per-commit group",
 )];
 
+/// The jobs of release.yml, sorted: the release (`plan`, `verify`, `publish`) and hostkeeper's
+/// own deploy ([`desired::CHANNEL_JOB`], [`desired::JOB`]).
+pub const RELEASE_JOBS: [&str; 5] = ["channel", "plan", "publish", "set-desired", "verify"];
+
 /// The triggers release.yml may have.
 pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workflow_run"];
 
@@ -63,6 +70,10 @@ pub const IMAGE_BUILD: &str = "docker buildx build --builder image-";
 
 /// How the image job's check that the two builds are byte for byte equal starts.
 pub const IMAGE_COMPARE: &str = "cargo xtask release compare-images ";
+
+/// The image job's check that the image holds the operator web app (`ui/` of the commit).
+pub const IMAGE_UI_CHECK: &str =
+    "cargo xtask release check-image-ui \"$RUNNER_TEMP/image-a.tar\" ui";
 
 /// How the image job's run of the image through its entrypoint starts; it ends in `--version`
 /// compared with the coordinator's stamp.
@@ -266,9 +277,9 @@ fn release_problems(doc: &Node) -> Vec<String> {
         .filter_map(|(k, _)| k.as_str())
         .collect();
     jobs.sort_unstable();
-    if jobs != ["plan", "publish", "verify"] {
+    if jobs != RELEASE_JOBS {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify and publish"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, channel and set-desired"
         ));
     }
     for (name, condition, needs) in [
@@ -304,6 +315,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
         let name = name.as_str().unwrap_or_default();
         problems.extend(build_problems(name, Some(j)));
     }
+    problems.extend(desired::problems(doc));
     problems
 }
 
@@ -402,6 +414,11 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
         problems.push(format!(
             "artifacts.yml: job image must build the image twice (`{IMAGE_BUILD}...` with \
              `--no-cache`, two steps) and run `{IMAGE_COMPARE}`"
+        ));
+    }
+    if !image_runs.contains(&IMAGE_UI_CHECK) {
+        problems.push(format!(
+            "artifacts.yml: job image must check that the image holds the web app (`{IMAGE_UI_CHECK}`)"
         ));
     }
     let runs_image = image_runs.iter().any(|r| {

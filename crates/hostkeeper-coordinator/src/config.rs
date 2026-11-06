@@ -17,7 +17,9 @@
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
-//! files of that directory under `/ui/` (`crate::ui`). With `--release-channel` a set of the
+//! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
+//! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
+//! a directory ([`Serve::with_default_ui_dir`]). With `--release-channel` a set of the
 //! desired state is refused unless the release channel holds the version (`crate::channel`):
 //! the URL is checked at start (`https://` only), and the channel is fetched only by a set.
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
@@ -356,6 +358,12 @@ pub struct Serve {
     /// host posting its waiting request again is still answered.
     #[arg(long, requires = "enrollment_dir", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_pending_enrollments: Option<u64>,
+    /// How long an enrollment request waits for an operator before it expires: a whole number
+    /// and a unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second. An expired request
+    /// is no longer approved, and its host is listed unenrolled; the host's key posted again
+    /// waits anew. Requests are looked at every --tls-reload-secs.
+    #[arg(long, default_value = "72h", requires = "enrollment_dir", value_parser = request_ttl_secs)]
+    pub enrollment_request_ttl: u64,
     /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
     /// prefix, role and services of each: a TOML file of `[[mac]]` entries (`serial`,
     /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
@@ -365,7 +373,9 @@ pub struct Serve {
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
     /// The files need no token; the operator API they call does. It must be a directory at
-    /// start. Without it no file is served.
+    /// start. Without it, /usr/share/hostkeeper-coordinator/ui is served when it is a
+    /// directory (the container image holds the web app there), and otherwise no file is
+    /// served.
     #[arg(long)]
     pub ui_dir: Option<PathBuf>,
     /// How long after its start the coordinator orders nothing, in seconds, so that it hears
@@ -411,6 +421,26 @@ pub struct Serve {
     /// (`cert_near_expiry`), in seconds; 0 alerts only once it has expired.
     #[arg(long, default_value_t = DEFAULT_CERT_WINDOW_SECS)]
     pub alert_cert_window_secs: u64,
+}
+
+/// The directory the binary serves under `/ui/` when `--ui-dir` is absent and this path is a
+/// directory: where the coordinator's container image holds the operator web app
+/// (`packaging/container/Dockerfile`).
+pub const DEFAULT_UI_DIR: &str = "/usr/share/hostkeeper-coordinator/ui";
+
+impl Serve {
+    /// These flags with `--ui-dir` set to `default` when the flag is absent and `default` is a
+    /// directory (a symbolic link to one included). A `--ui-dir` that was given is kept as
+    /// given, a directory or not, so [`build`] still refuses one that is not. Anything else at
+    /// `default` (nothing, a file, a path that cannot be read) leaves the flag absent, and no
+    /// file is served.
+    #[must_use]
+    pub fn with_default_ui_dir(mut self, default: &Path) -> Self {
+        if self.ui_dir.is_none() && default.is_dir() {
+            self.ui_dir = Some(default.to_owned());
+        }
+        self
+    }
 }
 
 /// Where the listeners are bound.
@@ -597,6 +627,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 os_random(),
             )?
             .with_max_pending(max_pending)
+            .with_request_ttl(flags.enrollment_request_ttl)
             // The MDM gate is not built into this coordinator: no device is known to it.
             .with_mac(MacPolicy {
                 device_state: Arc::new(NoDeviceState),
@@ -662,6 +693,30 @@ pub(crate) fn refuse_unfinished_restore(state: &Path) -> Result<(), StartError> 
         return Err(StartError::RestoreUnfinished { path: marker });
     }
     Ok(())
+}
+
+/// `--enrollment-request-ttl` in seconds: digits, then one unit of `s`, `m`, `h` or `d`, and at
+/// least one second.
+fn request_ttl_secs(text: &str) -> Result<u64, String> {
+    let wrong = || format!("{text:?} is not a time like 90m or 72h: digits, then s, m, h or d");
+    let (digits, per) = [("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)]
+        .into_iter()
+        .find_map(|(unit, per)| text.strip_suffix(unit).map(|digits| (digits, per)))
+        .ok_or_else(wrong)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(wrong());
+    }
+    let secs = digits
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(per))
+        .ok_or_else(|| format!("{text:?} is more seconds than this coordinator counts"))?;
+    if secs == 0 {
+        return Err(format!(
+            "{text:?} is no time: a request waits at least one second"
+        ));
+    }
+    Ok(secs)
 }
 
 /// The lock of `path`, taken by `lock`.
@@ -806,16 +861,19 @@ where
     }
 }
 
-/// Builds the runtime and runs the coordinator on it until a signal.
+/// Builds the runtime and runs the coordinator on it until a signal, serving
+/// [`DEFAULT_UI_DIR`] when `--ui-dir` is absent and that path is a directory.
 fn runtime(flags: Serve) -> Result<(), StartError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+    let flags = flags.with_default_ui_dir(Path::new(DEFAULT_UI_DIR));
     runtime.block_on(start(flags, Roots::System, bind_tcp, signalled()))
 }
 
 /// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup or restore
-/// is exit 1; SIGTERM or SIGINT, a backup made and a restore done are exit 0.
+/// is exit 1; SIGTERM or SIGINT, a backup made and a restore done are exit 0. `serve` without
+/// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
 pub fn main(args: Vec<OsString>) -> ExitCode {
     let cli = match Cli::try_parse_from(args) {

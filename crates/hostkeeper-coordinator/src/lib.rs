@@ -62,7 +62,9 @@
 //! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
 //!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
 //!   operator API, and the router that tells them from the frozen JSON routes;
-//! - [`ui`]: the static files of `--ui-dir`, which the private surface serves under `/ui/`;
+//! - [`ui`]: the static files of `--ui-dir` (by default, for the binary,
+//!   [`config::DEFAULT_UI_DIR`] when it is a directory), which the private surface serves under
+//!   `/ui/`;
 //! - [`config`]: the flags and the start, under the [`lock`] of the state files, with CI's spent
 //!   token ids in the [`jti_file`] beside them.
 //! - [`backup`]: `backup` and `restore`, a copy of the state files and the enrollment store
@@ -188,6 +190,8 @@ mod halt_race_tests;
 mod holds_calls_tests;
 #[cfg(test)]
 mod holds_tests;
+#[cfg(test)]
+mod host_inventory_tests;
 #[cfg(test)]
 mod hosts_tests;
 #[cfg(test)]

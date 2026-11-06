@@ -62,6 +62,7 @@ fn record() -> op::InventoryRecord {
         notes: "rack 4, slot 2".to_owned(),
         added_by: "alice".to_owned(),
         added_unix: 1_800_000_000,
+        enrolled: true,
     }
 }
 
@@ -184,6 +185,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::ListPendingRequest {
                 limit: 10,
                 page_token: "p2".to_owned(),
+                unenrolled: true,
             }),
         ),
         (
@@ -202,6 +204,10 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                     record_host_id: "db-1".to_owned(),
                     record_role: "storage".to_owned(),
                     candidate_host_ids: vec!["db-1".to_owned(), "db-2".to_owned()],
+                    state: op::EnrollmentRequestState::Unenrolled.into(),
+                    unenrolled_reason: "request_expired".to_owned(),
+                    unenrolled_unix: 1_800_259_201,
+                    request_ttl_secs: 259_200,
                 }],
                 next_page_token: "p3".to_owned(),
             }),
@@ -260,6 +266,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::ListRecordsRequest {
                 limit: 10,
                 page_token: "db-1".to_owned(),
+                enrolled: Some(false),
             }),
         ),
         (
@@ -775,4 +782,91 @@ fn a_release_index_and_its_digest_are_kept_by_an_older_reader() {
     );
     let back = Force::decode(read.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(back, force);
+}
+
+/// Catches a host's inventory fields that a reader of the release before drops or cannot read
+/// past, or that move an older field: the baseline's `Host` knows none of
+/// `inventory_record_id`, `data_macs`, `bmc_mac`, `serial` and `enrolled_unix`, still reads
+/// the node id, role and liveness it knows, and writes the new fields back unchanged; a host of
+/// the release before reads with every new field empty (no record, not enrolled). The new
+/// fields of `InventoryRecord` (`enrolled`) and `ListRecordsRequest` (`enrolled`, absent apart
+/// from `false`) are on messages the baseline does not hold, which the round trip above keeps.
+#[test]
+fn an_older_reader_keeps_a_hosts_inventory_fields() {
+    let older = baseline_pool();
+    let host = op::Host {
+        node_id: "db-1".to_owned(),
+        role: "storage".to_owned(),
+        live: true,
+        last_heartbeat_unix: 1_800_000_100,
+        inventory_record_id: "db-1".to_owned(),
+        data_macs: vec![
+            "0c:c4:7a:00:00:02".to_owned(),
+            "0c:c4:7a:00:00:03".to_owned(),
+        ],
+        bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+        serial: "SN-1".to_owned(),
+        enrolled_unix: 1_800_000_000,
+        ..op::Host::default()
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.operator.v1.Host")
+        .expect("released");
+    for added in [
+        "inventory_record_id",
+        "data_macs",
+        "bmc_mac",
+        "serial",
+        "enrolled_unix",
+    ] {
+        assert!(message.get_field_by_name(added).is_none(), "{added}");
+    }
+    let read = DynamicMessage::decode(message, round_trip(&host).as_slice()).expect("decodes");
+    assert_eq!(
+        (
+            read.get_field_by_name("node_id").as_deref().cloned(),
+            read.get_field_by_name("live").as_deref().cloned(),
+            read.get_field_by_name("last_heartbeat_unix")
+                .as_deref()
+                .cloned(),
+        ),
+        (
+            Some(Value::String("db-1".to_owned())),
+            Some(Value::Bool(true)),
+            Some(Value::U64(1_800_000_100)),
+        )
+    );
+    let back = op::Host::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, host);
+
+    let before = op::Host {
+        inventory_record_id: String::new(),
+        data_macs: Vec::new(),
+        bmc_mac: String::new(),
+        serial: String::new(),
+        enrolled_unix: 0,
+        ..host.clone()
+    };
+    let mut written = DynamicMessage::new(
+        older
+            .get_message_by_name("hostkeeper.operator.v1.Host")
+            .expect("released"),
+    );
+    written.set_field_by_name("node_id", Value::String("db-1".to_owned()));
+    written.set_field_by_name("role", Value::String("storage".to_owned()));
+    written.set_field_by_name("live", Value::Bool(true));
+    written.set_field_by_name("last_heartbeat_unix", Value::U64(1_800_000_100));
+    let read = op::Host::decode(written.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(read, before);
+
+    let all = op::ListRecordsRequest::decode(
+        op::ListRecordsRequest::default().encode_to_vec().as_slice(),
+    )
+    .expect("decodes");
+    assert_eq!(all.enrolled, None, "an absent filter is not false");
+    let others = op::ListRecordsRequest {
+        enrolled: Some(false),
+        ..op::ListRecordsRequest::default()
+    };
+    assert!(!round_trip(&others).is_empty(), "false is written");
 }

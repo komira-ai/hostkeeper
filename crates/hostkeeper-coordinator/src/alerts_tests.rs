@@ -632,6 +632,7 @@ fn request(byte: &str, claims: Claims) -> RequestView {
         round: 0,
         host_id: None,
         mac_nonce_presented: false,
+        expiry: None,
     }
 }
 

@@ -1628,18 +1628,23 @@ dependencies = [
 name = "hostkeeper-privileged"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "hex",
+ "hostkeeper-config",
  "hostkeeper-daemon",
  "hostkeeper-enroll",
  "hostkeeper-hook",
  "hostkeeper-launchd",
+ "hostkeeper-link",
  "hostkeeper-observe",
+ "hostkeeper-placed",
  "hostkeeper-proto",
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "hostkeeper-unpack",
  "hyper-util",
  "rustix",
+ "serde_json",
  "sha2",
  "thiserror",
  "tokio",
@@ -1702,13 +1707,25 @@ name = "hostkeeper-ui-tests"
 version = "0.1.0"
 dependencies = [
  "boa_engine",
+ "bytes",
+ "clap",
+ "hostkeeper-coordinator",
+ "hostkeeper-oidc",
  "hostkeeper-proto",
+ "hostkeeper-testkit",
+ "http-body-util",
+ "hyper",
  "prost",
  "prost-reflect",
  "prost-types",
+ "rcgen",
+ "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]

@@ -1,5 +1,6 @@
 //! The jobs of this repository that call the CI client, `set-desired.yml`
-//! (docs/deploy/ci-client.md), and the rules of `hello-desired.yml`, the hello proof run.
+//! (docs/deploy/ci-client.md), and the rules of `hello-desired.yml`, the hello proof run. The
+//! rules of the other caller, hostkeeper's own deploy in `release.yml`, are [`super::desired`].
 //!
 //! A job that calls a reusable workflow has no `runs-on` and no steps, so the shared rules of
 //! [`super::lint`] refuse it, and grant `id-token: write` to no job of a caller. The one exception
@@ -17,6 +18,7 @@
 //!   or a job of it lacks the exact `if:` [`HELLO_IF`] (a dispatch from another branch runs
 //!   nothing).
 
+use super::desired;
 use super::lint::{entries, entry, triggers};
 use super::yaml::{Node, Value};
 
@@ -40,12 +42,20 @@ pub const HELLO_IF: &str = "${{ github.ref == 'refs/heads/main' }}";
 /// `/readyz` answers 503 (docs/hello.md, step 4).
 pub const HELLO_VARIANTS: [&str; 2] = ["hello", "fail-ready"];
 
-/// Every job of this repository that calls the CI client.
-pub const CALLERS: &[Caller] = &[Caller {
-    file: HELLO_FILE,
-    job: HELLO_JOB,
-    condition: HELLO_IF,
-}];
+/// Every job of this repository that calls the CI client: the hello proof run, and
+/// hostkeeper's own deploy in release.yml ([`desired`]).
+pub const CALLERS: &[Caller] = &[
+    Caller {
+        file: HELLO_FILE,
+        job: HELLO_JOB,
+        condition: HELLO_IF,
+    },
+    Caller {
+        file: desired::FILE,
+        job: desired::JOB,
+        condition: desired::SET_IF,
+    },
+];
 
 /// The caller entry of the job `job` of `file`, if it is one.
 pub fn caller(file: &str, job: &str) -> Option<&'static Caller> {

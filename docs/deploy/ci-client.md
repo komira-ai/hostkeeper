@@ -129,7 +129,7 @@ lint (`cargo test -p xtask --test workflows`, `callers.rs`) holds the callers to
 new caller needs a reviewed change to the lint. Change `job_workflow_ref` in the same change as
 the `uses:` pin, or the coordinator refuses the token (`unauthorized`).
 
-The entry for this repository's one caller today, `hello-desired.yml`, the hello proof run
+The entry for this repository's first caller, `hello-desired.yml`, the hello proof run
 ([docs/hello.md](../hello.md)):
 
 ```toml
@@ -156,9 +156,12 @@ services = ["hello"]
 | `event_names` | `workflow_dispatch` | `hello-desired.yml` runs by hand only. The default is `push` and `workflow_dispatch`; a `pull_request` event is refused in any entry. |
 | `services` | `hello` | What a token of the entry may set. |
 
-When `release.yml` sets hostkeeper's own desired version (it does not call the client yet), the
-same entry covers it with two changes: `event_names` adds `workflow_run` and `schedule`, the events
-`release.yml` runs on, and `services` adds `hostkeeper`:
+`release.yml` sets hostkeeper's own desired version through the client too, while the
+repository variable `RELEASE_SETS_DESIRED` is `true` ([Deploying hostkeeper from GitHub
+Actions](github-actions.md)). The same entry covers it with three changes: `job_workflow_ref` adds
+`set-desired.yml` at the commit `release.yml` pins (when it is not the one above), `event_names`
+adds `workflow_run` and `schedule`, the events `release.yml` runs on, and `services` adds
+`hostkeeper`:
 
 ```toml
 event_names = ["workflow_dispatch", "workflow_run", "schedule"]
