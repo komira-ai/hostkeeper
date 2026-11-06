@@ -6,7 +6,6 @@ mod support;
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::thread;
 
 use bytes::Bytes;
 use hostkeeper_config::names::ServiceName;
@@ -16,7 +15,7 @@ use hostkeeper_daemon::admin::{self, Peer, step_record, verdict_into};
 use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::halt::HaltStore;
 use hostkeeper_daemon::locks::Package;
-use hostkeeper_daemon::testing::Counted;
+use hostkeeper_daemon::testing::{Counted, spawn};
 use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Dirs};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -104,9 +103,11 @@ async fn status_reports_running_version_last_result_and_held_halt() {
     }
     let running = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("busy", "2.0.0", &d(), 1)))
+        spawn("the order", move || {
+            daemon.order(&update("busy", "2.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&running).expect("the held step is entered");
 
     let status = daemon.status().expect("status");
     assert_eq!(status.version, OWN);

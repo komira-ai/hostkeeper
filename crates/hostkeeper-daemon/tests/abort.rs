@@ -498,7 +498,9 @@ fn abort_takes_no_step_lock_and_touches_only_its_service() {
     let waits = lock_waits(&daemon.ctx().locks);
     let abort = abort_of(&daemon, "alpha");
     assert_eq!(
-        waits.wait(&abort).expect("the abort waits for alpha's order"),
+        waits
+            .wait(&abort)
+            .expect("the abort waits for alpha's order"),
         "alpha"
     );
     assert_eq!(rig.launcher.stops(), ["updater-alpha-prepare-1"]);

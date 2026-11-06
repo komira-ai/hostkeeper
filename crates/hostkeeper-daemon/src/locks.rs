@@ -185,7 +185,11 @@ impl ServiceLocks {
     /// [`ServiceLocks::wait_let_go`], in place of any hook set before: what a test watches for to
     /// know that an abort has asked its runner and waits for the order.
     pub fn on_wait(&self, hook: impl Fn(&ServiceName) + Send + Sync + 'static) {
-        let mut on_wait = self.on_wait.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut on_wait = self
+            .on_wait
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         *on_wait = Some(Arc::new(hook));
     }
 

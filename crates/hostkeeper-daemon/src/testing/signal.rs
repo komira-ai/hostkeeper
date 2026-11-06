@@ -40,12 +40,6 @@ pub struct Missed {
 /// The sending end of a [`Signal`]: what a fake, or a hook of the daemon, holds.
 pub struct Notice<T>(Sender<Heard<T>>);
 
-impl<T> Clone for Notice<T> {
-    fn clone(&self) -> Self {
-        Notice(self.0.clone())
-    }
-}
-
 impl<T> Notice<T> {
     /// Sends `value` to the test; nothing happens when the test no longer listens.
     pub fn send(&self, value: T) {

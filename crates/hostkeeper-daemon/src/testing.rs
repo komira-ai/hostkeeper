@@ -32,11 +32,11 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tonic::transport::server::Connected;
 
 use crate::locks::{ServiceGuard, ServiceLocks};
-use crate::watchers::Watchers;
 use crate::notify::ReadyNotifier;
 use crate::packages::{PackageError, Packages, VersionDir};
 use crate::prune::Prune;
 use crate::verb::PackageDigest;
+use crate::watchers::Watchers;
 
 pub use signal::{Ending, Missed, Notice, Party, Signal, Spawned, Tell, spawn};
 
@@ -668,17 +668,13 @@ pub fn watcher_stops(watchers: &Watchers) -> Signal<String> {
     signal
 }
 
-/// A party over once a watcher of `service` has ended: the party of a signal a watcher sends,
-/// such as a held `verify` entered. It takes the place of any `on_end` hook set on `watchers`
-/// before.
-pub fn watcher_ends(watchers: &Watchers, service: &str) -> Ending {
+/// A party over once a watcher has ended, saying whose: the party of a signal a watcher sends,
+/// such as a held `verify` entered, in a test whose watchers are of one service. It takes the
+/// place of any `on_end` hook set on `watchers` before.
+pub fn watcher_ends(watchers: &Watchers) -> Ending {
     let ending = Ending::default();
-    let (over, service) = (ending.clone(), service.to_owned());
-    watchers.on_end(move |ended| {
-        if ended.as_str() == service {
-            over.over(&format!("the watcher of {service} ended"));
-        }
-    });
+    let over = ending.clone();
+    watchers.on_end(move |service| over.over(&format!("the watcher of {service} ended")));
     ending
 }
 

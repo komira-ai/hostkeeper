@@ -5,12 +5,10 @@ mod support;
 
 use std::fs;
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::thread;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::packages::PackageError;
-use hostkeeper_daemon::testing::{FakeClock, manifest};
+use hostkeeper_daemon::testing::{FakeClock, manifest, spawn};
 use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE};
 use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply};
@@ -304,9 +302,11 @@ fn a_second_order_while_one_runs_is_busy() {
     let daemon = Arc::new(rig.daemon());
     let first = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("alpha", "2.0.0", &d(), 1)))
+        spawn("alpha's order", move || {
+            daemon.order(&update("alpha", "2.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&first).expect("alpha's prepare runs");
     let other = daemon.order(&update("alpha", "3.0.0", &d(), 2));
     assert_eq!(
         other,
@@ -315,19 +315,17 @@ fn a_second_order_while_one_runs_is_busy() {
             detail: "alpha is locked by an order to update it to 2.0.0".to_owned(),
         }
     );
-    let (events, seen) = mpsc::channel();
-    rig.store.notify(events.clone());
+    let asked = rig.store.notified();
     let second = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || {
-            let reply = daemon.order(&update("beta", "2.0.0", &d(), 1));
-            events
-                .send(format!("beta replied {reply:?}"))
-                .unwrap_or_default();
-            reply
+        spawn("beta's order", move || {
+            daemon.order(&update("beta", "2.0.0", &d(), 1))
         })
     };
-    assert_eq!(seen.recv().expect("an event"), "beta 2.0.0");
+    assert_eq!(
+        asked.wait(&second).expect("beta asks for its package"),
+        "beta 2.0.0"
+    );
     gate.release();
     assert_eq!(first.join().expect("the first order"), succeeded());
     assert_eq!(second.join().expect("the second order"), succeeded());
@@ -344,9 +342,11 @@ fn a_second_order_for_the_same_package_is_a_resend_not_a_second_run() {
     let daemon = Arc::new(rig.daemon());
     let first = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 1)))
+        spawn("the order", move || {
+            daemon.order(&update("web", "2.0.0", &d(), 1))
+        })
     };
-    gate.entered();
+    gate.entered(&first).expect("the prepare runs");
     assert_eq!(
         daemon.order(&update("web", "2.0.0", &d(), 1)),
         Reply::Running
@@ -654,12 +654,19 @@ fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
     ));
     let first = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("alpha", "2.0.0", &d(), 1)))
+        spawn("alpha's order", move || {
+            daemon.order(&update("alpha", "2.0.0", &d(), 1))
+        })
     };
-    gate.entered();
-    // Past the bound of `prepare` (600 seconds): the dead-man tries to stop the step.
+    gate.entered(&first).expect("alpha's prepare runs");
+    // Past the bound of `prepare` (600 seconds): the dead-man tries to stop the step. It ticks,
+    // then sleeps on the clock: by its second sleep from here, one whole tick has looked past it.
     clock.advance(601);
-    assert_eq!(stops.recv().expect("a stop"), "updater-alpha-prepare-1");
+    let ticked = clock.sleeps(2);
+    assert_eq!(
+        stops.wait(&ticked).expect("the dead-man's stop"),
+        "updater-alpha-prepare-1"
+    );
     gate.release();
     let reply = first.join().expect("the order");
     assert_eq!(reply.refusal(), Some(Refusal::Unstopped), "{reply:?}");
@@ -692,21 +699,22 @@ fn lock_order_is_service_then_step() {
     let alpha_gate = rig.launcher.hold("alpha", Step::Verify);
     let beta_gate = rig.launcher.hold("beta", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
-    let order = |service: &'static str| {
+    let order = |service: &'static str, what: &'static str| {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update(service, "2.0.0", &d(), 1)))
+        spawn(what, move || {
+            daemon.order(&update(service, "2.0.0", &d(), 1))
+        })
     };
-    let alpha = order("alpha");
-    alpha_gate.entered();
-    let (events, seen) = mpsc::channel();
-    rig.store.notify(events);
-    let beta = order("beta");
+    let alpha = order("alpha", "alpha's order");
+    alpha_gate.entered(&alpha).expect("alpha's verify runs");
+    let asked = rig.store.notified();
+    let beta = order("beta", "beta's order");
     assert_eq!(
-        seen.recv().expect("beta asks for its package"),
+        asked.wait(&beta).expect("beta asks for its package"),
         "beta 2.0.0"
     );
     alpha_gate.release();
-    beta_gate.entered();
+    beta_gate.entered(&beta).expect("beta's prepare runs");
     let services: Vec<String> = rig
         .launcher
         .runs()

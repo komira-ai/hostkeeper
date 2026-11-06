@@ -4,11 +4,14 @@
 
 mod support;
 
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::thread;
 
-use hostkeeper_daemon::boot::Outcome;
-use hostkeeper_daemon::testing::FakeClock;
+use hostkeeper_daemon::boot::{BootReport, Outcome};
+use hostkeeper_daemon::testing::{
+    Ending, FakeClock, Missed, Signal, spawn, watcher_ends, watcher_stops,
+};
 use hostkeeper_daemon::watchers::STOPPED;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -37,6 +40,17 @@ fn watched(rig: &Rig) {
     let rec = rig.record("web").expect("a record");
     assert!(rec.progress.watching.is_some());
     assert_eq!(rig.launcher.steps("web").len(), 4);
+}
+
+/// What [`Rig::booted`] makes, and the party of the watcher of `web`: over once that watcher ends.
+/// It is set before the start pass, since only ends after it is set are seen.
+fn booted_watched(rig: &Rig) -> (Daemon, BootReport, Ending) {
+    fs::create_dir_all(&rig.state).expect("the state dir");
+    fs::set_permissions(&rig.state, fs::Permissions::from_mode(0o700)).expect("its mode");
+    let daemon = rig.daemon();
+    let ends = watcher_ends(&daemon.ctx().watchers);
+    let report = daemon.boot_pass().expect("the start pass");
+    (daemon, report, ends)
 }
 
 fn after_commit() -> Finished {
@@ -69,14 +83,30 @@ fn the_watcher_never_runs_rollback() {
             report.services["web"].action,
             Some(ResumeAction::WatcherRestart)
         );
-        // The watcher ends by itself; the daemon then ends with it still registered.
-        while daemon.ctx().watchers.running(&name("web")) {
-            thread::yield_now();
-        }
+        // The watcher ends by itself; joining it waits for nothing the test holds.
+        let _ended = daemon.ctx().watchers.wait(&name("web")).expect("a watcher");
         drop(daemon);
         assert_eq!(later_steps(&rig), [Step::Verify]);
         assert_eq!(rig.verdict("web"), Some(want), "exit {code}");
     }
+}
+
+/// Catches a watcher's end that a wait cannot see: once the restarted watcher has ended by
+/// itself, a wait that names the watcher's party fails at once, saying whose watcher ended.
+#[test]
+fn a_wait_on_a_watcher_that_has_ended_fails_naming_it() {
+    let rig = Rig::new("watch-ends");
+    watched(&rig);
+    rig.launcher.exits("web", Step::Verify, &[1]);
+    let (daemon, report, ends) = booted_watched(&rig);
+    assert_eq!(report.services["web"].outcome, Outcome::Watching);
+    let ended = daemon.ctx().watchers.wait(&name("web")).expect("a watcher");
+    assert_eq!(ended.expect("a verdict"), after_commit());
+    let (_notice, signal) = Signal::<()>::new();
+    let missed = Missed {
+        over: "the watcher of web ended".to_owned(),
+    };
+    assert_eq!(signal.wait(&ends), Err(missed));
 }
 
 /// Catches a watcher whose ceiling never runs out after a reboot, or that rolls back: the clock
@@ -130,22 +160,28 @@ fn a_new_order_stops_the_watcher_and_only_one_watcher_runs_per_service() {
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE)]);
     let gate = rig.launcher.hold("web", Step::Verify);
-    let (daemon, _) = rig.booted();
-    gate.entered();
+    let (daemon, _, ends) = booted_watched(&rig);
+    // Dropped before the daemon, which joins the watcher the gate holds, if the test fails here.
+    let gate = gate;
+    gate.entered(&ends).expect("the watcher's verify runs");
     let web = name("web");
     assert!(daemon.ctx().watchers.running(&web));
     let again = daemon.boot_pass().expect("a second start pass");
     assert_eq!(again.services["web"].outcome, Outcome::Watching);
     assert_eq!(later_steps(&rig), [Step::Verify]);
     let daemon = Arc::new(daemon);
+    let stops = watcher_stops(&daemon.ctx().watchers);
     let order = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "3.0.0", &d(), 2)))
+        spawn("the order", move || {
+            daemon.order(&update("web", "3.0.0", &d(), 2))
+        })
     };
     // The order has told the watcher to stop and waits for it.
-    while daemon.ctx().watchers.running(&web) {
-        thread::yield_now();
-    }
+    assert_eq!(
+        stops.wait(&order).expect("the watcher is told to stop"),
+        "web"
+    );
     gate.release();
     let reply = order.join().expect("the order");
     assert_eq!(
@@ -178,17 +214,21 @@ fn a_watcher_stopped_while_it_waits_runs_nothing_more() {
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE); 3]);
     let gate = rig.launcher.hold("web", Step::Verify);
-    let (daemon, report) = rig.booted();
+    let (daemon, report, ends) = booted_watched(&rig);
+    // Dropped before the daemon, which joins the watcher the gate holds, if the test fails here.
+    let gate = gate;
     assert_eq!(report.services["web"].outcome, Outcome::Watching);
-    gate.entered();
+    gate.entered(&ends).expect("the watcher's verify runs");
     let daemon = Arc::new(daemon);
+    let stops = watcher_stops(&daemon.ctx().watchers);
     let stopping = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.ctx().watchers.stop(&name("web")))
+        spawn("the stop", move || daemon.ctx().watchers.stop(&name("web")))
     };
-    while daemon.ctx().watchers.running(&name("web")) {
-        thread::yield_now();
-    }
+    assert_eq!(
+        stops.wait(&stopping).expect("the watcher is told to stop"),
+        "web"
+    );
     gate.release();
     let ended = stopping.join().expect("the stop").expect("a watcher");
     let Err(RunError::Launch(LaunchError::Launcher(why))) = ended else {
@@ -256,12 +296,6 @@ fn alert(kind: &str, why: &str) -> String {
     format!("hostkeeper daemon: level=error alert={kind} service=web: {why}")
 }
 
-fn wait_until_ended(daemon: &Daemon) {
-    while daemon.ctx().watchers.running(&name("web")) {
-        thread::yield_now();
-    }
-}
-
 /// Catches a watcher whose `verify` the dead-man cannot stop being forgotten: the service is
 /// locked for good, the status says why, an order of it is `busy`, and the alert names the unit.
 #[test]
@@ -281,15 +315,24 @@ fn a_watcher_that_cannot_stop_its_verify_locks_the_service_and_alerts() {
         ports,
         support::OWN,
     ));
+    // Dropped before the daemon, which joins the watcher the gate holds, if the test fails here.
+    let gate = gate;
+    let ends = watcher_ends(&daemon.ctx().watchers);
     let report = daemon.boot_pass().expect("the start pass");
     assert_eq!(report.services["web"].outcome, Outcome::Watching);
-    gate.entered();
-    // Past the bound of `verify` (1000 seconds): the dead-man tries to stop it, and fails.
+    gate.entered(&ends).expect("the watcher's verify runs");
+    // Past the bound of `verify` (1000 seconds): the dead-man tries to stop it, and fails. It
+    // ticks, then sleeps on the clock: by its second sleep from here, one whole tick has looked
+    // past the bound.
     clock.advance(1001);
-    assert_eq!(stops.recv().expect("a stop"), "updater-web-verify-1");
+    let ticked = clock.sleeps(2);
+    assert_eq!(
+        stops.wait(&ticked).expect("the dead-man's stop"),
+        "updater-web-verify-1"
+    );
     gate.release();
-    wait_until_ended(&daemon);
     let web = name("web");
+    let _ended = daemon.ctx().watchers.wait(&web).expect("a watcher");
     assert!(daemon.ctx().locks.holder(&web).expect("held").stuck);
     let status = daemon.status().expect("the status");
     assert!(status.services[0].stuck);
@@ -355,16 +398,20 @@ fn a_watcher_stopped_in_its_wait_ends_at_once() {
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE); 3]);
     let wait = rig.clock.park_next_sleep();
-    let (daemon, _) = rig.booted();
-    wait.entered();
+    let (daemon, _, ends) = booted_watched(&rig);
+    wait.entered(&ends).expect("the watcher's wait begins");
     let daemon = Arc::new(daemon);
+    // Dropped before the daemon, which joins the watcher the gate holds, if the test fails here.
+    let wait = wait;
+    let stops = watcher_stops(&daemon.ctx().watchers);
     let stopping = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.ctx().watchers.stop(&name("web")))
+        spawn("the stop", move || daemon.ctx().watchers.stop(&name("web")))
     };
-    while daemon.ctx().watchers.running(&name("web")) {
-        thread::yield_now();
-    }
+    assert_eq!(
+        stops.wait(&stopping).expect("the watcher is told to stop"),
+        "web"
+    );
     wait.release();
     let ended = stopping.join().expect("the stop").expect("a watcher");
     let Err(RunError::Launch(LaunchError::Launcher(why))) = ended else {
@@ -386,10 +433,13 @@ fn the_daemon_ends_its_watchers_when_it_ends() {
             .replies("web", Step::Verify, &[(0, PENDING_LINE); 10]);
         let gate = in_verify.then(|| rig.launcher.hold("web", Step::Verify));
         let wait = (!in_verify).then(|| rig.clock.park_next_sleep());
-        let (daemon, _) = rig.booted();
-        gate.iter().for_each(|gate| gate.entered());
-        wait.iter().for_each(|wait| wait.entered());
-        let ending = thread::spawn(move || drop(daemon));
+        let (daemon, _, ends) = booted_watched(&rig);
+        // Dropped before the daemon, which joins the watcher the gate holds, if the test fails here.
+        let (gate, wait) = (gate, wait);
+        for held in gate.iter().chain(wait.iter()) {
+            held.entered(&ends).expect("the watcher is held");
+        }
+        let ending = spawn("the daemon's end", move || drop(daemon));
         gate.iter().for_each(|gate| gate.release());
         wait.iter().for_each(|wait| wait.release());
         ending.join().expect("the daemon ends");
@@ -406,15 +456,21 @@ fn a_watcher_runs_while_another_service_holds_a_long_step() {
     rig.add("beta", "2.0.0");
     rig.launcher.exits("web", Step::Verify, &[1]);
     let watcher_verify = rig.launcher.hold("web", Step::Verify);
-    let (daemon, _) = rig.booted();
-    watcher_verify.entered();
+    let (daemon, _, ends) = booted_watched(&rig);
+    watcher_verify
+        .entered(&ends)
+        .expect("the watcher's verify runs");
     let daemon = Arc::new(daemon);
+    // Dropped before the daemon, which joins the watcher the gate holds, if the test fails here.
+    let watcher_verify = watcher_verify;
     let beta_prepare = rig.launcher.hold("beta", Step::Prepare);
     let beta = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("beta", "2.0.0", &d(), 1)))
+        spawn("beta's order", move || {
+            daemon.order(&update("beta", "2.0.0", &d(), 1))
+        })
     };
-    beta_prepare.entered();
+    beta_prepare.entered(&beta).expect("beta's prepare runs");
     watcher_verify.release();
     let ended = daemon.ctx().watchers.wait(&name("web")).expect("a watcher");
     assert_eq!(ended.expect("a verdict"), after_commit());
