@@ -6,9 +6,11 @@
 //! - beside `--state-file`: the state file itself, the spent ids of CI's tokens (`.jti`) and the
 //!   verdicts (`.verdicts`);
 //! - beside the ops file (`--ops-file`, by default the state file's name with `.ops` added): the
-//!   ops file itself, the audit file (`.audit`), the halts file (`.halts`), a halts file staged
-//!   by a change that had not finished (`.halts.next`, which the next start settles) and the
-//!   marker of a halt that was being written (`.halts.unfinished`, which refuses a start);
+//!   ops file itself, the audit file (`.audit`) and each of its sealed segments (`.audit.<n>`,
+//!   named `ops-audit.<n>` in a snapshot, with the number it has), the halts file (`.halts`), a
+//!   halts file staged by a change that had not finished (`.halts.next`, which the next start
+//!   settles) and the marker of a halt that was being written (`.halts.unfinished`, which
+//!   refuses a start);
 //! - with `--enrollment-dir`, every file of the enrollment store: each file ending `.pb` in that
 //!   directory and in the directories under it. Anything else there (the store's `lock`, a
 //!   `.tmp` file a crash left, a CA key or a server certificate kept in the same directory) is
@@ -29,14 +31,15 @@
 //! [`restore`] reads the manifest and every file of the snapshot, and refuses a snapshot whose
 //! manifest names a file it does not hold, holds a file the manifest does not name, or holds a
 //! file whose size or SHA-256 is not the manifest's, before it writes anything. It then takes the
-//! same lock, refuses targets that hold state (any of the files above, or an enrollment directory
-//! that is not empty), and writes each file through `<file>.restoring`, linked into place with a
+//! same lock, refuses targets that hold state (any of the files above, a sealed segment of the
+//! audit file among them, or an enrollment directory that is not empty), and writes each file through `<file>.restoring`, linked into place with a
 //! hard link, which refuses a name that is already there: no file is ever written over. Before
 //! its first file it writes `<state-file>.restore-unfinished`, and it removes it after its last,
 //! so `serve` refuses to start on a restore that stopped partway (killed, or the machine lost).
 //! A write that fails removes what the restore had written, so the targets hold no state again.
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write as _};
@@ -86,6 +89,9 @@ pub fn restore_marker(state: &Path) -> PathBuf {
 /// The name in a snapshot of the marker of a halt that was being written.
 const UNFINISHED: &str = "ops-halts-unfinished";
 
+/// The name in a snapshot of the audit file; its sealed segment `n` is `ops-audit.<n>`.
+const AUDIT: &str = "ops-audit";
+
 /// Where the coordinator's state is: the flags `serve` names it by.
 #[derive(Clone, Debug, Args)]
 pub struct StatePaths {
@@ -122,11 +128,30 @@ impl StatePaths {
             ("state-jti", jti_path(state)),
             ("state-verdicts", verdicts_path(state)),
             ("ops", ops.clone()),
-            ("ops-audit", audit_file::path_of(&ops)),
+            (AUDIT, audit_file::path_of(&ops)),
             ("ops-halts", halts_path(&ops)),
             ("ops-halts-next", staged_path(&ops)),
             (UNFINISHED, unfinished_path(&ops)),
         ]
+    }
+
+    /// Each sealed segment of the audit file, oldest first, with its name in a snapshot
+    /// (`ops-audit.<n>`, `n` its number): the segments `serve` reads, listed as it lists them.
+    fn segments(&self) -> Result<Vec<(String, PathBuf)>, BackupError> {
+        let audit = audit_file::path_of(&self.ops_file());
+        let listed = audit_file::segments(&audit).map_err(io_at(parent_of(&audit)))?;
+        Ok(listed
+            .into_iter()
+            .map(|(number, path)| (format!("{AUDIT}.{number}"), path))
+            .collect())
+    }
+
+    /// Where the file named `name` in a snapshot goes when it is a sealed segment of the audit
+    /// file: the segment of the same number beside the audit file.
+    fn segment_target(&self, name: &str) -> Option<PathBuf> {
+        let number = audit_file::segment_number(OsStr::new(AUDIT), OsStr::new(name))?;
+        let audit = audit_file::path_of(&self.ops_file());
+        Some(audit_file::segment_path(&audit, number))
     }
 }
 
@@ -368,6 +393,7 @@ pub fn backup(flags: &Backup, lock: &dyn StateLock) -> Result<Report, BackupErro
             absent.push(path);
         }
     }
+    sources.extend(flags.paths.segments()?);
     if sources.is_empty() {
         return Err(BackupError::NothingThere {
             path: flags.paths.state_file.clone(),
@@ -624,8 +650,12 @@ fn targets_of(paths: &StatePaths, manifest: &Manifest) -> Result<Vec<PathBuf>, B
         let named = || BackupError::Name {
             name: entry.name.clone(),
         };
-        let target = match beside.iter().find(|(name, _)| *name == entry.name) {
-            Some((_, path)) => path.clone(),
+        let found = beside.iter().find(|(name, _)| *name == entry.name);
+        let target = match found
+            .map(|(_, path)| path.clone())
+            .or_else(|| paths.segment_target(&entry.name))
+        {
+            Some(path) => path,
             None => {
                 let inner = entry
                     .name
@@ -720,14 +750,17 @@ fn read_no_follow(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Refuses targets that hold state: a file beside the state file or the ops file, or an
-/// enrollment directory with anything in it.
+/// Refuses targets that hold state: a file beside the state file or the ops file, a sealed
+/// segment of the audit file, or an enrollment directory with anything in it.
 fn refuse_state(paths: &StatePaths) -> Result<(), BackupError> {
     let marker = ("restore marker", restore_marker(&paths.state_file));
     for (_, path) in paths.beside().into_iter().chain([marker]) {
         if there(&path)? {
             return Err(BackupError::NotEmpty { path });
         }
+    }
+    if let Some((_, path)) = paths.segments()?.into_iter().next() {
+        return Err(BackupError::NotEmpty { path });
     }
     if let Some(dir) = paths.enrollment_dir.as_ref().filter(|dir| dir.exists())
         && let Some((_, inside)) = listed(dir)?.into_iter().next()
