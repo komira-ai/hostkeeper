@@ -87,7 +87,7 @@ impl InventoryRecord {
 
     /// Whether the record matches a request that claims `claims`: by serial for a Mac (the
     /// claimed Mac serial, letters compared without case); otherwise by one of its data MACs
-    /// among the claimed addresses, with no claimed BMC MAC other than its own.
+    /// among the claimed addresses, with no claimed BMC MAC other than its own (a record with no BMC MAC accepts any).
     fn matches(&self, claims: &Claims) -> bool {
         if !claims.mac_serial.is_empty() {
             return !self.serial.is_empty() && self.serial.eq_ignore_ascii_case(&claims.mac_serial);
@@ -97,9 +97,11 @@ impl InventoryRecord {
             .data_macs
             .iter()
             .any(|mac| claimed.iter().any(|claim| claim.to_string() == *mac));
-        let bmc_agrees = claims
-            .bmc()
-            .is_none_or(|bmc| bmc.to_string() == self.bmc_mac);
+        // A field the record leaves out does not constrain the match.
+        let bmc_agrees = self.bmc_mac.is_empty()
+            || claims
+                .bmc()
+                .is_none_or(|bmc| bmc.to_string() == self.bmc_mac);
         shares_data_mac && bmc_agrees
     }
 
