@@ -23,7 +23,15 @@
 //!   attested `sourceRepositoryDigest` with `env.HOSTKEEPER_COMMIT`, that same input;
 //! - the client step does not run [`CLIENT_COMMAND`], or does not pass [`MAX_POLLS_FLAG`] exactly
 //!   once, or its `MAX_POLLS` is not [`MAX_POLLS_INPUT`]; or any step's script has a loop
-//!   (`while`, `until` or `for`): the one bounded loop is the client's, in Rust.
+//!   (`while`, `until` or `for`): the one bounded loop is the client's, in Rust;
+//! - it has no input [`JOIN_INPUT`] of `type: boolean` with `default: false`; or the join step
+//!   [`JOIN_STEP`] is missing or there twice, its `if:` is not [`JOIN_IF`], it has
+//!   `continue-on-error`, it comes before a check of [`VERIFY_STEPS`] or after [`CLIENT_STEP`],
+//!   its `uses:` is not [`JOIN_ACTION`] at a 40-digit lowercase commit SHA, it names `secrets.`
+//!   anywhere or passes a stored credential ([`STORED_CREDENTIALS`]), its `with:` does not give
+//!   each of [`JOIN_WITH`] exactly, or it does not pin the Tailscale tarball by an `X.Y.Z`
+//!   `version` and a 64-digit lowercase `sha256sum`; or a step after the last provenance check
+//!   and before the join uses an action: the join is the first action of the job.
 //!
 //! Commands are read as text, line by line (a line ending in `\` continues on the next), and are
 //! never run.
@@ -84,6 +92,27 @@ pub const COMMIT_INPUT: &str = "${{ inputs.hostkeeper_commit }}";
 pub const MAX_POLLS_INPUT: &str = "${{ inputs.max_polls }}";
 /// The flag that bounds the client's convergence reads, with its value.
 pub const MAX_POLLS_FLAG: (&str, &str) = ("--max-polls", "$MAX_POLLS");
+/// The input that turns the join step on; off unless the caller sets it.
+pub const JOIN_INPUT: &str = "join_tailnet";
+/// The step that joins the runner to the tailnet, the one action of the job.
+pub const JOIN_STEP: &str = "tailnet";
+/// The join step's `if:`, exactly: it runs only when the caller turns it on.
+pub const JOIN_IF: &str = "${{ inputs.join_tailnet }}";
+/// The action the join step uses, pinned to a commit.
+pub const JOIN_ACTION: &str = "tailscale/github-action";
+/// What the join step's `with:` must give, exactly: the federated identity (from the caller's
+/// inputs; neither is a secret), the one tag the tailnet's ACL lets reach the coordinator, and
+/// the coordinator the join pings before it ends (from the caller's input), so the client's
+/// first call does not race the tailnet's spread of the new node.
+pub const JOIN_WITH: [(&str, &str); 4] = [
+    ("oauth-client-id", "${{ inputs.tailnet_client_id }}"),
+    ("audience", "${{ inputs.tailnet_audience }}"),
+    ("tags", "tag:hk-ci"),
+    ("ping", "${{ inputs.tailnet_coordinator }}"),
+];
+/// The action's inputs that take a stored credential; the join authenticates with an OIDC token
+/// instead, so it passes none of them.
+pub const STORED_CREDENTIALS: [&str; 2] = ["authkey", "oauth-secret"];
 
 /// The text of a scalar entry of `map`, if there is one.
 fn text<'a>(map: &'a Node, key: &str) -> Option<&'a str> {
@@ -156,11 +185,18 @@ pub fn problems(doc: &Node) -> Vec<String> {
     if call.and_then(|c| entry(c, "secrets")).is_some() {
         problems.push("`workflow_call` declares secrets".to_owned());
     }
-    let max_polls = call
-        .and_then(|c| entry(c, "inputs"))
-        .and_then(|i| entry(i, "max_polls"));
+    let inputs = call.and_then(|c| entry(c, "inputs"));
+    let max_polls = inputs.and_then(|i| entry(i, "max_polls"));
     if max_polls.and_then(|m| text(m, "type")) != Some("number") {
         problems.push("no input `max_polls` of `type: number`".to_owned());
+    }
+    let join = inputs.and_then(|i| entry(i, JOIN_INPUT));
+    if join.and_then(|j| text(j, "type")) != Some("boolean")
+        || join.and_then(|j| text(j, "default")) != Some("false")
+    {
+        problems.push(format!(
+            "no input `{JOIN_INPUT}` of `type: boolean` with `default: false`"
+        ));
     }
     let jobs = entry(doc, "jobs").map_or(&[][..], entries);
     let job = match jobs {
@@ -283,6 +319,10 @@ fn step_problems(steps: &[Node]) -> Vec<String> {
     if let Some(i) = index(CLIENT_STEP) {
         problems.extend(client_problems(&steps[i]));
     }
+    match position(steps, JOIN_STEP) {
+        Ok(join) => problems.extend(join_problems(steps, join, proven, &index)),
+        Err(e) => problems.push(e),
+    }
     for (i, step) in steps.iter().enumerate() {
         let lines = logical_lines(text(step, "run").unwrap_or_default());
         for word in ["while", "until", "for"] {
@@ -324,6 +364,95 @@ fn early_problems(who: &str, step: &Node) -> Vec<String> {
         ));
     }
     problems
+}
+
+/// What is wrong with the join step at index `join`: where it runs, what it uses and what it
+/// passes; and an action used between the last provenance check `proven` and it.
+fn join_problems(
+    steps: &[Node],
+    join: usize,
+    proven: Option<usize>,
+    index: &dyn Fn(&str) -> Option<usize>,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let step = &steps[join];
+    let who = format!("the join step `{JOIN_STEP}` (step {})", join + 1);
+    if text(step, "if") != Some(JOIN_IF) {
+        problems.push(format!("{who} does not have `if: {JOIN_IF}`"));
+    }
+    if entry(step, "continue-on-error").is_some() {
+        problems.push(format!(
+            "{who} has `continue-on-error`, which could run the job on past it"
+        ));
+    }
+    for id in VERIFY_STEPS {
+        if let Some(v) = index(id).filter(|&v| v > join) {
+            problems.push(format!(
+                "{who} comes before the verification step `{id}` (step {})",
+                v + 1
+            ));
+        }
+    }
+    if let Some(c) = index(CLIENT_STEP).filter(|&c| c < join) {
+        problems.push(format!(
+            "{who} comes after the OIDC token step `{CLIENT_STEP}` (step {})",
+            c + 1
+        ));
+    }
+    let start = proven.map_or(0, |p| p + 1);
+    for (i, early) in steps.iter().enumerate().take(join).skip(start) {
+        if entry(early, "uses").is_some() {
+            problems.push(format!(
+                "{} comes before the join step and uses an action",
+                label(i, early)
+            ));
+        }
+    }
+    let pinned = text(step, "uses")
+        .and_then(|u| u.strip_prefix(JOIN_ACTION))
+        .and_then(|u| u.strip_prefix('@'))
+        .is_some_and(|sha| is_lower_hex(sha, 40));
+    if !pinned {
+        problems.push(format!(
+            "{who} does not use `{JOIN_ACTION}` pinned to a 40-digit lowercase commit SHA"
+        ));
+    }
+    let mut values = Vec::new();
+    scalars(step, &mut values);
+    if values.iter().any(|v| v.contains("secrets.")) {
+        problems.push(format!("{who} names `secrets.`"));
+    }
+    let with = entry(step, "with");
+    let given = |key: &str| with.and_then(|w| text(w, key));
+    for key in STORED_CREDENTIALS {
+        if with.and_then(|w| entry(w, key)).is_some() {
+            problems.push(format!("{who} passes `{key}`, a stored credential"));
+        }
+    }
+    for (key, want) in JOIN_WITH {
+        if given(key) != Some(want) {
+            problems.push(format!("{who} does not pass `{key}: {want}`"));
+        }
+    }
+    let version = given("version").is_some_and(|v| {
+        let parts: Vec<&str> = v.split('.').collect();
+        parts.len() == 3
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    });
+    let sha256 = given("sha256sum").is_some_and(|v| is_lower_hex(v, 64));
+    if !(version && sha256) {
+        problems.push(format!(
+            "{who} does not pin the Tailscale tarball by an `X.Y.Z` `version` and a 64-digit lowercase `sha256sum`"
+        ));
+    }
+    problems
+}
+
+/// Whether `s` is `len` lowercase hex digits.
+fn is_lower_hex(s: &str, len: usize) -> bool {
+    s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// What is wrong with how the attestation step pins the signer and the source.
