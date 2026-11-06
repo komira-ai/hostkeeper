@@ -107,8 +107,9 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   device run of the daemon under launchd after each merge; no update has run through it on a
   device).
 - **Release.** Partly built: B14 (the release workflows and the release verbs of `xtask`; no
-  release is published). Planned: B12 (the privileged workflow with real systemd). Built: B15
-  (the privileged end-to-end proof, `crates/hostkeeper-privileged/tests/tierstore_shaped.rs`).
+  release is published). Built: B12 (the privileged workflow with real systemd,
+  `privileged.yml`), B15 (the privileged end-to-end proof,
+  `crates/hostkeeper-privileged/tests/tierstore_shaped.rs`).
 - **Clean-up.** Built: B19 (the wall-clock lint). B26 (the removal of the old per-service crate
   and its vocabulary) is this change.
 
