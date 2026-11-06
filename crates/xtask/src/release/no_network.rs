@@ -32,8 +32,16 @@ const COMMAND: &str = concat!("Command::", "new");
 const CFG_TEST: &str = concat!("#[cfg(", "test)]");
 
 /// The test files that start a process on purpose, and why.
-const PROCESS_TESTS: [(&str, &str); 6] = [
+const PROCESS_TESTS: [(&str, &str); 8] = [
     ("tests/cli.rs", "runs the xtask binary as a process"),
+    (
+        "tests/workflows/channel_run_tests.rs",
+        "runs the committed steps of release.yml's channel job with bash, with a fake gh and curl",
+    ),
+    (
+        "tests/bin/gh_fixture.rs",
+        "the fake gh runs jq over its scratch release list, as gh --jq does",
+    ),
     (
         "tests/channel_sync.rs",
         "runs the committed unit's and sidecar's channel-sync commands with a fake gh",

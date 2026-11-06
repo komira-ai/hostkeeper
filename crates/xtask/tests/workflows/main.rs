@@ -7,12 +7,17 @@
 mod advisories;
 mod callers;
 mod callers_tests;
+mod channel_run_tests;
+mod desired;
+mod desired_tests;
 mod lint;
 mod privileged_tests;
 mod release;
 mod release_tests;
 mod set_desired;
 mod set_desired_tests;
+#[path = "../../src/testdir.rs"]
+mod testdir;
 mod verify_doc;
 mod verify_doc_tests;
 mod yaml;
