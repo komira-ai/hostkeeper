@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use hostkeeper_wire::Platform;
-use hostkeeper_wire::wire::{ServiceBeat, ServiceReply};
+use hostkeeper_wire::wire::ServiceReply;
 
 use super::Coordinator;
 use crate::acks::release_ack;
@@ -15,7 +15,7 @@ use crate::fleet::Fleet;
 use crate::halt;
 use crate::identity::Identity;
 use crate::order_terms::{self, Terms};
-use crate::orders::{Order, install_order_id, next_try};
+use crate::orders::{Order, install_order_id};
 
 /// What the gate's order for one heartbeat is decided from.
 pub(super) struct Asked<'a> {
@@ -25,8 +25,6 @@ pub(super) struct Asked<'a> {
     pub(super) platform: Platform,
     /// The legacy service the heartbeat's top level speaks for, if any.
     pub(super) legacy: Option<&'a str>,
-    /// The services the heartbeat lists.
-    pub(super) announced: &'a [ServiceBeat],
     /// The services a halt the heartbeat raised holds: nothing is ordered of them.
     pub(super) held: &'a [String],
     /// Whether the agent reads order terms (`order-v1`): it is ordered only a version with a
@@ -74,7 +72,7 @@ impl Coordinator {
                             &digests,
                             name,
                             &version,
-                            asked.announced,
+                            fleet.next_try(name, id),
                             id,
                             asked.platform,
                         )
@@ -99,11 +97,7 @@ impl Coordinator {
                         continue;
                     }
                     let order_id = install_order_id(&digest);
-                    let order_try = next_try(
-                        fleet
-                            .get_in(name, id)
-                            .and_then(|h| h.beat.last_update.as_ref()),
-                    );
+                    let order_try = fleet.next_try(name, id);
                     fleet.order(name, id.clone(), version.clone(), now);
                     Order::Install {
                         service: name.to_owned(),
@@ -115,11 +109,7 @@ impl Coordinator {
                     }
                 }
                 Decision::Uninstall { order_id, running } if asked.orders => {
-                    let order_try = next_try(
-                        fleet
-                            .occupant(name, id)
-                            .and_then(|h| h.beat.last_update.as_ref()),
-                    );
+                    let order_try = fleet.next_try(name, id);
                     fleet.order_uninstall(name, id.clone(), running, order_id.clone(), now);
                     Order::Uninstall {
                         service: name.to_owned(),

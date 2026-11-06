@@ -4,6 +4,7 @@
 //! `try_conflict` (the same try of another package) or `stale_try` (a lower one). Every time is
 //! the rig's clock; every transport is the in-process one, with the host's identity explicit.
 
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_wire::wire::{
     ORDER_FEATURE, OrderId, Outcome, ServiceBeat, ServiceReply, UpdateResult,
 };
@@ -147,8 +148,8 @@ async fn a_restarted_coordinator_orders_one_past_the_highest_try_the_host_report
     );
 }
 
-/// A force of `web` to a host that installed it at try 1 carries try 2; a force to a host that
-/// reports a failed update at try 4 carries try 5.
+/// A force of `web` to a host that installed it at try 1 is sent (`hostkeeper.agent.v1` `Order.try`)
+/// at try 2; a force to a host that reports a failed update at try 4 is sent at try 5.
 ///
 /// Catches: a force always sent at try 1, which a daemon whose record holds the install's try 1
 /// refuses `try_conflict` and one whose record holds a higher try refuses `stale_try`.
@@ -175,14 +176,17 @@ async fn a_force_after_an_install_or_an_update_is_ordered_one_try_past_it() {
         )
         .expect("the force is accepted");
 
+    // The try the force carries, as `hostkeeper.agent.v1` sends it: the order the daemon reads.
     let try_of = |order: Option<Order>| match order {
-        Some(Order::Force {
-            order_try,
-            order_id,
-            ..
-        }) => {
-            assert_eq!(order_id, "force-1");
-            order_try
+        Some(force @ Order::Force { order_try, .. }) => {
+            let sent = force.to_proto();
+            assert_eq!(sent.order_id, "force-1");
+            assert!(
+                matches!(sent.verb, Some(agent::order::Verb::Force(_))),
+                "{sent:?}"
+            );
+            assert_eq!(sent.r#try, order_try, "the order sends the try it holds");
+            sent.r#try
         }
         other => panic!("a force, not {other:?}"),
     };
@@ -216,4 +220,51 @@ async fn an_uninstall_after_an_update_is_ordered_one_try_past_it() {
         ask_typed(&rig, "d1", "daemon", beat_of(INSTALLER, updated())).1,
         Some(uninstall_order(WEB, "uninstall-1", 4))
     );
+}
+
+/// The next try is one past the highest try the host's heartbeats carried for the service, and
+/// a later heartbeat never lowers it: not one that carries an older verdict, one whose verdict
+/// names no try, nor one with no verdict (an acknowledged verdict is no longer sent). Another
+/// host and another service are numbered on their own; the try saturates at `u64::MAX`.
+///
+/// Catches: a try taken from the verdict heard last (it would fall back to 1 once the daemon
+/// stops sending an acknowledged verdict, and the daemon would refuse it), one shared between
+/// hosts or services, and one that wraps.
+#[tokio::test]
+async fn the_next_try_is_one_past_the_highest_heard_and_never_lowered() {
+    let rig = rig("try-highest", "");
+    let next = |host: &str, service: &str| {
+        rig.coordinator
+            .lock_fleet()
+            .next_try(service, &crate::testutil::id(host))
+    };
+    let mut untried = after("1.0", &install_id(1), 0, Outcome::Succeeded);
+    if let Some(last) = untried.last_update.as_mut() {
+        last.order_try = None;
+    }
+    assert_eq!(next("d1", WEB), 1);
+    told(&rig, "d1", vec![runs(WEB, "1.0")]);
+    assert_eq!(next("d1", WEB), 1);
+    told(
+        &rig,
+        "d1",
+        vec![after("1.0", &install_id(1), 4, Outcome::Succeeded)],
+    );
+    assert_eq!(next("d1", WEB), 5);
+    for later in [
+        after("1.0", "update-older", 2, Outcome::Failed),
+        untried,
+        runs(WEB, "1.0"),
+    ] {
+        told(&rig, "d1", vec![later]);
+        assert_eq!(next("d1", WEB), 5);
+    }
+    assert_eq!(next("d2", WEB), 1);
+    assert_eq!(next("d1", crate::marks_support::DB), 1);
+    told(
+        &rig,
+        "d1",
+        vec![after("1.0", &install_id(1), u64::MAX, Outcome::Succeeded)],
+    );
+    assert_eq!(next("d1", WEB), u64::MAX);
 }

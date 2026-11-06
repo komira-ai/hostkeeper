@@ -6,11 +6,12 @@
 //! hex characters of the SHA-256 of the service, a newline and the version, so the same update
 //! has the same id at every heartbeat and across a coordinator restart, and fits the 64 bytes of
 //! an [`OrderId`]. The try is what the host's verdicts say, per service as the daemon keys it
-//! (design section 8.3, [`crate::orders::next_try`]): one more than the try of the verdict the
-//! host reports for the service, whatever order that verdict ended (an install, an earlier update,
-//! a force), and 1 when it reports none. A resend of an outstanding order therefore keeps its try,
-//! the next order after a verdict raises it, and a restarted coordinator, which remembers no
-//! tries, never issues a try lower than the host reported.
+//! (design section 8.3, [`crate::fleet::Fleet::next_try`]): one past the highest try the host's
+//! heartbeats carried for the service, whatever order the verdict ended (an install, an earlier
+//! update, a force), and 1 when none carried one. A resend of an outstanding order therefore keeps
+//! its try, the next order after a verdict raises it, and a restarted coordinator, which rebuilds
+//! the tries from the heartbeats and the verdicts file, never issues a try lower than the host
+//! reported.
 //!
 //! The package digest is the one CI registered with the version ([`crate::registry`]), or, for a
 //! version registered with a release index, the one the index lists for the host's platform, with
@@ -19,11 +20,11 @@
 //! terms, and an agent that reads terms is not ordered it.
 
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::wire::{OrderId, PackageDigest, ServiceBeat, ServiceReply, UpdateResult};
+use hostkeeper_wire::wire::{OrderId, PackageDigest, ServiceReply};
 use hostkeeper_wire::{HostId, Platform};
 
 use crate::ops_file;
-use crate::orders::{Order, next_try};
+use crate::orders::Order;
 use crate::registry::{Digest, Package, Registry};
 
 /// What an update answer carries for an agent that announced `order-v1`.
@@ -49,46 +50,38 @@ pub fn order_id_text(service: &str, version: &Version) -> String {
 }
 
 /// The terms of the order that updates `service` to `version`, whose package for the host CI
-/// registered as `package`, given the last update the host reported for the service. `None` only
+/// registered as `package`, at the try `order_try`. `None` only
 /// if the id or the digest were no such thing, which their grammars rule out for a version and a
 /// digest that were read.
 #[must_use]
-pub fn terms(
-    service: &str,
-    version: &Version,
-    package: &Package,
-    last: Option<&UpdateResult>,
-) -> Option<Terms> {
+pub fn terms(service: &str, version: &Version, package: &Package, order_try: u64) -> Option<Terms> {
     OrderId::parse(&order_id_text(service, version))
         .zip(PackageDigest::parse(package.digest.as_str()))
         .map(|(id, package_digest)| Terms {
-            order_try: next_try(last),
+            order_try,
             order_id: id,
             package_digest,
             index_digest: package.index_digest.clone(),
         })
 }
 
-/// The terms of the update of `service` to `version` for the host `id`, of `platform`, whose
-/// heartbeat lists `announced`, with the release `digests` registers for the version. With none
+/// The terms of the update of `service` to `version` for the host `id`, of `platform`, at the try
+/// `order_try` ([`crate::fleet::Fleet::next_try`]), with the release `digests` registers for the
+/// version. With none
 /// registered, or an index that lists no package for the platform, none, and a warning naming
 /// the service, the version and the host: such a host is not ordered the version.
 pub(crate) fn of_beat(
     digests: &Registry,
     service: &str,
     version: &Version,
-    announced: &[ServiceBeat],
+    order_try: u64,
     id: &HostId,
     platform: Platform,
 ) -> Option<Terms> {
-    let last = announced
-        .iter()
-        .find(|one| one.name == service)
-        .and_then(|one| one.last_update.as_ref());
     let made = digests
         .get(version)
         .and_then(|release| release.package_for(platform))
-        .and_then(|package| terms(service, version, &package, last));
+        .and_then(|package| terms(service, version, &package, order_try));
     if made.is_none() {
         tracing::warn!(
             service,

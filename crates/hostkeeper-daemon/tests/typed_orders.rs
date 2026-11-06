@@ -22,6 +22,7 @@ use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::orders::Order as Ordered;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
+use hostkeeper_coordinator::verdict_file::{VerdictFile, verdicts_path};
 use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::start;
 use hostkeeper_daemon::testing::spawn;
@@ -62,18 +63,25 @@ const HOOK_LINES: [(Step, &str); 4] = [
     (Step::Cleanup, "{}"),
 ];
 
-/// The real coordinator: `web` runs on the role `daemon` and is wanted at [`TARGET`], whose
-/// package digest CI registered as [`d`]; it orders from its start (no quiet period), on a
-/// clock that stays at second 1000.
+/// The real coordinator on the state files of `dir`: `web` runs on the role `daemon` and is wanted
+/// at [`TARGET`], whose package digest CI registered as [`d`], unless a coordinator before it on
+/// `dir` left another state; the verdicts it acknowledges are kept in the verdicts file beside
+/// the state file, as `serve` keeps them; it orders from its start (no quiet period), on a clock
+/// that stays at second 1000.
 fn coordinator(dir: &Path) -> Arc<Coordinator> {
-    std::fs::write(
-        dir.join("desired.json"),
-        format!(
-            r#"{{"services":{{"{SERVICE}":{{"version":"{TARGET}","min_up":{{}},"release_digest":"{0}","digests":{{"{TARGET}":"{0}"}}}}}}}}"#,
-            d()
-        ),
-    )
-    .expect("the desired state");
+    let state = dir.join("desired.json");
+    // A coordinator started again on the same directory reads the state the first one left.
+    if !state.exists() {
+        std::fs::write(
+            &state,
+            format!(
+                r#"{{"services":{{"{SERVICE}":{{"version":"{TARGET}","min_up":{{}},"release_digest":"{0}","digests":{{"{TARGET}":"{0}"}}}}}}}}"#,
+                d()
+            ),
+        )
+        .expect("the desired state");
+    }
+    let verdicts = VerdictFile::open(&verdicts_path(&state)).expect("the verdicts file");
     let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
     let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
     // CI's allow-list admits `web`, so a scenario can set its next version.
@@ -92,7 +100,8 @@ fn coordinator(dir: &Path) -> Arc<Coordinator> {
         Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
             .with_services(Services::parse(&rollout).expect("the rollout file"))
             .with_quiet(Duration::ZERO)
-            .with_ops(ops),
+            .with_ops(ops)
+            .with_verdicts(verdicts),
     )
 }
 
@@ -557,4 +566,61 @@ fn a_restarted_daemon_is_ordered_one_past_the_try_it_reported() {
     host.beat();
     assert_eq!(host.ordered()[1], None);
     assert_eq!(convergence(&coordinator), "converged");
+}
+
+/// The version CI sets after [`NEXT`], once both the daemon and the coordinator restarted.
+const LAST: &str = "4.0.0";
+
+/// Catches a try numbered from what the beat carries now instead of the highest the host
+/// reported: an acknowledged verdict is no longer sent, and after a restart of both the daemon
+/// and the coordinator nothing but the coordinator's verdicts file remembers it. The coordinator
+/// installs `web` at [`TARGET`] (try 1) and updates it to [`NEXT`] (try 2), each verdict
+/// reported and acknowledged; the daemon and the coordinator both restart on their own files; CI
+/// sets [`LAST`]; the restarted coordinator orders the update at try 3, which the restarted
+/// daemon runs through all four steps, and `web` reads converged at [`LAST`]. At try 1 or 2 the
+/// daemon, whose step record holds try 2, would refuse it `stale_try` or `try_conflict`.
+#[test]
+fn install_update_restart_update_runs_every_order_one_try_past_the_last() {
+    let rig = Rig::new("typed-twice");
+    for version in [TARGET, NEXT, LAST] {
+        rig.stage(SERVICE, version);
+    }
+    for (step, line) in HOOK_LINES {
+        rig.launcher
+            .replies(SERVICE, step, &[(0, line), (0, line), (0, line)]);
+    }
+    let dir = Scratch::new("typed-twice-coordinator");
+    let first = coordinator(dir.path());
+    let mut host = Host::new(&rig, &first);
+
+    host.beat();
+    assert_eq!(order_and_try(&host, 0), (Verb::Install(web_at(TARGET)), 1));
+    assert!(host.dispatch.run_next());
+    host.beat();
+    assert_eq!(host.ordered()[1], None);
+
+    set_desired(&first, NEXT);
+    host.beat();
+    assert_eq!(order_and_try(&host, 2), (Verb::Update(web_at(NEXT)), 2));
+    assert!(host.dispatch.run_next());
+    host.beat();
+    host.beat();
+    assert_eq!(host.ordered()[3..], [None, None]);
+    assert_eq!(convergence(&first), "converged");
+    drop(host);
+    drop(first);
+
+    let second = coordinator(dir.path());
+    let mut host = Host::new(&rig, &second);
+    set_desired(&second, LAST);
+    host.beat();
+    assert_eq!(order_and_try(&host, 0), (Verb::Update(web_at(LAST)), 3));
+    assert!(host.dispatch.run_next());
+    assert_eq!(
+        rig.launcher.steps(SERVICE),
+        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup].repeat(3)
+    );
+    host.beat();
+    assert_eq!(host.ordered()[1], None);
+    assert_eq!(convergence(&second), "converged");
 }

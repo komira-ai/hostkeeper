@@ -729,7 +729,6 @@ impl Coordinator {
             who: &who,
             platform,
             legacy,
-            announced: &announced,
             held: &held,
             order_v1,
             orders,

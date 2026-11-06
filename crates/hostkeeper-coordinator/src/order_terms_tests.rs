@@ -6,7 +6,6 @@ use hostkeeper_wire::wire::{Heartbeat, ORDER_FEATURE, OrderId, Outcome, UpdateRe
 
 use crate::marks_support::{WEB, beat_of, digest, restart, rig, runs, set, start, who};
 use crate::order_terms::{order_id_text, terms};
-use crate::orders::next_try;
 use crate::registry::{Digest, Package};
 use crate::service::{FEATURES, HeartbeatRefused, sends};
 use crate::testutil::{Log, Rig, ci_token, version};
@@ -233,29 +232,16 @@ async fn a_plain_agent_is_still_answered_about_the_legacy_service_by_its_top_lev
     );
 }
 
-/// The order id is a function of the service and the version alone, and the try is one past the
-/// try of the service's last verdict, whatever order that verdict ended.
+/// The order id is a function of the service and the version alone.
 ///
-/// Catches: an id that changes between runs or hosts, one that ignores the service or the
-/// version, a try that ignores another order's verdict of the service, a verdict without a try
-/// read as anything but try 0, and a try that wraps past `u64::MAX`.
+/// Catches: an id that changes between runs or hosts, and one that ignores the service or the
+/// version.
 #[test]
-fn the_order_id_names_the_update_and_the_try_follows_the_services_last_verdict() {
+fn the_order_id_names_the_update() {
     assert_eq!(order_id_text(WEB, &version("2.0")), WEB_ORDER);
     assert_ne!(order_id_text("db", &version("2.0")), WEB_ORDER);
     assert_ne!(order_id_text(WEB, &version("2.1")), WEB_ORDER);
     assert!(OrderId::parse(&order_id_text(WEB, &version("2.0"))).is_some());
-
-    assert_eq!(next_try(None), 1);
-    assert_eq!(next_try(Some(&verdict(WEB_ORDER, Some(1)))), 2);
-    assert_eq!(next_try(Some(&verdict(WEB_ORDER, None))), 1);
-    assert_eq!(next_try(Some(&verdict("other", Some(9)))), 10);
-    assert_eq!(
-        next_try(Some(&verdict(WEB_ORDER, Some(u64::MAX)))),
-        u64::MAX
-    );
-    let plain = UpdateResult::new(version("2.0"), Outcome::Failed);
-    assert_eq!(next_try(Some(&plain)), 1);
 }
 
 /// The terms carry the registered digest, the id and the try together.
@@ -267,13 +253,7 @@ fn terms_join_the_id_the_try_and_the_registered_digest() {
         digest: Digest::parse(&digest(7)).expect("a digest"),
         index_digest: None,
     };
-    let made = terms(
-        WEB,
-        &version("2.0"),
-        &registered,
-        Some(&verdict(WEB_ORDER, Some(2))),
-    )
-    .expect("terms");
+    let made = terms(WEB, &version("2.0"), &registered, 3).expect("terms");
     assert_eq!(made.order_id.as_str(), WEB_ORDER);
     assert_eq!(made.order_try, 3);
     assert_eq!(made.package_digest.as_str(), digest(7));
