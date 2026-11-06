@@ -76,6 +76,9 @@ the hook contract and the step record.
 
 Every command of `hostkeeper ctl`, with its flags and exit codes, is in [docs/ctl.md](docs/ctl.md),
 which a test regenerates from the protos and compares, so it cannot drift from them.
+Enrolling a node, from its inventory record to its first heartbeat, with every refusal on the
+way, is [docs/operations/enrollment.md](docs/operations/enrollment.md); a test parses each of
+its `hostkeeper ctl` lines with ctl's own parser.
 
 ## Build order
 
