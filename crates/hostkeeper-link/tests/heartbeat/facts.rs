@@ -147,7 +147,7 @@ fn a_clock_sleeper_waits_the_period_on_its_clock_and_stops_when_asked() {
     let sleeper = ClockSleeper::new(clock.clone(), stop.clone());
     assert_eq!(sleeper.sleep(15), Tick::Beat);
     assert_eq!(clock.mono_secs(), 22);
-    assert_eq!(clock.boot_id(), "fake-boot");
+    assert_eq!(clock.boot_id().expect("a boot id").as_str(), "fake-boot");
     assert!(!stop.is_stopped());
     stop.stop();
     assert!(stop.is_stopped());
