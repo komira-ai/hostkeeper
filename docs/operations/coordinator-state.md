@@ -17,6 +17,7 @@ offline, as [ca-backup.md](ca-backup.md) says.
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
 | `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, uninstall intents, the host inventory, the marks of last good and bad versions, and the audit ring. | All of it. |
 | `<ops-file>.audit` | Every change to the ops file, one JSON line each. | The audit history. |
+| `<ops-file>.audit.<n>` | The sealed segments of the audit file, the older changes, one JSON line each ([holds-and-force.md](holds-and-force.md#the-audit-file)). Written once the audit file has been rotated. | The audit history before the newest rotation. |
 | `<ops-file>.halts` | The halt reports, who raised each halt, the reports kept while a halt stood, and each service's clear generation. Written once there is a halt. | The halt reports and the clear generations: a halted service halts again after its clear. |
 | `<ops-file>.halts.next` | Only after a crash in the middle of a change: the halts file that change staged. The next start settles it. | The ops file holds that change and the halts file does not: what the change added to the halts file (a clear's generation, the reports of its acknowledgements) is lost. |
 | `<ops-file>.halts.unfinished` | Only after a crash while a halt was being written: the marker that refuses a start until the operator settles the halts file by hand and removes the marker. | The halt that was being written may be lost without notice. |
@@ -42,8 +43,10 @@ The flags are the ones `serve` runs with. Leave out `--ops-file` if `serve` runs
 - It refuses when none of the state files is there, or the state file's directory is not, which
   means a flag names the wrong file. It names each file of the state that is not there and so
   not in the backup: a file that should be there and is named means a flag is wrong.
-- It copies every file listed above that is there, except the lock. From the enrollment
-  directory it copies each file ending `.pb`, in that directory and the directories under it.
+- It copies every file listed above that is there, except the lock. That is each sealed segment
+  of the audit file, too: the manifest names segment `<n>` as `ops-audit.<n>`, with the number it
+  has. From the enrollment directory it copies each file ending `.pb`, in that directory and the
+  directories under it.
 - It copies `<ops-file>.halts.next` and `<ops-file>.halts.unfinished` as they are, so a restored
   coordinator starts exactly as the old one would have. The next start settles a staged halts
   file. A marker still refuses the start.
@@ -80,14 +83,18 @@ What the restore checks and refuses:
   nothing, when:
   - a file's size or SHA-256 is not what the manifest says;
   - the snapshot holds a file the manifest does not name, or lacks one it names;
-  - the manifest names a path that is no file of a snapshot;
+  - the manifest names a path that is no file of a snapshot (a segment's name is `ops-audit.`
+    and a number with no leading zero, 1 or more);
   - the snapshot holds the enrollment store and `--enrollment-dir` is not given.
 - It then takes the lock. It refuses while a coordinator holds it.
-- It refuses when any target file is already there, or when the enrollment directory has
-  anything in it. An enrollment directory that is there and empty, a freshly mounted volume for
+- It refuses when any target file is already there, a sealed segment of the audit file among
+  them (any `<ops-file>.audit.<n>`, even when it is the only file there), or when the enrollment
+  directory has anything in it. An enrollment directory that is there and empty, a freshly mounted volume for
   example, is fine.
 - It makes the missing directories, owner-only. It writes each file to `<file>.restoring` and links
-  it into place, which refuses a name that is already there, so no file is written over.
+  it into place, which refuses a name that is already there, so no file is written over. Each
+  sealed segment of the audit file is written back under its number, so `Audit.List` reads the
+  restored audit as it read before the backup.
 - Before its first file it writes `<state-file>.restore-unfinished`, and it removes the marker
   after its last. A restore that stopped partway (killed, or the machine lost) leaves the marker:
   `serve` refuses to start while it is there, and so does a second restore. Remove the files the

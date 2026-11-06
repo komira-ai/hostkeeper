@@ -132,6 +132,8 @@ mod audit_rotation_tests;
 #[cfg(test)]
 mod backup_refusal_tests;
 #[cfg(test)]
+mod backup_segment_tests;
+#[cfg(test)]
 mod backup_tests;
 #[cfg(test)]
 mod bake_canary_tests;
