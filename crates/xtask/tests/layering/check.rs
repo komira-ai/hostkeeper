@@ -56,16 +56,20 @@ pub type Layer = (
 /// crates' and the web app's tests read the protobuf descriptors; the privileged tests drive the
 /// step runner's launcher and dead-man and the observer's adapters against the host, and on a
 /// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
-/// normal dependency), the launchd adapters and the package check, and call its admin socket;
-/// their end-to-end tests run the coordinator in process with its fake issuer's config, load the
-/// fixture's manifest, and check the fixture's attestation with the package verifier.
+/// normal dependency), the launchd adapters and the package check, call its admin socket, and
+/// read the Mac's enrollment claims (`hostkeeper-enroll`'s `MacClaims`) from the real `ioreg`;
+/// their program `hostkeeper-selfupdate-daemon` runs the daemon on the Linux adapters with a
+/// package store and a heartbeat link of its own, so it needs the config, the launchd crate's
+/// platform, the link, the placement roots and the step crate as normal dependencies; their
+/// end-to-end tests run the coordinator in process with its fake issuer's config, and fetch and
+/// check the fixture's attestation with the package crate.
 pub const LAYERS: [Layer; 23] = [
     (BINARY, &[DAEMON], &[PROTO]),
     (CI, &[CTL], &[PROTO]),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,
-        &[ENROLLMENT, OIDC, PROTO, TLS, WIRE],
+        &[CONFIG, ENROLLMENT, OIDC, PROTO, TLS, WIRE],
         &[CTL, OIDC],
     ),
     (CTL, &[PROTO], &[]),
@@ -93,18 +97,8 @@ pub const LAYERS: [Layer; 23] = [
     (PLACED, &[CONFIG], &[]),
     (
         PRIVILEGED,
-        &[DAEMON, HOOK],
-        &[
-            CONFIG,
-            COORDINATOR,
-            LAUNCHD,
-            OBSERVE,
-            OIDC,
-            PACKAGE,
-            PROTO,
-            STEPS,
-            UNPACK,
-        ],
+        &[CONFIG, DAEMON, HOOK, LAUNCHD, LINK, PLACED, STEPS],
+        &[COORDINATOR, ENROLL, OBSERVE, OIDC, PACKAGE, PROTO, UNPACK],
     ),
     (PROTO, &[], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),

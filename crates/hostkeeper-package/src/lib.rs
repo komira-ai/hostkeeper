@@ -42,8 +42,9 @@ mod crate_tests;
 mod fixtures_tests;
 
 pub use failure::{
-    ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_INVALID, NO_PACKAGE_FOR_PLATFORM, NO_SPACE,
-    NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure, REASONS,
+    ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_DIGEST_MISMATCH, INDEX_INVALID,
+    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure,
+    REASONS,
 };
 pub use fetch::{PackageOrder, StagedArchive, fetch_package, remove_orphan_fetches};
 pub use index::{IndexEntry, IndexInvalid, Platform, ReleaseIndex, index_url, package_url};

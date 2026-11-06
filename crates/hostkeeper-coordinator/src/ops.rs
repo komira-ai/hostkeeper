@@ -74,7 +74,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::assignment::ServiceAssignments;
 use crate::audit_file::{
-    self, Appender, AuditLine, AuditLog, DEFAULT_ROTATION, Rotation, UnixClock, wall_clock,
+    self, Appender, AuditLine, AuditLog, DEFAULT_ROTATION, Logged, Query, Rotation, UnixClock,
+    wall_clock,
 };
 use crate::desired::StoreError;
 use crate::force::ForceRecord;
@@ -275,10 +276,13 @@ pub struct AuditEntry {
     /// `coordinator` for the coordinator's own changes, `ci` for CI's.
     pub by: String,
     /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`,
-    /// `halt`, `mark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`, `set_min_version`,
-    /// `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the coordinator's own:
-    /// `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and `uninstall_cancelled`;
-    /// CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an earlier build wrote).
+    /// `halt`, `mark_bad`, `unmark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`,
+    /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made;
+    /// the coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
+    /// `uninstall_cancelled`; CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a file an
+    /// earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
+    /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
+    /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -722,27 +726,63 @@ impl OpsStore {
         Ok(entries)
     }
 
-    /// Every change the audit file and its kept segments hold, oldest first; for a store with
-    /// no audit file, the ring.
+    /// The page `query` asks for, from the audit files without reading them whole
+    /// ([`AuditLog::page`]), or from the ring, with no times, for a store with no audit file.
     ///
     /// # Errors
-    /// [`OpsError::Io`]: a file of the audit exists and cannot be read.
-    pub(crate) fn audit_log(&self) -> Result<Vec<AuditEntry>, OpsError> {
-        self.audit_after(0)
+    /// [`OpsError::Io`]: the audit file exists and cannot be read.
+    pub(crate) fn audit_page(&self, query: &Query<'_>) -> Result<Vec<Logged>, OpsError> {
+        if let Some(log) = &self.audit {
+            return log.page(query);
+        }
+        let mut page: Vec<Logged> = self
+            .lock()
+            .audit
+            .iter()
+            .filter(|entry| entry.seq > query.since_seq && (query.keep)(entry))
+            .map(|entry| Logged {
+                entry: entry.clone(),
+                at_unix: None,
+            })
+            .collect();
+        if query.newest {
+            page.drain(..page.len().saturating_sub(query.limit));
+        } else {
+            page.truncate(query.limit);
+        }
+        Ok(page)
     }
 
-    /// The changes of [`Self::audit_log`] numbered after `since_seq`, oldest first. A
-    /// `since_seq` in a segment deleted since answers from the oldest change kept.
+    /// Visits every change the audit file and its kept segments hold, oldest first, reading them
+    /// a chunk at a time; for a store with no audit file, the ring.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`]: the audit file exists and cannot be read.
+    pub(crate) fn audit_each(&self, visit: &mut dyn FnMut(AuditEntry)) -> Result<(), OpsError> {
+        match &self.audit {
+            Some(log) => log.each(&mut |line| visit(line.into_logged().entry))?,
+            None => self.lock().audit.iter().cloned().for_each(visit),
+        }
+        Ok(())
+    }
+
+    /// The changes the audit file and its kept segments hold numbered after `since_seq`, oldest
+    /// first, read whole, for the tests; for a store with no audit file, the ring's.
     ///
     /// # Errors
     /// [`OpsError::Io`]: a file of the audit exists and cannot be read.
+    #[cfg(test)]
     pub(crate) fn audit_after(&self, since_seq: u64) -> Result<Vec<AuditEntry>, OpsError> {
         let Some(log) = &self.audit else {
             let ring = self.lock().audit.clone();
             return Ok(ring.into_iter().filter(|e| e.seq > since_seq).collect());
         };
         let read = log.read_after(since_seq)?;
-        Ok(read.lines.into_iter().map(AuditLine::into_entry).collect())
+        Ok(read
+            .lines
+            .into_iter()
+            .map(|line| line.into_logged().entry)
+            .collect())
     }
 
     /// When segments of the audit file were deleted by its retention, the time of the oldest
@@ -901,6 +941,13 @@ impl OpsStore {
 
 #[cfg(test)]
 impl OpsStore {
+    /// Every change of the audit log, oldest first ([`Self::audit_each`]).
+    pub(crate) fn audit_log(&self) -> Result<Vec<AuditEntry>, OpsError> {
+        let mut all = Vec::new();
+        self.audit_each(&mut |entry| all.push(entry))?;
+        Ok(all)
+    }
+
     /// The store with `unix` as its clock for the audit file.
     pub(crate) fn with_unix(mut self, unix: UnixClock) -> Self {
         self.unix = unix;

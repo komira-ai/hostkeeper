@@ -143,8 +143,9 @@ desired version and reads the coordinator's answer. The tests:
   the production fetch and proof with the pinned `gh`, and another digest or signer does not.
 
 These tests use the host's fixed paths the daemon uses (`/usr/lib/hostkeeper`, `/etc/updater`,
-`/var/lib/hostkeeper`, the CA bundle and the unit directory), refuse to start on a host that
-already has them, and remove or restore all of them when they end, failed or not; a failed test
+`/var/lib/hostkeeper`, the CA bundle and the unit directory): what is already there, left by
+another test, is moved aside and put back, and everything the test wrote is removed or restored
+when it ends, failed or not; a failed test
 first copies its hook records, step record and journal to `target/privileged-artifacts/`, which the
 workflow uploads. `tierstore_rig.rs` checks the fixture package against the production unpacker
 and the release channel's log without root, in the pull-request set.

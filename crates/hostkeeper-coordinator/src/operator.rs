@@ -1,11 +1,11 @@
 //! The operator's calls that mark or steer the rollout, as plain functions over the messages of
-//! `hostkeeper.operator.v1`: `Releases.MarkBad` and `Releases.Halt`, `Hosts.Abort` and
-//! `Hosts.Exclude` (with `abandon`), `Services.Hold` and `Services.Unhold`, and `Audit.List`;
-//! `Releases.Force` is in [`crate::force`], `Services.Assign`, `Unassign`, `SetMinVersion` and
-//! `List` in [`crate::assign`], `Enrollment.List` and `Enrollment.Approve` in
-//! [`crate::operator_enrollment`], and the inventory's calls in [`crate::inventory`]. A transport
-//! (the gRPC services, or a JSON gateway) authenticates the bearer ([`Coordinator::caller`]) and
-//! hands the call here.
+//! `hostkeeper.operator.v1`: `Releases.MarkBad`, `Releases.UnmarkBad` and `Releases.Halt`,
+//! `Hosts.Abort` and `Hosts.Exclude` (with `abandon`), `Services.Hold` and `Services.Unhold`,
+//! and `Audit.List`; `Releases.Force` is in [`crate::force`], `Services.Assign`, `Unassign`,
+//! `SetMinVersion` and `List` in [`crate::assign`], `Enrollment.List` and `Enrollment.Approve`
+//! in [`crate::operator_enrollment`], the inventory's calls in [`crate::inventory`], and
+//! `Hosts.List` and `Hosts.Get` in [`crate::hosts`]. A transport (the gRPC services, or a JSON
+//! gateway) authenticates the bearer ([`Coordinator::caller`]) and hands the call here.
 //!
 //! Every one of them takes the operator token only: a valid CI token is `forbidden` and no
 //! token, or any other, `unauthorized`, before the request is looked at. A refusal is one value
@@ -21,11 +21,12 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::is_service_name;
 use hostkeeper_wire::{HostId, RoleName};
 
+use crate::audit_file::{Logged, Query};
 use crate::halt;
 use crate::holds::{HoldMark, HoldScope, MAX_HOLDS, marks_of};
 use crate::operate::reason;
-use crate::ops::{AuditEntry, Exclusion, OpsError, Write};
-use crate::reconcile::{CI, COORDINATOR};
+use crate::ops::{AuditEntry, Exclusion, FailureAck, OpsError, Write, label};
+use crate::reconcile::{CI, COORDINATOR, is_release_failure_beat};
 use crate::service::Coordinator;
 use crate::tokens::TokenName;
 
@@ -144,7 +145,8 @@ fn is_action(text: &str) -> bool {
     (1..=64).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
 }
 
-/// `entry` as `hostkeeper.operator.v1` says it.
+/// `entry` as `hostkeeper.operator.v1` says it, without its time: the answer of the call that
+/// made it.
 pub(crate) fn entry_proto(entry: &AuditEntry) -> proto::AuditEntry {
     proto::AuditEntry {
         seq: entry.seq,
@@ -153,6 +155,16 @@ pub(crate) fn entry_proto(entry: &AuditEntry) -> proto::AuditEntry {
         service: entry.service.clone(),
         node_id: entry.node_id.clone(),
         reason: entry.reason.clone(),
+        at_unix: None,
+        by_name: Some(entry.by.clone()),
+    }
+}
+
+/// `logged` as `Audit.List` says it: the entry, with the time the audit file gives it.
+fn logged_proto(logged: &Logged) -> proto::AuditEntry {
+    proto::AuditEntry {
+        at_unix: logged.at_unix,
+        ..entry_proto(&logged.entry)
     }
 }
 
@@ -243,6 +255,62 @@ impl Coordinator {
             Ok(())
         })?;
         Ok(proto::MarkBadResponse {
+            entry: Some(entry_proto(&done)),
+        })
+    }
+
+    /// `Releases.UnmarkBad`: lifts the bad mark of a version of a service, the inverse of
+    /// [`Self::mark_bad`], whether the operator, the coordinator's rollback or a force set it:
+    /// the version may be ordered again and CI may set it. The failure reports of the version
+    /// that the service's hosts stand on are acked in the same write ([`crate::acks`]), so the
+    /// override is not undone by the failures it overrode; a new failure counts again.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, `unknown_service`, `invalid_request` (the version or the
+    /// reason), `not_marked_bad`, `store_failed`.
+    pub fn unmark_bad(
+        &self,
+        caller: &Caller,
+        request: proto::UnmarkBadRequest,
+    ) -> Result<proto::UnmarkBadResponse, proto::ReleasesRefusal> {
+        let by = caller.operator()?;
+        let def = self
+            .services
+            .get(&request.service)
+            .ok_or(proto::ReleasesRefusal::UnknownService)?;
+        let version = Version::parse(&request.version)
+            .ok()
+            .filter(|version| def.version_scheme.parses(version))
+            .ok_or(proto::ReleasesRefusal::InvalidRequest)?;
+        let why = valid_reason(&request.reason).ok_or(proto::ReleasesRefusal::InvalidRequest)?;
+        // Under the fleet's lock, as the mark is made: no heartbeat decides between the lift
+        // and its write, and the reports acked are the ones the fleet holds at the lift.
+        let fleet = self.lock_fleet();
+        let acks: Vec<FailureAck> = fleet
+            .hosts_of(&def.name)
+            .filter(|(_, host)| is_release_failure_beat(&host.beat, &version))
+            .filter_map(|(id, host)| {
+                host.beat.last_update.clone().map(|report| FailureAck {
+                    node_id: id.to_string(),
+                    report,
+                })
+            })
+            .collect();
+        let audit = entry(by, "unmark_bad", &def.name, format!("{version}: {why}"));
+        let done = self.ops.try_change(Write::BeforeMemory, audit, |state| {
+            let marks = state.services.entry(def.name.clone()).or_default();
+            if !marks.bad.contains(&version) {
+                return Err(proto::ReleasesRefusal::NotMarkedBad);
+            }
+            marks.bad.retain(|bad| *bad != version);
+            marks.bad_by_force.retain(|bad| *bad != version);
+            for ack in acks {
+                marks.failure_acked.retain(|old| old.node_id != ack.node_id);
+                marks.failure_acked.push(ack);
+            }
+            Ok(())
+        })?;
+        Ok(proto::UnmarkBadResponse {
             entry: Some(entry_proto(&done)),
         })
     }
@@ -481,15 +549,17 @@ impl Coordinator {
     }
 
     /// `Audit.List`: the entries of the audit file after `since_seq` that match every filter
-    /// set, oldest first, at most `limit` ([`MAX_AUDIT_PAGE`] for 0 or more), and the `since_seq`
-    /// of the next page. Changes nothing. The entries are read across the active audit file and
-    /// the sealed segments it keeps ([`crate::audit_file`]); a `since_seq` in a segment deleted
-    /// since answers from the oldest entry kept, with nothing in the answer to say so (the
-    /// response has no field for it). It answers when the audit file takes no lines.
+    /// set, oldest first, at most `limit` ([`MAX_AUDIT_PAGE`] for 0 or more): the oldest of
+    /// them, or with `newest` the newest; and the `since_seq` of the next page. Each has the
+    /// time of its line and the name it was made under. Changes nothing. The entries are read
+    /// across the active audit file and the sealed segments it keeps, a chunk at a time and not
+    /// whole ([`crate::audit_file::AuditLog::page`]); a `since_seq` in a segment deleted since
+    /// answers from the oldest entry kept, with nothing in the answer to say so (the response
+    /// has no field for it). It answers when the audit file takes no lines.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a filter that is no actor token, action,
-    /// service name or node id), `store_failed` (the audit file could not be read).
+    /// service name, node id or token name), `store_failed` (the audit file could not be read).
     pub fn audit_list(
         &self,
         caller: &Caller,
@@ -510,26 +580,30 @@ impl Coordinator {
             .node_id
             .as_deref()
             .is_some_and(|n| n.parse::<HostId>().is_err());
-        if bad_action || bad_service || bad_node {
+        let bad_name = request.by_name.as_deref().is_some_and(|n| !label(n));
+        if bad_action || bad_service || bad_node || bad_name {
             return Err(invalid);
         }
         let limit = match request.limit as usize {
             0 => MAX_AUDIT_PAGE,
             limit => limit.min(MAX_AUDIT_PAGE),
         };
-        let page: Vec<AuditEntry> = self
-            .ops
-            .audit_after(request.since_seq)?
-            .into_iter()
-            .filter(|e| actor.is_none_or(|actor| actor_of(&e.by) == actor))
-            .filter(|e| request.action.as_ref().is_none_or(|a| *a == e.action))
-            .filter(|e| request.service.is_none() || e.service == request.service)
-            .filter(|e| request.node_id.is_none() || e.node_id == request.node_id)
-            .take(limit)
-            .collect();
+        let keep = |e: &AuditEntry| {
+            actor.is_none_or(|actor| actor_of(&e.by) == actor)
+                && request.by_name.as_ref().is_none_or(|n| *n == e.by)
+                && request.action.as_ref().is_none_or(|a| *a == e.action)
+                && (request.service.is_none() || e.service == request.service)
+                && (request.node_id.is_none() || e.node_id == request.node_id)
+        };
+        let page = self.ops.audit_page(&Query {
+            since_seq: request.since_seq,
+            limit,
+            newest: request.newest,
+            keep: &keep,
+        })?;
         Ok(proto::ListAuditResponse {
-            next_seq: page.last().map_or(request.since_seq, |e| e.seq),
-            entries: page.iter().map(entry_proto).collect(),
+            next_seq: page.last().map_or(request.since_seq, |l| l.entry.seq),
+            entries: page.iter().map(logged_proto).collect(),
         })
     }
 }

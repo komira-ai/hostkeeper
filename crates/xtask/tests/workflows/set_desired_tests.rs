@@ -580,6 +580,87 @@ fn documented(markdown: &str) -> (Vec<Input>, Vec<String>) {
     (inputs, outputs)
 }
 
+/// The steps of the real workflow's one job.
+fn steps_of(doc: &Node) -> Vec<Node> {
+    let jobs = entry(doc, "jobs").expect("jobs");
+    let job = entry(jobs, JOB).expect("the job");
+    match entry(job, "steps").map(|s| &s.value) {
+        Some(Value::Seq(steps)) => steps.clone(),
+        _ => panic!("the job has no steps"),
+    }
+}
+
+/// The step of the real workflow with `id`.
+fn step_of(doc: &Node, id: &str) -> Node {
+    steps_of(doc)
+        .into_iter()
+        .find(|s| entry(s, "id").and_then(Node::as_str) == Some(id))
+        .unwrap_or_else(|| panic!("no step {id}"))
+}
+
+/// The text of the scalar entry `key` of `map`.
+fn scalar<'a>(map: &'a Node, key: &str) -> Option<&'a str> {
+    entry(map, key).and_then(Node::as_str)
+}
+
+#[test]
+fn the_release_index_reaches_the_client_as_a_file_of_its_exact_text() {
+    // Catches: the index text put in a script (where the runner would interpolate it as code),
+    // written with a newline added (printf with a trailing newline, echo), written after the
+    // client ran, the client given the file when no index was passed, and the package digest or
+    // the index inputs being required, which would refuse a caller that uses the other way.
+    let text = real();
+    let doc = yaml::load(&text).expect("parses");
+    let write = step_of(&doc, "index");
+    assert_eq!(
+        entry(&write, "env").and_then(|e| scalar(e, "RELEASE_INDEX")),
+        Some("${{ inputs.release_index }}")
+    );
+    assert_eq!(
+        scalar(&write, "run"),
+        Some("printf '%s' \"$RELEASE_INDEX\" > \"$RUNNER_TEMP/hostkeeper-release-index.json\"")
+    );
+    let ids = step_ids(&text);
+    let at = |id: &str| ids.iter().position(|s| s == id).expect(id);
+    assert!(at("index") < at(CLIENT_STEP), "{ids:?}");
+    assert!(at("index") > at("version"), "{ids:?}");
+
+    let client = step_of(&doc, CLIENT_STEP);
+    let env = entry(&client, "env").expect("the client's env");
+    assert_eq!(
+        scalar(env, "RELEASE_INDEX_FILE"),
+        Some(
+            "${{ inputs.release_index != '' && format('{0}/hostkeeper-release-index.json', runner.temp) || '' }}"
+        )
+    );
+    assert_eq!(
+        scalar(env, "RELEASE_INDEX_DIGEST"),
+        Some("${{ inputs.release_index_digest }}")
+    );
+    let run = scalar(&client, "run").expect("the client's script");
+    for flag in [
+        "--release-index-file \"$RELEASE_INDEX_FILE\"",
+        "--release-index-digest \"$RELEASE_INDEX_DIGEST\"",
+        "--package-digest \"$PACKAGE_DIGEST\"",
+    ] {
+        assert!(run.contains(flag), "no {flag} in {run}");
+    }
+    // No script holds an expression: an input is read only through `env`.
+    for step in steps_of(&doc) {
+        let script = scalar(&step, "run").unwrap_or_default();
+        assert!(!script.contains("${{"), "{script}");
+    }
+    let call = entry(&doc, "on")
+        .and_then(|on| entry(on, "workflow_call"))
+        .expect("workflow_call");
+    let inputs = entry(call, "inputs").expect("inputs");
+    for name in ["package_digest", "release_index", "release_index_digest"] {
+        let input = entry(inputs, name).expect(name);
+        assert_eq!(scalar(input, "required"), Some("false"), "{name}");
+        assert_eq!(scalar(input, "type"), Some("string"), "{name}");
+    }
+}
+
 #[test]
 fn the_inputs_and_outputs_match_the_documented_table() {
     // Catches: an input or output added, removed, retyped or given another default in the
@@ -594,6 +675,8 @@ fn the_inputs_and_outputs_match_the_documented_table() {
         "service",
         "version",
         "package_digest",
+        "release_index",
+        "release_index_digest",
         "hostkeeper_version",
         "hostkeeper_commit",
         "coordinator_url",

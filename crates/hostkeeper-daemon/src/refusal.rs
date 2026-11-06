@@ -96,6 +96,9 @@ pub enum Refusal {
     ArtifactChanged,
     /// The release index is not the index of the version asked for.
     IndexInvalid,
+    /// The release index received does not have the SHA-256 the order names for it; it is
+    /// refused before it is read.
+    IndexDigestMismatch,
     /// The release index lists no package for this host's platform.
     NoPackageForPlatform,
     /// The order's version is a name the package directory holds for itself.
@@ -123,7 +126,7 @@ pub enum Refusal {
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 44] = [
+    pub const ALL: [Refusal; 45] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -159,6 +162,7 @@ impl Refusal {
         Refusal::BadArchive,
         Refusal::ArtifactChanged,
         Refusal::IndexInvalid,
+        Refusal::IndexDigestMismatch,
         Refusal::NoPackageForPlatform,
         Refusal::ReservedVersion,
         Refusal::VersionTooLong,
@@ -208,6 +212,7 @@ impl Refusal {
             Refusal::BadArchive => "bad_archive",
             Refusal::ArtifactChanged => "artifact_changed",
             Refusal::IndexInvalid => "index_invalid",
+            Refusal::IndexDigestMismatch => "index_digest_mismatch",
             Refusal::NoPackageForPlatform => "no_package_for_platform",
             Refusal::ReservedVersion => "reserved_version",
             Refusal::VersionTooLong => "version_too_long",

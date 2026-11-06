@@ -28,7 +28,8 @@ import "hostkeeper/operator/v1/operator.proto";
 
 // The hosts waiting for an operator to approve their enrollment.
 service Enrollment {
-  // The pending requests, oldest first, a page at a time.
+  // The pending requests, oldest first, a page at a time; with `unenrolled`, the requests that
+  // expired instead.
   rpc List(ListPendingRequest) returns (ListPendingResponse);
   // Approve a pending request: the host gets its certificate at its next `Poll`, with the host
   // id, role and services the approval names.
@@ -37,7 +38,8 @@ service Enrollment {
   // MACs, BMC MAC, serial and notes. A record for the host id, or a MAC or serial another record
   // holds, is refused; remove the record first.
   rpc AddRecord(AddRecordRequest) returns (AddRecordResponse);
-  // The records, by host id, a page at a time.
+  // The records, by host id, a page at a time; all of them, or only those a host is enrolled
+  // against, or only the others.
   rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
   // Remove the record of a host id. An enrolled host keeps its certificate.
   rpc RemoveRecord(RemoveRecordRequest) returns (RemoveRecordResponse);
@@ -72,7 +74,8 @@ enum EnrollmentRefusal {
   // INVALID_ARGUMENT: another field breaks its rule (a request id, a key hash, a reason, a page
   // token).
   ENROLLMENT_REFUSAL_INVALID_REQUEST = 11;
-  // FAILED_PRECONDITION: the request is no longer pending: it was approved, issued or denied.
+  // FAILED_PRECONDITION: the request is no longer pending: it was approved, issued or denied, or it
+  // expired.
   ENROLLMENT_REFUSAL_NOT_PENDING = 12;
   // FAILED_PRECONDITION: an operator denied the host id, and `replace` is not set.
   ENROLLMENT_REFUSAL_DENIED = 13;
@@ -99,6 +102,11 @@ message ListPendingRequest {
   uint32 limit = 1;
   // Where to go on, as `next_page_token` gave it; empty for the first page.
   string page_token = 2;
+  // List the requests that expired, whose hosts are unenrolled, in place of the pending ones:
+  // each waited for an operator longer than the coordinator's `--enrollment-request-ttl` and is
+  // no longer approved. The order and the page tokens are the same. A coordinator before
+  // expiry ignores the field and lists the pending requests, each with `state` UNSPECIFIED.
+  bool unenrolled = 3;
 }
 
 message ListPendingResponse {
@@ -136,6 +144,26 @@ message PendingEnrollment {
   string record_role = 11;
   // The host ids of every matching record, sorted (AMBIGUOUS only); none is chosen.
   repeated string candidate_host_ids = 12;
+  // Where the request stands. UNSPECIFIED from a coordinator before expiry, whose list holds
+  // only pending requests.
+  EnrollmentRequestState state = 13;
+  // Why the host is unenrolled, as a token: `request_expired`, no operator approved the request
+  // within `request_ttl_secs` of `first_seen_unix` (UNENROLLED only).
+  string unenrolled_reason = 14;
+  // When the request expired (UNENROLLED only).
+  uint64 unenrolled_unix = 15;
+  // The coordinator's request TTL the request expired under, in seconds (UNENROLLED only).
+  uint64 request_ttl_secs = 16;
+}
+
+// Where an enrollment request stands, as `Enrollment.List` shows it.
+enum EnrollmentRequestState {
+  ENROLLMENT_REQUEST_STATE_UNSPECIFIED = 0;
+  // Waiting for an operator (a duplicate claim also says `duplicate_claim`).
+  ENROLLMENT_REQUEST_STATE_PENDING = 1;
+  // No longer waiting: the request expired, and its host is unenrolled. An approval of it is
+  // refused `not_pending`. The host's key posted again starts it over as a pending request.
+  ENROLLMENT_REQUEST_STATE_UNENROLLED = 2;
 }
 
 // How a pending request matches the host inventory. A record matches a Linux request when one of
@@ -170,6 +198,10 @@ message InventoryRecord {
   // The name of the operator token that added it.
   string added_by = 7;
   uint64 added_unix = 8;
+  // A host is enrolled against the record: the claims of the request its key was approved from
+  // match this record and no other, and its host id is not denied (`Host.inventory_record_id`
+  // names the record).
+  bool enrolled = 9;
 }
 
 message ApproveRequest {
@@ -222,6 +254,9 @@ message ListRecordsRequest {
   uint32 limit = 1;
   // Where to go on, as `next_page_token` gave it; empty for the first page.
   string page_token = 2;
+  // Unset for every record; true for only the records a host is enrolled against
+  // (`InventoryRecord.enrolled`), false for only the others.
+  optional bool enrolled = 3;
 }
 
 message ListRecordsResponse {

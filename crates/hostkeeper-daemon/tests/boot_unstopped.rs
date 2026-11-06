@@ -6,12 +6,11 @@ mod support;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::thread;
 
 use hostkeeper_daemon::admin::service_record;
 use hostkeeper_daemon::boot::Outcome;
 use hostkeeper_daemon::locks::Package;
-use hostkeeper_daemon::testing::{FakeClock, Log};
+use hostkeeper_daemon::testing::{FakeClock, Log, spawn};
 use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::Step;
@@ -61,12 +60,20 @@ fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
     let daemon = Arc::new(daemon);
     let pass = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.boot_pass().expect("the start pass"))
+        spawn("the start pass", move || {
+            daemon.boot_pass().expect("the start pass")
+        })
     };
-    gate.entered();
+    gate.entered(&pass).expect("alpha's prepare runs");
     // Past the bound of `prepare` (600 seconds): the dead-man tries to stop the step, and fails.
+    // It ticks, then sleeps on the clock: by its second sleep from here, one whole tick has
+    // looked past the bound.
     clock.advance(601);
-    assert_eq!(stops.recv().expect("a stop"), "updater-alpha-prepare-1");
+    let ticked = clock.sleeps(2);
+    assert_eq!(
+        stops.wait(&ticked).expect("the dead-man's stop"),
+        "updater-alpha-prepare-1"
+    );
     gate.release();
     let report = pass.join().expect("the start pass");
     let Outcome::Interrupted { refusal, detail } = &report.services["alpha"].outcome else {

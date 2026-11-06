@@ -21,6 +21,7 @@ with no client certificate asked of `Enroll` and `Poll`.
 | `--server-cert-file <file>` | The coordinator's server certificate, the CA certificate and the server key, one PEM file (mode 0600) the coordinator writes. The heartbeat listener serves it. |
 | `--server-name <name>` | A DNS name the server certificate names, as daemons dial the coordinator; repeat it for each. |
 | `--max-pending-enrollments <n>` | How many requests may wait for an operator at once, 1 or more; 256 when not given. A new request over it is refused `pending_full`; no waiting request is dropped for it, and a host posting its waiting request again is still answered. Requires `--enrollment-dir`. |
+| `--enrollment-request-ttl <time>` | How long a request waits for an operator before it expires: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second; `72h` when not given. Requires `--enrollment-dir`. |
 | `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--enrollment-dir`. |
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
@@ -89,7 +90,8 @@ hostkeeper ctl enrollment approve --request-id <id> --key-sha256 <key_sha256 as 
 `List` answers the waiting requests oldest first (the time the coordinator first received each,
 then its id), a page at a time (`limit` at most 256; `next_page_token` until the last page), each
 with its claims, its `key_sha256`, `renewal_of`, whether it is a `duplicate_claim` and whether a
-Mac nonce was presented. It never answers a CSR or a nonce.
+Mac nonce was presented. It never answers a CSR or a nonce. With `unenrolled` it answers, in the same order and pages, the
+requests that expired in their place (Request expiry, below).
 
 `Approve` names the request, the SHA-256 of its key as listed (compared whole, in constant time;
 another request's key hash is `key_mismatch`), the host id, the role, the services (each one the
@@ -113,6 +115,37 @@ therefore never refused `audit_unavailable`: the request file is its durable rec
 file's retention has deleted segments, an approval older than the oldest line kept is not audited
 again.
 
+The coordinator's own enrollment changes are audited under `coordinator`: a new request
+(`enroll_requested`, with its request id, round and `pending` or `duplicate_claim`, and the host
+it renews if any), a certificate's first issue at a `Poll` (`enroll_issued`, once per request and
+round, with the serial), a `Renew` (`cert_renewed`, with the serial) and a request that expired
+(`request_expired`, with its request id, round and the TTL, and the host it renews if any). A
+repost of a request, a later poll of an issued one and a refused call write nothing. No reason
+holds a CSR, a key, a nonce or a signature.
+
+## Request expiry
+
+A request no operator approves within `--enrollment-request-ttl` of the time the coordinator
+first received it expires (design 6.1: `pending` -> `unenrolled`). The coordinator looks at every
+reload tick (`--tls-reload-secs`), at the time its wall clock reads, so a request expires at most
+one tick after its TTL; one that has waited exactly the TTL still waits. A duplicate claim expires
+like any waiting request; an approved, issued or denied one never does. Under the store's lock the
+request is marked expired, once, and audited `request_expired`; an expiry whose entry did not land
+is audited when the coordinator next starts, as an approval is.
+
+An expired request is unenrolled: `Approve` refuses it `not_pending`, it no longer counts toward
+`--max-pending-enrollments`, and `List` with `unenrolled` lists it (with `state` `UNENROLLED`,
+`unenrolled_reason` `request_expired`, `unenrolled_unix` and `request_ttl_secs`), where the plain
+`List` no longer does. Its host's `Poll` is still answered pending: no wire answer tells a daemon
+its request expired, and a daemon posts its request once per start. When the host posts the same
+key again (its daemon restarted), the request starts over: pending, first seen at that post,
+audited `enroll_requested`, and checked for a duplicate claim like a new one. An expired request's
+machine id makes no other request a duplicate claim.
+
+The request file keeps the waiting state it expired in and adds the expiry's time and TTL, fields
+a release before expiry ignores: after a downgrade such a release reads the request as waiting
+again, as it did before it expired.
+
 | token | when |
 |---|---|
 | `unauthorized` | no bearer, or not an operator token |
@@ -122,7 +155,7 @@ again.
 | `unknown_request` | no request has the id |
 | `key_mismatch` | the key hash is not the request's |
 | `record_mismatch` | the request matches one inventory record, the host id is another, and `replace` is not set |
-| `not_pending` | the request was approved, issued or denied already |
+| `not_pending` | the request was approved, issued or denied already, or it expired |
 | `duplicate_claim` | the request is a duplicate claim and `replace` is not set |
 | `host_id_taken` | another key holds the host id and `replace` is not set |
 | `denied` | the host id is denied and `replace` is not set |

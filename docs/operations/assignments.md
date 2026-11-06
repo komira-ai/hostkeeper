@@ -31,7 +31,8 @@ assigned its allowlist entry's services this way: assign them with `Services.Ass
 
 At the next heartbeat of a host that is assigned a service and does not run it (it does not
 list it, or lists it `absent`: staged and never run), the coordinator orders `install` of the
-service's desired version, with the package digest CI set for it. The install is decided under
+service's desired version, with the package digest for the host's platform: the one CI set, or
+the one the version's release index lists for that platform. The install is decided under
 every rule of an update, in the same order: the halt, the exclusion, the hold, a version marked
 bad, the minimum version, one update at a time on the host, the canary, the one live update of
 the farm, the bake, a failure of this version on this host and a deferral. An install takes the
@@ -40,7 +41,9 @@ one live update slot and frees it as an update does.
 An install goes only to a daemon that announces the `install-v1` feature and lists every
 service it runs (`heartbeat-v2`), and only as a typed order: the JSON heartbeat reply carries
 none. The rollout status says why a host is not told: `unsupported` (its daemon cannot take an
-install) or `no_digest` (CI set the desired version without a digest).
+install), `no_digest` (CI set the desired version without a digest or a release index) or
+`no_package_for_platform` (the release index lists no package for the host's platform: the host
+is ordered nothing for this version, and that is not a failed install).
 
 ## Uninstall
 

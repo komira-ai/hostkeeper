@@ -7,13 +7,13 @@ mod support;
 use std::fs;
 use std::num::NonZeroU64;
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_config::names::Version;
 use hostkeeper_daemon::link_adapters::{
     DaemonHalts, DaemonOrders, MAX_DETAIL, order_result, wire_order,
 };
 use hostkeeper_daemon::packages::PackageError;
+use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::verb::{Forced, Hooked, NO_TRY, PackageDigest as WireDigest, Unhooked};
 use hostkeeper_daemon::{Refusal, Reply, Verb as Decoded};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
@@ -29,6 +29,7 @@ fn target(service: &str, version: &str) -> Target {
         service: name(service),
         version: Version::new(version).expect("a version"),
         digest: PackageDigest::new(&d()).expect("a package digest"),
+        index_digest: None,
     }
 }
 
@@ -91,6 +92,7 @@ fn a_link_order_is_decoded_by_the_daemon_as_the_verb_and_target_it_names() {
         service: name("web"),
         version: Version::new("2.0.0").expect("a version"),
         digest: WireDigest::new(&d()).expect("a digest"),
+        index_digest: None,
         order_try: NonZeroU64::new(order_try).expect("a try from 1"),
     };
     let update = wire_order(&update_order("web", "2.0.0", 3));
@@ -114,6 +116,39 @@ fn a_link_order_is_decoded_by_the_daemon_as_the_verb_and_target_it_names() {
     );
 }
 
+/// Catches an index digest of the loop's order that is dropped on its way to the daemon, or
+/// given to the wrong verb: an update, a forced update and an install whose target holds an index
+/// digest are decoded by the daemon with that digest beside the package digest.
+#[test]
+fn the_index_digest_of_a_link_order_reaches_the_daemons_order() {
+    let index = PackageDigest::new(&"cd".repeat(32)).expect("an index digest");
+    let indexed = |service: &str| Target {
+        index_digest: Some(index.clone()),
+        ..target(service, "2.0.0")
+    };
+    let wanted = Some(WireDigest::new(&"cd".repeat(32)).expect("an index digest"));
+    let order = |verb: Verb| Order {
+        id: order_id("o-1"),
+        order_try: 1,
+        verb,
+    };
+    let update = wire_order(&order(Verb::Update(indexed("web"))));
+    let Ok(Decoded::Update(hooked)) = Decoded::try_from(&update) else {
+        panic!("not an update: {update:?}");
+    };
+    assert_eq!(hooked.index_digest, wanted);
+    let forced = wire_order(&order(Verb::Force(indexed("web"))));
+    let Ok(Decoded::Force(forced)) = Decoded::try_from(&forced) else {
+        panic!("not a force");
+    };
+    assert_eq!(forced.package.index_digest, wanted);
+    let install = wire_order(&order(Verb::Install(indexed("web"))));
+    let Ok(Decoded::Install(hooked)) = Decoded::try_from(&install) else {
+        panic!("not an install");
+    };
+    assert_eq!(hooked.index_digest, wanted);
+}
+
 /// Catches an install, an uninstall or an abort of the loop that the daemon decodes as another
 /// verb, or with a field changed: each is decoded as the verb it names, with the order's
 /// service, try, and for an install its version and digest.
@@ -132,6 +167,7 @@ fn an_install_uninstall_and_abort_are_decoded_as_the_verbs_they_name() {
             service: name("web"),
             version: Version::new("2.0.0").expect("a version"),
             digest: WireDigest::new(&d()).expect("a digest"),
+            index_digest: None,
             order_try: NonZeroU64::new(2).expect("a try from 1"),
         }))
     );
@@ -221,9 +257,11 @@ fn a_busy_order_and_a_running_one_are_reported_failed_busy_under_their_own_id_an
     let first = update_order("alpha", "2.0.0", 1);
     let running = {
         let (orders, first) = (Arc::clone(&orders), first.clone());
-        thread::spawn(move || orders.execute(&first, &version_of(&first)))
+        spawn("the order", move || {
+            orders.execute(&first, &version_of(&first))
+        })
     };
-    gate.entered();
+    gate.entered(&running).expect("the held step is entered");
     let other = update_order("alpha", "3.0.0", 2);
     assert_eq!(
         orders.execute(&other, &version_of(&other)),

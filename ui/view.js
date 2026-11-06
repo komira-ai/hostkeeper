@@ -11,11 +11,11 @@ import { ApiError } from "./api.js";
 const TAGS = new Set([
   "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
   "legend", "li", "main", "nav", "option", "p", "pre", "section", "select", "small", "span",
-  "strong", "table", "tbody", "td", "th", "thead", "tr", "ul",
+  "strong", "table", "tbody", "td", "textarea", "th", "thead", "tr", "ul",
 ]);
 const ATTRIBUTES = new Set([
   "aria-label", "autocomplete", "class", "id", "inputmode", "maxlength", "name", "placeholder",
-  "role", "spellcheck", "type",
+  "role", "rows", "spellcheck", "type",
 ]);
 // Set as properties, not attributes: what the element shows now.
 const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);
@@ -149,6 +149,28 @@ export function list(obj, key) {
   return obj && Array.isArray(obj[key]) ? obj[key] : [];
 }
 
+// Every item `reply[key]` of a paged list, from `page(token)`, which resolves to one reply: the
+// first page for the token "", then the page each reply's `nextPageToken` names, to the last. A
+// token that does not move past the one before ends the list, so a reply that repeats one
+// cannot keep the page asking. A `reply[key]` that is there and is no list throws, as reading
+// it would.
+export async function allPages(page, key) {
+  const items = [];
+  let token = "";
+  for (;;) {
+    const reply = await page(token);
+    if (reply && reply[key] !== undefined && !Array.isArray(reply[key])) {
+      throw new TypeError(`${key} is not a list`);
+    }
+    items.push(...list(reply, key));
+    const next = reply && typeof reply.nextPageToken === "string" ? reply.nextPageToken : "";
+    if (next === "" || next <= token) {
+      return items;
+    }
+    token = next;
+  }
+}
+
 // The bound controls below keep their own view node up to date as the operator types, ticks or
 // chooses, so a tree mounted again (after a status line changes) shows what the state holds.
 
@@ -156,6 +178,20 @@ export function list(obj, key) {
 export function field(label, name, state, key, extra) {
   const input = h("input", Object.assign({
     type: "text", name, autocomplete: "off", spellcheck: "false", value: state[key] || "",
+  }, extra || {}));
+  input.on = {
+    input: (e) => {
+      state[key] = e.target.value;
+      input.attrs.value = state[key];
+    },
+  };
+  return h("label", {}, label, input);
+}
+
+// A multi-line text field bound to `state[key]`: it keeps the line breaks that a text field drops.
+export function area(label, name, state, key, extra) {
+  const input = h("textarea", Object.assign({
+    name, autocomplete: "off", spellcheck: "false", rows: 6, value: state[key] || "",
   }, extra || {}));
   input.on = {
     input: (e) => {

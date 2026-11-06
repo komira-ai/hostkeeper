@@ -98,8 +98,16 @@ label {
 }
 
 label input,
+label textarea,
 label select {
   margin-left: 8px;
+}
+
+label textarea {
+  display: block;
+  width: 100%;
+  margin: 4px 0 0;
+  font-family: monospace;
 }
 
 label.check input {
@@ -177,4 +185,10 @@ form.sign-in {
   max-width: 32em;
   margin: 48px auto;
   padding: 16px;
+}
+
+/* The row a link opened the page on (the Host page's link to its inventory record). */
+tr[aria-current="true"] {
+  background: var(--panel);
+  outline: 2px solid var(--accent);
 }

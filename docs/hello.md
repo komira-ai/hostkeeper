@@ -71,9 +71,12 @@ makes that directory, owner only, on its first step.
    --index <assets>/hello-fail-ready-index.json` for the failing build), which lays out
    `hello/<version>/index.json` beside its packages and their bundles
    ([docs/deploy/release-channel.md](deploy/release-channel.md)). A host fetches nothing else.
-2. **One platform.** The desired state carries one package digest, and every host checks the
-   package it fetches against it. Run the proof on hosts of one platform, and use the digest
-   of that platform's package: the `.sha256` file beside it.
+2. **The release index.** The desired state names the release by its index,
+   `hello-index.json`, and the SHA-256 of that file (`sha256sum hello-index.json`). The
+   coordinator orders each host the package its own platform has in the index, so the proof
+   can run on hosts of any platform the index lists. A host of a platform the index does not list
+   is ordered nothing and shows the hold `no_package_for_platform`. A fleet of one platform may
+   name the one package digest instead (the `.sha256` file beside the package).
 3. **The rollout entry.** Append `examples/hello/rollout.toml` to the coordinator's rollout file
    (`--rollout-file`). Replace the role `farm` with the role of the hosts that run the proof,
    and restart the coordinator. `cargo test -p hostkeeper-coordinator --test hello_rollout`
@@ -110,17 +113,23 @@ Host page's `Assigned services` lists hello for each host of the role, with `Des
 Set the desired version to the first release, `<v1>`:
 
 ```sh
-echo '{"desired":{"version":"<v1>"}}' > desired.json
+jq -n --arg version <v1> --arg digest "$(sha256sum hello-index.json | cut -d' ' -f1)" \
+  --rawfile index hello-index.json \
+  '{desired: {version: $version}, releaseIndex: $index, releaseIndexDigest: $digest}' > desired.json
 hostkeeper ctl --endpoint <coordinator> --ca-file <ca.pem> --token-file <token> \
-  releases set-desired --service hello --package-digest <sha256 of hello-<v1>-<platform>.tar.zst> \
-  --request desired.json
+  releases set-desired --service hello --request desired.json
 ```
 
-or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` and `variant` `hello`
+`--rawfile` keeps the index byte for byte, which its digest covers. The coordinator refuses an
+index whose SHA-256 is not the digest (`index_digest_mismatch`) and one that is not hello's at
+`<v1>` (`index_invalid`).
+
+Or let CI do it: dispatch `hello-desired.yml` with `version` `<v1>` and `variant` `hello`
 (see "The proof from CI" below).
 
-Or use the Rollout page, section `hello`: type `<v1>` in `Version` and the digest in `Package
-digest`, press `Set desired` and confirm. The page keeps the limits CI set earlier.
+Or use the Rollout page, section `hello`: type `<v1>` in `Version`, the SHA-256 of the index in `Release
+index digest` and the text of `hello-index.json` in `Release index`, press `Set desired` and
+confirm. The page keeps the limits CI set earlier.
 
 **Watch:**
 
@@ -176,7 +185,7 @@ real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Ru
 |---|---|---|
 | `version` | a release of this repository, `X.Y.Z` | The release whose hello package is set. |
 | `variant` | `hello` or `fail-ready` | `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose `/readyz` answers 503. |
-| `platform` | `linux-x86_64` (default), `linux-arm64`, `macos-arm64` | The platform of the proof's hosts: the digest set is that platform's package (see "One platform"). |
+| `platform` | `linux-x86_64` (default), `linux-arm64`, `macos-arm64` | The platform of the proof's hosts: the digest set is that platform's one package digest (see "The release index"). |
 
 Its first job reads the SHA-256 of the package from the release's `.sha256` file beside it. Its
 second calls `set-desired.yml` pinned to a hostkeeper release, as any service pins it
@@ -229,4 +238,5 @@ and the Host page's `Assigned services` shows hello with `State` `uninstalling`.
 - A hand-off without a gap: hello restarts. tierstore's port forward is its own (design
   `docs/design/host-updates.md`, section 4.1).
 - The macOS hosts: the daemon does not run its steps through launchd yet (`docs/macos.md`).
-- More than one platform in one rollout: see "One platform" above.
+- More than one platform in one proof from CI: `hello-desired.yml` sets one platform's package
+  digest. An operator can name the release index instead (see "The release index" above).

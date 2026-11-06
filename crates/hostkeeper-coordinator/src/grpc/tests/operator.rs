@@ -157,6 +157,7 @@ pub(super) fn state(version: &str, min_up: &[(&str, u32)]) -> proto::DesiredStat
             .map(|(role, n)| ((*role).to_owned(), *n))
             .collect(),
         package_digest: None,
+        release_index_digest: None,
     }
 }
 
@@ -198,6 +199,8 @@ fn audit(
         service: service.map(str::to_owned),
         node_id: node_id.map(str::to_owned),
         reason: reason.map(str::to_owned),
+        at_unix: None,
+        by_name: Some("operator".to_owned()),
     })
 }
 

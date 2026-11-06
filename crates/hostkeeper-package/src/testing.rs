@@ -145,6 +145,7 @@ pub(crate) fn order(service: &str, version: &str) -> PackageOrder {
     PackageOrder {
         service: ServiceName::new(service).expect("a service name"),
         version: Version::new(version).expect("a version"),
+        index_digest: None,
     }
 }
 

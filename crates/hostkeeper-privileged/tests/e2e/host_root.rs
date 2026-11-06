@@ -115,6 +115,22 @@ pub struct HostRoot {
     units: Mutex<Vec<String>>,
     /// The bytes of the CA bundle before [`HostRoot::trust_ca`] first appended to it.
     ca_bundle: Mutex<Option<Vec<u8>>>,
+    /// The fixed places of the host this rig takes over that were there already (another test
+    /// of this crate may leave them), each with where it was moved aside; put back at the drop.
+    saved: Vec<(PathBuf, PathBuf)>,
+}
+
+/// The fixed places of the host the rig takes over: the daemon's programs, its pki and placed
+/// state, the self-update units it writes at every start, and the fixture's template link.
+fn taken_places() -> [PathBuf; 6] {
+    [
+        PathBuf::from(LIBRARY_DIR),
+        PathBuf::from(PKI_DIR),
+        PathBuf::from(PLACED_DIR),
+        Path::new(UNIT_DIR).join(FALLBACK_UNIT),
+        Path::new(UNIT_DIR).join(SELF_UPDATE_DROPIN),
+        Path::new(UNIT_DIR).join(format!("{SERVICE}@.service")),
+    ]
 }
 
 impl HostRoot {
@@ -127,7 +143,7 @@ impl HostRoot {
     ///
     /// # Panics
     /// The test is not root or systemd is not the service manager, a place the rig takes over
-    /// already exists (the host is not a clean runner), or a directory cannot be made.
+    /// cannot be moved aside, or a directory cannot be made.
     pub fn new(tag: &str) -> HostRoot {
         assert!(
             (1..=8).contains(&tag.len())
@@ -140,22 +156,21 @@ impl HostRoot {
         if let Err(e) = check_host(root, Path::new(SYSTEMD_RUNTIME_DIR)) {
             panic!("{e}");
         }
-        // This rig writes to fixed places of the host. Never do so over something that is there:
-        // the machine is not a throwaway runner.
-        for taken in [
-            PathBuf::from(LIBRARY_DIR),
-            PathBuf::from(PKI_DIR),
-            PathBuf::from(PLACED_DIR),
-            Path::new(UNIT_DIR).join(FALLBACK_UNIT),
-            Path::new(UNIT_DIR).join(SELF_UPDATE_DROPIN),
-            Path::new(UNIT_DIR).join(format!("{SERVICE}@.service")),
-        ] {
-            assert!(
-                fs::symlink_metadata(&taken).is_err(),
-                "{} exists: this host is not a clean runner, and the end-to-end rig replaces it",
-                taken.display()
-            );
-        }
+        // This rig writes to fixed places of the host. What is there already is moved aside,
+        // beside itself, and put back when the test ends: another test of this crate may have
+        // left it, and nothing of it may leak into this test or be lost.
+        let pid = std::process::id();
+        let saved = taken_places()
+            .into_iter()
+            .filter(|place| fs::symlink_metadata(place).is_ok())
+            .map(|place| {
+                let aside = PathBuf::from(format!("{}.hk-e2e-saved-{tag}-{pid}", place.display()));
+                fs::rename(&place, &aside).unwrap_or_else(|e| {
+                    panic!("move {} aside to {}: {e}", place.display(), aside.display())
+                });
+                (place, aside)
+            })
+            .collect();
         let base = PathBuf::from(format!("/run/hk-e2e-{tag}-{}", std::process::id()));
         // `create_dir_all` would take over a directory that is already there.
         fs::create_dir(&base).unwrap_or_else(|e| panic!("create {}: {e}", base.display()));
@@ -164,6 +179,7 @@ impl HostRoot {
             base,
             units: Mutex::new(Vec::new()),
             ca_bundle: Mutex::new(None),
+            saved,
         };
         // The package check wants the packages directory and every ancestor root-owned and
         // writable by nobody else; the admin socket's directory is the daemon's to make 0700.
@@ -429,6 +445,9 @@ impl Drop for HostRoot {
             .take();
         if let Some(bytes) = original {
             let _ = fs::write(CA_BUNDLE, bytes);
+        }
+        for (place, aside) in &self.saved {
+            let _ = fs::rename(aside, place);
         }
         systemctl_quiet(&["daemon-reload"]);
         systemctl_quiet(&["reset-failed"]);

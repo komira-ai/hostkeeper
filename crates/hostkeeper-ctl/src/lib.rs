@@ -8,7 +8,9 @@
 //!
 //! [`run`] is the whole program: arguments in, an exit code out ([`exit`]). It reads the network
 //! only to call: `--help` and every usage error are answered before a transport is made, and the
-//! tokio runtime of a gRPC call is started inside the call.
+//! tokio runtime of a gRPC call is started inside the call. [`parse_with`] is that first read
+//! alone: whether a command line names an RPC with flags it takes, with nothing called, so that
+//! a test can check the command lines a document shows.
 //!
 //! Transports ([`transport`]): gRPC over TLS ([`transport::Tonic`]), the HTTP/JSON gateway of
 //! the coordinator's private listener ([`transport::Gateway`]), and an in-memory one that calls a
@@ -83,49 +85,29 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let cli = tree::build(commands);
-    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    // clap repeats what it cannot parse in its error; a credential typed in the wrong place must
-    // not be repeated with it.
-    let typed: Vec<String> = args
-        .iter()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    let credentials = secret::argument_credentials(&typed, &secret::known_flags(&cli));
-    let matches = match cli.try_get_matches_from(args) {
-        Ok(matches) => matches,
-        Err(e) if e.use_stderr() => {
-            let _ = write!(io.stderr, "{}", secret::scrub(&e.to_string(), &credentials));
-            return exit::USAGE;
-        }
-        Err(e) => {
+    let (command, leaf) = match read_args(commands, args) {
+        Ok(ReadArgs::Call(command, leaf)) => (command, leaf),
+        Ok(ReadArgs::Help(help)) => {
             // `--help`: the help is the output.
-            return match write!(io.stdout, "{e}") {
+            return match write!(io.stdout, "{help}") {
                 Ok(()) => exit::SUCCESS,
                 Err(_) => exit::FAILURE,
             };
         }
+        Err(usage) => {
+            let _ = write!(io.stderr, "{}", usage.0);
+            return exit::USAGE;
+        }
     };
-    let found = commands.iter().find_map(|c| {
-        matches
-            .subcommand_matches(c.service_command)
-            .and_then(|s| s.subcommand_matches(c.method_command))
-            .map(|leaf| (c, leaf))
-    });
-    // clap requires a service and an RPC, so a leaf is always found; the error is never made.
-    let result = found
-        .ok_or_else(|| Failure::Usage("name a service and one of its RPCs".to_owned()))
-        .and_then(|(command, leaf)| {
-            execute(
-                command,
-                leaf,
-                descriptors,
-                connect,
-                &mut *io.stdin,
-                &mut *io.stdout,
-                &mut *io.stderr,
-            )
-        });
+    let result = execute(
+        command,
+        &leaf,
+        descriptors,
+        connect,
+        &mut *io.stdin,
+        &mut *io.stdout,
+        &mut *io.stderr,
+    );
     match result {
         Ok(()) => exit::SUCCESS,
         Err(Failure::Usage(message)) => {
@@ -151,6 +133,80 @@ where
             code
         }
     }
+}
+
+/// What a command line of `hostkeeper ctl` asks for, as [`parse_with`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Parsed<'a> {
+    /// `--help` of `ctl`, of a service or of an RPC: `ctl` prints the help and calls nothing.
+    Help,
+    /// The RPC the line calls.
+    Call(&'a Command),
+}
+
+/// Why a command line of `hostkeeper ctl` cannot make a call: clap's message, as `ctl` prints
+/// it on stderr before it exits 2, with every credential typed on the line replaced.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct UsageError(String);
+
+/// Reads a command line of `hostkeeper ctl` against the command tree of `commands`, as
+/// [`run_with`] reads it before anything else, and stops there: it reads no file, no stdin and
+/// no network, and needs no `--endpoint`, `--ca-file` or token, which only a call reads. clap
+/// checks the commands, the flags and the values of a bool, an enum, `--transport`, `--output`
+/// and `--timeout-secs`; the text of a number flag is read, and refused, only when the request
+/// is built. `args` are as [`run`] takes them, the first the program's own name.
+pub fn parse_with<'a, I, T>(commands: &'a [Command], args: I) -> Result<Parsed<'a>, UsageError>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    match read_args(commands, args)? {
+        ReadArgs::Help(_) => Ok(Parsed::Help),
+        ReadArgs::Call(command, _) => Ok(Parsed::Call(command)),
+    }
+}
+
+/// What the arguments ask for once clap has read them.
+enum ReadArgs<'a> {
+    /// `--help`: the help text.
+    Help(String),
+    /// The RPC called, and the matches of its subcommand.
+    Call(&'a Command, ArgMatches),
+}
+
+/// The arguments read against the tree of `commands`, or the usage error to print.
+fn read_args<'a, I, T>(commands: &'a [Command], args: I) -> Result<ReadArgs<'a>, UsageError>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let cli = tree::build(commands);
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    // clap repeats what it cannot parse in its error; a credential typed in the wrong place must
+    // not be repeated with it.
+    let typed: Vec<String> = args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let credentials = secret::argument_credentials(&typed, &secret::known_flags(&cli));
+    let matches = match cli.try_get_matches_from(args) {
+        Ok(matches) => matches,
+        Err(e) if e.use_stderr() => {
+            return Err(UsageError(secret::scrub(&e.to_string(), &credentials)));
+        }
+        Err(e) => return Ok(ReadArgs::Help(e.to_string())),
+    };
+    // clap requires a service and an RPC, so a leaf is always found; the error is never made.
+    commands
+        .iter()
+        .find_map(|c| {
+            matches
+                .subcommand_matches(c.service_command)
+                .and_then(|s| s.subcommand_matches(c.method_command))
+                .map(|leaf| ReadArgs::Call(c, leaf.clone()))
+        })
+        .ok_or_else(|| UsageError("error: name a service and one of its RPCs\n".to_owned()))
 }
 
 /// A server's text with every control character escaped, so that it cannot act on a terminal.

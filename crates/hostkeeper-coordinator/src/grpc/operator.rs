@@ -2,13 +2,13 @@
 //! `Services`, `Enrollment` and `Audit`.
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
-//! ([`crate::operator`], [`crate::force`], [`crate::assign`]) calls it with the caller the
-//! router admitted. A method the frozen JSON routes have (`Hosts.Include`, `Hosts.SetLabels`, `Releases.ClearHalt`,
-//! `Releases.SetDesired`, `Releases.Converge`, `Releases.Status`) builds the request that route
-//! reads and calls what that route calls. A method no handler serves yet is `UNIMPLEMENTED`
-//! ([`super::PENDING`] lists them). The caller was settled before the request was read
-//! ([`super::admit`]) and arrives in the request's extensions; a request without one is an
-//! anonymous caller, and is refused as such.
+//! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`]) calls it with
+//! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
+//! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
+//! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
+//! method has a handler ([`super::PENDING`] is empty). The caller was settled before the request
+//! was read ([`super::admit`]) and arrives in the request's extensions; a request without one is
+//! an anonymous caller, and is refused as such.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,11 +34,6 @@ const UNKNOWN_SERVICE: &str = "service is not one this coordinator manages";
 
 /// What `operate` says of a clear of a service that is not halted.
 const NOT_HALTED: &str = "the service is not halted";
-
-/// The status of a method no handler serves yet.
-fn pending() -> Status {
-    Status::unimplemented("")
-}
 
 /// The caller the router admitted for `request`; anonymous when it admitted none.
 pub(crate) fn caller_of<T>(request: &Request<T>) -> Caller {
@@ -101,6 +96,10 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::Unavailable => proto::ReleasesRefusal::KeysUnavailable,
         SetError::Forbidden => proto::ReleasesRefusal::Forbidden,
         SetError::Invalid(DesiredError::UnknownService) => proto::ReleasesRefusal::UnknownService,
+        SetError::Invalid(DesiredError::IndexInvalid(_)) => proto::ReleasesRefusal::IndexInvalid,
+        SetError::Invalid(DesiredError::IndexDigestMismatch) => {
+            proto::ReleasesRefusal::IndexDigestMismatch
+        }
         SetError::Invalid(_) | SetError::UnparseableVersion | SetError::DigestConflict => {
             proto::ReleasesRefusal::InvalidRequest
         }
@@ -137,7 +136,9 @@ pub(crate) fn converge_refusal(why: ConvergenceError) -> proto::ReleasesRefusal 
 /// `invalid_request`: no desired state; a precondition (`if_generation`) or a write id, which
 /// the desired-state store keeps no generation or id for and so cannot honour; or two package
 /// digests that differ. An empty `service` names none, which the JSON route reads as the legacy
-/// service.
+/// service. A release index and its digest are passed as the keys `release_index` and
+/// `release_index_digest`, which the route checks (an index beside a package digest, or one of
+/// the pair alone, is its `index_invalid`).
 pub(crate) fn desired_body(
     request: proto::SetDesiredRequest,
 ) -> Result<Vec<u8>, proto::ReleasesRefusal> {
@@ -161,6 +162,12 @@ pub(crate) fn desired_body(
     if let Some(digest) = digest {
         body["release_digest"] = digest.into();
     }
+    if let Some(index) = request.release_index {
+        body["release_index"] = index.into();
+    }
+    if let Some(digest) = request.release_index_digest {
+        body["release_index_digest"] = digest.into();
+    }
     Ok(serde_json::to_vec(&body).unwrap_or_default())
 }
 
@@ -179,6 +186,10 @@ pub(crate) fn desired_proto(desired: &Desired) -> proto::DesiredState {
         max_updating: limits("max_updating"),
         min_up: limits("min_up"),
         package_digest: desired.release_digest.as_ref().map(ToString::to_string),
+        release_index_digest: desired
+            .release_index
+            .as_ref()
+            .map(|record| record.digest.to_string()),
     }
 }
 
@@ -198,16 +209,24 @@ impl HostsService {
 impl HostsApi for HostsService {
     async fn list(
         &self,
-        _request: Request<proto::ListHostsRequest>,
+        request: Request<proto::ListHostsRequest>,
     ) -> Result<Response<proto::ListHostsResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .list_hosts(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::hosts)
     }
 
     async fn get(
         &self,
-        _request: Request<proto::GetHostRequest>,
+        request: Request<proto::GetHostRequest>,
     ) -> Result<Response<proto::GetHostResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .get_host(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::hosts)
     }
 
     async fn exclude(
@@ -354,9 +373,13 @@ impl ReleasesApi for ReleasesService {
 
     async fn unmark_bad(
         &self,
-        _request: Request<proto::UnmarkBadRequest>,
+        request: Request<proto::UnmarkBadRequest>,
     ) -> Result<Response<proto::UnmarkBadResponse>, Status> {
-        Err(pending())
+        let caller = caller_of(&request);
+        self.coordinator
+            .unmark_bad(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::releases)
     }
 
     async fn clear_halt(

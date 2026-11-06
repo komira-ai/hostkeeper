@@ -23,6 +23,7 @@ const TOKEN: &str = "operator-token-1";
 struct Seen {
     records: BTreeMap<String, proto::InventoryRecord>,
     adds: Vec<proto::AddRecordRequest>,
+    lists: Vec<proto::ListRecordsRequest>,
     removes: Vec<proto::RemoveRecordRequest>,
     bearers: Vec<String>,
 }
@@ -86,6 +87,7 @@ impl Enrollment for Records {
                 notes: add.notes.clone(),
                 added_by: "operator".to_owned(),
                 added_unix: 1_800_000_000,
+                enrolled: false,
             };
             s.records.insert(add.host_id, record.clone());
             Ok(Response::new(proto::AddRecordResponse {
@@ -100,7 +102,15 @@ impl Enrollment for Records {
         request: Request<proto::ListRecordsRequest>,
     ) -> Result<Response<proto::ListRecordsResponse>, Status> {
         self.bearer(&request);
-        let records = self.seen(|s| s.records.values().cloned().collect());
+        let list = request.into_inner();
+        let records = self.seen(|s| {
+            s.lists.push(list.clone());
+            s.records
+                .values()
+                .filter(|r| list.enrolled.is_none_or(|want| r.enrolled == want))
+                .cloned()
+                .collect()
+        });
         Ok(Response::new(proto::ListRecordsResponse {
             records,
             next_page_token: String::new(),
@@ -313,5 +323,59 @@ fn the_inventory_commands_add_list_and_remove_a_record_through_the_grpc_route() 
     assert!(
         bearers.iter().all(|b| *b == format!("Bearer {TOKEN}")),
         "{bearers:?}"
+    );
+}
+
+/// Catches: the generated `--enrolled` flag of `list-records` not reaching
+/// `ListRecordsRequest.enrolled` as typed (an absent flag sent as `false`, or `false` dropped
+/// as if absent, would hide the records a host is enrolled against), and a record's `enrolled`
+/// not printed.
+#[test]
+fn list_records_sends_the_enrolled_filter_as_typed() {
+    let dir = hostkeeper_testkit::Scratch::under(
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
+        "ctl-inventory-enrolled",
+    )
+    .expect("a scratch directory");
+    let token_file = dir.path().join("token");
+    std::fs::write(&token_file, format!("{TOKEN}\n")).expect("written");
+    let token_file = token_file.to_str().expect("UTF-8 path");
+    let records = Records::default();
+    records.seen(|s| {
+        for (host, enrolled) in [("db-1", true), ("db-2", false)] {
+            let record = proto::InventoryRecord {
+                host_id: host.to_owned(),
+                serial: format!("SN-{host}"),
+                enrolled,
+                ..proto::InventoryRecord::default()
+            };
+            s.records.insert(host.to_owned(), record);
+        }
+    });
+    let memory = InMemory::new(PeerIdentity::Operator("op".to_owned()))
+        .serve(EnrollmentServer::new(records.clone()));
+    let hosts = |args: &[&str]| -> Vec<(String, bool)> {
+        let words: Vec<&str> = ["enrollment", "list-records"]
+            .into_iter()
+            .chain(args.iter().copied())
+            .collect();
+        json_of(&ctl(&memory, token_file, &words))["records"]
+            .as_array()
+            .expect("records")
+            .iter()
+            .map(|r| {
+                let host = r["hostId"].as_str().expect("a host id").to_owned();
+                (host, r["enrolled"].as_bool().unwrap_or(false))
+            })
+            .collect()
+    };
+
+    let all = [("db-1".to_owned(), true), ("db-2".to_owned(), false)];
+    assert_eq!(hosts(&[]), all);
+    assert_eq!(hosts(&["--enrolled", "true"]), all[..1]);
+    assert_eq!(hosts(&["--enrolled", "false"]), all[1..]);
+    assert_eq!(
+        records.seen(|s| s.lists.iter().map(|l| l.enrolled).collect::<Vec<_>>()),
+        [None, Some(true), Some(false)]
     );
 }

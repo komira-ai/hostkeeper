@@ -203,6 +203,8 @@ fn status_lists_every_service_in_name_order_with_the_top_level_facts() {
             service: Some("web".to_owned()),
             node_id: Some("d1".to_owned()),
             reason: Some("freeze".to_owned()),
+            at_unix: None,
+            by_name: Some("alice".to_owned()),
         }]
     );
 }
@@ -275,6 +277,7 @@ fn desired_state_carries_version_limits_and_digest() {
         max_updating: RoleLimits::max_updating_default(),
         min_up: RoleLimits::from([("storage", 3), ("frontend", 2)]),
         release_digest: Some(Digest::parse(&"a".repeat(64)).expect("a digest")),
+        release_index: None,
     });
 
     let desired = mapped(one, OpsState::default()).desired.expect("desired");
@@ -291,6 +294,7 @@ fn desired_state_carries_version_limits_and_digest() {
             ]),
             min_up: HashMap::from([("storage".to_owned(), 3), ("frontend".to_owned(), 2)]),
             package_digest: Some("a".repeat(64)),
+            release_index_digest: None,
         }
     );
 }
@@ -304,6 +308,7 @@ fn desired_state_without_digest_or_limits_leaves_them_empty() {
         max_updating: RoleLimits::default(),
         min_up: RoleLimits::default(),
         release_digest: None,
+        release_index: None,
     });
 
     let desired = mapped(one, OpsState::default()).desired.expect("desired");
@@ -454,6 +459,7 @@ fn standing_force_is_named_in_the_convergence() {
             reason: "rollback".to_owned(),
             by: "alice".to_owned(),
             digest: Digest::parse(&"b".repeat(64)).expect("a digest"),
+            release_index: None,
             halt_generation: 0,
             targets: ForceTargets::Fleet,
             include_held: false,
@@ -735,6 +741,10 @@ fn every_rollout_hold_maps_to_its_proto_gate_reason() {
         (Some(Why::Skip(Skip::Deferred)), R::Deferred),
         (Some(Why::Skip(Skip::Unsupported)), R::Unspecified),
         (Some(Why::Skip(Skip::NoDigest)), R::Unspecified),
+        (
+            Some(Why::Skip(Skip::NoPackageForPlatform)),
+            R::NoPackageForPlatform,
+        ),
         (None, R::None),
     ];
     for (why, expected) in cases {

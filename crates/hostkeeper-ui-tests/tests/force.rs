@@ -440,3 +440,43 @@ return null;"#,
         3
     );
 }
+
+/// The hosts a fleet force of `api` reaches, as `prepareForce` counts them over the replies
+/// scripted for `Hosts.List`; the error's code when the hosts cannot be counted.
+fn fleet_count(ui: &mut Ui) -> Value {
+    ui.run(
+        r#"
+import { api } from "../test/kit.js";
+import { prepareForce } from "./pages/rollout.js";
+export async function main() {
+  const request = { service: "api", version: "1.4.0", fleet: { confirmService: "api" } };
+  const prepared = await prepareForce(api("operator-token"), request);
+  return prepared.ok ? prepared.count : prepared.error.code;
+}"#,
+    )
+}
+
+#[test]
+fn a_force_counts_the_hosts_of_every_page_and_none_when_a_page_fails() {
+    // Catches: a force whose typed count is the first page's, so the operator confirms fewer
+    // hosts than it reaches; and a count made of the pages that did arrive.
+    let runs = |id: &str| json!({"nodeId": id, "services": [{"service": "api", "installedVersion": "1.3.0"}]});
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [runs("web-1")], "nextPageToken": "web-1"}),
+    );
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [runs("web-2"), runs("web-3")]}),
+    );
+    assert_eq!(fleet_count(&mut ui), json!(3));
+
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [runs("web-1")], "nextPageToken": "web-1"}),
+    );
+    ui.refuse(&m("Hosts/List"), 500, "INTERNAL", "store_failed");
+    assert_eq!(fleet_count(&mut ui), json!("INTERNAL"));
+}

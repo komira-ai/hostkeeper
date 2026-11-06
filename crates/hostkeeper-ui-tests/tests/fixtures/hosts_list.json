@@ -1,0 +1,53 @@
+{
+  "hosts": [
+    {
+      "heartbeat": {
+        "agent": {
+          "name": "hostkeeper-daemon",
+          "version": "1.0"
+        },
+        "features": [
+          "order-v1",
+          "halt-v1",
+          "deferred-v1"
+        ],
+        "platform": "PLATFORM_LINUX_X86_64",
+        "services": [
+          {
+            "health": "HEALTH_HEALTHY",
+            "name": "kbf",
+            "version": "1.0"
+          }
+        ]
+      },
+      "labels": {
+        "rack": "r1"
+      },
+      "lastHeartbeatUnix": "1800000000",
+      "live": true,
+      "nodeId": "s1",
+      "role": "storage",
+      "services": [
+        {
+          "gateReason": "GATE_REASON_NO_DESIRED",
+          "health": "HEALTH_HEALTHY",
+          "holds": [
+            {
+              "reason": "disk swap",
+              "scope": {
+                "host": "s1"
+              },
+              "service": "kbf",
+              "setBy": "operator",
+              "setUnix": "1800000000"
+            }
+          ],
+          "installedVersion": "1.0",
+          "membership": "MEMBERSHIP_PRESENT",
+          "service": "kbf",
+          "up": true
+        }
+      ]
+    }
+  ]
+}

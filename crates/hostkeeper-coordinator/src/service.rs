@@ -96,10 +96,12 @@ pub enum SetError {
 impl SetError {
     /// The closed reason token of a refusal of the version itself (`below_min_version`,
     /// `unparseable_version`, `bad_version`, `digest_conflict`, `not_in_channel`,
-    /// `channel_digest_mismatch`), which the answer says; `None` for every other error.
+    /// `channel_digest_mismatch`) or of its release index (`index_invalid`,
+    /// `index_digest_mismatch`), which the answer says; `None` for every other error.
     #[must_use]
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
+            Self::Invalid(why) => why.reason(),
             Self::BelowMinVersion => Some("below_min_version"),
             Self::UnparseableVersion => Some("unparseable_version"),
             Self::BadVersion => Some("bad_version"),
@@ -107,7 +109,6 @@ impl SetError {
             Self::Channel(refusal) => Some(refusal.token()),
             Self::Unauthorized(_)
             | Self::Unavailable
-            | Self::Invalid(_)
             | Self::Store(_)
             | Self::Ops(_)
             | Self::Forbidden => None,
@@ -597,6 +598,7 @@ impl Coordinator {
             role: who.role.name().to_owned(),
             features: beat.agent_features.clone(),
             agent: beat.agent.clone(),
+            platform: beat.platform,
             seen: now,
             announced: legacy
                 .map(|name| (name.to_owned(), beat.health))
@@ -721,6 +723,7 @@ impl Coordinator {
         }
         let asked = Asked {
             who: &who,
+            platform,
             legacy,
             announced: &announced,
             held: &held,
@@ -809,8 +812,8 @@ impl Coordinator {
             return Err(SetError::BadVersion);
         }
         let registered = self.desired.digests(service).get(version).cloned();
-        if let (Some(before), Some(now)) = (registered, desired.release_digest.as_ref())
-            && before != *now
+        if let (Some(before), Some(now)) = (registered, desired.release())
+            && before != now
         {
             return Err(SetError::DigestConflict);
         }
@@ -874,13 +877,19 @@ impl Coordinator {
         self.operator(bearer)?;
         let now = (self.clock)();
         let fleet = self.lock_fleet();
+        Ok(self.status_in(&fleet, now))
+    }
+
+    /// The status of `fleet` at `now`, which the caller holds locked: what [`Self::status`]
+    /// answers, and what `Hosts.List` and `Hosts.Get` read ([`crate::hosts`]).
+    pub(crate) fn status_in(&self, fleet: &Fleet, now: Duration) -> Status {
         let hosts = self
             .legacy
             .iter()
             .flat_map(|name| {
                 fleet
                     .hosts_of(name)
-                    .map(|(id, host)| host_status(&fleet, name, id, host, now))
+                    .map(|(id, host)| host_status(fleet, name, id, host, now))
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -891,28 +900,28 @@ impl Coordinator {
             .defs()
             .map(|def| {
                 let desired = self.desired.get(&def.name);
-                let roles = role_counts(def, desired.as_ref(), &fleet, now);
+                let roles = role_counts(def, desired.as_ref(), fleet, now);
                 let hosts: Vec<ServiceHostStatus> = fleet
                     .hosts_of(&def.name)
                     .map(|(id, host)| ServiceHostStatus {
-                        host: host_status(&fleet, &def.name, id, host, now),
+                        host: host_status(fleet, &def.name, id, host, now),
                         hold: halt::decide(
                             &self.ops,
                             &self.services,
                             &all,
                             &def.name,
-                            &fleet,
+                            fleet,
                             id,
                             now,
                         )
                         .why(),
-                        held_on_bad_version: on_bad_version(&fleet, &ops, &def.name, id),
+                        held_on_bad_version: on_bad_version(fleet, &ops, &def.name, id),
                     })
                     .collect();
                 let up = hosts.iter().filter(|h| h.host.up).count();
                 let slots_held = hosts.iter().filter(|h| h.host.holds_slot).count();
-                let members = members(def, &fleet, &ops, now);
-                let convergence = convergence_of(def, desired.as_ref(), &fleet, &ops, now);
+                let members = members(def, fleet, &ops, now);
+                let convergence = convergence_of(def, desired.as_ref(), fleet, &ops, now);
                 let status = ServiceStatus {
                     desired,
                     roles,
@@ -925,7 +934,7 @@ impl Coordinator {
                 (def.name.clone(), status)
             })
             .collect();
-        Ok(Status {
+        Status {
             per_service,
             ops,
             desired: self
@@ -947,7 +956,7 @@ impl Coordinator {
                 .enrollment
                 .as_deref()
                 .map(Enrollment::server_certificate),
-        })
+        }
     }
 
     /// Where the hosts of `service` stand against its desired state, if `bearer` is a

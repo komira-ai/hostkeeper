@@ -8,11 +8,11 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread;
 
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::place::hooked_switch;
+use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Params, Step, Verdict};
 use hostkeeper_placed::testing::{Event, FaultFs, FsWrite, UnitCall};
@@ -113,9 +113,11 @@ fn a_hooked_update_places_paths_at_the_design_points() {
     let gate = rig.launcher.hold("web", Step::Cutover);
     let running = {
         let daemon = Arc::clone(&daemon);
-        thread::spawn(move || daemon.order(&update("web", "2.0.0", &d(), 2)))
+        spawn("the order", move || {
+            daemon.order(&update("web", "2.0.0", &d(), 2))
+        })
     };
-    gate.entered();
+    gate.entered(&running).expect("the held step is entered");
     // At `cutover`: `current` and `previous` switched, the new paths pending, the old still there.
     assert_eq!(link(&rig, "current").as_deref(), Some("2.0.0"));
     assert_eq!(link(&rig, "previous").as_deref(), Some("1.0.0"));

@@ -187,7 +187,8 @@ fn release_workflows_have_empty_top_level_permissions() {
             "permissions:\n  contents: write\n",
             "",
         ] {
-            let text = with_in(&workflow(file), "permissions: {}\n", top);
+            // The top-level line: no job's `permissions: {}` starts a line.
+            let text = with_in(&workflow(file), "\npermissions: {}\n", &format!("\n{top}"));
             assert_refused(file, &text, "no top-level `permissions: {}`");
         }
     }
@@ -263,11 +264,11 @@ fn publish_job_alone_holds_contents_write() {
 fn unpinned_action_is_refused_in_the_new_workflows() {
     // Catches: an action of a release workflow that a tag or branch move would change under us,
     // in the job that publishes and in the job that signs.
-    let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-";
+    let download = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-${{ matrix.tag }}";
     let text = with_in(
         &workflow("release.yml"),
         download,
-        "actions/download-artifact@v8\n        with:\n          name: release-",
+        "actions/download-artifact@v8\n        with:\n          name: release-${{ matrix.tag }}",
     );
     assert_refused(
         "release.yml",
@@ -438,10 +439,10 @@ fn release_workflow_run_names_exactly_the_three_required_workflows() {
 }
 
 #[test]
-fn release_workflow_keeps_its_three_jobs_and_checks_the_binary() {
-    // Catches: a job added beside plan, verify and publish (which could write or build without a
-    // rule about it), publish no longer waiting for verify, and verify no longer running the
-    // binary it is about to release.
+fn release_workflow_keeps_its_five_jobs_and_checks_the_binary() {
+    // Catches: a job added beside plan, verify, publish and the two deploy jobs (which could
+    // write or build without a rule about it), publish no longer waiting for verify, and verify
+    // no longer running the binary it is about to release.
     let text = with_in(
         &workflow("release.yml"),
         "    needs: [plan, verify]\n",
@@ -459,7 +460,7 @@ fn release_workflow_keeps_its_three_jobs_and_checks_the_binary() {
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: jobs are [\"notify\", \"plan\", \"publish\", \"verify\"], not plan, verify and publish",
+        "release.yml: jobs are [\"channel\", \"notify\", \"plan\", \"publish\", \"set-desired\", \"verify\"], not plan, verify, publish, channel and set-desired",
     );
     for program in ["hostkeeper", "hostkeeper-coordinator"] {
         let check = format!(
@@ -513,6 +514,23 @@ fn the_image_job_builds_twice_from_scratch_and_compares() {
         (compare, "        run: cmp "),
     ] {
         let text = with_in(&workflow("artifacts.yml"), from, to);
+        assert_refused("artifacts.yml", &text, want);
+    }
+}
+
+#[test]
+fn the_image_job_checks_that_the_image_holds_the_web_app() {
+    // Catches: an image released without the operator web app, or checked against another
+    // image or another directory than the commit's `ui/` (a deploy of it would answer 404 at
+    // /ui/): the check removed, run on the second build's context, or on another directory.
+    let check = "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/image-a.tar\" ui\n";
+    let want = "artifacts.yml: job image must check that the image holds the web app";
+    for to in [
+        "        run: true\n",
+        "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/context-a\" ui\n",
+        "        run: cargo xtask release check-image-ui \"$RUNNER_TEMP/image-a.tar\" examples\n",
+    ] {
+        let text = with_in(&workflow("artifacts.yml"), check, to);
         assert_refused("artifacts.yml", &text, want);
     }
 }

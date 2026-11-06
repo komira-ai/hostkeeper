@@ -1,5 +1,6 @@
 //! The six pages, run in the JavaScript engine against the fake gateway of `support`: what each
-//! calls, what it shows, and what each of its buttons sends.
+//! calls, what it shows, and what each of its buttons sends. The Audit page's own tests are in
+//! `audit_page.rs`.
 
 mod support;
 
@@ -792,64 +793,6 @@ fn enrollment_page_passes_its_page_token() {
     assert_eq!(
         out["seen"]["navigations"],
         json!([{"name": "enrollment", "params": {}}])
-    );
-}
-
-#[test]
-fn audit_page_passes_its_filters_to_the_call() {
-    // Catches: a filter dropped from the request, an empty filter sent, and paging that does not
-    // go on from the last entry.
-    let mut ui = Ui::start();
-    ui.reply(
-        &m("Audit/List"),
-        json!({"entries": [{"seq": "6", "by": "ACTOR_OPERATOR", "action": "hold", "service": "api",
-                            "nodeId": "web-1", "reason": "kernel patch"}],
-               "nextSeq": "6"}),
-    );
-    ui.reply(&m("Audit/List"), json!({}));
-    let out = ui.run(&page_driver(
-        "audit",
-        r#"{ actor: "operator", action: "hold", service: "api", nodeId: "web-1", sinceSeq: "5" }"#,
-        "[]",
-        r#"
-await click(tree, "next-page");
-await click(tree, "first-page");
-type(tree, "service", " ");
-type(tree, "action", "unhold");
-choose(tree, "actor", "ci");
-await click(tree, "show");
-const { ctx: other } = recorder(ctx.api, {}, []);
-return text(await render(other));
-"#,
-    ));
-    assert_eq!(
-        bodies(&ui),
-        [
-            (
-                m("Audit/List"),
-                json!({"sinceSeq": "5", "limit": 100, "actor": "operator", "action": "hold",
-                                      "service": "api", "nodeId": "web-1"})
-            ),
-            (m("Audit/List"), json!({"sinceSeq": "0", "limit": 100})),
-        ]
-    );
-    assert_eq!(
-        out["seen"]["navigations"],
-        json!([
-            {"name": "audit", "params": {"actor": "operator", "action": "hold", "service": "api", "nodeId": "web-1", "sinceSeq": "6"}},
-            {"name": "audit", "params": {"actor": "operator", "action": "hold", "service": "api", "nodeId": "web-1"}},
-            {"name": "audit", "params": {"actor": "ci", "action": "unhold", "nodeId": "web-1"}},
-        ])
-    );
-    assert_shows(
-        &out,
-        &["6", "operator", "hold", "api", "web-1", "kernel patch"],
-    );
-    assert!(
-        out["out"]
-            .as_str()
-            .expect("the second page")
-            .contains("No entry.")
     );
 }
 

@@ -57,7 +57,10 @@ index. (`SHA256SUMS` lists every index, so the provenance of a release covers th
 Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
 
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
-distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It is
+distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It
+also holds the operator web app (`ui/` of the commit) at `/usr/share/hostkeeper-coordinator/ui`,
+owned by root, which the coordinator serves under `/ui/` when given no `--ui-dir`; `cargo xtask
+release check-image-ui` refuses an image that does not hold it file for file. It is
 built twice from clean contexts and released only when the two builds are byte for byte equal, so
 anyone can rebuild it from the commit and compare; before it is released it is also loaded and run
 through its entrypoint with `--version`, which must print the coordinator's stamp.
@@ -276,20 +279,31 @@ What it proves: the binary was built from the pinned commit and reports the vers
 
 Refuse when: the output differs in any character.
 
-### 7. Package digest for desired state
+### 7. Release index digest for desired state
 
 ```sh
+grep "  <service>-index.json$" release/SHA256SUMS
+sha256sum release/<service>-index.json
 cat release/hostkeeper-<version>-<platform>.tar.zst.sha256
 sha256sum release/hostkeeper-<version>-<platform>.tar.zst
 ```
 
-The digest in the first output equals the digest of the package that step 3 (or step 4) verified.
-This SHA-256 is what CI puts in the desired state with the version (design section 4.7); the daemon
-checks the package against it, and checks an attestation for it, before it reads the archive.
+(`index.json` for the hostkeeper packages; `<service>` is `hello` for the hello packages.)
 
-What it proves: the digest placed in desired state is the digest of the attested package.
+The digest of the index in the first two outputs is equal, and the index lists, for
+`<platform>`, the package file and the digest in the last two outputs, which are equal. These
+are what CI puts in the desired state with the version (design section 4.7): the index text and
+its SHA-256, so that each host is ordered the package of its own platform. The coordinator
+checks the index against its digest and keeps each platform's package digest; the daemon checks
+the index it fetches against the digest before it reads it, then the package against the
+index, and checks an attestation for the package, before it reads the archive. A fleet of one
+platform may put the one package digest in the desired state instead.
 
-Refuse when: the two digests differ, or the package did not pass step 3 or step 4.
+What it proves: the digest placed in desired state is the digest of the verified index, and the
+index lists the attested package.
+
+Refuse when: the digests differ, the index lists another digest for the package than the package
+has, or the package did not pass step 3 or step 4.
 
 ## What the release workflow runs
 

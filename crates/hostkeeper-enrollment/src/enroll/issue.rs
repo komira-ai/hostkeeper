@@ -30,6 +30,10 @@ pub struct IssuedCertificate {
     pub not_after: u64,
     /// The certificate, DER: the same bytes on every call for one request id and round.
     pub certificate_der: Vec<u8>,
+    /// The request became issued at this call: its certificate was signed now, or was signed
+    /// before a crash and is recorded issued now. Decided under the store's lock, so one call
+    /// per request and round says so.
+    pub first: bool,
 }
 
 impl EnrollmentStore {
@@ -37,8 +41,8 @@ impl EnrollmentStore {
     /// call of its round and read back at every later one (a poll issues lazily).
     ///
     /// # Errors
-    /// [`IssueError::NotApproved`] while the request waits for an operator (the poll answers
-    /// "pending"); [`IssueError::Denied`] when the request or its host is denied;
+    /// [`IssueError::NotApproved`] while the request waits for an operator, or after it expired
+    /// (the poll answers "pending"); [`IssueError::Denied`] when the request or its host is denied;
     /// [`IssueError::UnknownRequest`]; [`IssueError::Sign`]; [`IssueError::Store`], also for an
     /// issued request whose certificate file is gone (nothing is signed again).
     pub fn issue(
@@ -53,7 +57,9 @@ impl EnrollmentStore {
         if row.state == RequestState::Denied {
             return Err(IssueError::Denied);
         }
-        if row.state.is_pending() {
+        // An expired request is not approved either, and never will be: its host polls "pending"
+        // until it posts its key again, which starts the request over.
+        if row.state.is_pending() || row.state == RequestState::Expired {
             return Err(IssueError::NotApproved(row.state));
         }
         let host_id = row
@@ -67,11 +73,12 @@ impl EnrollmentStore {
             .load_issued(request_id)?
             .filter(|issued| issued.round == round)
         {
-            if row.state != RequestState::Issued {
+            let first = row.state != RequestState::Issued;
+            if first {
                 row.set_state(RequestState::Issued);
                 self.write_request(&row)?;
             }
-            return Ok(view(request_id, &host_id, issued));
+            return Ok(view(request_id, &host_id, issued, first));
         }
         if row.state == RequestState::Issued {
             let reason = "the request is issued but its certificate file is gone";
@@ -99,11 +106,16 @@ impl EnrollmentStore {
         self.write_issued(&issued, request_id)?;
         row.set_state(RequestState::Issued);
         self.write_request(&row)?;
-        Ok(view(request_id, &host_id, issued))
+        Ok(view(request_id, &host_id, issued, true))
     }
 }
 
-fn view(request_id: &KeyHash, host_id: &HostId, issued: pb::Issued) -> IssuedCertificate {
+fn view(
+    request_id: &KeyHash,
+    host_id: &HostId,
+    issued: pb::Issued,
+    first: bool,
+) -> IssuedCertificate {
     IssuedCertificate {
         request_id: *request_id,
         round: issued.round,
@@ -111,5 +123,6 @@ fn view(request_id: &KeyHash, host_id: &HostId, issued: pb::Issued) -> IssuedCer
         serial: issued.serial,
         not_after: issued.not_after,
         certificate_der: issued.certificate_der,
+        first,
     }
 }

@@ -633,9 +633,9 @@ fn the_mirror_of_kbfs_readers_refuses_what_they_refuse() {
 
 /// Names the readers of the release before that refuse the keys this coordinator adds, and
 /// those that skip them. The desired-state file's readers (`desired-single` and `desired-map`)
-/// were strict, and refuse `release_digest` and `digests` once CI sends a digest: a coordinator
-/// rolled back below this one refuses to start rather than run without the digests. With no
-/// digest neither key is written (`an_old_state_file_still_reads` in the unit tests). The halts
+/// were strict, and refuse `release_digest`, `release_index` and `digests` once CI sends a
+/// release: a coordinator rolled back below this one refuses to start rather than run without
+/// the digests. With no digest and no index none of the keys is written (`an_old_state_file_still_reads` in the unit tests). The halts
 /// file's reader was lenient and skips `origin` on a halt, keeping the record.
 ///
 /// Catches: a new key put in a file whose earlier reader is strict where it was not meant to be,
@@ -668,6 +668,37 @@ async fn the_new_keys_are_refused_only_by_the_readers_that_were_strict() {
         .check(readers.reader_of("desired-map"), &state, "desired.json")
         .expect_err("the map's reader is strict");
     assert!(refused.contains("digests is a key"), "{refused}");
+
+    // A version set over a release index writes the record of the index beside the registry,
+    // which the map's reader refuses the same way: by the key it does not know.
+    let index = format!(
+        r#"{{"packages":[{{"bytes":1,"file":"tierstore-3.0-linux-x86_64.tar.zst","platform":"linux-x86_64","sha256":"{digest}"}}],"schema":1,"service":"tierstore","version":"3.0"}}"#
+    );
+    let mut index_digest = String::new();
+    for b in Sha256::digest(index.as_bytes()).iter() {
+        write!(index_digest, "{b:02x}").expect("a string takes text");
+    }
+    let with_index = json!({
+        "service": "tierstore", "version": "3.0", "min_up": {},
+        "release_index": index, "release_index_digest": index_digest,
+    });
+    let (code, body) = rig.desired(&with_index.to_string()).await;
+    assert_eq!(code, 200, "{body}");
+    let state = parse(&rig.dir.path().join("desired.json"));
+    let kept = &state["services"]["tierstore"];
+    assert_eq!(kept["release_index"]["digest"], index_digest.as_str());
+    assert_eq!(
+        kept["release_index"]["packages"],
+        json!({"linux-x86_64": digest})
+    );
+    assert_eq!(kept["digests"]["3.0"]["digest"], index_digest.as_str());
+    let mut entry = kept.clone();
+    entry.as_object_mut().expect("a state").remove("digests");
+    let only = json!({"services": {"tierstore": entry}});
+    let refused = readers
+        .check(readers.reader_of("desired-map"), &only, "desired.json")
+        .expect_err("the map's reader is strict");
+    assert!(refused.contains("release_index is a key"), "{refused}");
 
     let mut halts: Value =
         serde_json::from_slice(&recorded_bytes("ops.json.halts")).expect("kbf's halts file");

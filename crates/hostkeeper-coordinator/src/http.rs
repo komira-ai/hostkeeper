@@ -18,9 +18,10 @@
 //!   service, and is a bad request when there is none); `POST /v1/operator` with an operator
 //!   token as the bearer and an action as JSON (`crate::ops`; CI's token is refused). An
 //!   operator token is one of the named tokens ([`crate::tokens`]); its name is the `by` of the
-//!   change. With `--ui-dir` it also answers `GET` and `HEAD` for `/ui/` and every path below
-//!   from that directory ([`crate::ui`]), with no token read; without it those paths are not
-//!   found. The heartbeat surface never serves them.
+//!   change. With a UI directory (`--ui-dir`, or the binary's default,
+//!   [`crate::config::DEFAULT_UI_DIR`]) it also answers `GET` and `HEAD` for `/ui/` and every
+//!   path below from that directory ([`crate::ui`]), with no token read; without one those paths
+//!   are not found. The heartbeat surface never serves them.
 //!
 //! No answer, on either surface, carries an `Access-Control-*` header: the operator web app is
 //! served from the private listener itself, so its calls are same-origin, and a cross-origin
@@ -33,7 +34,10 @@
 //! answered with its reason as the code: `unparseable_version` (400), and
 //! `below_min_version`, `bad_version` and `digest_conflict` (409), and, with
 //! `--release-channel`, `not_in_channel` and `channel_digest_mismatch` (409,
-//! [`crate::channel`]). A heartbeat that lists no
+//! [`crate::channel`]). A desired state may instead name the release index of its version
+//! (`release_index`, the text of its `index.json`, with `release_index_digest`, its SHA-256),
+//! from which each host is ordered the package of its own platform; one the coordinator refuses
+//! is answered `index_invalid` or `index_digest_mismatch` (400). A heartbeat that lists no
 //! services, at a coordinator with no legacy service, is a bad request. An agent that announces
 //! `order-v1` is answered with the order terms of [`crate::order_terms`] on an update, and its
 //! heartbeat's top level is never read as the legacy service.
@@ -370,8 +374,7 @@ where
         Err(SetError::Unauthorized(_)) => error(StatusCode::UNAUTHORIZED, "unauthorized"),
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
-        Err(SetError::Invalid(_)) => error(StatusCode::BAD_REQUEST, "bad_request"),
-        Err(why @ SetError::UnparseableVersion) => error(
+        Err(why @ (SetError::Invalid(_) | SetError::UnparseableVersion)) => error(
             StatusCode::BAD_REQUEST,
             why.reason().unwrap_or("bad_request"),
         ),
