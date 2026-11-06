@@ -28,8 +28,8 @@ Every API is a protobuf service, and the command line is generated from those de
 
 **hostkeeper is pre-release.** There is no release yet. Two programs are built from source: the
 one host program, `hostkeeper daemon`, which serves its admin socket (`Status`, `Abort`,
-`ClearRecord`) and runs the coordinator's `update` and `force` orders, but no `install`,
-`uninstall` or `abort` yet (see [Running the daemon](#running-the-daemon)), and the
+`ClearRecord`) and runs the orders the coordinator sends in its heartbeat replies (see
+[Running the daemon](#running-the-daemon)), and the
 update coordinator, `hostkeeper-coordinator serve`. The parts are being moved here from
 [kbf](https://github.com/komira-ai/kbf), where they were developed first
 ([MIGRATION.md](MIGRATION.md)).
@@ -141,7 +141,7 @@ the unit's name), and observes each service for `Status`. It has no service mana
 its launcher does not yet run an additive step (`[hook] boot`, `uninstall`) or the self-update
 protocol probe (each fails without starting). Once the host is enrolled, its heartbeats go to the
 config's `coordinator` over mutual TLS, pinned to `ca_sha256` (JSON, then gRPC once the coordinator
-advertises it), and the coordinator's `update` and `force` orders come back in the replies.
+advertises it), and the coordinator's orders come back in the replies.
 
 | exit status | meaning |
 |---|---|

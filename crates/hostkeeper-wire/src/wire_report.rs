@@ -22,8 +22,9 @@ use crate::wire::{MAX_SERVICES, ServiceReply, is_service_name};
 /// The most bytes of a [`Token`].
 pub const MAX_TOKEN: usize = 64;
 
-/// The most feature names an agent announces, and a reply names.
-pub const MAX_FEATURES: usize = 8;
+/// The most feature names an agent announces, and a reply names. A reader of an earlier release
+/// took at most 8, and dropped a longer list whole.
+pub const MAX_FEATURES: usize = 16;
 
 /// The most bytes of a feature name.
 pub const MAX_FEATURE_NAME: usize = 32;
