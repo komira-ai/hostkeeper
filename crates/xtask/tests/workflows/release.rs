@@ -7,7 +7,9 @@
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
 //!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
 //!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the two jobs
-//!   of hostkeeper's own deploy, held to [`desired::problems`]; checks both shipped binaries
+//!   of hostkeeper's own deploy, held to [`desired::problems`]; plans with the one step of
+//!   [`PLAN_RUN`], under no `if:`, on a checkout of the tip, for every trigger; publishes in the
+//!   job-level group of [`PUBLISH_GROUP`], never cancelled; checks both shipped binaries
 //!   ([`SHIPPED_BINARIES`]) in `verify`, and
 //!   has no step that builds or signs ([`build_problems`]).
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
@@ -38,9 +40,20 @@ pub const PLAN_IF: &str = "${{ github.ref == 'refs/heads/main' && (github.event_
 pub const RELEASE_IF: &str =
     "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}";
 
-/// The group every workflow that tags or publishes is in: a run of main of this repository joins
-/// `release-main`; any other takes a group of its own, so it cannot replace the release waiting.
-pub const RELEASE_GROUP: &str = "release-${{ (github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository))) && 'main' || github.run_id }}";
+/// The group every workflow that tags or publishes is in: a dispatch or schedule run of main
+/// joins `release-main-dispatch`, so the completion of a push run never replaces it while it
+/// waits; the completion of a push run on main of this repository joins `release-main`; any other
+/// run takes a group of its own, so it cannot replace a release waiting.
+pub const RELEASE_GROUP: &str = "release-${{ (github.ref == 'refs/heads/main' && github.event_name != 'workflow_run') && 'main-dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository) && 'main' || github.run_id }}";
+
+/// The job-level group of release.yml's `publish`: one per tag, so the two groups of main never
+/// publish one tag at once (two drafts of one tag would hold every later publish of it).
+pub const PUBLISH_GROUP: &str = "release-publish-${{ matrix.tag }}";
+
+/// The one plan step of release.yml, the same for every trigger: every commit from the tip of
+/// main down to the last release is planned, so a run replaced while it waited leaves nothing
+/// behind.
+pub const PLAN_RUN: &str = "cargo xtask release plan --repo \"$GITHUB_REPOSITORY\" --commit \"$GITHUB_SHA\" --version-file VERSION --freeze \"$FREEZE\" --output \"$GITHUB_OUTPUT\"";
 
 /// The group of artifacts.yml: one per commit.
 pub const ARTIFACTS_GROUP: &str = "artifacts-${{ github.sha }}";
@@ -300,6 +313,17 @@ fn release_problems(doc: &Node) -> Vec<String> {
             ));
         }
     }
+    problems.extend(plan_problems(job(doc, "plan")));
+    let publish = job(doc, "publish").and_then(|j| entry(j, "concurrency"));
+    if (
+        text_of(publish, "group"),
+        text_of(publish, "cancel-in-progress"),
+    ) != (Some(PUBLISH_GROUP), Some("false"))
+    {
+        problems.push(format!(
+            "release.yml: job publish needs `concurrency:` group {PUBLISH_GROUP}, cancel-in-progress false"
+        ));
+    }
     let verify_runs = step_values(job(doc, "verify"), "run");
     for program in SHIPPED_BINARIES {
         let checks = verify_runs.iter().any(|r| {
@@ -316,6 +340,39 @@ fn release_problems(doc: &Node) -> Vec<String> {
         problems.extend(build_problems(name, Some(j)));
     }
     problems.extend(desired::problems(doc));
+    problems
+}
+
+/// One line per way the plan job `plan` of release.yml plans other than with the one step of
+/// [`PLAN_RUN`], under no `if:`, on a checkout of the tip (no `ref:`): a second plan step, or one
+/// that a trigger skips or points elsewhere, would plan differently for some trigger.
+fn plan_problems(plan: Option<&Node>) -> Vec<String> {
+    let mut problems = Vec::new();
+    let planning: Vec<&Node> = steps(plan)
+        .iter()
+        .filter(|s| text_of(Some(s), "run").is_some_and(|r| r.contains("xtask release plan")))
+        .collect();
+    match planning[..] {
+        [step] if text_of(Some(step), "run") == Some(PLAN_RUN) => {
+            if entry(step, "if").is_some() {
+                problems.push(
+                    "release.yml: the plan step must run for every trigger, under no `if:`"
+                        .to_owned(),
+                );
+            }
+        }
+        _ => problems.push(format!(
+            "release.yml: job plan needs exactly one plan step, `{PLAN_RUN}`"
+        )),
+    }
+    let checkouts_elsewhere = steps(plan).iter().any(|s| {
+        text_of(Some(s), "uses").is_some_and(|u| u.starts_with("actions/checkout@"))
+            && entry(s, "with").and_then(|w| entry(w, "ref")).is_some()
+    });
+    if checkouts_elsewhere {
+        problems
+            .push("release.yml: job plan must check out the tip of main (no `ref:`)".to_owned());
+    }
     problems
 }
 

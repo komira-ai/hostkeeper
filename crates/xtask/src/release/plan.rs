@@ -1,5 +1,16 @@
-//! `release plan`: whether a commit (on the scheduled path, each commit missed since the last
-//! release) is released, and under which version.
+//! `release plan`: which commits since the last release are released, oldest first, and under
+//! which versions.
+//!
+//! Every run of `release.yml` plans the same way, whatever started it: it walks the first-parent
+//! history from the tip it is given down to the last release and judges each commit. A run
+//! started by the completion of one commit's run therefore also releases every earlier commit
+//! whose runs are done, so a run that a newer one replaced in the release concurrency group
+//! leaves nothing behind.
+//!
+//! Releases keep the order of their versions: a commit with a required run that has not
+//! completed holds every newer commit that would be released until that run completes (a newer
+//! release would end the walk above it, and it would never be released). A missing or failed run
+//! holds nothing: it may never change.
 //!
 //! A commit is released when it is not frozen, not already released, not documentation only,
 //! not held by a red privileged run, and every required workflow has a successful push run on
@@ -15,13 +26,11 @@ use super::{Error, RunState, answer, state, version};
 /// What `release plan` is asked.
 pub(crate) struct Request {
     pub(crate) repo: Repo,
-    /// The pushed commit, or on the scheduled path the tip of `main`.
+    /// The tip of `main` the walk starts from.
     pub(crate) commit: Commit,
     pub(crate) version_file: String,
     /// The value of the repository variable `RELEASE_FREEZE`.
     pub(crate) freeze: String,
-    /// Plan every commit since the last release, not only `commit`.
-    pub(crate) scheduled: bool,
     /// A file the answers (`key=value` lines) are appended to.
     pub(crate) output: Option<PathBuf>,
 }
@@ -50,11 +59,28 @@ pub(crate) fn is_docs_path(path: &str) -> bool {
     path.starts_with(dir) | path.ends_with(suffix)
 }
 
-/// One commit judged: its version, and why it is not released (none: it is released).
+/// One commit judged: its version, why it is not released (none: it is released), and whether
+/// a required run of it has not completed.
 struct Candidate {
     commit: Commit,
     version: Version,
     reason: Option<String>,
+    pending: bool,
+}
+
+/// Why a commit is not released, and whether that is a required run that has not completed.
+struct Decline {
+    reason: String,
+    pending: bool,
+}
+
+impl Decline {
+    fn settled(reason: String) -> Option<Self> {
+        Some(Self {
+            reason,
+            pending: false,
+        })
+    }
 }
 
 /// An open hold: the privileged run `run` failed on `commit`, the commit at `index` of the
@@ -86,8 +112,9 @@ struct Context<'a> {
     hold: Option<Hold>,
 }
 
-/// Plans the release of the requested commit (or of each missed commit) and returns the printed
-/// lines followed by the answer lines, which are also appended to the output file.
+/// Plans the release of each commit from the requested one down to the last release, oldest
+/// first, and returns the printed lines followed by the answer lines, which are also appended to
+/// the output file.
 pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, Error> {
     if frozen(&request.freeze) {
         return finish(request, vec![format!("no release: {FROZEN}")], &[]);
@@ -116,14 +143,17 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         releases: &releases,
         hold,
     };
-    let indices: Vec<usize> = if request.scheduled {
-        (0..end).rev().collect()
-    } else {
-        vec![0]
-    };
-    let mut candidates = Vec::new();
-    for index in indices {
-        candidates.push(judge(&context, index)?);
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for index in (0..end).rev() {
+        let mut candidate = judge(&context, index)?;
+        let older = candidates.iter().find(|c| c.pending);
+        if let (None, Some(older)) = (&candidate.reason, older) {
+            candidate.reason = Some(format!(
+                "waiting for {} ({}), an older commit whose runs have not completed",
+                older.commit, older.version
+            ));
+        }
+        candidates.push(candidate);
     }
     let printed = candidates.iter().map(describe).collect();
     finish(request, printed, &candidates)
@@ -201,11 +231,12 @@ fn judge(context: &Context<'_>, index: usize) -> Result<Candidate, Error> {
         &context.chain[index..],
         &context.request.version_file,
     )?;
-    let reason = decline(context, index, &commit, &version)?;
+    let decline = decline(context, index, &commit, &version)?;
     Ok(Candidate {
         commit,
         version,
-        reason,
+        pending: decline.as_ref().is_some_and(|d| d.pending),
+        reason: decline.map(|d| d.reason),
     })
 }
 
@@ -215,30 +246,33 @@ fn decline(
     index: usize,
     commit: &Commit,
     version: &Version,
-) -> Result<Option<String>, Error> {
+) -> Result<Option<Decline>, Error> {
     let tag = version.tag();
     let released = context
         .releases
         .iter()
         .find(|r| (r.tag == tag) | (r.commit == commit.as_str()));
     if let Some(release) = released {
-        return Ok(Some(format!("already released as {}", release.tag)));
+        return Ok(Decline::settled(format!(
+            "already released as {}",
+            release.tag
+        )));
     }
     let paths = context
         .ports
         .git
         .changed_paths(commit, context.chain.get(index + 1))?;
     if paths.iter().all(|p| is_docs_path(p)) {
-        return Ok(Some("documentation only".to_owned()));
+        return Ok(Decline::settled("documentation only".to_owned()));
     }
     if let Some(hold) = context.hold.as_ref().filter(|h| index <= h.index) {
-        return Ok(Some(hold.reason()));
+        return Ok(Decline::settled(hold.reason()));
     }
     waiting(context, commit)
 }
 
 /// The first required workflow without a successful push run for `commit`, as a reason.
-fn waiting(context: &Context<'_>, commit: &Commit) -> Result<Option<String>, Error> {
+fn waiting(context: &Context<'_>, commit: &Commit) -> Result<Option<Decline>, Error> {
     for workflow in REQUIRED_WORKFLOWS {
         let runs = context
             .ports
@@ -249,13 +283,18 @@ fn waiting(context: &Context<'_>, commit: &Commit) -> Result<Option<String>, Err
             RunState::Missing => {
                 format!("waiting for {workflow}: no push run on main for this commit")
             }
-            RunState::Pending(id) => format!("waiting for {workflow}: run {id} has not completed"),
+            RunState::Pending(id) => {
+                return Ok(Some(Decline {
+                    reason: format!("waiting for {workflow}: run {id} has not completed"),
+                    pending: true,
+                }));
+            }
             RunState::Failed(id) => {
                 format!("{workflow} run {id} ended {}", conclusion_of(&runs, id))
             }
             RunState::Other(id, conclusion) => format!("{workflow} run {id} ended {conclusion}"),
         };
-        return Ok(Some(reason));
+        return Ok(Decline::settled(reason));
     }
     Ok(None)
 }
@@ -298,32 +337,12 @@ fn finish(
             )
         })
         .collect();
-    let mut lines = vec![
+    let lines = vec![
         format!("release={}", !released.is_empty()),
         format!("matrix={{\"include\":[{}]}}", entries.join(",")),
     ];
-    if !request.scheduled {
-        lines.extend(push_lines(candidates.first()));
-    }
     printed.extend(answer(request.output.as_deref(), lines)?);
     Ok(printed)
-}
-
-/// The answers only the push path gives: the version, tag and commit of the released commit, or
-/// the reason it is not released (none judged: the repository is frozen).
-fn push_lines(candidate: Option<&Candidate>) -> Vec<String> {
-    match candidate {
-        None => vec![format!("reason={FROZEN}")],
-        Some(Candidate {
-            reason: Some(reason),
-            ..
-        }) => vec![format!("reason={reason}")],
-        Some(released) => vec![
-            format!("version={}", released.version),
-            format!("tag={}", released.version.tag()),
-            format!("commit={}", released.commit),
-        ],
-    }
 }
 
 #[cfg(test)]

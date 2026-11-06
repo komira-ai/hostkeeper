@@ -442,7 +442,6 @@ fn plan_with_the_freeze_set_releases_nothing() {
         "no release: RELEASE_FREEZE is set",
         "release=false",
         "matrix={\"include\":[]}",
-        "reason=RELEASE_FREEZE is set",
     ];
     assert_eq!(out, Ok(lines.iter().map(|l| (*l).to_owned()).collect()));
 }
@@ -774,9 +773,11 @@ fn three_plans_for_one_sha_publish_once() {
 }
 
 #[test]
-fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers() {
-    // Catches: missed commits published newest first, or all under the number of the tip, or a
-    // commit published with the assets of another.
+fn a_plan_from_a_tip_whose_ci_is_pending_publishes_the_done_commits_oldest_first() {
+    // Catches: the plan step of release.yml, as every trigger runs it, planning only the tip
+    // whose ci run has not completed, so the earlier commits whose runs are all done are never
+    // released; or those published newest first, under the number of the tip, or with the
+    // assets of another commit.
     let mut h = FakeHistory::default();
     let root = h.commit(
         None,
@@ -785,6 +786,7 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
     let r = h.commit(Some(&root), &[("src/lib.rs", Some("1"))]);
     let a = h.commit(Some(&r), &[("src/lib.rs", Some("2"))]);
     let b = h.commit(Some(&a), &[("src/lib.rs", Some("3"))]);
+    let tip = h.commit(Some(&b), &[("src/lib.rs", Some("4"))]);
     let fakes = Fakes::over(h);
     fakes.store.insert(Release {
         tag: "v0.1.2".to_owned(),
@@ -794,14 +796,20 @@ fn scheduled_path_publishes_missed_commits_oldest_first_under_their_own_numbers(
     });
     green(&fakes, &a);
     green(&fakes, &b);
+    fakes.runs.push("privileged.yml", &tip, "success");
+    fakes.runs.push("artifacts.yml", &tip, "success");
+    fakes.runs.add("ci.yml", &tip, "push", "main", None);
 
     let plan = verb(&[
         "plan",
         "--repo",
         REPO,
         "--commit",
-        b.as_str(),
-        "--scheduled",
+        tip.as_str(),
+        "--version-file",
+        "VERSION",
+        "--freeze",
+        "",
     ]);
     let lines = run_with(plan, &fakes.ports()).expect("plan");
     let matrix = lines

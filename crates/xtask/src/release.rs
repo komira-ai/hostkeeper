@@ -24,8 +24,8 @@
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
 //!   (`ui/`) at the path the coordinator serves by default, file for file, owned by root.
-//! - `plan` ([`plan`]): whether a commit (or, on the scheduled path, each missed commit) is
-//!   released, and under which version.
+//! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
+//!   under which versions.
 //! - `locate` ([`locate`]): the commit is on `main` and its runs exist; the id of its build run.
 //! - `check` ([`check`]): every asset against `SHA256SUMS`, both release indexes against the
 //!   packages, every attestation and bundle against the signer identity of [`contract`] and the
@@ -295,11 +295,12 @@ pub(crate) enum Verb {
         /// The web app's directory, `ui` of the commit.
         ui: PathBuf,
     },
-    /// Whether a commit is released, and as which version.
+    /// Which commits since the last release are released, oldest first, and as which versions.
     Plan {
         #[arg(long)]
         repo: Repo,
-        /// The pushed commit, or on the scheduled path the tip of `main`.
+        /// The tip of `main`: every commit from it down to the last release is planned,
+        /// oldest first.
         #[arg(long)]
         commit: Commit,
         #[arg(long, default_value = "VERSION")]
@@ -308,9 +309,6 @@ pub(crate) enum Verb {
         /// `false` stops releases.
         #[arg(long, default_value = "")]
         freeze: String,
-        /// Plan every commit since the last release, oldest first, not only `--commit`.
-        #[arg(long)]
-        scheduled: bool,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -534,7 +532,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             commit,
             version_file,
             freeze,
-            scheduled,
             output,
         } => plan::plan(
             ports,
@@ -543,7 +540,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
                 commit,
                 version_file,
                 freeze,
-                scheduled,
                 output,
             },
         ),

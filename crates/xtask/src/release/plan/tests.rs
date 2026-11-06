@@ -12,15 +12,7 @@ fn request(commit: &Commit) -> Request {
         commit: commit.clone(),
         version_file: "VERSION".to_owned(),
         freeze: String::new(),
-        scheduled: false,
         output: None,
-    }
-}
-
-fn scheduled(commit: &Commit) -> Request {
-    Request {
-        scheduled: true,
-        ..request(commit)
     }
 }
 
@@ -55,6 +47,14 @@ fn green(fakes: &Fakes, commit: &Commit) {
     }
 }
 
+/// Successful push runs of privileged and artifacts for `commit`, and a ci run that has not
+/// completed; the id of the ci run.
+fn ci_pending(fakes: &Fakes, commit: &Commit) -> u64 {
+    fakes.runs.push("privileged.yml", commit, "success");
+    fakes.runs.push("artifacts.yml", commit, "success");
+    fakes.runs.add("ci.yml", commit, "push", "main", None)
+}
+
 fn plan_of(fakes: &Fakes, request: &Request) -> Result<Vec<String>, Error> {
     plan(&fakes.ports(), request)
 }
@@ -68,6 +68,14 @@ fn published(tag: &str, commit: &Commit) -> Release {
     }
 }
 
+/// Fakes over `history` in which the root `root` is released as v0.1.1, so a plan walks only
+/// the commits after it.
+fn after_root(history: FakeHistory, root: &Commit) -> Fakes {
+    let fakes = Fakes::over(history);
+    fakes.store.insert(published("v0.1.1", root));
+    fakes
+}
+
 const EMPTY_MATRIX: &str = "matrix={\"include\":[]}";
 
 fn matrix(entries: &[(&str, &Commit)]) -> String {
@@ -78,26 +86,196 @@ fn matrix(entries: &[(&str, &Commit)]) -> String {
     format!("matrix={{\"include\":[{}]}}", items.join(","))
 }
 
-/// The lines of the push path for a commit that is released as `version`.
-fn push_released(version: &str, commit: &Commit) -> Vec<String> {
-    vec![
-        format!("release v{version} of {commit}"),
-        "release=true".to_owned(),
-        matrix(&[(version, commit)]),
-        format!("version={version}"),
-        format!("tag=v{version}"),
-        format!("commit={commit}"),
-    ]
+/// The printed line of a commit released as `version`.
+fn release_line(version: &str, commit: &Commit) -> String {
+    format!("release v{version} of {commit}")
 }
 
-/// The lines of the push path for a commit that is not released.
-fn push_declined(commit: &Commit, version: &str, reason: &str) -> Vec<String> {
-    vec![
-        format!("no release of {commit} ({version}): {reason}"),
-        "release=false".to_owned(),
-        EMPTY_MATRIX.to_owned(),
-        format!("reason={reason}"),
-    ]
+/// The printed line of a commit not released.
+fn decline_line(commit: &Commit, version: &str, reason: &str) -> String {
+    format!("no release of {commit} ({version}): {reason}")
+}
+
+/// The lines of a plan: the printed `judged` lines, then the answers for the `released`
+/// commits.
+fn lines(judged: &[String], released: &[(&str, &Commit)]) -> Vec<String> {
+    let mut out = judged.to_vec();
+    out.push(format!("release={}", !released.is_empty()));
+    out.push(matrix(released));
+    out
+}
+
+#[test]
+fn a_plan_for_a_commit_whose_ci_is_pending_releases_the_earlier_commits_whose_runs_are_done() {
+    // Catches: a run started by one commit's completion planning that commit alone, so that
+    // when a newer commit's run replaces the pending release run, the earlier commits whose
+    // ci, privileged and artifacts runs all succeeded are never released.
+    let mut h = FakeHistory::default();
+    let r = root(&mut h);
+    let a = code(&mut h, &r, "fn a2() {}");
+    let b = code(&mut h, &a, "fn b() {}");
+    let c = code(&mut h, &b, "fn c() {}");
+    let fakes = after_root(h, &r);
+    green(&fakes, &a);
+    green(&fakes, &b);
+    let pending = ci_pending(&fakes, &c);
+    assert_eq!(
+        plan_of(&fakes, &request(&c)),
+        Ok(lines(
+            &[
+                release_line("0.1.2", &a),
+                release_line("0.1.3", &b),
+                decline_line(
+                    &c,
+                    "0.1.4",
+                    &format!("waiting for ci.yml: run {pending} has not completed")
+                ),
+            ],
+            &[("0.1.2", &a), ("0.1.3", &b)],
+        ))
+    );
+    assert_eq!(*fakes.runs.writes.borrow(), Vec::<String>::new());
+}
+
+#[test]
+fn a_missing_or_failed_run_does_not_stop_the_walk() {
+    // Catches: a commit whose run never came or failed (which may never change) holding back
+    // the newer commits whose runs all succeeded; only a failed privileged run holds them.
+    let mut h = FakeHistory::default();
+    let r = root(&mut h);
+    let a = code(&mut h, &r, "fn a2() {}");
+    let m = code(&mut h, &a, "fn m() {}");
+    let f = code(&mut h, &m, "fn f() {}");
+    let b = code(&mut h, &f, "fn b() {}");
+    let fakes = after_root(h, &r);
+    green(&fakes, &a);
+    fakes.runs.push("ci.yml", &f, "success");
+    fakes.runs.push("privileged.yml", &f, "success");
+    let failed = fakes.runs.push("artifacts.yml", &f, "failure");
+    green(&fakes, &b);
+    assert_eq!(
+        plan_of(&fakes, &request(&b)),
+        Ok(lines(
+            &[
+                release_line("0.1.2", &a),
+                decline_line(
+                    &m,
+                    "0.1.3",
+                    "waiting for ci.yml: no push run on main for this commit"
+                ),
+                decline_line(
+                    &f,
+                    "0.1.4",
+                    &format!("artifacts.yml run {failed} ended failure")
+                ),
+                release_line("0.1.5", &b),
+            ],
+            &[("0.1.2", &a), ("0.1.5", &b)],
+        ))
+    );
+}
+
+#[test]
+fn a_pending_run_holds_the_newer_commits_until_it_completes_and_then_all_release_in_order() {
+    // Catches: a newer commit released past an older one whose run has not completed, which
+    // ends every later walk above the older one so it is never released; or the held commits
+    // not released, oldest first, once that run completes.
+    let mut h = FakeHistory::default();
+    let r = root(&mut h);
+    let a = code(&mut h, &r, "fn a2() {}");
+    let p = code(&mut h, &a, "fn p() {}");
+    let d = docs(&mut h, &p);
+    let b = code(&mut h, &d, "fn b() {}");
+    let c = code(&mut h, &b, "fn c() {}");
+    let fakes = after_root(h, &r);
+    green(&fakes, &a);
+    let pending = ci_pending(&fakes, &p);
+    for commit in [&d, &b, &c] {
+        green(&fakes, commit);
+    }
+    let behind = format!("waiting for {p} (0.1.3), an older commit whose runs have not completed");
+    assert_eq!(
+        plan_of(&fakes, &request(&c)),
+        Ok(lines(
+            &[
+                release_line("0.1.2", &a),
+                decline_line(
+                    &p,
+                    "0.1.3",
+                    &format!("waiting for ci.yml: run {pending} has not completed")
+                ),
+                decline_line(&d, "0.1.4", "documentation only"),
+                decline_line(&b, "0.1.5", &behind),
+                decline_line(&c, "0.1.6", &behind),
+            ],
+            &[("0.1.2", &a)],
+        ))
+    );
+    fakes.store.insert(published("v0.1.2", &a));
+    fakes.runs.push("ci.yml", &p, "success");
+    assert_eq!(
+        plan_of(&fakes, &request(&c)),
+        Ok(lines(
+            &[
+                release_line("0.1.3", &p),
+                decline_line(&d, "0.1.4", "documentation only"),
+                release_line("0.1.5", &b),
+                release_line("0.1.6", &c),
+            ],
+            &[("0.1.3", &p), ("0.1.5", &b), ("0.1.6", &c)],
+        ))
+    );
+}
+
+#[test]
+fn the_walk_starts_after_the_newest_release_on_the_history() {
+    // Catches: a walk that starts after an older release, so a released commit is planned again,
+    // or that takes a release whose tag is not a version, or one off the history, for the last.
+    let mut h = FakeHistory::default();
+    let r = root(&mut h);
+    let a = code(&mut h, &r, "fn a2() {}");
+    let b = code(&mut h, &a, "fn b() {}");
+    let c = code(&mut h, &b, "fn c() {}");
+    let off = code(&mut h, &r, "fn off() {}");
+    let fakes = after_root(h, &r);
+    fakes.store.insert(published("v0.1.2", &a));
+    fakes.store.insert(published("nightly", &b));
+    fakes.store.insert(published("v0.1.9", &off));
+    for commit in [&a, &b, &c] {
+        green(&fakes, commit);
+    }
+    assert_eq!(
+        plan_of(&fakes, &request(&c)),
+        Ok(lines(
+            &[
+                decline_line(&b, "0.1.3", "already released as nightly"),
+                release_line("0.1.4", &c),
+            ],
+            &[("0.1.4", &c)],
+        ))
+    );
+}
+
+#[test]
+fn with_no_release_the_walk_starts_at_the_commit_that_set_the_version() {
+    // Catches: a repository with no release yet planning commits from before the version file's
+    // last change, or skipping the commit that changed it.
+    let mut h = FakeHistory::default();
+    let r = root(&mut h);
+    let a = code(&mut h, &r, "fn a2() {}");
+    let v = h.commit(Some(&a), &[("VERSION", Some("0.2\n"))]);
+    let b = code(&mut h, &v, "fn b() {}");
+    let fakes = Fakes::over(h);
+    for commit in [&r, &a, &v, &b] {
+        green(&fakes, commit);
+    }
+    assert_eq!(
+        plan_of(&fakes, &request(&b)),
+        Ok(lines(
+            &[release_line("0.2.1", &v), release_line("0.2.2", &b)],
+            &[("0.2.1", &v), ("0.2.2", &b)],
+        ))
+    );
 }
 
 #[test]
@@ -108,17 +286,21 @@ fn docs_only_commits_use_a_number_but_are_not_released() {
     let r = root(&mut h);
     let d = docs(&mut h, &r);
     let c = code(&mut h, &d, "fn b() {}");
-    let fakes = Fakes::over(h);
-    for commit in [&r, &d, &c] {
+    let fakes = after_root(h, &r);
+    for commit in [&d, &c] {
         green(&fakes, commit);
     }
+    let docs_only = decline_line(&d, "0.1.2", "documentation only");
     assert_eq!(
         plan_of(&fakes, &request(&d)),
-        Ok(push_declined(&d, "0.1.2", "documentation only"))
+        Ok(lines(std::slice::from_ref(&docs_only), &[]))
     );
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_released("0.1.3", &c))
+        Ok(lines(
+            &[docs_only, release_line("0.1.3", &c)],
+            &[("0.1.3", &c)]
+        ))
     );
 }
 
@@ -129,22 +311,25 @@ fn plan_declines_while_privileged_is_pending_and_a_later_success_releases() {
     let mut h = FakeHistory::default();
     let r = root(&mut h);
     let c = code(&mut h, &r, "fn b() {}");
-    let fakes = Fakes::over(h);
+    let fakes = after_root(h, &r);
     fakes.runs.push("ci.yml", &c, "success");
     fakes.runs.push("artifacts.yml", &c, "success");
     let pending = fakes.runs.add("privileged.yml", &c, "push", "main", None);
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_declined(
-            &c,
-            "0.1.2",
-            &format!("waiting for privileged.yml: run {pending} has not completed")
+        Ok(lines(
+            &[decline_line(
+                &c,
+                "0.1.2",
+                &format!("waiting for privileged.yml: run {pending} has not completed")
+            )],
+            &[]
         ))
     );
     fakes.runs.push("privileged.yml", &c, "success");
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_released("0.1.2", &c))
+        Ok(lines(&[release_line("0.1.2", &c)], &[("0.1.2", &c)]))
     );
     assert_eq!(*fakes.runs.writes.borrow(), Vec::<String>::new());
 }
@@ -157,7 +342,7 @@ fn a_red_privileged_run_blocks_the_next_release_and_opens_one_issue() {
     let r = root(&mut h);
     let a = code(&mut h, &r, "fn a2() {}");
     let b = code(&mut h, &a, "fn b() {}");
-    let fakes = Fakes::over(h);
+    let fakes = after_root(h, &r);
     green(&fakes, &r);
     fakes.runs.push("ci.yml", &a, "success");
     fakes.runs.push("artifacts.yml", &a, "success");
@@ -166,7 +351,13 @@ fn a_red_privileged_run_blocks_the_next_release_and_opens_one_issue() {
     fakes.runs.push("artifacts.yml", &b, "success");
     let held = format!("held: privileged run {red} failed on {a}; tracking issue #1");
 
-    let expected = push_declined(&b, "0.1.3", &held);
+    let expected = lines(
+        &[
+            decline_line(&a, "0.1.2", &held),
+            decline_line(&b, "0.1.3", &held),
+        ],
+        &[],
+    );
     assert_eq!(plan_of(&fakes, &request(&b)), Ok(expected.clone()));
     assert_eq!(plan_of(&fakes, &request(&b)), Ok(expected));
     assert_eq!(*fakes.runs.writes.borrow(), ["open #1".to_owned()]);
@@ -178,13 +369,59 @@ fn a_red_privileged_run_blocks_the_next_release_and_opens_one_issue() {
     fakes.runs.push("privileged.yml", &b, "success");
     assert_eq!(
         plan_of(&fakes, &request(&b)),
-        Ok(push_released("0.1.3", &b))
+        Ok(lines(
+            &[
+                decline_line(
+                    &a,
+                    "0.1.2",
+                    &format!("privileged.yml run {red} ended failure")
+                ),
+                release_line("0.1.3", &b),
+            ],
+            &[("0.1.3", &b)],
+        ))
     );
     assert_eq!(
         plan_of(&fakes, &request(&a)),
-        Ok(push_declined(&a, "0.1.2", &held))
+        Ok(lines(&[decline_line(&a, "0.1.2", &held)], &[]))
     );
     assert_eq!(*fakes.runs.writes.borrow(), ["open #1".to_owned()]);
+}
+
+#[test]
+fn a_red_privileged_run_holds_later_commits_while_the_tip_waits() {
+    // Catches: the walk of a run started by one commit's completion releasing a commit after a
+    // red privileged run, or holding the commits before it.
+    let mut h = FakeHistory::default();
+    let r = root(&mut h);
+    let older = code(&mut h, &r, "fn older() {}");
+    let a = code(&mut h, &older, "fn a2() {}");
+    let b = code(&mut h, &a, "fn b() {}");
+    let tip = code(&mut h, &b, "fn tip() {}");
+    let fakes = after_root(h, &r);
+    green(&fakes, &older);
+    fakes.runs.push("ci.yml", &a, "success");
+    fakes.runs.push("artifacts.yml", &a, "success");
+    let red = fakes.runs.push("privileged.yml", &a, "failure");
+    fakes.runs.push("ci.yml", &b, "success");
+    fakes.runs.push("artifacts.yml", &b, "success");
+    fakes.runs.add("privileged.yml", &b, "push", "main", None);
+    fakes.runs.push("artifacts.yml", &tip, "success");
+    fakes.runs.add("ci.yml", &tip, "push", "main", None);
+    fakes.runs.add("privileged.yml", &tip, "push", "main", None);
+    let held = format!("held: privileged run {red} failed on {a}; tracking issue #1");
+    assert_eq!(
+        plan_of(&fakes, &request(&tip)),
+        Ok(lines(
+            &[
+                release_line("0.1.2", &older),
+                decline_line(&a, "0.1.3", &held),
+                decline_line(&b, "0.1.4", &held),
+                decline_line(&tip, "0.1.5", &held),
+            ],
+            &[("0.1.2", &older)],
+        ))
+    );
 }
 
 #[test]
@@ -195,7 +432,7 @@ fn an_open_issue_with_another_body_is_edited_once_and_others_are_left() {
     let r = root(&mut h);
     let a = code(&mut h, &r, "fn a2() {}");
     let b = code(&mut h, &a, "fn b() {}");
-    let fakes = Fakes::over(h);
+    let fakes = after_root(h, &r);
     let red = fakes.runs.push("privileged.yml", &a, "failure");
     fakes
         .runs
@@ -208,7 +445,13 @@ fn an_open_issue_with_another_body_is_edited_once_and_others_are_left() {
     let held = format!("held: privileged run {red} failed on {a}; tracking issue #2");
     assert_eq!(
         plan_of(&fakes, &request(&b)),
-        Ok(push_declined(&b, "0.1.3", &held))
+        Ok(lines(
+            &[
+                decline_line(&a, "0.1.2", &held),
+                decline_line(&b, "0.1.3", &held),
+            ],
+            &[]
+        ))
     );
     assert_eq!(
         *fakes.runs.writes.borrow(),
@@ -230,7 +473,7 @@ fn a_run_from_a_pull_request_or_another_sha_never_counts() {
     let mut h = FakeHistory::default();
     let r = root(&mut h);
     let c = code(&mut h, &r, "fn b() {}");
-    let fakes = Fakes::over(h);
+    let fakes = after_root(h, &r);
     fakes
         .runs
         .add("ci.yml", &c, "pull_request", "feature", Some("success"));
@@ -239,16 +482,19 @@ fn a_run_from_a_pull_request_or_another_sha_never_counts() {
     fakes.runs.push("artifacts.yml", &c, "success");
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_declined(
-            &c,
-            "0.1.2",
-            "waiting for ci.yml: no push run on main for this commit"
+        Ok(lines(
+            &[decline_line(
+                &c,
+                "0.1.2",
+                "waiting for ci.yml: no push run on main for this commit"
+            )],
+            &[]
         ))
     );
     fakes.runs.push("ci.yml", &c, "success");
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_released("0.1.2", &c))
+        Ok(lines(&[release_line("0.1.2", &c)], &[("0.1.2", &c)]))
     );
 }
 
@@ -259,14 +505,17 @@ fn a_failed_and_a_cancelled_run_are_declined_with_their_conclusion() {
     let mut h = FakeHistory::default();
     let r = root(&mut h);
     let c = code(&mut h, &r, "fn b() {}");
-    let fakes = Fakes::over(h);
+    let fakes = after_root(h, &r);
     let failed = fakes.runs.push("ci.yml", &c, "timed_out");
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_declined(
-            &c,
-            "0.1.2",
-            &format!("ci.yml run {failed} ended timed_out")
+        Ok(lines(
+            &[decline_line(
+                &c,
+                "0.1.2",
+                &format!("ci.yml run {failed} ended timed_out")
+            )],
+            &[]
         ))
     );
     fakes.runs.push("ci.yml", &c, "success");
@@ -274,16 +523,19 @@ fn a_failed_and_a_cancelled_run_are_declined_with_their_conclusion() {
     let cancelled = fakes.runs.push("artifacts.yml", &c, "cancelled");
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_declined(
-            &c,
-            "0.1.2",
-            &format!("artifacts.yml run {cancelled} ended cancelled")
+        Ok(lines(
+            &[decline_line(
+                &c,
+                "0.1.2",
+                &format!("artifacts.yml run {cancelled} ended cancelled")
+            )],
+            &[]
         ))
     );
 }
 
 #[test]
-fn scheduled_path_plans_missed_commits_oldest_first_under_their_own_numbers() {
+fn missed_commits_are_planned_oldest_first_under_their_own_numbers() {
     // Catches: missed commits planned newest first, under the tip's number, or with the
     // documentation-only commit released.
     let mut h = FakeHistory::default();
@@ -291,13 +543,12 @@ fn scheduled_path_plans_missed_commits_oldest_first_under_their_own_numbers() {
     let a = code(&mut h, &r, "fn a2() {}");
     let d = docs(&mut h, &a);
     let b = code(&mut h, &d, "fn b() {}");
-    let fakes = Fakes::over(h);
-    fakes.store.insert(published("v0.1.1", &r));
+    let fakes = after_root(h, &r);
     for commit in [&a, &d, &b] {
         green(&fakes, commit);
     }
     assert_eq!(
-        plan_of(&fakes, &scheduled(&b)),
+        plan_of(&fakes, &request(&b)),
         Ok(vec![
             format!("release v0.1.2 of {a}"),
             format!("no release of {d} (0.1.3): documentation only"),
@@ -311,47 +562,13 @@ fn scheduled_path_plans_missed_commits_oldest_first_under_their_own_numbers() {
 }
 
 #[test]
-fn the_scheduled_path_releases_commits_before_a_red_run_and_holds_the_rest() {
-    // Catches: a hold declining the commits older than the red run, or lifting for the newer
-    // ones.
-    let mut h = FakeHistory::default();
-    let r = root(&mut h);
-    let older = code(&mut h, &r, "fn older() {}");
-    let a = code(&mut h, &older, "fn a2() {}");
-    let b = code(&mut h, &a, "fn b() {}");
-    let fakes = Fakes::over(h);
-    fakes.store.insert(published("v0.1.1", &r));
-    green(&fakes, &older);
-    fakes.runs.push("ci.yml", &a, "success");
-    fakes.runs.push("artifacts.yml", &a, "success");
-    let red = fakes.runs.push("privileged.yml", &a, "failure");
-    fakes.runs.push("ci.yml", &b, "success");
-    fakes.runs.push("artifacts.yml", &b, "success");
-    assert_eq!(
-        plan_of(&fakes, &scheduled(&b)),
-        Ok(vec![
-            format!("release v0.1.2 of {older}"),
-            format!(
-                "no release of {a} (0.1.3): held: privileged run {red} failed on {a}; tracking issue #1"
-            ),
-            format!(
-                "no release of {b} (0.1.4): held: privileged run {red} failed on {a}; tracking issue #1"
-            ),
-            "release=true".to_owned(),
-            matrix(&[("0.1.2", &older)]),
-        ])
-    );
-}
-
-#[test]
-fn a_scheduled_plan_with_nothing_missed_releases_nothing() {
+fn a_plan_with_nothing_after_the_last_release_releases_nothing() {
     // Catches: the last release being planned again when nothing came after it.
     let mut h = FakeHistory::default();
     let r = root(&mut h);
-    let fakes = Fakes::over(h);
-    fakes.store.insert(published("v0.1.1", &r));
+    let fakes = after_root(h, &r);
     assert_eq!(
-        plan_of(&fakes, &scheduled(&r)),
+        plan_of(&fakes, &request(&r)),
         Ok(vec!["release=false".to_owned(), EMPTY_MATRIX.to_owned()])
     );
 }
@@ -363,7 +580,7 @@ fn a_commit_released_under_its_tag_or_its_sha_is_not_released_again() {
     let mut h = FakeHistory::default();
     let r = root(&mut h);
     let c = code(&mut h, &r, "fn b() {}");
-    let fakes = Fakes::over(h);
+    let fakes = after_root(h, &r);
     green(&fakes, &c);
     fakes.store.insert(Release {
         draft: true,
@@ -371,12 +588,15 @@ fn a_commit_released_under_its_tag_or_its_sha_is_not_released_again() {
     });
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_released("0.1.2", &c))
+        Ok(lines(&[release_line("0.1.2", &c)], &[("0.1.2", &c)]))
     );
     fakes.store.insert(published("nightly", &c));
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_declined(&c, "0.1.2", "already released as nightly"))
+        Ok(lines(
+            &[decline_line(&c, "0.1.2", "already released as nightly")],
+            &[]
+        ))
     );
 
     let mut h = FakeHistory::default();
@@ -387,7 +607,10 @@ fn a_commit_released_under_its_tag_or_its_sha_is_not_released_again() {
     fakes.store.insert(published("v0.1.2", &r));
     assert_eq!(
         plan_of(&fakes, &request(&c)),
-        Ok(push_declined(&c, "0.1.2", "already released as v0.1.2"))
+        Ok(lines(
+            &[decline_line(&c, "0.1.2", "already released as v0.1.2")],
+            &[]
+        ))
     );
 
     let mut h = FakeHistory::default();
@@ -396,10 +619,7 @@ fn a_commit_released_under_its_tag_or_its_sha_is_not_released_again() {
     let fakes = Fakes::over(h);
     green(&fakes, &c);
     fakes.store.insert(published("v0.1.2", &c));
-    assert_eq!(
-        plan_of(&fakes, &request(&c)),
-        Ok(push_declined(&c, "0.1.2", "already released as v0.1.2"))
-    );
+    assert_eq!(plan_of(&fakes, &request(&c)), Ok(lines(&[], &[])));
 }
 
 #[test]
@@ -418,31 +638,20 @@ fn a_frozen_repository_releases_nothing_and_reads_nothing() {
     // Catches: a freeze that still reads git or GitHub, or that answers without the reason.
     let commit = nth_commit(1);
     let fakes = Fakes::over(FakeHistory::default());
-    let frozen_push = Request {
-        freeze: "true".to_owned(),
-        ..request(&commit)
-    };
-    assert_eq!(
-        plan_of(&fakes, &frozen_push),
-        Ok(vec![
-            "no release: RELEASE_FREEZE is set".to_owned(),
-            "release=false".to_owned(),
-            EMPTY_MATRIX.to_owned(),
-            "reason=RELEASE_FREEZE is set".to_owned(),
-        ])
-    );
-    let frozen_scheduled = Request {
-        freeze: "1".to_owned(),
-        ..scheduled(&commit)
-    };
-    assert_eq!(
-        plan_of(&fakes, &frozen_scheduled),
-        Ok(vec![
-            "no release: RELEASE_FREEZE is set".to_owned(),
-            "release=false".to_owned(),
-            EMPTY_MATRIX.to_owned(),
-        ])
-    );
+    for value in ["true", "1"] {
+        let frozen = Request {
+            freeze: value.to_owned(),
+            ..request(&commit)
+        };
+        assert_eq!(
+            plan_of(&fakes, &frozen),
+            Ok(vec![
+                "no release: RELEASE_FREEZE is set".to_owned(),
+                "release=false".to_owned(),
+                EMPTY_MATRIX.to_owned(),
+            ])
+        );
+    }
 }
 
 #[test]
@@ -494,7 +703,7 @@ fn the_answers_are_appended_to_the_output_file() {
     let mut h = FakeHistory::default();
     let r = root(&mut h);
     let c = code(&mut h, &r, "fn b() {}");
-    let fakes = Fakes::over(h);
+    let fakes = after_root(h, &r);
     green(&fakes, &c);
     let dir = scratch("plan-output");
     let file = dir.join("out");
@@ -503,14 +712,14 @@ fn the_answers_are_appended_to_the_output_file() {
         output: Some(file.clone()),
         ..request(&c)
     };
-    let lines = plan_of(&fakes, &asked).expect("planned");
-    assert_eq!(lines, push_released("0.1.2", &c));
+    let printed = plan_of(&fakes, &asked).expect("planned");
+    assert_eq!(
+        printed,
+        lines(&[release_line("0.1.2", &c)], &[("0.1.2", &c)])
+    );
     assert_eq!(
         std::fs::read_to_string(&file).expect("read the output"),
-        format!(
-            "kept=1\nrelease=true\n{}\nversion=0.1.2\ntag=v0.1.2\ncommit={c}\n",
-            matrix(&[("0.1.2", &c)])
-        )
+        format!("kept=1\nrelease=true\n{}\n", matrix(&[("0.1.2", &c)]))
     );
 }
 
