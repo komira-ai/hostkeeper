@@ -1,12 +1,19 @@
 # cargo-deny configuration. Run: cargo deny check bans licenses sources
 # CI (ci.yml) checks bans, licences and sources. Advisories never block a pull request
-# (AGENTS.md B9, R6), so CI does not check them.
+# (AGENTS.md B9, R6), so CI does not check them: advisories.yml runs
+# `cargo xtask advisories`, which runs `cargo deny check advisories` daily and on every push to
+# main and keeps its findings in one issue.
 
 [graph]
 all-features = true
 
+# What `cargo xtask advisories` reports. No advisory is ignored here: a finding goes to the
+# issue, not into an `ignore` list.
 [advisories]
 version = 2
+# The RustSec advisory database, cargo-deny's default, named so that it is pinned.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# A yanked crate in Cargo.lock is a finding, listed in the issue like an advisory.
 yanked = "deny"
 
 [licenses]
