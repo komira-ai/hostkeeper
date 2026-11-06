@@ -39,10 +39,28 @@
 //! the one running or the last one started is not started again; any other, even with the same
 //! id and try, goes to the executor, which owns the try rules (a resend answered from the
 //! record, `try_conflict`, `stale_try`). An order that arrives while another runs is not
-//! started, and its verdict is `busy`. An order for a service that is not installed is not run.
-//! A forced order runs only while the reply advertises `forced-v1`; an update whose target a
-//! deferral declines runs only once the retry time has come, by the [`UnixClock`]. A worker that
-//! ended with no verdict leaves no mark: the same order sent again runs.
+//! started, and its verdict is `busy`. An order for a service that is not installed is not run,
+//! but for an `install`, which is for a service the host does not run. A forced order runs only
+//! while the reply advertises `forced-v1`; an update, an install or an uninstall whose version a
+//! deferral names runs only once the retry time has come, by the [`UnixClock`] (for an
+//! uninstall, the version it names is the one the service runs, so a deferred uninstall sent
+//! again waits out its own deferral). A worker that ended with no verdict leaves no mark: the
+//! same order sent again runs.
+//!
+//! The verdict of an order names its target version; an `uninstall` names none, and its verdict
+//! names the version the service runs, as the last step records listed it. While an order runs,
+//! its service's `updating` is that version: an uninstall reports the version it removes, and an
+//! install reports nothing until its service is listed. An uninstall that succeeded leaves no
+//! verdict to send: the service is gone from the next heartbeat, which is the report, and the
+//! verdicts of it not yet acknowledged go with it.
+//!
+//! **Abort.** An `abort` is not one of the orders above: it goes to the executor at once, on a
+//! worker of its own, beside the order it stops, whatever runs. The order it stops reports how
+//! it ended (in the halt phase); the abort's own answer is logged, never sent as a verdict. Each
+//! abort that arrives is run, a resend too: the executor answers a resend of the same order and
+//! try from its first answer and stops nothing more. An
+//! abort of a service the loop runs no order of and does not list is not run: the abort that
+//! stops a step the daemon left running before a restart is the admin socket's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -56,7 +74,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use crate::beat::{ANNOUNCED, Feature, Features, Heartbeat, Observed, Platform, ServiceFacts, fit};
 use crate::deferral::{Book, Deferral};
 use crate::names::Reason;
-use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
+use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
     RecordedService, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
@@ -121,6 +139,8 @@ pub enum BeatOutcome {
 struct Running {
     order: Order,
     service: ServiceName,
+    /// The version its verdict names.
+    target: Version,
     done: Receiver<OrderResult>,
 }
 
@@ -140,8 +160,8 @@ pub struct Heartbeater {
     started: BTreeMap<String, Order>,
     /// The services of the last step records whose kept verdict was read.
     seen: BTreeSet<String>,
-    /// The services of the last step records.
-    installed: BTreeSet<String>,
+    /// The services of the last step records, each at the version they listed.
+    installed: BTreeMap<String, Version>,
     running: Option<Running>,
     /// The path the loop said it waits for, so that it says so once.
     waiting_for: Option<PathBuf>,
@@ -159,7 +179,7 @@ impl Heartbeater {
             acked: BTreeMap::new(),
             started: BTreeMap::new(),
             seen: BTreeSet::new(),
-            installed: BTreeSet::new(),
+            installed: BTreeMap::new(),
             running: None,
             waiting_for: None,
         }
@@ -231,7 +251,7 @@ impl Heartbeater {
             return;
         };
         match running.done.try_recv() {
-            Ok(result) => self.finish(&running.service, result),
+            Ok(result) => self.finish(&running.order, &running.service, result),
             Err(TryRecvError::Empty) => self.running = Some(running),
             Err(TryRecvError::Disconnected) => {
                 self.started.remove(running.service.as_str());
@@ -247,8 +267,18 @@ impl Heartbeater {
 
     /// The verdict of an order that ran: sent until acknowledged. A deferral is the service's
     /// deferral from now on; any other hooked verdict ends a deferral of the same target only,
-    /// and a forced one ends none.
-    fn finish(&mut self, service: &ServiceName, result: OrderResult) {
+    /// and a forced one ends none. An uninstall that succeeded is not sent: the service is gone,
+    /// and so are its verdicts not yet acknowledged.
+    fn finish(&mut self, order: &Order, service: &ServiceName, result: OrderResult) {
+        if matches!(order.verb, Verb::Uninstall(_)) & (result.outcome == Outcome::Succeeded) {
+            self.pending.remove(service.as_str());
+            self.log(&format!(
+                "order {} try {} uninstalled {service}",
+                result.order.id.as_str(),
+                result.order.order_try
+            ));
+            return;
+        }
         let now = self.ports.clock.unix_secs();
         let log = self.ports.log.as_ref();
         match result.outcome {
@@ -263,7 +293,7 @@ impl Heartbeater {
             }
             Outcome::Succeeded | Outcome::Failed => {}
         }
-        if !self.installed.contains(service.as_str()) {
+        if !self.installed.contains_key(service.as_str()) {
             self.log(&format!(
                 "the verdict of order {} try {} is kept until {service} is listed again",
                 result.order.id.as_str(),
@@ -306,16 +336,17 @@ impl Heartbeater {
     /// The heartbeat: every installed service, from its step record and the observer.
     fn facts(&mut self) -> io::Result<Heartbeat> {
         let installed = self.ports.records.installed()?;
-        let mut names = BTreeSet::new();
+        let mut names = BTreeMap::new();
         for recorded in &installed {
-            if !names.insert(recorded.name.as_str().to_owned()) {
+            let named = names.insert(recorded.name.as_str().to_owned(), recorded.version.clone());
+            if named.is_some() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("the step records name {} twice", recorded.name),
                 ));
             }
         }
-        self.seen.retain(|name| names.contains(name));
+        self.seen.retain(|name| names.contains_key(name));
         self.installed = names;
         let now = self.ports.clock.unix_secs();
         let mut services = Vec::with_capacity(installed.len());
@@ -336,7 +367,7 @@ impl Heartbeater {
                 .running
                 .as_ref()
                 .filter(|running| running.service == name)
-                .map(|running| running.order.target().version.clone());
+                .map(|running| running.target.clone());
             let log = self.ports.log.as_ref();
             let deferred = self
                 .advertised
@@ -437,12 +468,27 @@ impl Heartbeater {
 
     /// Hands `order` to the executor, on a worker, unless it must not run now.
     fn dispatch(&mut self, order: Order) {
-        let service = order.target().service.clone();
+        let service = order.service().clone();
         let named = format!(
             "order {} try {} of {service}",
             order.id.as_str(),
             order.order_try
         );
+        if matches!(order.verb, Verb::Abort(_)) {
+            self.abort(order, &named);
+            return;
+        }
+        let listed = self.installed.get(service.as_str());
+        let target = match (order.target(), listed) {
+            (Some(target), _) => target.version.clone(),
+            (None, Some(version)) => version.clone(),
+            (None, None) => {
+                self.log(&format!(
+                    "{named} is not run: {service} is not installed on this host"
+                ));
+                return;
+            }
+        };
         if let Some(running) = &self.running {
             if running.order != order {
                 self.log(&format!(
@@ -451,14 +497,14 @@ impl Heartbeater {
                     running.order.order_try,
                     running.service
                 ));
-                self.push(&service, OrderResult::busy(&order));
+                self.push(&service, OrderResult::busy(&order, target));
             }
             return;
         }
         if self.started.get(service.as_str()) == Some(&order) {
             return;
         }
-        if !self.installed.contains(service.as_str()) {
+        if listed.is_none() & !matches!(order.verb, Verb::Install(_)) {
             self.log(&format!(
                 "{named} is not run: {service} is not installed on this host"
             ));
@@ -475,7 +521,7 @@ impl Heartbeater {
         let declined = (!order.is_forced() & self.advertised.has(Feature::DeferredV1))
             .then(|| self.book.get(&service, now, log))
             .flatten()
-            .filter(|deferral| deferral.declines(&order.target().version, now));
+            .filter(|deferral| deferral.declines(&target, now));
         if let Some(deferral) = declined {
             self.log(&format!(
                 "{named} is not run: deferred until unix second {}",
@@ -486,17 +532,59 @@ impl Heartbeater {
         let (sender, receiver) = mpsc::channel();
         let orders = Arc::clone(&self.ports.orders);
         let job_order = order.clone();
+        let job_target = target.clone();
         self.ports.dispatch.start(Box::new(move || {
-            let _ = sender.send(orders.execute(&job_order));
+            let _ = sender.send(orders.execute(&job_order, &job_target));
         }));
         self.started
             .insert(service.as_str().to_owned(), order.clone());
         self.running = Some(Running {
             order,
             service,
+            target,
             done: receiver,
         });
     }
+
+    /// Hands the abort `order` to the executor on a worker of its own, beside the order it stops,
+    /// and logs its answer when it ends. Its answer names the target of the order of the service
+    /// that runs, else the version listed; an abort of a service with neither is not run.
+    fn abort(&self, order: Order, named: &str) {
+        let service = order.service();
+        let running = self
+            .running
+            .as_ref()
+            .filter(|running| &running.service == service)
+            .map(|running| running.target.clone());
+        let Some(target) = running.or_else(|| self.installed.get(service.as_str()).cloned()) else {
+            self.log(&format!(
+                "{named} is not run: no order of {service} runs and it is not installed on this host"
+            ));
+            return;
+        };
+        let orders = Arc::clone(&self.ports.orders);
+        let log = Arc::clone(&self.ports.log);
+        let named = named.to_owned();
+        self.ports.dispatch.start(Box::new(move || {
+            let answer = orders.execute(&order, &target);
+            log.line(&format!("{named} answered {}", answered(&answer)));
+        }));
+    }
+}
+
+/// An answer as the log says it: the outcome, then the reason and the detail when it has them.
+fn answered(result: &OrderResult) -> String {
+    let mut text = result.outcome.as_str().to_owned();
+    if let Some(reason) = &result.reason {
+        text.push_str(": ");
+        text.push_str(reason.as_str());
+    }
+    if let Some(detail) = &result.detail {
+        text.push_str(" (");
+        text.push_str(detail);
+        text.push(')');
+    }
+    text
 }
 
 /// The deferral a deferred verdict starts at `now`, under the verdict's reason, or `deferred`

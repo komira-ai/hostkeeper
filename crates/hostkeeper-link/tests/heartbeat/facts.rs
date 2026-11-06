@@ -3,7 +3,7 @@
 use std::io;
 use std::sync::Arc;
 
-use hostkeeper_link::testing::{FakeClock, ScriptedSleeper, verdict};
+use hostkeeper_link::testing::{FakeClock, ScriptedSleeper};
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, BeatOutcome, ClockSleeper, Health, Heartbeat, LinkError, Liveness,
     Observation, Observed, OrderResult, Outcome, Platform, RecordedService, Reply, ServiceFacts,
@@ -11,6 +11,7 @@ use hostkeeper_link::{
 };
 use hostkeeper_steps::Clock;
 
+use crate::verdict;
 use crate::{Rig, recorded, service, update, version};
 
 /// Catches a heartbeat whose list of services comes from anywhere but the step records (a
