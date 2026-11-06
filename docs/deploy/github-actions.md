@@ -160,7 +160,8 @@ cause is fixed, use **Re-run failed jobs** on the release run: it runs `channel`
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin. |
 | `set-desired`: Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (the allow-list entry, above), `not_in_channel` (the coordinator does not reach the channel the runner reached, or reads another one), `held_bad`, `below_min_version`, `no_answer` (the coordinator is not reachable: the tailnet variables) ([the full table](ci-client.md#when-it-fails)). | Fix what the token names, then re-run. |
 
-A run that published several releases (the daily walk, after missed runs) sets only the newest:
+A run that published several releases (each run releases every commit since the last release whose
+runs are done, so one run can publish several) sets only the newest:
 the others are in the channel, and a host goes straight to the newest. A run whose newest release
 is older than one already published sets nothing: `set-desired` is skipped, not failed.
 

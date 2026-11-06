@@ -1,5 +1,11 @@
-//! `release plan`: whether a commit (on the scheduled path, each commit missed since the last
-//! release) is released, and under which version.
+//! `release plan`: which commits since the last release are released, oldest first, and under
+//! which versions.
+//!
+//! Every run of `release.yml` plans the same way, whatever started it: it walks the first-parent
+//! history from the tip it is given down to the last release and judges each commit. A run
+//! started by the completion of one commit's run therefore also releases every earlier commit
+//! whose runs are done, so a run that a newer one replaced in the release concurrency group
+//! leaves nothing behind.
 //!
 //! A commit is released when it is not frozen, not already released, not documentation only,
 //! not held by a red privileged run, and every required workflow has a successful push run on
@@ -15,13 +21,11 @@ use super::{Error, RunState, answer, state, version};
 /// What `release plan` is asked.
 pub(crate) struct Request {
     pub(crate) repo: Repo,
-    /// The pushed commit, or on the scheduled path the tip of `main`.
+    /// The tip of `main` the walk starts from.
     pub(crate) commit: Commit,
     pub(crate) version_file: String,
     /// The value of the repository variable `RELEASE_FREEZE`.
     pub(crate) freeze: String,
-    /// Plan every commit since the last release, not only `commit`.
-    pub(crate) scheduled: bool,
     /// A file the answers (`key=value` lines) are appended to.
     pub(crate) output: Option<PathBuf>,
 }
@@ -86,8 +90,9 @@ struct Context<'a> {
     hold: Option<Hold>,
 }
 
-/// Plans the release of the requested commit (or of each missed commit) and returns the printed
-/// lines followed by the answer lines, which are also appended to the output file.
+/// Plans the release of each commit from the requested one down to the last release, oldest
+/// first, and returns the printed lines followed by the answer lines, which are also appended to
+/// the output file.
 pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, Error> {
     if frozen(&request.freeze) {
         return finish(request, vec![format!("no release: {FROZEN}")], &[]);
@@ -116,13 +121,8 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         releases: &releases,
         hold,
     };
-    let indices: Vec<usize> = if request.scheduled {
-        (0..end).rev().collect()
-    } else {
-        vec![0]
-    };
     let mut candidates = Vec::new();
-    for index in indices {
+    for index in (0..end).rev() {
         candidates.push(judge(&context, index)?);
     }
     let printed = candidates.iter().map(describe).collect();
@@ -298,32 +298,12 @@ fn finish(
             )
         })
         .collect();
-    let mut lines = vec![
+    let lines = vec![
         format!("release={}", !released.is_empty()),
         format!("matrix={{\"include\":[{}]}}", entries.join(",")),
     ];
-    if !request.scheduled {
-        lines.extend(push_lines(candidates.first()));
-    }
     printed.extend(answer(request.output.as_deref(), lines)?);
     Ok(printed)
-}
-
-/// The answers only the push path gives: the version, tag and commit of the released commit, or
-/// the reason it is not released (none judged: the repository is frozen).
-fn push_lines(candidate: Option<&Candidate>) -> Vec<String> {
-    match candidate {
-        None => vec![format!("reason={FROZEN}")],
-        Some(Candidate {
-            reason: Some(reason),
-            ..
-        }) => vec![format!("reason={reason}")],
-        Some(released) => vec![
-            format!("version={}", released.version),
-            format!("tag={}", released.version.tag()),
-            format!("commit={}", released.commit),
-        ],
-    }
 }
 
 #[cfg(test)]
