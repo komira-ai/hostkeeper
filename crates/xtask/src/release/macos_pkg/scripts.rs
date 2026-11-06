@@ -1,4 +1,5 @@
-//! The pkg's one script, `postinstall` ([`postinstall_text`]): it gives the binary directory of
+//! The pkg's one script, `postinstall` ([`postinstall_text`], the text
+//! `hostkeeper_launchd::postinstall::postinstall` writes for the pkg's paths): it gives the binary directory of
 //! hostkeeper's own update its first binary, so that the daemon's launchd job, which starts
 //! `current` of that directory (`hostkeeper_launchd::plist::DAEMON_PROGRAM`), starts the binary
 //! the pkg installed before any self-update. It is the counterpart of the Linux unit's
@@ -18,7 +19,10 @@
 //! exactly that script: `PackageInfo` names `postinstall` and no `preinstall`, and the `Scripts`
 //! archive holds `postinstall` alone, executable, with exactly these bytes.
 
+use std::path::Path;
+
 use hostkeeper_launchd::plist::{DAEMON_STATE_DIR, INSTALLED_BINARY};
+use hostkeeper_launchd::postinstall::postinstall;
 
 use super::{CpioEntry, TYPE_BITS, TYPE_FILE};
 
@@ -31,17 +35,10 @@ pub(super) const SCRIPT_MODE: u32 = 0o755;
 /// The element `pkgbuild` writes in `PackageInfo` for a `postinstall` in the scripts directory.
 const POSTINSTALL_ELEMENT: &str = "<postinstall file=\"./postinstall\"";
 
-/// The text of `postinstall`.
+/// The text of `postinstall`: the seed of the daemon's state directory from the installed
+/// binary.
 pub(super) fn postinstall_text() -> String {
-    format!(
-        "#!/bin/sh\n\
-         # The hostkeeper pkg's postinstall, written by `cargo xtask release macos-pkg`. The\n\
-         # daemon's launchd job starts current of the binary directory of hostkeeper's own update;\n\
-         # when current starts nothing, this puts the binary the pkg installed there and points\n\
-         # current at it. When current starts a binary, as after a self-update, it changes nothing.\n\
-         exec {INSTALLED_BINARY} self-update-seed --state-dir {DAEMON_STATE_DIR} --binary \
-         {INSTALLED_BINARY}\n"
-    )
+    postinstall(Path::new(INSTALLED_BINARY), Path::new(DAEMON_STATE_DIR))
 }
 
 /// What is wrong with the scripts `PackageInfo` names in `text`, one line each: it names the

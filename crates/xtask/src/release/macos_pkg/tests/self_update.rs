@@ -96,14 +96,17 @@ fn the_fallback_job_runs_previous_of_the_directory_the_daemon_job_starts_current
     assert_eq!(flags.dir, dir);
 }
 
-/// The words of the one command of the postinstall, `exec` dropped.
+/// The words of the one command of the postinstall, `exec` dropped and each word's quotes
+/// taken off (the pkg's paths hold no quote, space or other character the shell reads).
 fn postinstall_words() -> Vec<String> {
     let text = postinstall_text();
     let line = text.lines().last().expect("a command");
     let line = line
         .strip_prefix("exec ")
         .expect("the script execs the seed");
-    line.split(' ').map(str::to_owned).collect()
+    line.split(' ')
+        .map(|word| word.trim_matches('\'').to_owned())
+        .collect()
 }
 
 #[test]

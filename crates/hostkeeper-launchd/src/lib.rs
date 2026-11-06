@@ -20,6 +20,8 @@
 //! - [`launcher`]: [`LaunchdLauncher`], the step runner's
 //!   [`StepLauncher`](hostkeeper_steps::StepLauncher): each step of a hook as a transient launchd
 //!   job, under the same contract as `hostkeeper_steps::SystemdLauncher`.
+//! - [`postinstall`]: the `postinstall` script of the macOS installer pkg, which gives the
+//!   self-update binary directory the daemon job starts its first binary.
 //! - [`platform`]: [`Platform`], the paths and unit directory that differ between Linux and
 //!   macOS.
 //! - [`fake`]: [`FakeLaunchctl`], the scripted `launchctl` every test drives.
@@ -37,6 +39,7 @@ pub mod launcher;
 pub mod manager;
 pub mod platform;
 pub mod plist;
+pub mod postinstall;
 pub mod procid;
 pub mod unit_control;
 

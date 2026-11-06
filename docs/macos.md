@@ -371,7 +371,7 @@ It has one script, a `postinstall` of one command, which the installer runs as r
 are in place:
 
 ```
-exec /usr/local/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/local/bin/hostkeeper
+exec '/usr/local/bin/hostkeeper' self-update-seed --state-dir '/var/lib/updater/state' --binary '/usr/local/bin/hostkeeper'
 ```
 
 It is the seed the Linux unit runs before each start (`hostkeeper_daemon::seed`): when `current`

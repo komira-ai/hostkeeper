@@ -74,8 +74,8 @@ fn a_scripts_archive_that_is_not_the_one_postinstall_is_refused() {
     let script = |mode: u32, data: &[u8]| odc_entry("./postinstall", mode, 501, 20, data);
     let top = odc_entry(".", 0o040_755, 501, 20, b"");
     let other = text.replace(
-        "--state-dir /var/lib/updater/state",
-        "--state-dir /tmp/state",
+        "--state-dir '/var/lib/updater/state'",
+        "--state-dir '/tmp/state'",
     );
     let not_ours = "Scripts: ./postinstall is not the postinstall release macos-pkg writes";
     let cases: [(Vec<Vec<u8>>, Vec<String>); 7] = [
@@ -152,8 +152,8 @@ fn the_postinstall_runs_the_installed_binarys_seed_of_the_daemons_state_director
     assert_eq!(
         text.lines().last(),
         Some(
-            "exec /usr/local/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state \
-             --binary /usr/local/bin/hostkeeper"
+            "exec '/usr/local/bin/hostkeeper' self-update-seed --state-dir \
+             '/var/lib/updater/state' --binary '/usr/local/bin/hostkeeper'"
         )
     );
     assert!(text.starts_with("#!/bin/sh\n"));
