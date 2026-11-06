@@ -15,8 +15,9 @@ pub const ROLLOUT: &str = "farm-rollout-linux.tsv";
 /// The cells the rollout fills, in the report's order.
 pub const ROLLOUT_CELLS: &[&str] = &["m-rollout-bootstrap", "m-rollout-approve-to-ready"];
 
-/// The Linux nodes of the lab, as the report names them.
-const NODES: &[&str] = &["node-1", "node-2", "node-3", "node-4", "node-5", "node-6"];
+/// The Linux nodes of the rollout, as the report names them: the lab's six but node-5, the canary,
+/// whose times are in its own file.
+const NODES: &[&str] = &["node-1", "node-2", "node-3", "node-4", "node-6"];
 
 fn rollout_text() -> String {
     std::fs::read_to_string(repo_root().join(RESULTS).join(ROLLOUT)).expect("read the rollout")
@@ -29,11 +30,13 @@ fn tenth(value: f64) -> f64 {
 
 /// One line per derived row of the result file `text` that its raw rows do not give.
 ///
-/// A raw row `<measure>-node-<k>` is one node's time; `<k>` names a Linux node of the lab. A
-/// derived row `<measure>-min` or `<measure>-max` is the least or the greatest of the raw rows of
-/// its measure, to one decimal; a measure with such a row has at least one raw row. The derived
-/// row `nodes` is the number of raw rows of every measure, and every measure covers the same
-/// nodes. Any other derived row is refused, so a derived row is never left unchecked.
+/// Every value is a finite number. A raw row `<measure>-node-<k>` is one node's time, `<k>` a
+/// node of [`NODES`], once per measure; any other raw row names a cell that prints it, so no raw
+/// row is left out of both checks. A derived row `<measure>-min` or `<measure>-max` is the least
+/// or the greatest of the raw rows of its measure, to one decimal; a measure with such a row has
+/// at least one raw row, and every measure has both. The derived row `nodes` is there, and is the
+/// number of raw rows of every measure, and every measure covers the same nodes. Any other derived
+/// row is refused, so a derived row is never left unchecked.
 fn derived_problems(text: &str) -> Vec<String> {
     let mut raw: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
     let mut derived: Vec<(String, f64)> = Vec::new();
@@ -48,8 +51,8 @@ fn derived_problems(text: &str) -> Vec<String> {
             problems.push(format!("{line:?}: fewer than 3 columns"));
             continue;
         };
-        let Ok(value) = value.parse::<f64>() else {
-            problems.push(format!("{id}: value {value:?} is not a number"));
+        let Some(value) = value.parse::<f64>().ok().filter(|v| v.is_finite()) else {
+            problems.push(format!("{id}: value {value:?} is not a finite number"));
             continue;
         };
         match *kind {
@@ -57,11 +60,16 @@ fn derived_problems(text: &str) -> Vec<String> {
                 if let Some((measure, node)) = id.split_once("-node-") {
                     let node = format!("node-{node}");
                     if !NODES.contains(&node.as_str()) {
-                        problems.push(format!("{id}: {node} is not a Linux node of the lab"));
+                        problems.push(format!("{id}: {node} is not a node of the rollout"));
                     }
-                    raw.entry(measure.to_owned())
-                        .or_default()
-                        .insert(node, value);
+                    let by_node = raw.entry(measure.to_owned()).or_default();
+                    if by_node.insert(node, value).is_some() {
+                        problems.push(format!("{id}: a second row of the same node"));
+                    }
+                } else if columns.get(5).is_none_or(|c| c.trim().is_empty()) {
+                    problems.push(format!(
+                        "{id}: a raw row that is no node's time and names no cell"
+                    ));
                 }
             }
             "derived" => derived.push(((*id).to_owned(), value)),
@@ -85,6 +93,19 @@ fn derived_problems(text: &str) -> Vec<String> {
             "the measures cover different nodes ({})",
             listed.join("; ")
         ));
+    }
+    if !derived.iter().any(|(id, _)| id == "nodes") {
+        problems.push("no derived row nodes".to_owned());
+    }
+    for measure in raw.keys() {
+        for end in ["min", "max"] {
+            if !derived
+                .iter()
+                .any(|(id, _)| *id == format!("{measure}-{end}"))
+            {
+                problems.push(format!("{measure}: no derived row {measure}-{end}"));
+            }
+        }
     }
     for (id, value) in &derived {
         if id == "nodes" {
@@ -172,8 +193,11 @@ fn the_derived_rows_of_the_committed_rollout_are_what_its_node_rows_give() {
 #[test]
 fn a_derived_row_its_node_rows_do_not_give_fails() {
     // Catches: a node's time changed without the range, the range changed without a node's
-    // time, a node dropped from one measure without the count, a node outside the lab, a derived
-    // row of a measure with no node rows, a derived row of no known shape, and an unknown kind.
+    // time, a node dropped from one measure without the count, a node outside the rollout (one
+    // outside the lab, and node-5, the canary), a node given twice, a raw row that is neither a
+    // node's time nor printed, a value that is not a finite number, a missing count, min or max,
+    // a derived row of a measure with no node rows, a derived row of no known shape, an unknown
+    // kind, and a row of too few columns.
     let text = rollout_text();
     let dropped: String = text
         .lines()
@@ -210,10 +234,72 @@ fn a_derived_row_its_node_rows_do_not_give_fails() {
         (
             text.replace("bootstrap-apply-node-6", "bootstrap-apply-node-7"),
             vec![
-                "bootstrap-apply-node-7: node-7 is not a Linux node of the lab".to_owned(),
+                "bootstrap-apply-node-7: node-7 is not a node of the rollout".to_owned(),
                 "the measures cover different nodes (approve-to-ready: node-1 node-2 node-3 node-4 node-6; bootstrap-apply: node-1 node-2 node-3 node-4 node-7)"
                     .to_owned(),
             ],
+        ),
+        (
+            text.replace("bootstrap-apply-node-6", "bootstrap-apply-node-5"),
+            vec![
+                "bootstrap-apply-node-5: node-5 is not a node of the rollout".to_owned(),
+                "the measures cover different nodes (approve-to-ready: node-1 node-2 node-3 node-4 node-6; bootstrap-apply: node-1 node-2 node-3 node-4 node-5)"
+                    .to_owned(),
+            ],
+        ),
+        (
+            text.replace("bootstrap-apply-node-6", "bootstrap-apply-node-4"),
+            vec![
+                "bootstrap-apply-node-4: a second row of the same node".to_owned(),
+                "the measures cover different nodes (approve-to-ready: node-1 node-2 node-3 node-4 node-6; bootstrap-apply: node-1 node-2 node-3 node-4)"
+                    .to_owned(),
+                "nodes is 5, bootstrap-apply has 4 per-node rows".to_owned(),
+                // The second row replaced node-4's time, so the least is now node-3's.
+                "bootstrap-apply-min is 22.7, the least bootstrap-apply-node-* is 23.925"
+                    .to_owned(),
+            ],
+        ),
+        (
+            format!("{text}raw\tbootstrap-apply-nod-7\t30\ts\tm\n"),
+            vec!["bootstrap-apply-nod-7: a raw row that is no node's time and names no cell".to_owned()],
+        ),
+        (
+            format!("{text}raw\tx\t30\ts\tm\t\n"),
+            vec!["x: a raw row that is no node's time and names no cell".to_owned()],
+        ),
+        (
+            with_value("bootstrap-apply-node-1", "NaN"),
+            vec![
+                "bootstrap-apply-node-1: value \"NaN\" is not a finite number".to_owned(),
+                // The refused row is left out, so node-1 is missing from the measure.
+                "the measures cover different nodes (approve-to-ready: node-1 node-2 node-3 node-4 node-6; bootstrap-apply: node-2 node-3 node-4 node-6)"
+                    .to_owned(),
+                "nodes is 5, bootstrap-apply has 4 per-node rows".to_owned(),
+            ],
+        ),
+        (
+            with_value("bootstrap-apply-node-1", "inf"),
+            vec![
+                "bootstrap-apply-node-1: value \"inf\" is not a finite number".to_owned(),
+                // The refused row is left out, so node-1 is missing from the measure.
+                "the measures cover different nodes (approve-to-ready: node-1 node-2 node-3 node-4 node-6; bootstrap-apply: node-2 node-3 node-4 node-6)"
+                    .to_owned(),
+                "nodes is 5, bootstrap-apply has 4 per-node rows".to_owned(),
+            ],
+        ),
+        (
+            text.lines()
+                .filter(|l| !l.starts_with("derived\tnodes\t"))
+                .map(|l| format!("{l}\n"))
+                .collect(),
+            vec!["no derived row nodes".to_owned()],
+        ),
+        (
+            text.lines()
+                .filter(|l| !l.starts_with("derived\tapprove-to-ready-max\t"))
+                .map(|l| format!("{l}\n"))
+                .collect(),
+            vec!["approve-to-ready: no derived row approve-to-ready-max".to_owned()],
         ),
         (
             format!("{text}derived\tenroll-max\t1\ts\tm\n"),
@@ -229,7 +315,7 @@ fn a_derived_row_its_node_rows_do_not_give_fails() {
         ),
         (
             format!("{text}raw\tx\tfast\ts\tm\n"),
-            vec!["x: value \"fast\" is not a number".to_owned()],
+            vec!["x: value \"fast\" is not a finite number".to_owned()],
         ),
         (
             format!("{text}raw\tx\n"),

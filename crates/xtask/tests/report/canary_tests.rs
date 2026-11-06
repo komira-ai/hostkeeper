@@ -99,6 +99,18 @@ fn the_canary_fills_its_cells_and_leaves_the_rest_open() {
 
 #[test]
 fn every_row_of_the_canary_is_printed_by_exactly_the_cells_it_names() {
+    // Catches: a canary row printed by no cell (every row of the canary is one cell's number),
+    // and what `rows_are_printed_by_exactly_their_cells` catches.
+    let rows = result_rows(
+        &std::fs::read_to_string(repo_root().join(RESULTS).join(CANARY)).expect("read the canary"),
+    )
+    .expect("the canary parses");
+    let unprinted: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.cells.is_empty())
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(unprinted, Vec::<&str>::new());
     rows_are_printed_by_exactly_their_cells(CANARY);
 }
 

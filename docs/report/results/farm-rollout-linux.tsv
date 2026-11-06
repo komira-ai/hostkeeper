@@ -5,8 +5,8 @@
 # Each node ran each step once. Times are differences between the stamps, to the millisecond, of
 # the operator's own commands and of an ssh poll of the hello service (its readiness and version
 # routes) every 3 s. A time that ends at a poll is an upper bound: the event happened at most one
-# poll interval earlier. On every node kbf and tierstore had the same process
-# and the same executable digest before and after the adoption.
+# poll interval earlier. On each of these five nodes kbf and tierstore had the same process and
+# the same executable digest before and after the adoption.
 # A raw row is one node's time and names no cell; a derived row is computed from the raw rows above
 # it, as its how column says, and is what the report prints.
 # kind	id	value	unit	how	cells
