@@ -88,7 +88,10 @@ fn forward(
     let claims = placer.desired(&manifest).map_err(text)?;
     let linking = placer.begin(&claims).map_err(text)?;
     placer.link(&linking).map_err(text)?;
-    placer.switch_current(&service, &version).map_err(text)?;
+    // Negative control: link switch stubbed (an update only; a first install still switches)
+    if order.previous.is_none() {
+        placer.switch_current(&service, &version).map_err(text)?;
+    }
     placer.reload().map_err(text)?;
     if order.previous.is_none() {
         placer.commit(linking).map_err(text)?;
