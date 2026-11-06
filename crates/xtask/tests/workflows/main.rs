@@ -1,8 +1,12 @@
 //! The workflow lint: every file in `.github/workflows` is held to the rules in [`lint`], and
 //! the lint is shown to refuse each defect by putting it into a workflow that is otherwise
 //! clean ([`CLEAN`]) and reading the exact problems it reports. The rules of `privileged.yml`, the
-//! one workflow that runs a job as root, are tested in `privileged_tests.rs`.
+//! one workflow that runs a job as root, are tested in `privileged_tests.rs`; those of
+//! `advisories.yml`, the advisory monitor, in `advisories.rs`.
 
+mod advisories;
+mod callers;
+mod callers_tests;
 mod lint;
 mod privileged_tests;
 mod release;

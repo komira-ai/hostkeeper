@@ -31,9 +31,12 @@
 //! 9. the follow-on ([`hostkeeper_steps::follow_on`]): the new binary staged in the binary
 //!    directory ([`binary_dir`]), the record written as waiting for the restart, `current`
 //!    switched. The reply is `Deferred` `awaiting_restart`, never `Succeeded`, and the daemon is
-//!    asked to exit with status 0 ([`Restart`]); its unit's `Restart=always` starts the new
-//!    binary. The step lock is released only after the switch, so a step of another service
-//!    that waits for it starts after the swap.
+//!    asked to exit with status 0 ([`Restart`]). Its unit (`packaging/linux/hostkeeper.service`)
+//!    starts `current` of the binary directory and has `Restart=always`, so that clean exit
+//!    starts the new binary; the drop-in and fallback unit the daemon writes at its start
+//!    (`crate::selfunits`) put the previous one back if the new one fails its start limit. The
+//!    step lock is released only after the switch, so a step of another service that waits for
+//!    it starts after the swap.
 //!
 //! At start, after the lock of the state directory and before the boot pass,
 //! [`Daemon::settle_self_update`] settles an update that waits for the restart
