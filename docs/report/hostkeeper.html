@@ -407,7 +407,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <li id="n-h2"><strong>h2.</strong> CI authenticates to the coordinator with a GitHub Actions OIDC token on <code>Releases.SetDesired</code> and <code>Releases.Converge</code>, and an operator&rsquo;s token may also set the desired version. Packages are attested in CI, and hosts only dial out. CI needs network reach to the coordinator&rsquo;s private listener, not to any host. Releases are published from <code>main</code> as GitHub releases, but no release channel that the daemon reads is hosted: the operator stages and serves one. The shipped daemon&rsquo;s heartbeat reaches the coordinator over mutual TLS once the host is enrolled, so a desired version reaches it in the reply.</li>
 <li id="n-h3"><strong>h3.</strong> The step contract (prepare, cutover, verify, cleanup, rollback), the rollback after a failed verify and the dead-man are built and tested in process. The service&rsquo;s hook does the hand-off; the daemon does not enforce zero dropped requests. On Linux a hooked update stops before cutover, because unit control is unwired.</li>
 <li id="n-h4"><strong>h4.</strong> The one-at-a-time gate, the canary, the bake, holds and force are built in the coordinator. <code>Hosts.Abort</code> does not reach the shipped daemon; an abort is done on the host through the admin socket. The group sizes <code>max_updating</code> and <code>min_up</code> are stored but no decision reads them.</li>
-<li id="n-h5"><strong>h5.</strong> A host id is chosen by the operator and bound to the host&rsquo;s key at approval. It is not derived from a MAC address. MAC addresses, serials and the machine id travel as claims that help match an inventory record and authorise nothing. The BMC claim&rsquo;s parser and wire field are built, but no IPMI reader is, so the shipped daemon never sends a BMC MAC. The CA, approval, renewal and the pinned CA hash are built, and the daemon&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts.</li>
+<li id="n-h5"><strong>h5.</strong> A host id is chosen by the operator and bound to the host&rsquo;s key at approval. It is not derived from a MAC address. MAC addresses, serials and the machine id travel as claims that help match an inventory record and authorise nothing. A Linux daemon reads its BMC&rsquo;s MAC over <code>/dev/ipmi0</code> and sends it as a claim; a host with no BMC sends none. The CA, approval, renewal and the pinned CA hash are built, and the daemon&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts.</li>
 <li id="n-h6"><strong>h6.</strong> One root daemon, in Rust, with its verbs compiled in and no interpreter on the host. Hooks are executables that services ship. The coordinator is a second program.</li>
 <li id="n-h7"><strong>h7.</strong> gRPC and an HTTP/JSON gateway serve every operator method except <code>Hosts.List</code>, <code>Hosts.Get</code> and <code>Releases.UnmarkBad</code>, which answer <code>UNIMPLEMENTED</code>, so the Fleet and Host pages get refusals (the Host page still lists the services assigned to the host). <code>hostkeeper ctl</code> is generated from the protos, the web UI is built and the audit file is append-only. A <code>SetDesired</code> by CI writes no audit entry of its own; one by an operator writes a <code>set_desired</code> entry.</li>
 <li id="n-h8"><strong>h8.</strong> State is plain files, with one coordinator and no database. There is no failover, and the operator supervises the coordinator.</li>
@@ -476,7 +476,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <h3 id="g5">G5: hardware identity and enrollment with a CA and operator approval</h3>
 <p>Hostnames get reused and cloned. A host should prove which machine it is, and a person should approve it.</p>
 <ul>
-<li>hostkeeper binds a host id to the host&rsquo;s key at approval, with a CA that issues short-lived client certificates. Claims (MAC addresses, serial, machine id) are matched against an operator&rsquo;s inventory of MAC addresses, BMC MACs and serials, and by design authorise nothing. The BMC reader is not built (<a href="#n-h5">h5</a>).</li>
+<li>hostkeeper binds a host id to the host&rsquo;s key at approval, with a CA that issues short-lived client certificates. Claims (MAC addresses, serial, machine id) are matched against an operator&rsquo;s inventory of MAC addresses, BMC MACs and serials, and by design authorise nothing. A Linux daemon claims its BMC MAC too (<a href="#n-h5">h5</a>).</li>
 <li>Mender identifies devices by identity attributes, a MAC by default, with accept and reject states. Fleet uses hardware identifiers and enroll secrets. MDM ties enrollment to Apple hardware serials through Automated Device Enrollment and issues certificates over SCEP.</li>
 <li>Puppet has a CA with manual signing of requests, though the identity is the certname. Kubernetes has CA-signed node certificates with approval of requests, with the identity from the node name.</li>
 <li>Salt has key acceptance by an operator, with the minion id as the identity. It has an <code>ipmi</code> module and a BMC extension, but they are modules that use supplied credentials, not a built-in identity.</li>
@@ -682,9 +682,10 @@ operator recognise the machine and match it against the inventory, but they auth
 at most
 <span data-cell="c-inventory" data-source="crates/hostkeeper-coordinator/src/inventory.rs" data-item="MAX_RECORDS">10,000</span>
 records. <code>Enrollment.List</code> marks each pending request as matched, unmatched or ambiguous against
-it. A match fills the approval form but approves nothing. The daemon has the logic to read the BMC
-MAC over IPMI, but no IPMI reader is built, so the shipped daemon never sends a BMC MAC
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#57-enrollment-and-remote-install">design: Enrollment and remote install</a>).</p>
+it. A match fills the approval form but approves nothing. A Linux daemon reads its BMC&rsquo;s MAC
+over <code>/dev/ipmi0</code> and sends it as a claim; a host with no BMC sends none
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/ipmi.rs">crates/hostkeeper-daemon/src/ipmi.rs</a>,
+<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#57-enrollment-and-remote-install">design: Enrollment and remote install</a>).</p>
 <p><strong>The CA</strong> is a module of the coordinator, not a separate process
 (<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-enrollment/src/ca">crates/hostkeeper-enrollment/src/ca</a>,
 <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/enrollment-coordinator.md">docs/enrollment-coordinator.md</a>). Its key is one P-256 <code>PKCS#8</code> file
@@ -872,12 +873,17 @@ attestation verify</code> runs offline against the Sigstore trusted root and the
 <code>[trusted_signers]</code> entry (organisation, workflow, ref globs, hosted runner). There is no unsigned
 mode. The bundle is read up to
 <span data-cell="c-bundle" data-source="crates/hostkeeper-package/src/bundle.rs" data-item="MAX_BUNDLE_BYTES">1 MiB</span>.
-The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code> on Linux
-and under <code>/usr/local/lib/hostkeeper/</code> on a Mac
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>). The macOS
-installer pkg installs both (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>); no Linux
-package does. Until an operator places them on a Linux host, every package check there ends
-<code>attestation_unavailable</code>.</p>
+The pinned <code>gh</code> and the trusted root are read from <code>/usr/lib/hostkeeper/</code> on Linux
+and from <code>/usr/local/lib/hostkeeper/</code> on a Mac
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>). The deb
+and the rpm install both on Linux, <code>gh</code> from its release archive checked against a pinned SHA-256 and the
+trusted root captured when the package is built
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/verify-a-release.md">docs/deploy/verify-a-release.md</a>); the macOS
+installer pkg installs both on a Mac (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>). A host
+without them ends every package check <code>attestation_unavailable</code>. Hostkeeper&rsquo;s own package also
+carries the trusted root, so each update of hostkeeper brings the root of its release; the daemon uses
+the copy written last and reports its age in the admin <code>Status</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/verify-a-release.md#the-trusted-root-on-a-host">docs/deploy/verify-a-release.md</a>).</p>
 <p><strong>Unpack.</strong> One streaming pass (zstd, tar, a SHA-256 per file) writes into a private staging
 directory, under hard bounds: a zstd window of at most
 <span data-cell="c-window" data-source="crates/hostkeeper-unpack/src/archive.rs" data-item="MAX_WINDOW_BYTES">8 MiB</span>,
@@ -964,10 +970,13 @@ loop announces it and runs the abort beside the order it stops, whose verdict th
 halt; on a host the coordinator cannot reach, an abort is done through the admin socket.</p>
 <p><strong>The audit trail.</strong> Every change to the ops store is one entry: who (operator token name, <code>ci</code> or
 <code>coordinator</code>), the action, the service, the host and the reason. The entries go to an append-only
-audit file, one JSON line each, fsynced, never rotated. The file is a copy, not a gate: a line
-that cannot be appended is logged as an error and the change stands. The ops file keeps the last
+audit file, one JSON line each, fsynced. The file is rotated by size: a full file is sealed as a
+numbered segment on a line boundary, the numbers go on across files, and the oldest segments past
+a retained count are deleted. A change is not made without its line: when it cannot be appended
+the call is refused with <code>audit_unavailable</code>, except <code>Hosts.Abort</code> and
+<code>Releases.Halt</code>, which stand with the failure logged. The ops file keeps the last
 <span data-cell="c-audit-ring" data-source="crates/hostkeeper-coordinator/src/ops.rs" data-item="AUDIT_RING">64</span>
-entries for <code>Releases.Status</code>. <code>Audit.List</code> filters the whole file, at most
+entries for <code>Releases.Status</code>. <code>Audit.List</code> filters the active file and the segments kept, at most
 <span data-cell="c-audit-page" data-source="crates/hostkeeper-coordinator/src/operator.rs" data-item="MAX_AUDIT_PAGE">256</span>
 entries a page (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/audit_file.rs">crates/hostkeeper-coordinator/src/audit_file.rs</a>).
 A <code>SetDesired</code> by CI writes no audit entry of its own (only the force it ends, <code>force_ended</code>, and
@@ -1177,7 +1186,7 @@ paths (the CA bundle, <code>gh</code> and the trusted root use their Linux paths
 <h3 id="labels">How machines are labelled: MAC address, host record, role, services</h3>
 <p>A machine is known to hostkeeper in four steps, each kept by a different hand:</p>
 <ol>
-<li><strong>MAC address and serial.</strong> When a server is built, the operator records its data MACs and its BMC MAC, and for a Mac its serial. These are what the machine says it is when it asks to enroll: a Linux daemon claims its network addresses, machine id and DMI serial, and a Mac claims its serial and platform UUID. A claim is written by the requester, so it proves nothing.</li>
+<li><strong>MAC address and serial.</strong> When a server is built, the operator records its data MACs and its BMC MAC, and for a Mac its serial. These are what the machine says it is when it asks to enroll: a Linux daemon claims its network addresses, machine id, DMI serial and BMC MAC, and a Mac claims its serial and platform UUID. A claim is written by the requester, so it proves nothing.</li>
 <li><strong>Host record.</strong> The record (<code>Enrollment.AddRecord</code>, the Inventory page) gives the machine its host id and its expected role. A pending request whose claimed addresses include a record&rsquo;s data MAC (or, for a Mac, whose serial is the record&rsquo;s) shows that record&rsquo;s host id and role on the Enrollment page. The match fills in the approval form and approves nothing.</li>
 <li><strong>Role.</strong> The operator approves the request by its key hash, with a host id and a role. The role goes into the host&rsquo;s certificate, and the coordinator reads it from there on every connection.</li>
 <li><strong>Assigned services.</strong> The rollout file assigns each service to roles, and the operator&rsquo;s entries (<code>Services.Assign</code>, <code>Services.Unassign</code>) go on top, first for the host itself, then for its role. Labels the operator sets on a host can narrow a service further.</li>
@@ -1354,13 +1363,12 @@ rollback cannot move a host back below the version it runs.</li>
 <li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no expiry of pending
 requests, no CA rotation or revocation lists.</li>
 <li><strong>Operations:</strong> a single coordinator with no failover; the rollout file is read only at start; the
-audit file is never rotated; there is no metrics endpoint and no pager (conditions that need a
+audit keeps only its retained segments, so the oldest entries are deleted; there is no metrics endpoint and no pager (conditions that need a
 person are <code>alert=</code> log lines).</li>
 <li><strong>macOS:</strong> no MDM, no update run on a device, no signed installer.</li>
 <li><strong>A hook is root and is not confined.</strong> This is by design: the trust is in the signed package and
 the conformance suite (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#11-limits">design: Limits</a>).</li>
-<li><strong>Distribution:</strong> releases are published as GitHub releases, but no release channel is hosted,
-and no package installs the pinned <code>gh</code> and trusted root the daemon&rsquo;s attestation check needs.</li>
+<li><strong>Distribution:</strong> releases are published as GitHub releases, but no release channel is hosted.</li>
 </ul>
 <p>The design&rsquo;s plan for the rest is its build order
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#122-build-order-from-todays-code-to-done">design: Build order</a>).

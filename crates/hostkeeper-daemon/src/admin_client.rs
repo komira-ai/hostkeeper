@@ -2,7 +2,7 @@
 //! (`hostkeeper.local.v1.Admin`, [`crate::admin`]), one verb per call (docs/admin.md):
 //!
 //! - `status`: `Status`, what the daemon holds: the host's enrollment, the heartbeat loop's link
-//!   to the coordinator, and each installed service;
+//!   to the coordinator, the trusted root's age, and each installed service;
 //! - `abort <service>`: `Abort`, the service's running step stopped;
 //! - `clear-record <service>`: `ClearRecord`, the service's unreadable step record cleared.
 //!
@@ -236,6 +236,9 @@ macro_rules! token_of {
 ///   `enrollment.host_id` and `enrollment.not_after_unix` for an enrolled one;
 /// - `link.last_success_unix` (`never` when no heartbeat was answered) and
 ///   `link.consecutive_failures`, or `link: unknown` when the daemon has none yet;
+/// - `trusted_root.age_secs`, the age of the Sigstore trusted root (`unknown` when the daemon
+///   reported none), and `trusted_root.reason`, why it needs attention (`none` when it needs
+///   none);
 /// - `services`, how many; then each service ([`service_lines`]), in the daemon's order.
 pub fn status_text(status: &StatusResponse) -> String {
     let mut out = Lines::default();
@@ -265,6 +268,15 @@ pub fn status_text(status: &StatusResponse) -> String {
             out.push("link.consecutive_failures", link.consecutive_failures);
         }
     }
+    let age = status
+        .trusted_root_age_secs
+        .map_or_else(|| "unknown".to_owned(), |secs| secs.to_string());
+    out.push("trusted_root.age_secs", age);
+    let reason = status.trusted_root_reason.as_str();
+    out.push(
+        "trusted_root.reason",
+        if reason.is_empty() { "none" } else { reason },
+    );
     out.push("services", status.services.len());
     for service in &status.services {
         service_lines(service, &mut out);

@@ -430,6 +430,7 @@ fn an_older_admin_reader_keeps_the_enrollment_and_link_of_a_status() {
         }],
         enrollment: Some(enrolled()),
         link: Some(link()),
+        ..StatusResponse::default()
     };
     let read = DynamicMessage::decode(message, round_trip(&status).as_slice()).expect("decodes");
     let services = read.get_field_by_name("services").expect("known");
@@ -450,6 +451,47 @@ fn an_older_admin_reader_keeps_the_enrollment_and_link_of_a_status() {
     };
     let read = Enrollment::decode(round_trip(&later).as_slice()).expect("decodes");
     assert_eq!(read.state(), EnrollmentState::Unspecified);
+}
+
+/// Catches the trusted root's age and reason in `Status` that an admin client of the release
+/// before cannot read past, or drops, and a status of the release before read as a root of age
+/// 0: a `StatusResponse` with both is read by the baseline's, which has neither, with its
+/// services, and written back with both kept; one without them reads with no age and no reason.
+#[test]
+fn an_older_admin_reader_keeps_the_trusted_roots_age_and_reason() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.StatusResponse")
+        .expect("released");
+    assert!(message.get_field_by_name("trusted_root_age_secs").is_none());
+    assert!(message.get_field_by_name("trusted_root_reason").is_none());
+    let stale = StatusResponse {
+        services: vec![ServiceRecord {
+            service: "web".to_owned(),
+            ..ServiceRecord::default()
+        }],
+        trusted_root_age_secs: Some(91 * 86_400),
+        trusted_root_reason: "trusted_root_stale".to_owned(),
+        ..StatusResponse::default()
+    };
+    let read = DynamicMessage::decode(message, round_trip(&stale).as_slice()).expect("decodes");
+    let services = read.get_field_by_name("services").expect("the services");
+    assert!(matches!(services.as_ref(), Value::List(list) if list.len() == 1));
+    let back = StatusResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, stale);
+
+    let before = StatusResponse {
+        services: stale.services.clone(),
+        ..StatusResponse::default()
+    };
+    let read = StatusResponse::decode(round_trip(&before).as_slice()).expect("decodes");
+    assert_eq!(
+        (
+            read.trusted_root_age_secs,
+            read.trusted_root_reason.as_str()
+        ),
+        (None, "")
+    );
 }
 
 /// Catches: a field added to a released message of `Services` that the release before drops or
@@ -536,5 +578,32 @@ fn an_older_reader_keeps_the_assignments_of_services() {
         "hostkeeper.operator.v1.AssignedHost",
     ] {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
+    }
+}
+
+/// Catches: a refusal of `Releases.SetDesired` for the release channel taking the number of a
+/// value the release before already gave a meaning, or renumbering one: the baseline knows no
+/// value 19 or 20, and every value it knows keeps its name and number. A caller of the release
+/// before reads the new refusals by their token, the status message, which needs no value.
+#[test]
+fn the_release_channel_refusals_are_new_values_of_releases() {
+    let older = baseline_pool();
+    let refusal = older
+        .get_enum_by_name("hostkeeper.operator.v1.ReleasesRefusal")
+        .expect("released");
+    for (added, number) in [
+        (op::ReleasesRefusal::NotInChannel, 19),
+        (op::ReleasesRefusal::ChannelDigestMismatch, 20),
+    ] {
+        assert_eq!(added as i32, number, "{added:?}");
+        assert!(refusal.get_value(number).is_none(), "{added:?}");
+    }
+    for value in refusal.values() {
+        assert_eq!(
+            op::ReleasesRefusal::try_from(value.number())
+                .expect("a value of the release before")
+                .as_str_name(),
+            value.name()
+        );
     }
 }

@@ -156,9 +156,14 @@ impl Admin for AdminService {
             .and_then(Result::ok)
             .ok_or_else(|| Status::internal(Refusal::StoreFailed.token()))?;
         let services = status.services.iter().map(service_record).collect();
+        let root = status.trusted_root.as_ref();
         let node = &self.daemon.ctx().node;
         Ok(Response::new(StatusResponse {
             services,
+            trusted_root_age_secs: root.and_then(|root| root.age_secs),
+            trusted_root_reason: root
+                .and_then(|root| root.problem)
+                .map_or_else(String::new, |problem| problem.token().to_owned()),
             enrollment: node.enrollment().as_ref().map(enrollment),
             link: node.link().map(link_health),
         }))

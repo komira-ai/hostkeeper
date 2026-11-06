@@ -1,7 +1,7 @@
 //! The host's adapters by platform, and the real adapters of a Mac's package check and claims,
 //! against the fake process port and files in a scratch directory: the argument lists of
 //! `codesign` and `ioreg`, how each of their ends is read, the quarantine attribute read from the
-//! entry itself, and which ports each platform's set asks.
+//! entry itself, which ports each platform's set asks, and the boot id of the host's clock.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -10,20 +10,22 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hostkeeper_daemon::adapters::{Adapters, host_claims};
+use hostkeeper_daemon::adapters::{Adapters, host_boot_id, host_claims, host_clock};
 use hostkeeper_daemon::cli::{DEFAULT_ADMIN_SOCKET, UNWIRED, Unwired};
+use hostkeeper_daemon::ipmi::DevIpmi;
 use hostkeeper_daemon::mac::{
     CODESIGN, HostIoreg, HostMacVerify, IOREG, NOT_SIGNED, QUARANTINE_ATTRIBUTE, TOOL_DEADLINE,
     codesign_args, codesign_verdict, has_attribute, ioreg_args,
 };
 use hostkeeper_daemon::start::StartError;
-use hostkeeper_enroll::{Claims, Ioreg};
+use hostkeeper_enroll::{Claims, Ioreg, LinuxClaims};
 use hostkeeper_launchd::launchctl::print_args;
 use hostkeeper_launchd::{
     FakeLaunchctl, Label, LaunchctlError, LaunchctlOutput, PidInfo, PidInfoError, Platform,
     PlatformKind,
 };
 use hostkeeper_observe::{ActiveState, ObserveError, ProcessIdentity};
+use hostkeeper_steps::{BootId, Clock, Stamp};
 use hostkeeper_testkit::Scratch;
 use hostkeeper_unpack::{MacVerify, SignatureVerdict, VerifyIoError};
 use rustix::fs::XattrFlags;
@@ -326,9 +328,14 @@ impl Ioreg for FakeIoreg {
 /// UUID `ioreg` gives, and nothing else.
 #[test]
 fn a_macs_claims_are_its_serial_and_platform_uuid_alone() {
-    let claims = host_claims(PlatformKind::Macos, Box::new(FakeIoreg))
-        .claims()
-        .expect("the claims");
+    let claims = host_claims(
+        PlatformKind::Macos,
+        LinuxClaims::host(),
+        Box::new(FakeIoreg),
+        Arc::new(DevIpmi::host()),
+    )
+    .claims()
+    .expect("the claims");
     assert_eq!(
         claims,
         Claims {
@@ -338,7 +345,12 @@ fn a_macs_claims_are_its_serial_and_platform_uuid_alone() {
         }
     );
     // A Linux host's claims are its own collectors'; making them reads nothing.
-    let _linux = host_claims(PlatformKind::Linux, Box::new(FakeIoreg));
+    let _linux = host_claims(
+        PlatformKind::Linux,
+        LinuxClaims::host(),
+        Box::new(FakeIoreg),
+        Arc::new(DevIpmi::host()),
+    );
 }
 
 /// A pid lookup with fixed answers.
@@ -506,4 +518,17 @@ fn the_admin_socket_default_is_the_host_platforms() {
         Path::new(DEFAULT_ADMIN_SOCKET),
         Platform::host().admin_socket
     );
+}
+
+/// Catches a daemon built for Linux whose clock has no boot id, or one that is not the kernel's:
+/// the host's clock and the host's boot-id port both give the kernel's UUID, the same on two
+/// reads, and a stamp taken on the clock is of that boot.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_host_clock_of_a_linux_build_reads_the_kernels_boot_id() {
+    let clock = host_clock();
+    let id = clock.boot_id().expect("the host's boot id");
+    assert!(BootId::uuid("the host", id.as_str()).is_ok(), "{id}");
+    assert_eq!(host_boot_id().read().expect("the host's boot id"), id);
+    assert_eq!(Stamp::now(&clock).boot_id, Some(id));
 }

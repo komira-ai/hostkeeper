@@ -151,7 +151,7 @@ fn status_reports_each_enrollment_state_and_the_link() {
     assert_eq!((got.enrollment, got.link), (None, None));
     assert_eq!(
         run(&socket, AdminVerb::Status).out,
-        "enrollment: unknown\nlink: unknown\nservices: 0\n"
+        "enrollment: unknown\nlink: unknown\ntrusted_root.age_secs: unknown\ntrusted_root.reason: none\nservices: 0\n"
     );
 
     let failing = LinkHealth {
@@ -172,7 +172,7 @@ fn status_reports_each_enrollment_state_and_the_link() {
             failing,
             wire(EnrollmentState::Unenrolled),
             "enrollment: unenrolled\nlink.last_success_unix: never\n\
-             link.consecutive_failures: 3\nservices: 0\n"
+             link.consecutive_failures: 3\ntrusted_root.age_secs: unknown\ntrusted_root.reason: none\nservices: 0\n"
                 .to_owned(),
         ),
         (
@@ -186,7 +186,7 @@ fn status_reports_each_enrollment_state_and_the_link() {
             },
             format!(
                 "enrollment: pending\nenrollment.key_sha256: {KEY}\n\
-                 link.last_success_unix: never\nlink.consecutive_failures: 3\nservices: 0\n"
+                 link.last_success_unix: never\nlink.consecutive_failures: 3\ntrusted_root.age_secs: unknown\ntrusted_root.reason: none\nservices: 0\n"
             ),
         ),
         (
@@ -203,7 +203,7 @@ fn status_reports_each_enrollment_state_and_the_link() {
             format!(
                 "enrollment: enrolled\nenrollment.host_id: web-17\n\
                  enrollment.not_after_unix: {NOT_AFTER}\nlink.last_success_unix: {BEAT}\n\
-                 link.consecutive_failures: 0\nservices: 0\n"
+                 link.consecutive_failures: 0\ntrusted_root.age_secs: unknown\ntrusted_root.reason: none\nservices: 0\n"
             ),
         ),
         (
@@ -212,7 +212,7 @@ fn status_reports_each_enrollment_state_and_the_link() {
             wire(EnrollmentState::Unreadable),
             format!(
                 "enrollment: unreadable\nlink.last_success_unix: {BEAT}\n\
-                 link.consecutive_failures: 0\nservices: 0\n"
+                 link.consecutive_failures: 0\ntrusted_root.age_secs: unknown\ntrusted_root.reason: none\nservices: 0\n"
             ),
         ),
     ];
@@ -410,6 +410,8 @@ fn status_prints_each_service_in_its_lines() {
                 last_success_unix: Some(BEAT),
                 consecutive_failures: 0,
             }),
+            trusted_root_age_secs: Some(91 * 86_400),
+            trusted_root_reason: "trusted_root_stale".to_owned(),
         },
         ..Recording::default()
     });
@@ -420,6 +422,8 @@ fn status_prints_each_service_in_its_lines() {
 enrollment.key_sha256: {KEY}
 link.last_success_unix: {BEAT}
 link.consecutive_failures: 0
+trusted_root.age_secs: 7862400
+trusted_root.reason: trusted_root_stale
 services: 2
 service[api].lifecycle: running
 service[api].record_problem: none

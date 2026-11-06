@@ -33,6 +33,9 @@ hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 # claims.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The BMC's MAC address, claimed in a Linux host's enrollment request: `Get LAN Configuration
+# Parameters` sent to `/dev/ipmi0` (`ipmi`).
+ipmi-rs.workspace = true
 # The macOS adapters (`adapters::Adapters::macos`): the launchd step launcher, service manager,
 # unit control and process probe, the `Platform` the host's adapters are chosen by, and the
 # process port `codesign` and `ioreg` run through (`mac`).
@@ -58,6 +61,8 @@ libc.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 # The host's CA bundle (PEM) read into the DER roots the package fetch's HTTPS client trusts.
 rustls-pki-types.workspace = true
+# `trusted_root`: whether the Sigstore trusted root file is a stream of JSON trusted roots.
+serde_json.workspace = true
 thiserror.workspace = true
 # `hostkeeper admin`: the unix socket handed to tonic's channel as hyper reads it, through a
 # connector made with `service_fn`.
@@ -86,6 +91,9 @@ bytes.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The public key of the enrollment request's CSR, whose SHA-256 is the request id the fake
+# coordinator of tests/bmc_claim.rs answers with.
+x509-cert.workspace = true
 # tests/coordinator_link.rs: the shipped heartbeat link against the coordinator's own listener on
 # loopback, behind the TLS of a test CA (`rcgen`) the coordinator serves with (`hostkeeper-tls`).
 hostkeeper-tls = { path = "../hostkeeper-tls" }
@@ -102,7 +110,6 @@ prost-types.workspace = true
 # The effective uid: the owner the tests' daemon config is trusted for; an extended attribute
 # set on a scratch file, which the quarantine check reads.
 rustix = { workspace = true, features = ["fs", "process"] }
-serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
 tonic = { workspace = true, features = ["channel"] }
 tower = { workspace = true, features = ["util"] }

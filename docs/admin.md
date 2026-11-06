@@ -13,7 +13,7 @@ hostkeeper admin clear-record <service>
 
 | verb | RPC | what it does |
 |---|---|---|
-| `status` | `Status` | prints the host's enrollment, the heartbeat loop's link to the coordinator, and each installed service. Changes nothing. |
+| `status` | `Status` | prints the host's enrollment, the heartbeat loop's link to the coordinator, the trusted root's age, and each installed service. Changes nothing. |
 | `abort <service>` | `Abort` | stops the service's running step, and ends its order in the halt phase, as the coordinator's `abort` verb does. |
 | `clear-record <service>` | `ClearRecord` | clears the service's step record when it cannot be read, so that orders run for the service again. A record that reads is refused (`record_reads`). |
 
@@ -52,6 +52,8 @@ match them:
 | `link.last_success_unix` | the unix second, by the host's wall clock, of the last heartbeat the coordinator answered; `never` when none was since the daemon started |
 | `link.consecutive_failures` | the heartbeats in a row not sent or not answered since the last one answered, or since the daemon started |
 | `link` | `unknown`, in place of the two lines above, before the heartbeat loop's first heartbeat has ended, and when the loop does not run |
+| `trusted_root.age_secs` | the seconds since the Sigstore trusted root's file was last written on the host; `unknown` when the daemon reported no age (no file) |
+| `trusted_root.reason` | why the trusted root needs attention: `trusted_root_stale`, `trusted_root_missing` or `trusted_root_unparseable`; `none` when it needs none |
 | `services` | how many services follow |
 
 A heartbeat the loop did not try to send, because the host has no certificate yet or its
@@ -87,6 +89,8 @@ enrollment: pending
 enrollment.key_sha256: 4f2a9c0e8b7d6a5f4e3d2c1b0a99887766554433221100ffeeddccbbaa998877
 link.last_success_unix: never
 link.consecutive_failures: 0
+trusted_root.age_secs: 86400
+trusted_root.reason: none
 services: 0
 ```
 

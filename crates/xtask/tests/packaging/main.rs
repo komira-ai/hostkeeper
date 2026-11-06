@@ -6,6 +6,7 @@
 //! function of the texts, and each is also shown to refuse its defect on an altered text.
 //! Nothing here runs systemd, nfpm, a package manager or a container build.
 
+mod attestation_files;
 mod config_template;
 mod container;
 mod daemon_flags;

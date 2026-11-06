@@ -117,7 +117,7 @@ on:
         description: "`true` when the fleet converged on the version, `false` otherwise."
         value: ${{ jobs.set-desired.outputs.converged }}
       reason:
-        description: Why the job ended where it did, one token.
+        description: "Why the job ended where it did, one token (a refusal token of the coordinator among them, such as `not_in_channel`, which is retryable once the release channel holds the version, or `channel_digest_mismatch`)."
         value: ${{ jobs.set-desired.outputs.reason }}
 
 permissions: {}

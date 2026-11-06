@@ -31,6 +31,7 @@
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
+//! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
@@ -43,6 +44,8 @@
 //!   (fetch, prove, unpack and seal, with the one table that maps their failures onto
 //!   [`refusal`]), and [`installed`] what the host runs.
 //! - [`observer`]: what the admin `Status` reports of a running service.
+//! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason the
+//!   admin `Status` reports of it.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`);
 //!   [`node`]: the host's enrollment and the heartbeat loop's link, which its `Status` reports
 //!   besides the services; [`admin_client`]: `hostkeeper admin`, its client on the host.
@@ -76,6 +79,7 @@ mod files;
 pub mod halt;
 pub mod hook_log;
 pub mod installed;
+pub mod ipmi;
 pub mod link_adapters;
 pub mod links;
 pub mod locks;
@@ -96,6 +100,7 @@ pub mod stamp;
 pub mod start;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod trusted_root;
 pub mod uninstall;
 pub mod unix_clock;
 pub mod verb;

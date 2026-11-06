@@ -11,6 +11,9 @@
 //!   ([`LaunchdProcessProbe`]), the plists under `/Library/LaunchDaemons`, and the quarantine and
 //!   code-signature checks of every unpacked package ([`HostMacVerify`]).
 //!
+//! The host's clock is chosen here too ([`host_clock`]): the kernel's monotonic clock under the
+//! boot id of the system the daemon was built for.
+//!
 //! [`Adapters::macos`] assembles the macOS set from the ports it is given, so it is measured on
 //! Linux against fakes; only the host's own `launchctl` clock and `proc_pidpath` are compiled
 //! for macOS alone (`host_macos`). A Linux build asked for the macOS set refuses to start.
@@ -19,14 +22,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hostkeeper_enroll::{ClaimsSource, Ioreg, LinuxClaims, MacClaims};
+use hostkeeper_enroll::{ClaimsSource, Ioreg, Ipmi, LinuxClaims, MacClaims};
 use hostkeeper_launchd::{
     Launchctl, LaunchdProcessProbe, LaunchdServiceManager, LaunchdUnitControl, PidInfo, Platform,
     PlatformKind, StdFileIdentity,
 };
 use hostkeeper_observe::{ProcessProbe, ServiceManager};
 use hostkeeper_placed::UnitControl;
-use hostkeeper_steps::{StepLauncher, SystemdLauncher};
+use hostkeeper_steps::{BootIdSource, StepLauncher, SystemClock, SystemdLauncher};
 use hostkeeper_unpack::MacVerify;
 
 use crate::cli::Unwired;
@@ -143,11 +146,38 @@ fn host_macos(_platform: &Platform) -> Result<Adapters, StartError> {
     Err(StartError::NoAdapters { platform: "macOS" })
 }
 
-/// The enrollment claims of a host of `kind`: [`LinuxClaims::host`] on Linux; on macOS the serial
-/// and the platform UUID that `ioreg` gives ([`MacClaims`]), and nothing of Linux's.
-pub fn host_claims(kind: PlatformKind, ioreg: Box<dyn Ioreg>) -> Box<dyn ClaimsSource> {
+/// The host's clock: the kernel's monotonic clock, under the boot id of the system the daemon
+/// was built for ([`host_boot_id`]).
+pub fn host_clock() -> SystemClock {
+    SystemClock::new(host_boot_id())
+}
+
+/// The boot id of a Mac: `kern.bootsessionuuid`.
+#[cfg(target_os = "macos")]
+pub fn host_boot_id() -> Box<dyn BootIdSource> {
+    Box::new(hostkeeper_launchd::SysctlBootId)
+}
+
+/// The boot id of Linux: the kernel's `boot_id` file.
+#[cfg(not(target_os = "macos"))]
+pub fn host_boot_id() -> Box<dyn BootIdSource> {
+    Box::new(hostkeeper_steps::ProcBootId::host())
+}
+
+/// The enrollment claims of a host of `kind`. On Linux, the files of `linux` (the host's own:
+/// [`LinuxClaims::host`]) and the BMC's MAC asked of `bmc` (the host's: [`DevIpmi::host`]), so a
+/// host with a BMC claims its MAC and a host with none claims the rest; on macOS the serial and
+/// the platform UUID that `ioreg` gives ([`MacClaims`]), and nothing of Linux's.
+///
+/// [`DevIpmi::host`]: crate::ipmi::DevIpmi::host
+pub fn host_claims(
+    kind: PlatformKind,
+    linux: LinuxClaims,
+    ioreg: Box<dyn Ioreg>,
+    bmc: Arc<dyn Ipmi>,
+) -> Box<dyn ClaimsSource> {
     match kind {
-        PlatformKind::Linux => Box::new(LinuxClaims::host()),
+        PlatformKind::Linux => Box::new(linux.with_ipmi(bmc)),
         PlatformKind::Macos => Box::new(MacClaims::new(ioreg)),
     }
 }

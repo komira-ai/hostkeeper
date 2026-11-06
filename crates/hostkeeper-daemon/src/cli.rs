@@ -37,7 +37,8 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_ctl::transport::Network;
 use hostkeeper_ctl::{Connect, Io};
 use hostkeeper_enroll::{
-    Enroller, GrpcEnroll, OsEntropy, PkiDir, Settings as EnrollSettings, SystemWallClock,
+    Enroller, GrpcEnroll, LinuxClaims, OsEntropy, PkiDir, Settings as EnrollSettings,
+    SystemWallClock,
 };
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
@@ -46,15 +47,16 @@ use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_package::ports::{Attest, Attested, Verifier, VerifyError};
 use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
-use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher, SystemClock};
+use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher};
 use hostkeeper_unpack::Owner;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-use crate::adapters::{Adapters, host_claims};
+use crate::adapters::{Adapters, host_claims, host_clock};
 use crate::admin_client::AdminCommand;
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
+use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
 use crate::notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
@@ -62,6 +64,7 @@ use crate::observer::observer_with;
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::start::{self, Settings, StartError};
+use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
 use crate::unix_clock::SystemUnixClock;
 
 pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
@@ -94,10 +97,15 @@ pub const CA_BUNDLE_MACOS: &str = "/etc/ssl/cert.pem";
 pub const GH_BINARY: &str = "/usr/lib/hostkeeper/gh";
 /// The pinned `gh` on a Mac, where the installer pkg puts it (`/usr` itself is read-only there).
 pub const GH_BINARY_MACOS: &str = "/usr/local/lib/hostkeeper/gh";
-/// The Sigstore trusted root, as `gh attestation trusted-root` prints it, on a Linux host.
+/// The Sigstore trusted root, as `gh attestation trusted-root` prints it, on a Linux host: the
+/// host's copy, which an installer or an operator places. Hostkeeper's own package carries
+/// another ([`crate::trusted_root::PACKAGED_TRUSTED_ROOT`]); the daemon uses the one written last.
 pub const SIGSTORE_TRUSTED_ROOT: &str = "/usr/lib/hostkeeper/trusted_root.json";
 /// The Sigstore trusted root on a Mac, where the installer pkg puts it.
 pub const SIGSTORE_TRUSTED_ROOT_MACOS: &str = "/usr/local/lib/hostkeeper/trusted_root.json";
+/// The default of `--trusted-root-max-age-days`: a trusted root older than this is reported
+/// `trusted_root_stale`.
+pub const DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS: NonZeroU64 = NonZeroU64::MIN.saturating_add(89);
 /// The directory `gh` runs in, under the state directory.
 pub const GH_HOME: &str = ".gh";
 /// How often each service's dead-man looks at its running step on a host, in seconds.
@@ -185,6 +193,10 @@ pub struct DaemonFlags {
     /// of `Type=notify`) once its boot work is over.
     #[arg(long)]
     pub notify_systemd: bool,
+    /// Days after which the Sigstore trusted root is reported `trusted_root_stale` in the admin
+    /// `Status`, at least 1. A signal only: package checks go on with the root there is.
+    #[arg(long, default_value_t = DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS)]
+    pub trusted_root_max_age_days: NonZeroU64,
     /// The heartbeat loop's flag: `--heartbeat-secs`.
     #[command(flatten)]
     pub link: LoopFlags,
@@ -199,6 +211,7 @@ impl DaemonFlags {
             packages_dir: self.packages_dir.clone(),
             admin_socket: self.admin_socket.clone(),
             trusted_uid: 0,
+            trusted_root_max_age_days: self.trusted_root_max_age_days,
         }
     }
 }
@@ -314,7 +327,7 @@ fn daemon(
     notifier: &dyn ReadyNotifier,
 ) -> Result<(), StartError> {
     let own_version = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION"))?;
-    note_start(settings, Platform::host().kind, own_version, &SystemClock);
+    note_start(settings, Platform::host().kind, own_version, &host_clock());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build();
@@ -404,8 +417,9 @@ pub fn image_of(own_version: HostkeeperVersion) -> String {
 }
 
 /// The enroller of a host of `kind`: [`GrpcEnroll`] to `endpoint`, the pki directory at `pki`
-/// (its `current` generation is what a renewal presents), the claims of [`host_claims`] (on a
-/// Mac through the host's `ioreg`, [`HostIoreg::system`]), the operating
+/// (its `current` generation is what a renewal presents), the claims of [`host_claims`] (on
+/// Linux the host's files and its BMC behind `/dev/ipmi0`, [`DevIpmi::host`]; on a Mac through
+/// the host's `ioreg`, [`HostIoreg::system`]), the operating
 /// system's entropy, the wall clock for the certificates' validity alone, and the monotonic
 /// clock for the retries. Opening it takes the pki directory's lock and finishes what a crash
 /// left there. `Err` names what refused: the endpoint, the runtime or the pki directory.
@@ -421,10 +435,15 @@ pub fn host_enroller(
     let ports = hostkeeper_enroll::Ports {
         coordinator: Box::new(coordinator),
         store: Box::new(store),
-        claims: host_claims(kind, Box::new(HostIoreg::system())),
+        claims: host_claims(
+            kind,
+            LinuxClaims::host(),
+            Box::new(HostIoreg::system()),
+            Arc::new(DevIpmi::host()),
+        ),
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
-        clock: Box::new(SystemClock),
+        clock: Box::new(host_clock()),
     };
     Enroller::open(settings, ports).map_err(|error| error.to_string())
 }
@@ -518,17 +537,18 @@ pub fn tls_roots(path: &Path) -> Vec<Vec<u8>> {
 /// checked (the verifier of the package library is not shareable between threads).
 pub struct HostVerifier {
     gh: PathBuf,
-    trusted_root: PathBuf,
+    trusted_root: Arc<TrustedRoot>,
     home: PathBuf,
     clock: Arc<dyn Clock>,
 }
 
 impl HostVerifier {
-    /// A verifier that runs `gh` with `trusted_root`, in `home`, deadlines read on `clock`. `gh`
-    /// and the root must be owned by root and not writable by group or others.
+    /// A verifier that runs `gh` with the file of `trusted_root` chosen at each check
+    /// ([`TrustedRoot::path`]), in `home`, deadlines read on `clock`. `gh` and the root must be
+    /// owned by root and not writable by group or others.
     pub fn new(
         gh: PathBuf,
-        trusted_root: PathBuf,
+        trusted_root: Arc<TrustedRoot>,
         home: PathBuf,
         clock: Arc<dyn Clock>,
     ) -> HostVerifier {
@@ -545,7 +565,7 @@ impl Verifier for HostVerifier {
     fn verify(&self, request: &Attest<'_>) -> Result<Attested, VerifyError> {
         GhVerifier::new(
             self.gh.clone(),
-            self.trusted_root.clone(),
+            self.trusted_root.path(),
             self.home.clone(),
             Box::new(SystemRunner::new(Arc::clone(&self.clock))),
             Box::new(OwnedBy { uid: 0 }),
@@ -557,8 +577,11 @@ impl Verifier for HostVerifier {
 /// The ports of this build over the platform's `adapters` ([`Adapters`]: the step launcher, the
 /// service manager, the unit directory, the observer's service manager and process probe, and
 /// the package check). The package store is the real one ([`RealPackages`]: HTTPS over the CA
-/// bundle of `files`, `gh` for the attestation, unpacked into `--packages-dir` as root, each
-/// staged tree judged by the adapters' package check); the observer looks through the adapters
+/// bundle of `files`, `gh` for the attestation with the trusted root written last of the
+/// packaged one under `--packages-dir` and the one of `files` ([`TrustedRoot`], whose age and
+/// reason the store reports, on the wall clock, against `--trusted-root-max-age-days`), unpacked
+/// into `--packages-dir` as root, each staged tree judged by the adapters' package check); the
+/// observer looks through the adapters
 /// and TCP ([`observer_with`]). On Linux the service manager is not part of this build yet
 /// ([`Unwired`]): an order that reached it is refused there. Placed paths are linked under the
 /// host's own directories and the adapters' unit directory, `--packages-dir` being the packages
@@ -572,7 +595,7 @@ pub fn host_ports(
     own_version: HostkeeperVersion,
     adapters: Adapters,
 ) -> Result<Ports, StartError> {
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let clock: Arc<dyn Clock> = Arc::new(host_clock());
     let fetcher = NetFetcher::new(
         UreqTransport::new(&tls_roots(&files.ca_bundle)),
         Arc::clone(&clock),
@@ -582,9 +605,15 @@ pub fn host_ports(
         path: home.clone(),
         source,
     })?;
+    let trusted_root = Arc::new(TrustedRoot::new(
+        settings.packages_dir.join(PACKAGED_TRUSTED_ROOT),
+        files.trusted_root.clone(),
+        settings.trusted_root_max_age_days.get(),
+        Arc::new(SystemUnixClock),
+    ));
     let verifier = HostVerifier::new(
         files.gh.clone(),
-        files.trusted_root.clone(),
+        Arc::clone(&trusted_root),
         home,
         Arc::clone(&clock),
     );
@@ -600,7 +629,8 @@ pub fn host_ports(
         path: settings.packages_dir.clone(),
         source,
     })?
-    .with_package_check(adapters.package_check);
+    .with_package_check(adapters.package_check)
+    .with_trusted_root(trusted_root);
     Ok(Ports {
         launcher: adapters.launcher,
         packages: Arc::new(packages),

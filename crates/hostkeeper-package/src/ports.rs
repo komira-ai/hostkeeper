@@ -40,12 +40,13 @@ pub struct Limit {
 }
 
 /// The seconds left until `deadline` on `clock`: `0` once it has passed, and `0` when the host
-/// booted since it was set (the time before a reboot is unknown).
+/// may have booted since it was set, its boot id or the clock's being another or unknown (the
+/// time before a reboot is unknown).
 pub fn remaining_secs(deadline: &Stamp, clock: &dyn Clock) -> u64 {
-    if deadline.boot_id == clock.boot_id() {
-        deadline.mono_secs.saturating_sub(clock.mono_secs())
-    } else {
-        0
+    let now = Stamp::now(clock);
+    match deadline.same_boot(&now) {
+        true => deadline.mono_secs.saturating_sub(now.mono_secs),
+        false => 0,
     }
 }
 
