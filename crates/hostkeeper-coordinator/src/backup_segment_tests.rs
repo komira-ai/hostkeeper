@@ -261,6 +261,33 @@ fn restore_refuses_a_manifest_that_names_a_missing_segment() {
     assert_eq!(fs::read_dir(target.path()).expect("listed").count(), 0);
 }
 
+/// Proves: a manifest that names `ops-audit.1` twice is refused naming it, before anything is
+/// written.
+///
+/// Catches: a segment restored twice over one target, which the second write would meet.
+#[test]
+fn restore_refuses_a_segment_named_twice() {
+    let dir = scratch("backup-segments-twice");
+    let paths = rotated_state(dir.path(), 3, two_lines_a_file(100));
+    let snapshot = dir.path().join("snapshot");
+    backup(&backup_flags(&paths, &snapshot), &FileLock).expect("a backup");
+    let path = snapshot.join(MANIFEST);
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    let files = value["files"].as_array_mut().expect("files");
+    let segment = files
+        .iter()
+        .find(|entry| entry["name"] == json!("ops-audit.1"))
+        .expect("the segment")
+        .clone();
+    files.push(segment);
+    fs::write(&path, value.to_string()).expect("written");
+    let target = scratch("backup-segments-twice-target");
+    let refused =
+        restore(&restore_flags(&snapshot, &targets_in(&target)), &FileLock).expect_err("twice");
+    assert_eq!(refused.to_string(), "the manifest names ops-audit.1 twice");
+    assert_eq!(fs::read_dir(target.path()).expect("listed").count(), 0);
+}
+
 /// Proves: a manifest name that only looks like a segment's (number 0, a leading zero, no
 /// number, a sign, a letter, a number past `u64`, another file's name with a number) is
 /// refused as no file of a snapshot, before anything is written.

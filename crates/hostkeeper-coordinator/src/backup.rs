@@ -32,8 +32,9 @@
 //! manifest names a file it does not hold, holds a file the manifest does not name, or holds a
 //! file whose size or SHA-256 is not the manifest's, before it writes anything. It then takes the
 //! same lock, refuses targets that hold state (any of the files above, a sealed segment of the
-//! audit file among them, or an enrollment directory that is not empty), and writes each file through `<file>.restoring`, linked into place with a
-//! hard link, which refuses a name that is already there: no file is ever written over. Before
+//! audit file among them, or an enrollment directory that is not empty), and writes each file
+//! through `<file>.restoring`, linked into place with a hard link, which refuses a name that is
+//! already there: no file is ever written over. Before
 //! its first file it writes `<state-file>.restore-unfinished`, and it removes it after its last,
 //! so `serve` refuses to start on a restore that stopped partway (killed, or the machine lost).
 //! A write that fails removes what the restore had written, so the targets hold no state again.
@@ -101,8 +102,8 @@ pub struct StatePaths {
     #[arg(long)]
     pub state_file: PathBuf,
     /// The ops file, as `serve --ops-file` names it. Default: the state file's name with `.ops`
-    /// added. The audit file, the halts file and the halts file's staged copy and marker are
-    /// beside it.
+    /// added. The audit file with its sealed segments, the halts file and the halts file's
+    /// staged copy and marker are beside it.
     #[arg(long)]
     pub ops_file: Option<PathBuf>,
     /// The enrollment store, as `serve --enrollment-dir` names it, when the coordinator is the
