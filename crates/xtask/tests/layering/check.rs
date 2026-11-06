@@ -49,7 +49,8 @@ pub type Layer = (
 /// each crate's tests use: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature
 /// (a fake issuer), which a dev-dependency can do and a normal dependency must not, and run
 /// `hostkeeper-ctl` against an in-process coordinator; the daemon's and the link's tests run a
-/// coordinator in process, and the daemon's run the example service hello's hook in process;
+/// coordinator in process, behind a listener's TLS (`hostkeeper-tls`), and the daemon's run the
+/// example service hello's hook in process;
 /// hello's tests read its output with the hook contract and load its package with the
 /// manifest loader; the observer's tests run hooks through the step runner; the CLI
 /// crates' and the web app's tests read the protobuf descriptors; the privileged tests drive the
@@ -72,7 +73,7 @@ pub const LAYERS: [Layer; 23] = [
             CI, CONFIG, CTL, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS,
             UNPACK,
         ],
-        &[COORDINATOR, HELLO, OIDC, WIRE],
+        &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
     ),
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),
