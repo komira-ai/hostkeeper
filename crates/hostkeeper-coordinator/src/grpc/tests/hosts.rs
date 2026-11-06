@@ -16,7 +16,7 @@ use serde_json::Value;
 use tonic::Code;
 
 use super::heartbeat::{beat, peer_of, proto_message, svc};
-use super::operator::World;
+use super::operator::{AUDIT_UNIX, World};
 use super::support::{call, decode, grpc_request, raw};
 use crate::enrollment::tests::support::{HostKey, Rig as EnrollmentRig, enrolled};
 use crate::http::Surface;
@@ -224,4 +224,60 @@ async fn unmark_bad_after_mark_bad_leaves_the_ops_state_as_it_was() {
         )
     );
     assert_eq!(c.ops.state(), after, "a refused unmark changes nothing");
+}
+
+/// Proves: what a host's gRPC heartbeat says of its certificate and clock reaches `Hosts.Get`
+/// and `Hosts.List` through the router, as protobuf both ways: the certificate's end and the
+/// renewal error of the last heartbeat, and the count of heartbeats whose time was more than the
+/// skew bound from the coordinator's wall clock (one of the two sent here).
+///
+/// Catches: a field dropped between the mounted heartbeat handler and the operator's answer, or
+/// encoded under another number than the one decoded.
+#[tokio::test]
+async fn get_and_list_answer_the_certificate_and_clock_the_grpc_heartbeat_said() {
+    let enrollment = EnrollmentRig::new("grpc-hosts-cert-enrollment");
+    let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
+    let world = world_over("grpc-hosts-cert", &enrollment);
+    let c = &world.coordinator;
+    let mut sent = proto_message(&[svc("kbf", "1.0")]);
+    sent.cert_not_after_unix = Some(AUDIT_UNIX + 86_400);
+    sent.last_renew_error = Some("renewal refused: host_excluded".to_owned());
+    for sent_unix in [AUDIT_UNIX + 3_600, AUDIT_UNIX] {
+        sent.sent_unix = Some(sent_unix);
+        assert_eq!(
+            beat(c, &peer_of(&certificate), &sent).await.token(),
+            (Code::Ok, "")
+        );
+    }
+
+    let get = proto::GetHostRequest {
+        node_id: "s1".to_owned(),
+    };
+    let (code, _, got) =
+        operator_call::<proto::GetHostResponse>(&world, "/hostkeeper.operator.v1.Hosts/Get", get)
+            .await;
+    assert_eq!(code, Code::Ok);
+    let host = got.and_then(|answer| answer.host).expect("the host");
+    let said = |host: &proto::Host| {
+        (
+            host.cert_not_after_unix,
+            host.last_renew_error.clone(),
+            host.clock_skew_beats,
+        )
+    };
+    let expected = (
+        Some(AUDIT_UNIX + 86_400),
+        Some("renewal refused: host_excluded".to_owned()),
+        1,
+    );
+    assert_eq!(said(&host), expected);
+    let (code, _, listed) = operator_call::<proto::ListHostsResponse>(
+        &world,
+        "/hostkeeper.operator.v1.Hosts/List",
+        proto::ListHostsRequest::default(),
+    )
+    .await;
+    assert_eq!(code, Code::Ok);
+    let hosts = listed.expect("a reply").hosts;
+    assert_eq!(hosts.iter().map(said).collect::<Vec<_>>(), [expected]);
 }
