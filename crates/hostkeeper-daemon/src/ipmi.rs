@@ -65,9 +65,20 @@ impl Ipmi for DevIpmi {
     /// outlives the call.
     fn lan_parameter(&self, channel: u8, parameter: u8) -> io::Result<Vec<u8>> {
         File::new(&self.device, ANSWER_TIMEOUT)
-            .and_then(|mut device| device.send_recv(&mut lan_request(channel, parameter)))
-            .map(answer)
+            .and_then(|mut device| ask(&mut device, channel, parameter))
     }
+}
+
+/// A connection to a BMC whose failures are I/O errors: the device's `File`, or a test's double.
+type Connection =
+    dyn IpmiConnection<SendError = io::Error, RecvError = io::Error, Error = io::Error>;
+
+/// The answer of the BMC behind `connection` to `Get LAN Configuration Parameters` for
+/// `parameter` on `channel`: the completion code, then the response data.
+fn ask(connection: &mut Connection, channel: u8, parameter: u8) -> io::Result<Vec<u8>> {
+    connection
+        .send_recv(&mut lan_request(channel, parameter))
+        .map(answer)
 }
 
 /// `Get LAN Configuration Parameters` for `parameter` on `channel`, set and block selectors 0,
@@ -92,6 +103,101 @@ fn answer(response: Response) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a request asked: network function, command, data, and whether it went to the BMC
+    /// itself on logical unit 0.
+    type Asked = (u8, u8, Vec<u8>, bool);
+
+    /// A BMC connection that keeps each request it is sent and answers with `reply`, or fails
+    /// with `reply`'s error.
+    struct Scripted {
+        reply: Option<Vec<u8>>,
+        asked: Vec<Asked>,
+    }
+
+    impl Scripted {
+        fn answering(raw: &[u8]) -> Scripted {
+            Scripted {
+                reply: Some(raw.to_vec()),
+                asked: Vec::new(),
+            }
+        }
+    }
+
+    impl IpmiConnection for Scripted {
+        type SendError = io::Error;
+        type RecvError = io::Error;
+        type Error = io::Error;
+
+        fn send(&mut self, request: &mut Request) -> io::Result<()> {
+            let to_bmc = matches!(
+                request.target(),
+                RequestTargetAddress::Bmc(LogicalUnit::Zero)
+            );
+            self.asked.push((
+                request.netfn_raw(),
+                request.cmd(),
+                request.data().to_vec(),
+                to_bmc,
+            ));
+            Ok(())
+        }
+
+        fn recv(&mut self) -> io::Result<Response> {
+            let raw = self
+                .reply
+                .clone()
+                .ok_or_else(|| io::Error::from(io::ErrorKind::TimedOut))?;
+            Response::new(Message::new_raw(0x0D, 0x02, raw), 0)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))
+        }
+
+        fn send_recv(&mut self, request: &mut Request) -> io::Result<Response> {
+            self.send(request)?;
+            self.recv()
+        }
+    }
+
+    /// Catches a reader whose exchange with the BMC never returns the BMC's answer (an adapter
+    /// that always fails), sends another request than `Get LAN Configuration Parameters` for the
+    /// channel and parameter asked, or returns the answer without its completion code: one
+    /// request, Transport (0x0C) command 0x02 with `[channel, parameter, 0, 0]` to the BMC, and
+    /// the answer returned byte for byte, completion code first.
+    #[test]
+    fn a_bmc_that_answers_gives_its_answer_byte_for_byte() {
+        let raw = [0x00, 0x11, 0x0c, 0xc4, 0x7a, 0x00, 0x00, 0x01];
+        let mut bmc = Scripted::answering(&raw);
+        assert_eq!(ask(&mut bmc, 2, 5).expect("an answer"), raw);
+        assert_eq!(bmc.asked, [(0x0C, 0x02, vec![2, 5, 0, 0], true)]);
+        assert_eq!(
+            hostkeeper_enroll::parse_lan_mac(&ask(&mut bmc, 2, 5).expect("again")).as_deref(),
+            Some("0c:c4:7a:00:00:01")
+        );
+        assert_eq!(bmc.asked.len(), 2, "each question is one request");
+    }
+
+    /// Catches a refusal turned into an error, or a BMC that answers nothing turned into an
+    /// empty answer: a refusal is its completion code alone, which claims no MAC, and no answer
+    /// is an error, after the request was sent.
+    #[test]
+    fn a_refusal_is_its_code_and_no_answer_is_an_error() {
+        let mut refusing = Scripted::answering(&[0xc1]);
+        let refused = ask(&mut refusing, 1, 5).expect("a refusal is an answer");
+        assert_eq!(refused, [0xc1]);
+        assert_eq!(hostkeeper_enroll::parse_lan_mac(&refused), None);
+
+        let mut silent = Scripted {
+            reply: None,
+            asked: Vec::new(),
+        };
+        let error = ask(&mut silent, 1, 5).expect_err("no answer");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(silent.asked, [(0x0C, 0x02, vec![1, 5, 0, 0], true)]);
+
+        let mut empty = Scripted::answering(&[]);
+        let error = ask(&mut empty, 1, 5).expect_err("an empty answer");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
 
     /// Catches the request sent to another network function or command than Transport's
     /// `Get LAN Configuration Parameters`, to another target than the BMC, or with the channel
