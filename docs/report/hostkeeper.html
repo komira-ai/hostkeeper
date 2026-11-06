@@ -873,12 +873,14 @@ attestation verify</code> runs offline against the Sigstore trusted root and the
 <code>[trusted_signers]</code> entry (organisation, workflow, ref globs, hosted runner). There is no unsigned
 mode. The bundle is read up to
 <span data-cell="c-bundle" data-source="crates/hostkeeper-package/src/bundle.rs" data-item="MAX_BUNDLE_BYTES">1 MiB</span>.
-The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code> on Linux
-and under <code>/usr/local/lib/hostkeeper/</code> on a Mac
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>). The macOS
-installer pkg installs both (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>); no Linux
-package does. Until an operator places them on a Linux host, every package check there ends
-<code>attestation_unavailable</code>.</p>
+The pinned <code>gh</code> and the trusted root are read from <code>/usr/lib/hostkeeper/</code> on Linux
+and from <code>/usr/local/lib/hostkeeper/</code> on a Mac
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>). The deb
+and the rpm install both on Linux, <code>gh</code> from its release archive checked against a pinned SHA-256 and the
+trusted root captured when the package is built
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/verify-a-release.md">docs/deploy/verify-a-release.md</a>); the macOS
+installer pkg installs both on a Mac (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>). A host
+without them ends every package check <code>attestation_unavailable</code>.</p>
 <p><strong>Unpack.</strong> One streaming pass (zstd, tar, a SHA-256 per file) writes into a private staging
 directory, under hard bounds: a zstd window of at most
 <span data-cell="c-window" data-source="crates/hostkeeper-unpack/src/archive.rs" data-item="MAX_WINDOW_BYTES">8 MiB</span>,
@@ -965,10 +967,13 @@ loop announces it and runs the abort beside the order it stops, whose verdict th
 halt; on a host the coordinator cannot reach, an abort is done through the admin socket.</p>
 <p><strong>The audit trail.</strong> Every change to the ops store is one entry: who (operator token name, <code>ci</code> or
 <code>coordinator</code>), the action, the service, the host and the reason. The entries go to an append-only
-audit file, one JSON line each, fsynced, never rotated. The file is a copy, not a gate: a line
-that cannot be appended is logged as an error and the change stands. The ops file keeps the last
+audit file, one JSON line each, fsynced. The file is rotated by size: a full file is sealed as a
+numbered segment on a line boundary, the numbers go on across files, and the oldest segments past
+a retained count are deleted. A change is not made without its line: when it cannot be appended
+the call is refused with <code>audit_unavailable</code>, except <code>Hosts.Abort</code> and
+<code>Releases.Halt</code>, which stand with the failure logged. The ops file keeps the last
 <span data-cell="c-audit-ring" data-source="crates/hostkeeper-coordinator/src/ops.rs" data-item="AUDIT_RING">64</span>
-entries for <code>Releases.Status</code>. <code>Audit.List</code> filters the whole file, at most
+entries for <code>Releases.Status</code>. <code>Audit.List</code> filters the active file and the segments kept, at most
 <span data-cell="c-audit-page" data-source="crates/hostkeeper-coordinator/src/operator.rs" data-item="MAX_AUDIT_PAGE">256</span>
 entries a page (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/audit_file.rs">crates/hostkeeper-coordinator/src/audit_file.rs</a>).
 A <code>SetDesired</code> by CI writes no audit entry of its own (only the force it ends, <code>force_ended</code>, and
@@ -1355,13 +1360,13 @@ rollback cannot move a host back below the version it runs.</li>
 <li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no expiry of pending
 requests, no CA rotation or revocation lists.</li>
 <li><strong>Operations:</strong> a single coordinator with no failover; the rollout file is read only at start; the
-audit file is never rotated; there is no metrics endpoint and no pager (conditions that need a
+audit keeps only its retained segments, so the oldest entries are deleted; there is no metrics endpoint and no pager (conditions that need a
 person are <code>alert=</code> log lines).</li>
 <li><strong>macOS:</strong> no MDM, no update run on a device, no signed installer.</li>
 <li><strong>A hook is root and is not confined.</strong> This is by design: the trust is in the signed package and
 the conformance suite (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#11-limits">design: Limits</a>).</li>
-<li><strong>Distribution:</strong> releases are published as GitHub releases, but no release channel is hosted,
-and no package installs the pinned <code>gh</code> and trusted root the daemon&rsquo;s attestation check needs.</li>
+<li><strong>Distribution:</strong> releases are published as GitHub releases, but no release channel is hosted.
+The trusted root a Linux host checks with is the one of the deb or rpm it last installed; self-update does not refresh it.</li>
 </ul>
 <p>The design&rsquo;s plan for the rest is its build order
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#122-build-order-from-todays-code-to-done">design: Build order</a>).

@@ -228,8 +228,30 @@ fn the_test_clock_moves_only_when_told() {
         clock.sleep_secs(2);
         assert_eq!((clock.mono_secs(), clock.sleeps()), (7, 1));
         clock.reboot("boot-2");
-        assert_eq!(clock.boot_id(), "boot-2");
+        assert_eq!(clock.boot_id().expect("a boot id").as_str(), "boot-2");
     }
+}
+
+/// Catches a deadline compared across an unknown boot: a deadline of this boot has its seconds
+/// left; one of an unknown boot, one read on a clock whose boot id cannot be read, and one of
+/// another boot have none.
+#[test]
+fn a_deadline_of_another_or_an_unknown_boot_has_no_time_left() {
+    use crate::ports::remaining_secs;
+    use hostkeeper_steps::Stamp;
+    let clock = crate::testing::FakeClock::at(10);
+    let deadline = clock.stamp(100);
+    assert_eq!(remaining_secs(&deadline, &clock), 90);
+    let unknown = Stamp {
+        boot_id: None,
+        mono_secs: 100,
+    };
+    assert_eq!(remaining_secs(&unknown, &clock), 0);
+    clock.reboot("");
+    assert_eq!(clock.stamp(100).boot_id, None);
+    assert_eq!(remaining_secs(&deadline, &clock), 0);
+    clock.reboot("boot-2");
+    assert_eq!(remaining_secs(&deadline, &clock), 0);
 }
 
 /// Catches the tests' failing writer failing to fail: every write is its error, and a flush

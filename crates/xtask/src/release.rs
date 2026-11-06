@@ -11,6 +11,11 @@
 //! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
 //!   unless it says `hello`; for hello `--fail-ready` builds its failing build), `.tar.zst`, and
 //!   its SHA-256.
+//! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
+//!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
+//!   and staged for the deb and the rpm.
+//! - `check-linux-pkg` ([`package::linux_check`]): a built deb or rpm, read back, installs the
+//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing build: which
 //!   package serves each platform, refused unless it has the package of every released platform.
@@ -177,6 +182,40 @@ pub(crate) enum Verb {
         /// The directory the package and its `.sha256` are written to.
         #[arg(long)]
         out: PathBuf,
+    },
+    /// Stage the pinned `gh` and the Sigstore trusted root for the deb and the rpm: `gh` out of
+    /// its release archive, refused unless the archive has the pinned SHA-256 and `gh` is a
+    /// program of the architecture; the trusted root refused unless each line is one. Writes
+    /// `<out>/gh` (0755) and `<out>/trusted_root.json` (0644) only when both pass.
+    NfpmStage {
+        /// The architecture of the packages, as nfpm's `ARCH`.
+        #[arg(long, value_enum)]
+        arch: package::nfpm_stage::Arch,
+        /// The pinned version of `gh`, `X.Y.Z`.
+        #[arg(long)]
+        gh_version: Version,
+        /// The downloaded `gh_<version>_linux_<arch>.tar.gz`.
+        #[arg(long)]
+        gh_archive: PathBuf,
+        /// The pinned SHA-256 of that archive, 64 lowercase hex digits.
+        #[arg(long)]
+        gh_sha256: crate::install::Sha256,
+        /// The output of `gh attestation trusted-root`.
+        #[arg(long)]
+        trusted_root: PathBuf,
+        /// The directory nfpm.yaml takes the two files from.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Read a built deb or rpm and refuse it unless it installs `/usr/lib/hostkeeper/gh` (a
+    /// regular file, 0755) and `/usr/lib/hostkeeper/trusted_root.json` (0644), both
+    /// root:root, with the bytes of the files `nfpm-stage` wrote.
+    CheckLinuxPkg {
+        /// The `.deb` or `.rpm` nfpm built.
+        package: PathBuf,
+        /// The directory `nfpm-stage` wrote (its `--out`).
+        #[arg(long)]
+        staged: PathBuf,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per released platform, refused when the package of any is missing: `index.json` for
@@ -361,6 +400,22 @@ pub(crate) fn run<A: Adapters>(
             Some(package) => index::write_index(&dir, package, &version),
             None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
         },
+        Verb::NfpmStage {
+            arch,
+            gh_version,
+            gh_archive,
+            gh_sha256,
+            trusted_root,
+            out,
+        } => package::nfpm_stage::stage(&package::nfpm_stage::Request {
+            arch,
+            gh_version,
+            gh_archive,
+            gh_sha256,
+            trusted_root,
+            out,
+        }),
+        Verb::CheckLinuxPkg { package, staged } => package::linux_check::check(&package, &staged),
         Verb::CheckMacosPkg {
             expanded,
             version,
@@ -512,6 +567,8 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::Stamp { .. }
         | Verb::CompareImages { .. }
         | Verb::Index { .. }
+        | Verb::NfpmStage { .. }
+        | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
         | Verb::ChannelStage { .. } => run(verb, || Lent(*ports)),
     }

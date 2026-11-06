@@ -2,6 +2,9 @@
 //! the same flow, the same config and package paths as a Linux host; what differs is behind
 //! ports that already exist, and this crate implements them over launchd:
 //!
+//! - [`bootid`]: [`parse_boot_session_uuid`], the reading of the Mac's boot id
+//!   (`kern.bootsessionuuid`), and `SysctlBootId`, the step runner's
+//!   [`BootIdSource`](hostkeeper_steps::BootIdSource) on a Mac.
 //! - [`label`]: the reverse-DNS prefix and the labels of the daemon and of each step job.
 //! - [`plist`]: the XML property lists of the daemon, of a step job and of a service package's
 //!   job.
@@ -21,10 +24,12 @@
 //!   macOS.
 //! - [`fake`]: [`FakeLaunchctl`], the scripted `launchctl` every test drives.
 //!
-//! Nothing here is compiled for macOS only except the real `PidInfo` of [`procid`] and the host's
-//! launcher (`LaunchdLauncher::system` and its clock, in [`launcher`]); the rest is built and
+//! Nothing here is compiled for macOS only except the real `PidInfo` of [`procid`], the host's
+//! launcher (`LaunchdLauncher::system` and its clock, in [`launcher`]) and the sysctl read of
+//! [`bootid`]; the rest is built and
 //! measured on Linux, against the fakes.
 
+pub mod bootid;
 pub mod fake;
 pub mod label;
 pub mod launchctl;
@@ -35,6 +40,9 @@ pub mod plist;
 pub mod procid;
 pub mod unit_control;
 
+#[cfg(target_os = "macos")]
+pub use bootid::SysctlBootId;
+pub use bootid::{BOOT_SESSION_UUID, parse_boot_session_uuid};
 pub use fake::FakeLaunchctl;
 pub use label::{Label, LabelError, REVERSE_DNS_PREFIX};
 pub use launchctl::{

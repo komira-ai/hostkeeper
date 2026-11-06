@@ -17,7 +17,7 @@ use hostkeeper_enroll::{
     PollAnswer, Ports, Reason, RenewAnswer, RenewRequest, RequestId, Settings, Site, Store,
     StoreError, StoreLock, Stored, TransportError, WallClock,
 };
-use hostkeeper_steps::Clock;
+use hostkeeper_steps::{BootId, BootIdError, Clock};
 use hostkeeper_testkit::Scratch;
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{DerSignature, SigningKey, VerifyingKey};
@@ -565,8 +565,8 @@ impl Clock for FakeClock {
         self.0.lock().expect("clock").iter().sum()
     }
 
-    fn boot_id(&self) -> String {
-        "boot".to_owned()
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the fake clock", "boot")
     }
 
     fn sleep_secs(&self, secs: u64) {

@@ -104,8 +104,11 @@ it cannot renew.
 Each approval is audited `enroll_approve` (`enroll_replace` with `replace`) under the operator's
 token name, with the request id, role, services and the claims; each refused one
 `enroll_approve_refused` with its token, and nothing else changes. The audit log is a second file,
-so its entry is written right after the approval; an approval whose entry did not land is audited
-when the coordinator next starts.
+so its entry is written right after the approval; an approval whose entry did not land (a crash,
+or an audit file that takes no lines) is audited when the coordinator next starts. An approval is
+therefore never refused `audit_unavailable`: the request file is its durable record. Once the audit
+file's retention has deleted segments, an approval older than the oldest line kept is not audited
+again.
 
 | token | when |
 |---|---|

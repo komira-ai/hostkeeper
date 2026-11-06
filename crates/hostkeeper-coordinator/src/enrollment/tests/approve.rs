@@ -420,3 +420,56 @@ async fn an_approval_whose_audit_did_not_land_is_audited_at_the_next_start() {
     rig.coordinator = coordinator;
     assert_eq!(count(&rig), 1);
 }
+
+/// Catches an approval audited again at every start once the audit file's retention deleted the
+/// segment that held its entry, and one never audited when its entry is merely missing: with
+/// segment 1 deleted, an approval made before the oldest line kept is not audited at the next
+/// start, and one made at or after it is.
+#[tokio::test]
+async fn an_approval_older_than_the_audit_kept_is_not_audited_again() {
+    let enrollment = Rig::new("approve-pruned");
+    let mut rig = coordinator_over("approve-pruned-coordinator", &enrollment).await;
+    rig.coordinator = crate::testutil::Rig::start(&rig.dir, &rig.clock)
+        .with_ops(unwritable(OpsState::default()))
+        .with_enrollment(Arc::clone(&enrollment.enrollment));
+    let operator = rig.coordinator.caller(Some(OPERATOR)).await;
+    let key = HostKey::new();
+    enrollment
+        .enrollment
+        .enroll(enroll_request(&key, "machine-1"))
+        .expect("enrolled");
+    rig.coordinator
+        .enrollment_approve(&operator, approval(&key, "s1"))
+        .expect("the approval stands");
+    let approvals = |rig: &crate::testutil::Rig| {
+        audit_of(&rig.coordinator)
+            .iter()
+            .filter(|audited| audited.1 == "enroll_approve")
+            .count()
+    };
+    let audit = crate::audit_file::path_of(&rig.dir.path().join("desired.json.ops"));
+    let kept_from = |at_unix: u64| {
+        let line = format!(
+            r#"{{"seq":40,"at_unix":{at_unix},"by":"operator","action":"hold","detail":{{}}}}"#
+        );
+        std::fs::write(
+            crate::audit_file::segment_path(&audit, 2),
+            format!("{line}\n"),
+        )
+        .expect("a segment past the first");
+    };
+
+    kept_from(NOW + 1);
+    rig.coordinator = crate::testutil::Rig::start(&rig.dir, &rig.clock)
+        .with_enrollment(Arc::clone(&enrollment.enrollment));
+    assert_eq!(approvals(&rig), 0, "its entry went with a deleted segment");
+
+    kept_from(NOW);
+    rig.coordinator = crate::testutil::Rig::start(&rig.dir, &rig.clock)
+        .with_enrollment(Arc::clone(&enrollment.enrollment));
+    assert_eq!(
+        approvals(&rig),
+        1,
+        "made after the oldest line kept: audited"
+    );
+}

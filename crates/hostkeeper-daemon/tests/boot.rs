@@ -21,7 +21,7 @@ use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
 use hostkeeper_daemon::{Daemon, Refusal, Reply, WriteStep};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{RECORD_FILE, State};
-use hostkeeper_steps::{CrashPoint, Finished, RecordStore, ResumeAction};
+use hostkeeper_steps::{BootId, CrashPoint, Finished, RecordStore, ResumeAction};
 use support::{
     IRREVERSIBLE, OWN, Rig, alerting, crash_after_writing, crash_at, d, finished, lines, name, ok,
     update,
@@ -198,7 +198,13 @@ fn the_verify_window_restarts_after_a_reboot() {
         ["run updater-web-verify-1", "run updater-web-cleanup-1"]
     );
     let began = rig.record("web").expect("a record").progress.verify_started;
-    assert_eq!(began.map(|stamp| stamp.boot_id).as_deref(), Some("boot-2"));
+    assert_eq!(
+        began
+            .and_then(|stamp| stamp.boot_id)
+            .as_ref()
+            .map(BootId::as_str),
+        Some("boot-2")
+    );
 }
 
 /// Catches a resend answered by running the update again after the daemon died between its
@@ -448,6 +454,77 @@ fn the_boot_id_file_is_a_bare_id_and_an_unknown_future_record_schema_is_held() {
     assert!(report.boot_id_written);
     let kept = fs::read_to_string(rig.state.join("web").join(RECORD_FILE)).expect("read");
     assert_eq!(kept, newer);
+}
+
+/// Catches an unreadable boot id read as the same boot, or written as an empty one: the start
+/// pass reads a changed id as a boot and the same id as none, and a clock whose boot id cannot be
+/// read as a boot whatever the file holds, or when there is no file; the boot id is then not
+/// written, and the file keeps the old id.
+#[test]
+fn an_unreadable_boot_id_is_a_boot_and_is_never_written() {
+    let rig = Rig::new("boot-id-unreadable");
+    fs::create_dir_all(&rig.state).expect("the state dir");
+    assert!(boot_changed(&rig.state, &*rig.clock));
+    rig.clock.lose_boot_id();
+    assert!(boot_changed(&rig.state, &*rig.clock));
+    rig.clock.set_boot_id("boot-1");
+    commit_boot(&rig.state, &*rig.clock).expect("write the boot id");
+    assert!(!boot_changed(&rig.state, &*rig.clock));
+    rig.clock.set_boot_id("boot-2");
+    assert!(boot_changed(&rig.state, &*rig.clock));
+
+    rig.clock.lose_boot_id();
+    assert!(boot_changed(&rig.state, &*rig.clock));
+    let error = commit_boot(&rig.state, &*rig.clock).expect_err("no boot id to write");
+    assert_eq!(
+        error.to_string(),
+        "the boot id read from the fake clock is empty"
+    );
+    assert_eq!(boot_id(&rig), "boot-1");
+    assert!(!rig.state.join(format!("{BOOT_ID_FILE}.tmp")).exists());
+}
+
+/// Catches a Mac that lost power mid-update read as not rebooted because its boot id cannot be
+/// read: the start pass reports a reboot, alerts that the boot id is not written, and runs no
+/// hook; once the id can be read again and is another boot's, the next start reads the record as
+/// after a boot, rolls the cut-off `prepare` back and reports `Deferred` `rebooted`.
+#[test]
+fn a_start_whose_boot_id_cannot_be_read_reports_a_reboot_and_runs_no_hook() {
+    let rig = Rig::new("boot-id-unknown-start");
+    lost_in(&rig, Step::Prepare);
+    rig.clock.lose_boot_id();
+    let log = Log::default();
+    rig.launcher.log_to(log.clone());
+    let (daemon, alerts) = alerting(rig.daemon());
+    let report = daemon.boot_pass().expect("the start pass");
+    assert!(report.rebooted);
+    assert!(!report.boot_id_written);
+    assert_eq!(boot_id(&rig), "boot-1");
+    assert_eq!(
+        lines(&alerts),
+        [
+            "hostkeeper daemon: level=error alert=journal_unavailable the boot id is not written: the boot id read from the fake clock is empty; no hook runs in this start",
+            "hostkeeper daemon: level=error alert=journal_unavailable service=web: the boot id is not written: the boot id read from the fake clock is empty",
+        ]
+    );
+    assert_eq!(
+        web(&report).action,
+        Some(ResumeAction::RollbackThenDeferred { reason: "rebooted" })
+    );
+    assert!(matches!(
+        web(&report).outcome,
+        Outcome::JournalUnavailable(_)
+    ));
+    assert!(calls(&log).is_empty(), "{:?}", calls(&log));
+
+    rig.reboot();
+    let (_, report, log) = restart(&rig);
+    assert!(report.rebooted);
+    assert!(report.boot_id_written);
+    assert_eq!(boot_id(&rig), "boot-2");
+    assert_eq!(web(&report).verdict(), Some(rebooted_deferred()));
+    assert_eq!(rig.verdict("web"), Some(rebooted_deferred()));
+    assert_eq!(calls(&log), ["run updater-web-rollback-1"]);
 }
 
 /// Catches a start whose parts run out of order: the registration socket and the placed links
