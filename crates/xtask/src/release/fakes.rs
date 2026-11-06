@@ -1,6 +1,6 @@
 //! The fakes the release tests run the verbs against: a git history held in memory, GitHub runs
-//! and issues, a release store, a verifier, a binary's `--version`, `pkgbuild` and a scripted
-//! [`Exec`]. Each
+//! and issues, a release store, a verifier, a binary's `--version`, `pkgbuild`, the advisory
+//! check and a scripted [`Exec`]. Each
 //! records the writes it was asked for, so a test can assert that nothing was written.
 
 use std::cell::{Cell, RefCell};
@@ -14,8 +14,8 @@ use super::contract::{
 use super::file_sha256;
 use super::index::ReleaseIndex;
 use super::ports::{
-    Adapters, Attestation, BuildPkg, Exec, GitHistory, GitHubRuns, Issue, PortError, Ports, Ran,
-    Release, ReleaseStore, Run, RunVersion, Said, StoredAsset, Verifier,
+    Adapters, AdvisoryCheck, Attestation, BuildPkg, Exec, GitHistory, GitHubRuns, Issue, PortError,
+    Ports, Ran, Release, ReleaseStore, Run, RunVersion, Said, StoredAsset, Verifier,
 };
 use crate::testdir::TestDir;
 use std::path::PathBuf;
@@ -197,7 +197,7 @@ pub(crate) struct FakeRuns {
     /// The commits `on_main` says are on `main`.
     pub(crate) on_main: RefCell<Vec<Commit>>,
     issues: RefCell<Vec<Issue>>,
-    /// The writes asked for, in order: `open #<n>` and `edit #<n>`.
+    /// The writes asked for, in order: `open #<n>`, `edit #<n>` and `close #<n>: <comment>`.
     pub(crate) writes: RefCell<Vec<String>>,
 }
 
@@ -283,6 +283,17 @@ impl GitHubRuns for FakeRuns {
             .filter(|issue| issue.number == number)
             .for_each(|issue| issue.body = body.to_owned());
         self.writes.borrow_mut().push(format!("edit #{number}"));
+        Ok(())
+    }
+
+    /// The closed issue is no longer listed as open.
+    fn close_issue(&self, _repo: &Repo, number: u64, comment: &str) -> Result<(), PortError> {
+        self.issues
+            .borrow_mut()
+            .retain(|issue| issue.number != number);
+        self.writes
+            .borrow_mut()
+            .push(format!("close #{number}: {comment}"));
         Ok(())
     }
 }
@@ -450,6 +461,17 @@ impl RunVersion for FakeRunVersion {
     }
 }
 
+/// An advisory check that prints `said`.
+pub(crate) struct FakeAdvisories {
+    pub(crate) said: Said,
+}
+
+impl AdvisoryCheck for FakeAdvisories {
+    fn check_advisories(&self) -> Result<Said, PortError> {
+        Ok(self.said.clone())
+    }
+}
+
 /// One call of [`FakePkgbuild`]: the tree, the identifier, the version and the pkg asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PkgCall {
@@ -574,6 +596,7 @@ pub(crate) struct Fakes {
     pub(crate) verifier: FakeVerifier,
     pub(crate) run_version: FakeRunVersion,
     pub(crate) pkgbuild: FakePkgbuild,
+    pub(crate) advisories: FakeAdvisories,
 }
 
 impl Fakes {
@@ -595,6 +618,13 @@ impl Fakes {
                 },
             },
             pkgbuild: FakePkgbuild::default(),
+            advisories: FakeAdvisories {
+                said: Said {
+                    success: true,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+            },
         }
     }
 }
@@ -608,6 +638,7 @@ impl Adapters for Fakes {
             verifier: &self.verifier,
             run_version: &self.run_version,
             pkgbuild: &self.pkgbuild,
+            advisories: &self.advisories,
         }
     }
 }

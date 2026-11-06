@@ -54,6 +54,15 @@ no fixed port and no root, and they write only under Cargo's target directory.
   fails when any crate of the workspace is under 99.00% of its lines or of its branches. Every
   crate is judged; there is no way to exclude one (rules T1 to T4).
 
+Security advisories are not checked on a pull request: a new advisory against a crate already in
+`Cargo.lock` would fail every open pull request for something none of them did. Instead
+`.github/workflows/advisories.yml` runs `cargo xtask advisories` daily, on every push to `main`
+and by hand. It runs `cargo deny check advisories` and keeps what it finds (advisories and yanked
+crates) in one issue, "Security advisories in hostkeeper's dependencies": it opens the issue,
+rewrites its table when the findings change, and comments and closes it when none remain. The
+workflow lint holds that workflow to those triggers, to `issues: write` on its one job of `main`
+only, and to the cargo-deny pin of `ci.yml`.
+
 To see the coverage table locally, with the nightly named in `ci.yml` and `cargo-llvm-cov`
 installed:
 
