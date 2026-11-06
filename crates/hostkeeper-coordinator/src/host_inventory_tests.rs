@@ -300,8 +300,9 @@ fn a_record_added_after_its_host_enrolled_is_enrolled_at_once() {
     );
 }
 
-/// Proves: a host whose id is denied is no longer enrolled: `Hosts.Get` (it is still heard of)
-/// answers no record and an enrollment time of 0, and its record is listed as not enrolled.
+/// Proves: a host whose id is denied is no longer enrolled: `Hosts.Get` and `Hosts.List` (it is
+/// still heard of) answer no record and an enrollment time of 0, and its record is still listed,
+/// as not enrolled, among the records the "not enrolled" filter keeps.
 ///
 /// Catches: a retired host kept as its record's enrolled host, which would hide the record
 /// from the "not enrolled" view when the server is rebuilt.
@@ -319,7 +320,22 @@ fn a_denied_host_is_no_longer_enrolled_against_its_record() {
         inventory_of(&fixture.get("db-1").expect("db-1")),
         ("", Vec::new(), "", "", 0)
     );
+    let db1 = fixture
+        .list()
+        .expect("listed")
+        .into_iter()
+        .find(|h| h.node_id == "db-1")
+        .expect("db-1 is still listed");
+    assert_eq!(inventory_of(&db1), ("", Vec::new(), "", "", 0));
     assert_eq!(fixture.marks(Some(true)), marked(&[]));
+    let all = fixture.marks(None);
+    assert_eq!(all.first(), Some(&("db-1".to_owned(), false)));
+    assert_eq!(all.len(), 5, "every record is still listed");
+    assert_eq!(
+        fixture.marks(Some(false)),
+        all,
+        "db-1 is among the not enrolled"
+    );
 }
 
 /// Proves: when the enrollment store cannot be read (a host's request file is gone),

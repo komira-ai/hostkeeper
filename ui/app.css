@@ -186,3 +186,9 @@ form.sign-in {
   margin: 48px auto;
   padding: 16px;
 }
+
+/* The row a link opened the page on (the Host page's link to its inventory record). */
+tr[aria-current="true"] {
+  background: var(--panel);
+  outline: 2px solid var(--accent);
+}
