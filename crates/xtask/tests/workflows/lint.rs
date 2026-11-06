@@ -50,6 +50,7 @@
 //! Keys are matched exactly. What this does not evaluate it refuses: a YAML tag, a second
 //! document, an alias to an unfinished node, a document that does not parse.
 
+use super::advisories;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
 use super::set_desired;
 use super::yaml::{self, Node, Value};
@@ -70,6 +71,8 @@ pub struct Allowed {
 /// - `release.yml` / `publish`: `contents`, to create the release and its tag.
 /// - `release.yml` / `plan`: `issues`, to open or update the one issue that tracks a release
 ///   held by a failed privileged run.
+/// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
+///   lists the security advisories against the dependencies, on a run of main.
 pub const WRITE_ALLOWED: &[Allowed] = &[
     Allowed {
         file: "artifacts.yml",
@@ -94,6 +97,12 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         job: "plan",
         scope: "issues",
         condition: PLAN_IF,
+    },
+    Allowed {
+        file: advisories::FILE,
+        job: advisories::JOB,
+        scope: "issues",
+        condition: advisories::ISSUE_IF,
     },
 ];
 

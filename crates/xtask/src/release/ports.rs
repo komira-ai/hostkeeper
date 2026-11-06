@@ -3,7 +3,8 @@
 //!
 //! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]),
 //! `github::Gh` ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]) and
-//! `check_binary::VersionOf` ([`RunVersion`]) and `macos_pkg::PkgbuildCli` ([`BuildPkg`]). Each runs its program through an [`Exec`], and the
+//! `check_binary::VersionOf` ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`]) and
+//! `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
 
@@ -84,6 +85,8 @@ pub(crate) trait GitHubRuns {
     fn open_issue(&self, repo: &Repo, title: &str, body: &str) -> Result<u64, PortError>;
     /// Replaces the body of issue `number`.
     fn edit_issue(&self, repo: &Repo, number: u64, body: &str) -> Result<(), PortError>;
+    /// Comments `comment` on issue `number`, then closes it as completed.
+    fn close_issue(&self, repo: &Repo, number: u64, comment: &str) -> Result<(), PortError>;
 }
 
 /// One asset of a release, as the store holds it.
@@ -163,6 +166,14 @@ pub(crate) trait RunVersion {
     fn version_of(&self, binary: &Path) -> Result<Said, PortError>;
 }
 
+/// Checks the dependencies in `Cargo.lock` against the advisory database
+/// (`cargo deny check advisories`, read by `advisories`).
+pub(crate) trait AdvisoryCheck {
+    /// What the check printed and whether it exited 0. cargo-deny writes its JSON records to
+    /// stderr.
+    fn check_advisories(&self) -> Result<Said, PortError>;
+}
+
 /// Builds a flat macOS installer package from a directory tree (`pkgbuild`).
 pub(crate) trait BuildPkg {
     /// Builds `pkg` from the tree `root`, installed at `/`, with the package identifier
@@ -198,6 +209,7 @@ pub(crate) struct Ports<'a> {
     pub(crate) verifier: &'a dyn Verifier,
     pub(crate) run_version: &'a dyn RunVersion,
     pub(crate) pkgbuild: &'a dyn BuildPkg,
+    pub(crate) advisories: &'a dyn AdvisoryCheck,
 }
 
 /// What owns a set of adapters and lends them as [`Ports`]: the wired adapters (`Wired`, over
