@@ -13,3 +13,9 @@ commas, every cell id that prints the value; a row no cell prints leaves it out.
 the lab, node-5. The report's measurements that run did not take are open cells. The check
 `canary_tests.rs` (in `crates/xtask/tests/report/`) holds that each row of that file is printed by
 exactly the cells it names, and that a cell or a row changed alone fails the check.
+
+`farm-rollout-linux.tsv` holds the rollout to the other five Linux nodes of the lab after that
+canary: one `raw` row per node and measurement, which no cell prints, and `derived` rows (the least
+and the greatest time, to 0.1 s, and the number of nodes) that the report's two rollout cells print.
+The check `rollout_tests.rs` holds that each row is printed by exactly the cells it names, that
+each derived row is what the raw rows give, and that a derived row they do not give fails.
