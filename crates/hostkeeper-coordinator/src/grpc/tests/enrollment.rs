@@ -164,6 +164,7 @@ async fn list_and_approve_answer_what_the_coordinator_answers() {
                 proto::ListPendingRequest {
                     limit: 1,
                     page_token: "not a token".to_owned(),
+                    ..proto::ListPendingRequest::default()
                 },
             )
             .await,

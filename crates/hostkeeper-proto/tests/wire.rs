@@ -572,7 +572,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 29] = [
     ),
     (
         "hostkeeper.operator.v1.ListPendingRequest",
-        &[("limit", 1), ("page_token", 2)],
+        &[("limit", 1), ("page_token", 2), ("unenrolled", 3)],
     ),
     (
         "hostkeeper.operator.v1.ListPendingResponse",
@@ -593,6 +593,10 @@ const FIELDS: [(&str, &[(&str, u32)]); 29] = [
             ("record_host_id", 10),
             ("record_role", 11),
             ("candidate_host_ids", 12),
+            ("state", 13),
+            ("unenrolled_reason", 14),
+            ("unenrolled_unix", 15),
+            ("request_ttl_secs", 16),
         ],
     ),
     (
@@ -694,7 +698,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 12] = [
+    let cases: [(&str, &str, &[&str]); 13] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -809,6 +813,11 @@ fn wire_names_are_pinned() {
             "hostkeeper.operator.v1.InventoryMatch",
             "INVENTORY_MATCH_",
             &["matched", "unmatched", "ambiguous"],
+        ),
+        (
+            "hostkeeper.operator.v1.EnrollmentRequestState",
+            "ENROLLMENT_REQUEST_STATE_",
+            &["pending", "unenrolled"],
         ),
         (
             "hostkeeper.operator.v1.AuditRefusal",

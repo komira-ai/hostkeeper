@@ -310,8 +310,9 @@ pub async fn connection<S>(
 
 /// Looks at everything that is re-read while the coordinator runs, every `interval`, for as long
 /// as the future is polled: with `enrollment`, its server certificate file, made again when it
-/// is due ([`Enrollment::renew_server`]); then the TLS files of `sources` and the tokens file of
-/// `tokens`. It never returns.
+/// is due ([`Enrollment::renew_server`]), and its requests, expired once they waited longer than
+/// the request TTL ([`Enrollment::expire_requests`]); then the TLS files of `sources` and the
+/// tokens file of `tokens`. It never returns.
 pub async fn reload_every(
     enrollment: Option<Arc<Enrollment>>,
     sources: Vec<TlsSource>,
@@ -327,9 +328,9 @@ pub async fn reload_every(
     }
 }
 
-/// One look of the tick: the server certificate of `enrollment` is renewed when it is due, then
-/// each TLS source reloads (so a renewed file is served from this look on), then the tokens file
-/// is read again.
+/// One look of the tick: the server certificate of `enrollment` is renewed when it is due and
+/// its requests older than the request TTL expire, then each TLS source reloads (so a renewed
+/// file is served from this look on), then the tokens file is read again.
 pub(crate) async fn reload_all(
     enrollment: Option<&Arc<Enrollment>>,
     sources: &[TlsSource],
@@ -337,8 +338,12 @@ pub(crate) async fn reload_all(
 ) {
     if let Some(enrollment) = enrollment {
         let enrollment = Arc::clone(enrollment);
-        // A file read, a key, a serial from the store and a file write: off the runtime's threads.
-        let _ = tokio::task::spawn_blocking(move || enrollment.renew_server()).await;
+        // File reads, a key, a serial from the store and file writes: off the runtime's threads.
+        let _ = tokio::task::spawn_blocking(move || {
+            enrollment.renew_server();
+            enrollment.expire_requests();
+        })
+        .await;
     }
     for source in sources {
         let source = source.clone();

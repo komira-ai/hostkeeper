@@ -41,8 +41,8 @@ impl EnrollmentStore {
     /// call of its round and read back at every later one (a poll issues lazily).
     ///
     /// # Errors
-    /// [`IssueError::NotApproved`] while the request waits for an operator (the poll answers
-    /// "pending"); [`IssueError::Denied`] when the request or its host is denied;
+    /// [`IssueError::NotApproved`] while the request waits for an operator, or after it expired
+    /// (the poll answers "pending"); [`IssueError::Denied`] when the request or its host is denied;
     /// [`IssueError::UnknownRequest`]; [`IssueError::Sign`]; [`IssueError::Store`], also for an
     /// issued request whose certificate file is gone (nothing is signed again).
     pub fn issue(
@@ -57,7 +57,9 @@ impl EnrollmentStore {
         if row.state == RequestState::Denied {
             return Err(IssueError::Denied);
         }
-        if row.state.is_pending() {
+        // An expired request is not approved either, and never will be: its host polls "pending"
+        // until it posts its key again, which starts the request over.
+        if row.state.is_pending() || row.state == RequestState::Expired {
             return Err(IssueError::NotApproved(row.state));
         }
         let host_id = row

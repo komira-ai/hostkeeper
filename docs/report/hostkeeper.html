@@ -743,7 +743,10 @@ A poll is signed over a fresh nonce of
 bytes, so polling needs no clock. The host does need a correct wall clock: it refuses a
 certificate that is not valid now, and it decides renewal and expiry by that clock. At most
 <span data-cell="c-pending" data-source="crates/hostkeeper-enrollment/src/enroll/store.rs" data-item="DEFAULT_MAX_PENDING">256</span>
-requests may be pending (<code>--max-pending-enrollments</code>). Pending requests do not expire.</li>
+requests may be pending (<code>--max-pending-enrollments</code>). A request no operator approves within
+<span data-cell="c-request-ttl" data-source="crates/hostkeeper-coordinator/src/enrollment/expiry.rs" data-item="DEFAULT_REQUEST_TTL_SECS">72 hours</span>
+(<code>--enrollment-request-ttl</code>) expires at the next reload tick: its host is unenrolled, the request is no
+longer approved and no longer counts as pending, and the host&rsquo;s key posted again waits anew.</li>
 <li>An operator approves with <code>Enrollment.Approve</code>, giving the request id, the key hash shown by
 <code>Enrollment.List</code>, the host id, the role, the services to assign to the host and a reason. The
 approval is one durable write, followed by an audit entry (<code>enroll_approve</code>, or <code>enroll_replace</code>)
@@ -993,7 +996,8 @@ the halt it lifts, <code>lift_halt</code>, are audited as <code>ci</code>); one 
 An entry that <code>Audit.List</code> answers carries its time and the name it was made under; the entry in a
 change&rsquo;s own answer has the name and no time. Enrollment&rsquo;s own changes are audited under
 <code>coordinator</code>: a new request (<code>enroll_requested</code>), a certificate&rsquo;s first issue
-(<code>enroll_issued</code>) and a renewal (<code>cert_renewed</code>), with no CSR, key, nonce or signature in the reason.</p>
+(<code>enroll_issued</code>), a renewal (<code>cert_renewed</code>) and a request that expired (<code>request_expired</code>),
+with no CSR, key, nonce or signature in the reason.</p>
 <h3 id="hooks">Update hooks</h3>
 <p><strong>The step contract</strong> is in <a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-hook">crates/hostkeeper-hook</a>
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#53-how-a-hook-runs">design: How a hook runs</a>,
@@ -1366,8 +1370,8 @@ probe cannot start on either real launcher, so uninstall and self-update do not 
 host.</li>
 <li><strong>Rollout shape:</strong> one ordinary update at a time across the whole fleet, with no groups. Automatic
 rollback cannot move a host back below the version it runs.</li>
-<li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no expiry of pending
-requests, no CA rotation or revocation lists.</li>
+<li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no CA rotation or
+revocation lists.</li>
 <li><strong>Operations:</strong> a single coordinator with no failover; the rollout file is read only at start; the
 audit keeps only its retained segments, so the oldest entries are deleted; there is no metrics endpoint and no pager (conditions that need a
 person are <code>alert=</code> log lines).</li>
