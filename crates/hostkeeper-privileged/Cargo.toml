@@ -69,10 +69,14 @@ privileged = []
 [dev-dependencies]
 # What the privileged tests drive: the production launcher and dead-man (`hostkeeper-steps`,
 # above), and the observer's real adapters; on a Mac the launchd adapters (`hostkeeper-launchd`,
-# above), the process probe over `proc_pidpath`, and the package check
-# (`hostkeeper_unpack::MacVerify`) over `codesign` and `getxattr`.
+# above), the process probe over `proc_pidpath`, the package check
+# (`hostkeeper_unpack::MacVerify`) over `codesign` and `getxattr`, and the enrollment claims over
+# `ioreg`.
 hostkeeper-observe = { path = "../hostkeeper-observe" }
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+# The macOS device test of the enrollment claims: `MacClaims` over the daemon's `HostIoreg`, the
+# real `ioreg`.
+hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 # The macOS device test's `Status` call to the daemon's admin socket: the admin service's client,
 # over a Unix socket.
 hostkeeper-proto = { path = "../hostkeeper-proto" }

@@ -56,7 +56,8 @@ pub type Layer = (
 /// crates' and the web app's tests read the protobuf descriptors; the privileged tests drive the
 /// step runner's launcher and dead-man and the observer's adapters against the host, and on a
 /// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
-/// normal dependency), the launchd adapters and the package check, and call its admin socket;
+/// normal dependency), the launchd adapters and the package check, call its admin socket, and
+/// read the Mac's enrollment claims (`hostkeeper-enroll`'s `MacClaims`) from the real `ioreg`;
 /// their program `hostkeeper-selfupdate-daemon` runs the daemon on the Linux adapters with a
 /// package store and a heartbeat link of its own, so it needs the config, the launchd crate's
 /// platform, the link, the placement roots and the step crate as normal dependencies.
@@ -95,7 +96,7 @@ pub const LAYERS: [Layer; 23] = [
     (
         PRIVILEGED,
         &[CONFIG, DAEMON, HOOK, LAUNCHD, LINK, PLACED, STEPS],
-        &[OBSERVE, PROTO, UNPACK],
+        &[ENROLL, OBSERVE, PROTO, UNPACK],
     ),
     (PROTO, &[], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),
