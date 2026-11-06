@@ -157,14 +157,12 @@ fn the_rigs_two_releases_differ() {
     );
 }
 
-/// Catches a staged release that others can change, or reached through a link, being trusted: a
-/// tree writable by group, a parent writable by others, and a path with a linked component are
-/// `Untrusted`; the same tree closed is accepted.
+/// Catches a staged release that others can change being trusted: a tree writable by group and
+/// a parent writable by others are `Untrusted`, naming it; the same tree closed is accepted.
 #[test]
-fn the_tree_and_its_parents_must_be_closed_and_unlinked() {
-    use std::os::unix::fs::PermissionsExt;
+fn the_tree_and_its_parents_must_be_closed() {
     let s = Scratch::new("art-place");
-    let outer = s.path().join("outer");
+    let outer = fs::canonicalize(s.path()).unwrap().join("outer");
     let inner = outer.join("inner");
     fs::create_dir_all(inner.join("bin")).unwrap();
     fs::write(inner.join("bin/hook"), "#!hook\n").unwrap();
@@ -184,16 +182,70 @@ fn the_tree_and_its_parents_must_be_closed_and_unlinked() {
         ArtifactError::Untrusted(p) if p == outer
     ));
     fs::set_permissions(&outer, fs::Permissions::from_mode(0o755)).unwrap();
+    staged.check(hook).unwrap();
+}
 
-    let link = s.path().join("link");
-    symlink(&outer, &link).unwrap();
-    let through = Staged::seal(&link.join("inner")).unwrap();
-    assert_eq!(through.digest(), staged.digest());
+/// Catches a tree sealed through a link above it being refused, which halted every package on
+/// macOS (`/var` is a link to `/private/var`): the seal names the tree by its real path, with
+/// the digest of the same tree sealed directly, and the check passes and returns the hook on
+/// that path; the real parents are still judged (one open to others is `Untrusted`, named by
+/// its real path), a byte changed is still `Changed`, and a tree that is itself a link is still
+/// `Untrusted`, sealed directly or through the linked parent.
+#[test]
+fn a_linked_parent_is_judged_by_its_real_path() {
+    let s = Scratch::new("art-linked-parent");
+    let real = fs::canonicalize(s.path()).unwrap();
+    let outer = real.join("private/var");
+    let inner = outer.join("inner");
+    fs::create_dir_all(inner.join("bin")).unwrap();
+    fs::write(inner.join("bin/hook"), "#!hook\n").unwrap();
+    let var = real.join("var");
+    symlink("private/var", &var).unwrap();
+    let hook = Path::new("bin/hook");
+
+    let through = Staged::seal(&var.join("inner")).unwrap();
+    assert_eq!(through.dir(), inner);
+    assert_eq!(through.digest(), Staged::seal(&inner).unwrap().digest());
+    assert_eq!(through.check(hook).unwrap(), inner.join("bin/hook"));
+
+    fs::set_permissions(&outer, fs::Permissions::from_mode(0o757)).unwrap();
     assert!(matches!(
         through.check(hook).unwrap_err(),
-        ArtifactError::Untrusted(p) if p == link
+        ArtifactError::Untrusted(p) if p == outer
     ));
-    staged.check(hook).unwrap();
+    fs::set_permissions(&outer, fs::Permissions::from_mode(0o755)).unwrap();
+
+    fs::write(inner.join("bin/hook"), "#!hoox\n").unwrap();
+    let err = through.check(hook).unwrap_err();
+    assert!(
+        matches!(&err, ArtifactError::Changed { expected, found }
+            if expected == through.digest() && found != expected),
+        "{err:?}"
+    );
+
+    let linked_tree = outer.join("linked");
+    symlink("inner", &linked_tree).unwrap();
+    let sealed = Staged::seal(&linked_tree).unwrap();
+    assert!(matches!(
+        sealed.check(hook).unwrap_err(),
+        ArtifactError::Untrusted(p) if p == linked_tree
+    ));
+    assert!(matches!(
+        Staged::seal(&var.join("linked")).unwrap().check(hook).unwrap_err(),
+        ArtifactError::Untrusted(p) if p == linked_tree
+    ));
+}
+
+/// A tree whose parent does not exist (so its real path cannot be resolved) cannot be sealed:
+/// an I/O error, `NotFound`, as for any tree that cannot be read.
+#[test]
+fn a_tree_whose_parent_is_missing_cannot_be_sealed() {
+    let s = Scratch::new("art-parent-missing");
+    let err = Staged::seal(&s.path().join("missing/tree")).unwrap_err();
+    assert!(
+        matches!(&err, ArtifactError::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
+        "{err:?}"
+    );
 }
 
 fn host_owner(meta: &fs::Metadata) -> (u32, u32) {
@@ -325,7 +377,7 @@ fn a_tree_with_setuid_or_writable_entries_is_refused() {
 /// then be made on something else than the tree that is run, so it is not even sealed.
 #[test]
 fn the_staged_directory_must_be_absolute_and_plain() {
-    for dir in ["relative/tree", "/a/../b", ""] {
+    for dir in ["relative/tree", "/a/../b", "", "/"] {
         let err = Staged::seal(Path::new(dir)).unwrap_err();
         assert!(
             matches!(err, ArtifactError::Untrusted(_)),

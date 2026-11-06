@@ -7,6 +7,12 @@
 //! anyway (a bad restore, a disk fault, a root that was tricked), and the runner treats it as a
 //! `halt`.
 //!
+//! A staged tree is named by its real path: [`Staged::seal`] resolves the links above the tree
+//! once, so the check, the hook it returns and every reader of [`Staged::dir`] use one path that
+//! holds no link. On macOS `/var` is a link to `/private/var`, so a version under
+//! `/var/lib/hostkeeper/packages` is `/private/var/lib/hostkeeper/packages/...` from its seal on.
+//! The tree itself is never a link.
+//!
 //! # The tree digest
 //!
 //! [`tree_digest`] is a public format (docs/package-format.md): the seal of every unpacked
@@ -102,21 +108,29 @@ impl Staged {
     /// The tree at `dir` as it is now. Called by the step that verified the release, once, right
     /// after the verification and before anything else touches the tree.
     ///
-    /// `dir` must be absolute and made of plain names ([`ArtifactError::Untrusted`] otherwise):
-    /// the checks of its ancestors would else be made on something else than the tree that runs.
-    /// A tree holding a link or anything else that is neither a regular file nor a directory is
-    /// [`ArtifactError::Unsupported`].
+    /// `dir` must be absolute, made of plain names and not the root ([`ArtifactError::Untrusted`]
+    /// otherwise): the checks of its ancestors would else be made on something else than the
+    /// tree that runs. The links above the tree are resolved here, once: the `Staged` names the
+    /// real path of its parent joined with the tree's own name, which is not resolved, so a tree
+    /// that is itself a link stays one and [`Staged::check`] refuses it. A parent that cannot be
+    /// resolved is [`ArtifactError::Io`]. A tree holding a link or anything else that is neither a
+    /// regular file nor a directory is [`ArtifactError::Unsupported`].
     pub fn seal(dir: &Path) -> Result<Staged, ArtifactError> {
+        let untrusted = || ArtifactError::Untrusted(dir.to_path_buf());
         if !dir.is_absolute() || !dir.components().skip(1).all(is_plain) {
-            return Err(ArtifactError::Untrusted(dir.to_path_buf()));
+            return Err(untrusted());
         }
+        let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+            return Err(untrusted());
+        };
+        let dir = fs::canonicalize(parent)?.join(name);
         Ok(Staged {
-            dir: dir.to_path_buf(),
-            digest: tree_digest(dir)?,
+            digest: tree_digest(&dir)?,
+            dir,
         })
     }
 
-    /// The absolute path of the tree.
+    /// The absolute path of the tree: its real path, as [`Staged::seal`] resolved it.
     pub fn dir(&self) -> &Path {
         &self.dir
     }

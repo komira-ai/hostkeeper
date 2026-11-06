@@ -1,6 +1,7 @@
 //! The Mac the end-to-end test of `tests/device_mac_e2e.rs` runs against: a directory tree under
-//! `/private/var`, the fixed host paths the real daemon uses on a Mac, the daemon as a launchd
-//! job of the system domain, and the reads of launchd's state the test asserts on.
+//! `/var` (a link to `/private/var`, as the daemon's default packages directory is reached), the
+//! fixed host paths the real daemon uses on a Mac, the daemon as a launchd job of the system
+//! domain, and the reads of launchd's state the test asserts on.
 //!
 //! The daemon reads some paths from no flag: the CA bundle its package fetch trusts
 //! (`/etc/ssl/cert.pem`), `gh` and the Sigstore trusted root (`/usr/local/lib/hostkeeper`), the
@@ -242,7 +243,7 @@ impl MacHost {
     /// keeps its placed state in.
     ///
     /// `tag` is 1 to 8 characters of `[a-z0-9]`; it names the tree
-    /// (`/private/var/hk-e2e-<tag>-<pid>`) and the daemon's job.
+    /// (`/var/hk-e2e-<tag>-<pid>`) and the daemon's job.
     ///
     /// # Panics
     /// The test is not root, a place cannot be moved aside, or a directory cannot be made.
@@ -275,9 +276,9 @@ impl MacHost {
                 (place, aside)
             })
             .collect();
-        // Under /private/var, not /var: the package check wants every ancestor of the packages
-        // directory to be a root-owned directory, and /var is a link.
-        let base = PathBuf::from(format!("/private/var/hk-e2e-{tag}-{pid}"));
+        // Under /var, a link to /private/var, as the daemon's default `/var/lib/hostkeeper` is:
+        // the seal names each version by its real path, which the check before each step judges.
+        let base = PathBuf::from(format!("/var/hk-e2e-{tag}-{pid}"));
         // `create_dir_all` would take over a directory that is already there.
         fs::create_dir(&base).unwrap_or_else(|e| panic!("create {}: {e}", base.display()));
         let host = MacHost {
