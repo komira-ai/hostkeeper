@@ -367,10 +367,10 @@ fn package_builds_the_package_of_the_service_asked_for_and_hostkeeper_by_default
         assert!(!d.join("out").join(other).exists(), "{other}");
     }
 
-    // Without `--service` the package is hostkeeper's: for macOS it has no unit, and no
-    // `--fail-ready`.
+    // Without `--service` the package is hostkeeper's: for macOS it has no unit, no
+    // `--fail-ready`, and a `--trusted-root` (any file: the verb does not read it as one).
     let (h, _) = one_commit();
-    let out = run(parse(&[]), || Fakes::over(h));
+    let out = run(parse(&["--trusted-root", text(&binary)]), || Fakes::over(h));
     assert!(
         matches!(&out, Ok(lines) if lines[0].starts_with("hostkeeper-0.1.2-macos-arm64.tar.zst:")),
         "{out:?}"
@@ -494,6 +494,8 @@ fn package_without_its_binary_is_an_io_error() {
             text(&d.join("missing-binary")),
             "--unit",
             text(&d.join("missing-unit")),
+            "--trusted-root",
+            text(&d.join("missing-root")),
             "--out",
             text(&d.join("out")),
         ]),

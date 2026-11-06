@@ -58,6 +58,8 @@ libc.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 # The host's CA bundle (PEM) read into the DER roots the package fetch's HTTPS client trusts.
 rustls-pki-types.workspace = true
+# `trusted_root`: whether the Sigstore trusted root file is a stream of JSON trusted roots.
+serde_json.workspace = true
 thiserror.workspace = true
 # A manifest's `[params]` table is handed to the hook's params file as TOML text.
 toml.workspace = true
@@ -93,7 +95,6 @@ prost-types.workspace = true
 # The effective uid: the owner the tests' daemon config is trusted for; an extended attribute
 # set on a scratch file, which the quarantine check reads.
 rustix = { workspace = true, features = ["fs", "process"] }
-serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
 tonic = { workspace = true, features = ["channel"] }
 tower = { workspace = true, features = ["util"] }

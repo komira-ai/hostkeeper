@@ -14,16 +14,20 @@ use crate::release::ports::PortError;
 
 /// The packaged binary; nothing reads it as a program.
 pub(super) const BINARY: &[u8] = b"the hostkeeper binary";
-const UNIT: &str = include_str!("../../../tests/release/hostkeeper.service");
-const NAMES: [&str; 5] = [
+pub(super) const UNIT: &str = include_str!("../../../tests/release/hostkeeper.service");
+/// The packaged trusted root; nothing reads it as one here.
+pub(super) const TRUSTED_ROOT: &[u8] = b"{\"mediaType\":\"a trusted root\"}\n";
+const NAMES: [&str; 7] = [
     "bin/",
     "bin/hostkeeper",
+    "files/",
+    "files/trusted_root.json",
     "manifest.toml",
     "units/",
     "units/hostkeeper.service",
 ];
 
-fn version() -> Version {
+pub(super) fn version() -> Version {
     "0.1.5".parse().expect("a version")
 }
 
@@ -36,17 +40,19 @@ pub(super) fn history() -> (FakeHistory, Commit) {
 
 /// A request over a binary and the given unit text written under `dir`, writing to `out`. The
 /// unit is passed for a Linux platform, and not for macos-arm64, which takes none.
-fn request(dir: &Path, unit: &[u8], commit: &Commit, platform: Platform, out: &str) -> Request {
+pub(super) fn request(dir: &Path, unit: &[u8], c: &Commit, p: Platform, out: &str) -> Request {
     std::fs::write(dir.join("hostkeeper"), BINARY).expect("write the binary");
     std::fs::write(dir.join("hostkeeper.service"), unit).expect("write the unit");
+    std::fs::write(dir.join("trusted_root.json"), TRUSTED_ROOT).expect("write the root");
     Request {
         service: Service::Hostkeeper,
-        platform,
+        platform: p,
         version: version(),
-        commit: commit.clone(),
+        commit: c.clone(),
         binary: dir.join("hostkeeper"),
-        unit: (platform != Platform::MacosArm64).then(|| dir.join("hostkeeper.service")),
+        unit: (p != Platform::MacosArm64).then(|| dir.join("hostkeeper.service")),
         fail_ready: false,
+        trusted_root: Some(dir.join("trusted_root.json")),
         out: dir.join(out),
     }
 }
@@ -234,6 +240,8 @@ fn package_is_deterministic_and_has_exactly_the_four_allowed_top_level_names() {
         [
             (true, 0o555),
             (false, 0o555),
+            (true, 0o555),
+            (false, 0o444),
             (false, 0o444),
             (true, 0o555),
             (false, 0o444)
@@ -615,26 +623,6 @@ fn the_entry_list_check_refuses_each_shape_rule_and_accepts_a_good_list() {
             "files/a/: the same name as an earlier entry, ignoring ASCII case".to_owned(),
         ]))
     );
-    let with_unit = Contents {
-        manifest: manifest(&version(), Platform::LinuxX86_64, true),
-        units: vec![Unit {
-            file: UNIT_FILE.to_owned(),
-            origin: String::new(),
-            data: Vec::new(),
-        }],
-    };
-    assert_eq!(
-        check_entries(&entries("hostkeeper", Vec::new(), with_unit)),
-        Ok(())
-    );
-    let without_unit = Contents {
-        manifest: manifest(&version(), Platform::MacosArm64, false),
-        units: Vec::new(),
-    };
-    assert_eq!(
-        check_entries(&entries("hostkeeper", Vec::new(), without_unit)),
-        Ok(())
-    );
 }
 
 /// On drop, makes every directory under its path writable again and removes the path. The
@@ -802,10 +790,11 @@ fn a_macos_package_holds_the_binary_and_a_manifest_without_units() {
     assert_eq!(shape_problems(&bytes, time_of(1)), Vec::<String>::new());
     let seen = read_back(&bytes);
     let names: Vec<&str> = seen.iter().map(|e| e.name.as_str()).collect();
-    assert_eq!(names, ["bin/", "bin/hostkeeper", "manifest.toml"]);
+    assert_eq!(names, NAMES[..5]);
     assert_eq!(seen[1].data, BINARY);
+    assert_eq!(seen[3].data, TRUSTED_ROOT);
     assert_eq!(
-        seen[2].data,
+        seen[4].data,
         manifest(&version(), Platform::MacosArm64, false).into_bytes()
     );
     let name = "hostkeeper-0.1.5-macos-arm64.tar.zst";

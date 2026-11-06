@@ -174,6 +174,9 @@ For a host without access to the GitHub API. Once, on a host that has it:
 gh attestation trusted-root > trusted_root.jsonl
 ```
 
+This saved root is only for checking a release by hand. A hostkeeper host needs no such step: its
+root ships in the packages (see [The trusted root on a host](#the-trusted-root-on-a-host)).
+
 Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` you use, with the
 bundle released next to it (the other assets have no bundle and are verified online, step 3):
 
@@ -270,6 +273,47 @@ and 3 and the `--version` check of step 6 as written here, on the binary tarball
 `linux-x86_64`. The workflow lint (`cargo test -p xtask --test workflows`) refuses a change to
 those commands, to the tag or to the binary tarball's name in this document that the workflow
 does not follow, and the reverse.
+
+## The trusted root on a host
+
+The daemon checks every package's attestation offline, as step 4 does, against a Sigstore
+trusted root on the host. Nobody runs the command of step 4 on a host. The root comes with the
+packages:
+
+- The release commits the root, as `gh attestation trusted-root` prints it, at
+  `packaging/sigstore/trusted_root.json`.
+- hostkeeper's own package (`hostkeeper-<version>-<platform>.tar.zst`) carries that file as
+  `files/trusted_root.json`. The daemon reads it from
+  `/var/lib/hostkeeper/packages/hostkeeper/current/files/trusted_root.json`, so each update of
+  hostkeeper brings the root of its release.
+- The deb and the rpm install the same file at `/usr/lib/hostkeeper/trusted_root.json`. That is
+  the root of a host before its first update of hostkeeper, and the place to copy a root by hand.
+
+When both files are present, the daemon uses the one written last; a tie in the same second goes
+to the packaged one. A root an operator copies after a rotation therefore takes over from the
+one an older package carried. When neither file is present, `gh` is given the
+`/usr/lib/hostkeeper/` path and the check fails there.
+
+A key that Sigstore rotates reaches the hosts with the next release made after the committed root
+changes. That release is checked against the root the hosts already hold, so the update has to
+land while the old root still verifies it. The scheduled workflow `trusted-root.yml` fetches
+the live root once a day and fails when its bytes differ from the committed file. The failed run
+is the notice to commit the new root, and it keeps the live root as its artifact `trusted-root`.
+
+The admin `Status` reports the root the daemon uses:
+
+- `trusted_root_age_secs`: the seconds since that file was last written on the host (the format
+  has no field for when the root was made). It is absent when there is no file.
+- `trusted_root_reason`: one token, or empty when the root needs no attention:
+
+| reason | when |
+|---|---|
+| `trusted_root_stale` | the root is older than `--trusted-root-max-age-days` (default 90): the host has not taken an update of hostkeeper in that time |
+| `trusted_root_missing` | neither file is present |
+| `trusted_root_unparseable` | the file cannot be read, or is not one or more JSON trusted roots; this wins over `trusted_root_stale` |
+
+The reason is a signal only. A stale root does not stop a package check: the check goes on with
+the root there is, and fails only if that root no longer verifies the package.
 
 ## Refuse
 

@@ -7,8 +7,10 @@
 # no `v` and no prerelease or build suffix. ARCH is amd64 for the platform linux-x86_64 and
 # arm64 for linux-arm64. nfpm expands ${VERSION} and ${ARCH} and names the files
 # hostkeeper_<version>_<arch>.deb (amd64, arm64) and hostkeeper-<version>-1.<arch>.rpm (x86_64,
-# aarch64). The packages carry the daemon, its unit, its tmpfiles rules and the template of its
-# config, and nothing else: no key, no certificate, no token and no hostkeeper.toml, which
+# aarch64). The packages carry the daemon, its unit, its tmpfiles rules, the template of its
+# config and the Sigstore trusted root of the release (packaging/sigstore/trusted_root.json, at
+# the path the daemon checks package attestations against until an update of hostkeeper brings
+# a newer one), and nothing else: no key, no certificate, no token and no hostkeeper.toml, which
 # whoever installs the package places (packaging/linux/README.md). The deb and the rpm carry the
 # same files and the same scripts.
 name: hostkeeper
@@ -48,6 +50,12 @@ contents:
     dst: /usr/share/hostkeeper/hostkeeper.toml.template
     file_info:
       mode: 0644
+      owner: root
+      group: root
+  - src: packaging/sigstore/trusted_root.json
+    dst: /usr/lib/hostkeeper/trusted_root.json
+    file_info:
+      mode: 0444
       owner: root
       group: root
 scripts:

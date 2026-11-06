@@ -61,6 +61,7 @@ fn request(
         binary: dir.join("hello"),
         unit: None,
         fail_ready,
+        trusted_root: None,
         out: dir.join(out),
     }
 }
@@ -616,6 +617,7 @@ fn hello_takes_no_unit_and_hostkeeper_takes_no_fail_ready_and_needs_its_unit_on_
         let mut r = request(&dir, &commit, platform, fail_ready, out);
         r.service = Service::Hostkeeper;
         r.unit = unit.then(|| dir.join("hostkeeper.service"));
+        r.trusted_root = Some(dir.join("trusted_root.json"));
         r
     };
     refuse(

@@ -39,6 +39,8 @@
 //!   (fetch, prove, unpack and seal, with the one table that maps their failures onto
 //!   [`refusal`]), and [`installed`] what the host runs.
 //! - [`observer`]: what the admin `Status` reports of a running service.
+//! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason the
+//!   admin `Status` reports of it.
 //! - [`admin`] and [`socket`]: the root-only admin socket (`hostkeeper.local.v1.Admin`).
 //! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper ctl`, which it hands to
 //!   `hostkeeper-ctl`, `hostkeeper ci`, and the plumbing verbs `self-update-fallback` and
@@ -86,6 +88,7 @@ pub mod stamp;
 pub mod start;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod trusted_root;
 pub mod uninstall;
 pub mod unix_clock;
 pub mod verb;

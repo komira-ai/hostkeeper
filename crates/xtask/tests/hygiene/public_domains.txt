@@ -13,8 +13,12 @@ crates.io
 githubusercontent.com
 slsa.dev
 in-toto.io
-# The Sigstore transparency log a captured attestation bundle's checkpoint names (rekor.sigstore.dev).
+# The Sigstore transparency log a captured attestation bundle's checkpoint names (rekor.sigstore.dev),
+# and the logs and authorities of the public-good trusted root (packaging/sigstore/trusted_root.json).
 sigstore.dev
+# GitHub's own Sigstore certificate and timestamp authorities, which the trusted root names
+# (fulcio.githubapp.com, timestamp.githubapp.com).
+githubapp.com
 
 # The document type of an Apple property list, which every plist hostkeeper-launchd writes
 # declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
