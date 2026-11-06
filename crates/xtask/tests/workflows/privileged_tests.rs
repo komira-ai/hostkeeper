@@ -506,6 +506,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         targets["privileged"],
         BTreeSet::from([
             "observer".to_owned(),
+            "self_update".to_owned(),
             "transient_unit".to_owned(),
             "unit_control".to_owned()
         ])
