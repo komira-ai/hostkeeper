@@ -834,7 +834,10 @@ files. The Rollout page sets a service&rsquo;s desired version with the operator
 for a role, and the Host page lists the services assigned to the host from <code>Services.List</code>. The Fleet
 page and the Rollout page&rsquo;s force dialog read every page of <code>Hosts.List</code>. The UI tests run the app
 in a JavaScript engine against a fake gateway
-(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-ui-tests">crates/hostkeeper-ui-tests</a>);
+(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-ui-tests">crates/hostkeeper-ui-tests</a>),
+and send every call the app lists in <code>ui/calls.json</code> to the real coordinator, over the gateway and over gRPC
+with an operator&rsquo;s token, failing on a call it does not serve or refuses to that token
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-ui-tests/tests/real_router.rs">tests/real_router.rs</a>);
 the Fleet and Host pages are also tested on a <code>Hosts.List</code> reply that a test of the coordinator holds equal to its answer. <a href="#ui">The lab section</a> draws each page.</p>
 <p><strong>Wire compatibility.</strong> <code>the_protos_keep_every_rule_against_the_baseline</code> compares the compiled
 descriptors with a committed baseline and fails on any removed, renumbered, renamed or retyped
