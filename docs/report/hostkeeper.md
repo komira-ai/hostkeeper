@@ -26,7 +26,7 @@ host. Before anything else, an engineer should know these facts:
 | Assignment of services to roles and hosts; `install` and `uninstall` orders | Built in the coordinator; sent only to a daemon that announces `install-v1`, which the shipped daemon does not |
 | Daemon: start-up, boot pass, step runner, dead-man, admin socket, enrollment loop | Built and running in the shipped binary |
 | Daemon: package fetch, attestation check, unpack, placed-path linking, force, prune | Built; reachable only through an order |
-| Daemon heartbeat to the coordinator | **Not wired**: the shipped daemon gives its heartbeat loop `NoLink`, so it sends no heartbeat and receives no order |
+| Daemon heartbeat to the coordinator | Built and running in the shipped binary: JSON, then gRPC once the coordinator advertises it, over mutual TLS; `update` and `force` orders reach the host |
 | Linux unit control (daemon-reload, start, stop) for linked units; the step launcher is wired | **Not wired**: the Linux adapter set uses `Unwired`, which refuses every call |
 | macOS daemon under launchd | Built; a device run starts it under launchd and asks its status; no update has run on a Mac |
 | Releases | Published from `main` as GitHub releases by `release.yml`; no hosted release channel |
@@ -87,7 +87,7 @@ flowchart LR
   PRIV --> FILES
   HB --> CA
   D -- "Coordinator.Enroll, Coordinator.Poll, Coordinator.Renew" --> HB
-  D -. "Coordinator.Heartbeat: client not wired on main" .-> HB
+  D -- "Coordinator.Heartbeat, or POST /v1/heartbeat until gRPC is advertised" --> HB
   D -- "fetch and verify, only inside an order" --> RC
   D --> STEP
   D --> PKG
@@ -129,18 +129,17 @@ The coordinator cannot change it. The daemon's local interface is a unix socket 
 ([crates/hostkeeper-daemon/src/admin.rs](../../crates/hostkeeper-daemon/src/admin.rs)).
 `hostkeeper ctl` has no command for it, so a root user needs a gRPC client of their own.
 
-**The gap that matters most.** The heartbeat client exists in
+**The gap that matters most.** The heartbeat client is in
 [crates/hostkeeper-link](../../crates/hostkeeper-link), with gRPC over mutual TLS
 (`GrpcMtlsLink`), a JSON form and one that negotiates between them. Each call is bounded to
 <span data-cell="c-call" data-source="crates/hostkeeper-link/src/dial.rs" data-item="CALL_SECS">10 s</span>.
-The shipped daemon does not use it. `host_links` gives the heartbeat loop `NoLink`, whose every
-call fails as unsupported
+The shipped daemon uses the negotiating one: `host_links` gives the heartbeat loop `HostLink`,
+which makes it at the first heartbeat of an enrolled host, to the config's `coordinator`, pinned
+to its `ca_sha256`, with the certificate and CA bundle of the pki directory
 ([crates/hostkeeper-daemon/src/cli.rs](../../crates/hostkeeper-daemon/src/cli.rs),
-[crates/hostkeeper-daemon/src/links.rs](../../crates/hostkeeper-daemon/src/links.rs)). The
-enrollment loop is wired and talks to the coordinator. The heartbeat loop runs but sends nothing,
-so no order from the coordinator reaches a host built from `main`. Wiring a link would not be
-enough for every order either: the heartbeat loop runs only `update` and `force` orders and drops
-the rest, and the daemon announces neither `install-v1` nor `abort-v1`, the features the
+[crates/hostkeeper-daemon/src/links.rs](../../crates/hostkeeper-daemon/src/links.rs)). Both loops
+are wired and talk to the coordinator. The link alone is not enough for every order: the
+heartbeat loop runs only `update` and `force` orders and drops the rest, and the daemon announces neither `install-v1` nor `abort-v1`, the features the
 coordinator requires before it sends an install, an uninstall or an abort
 ([crates/hostkeeper-link/src/beat.rs](../../crates/hostkeeper-link/src/beat.rs),
 [crates/hostkeeper-link/src/order.rs](../../crates/hostkeeper-link/src/order.rs)).
@@ -528,7 +527,7 @@ sequenceDiagram
   participant D as daemon
   participant R as release channel
   participant H as hook, one unit per step
-  C-->>D: update order in a heartbeat reply, not delivered on main, see NoLink
+  C-->>D: update order in a heartbeat reply
   D->>R: GET index.json, the package and its attestation bundle
   D->>D: size and digest against the index and the order, gh attestation verify, unpack and seal
   D->>H: prepare
@@ -730,7 +729,6 @@ That test asserts behaviour, not time.
 
 **What the farm run needs first, from the code on `main`:**
 
-- a heartbeat link in the shipped daemon in place of `NoLink`;
 - a systemd unit control in the Linux adapter set in place of `Unwired`;
 - a daemon certificate request the CA accepts (see [Identity and enrollment](#identity-and-enrollment));
 - a first-install path the daemon takes: the coordinator orders `install` only to a daemon that
@@ -742,9 +740,9 @@ That test asserts behaviour, not time.
 
 What is not built, plainly:
 
-- **The daemon does not talk to the coordinator after enrollment,** and on Linux the unit control
-  (daemon-reload, start, stop) is not wired; the step launcher is. Together these mean no host
-  built from `main` can be updated by the coordinator.
+- **On Linux the unit control** (daemon-reload, start, stop) is not wired; the step launcher is.
+  The heartbeat brings a host built from `main` its `update` and `force` orders, but an update
+  that must stop or start a unit does not finish there.
 - **Orders the daemon takes:** the coordinator orders `install` and `uninstall` for assigned and
   unassigned services, but only to a daemon that announces `install-v1`. The shipped daemon does
   not, and its heartbeat loop runs only `update` and `force`. `Hosts.Abort` likewise reaches only a
