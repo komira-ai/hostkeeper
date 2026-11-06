@@ -21,14 +21,14 @@ use hostkeeper_placed::testing::{Event, FakeUnitControl, FaultFs, FsWrite, UnitC
 use support::{OWN, Rig};
 
 /// The drop-in, as `hostkeeper_steps::selfupdate::main_dropin` pins it.
-const DROPIN_TEXT: &str = "[Unit]\nOnFailure=hostkeeper-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\n";
+const DROPIN_TEXT: &str = "[Unit]\nOnFailure=hostkeeper-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n";
 
 /// The fallback unit of a host whose binary directory is `dir`, as
 /// `hostkeeper_steps::selfupdate::fallback_unit` pins it.
 fn fallback_text(dir: &Path) -> String {
     let dir = dir.display();
     format!(
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\n\n[Service]\nType=oneshot\nExecStart={dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed hostkeeper.service\nExecStartPost=/usr/bin/systemctl start --no-block hostkeeper.service\n"
+        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-{dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed hostkeeper.service\nExecStartPost=/usr/bin/systemctl start --no-block hostkeeper.service\n"
     )
 }
 

@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_daemon::cli::{HostFiles, host_enroller, host_links, image_of};
 use hostkeeper_daemon::links::{Links, NO_ENROLLMENT};
-use hostkeeper_daemon::start;
 use hostkeeper_daemon::testing::{Ending, FakeNotifier, Log, Notice, Signal};
 use hostkeeper_daemon::unix_clock::SystemUnixClock;
+use hostkeeper_daemon::{NoWatchdog, start};
 use hostkeeper_enroll::{
     CoordinatorEnroll, EnrollAnswer, EnrollRequest, LinuxClaims, OsEntropy, PkiDir, Poll,
     PollAnswer, RenewAnswer, RenewRequest, Settings as EnrollSettings, SystemWallClock,
@@ -89,6 +89,7 @@ fn links_with(
         stop: StopFlag::default(),
         enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
         renewal: hostkeeper_enroll::RenewalState::default(),
+        watchdog: Box::new(NoWatchdog),
     }
 }
 
@@ -309,7 +310,13 @@ fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
     let daemon = Arc::new(daemon);
     let files = files_under(rig.scratch.path());
     let period = NonZeroU64::new(7).expect("not zero");
-    let links = host_links(&daemon, &files, period, PlatformKind::Linux);
+    let links = host_links(
+        &daemon,
+        &files,
+        period,
+        PlatformKind::Linux,
+        Box::new(NoWatchdog),
+    );
     assert_eq!(links.period, period);
     assert_eq!(
         links.certs.current(),

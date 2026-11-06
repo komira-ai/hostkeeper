@@ -443,7 +443,13 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
     let (dispatch, jobs) = kept();
     let links = hostkeeper_daemon::links::Links {
         dispatch,
-        ..host_links(&daemon, &files, PERIOD, PlatformKind::Linux)
+        ..host_links(
+            &daemon,
+            &files,
+            PERIOD,
+            PlatformKind::Linux,
+            Box::new(hostkeeper_daemon::NoWatchdog),
+        )
     };
     let mut heartbeater = links.heartbeater(&daemon);
 
@@ -496,7 +502,13 @@ fn the_link_of_host_links_answers_the_coordinators_reply() {
     ));
     let files = files_under(rig.scratch.path());
     enroll(&files.pki, &ca.host(), &ca);
-    let links = host_links(&daemon, &files, PERIOD, PlatformKind::Linux);
+    let links = host_links(
+        &daemon,
+        &files,
+        PERIOD,
+        PlatformKind::Linux,
+        Box::new(hostkeeper_daemon::NoWatchdog),
+    );
 
     let reply = links
         .link
@@ -558,7 +570,13 @@ fn a_coordinator_whose_ca_is_not_the_pinned_one_hears_no_heartbeat() {
     ));
     let files = files_under(rig.scratch.path());
     enroll(&files.pki, &ca.host(), &ca);
-    let links = host_links(&daemon, &files, PERIOD, PlatformKind::Linux);
+    let links = host_links(
+        &daemon,
+        &files,
+        PERIOD,
+        PlatformKind::Linux,
+        Box::new(hostkeeper_daemon::NoWatchdog),
+    );
 
     assert_eq!(
         links.link.heartbeat(&identity_of(&ca.host()), &bare_beat()),
@@ -588,7 +606,13 @@ fn a_host_not_enrolled_makes_no_link_and_dials_nothing() {
     ));
     let daemon = Arc::new(daemon);
     let files = files_under(rig.scratch.path());
-    let links = host_links(&daemon, &files, PERIOD, PlatformKind::Linux);
+    let links = host_links(
+        &daemon,
+        &files,
+        PERIOD,
+        PlatformKind::Linux,
+        Box::new(hostkeeper_daemon::NoWatchdog),
+    );
     let mut heartbeater = links.heartbeater(&daemon);
 
     assert_eq!(heartbeater.beat_once(), BeatOutcome::NotEnrolled);

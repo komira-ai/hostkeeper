@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use hostkeeper_daemon::boot::{BootStep, Outcome};
-use hostkeeper_daemon::cli::{self, Cli, Command, EXIT_CONFIG, EXIT_FAILED};
+use hostkeeper_daemon::cli::{self, Cli, Command, EXIT_CONFIG, EXIT_FAILED, SystemdVars};
 use hostkeeper_daemon::start::{self, StartError};
 use hostkeeper_daemon::testing::{AdditiveFault, FakeNotifier, Log};
 use hostkeeper_daemon::{NoNotifier, ReadyNotifier, Refusal, SystemdNotifier};
@@ -297,7 +297,7 @@ fn the_notify_systemd_flag_needs_the_socket_systemd_sets() {
         }
         Cli::parse_from(args)
     };
-    let code = cli::run_with(args(true), None);
+    let code = cli::run_with(args(true), SystemdVars::default());
     assert_eq!(
         format!("{code:?}"),
         format!("{:?}", ExitCode::from(EXIT_FAILED))
@@ -310,7 +310,13 @@ fn the_notify_systemd_flag_needs_the_socket_systemd_sets() {
         "--notify-systemd was given, but no notify socket was set for the daemon (NOTIFY_SOCKET)"
     );
     let socket = Some(OsString::from(rig.scratch.path().join("n.sock")));
-    let code = cli::run_with(args(true), socket);
+    let code = cli::run_with(
+        args(true),
+        SystemdVars {
+            notify_socket: socket,
+            watchdog_usec: None,
+        },
+    );
     assert_eq!(
         format!("{code:?}"),
         format!("{:?}", ExitCode::from(EXIT_CONFIG))

@@ -97,9 +97,9 @@ to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper 
 - `not enrolled: waiting for /etc/updater/pki/current`: the heartbeat loop has no certificate yet
   and sends nothing.
 - `/etc/hostkeeper/hostkeeper.toml: the daemon config's <key> <why>`: the config does not load
-  (exit 3); nothing on the host changed. The loader reports one key at a time. After three
-  failed starts within 300 seconds systemd stops trying: fix the file, then run
-  `systemctl reset-failed hostkeeper.service` and start the unit again.
+  (exit 3); nothing on the host changed. The loader reports one key at a time. systemd keeps
+  starting the daemon again, so once the file is fixed the next start loads it; nothing needs
+  resetting.
 - `the coordinator presents a CA whose SHA-256 is <hex>, not the pinned ca_sha256; nothing was
   sent`: `ca_sha256` or `coordinator` is wrong.
 - `the coordinator could not be reached: Enroll was answered with the status <code>: "<token>"`:

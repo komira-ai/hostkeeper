@@ -22,9 +22,9 @@
 //! update at its start ([`crate::selfupdate`]) has run, and is not put back either, even when that
 //! start fails later. On Linux systemd runs the
 //! fallback unit whenever the daemon's unit fails its start limit, for any reason (a config that
-//! does not load, three restarts within the window); the verb then exits [`EXIT_FAILED`], the
-//! unit's `ExecStartPost=` lines do not run, and the daemon's unit stays failed until
-//! `systemctl reset-failed`, as it did before the fallback was installed.
+//! does not load, three restarts within the window); the verb then exits [`EXIT_FAILED`], which
+//! the unit ignores (`ExecStart=-`), and its `ExecStartPost=` lines still reset the daemon's unit
+//! and start it again: the daemon is retried for good, three starts at a time.
 //!
 //! On macOS the fallback runs only when all of these hold, and otherwise nothing is written:
 //!

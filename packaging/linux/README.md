@@ -7,7 +7,7 @@ image, network boot, signing and publishing the packages are not here.
 
 | file | what |
 |---|---|
-| `hostkeeper.service` | the unit, the daemon's only one: the daemon as root, `Type=notify`, with its paths as flags, started from the binary directory of its own update with `Restart=always`; it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other. hostkeeper's own package carries it too |
+| `hostkeeper.service` | the unit, the daemon's only one: the daemon as root, `Type=notify`, with its paths as flags, started from the binary directory of its own update with `Restart=always` and no start limit of its own, and restarted by a 60-second watchdog its heartbeat loop feeds (`WatchdogSec=`, four heartbeat periods); it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other. hostkeeper's own package carries it too |
 | `hostkeeper.tmpfiles.conf` | the daemon's directories and their modes, as `/usr/lib/tmpfiles.d/hostkeeper.conf` |
 | `hostkeeper.toml.template` | the daemon config with a `@@NAME@@` placeholder in each value that belongs to a site |
 | `nfpm.yaml` | the deb and the rpm, for nfpm |
@@ -44,8 +44,12 @@ start runs the binary the last update chose.
   A new binary that confirmed its update at its start has run, and is not put back even when
   that start fails later.
   When no update is waiting for its restart (a config that does not load, three restarts for
-  another reason), the fallback changes nothing and the unit stays failed until `systemctl
-  reset-failed hostkeeper.service`.
+  another reason), the fallback puts nothing back and still starts the daemon again, so the
+  daemon is retried for good, three starts at a time (`RestartMode=direct` keeps systemd from
+  running the fallback before the three starts are spent, and the fallback has no start limit
+  of its own); before the daemon has first been ready
+  there is no drop-in, and the unit, which has no start limit of its own, retries it every
+  second.
 - Once `current` exists, upgrading the deb or the rpm replaces `/usr/bin/hostkeeper` and does not
   change the binary the daemon runs: hostkeeper's own update does that. A self-update also links
   the unit its package carries in `/etc/systemd/system/`, which then takes the place of the one
@@ -98,8 +102,8 @@ host's config. Whoever installs the package places it:
 The file holds no secret. The config loader (`crates/hostkeeper-config`) refuses it while a
 placeholder is left, while it is owned by another account or writable by the group or others,
 or when it holds a key it does not know, and a daemon whose config does not load does not start
-(design section 4.1); systemd then stops trying after three failed starts within 300 seconds
-(`systemctl reset-failed hostkeeper.service` clears that). What the daemon does on a host that
+(design section 4.1); systemd starts it again for good (see above), so it starts once the
+config is fixed, with nothing to reset. What the daemon does on a host that
 has a config but no certificate yet, its enrollment, is design section 5.7. The whole procedure
 for one node, from its inventory record through installing, filling the config and starting the
 unit by hand to its approval and first heartbeat, is

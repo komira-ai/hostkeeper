@@ -58,8 +58,9 @@
 //!   the service observer of the heartbeat loop (`hostkeeper_link`): its order becomes a protobuf
 //!   `Order` for [`Daemon::order`], and the daemon's reply the verdict the loop reports.
 //! - [`links`]: the enrollment loop (`hostkeeper_enroll`) and the heartbeat loop, which
-//!   [`start::serve`] starts, in that order, once the daemon is ready; [`unix_clock`] is the
-//!   wall clock of the loop's deferrals, the daemon's one read of it.
+//!   [`start::serve`] starts, in that order, once the daemon is ready, and which sends the
+//!   watchdog notice ([`notify::Watchdog`]) after each heartbeat; [`unix_clock`] is the wall
+//!   clock of the loop's deferrals, the daemon's one read of it.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
 //! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
@@ -114,6 +115,8 @@ pub use executor::{
     ServiceStatus, StoreSeam,
 };
 pub use files::WriteStep;
-pub use notify::{NoNotifier, ReadyNotifier, SystemdNotifier};
+pub use notify::{
+    NoNotifier, NoWatchdog, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
+};
 pub use refusal::Refusal;
 pub use verb::Verb;

@@ -12,6 +12,12 @@
 //! the boot pass does. The heartbeat loop works on the daemon through the four adapters of
 //! [`crate::link_adapters`] ([`Links::heartbeater`]).
 //!
+//! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
+//! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends
+//! that notice: no thread or timer of its own. So a heartbeat that never returns stops the
+//! notices, and systemd, past the unit's `WatchdogSec=`, restarts the daemon. A notice that
+//! cannot be sent is logged, and the loop goes on.
+//!
 //! The loops stop when [`Links::stop`] is set: the enrollment loop before its next step, the
 //! heartbeat loop at the end of its wait (`hostkeeper_link::ClockSleeper`). An order running on
 //! a worker goes on; its verdict is in its step record.
@@ -48,6 +54,7 @@ use crate::link_adapters::{
     DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal,
 };
 use crate::node::NodeState;
+use crate::notify::Watchdog;
 
 pub use hostkeeper_enroll::RenewalState;
 pub use hostkeeper_link::Log;
@@ -70,6 +77,9 @@ pub const OPEN_RETRY_FIRST_SECS: u64 = RETRY_SECS;
 /// again within five minutes of the cause going away, and one that cannot make it at all tries
 /// twelve times an hour.
 pub const OPEN_RETRY_MAX_SECS: u64 = 300;
+
+/// The line the heartbeat loop logs when its watchdog notice was not sent, before the error.
+pub const NO_WATCHDOG_NOTICE: &str = "error: the watchdog notice was not sent: ";
 
 /// What the two loops need besides the daemon.
 pub struct Links {
@@ -97,6 +107,8 @@ pub struct Links {
     /// Stops the loops; the enrollment loop reads it before each step. The production sleeper
     /// reads the same flag.
     pub stop: StopFlag,
+    /// Told after each heartbeat that the heartbeat loop is alive.
+    pub watchdog: Box<dyn Watchdog>,
 }
 
 impl Links {
@@ -115,9 +127,11 @@ impl Links {
             renewal,
             dispatch,
             stop,
+            watchdog,
             ..
         } = self;
         let enrolling = Arc::clone(daemon);
+        let beat_log = Arc::clone(&log);
         dispatch.start(Box::new(move || {
             let loop_ports = EnrollLoop {
                 log: log.as_ref(),
@@ -133,6 +147,7 @@ impl Links {
             let node = &beating.ctx().node;
             heartbeater.run(&*sleeper, &mut |outcome| {
                 node.beat(outcome, clock.unix_secs());
+                alive(&*watchdog, beat_log.as_ref());
             });
         }));
     }
@@ -163,6 +178,14 @@ impl Links {
                 log: Arc::clone(&self.log),
             },
         )
+    }
+}
+
+/// The watchdog notice the heartbeat loop sends after each heartbeat, whatever it came to; a
+/// notice that cannot be sent is logged ([`NO_WATCHDOG_NOTICE`]) and the loop goes on.
+fn alive(watchdog: &dyn Watchdog, log: &dyn Log) {
+    if let Err(e) = watchdog.alive() {
+        log.line(&format!("{NO_WATCHDOG_NOTICE}{e}"));
     }
 }
 

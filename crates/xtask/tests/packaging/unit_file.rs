@@ -1,6 +1,9 @@
-//! The unit, `hostkeeper.service`: its command lines, its account, its restart policy and start
-//! limits, the units it conflicts with and the keys it sets.
+//! The unit, `hostkeeper.service`: its command lines, its account, its restart policy, its lack
+//! of a start limit of its own and its watchdog, the units it conflicts with and the keys it sets.
 
+use hostkeeper_link::CALL_SECS;
+
+use crate::daemon_flags::parse_flags;
 use crate::unit::{self, Unit};
 use crate::{UNIT, altered, read, refuses};
 
@@ -59,7 +62,6 @@ const UNIT_KEYS: [(&str, &[&str]); 3] = [
             "Wants",
             "Conflicts",
             "StartLimitIntervalSec",
-            "StartLimitBurst",
         ],
     ),
     (
@@ -71,6 +73,8 @@ const UNIT_KEYS: [(&str, &[&str]); 3] = [
             "ExecStart",
             "Restart",
             "RestartSec",
+            "RestartMode",
+            "WatchdogSec",
             "RuntimeDirectory",
             "RuntimeDirectoryMode",
         ],
@@ -388,11 +392,10 @@ fn check_limits(text: &str) -> Result<(), String> {
             ));
         }
     }
-    let burst = unit.single("Unit", "StartLimitBurst")?;
     let interval = unit.single("Unit", "StartLimitIntervalSec")?;
-    if (burst, interval) != ("3", "300") {
+    if interval != "0" {
         return Err(format!(
-            "StartLimitBurst={burst} within StartLimitIntervalSec={interval}; design section 6.6 assumes 3 starts within 300 seconds"
+            "StartLimitIntervalSec={interval}: the unit has no start limit of its own (0); the self-update drop-in sets it"
         ));
     }
     let restart = unit.single("Service", "Restart")?;
@@ -407,56 +410,74 @@ fn check_limits(text: &str) -> Result<(), String> {
             "RestartSec={delay}, not 1, the delay of the self-update drop-in"
         ));
     }
+    let mode = unit.single("Service", "RestartMode")?;
+    if mode != "direct" {
+        return Err(format!(
+            "RestartMode={mode}, not direct: OnFailure= would run the fallback at every failed start, not at the start limit"
+        ));
+    }
     let timeout = unit.single("Service", "TimeoutStartSec")?;
     if timeout != "infinity" {
         return Err(format!(
             "TimeoutStartSec={timeout}: systemd would stop a daemon whose boot pass runs longer"
         ));
     }
+    check_watchdog(&unit)
+}
+
+/// The heartbeat period of the unit's command line, in seconds: its `--heartbeat-secs`, or the
+/// binary's default, as the binary's own flag parser reads the line.
+fn heartbeat_secs(unit: &Unit) -> Result<u64, String> {
+    let words = unit::command_words(unit.single("Service", "ExecStart")?)?;
+    Ok(parse_flags(&words)?.link.heartbeat_secs.get())
+}
+
+/// The watchdog: `WatchdogSec=` in whole seconds, at least three heartbeat periods of the
+/// command line, and longer than one period and the longest heartbeat call together.
+fn check_watchdog(unit: &Unit) -> Result<(), String> {
+    let value = unit.single("Service", "WatchdogSec")?;
+    let watchdog: u64 = value
+        .parse()
+        .map_err(|_| format!("WatchdogSec={value} is not a whole number of seconds"))?;
+    let period = heartbeat_secs(unit)?;
+    let least = (3 * period).max(period + CALL_SECS + 1);
+    if watchdog < least {
+        return Err(format!(
+            "WatchdogSec={watchdog} is under {least} seconds: a heartbeat every {period} seconds, each call up to {CALL_SECS}, would be killed while it is healthy"
+        ));
+    }
     Ok(())
 }
 
-/// Catches start limits other than the ones the self-update fallback of design section 6.6 is
-/// written against (3 starts within 300 seconds), limits put where systemd does not read them, a
-/// restart policy that does not restart a daemon that exited cleanly for its own update
-/// (`on-failure`, the policy that left a self-updated host down), a restart delay other than the
-/// drop-in's, or a start timeout that would stop a daemon during a long boot pass (design section
-/// 6.5).
+/// Catches a start limit in the unit itself (which, before the daemon has first been ready and
+/// written the self-update drop-in, would leave a daemon that fails three starts failed with no
+/// fallback to start it again), limits put where systemd does not read them, a restart policy
+/// that does not restart a daemon that exited cleanly for its own update (`on-failure`, the
+/// policy that left a self-updated host down), a restart delay other than the drop-in's, a start
+/// timeout that would stop a daemon during a long boot pass (design section 6.5), and a
+/// watchdog that is missing, not in whole seconds, or too short for the heartbeat the command
+/// line runs: under three periods, or under one period and the longest heartbeat call.
 #[test]
-fn unit_restart_limits_match_the_self_update_fallback_assumption() {
+fn unit_restarts_always_with_no_start_limit_of_its_own_and_a_watchdog_over_the_heartbeat() {
     let text = read(UNIT);
     assert_eq!(check_limits(&text), Ok(()));
-    let limits = "StartLimitIntervalSec=300\nStartLimitBurst=3\n";
+    let limit = "StartLimitIntervalSec=0\n";
     let moved = altered(
-        &altered(&text, limits, ""),
+        &altered(&text, limit, ""),
         "Restart=always\n",
-        &format!("Restart=always\n{limits}"),
+        &format!("Restart=always\n{limit}"),
     );
+    let flags = "--notify-systemd\n";
     let cases = [
         (
-            altered(&text, "StartLimitBurst=3", "StartLimitBurst=5"),
-            "StartLimitBurst=5",
-        ),
-        (
             altered(
                 &text,
+                "StartLimitIntervalSec=0",
                 "StartLimitIntervalSec=300",
-                "StartLimitIntervalSec=600",
             ),
-            "StartLimitIntervalSec=600",
+            "StartLimitIntervalSec=300: the unit has no start limit",
         ),
-        (
-            altered(
-                &text,
-                "StartLimitIntervalSec=300",
-                "StartLimitIntervalSec=5min",
-            ),
-            "StartLimitIntervalSec=5min",
-        ),
-        (
-            altered(&text, "StartLimitBurst=3\n", ""),
-            "has no StartLimitBurst=",
-        ),
+        (altered(&text, limit, ""), "has no StartLimitIntervalSec="),
         (moved, "is in [Service]"),
         (
             altered(&text, "TimeoutStartSec=infinity", "TimeoutStartSec=90"),
@@ -479,8 +500,58 @@ fn unit_restart_limits_match_the_self_update_fallback_assumption() {
             "RestartSec=30, not 1",
         ),
         (altered(&text, "RestartSec=1\n", ""), "has no RestartSec="),
+        (
+            altered(&text, "RestartMode=direct\n", "RestartMode=normal\n"),
+            "RestartMode=normal, not direct",
+        ),
+        (
+            altered(&text, "RestartMode=direct\n", ""),
+            "has no RestartMode=",
+        ),
+        (
+            altered(&text, "WatchdogSec=60\n", ""),
+            "has no WatchdogSec=",
+        ),
+        (
+            altered(&text, "WatchdogSec=60", "WatchdogSec=1min"),
+            "WatchdogSec=1min is not a whole number",
+        ),
+        (
+            altered(&text, "WatchdogSec=60", "WatchdogSec=44"),
+            "WatchdogSec=44 is under 45 seconds",
+        ),
+        (
+            altered(&text, flags, "--notify-systemd --heartbeat-secs 30\n"),
+            "WatchdogSec=60 is under 90 seconds",
+        ),
+        (
+            altered(&text, flags, "--notify-systemd --heartbeat-secs 0\n"),
+            "--heartbeat-secs",
+        ),
     ];
     refuses(check_limits, &cases);
+    // Three periods is enough, at the default heartbeat and at one the command line sets.
+    let at_three = altered(&text, "WatchdogSec=60", "WatchdogSec=45");
+    assert_eq!(check_limits(&at_three), Ok(()));
+    let set = altered(&text, flags, "--notify-systemd --heartbeat-secs 20\n");
+    assert_eq!(check_limits(&set), Ok(()));
+    // A short heartbeat needs a watchdog over one period and the longest call, not three
+    // periods alone.
+    let short = altered(
+        &altered(&text, flags, "--notify-systemd --heartbeat-secs 2\n"),
+        "WatchdogSec=60",
+        "WatchdogSec=12",
+    );
+    assert_eq!(
+        check_limits(&short),
+        Err(format!(
+            "WatchdogSec=12 is under 13 seconds: a heartbeat every 2 seconds, each call up to {CALL_SECS}, would be killed while it is healthy"
+        ))
+    );
+    assert_eq!(
+        check_limits(&altered(&short, "WatchdogSec=12", "WatchdogSec=13")),
+        Ok(())
+    );
 }
 
 /// Keys that would start a kbf unit with this one, or tie this unit's life to it.
@@ -649,10 +720,30 @@ fn unit_holds_only_the_keys_the_design_names() {
         (
             altered(
                 &text,
-                "StartLimitBurst=3\n",
-                "StartLimitBurst=3\nOnFailure=hostkeeper-fallback.service\n",
+                "StartLimitIntervalSec=0\n",
+                "StartLimitIntervalSec=0\nOnFailure=hostkeeper-fallback.service\n",
             ),
             "[Unit] OnFailure= is not",
+        ),
+        (
+            altered(
+                &text,
+                "StartLimitIntervalSec=0\n",
+                "StartLimitIntervalSec=0\nStartLimitBurst=3\n",
+            ),
+            "[Unit] StartLimitBurst= is not",
+        ),
+        (
+            altered(
+                &text,
+                "WatchdogSec=60\n",
+                "WatchdogSec=60\nWatchdogSignal=SIGKILL\n",
+            ),
+            "[Service] WatchdogSignal= is not",
+        ),
+        (
+            altered(&text, "WatchdogSec=60\n", ""),
+            "[Service] has no WatchdogSec=",
         ),
         (
             altered(

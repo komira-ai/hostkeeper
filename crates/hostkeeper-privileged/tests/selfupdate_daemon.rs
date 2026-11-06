@@ -146,7 +146,9 @@ fn the_main_unit_is_the_real_unit_with_the_tests_directories() {
         "Type=notify",
         "Restart=always",
         "RestartSec=1",
-        "StartLimitBurst=3",
+        "RestartMode=direct",
+        "StartLimitIntervalSec=0",
+        "WatchdogSec=60",
     ] {
         assert!(unit.lines().any(|l| l == line), "{line} is kept");
     }

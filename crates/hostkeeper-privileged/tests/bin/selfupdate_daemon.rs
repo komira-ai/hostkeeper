@@ -49,13 +49,13 @@ use clap::Parser;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::adapters::Adapters;
-use hostkeeper_daemon::cli::{self, Cli, Command, DaemonFlags, HostFiles};
+use hostkeeper_daemon::cli::{self, Cli, Command, DaemonFlags, HostFiles, SystemdVars};
 use hostkeeper_daemon::links::{DaemonLog, Links};
 use hostkeeper_daemon::packages::{PackageError, Packages, VersionDir};
 use hostkeeper_daemon::start::{self, StartError};
 use hostkeeper_daemon::unix_clock::SystemUnixClock;
 use hostkeeper_daemon::verb::PackageDigest as OrderDigest;
-use hostkeeper_daemon::{Daemon, Ports};
+use hostkeeper_daemon::{Daemon, Ports, Watchdog};
 use hostkeeper_launchd::Platform;
 use hostkeeper_link::{
     CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Heartbeat, LinkError,
@@ -96,7 +96,7 @@ fn main() -> ExitCode {
     };
     match cli.command {
         Command::Daemon(flags) => daemon_verb(&fixture, &flags),
-        command => cli::run_with(Cli { command }, notify_socket()),
+        command => cli::run_with(Cli { command }, systemd_vars()),
     }
 }
 
@@ -192,20 +192,25 @@ fn hold(file: &Path) -> bool {
     }
 }
 
-/// The address of the notify socket systemd set for the process: what `hostkeeper_daemon::cli`
-/// reads for `--notify-systemd`.
+/// What systemd set for the process, the notify socket's address and the watchdog's timeout:
+/// what `hostkeeper_daemon::cli` reads for `--notify-systemd`.
 #[expect(
     clippy::disallowed_methods,
-    reason = "NOTIFY_SOCKET is the platform-set marker of a Type=notify unit, which AGENTS.md S2 allows; the shipped binary reads it the same way"
+    reason = "NOTIFY_SOCKET and WATCHDOG_USEC are the platform-set markers of a Type=notify unit and of its watchdog, which AGENTS.md S2 allows; the shipped binary reads them the same way"
 )]
-fn notify_socket() -> Option<OsString> {
-    std::env::var_os("NOTIFY_SOCKET")
+fn systemd_vars() -> SystemdVars {
+    SystemdVars {
+        notify_socket: std::env::var_os(cli::NOTIFY_SOCKET),
+        watchdog_usec: std::env::var_os(cli::WATCHDOG_USEC),
+    }
 }
 
 /// Starts the shipped daemon with the fixture's package store and link, and serves it until it
 /// asks to exit for its own update, as `hostkeeper_daemon::cli` does with the host's.
 fn run_daemon(dir: &Path, flags: &DaemonFlags, own: HostkeeperVersion) -> Result<(), StartError> {
-    let notifier = cli::notifier(flags, notify_socket())?;
+    let systemd = systemd_vars();
+    let watchdog = cli::watchdog(flags, &systemd);
+    let notifier = cli::notifier(flags, systemd.notify_socket)?;
     let settings = flags.settings();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -230,14 +235,21 @@ fn run_daemon(dir: &Path, flags: &DaemonFlags, own: HostkeeperVersion) -> Result
             started.daemon(),
             &dir.join("link"),
             flags.link.heartbeat_secs,
+            watchdog,
         );
         start::serve(started, links).await
     })
 }
 
 /// The loops of the daemon with the link of [`FileLink`]: no enrollment (the loop tries again on
-/// the daemon's clock, as the shipped daemon's does), a certificate that the link never presents, the loop's own clock, sleeper and workers as the shipped daemon's.
-fn file_links(daemon: &Arc<Daemon>, dir: &Path, period: NonZeroU64) -> Links {
+/// the daemon's clock, as the shipped daemon's does), a certificate that the link never presents, the loop's own clock, sleeper and workers as the shipped daemon's, and the
+/// shipped daemon's watchdog (`cli::watchdog`), which the unit's `WatchdogSec=` waits for.
+fn file_links(
+    daemon: &Arc<Daemon>,
+    dir: &Path,
+    period: NonZeroU64,
+    watchdog: Box<dyn Watchdog>,
+) -> Links {
     let stop = StopFlag::default();
     let log: Arc<dyn Log> = Arc::new(DaemonLog::new(Arc::clone(daemon)));
     Links {
@@ -259,6 +271,7 @@ fn file_links(daemon: &Arc<Daemon>, dir: &Path, period: NonZeroU64) -> Links {
             stop.clone(),
         )),
         renewal: hostkeeper_daemon::links::RenewalState::default(),
+        watchdog,
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,
