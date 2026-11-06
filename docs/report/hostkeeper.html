@@ -966,10 +966,13 @@ loop announces it and runs the abort beside the order it stops, whose verdict th
 halt; on a host the coordinator cannot reach, an abort is done through the admin socket.</p>
 <p><strong>The audit trail.</strong> Every change to the ops store is one entry: who (operator token name, <code>ci</code> or
 <code>coordinator</code>), the action, the service, the host and the reason. The entries go to an append-only
-audit file, one JSON line each, fsynced, never rotated. The file is a copy, not a gate: a line
-that cannot be appended is logged as an error and the change stands. The ops file keeps the last
+audit file, one JSON line each, fsynced. The file is rotated by size: a full file is sealed as a
+numbered segment on a line boundary, the numbers go on across files, and the oldest segments past
+a retained count are deleted. A change is not made without its line: when it cannot be appended
+the call is refused with <code>audit_unavailable</code>, except <code>Hosts.Abort</code> and
+<code>Releases.Halt</code>, which stand with the failure logged. The ops file keeps the last
 <span data-cell="c-audit-ring" data-source="crates/hostkeeper-coordinator/src/ops.rs" data-item="AUDIT_RING">64</span>
-entries for <code>Releases.Status</code>. <code>Audit.List</code> filters the whole file, at most
+entries for <code>Releases.Status</code>. <code>Audit.List</code> filters the active file and the segments kept, at most
 <span data-cell="c-audit-page" data-source="crates/hostkeeper-coordinator/src/operator.rs" data-item="MAX_AUDIT_PAGE">256</span>
 entries a page (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-coordinator/src/audit_file.rs">crates/hostkeeper-coordinator/src/audit_file.rs</a>).
 A <code>SetDesired</code> by CI writes no audit entry of its own (only the force it ends, <code>force_ended</code>, and
@@ -1356,7 +1359,7 @@ rollback cannot move a host back below the version it runs.</li>
 <li><strong>Identity:</strong> no BMC reader, no operator call to deny or retire a host, no expiry of pending
 requests, no CA rotation or revocation lists.</li>
 <li><strong>Operations:</strong> a single coordinator with no failover; the rollout file is read only at start; the
-audit file is never rotated; there is no metrics endpoint and no pager (conditions that need a
+audit keeps only its retained segments, so the oldest entries are deleted; there is no metrics endpoint and no pager (conditions that need a
 person are <code>alert=</code> log lines).</li>
 <li><strong>macOS:</strong> no MDM, no update run on a device, no signed installer.</li>
 <li><strong>A hook is root and is not confined.</strong> This is by design: the trust is in the signed package and
