@@ -470,7 +470,10 @@ fn config_rejects_zero_rotation_values() {
     let parsed = |extra: &[&str]| {
         let Command::Serve(flags) = Cli::try_parse_from(serve_args(extra))
             .expect("flags")
-            .command;
+            .command
+        else {
+            panic!("serve's flags");
+        };
         (
             flags.audit_max_bytes.get(),
             flags.audit_retained_segments.get(),

@@ -111,7 +111,9 @@ fn enrollment_flags(init: bool) -> Vec<&'static str> {
 }
 
 fn flags_of(args: Vec<OsString>) -> Serve {
-    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command;
+    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
+        panic!("serve")
+    };
     flags
 }
 

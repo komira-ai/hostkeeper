@@ -431,7 +431,7 @@ fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
         http(
             200,
             &format!(
-                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
+                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
             ),
         )
     };

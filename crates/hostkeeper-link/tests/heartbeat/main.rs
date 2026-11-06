@@ -23,6 +23,7 @@ mod ports;
 mod resend;
 mod size;
 mod tls;
+mod typed_orders;
 mod types;
 mod wire;
 
@@ -32,8 +33,8 @@ use std::path::{Path, PathBuf};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_link::testing::World;
 use hostkeeper_link::{
-    Feature, Heartbeater, Order, OrderId, OrderRef, PackageDigest, RecordedService, Reply, Target,
-    Verb,
+    Feature, Heartbeater, Order, OrderId, OrderRef, OrderResult, Outcome, PackageDigest,
+    RecordedService, Reply, Target, Verb,
 };
 use hostkeeper_testkit::Scratch;
 
@@ -51,6 +52,12 @@ pub fn digest() -> PackageDigest {
 
 pub fn order_id(id: &str) -> OrderId {
     OrderId::new(id).expect("an order id")
+}
+
+/// The verdict of `order`, which names a version, with `outcome`, naming that version.
+pub fn verdict(order: &Order, outcome: Outcome) -> OrderResult {
+    let target = order.target().expect("an order that names a version");
+    hostkeeper_link::testing::verdict(order, &target.version, outcome)
 }
 
 pub fn reference(id: &str, order_try: u64) -> OrderRef {
@@ -83,6 +90,33 @@ pub fn forced(id: &str, order_try: u64, name: &str, to: &str) -> Order {
         id: order_id(id),
         order_try,
         verb: Verb::Force(target(name, to)),
+    }
+}
+
+/// The install of `name` at `to`.
+pub fn install(id: &str, order_try: u64, name: &str, to: &str) -> Order {
+    Order {
+        id: order_id(id),
+        order_try,
+        verb: Verb::Install(target(name, to)),
+    }
+}
+
+/// The uninstall of `name`.
+pub fn uninstall(id: &str, order_try: u64, name: &str) -> Order {
+    Order {
+        id: order_id(id),
+        order_try,
+        verb: Verb::Uninstall(service(name)),
+    }
+}
+
+/// The abort of what runs for `name`.
+pub fn abort(id: &str, name: &str) -> Order {
+    Order {
+        id: order_id(id),
+        order_try: 1,
+        verb: Verb::Abort(service(name)),
     }
 }
 

@@ -19,6 +19,10 @@
 //!   [`wanted_by`]), each a plain unit name of a known type ([`is_unit_name`]). The accepted
 //!   syntax is narrower than systemd's: no quotes, escapes or `%` specifiers in `WantedBy=`;
 //!   such a value is refused, never guessed at.
+//!
+//! The plist reader is shared with the daemon, which finds a launchd job's sealed executable
+//! with [`plist_program`] (its `Program`, else its first `ProgramArguments` element); the lint
+//! itself judges the first `ProgramArguments` element ([`plist_first_argument`]).
 
 use std::collections::BTreeMap;
 use std::iter::Peekable;
@@ -315,16 +319,40 @@ fn decode_xml(text: &str) -> String {
     out
 }
 
-/// The first `<string>` of the `ProgramArguments` array of a launchd plist, decoded, if it has
-/// one.
-fn plist_program(text: &str) -> Option<String> {
-    let text = without_comments(text);
-    let (_, after) = text.split_once("<key>ProgramArguments</key>")?;
-    let array = after.trim_start().strip_prefix("<array>")?;
-    let first = array.trim_start().strip_prefix("<string>")?;
-    first
+/// The `<string>` that begins `text` (after white space), decoded; `None` when `text` does not
+/// begin with one or it is not closed.
+fn leading_string(text: &str) -> Option<String> {
+    text.trim_start()
+        .strip_prefix("<string>")?
         .split_once("</string>")
         .map(|(value, _)| decode_xml(value.trim()))
+}
+
+/// The first `<string>` of the `ProgramArguments` array of the plist `text`, whose comments are
+/// already removed.
+fn first_argument(text: &str) -> Option<String> {
+    let (_, after) = text.split_once("<key>ProgramArguments</key>")?;
+    leading_string(after.trim_start().strip_prefix("<array>")?)
+}
+
+/// The first `<string>` of the `ProgramArguments` array of a launchd plist, decoded, with its
+/// XML comments skipped; `None` when it has none.
+pub fn plist_first_argument(text: &str) -> Option<String> {
+    first_argument(&without_comments(text))
+}
+
+/// The executable a launchd plist starts, as launchd chooses it: the `<string>` of its `Program`
+/// key when it has that key, else the first `<string>` of its `ProgramArguments` array; decoded,
+/// with its XML comments skipped. `None` when it has neither, or its `Program` key is not
+/// followed by a string (launchd does not load such a job, so nothing is guessed in its place).
+/// The keys are found as text, as the lint finds them: the first `<key>Program</key>` anywhere
+/// counts, a nested dictionary's included.
+pub fn plist_program(text: &str) -> Option<String> {
+    let text = without_comments(text);
+    match text.split_once("<key>Program</key>") {
+        Some((_, after)) => leading_string(after),
+        None => first_argument(&text),
+    }
 }
 
 /// Checks the command lines of the unit file `file` of `service`, whose text is `text`, against
@@ -344,7 +372,7 @@ pub fn check_unit_text(
         service: service.to_owned(),
     };
     if file.ends_with(".plist") {
-        let program = plist_program(text).unwrap_or_default();
+        let program = plist_first_argument(text).unwrap_or_default();
         return match through_current(packages, service, &program) {
             true => Ok(()),
             false => Err(refuse("ProgramArguments", program)),
