@@ -39,9 +39,12 @@
 // package digest, a halt generation, never a command, a path, a URL or a script. The daemon finds
 // everything else (the release channel, the package of its own platform with its size and digest
 // in the version's release index, the hook, the units) in its own configuration, in the index and
-// in the manifest of the package that verified (design section 5.5). The daemon does not check a
-// package against an order's `package_digest`; the field stays so that every release reads every
-// order.
+// in the manifest of the package that verified (design section 5.5). The coordinator fills
+// `package_digest` with the digest the version's release index lists for the host's own platform,
+// and `index_digest` with the SHA-256 of that index. The daemon refuses an index whose SHA-256 is
+// not `index_digest` (`index_digest_mismatch`), and a package whose SHA-256 is not
+// `package_digest` (`digest_mismatch`). An empty `index_digest` (an order of a coordinator before
+// it, or of a version set with one package digest) skips the index check.
 //
 // Enrollment: a host with no certificate generates a P-256 key, keeps it, and sends `Enroll`
 // with a CSR for it and its claims. Its request is pending until an operator approves it
@@ -365,8 +368,10 @@ message Order {
 message Update {
   string service = 1;
   string version = 2;
-  // Not checked by the daemon, which takes the digest from the release index (see Orders above).
+  // The SHA-256 of the package of the host's platform (see Orders above).
   string package_digest = 3;
+  // The SHA-256 of the version's release index; empty: not checked (see Orders above).
+  string index_digest = 4;
 }
 
 // The arguments of an `install`.
@@ -374,6 +379,8 @@ message Install {
   string service = 1;
   string version = 2;
   string package_digest = 3;
+  // The SHA-256 of the version's release index; empty: not checked (see Orders above).
+  string index_digest = 4;
 }
 
 // The arguments of a `force_rollback`.
@@ -381,16 +388,20 @@ message ForceRollback {
   string service = 1;
   string version = 2;
   string package_digest = 3;
+  // The SHA-256 of the version's release index; empty: not checked (see Orders above).
+  string index_digest = 4;
 }
 
 // The arguments of a `force`.
 message Force {
   string service = 1;
   string version = 2;
-  // Not checked by the daemon, which takes the digest from the release index (see Orders above).
+  // The SHA-256 of the package of the host's platform (see Orders above).
   string package_digest = 3;
   // Greater than the generation the service is held under: a force lifts a standing halt.
   uint64 halt_generation = 4;
+  // The SHA-256 of the version's release index; empty: not checked (see Orders above).
+  string index_digest = 5;
 }
 
 // The arguments of an `uninstall`.

@@ -475,3 +475,86 @@ fn an_older_reader_keeps_the_assignments_of_services() {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
     }
 }
+
+/// Catches a release named by its index that a reader of the release before drops or cannot read
+/// past: `SetDesiredRequest.release_index` and `release_index_digest`,
+/// `DesiredState.release_index_digest`, and the `index_digest` of an update and a force are kept
+/// by the baseline's readers, which still read every field they know; an update of the release
+/// before reads with an empty `index_digest`, which the daemon does not check.
+#[test]
+fn a_release_index_and_its_digest_are_kept_by_an_older_reader() {
+    use hostkeeper_proto::hostkeeper::agent::v1::{Force, Update};
+
+    let older = baseline_pool();
+    let index = r#"{"packages":[],"schema":1,"service":"db","version":"1.4"}"#;
+    let set = op::SetDesiredRequest {
+        service: "db".to_owned(),
+        desired: Some(op::DesiredState {
+            version: "1.4".to_owned(),
+            release_index_digest: Some("cd".repeat(32)),
+            ..op::DesiredState::default()
+        }),
+        release_index: Some(index.to_owned()),
+        release_index_digest: Some("cd".repeat(32)),
+        ..op::SetDesiredRequest::default()
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.operator.v1.SetDesiredRequest")
+        .expect("released");
+    assert!(message.get_field_by_name("release_index").is_none());
+    assert!(message.get_field_by_name("release_index_digest").is_none());
+    let read = DynamicMessage::decode(message, round_trip(&set).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("service").as_deref(),
+        Some(&Value::String("db".to_owned()))
+    );
+    let back = op::SetDesiredRequest::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, set);
+
+    let update = Update {
+        service: "db".to_owned(),
+        version: "1.4".to_owned(),
+        package_digest: "ab".repeat(32),
+        index_digest: "cd".repeat(32),
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.agent.v1.Update")
+        .expect("released");
+    assert!(message.get_field_by_name("index_digest").is_none());
+    let read = DynamicMessage::decode(message, round_trip(&update).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("package_digest").as_deref(),
+        Some(&Value::String("ab".repeat(32)))
+    );
+    let back = Update::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, update);
+    let before = Update::decode(
+        Update {
+            index_digest: String::new(),
+            ..update.clone()
+        }
+        .encode_to_vec()
+        .as_slice(),
+    )
+    .expect("decodes");
+    assert_eq!(before.index_digest, "");
+
+    let force = Force {
+        service: "db".to_owned(),
+        version: "1.4".to_owned(),
+        package_digest: "ab".repeat(32),
+        halt_generation: 3,
+        index_digest: "cd".repeat(32),
+    };
+    let message = older
+        .get_message_by_name("hostkeeper.agent.v1.Force")
+        .expect("released");
+    assert!(message.get_field_by_name("index_digest").is_none());
+    let read = DynamicMessage::decode(message, round_trip(&force).as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("halt_generation").as_deref(),
+        Some(&Value::U64(3))
+    );
+    let back = Force::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, force);
+}

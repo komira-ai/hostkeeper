@@ -284,7 +284,7 @@ fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
 }
 
 /// Catches: an order that cannot say one verb with its typed arguments, or that reads back as
-/// another: a force with its digest and halt generation, in a reply.
+/// another: a force with its digests and halt generation, in a reply.
 #[test]
 fn an_order_is_one_verb_with_typed_arguments() {
     let reply = HeartbeatResponse {
@@ -296,6 +296,7 @@ fn an_order_is_one_verb_with_typed_arguments() {
                 version: "1.4".to_owned(),
                 package_digest: "ab".repeat(32),
                 halt_generation: 3,
+                index_digest: "cd".repeat(32),
             })),
         }),
         ..HeartbeatResponse::default()
@@ -306,6 +307,7 @@ fn an_order_is_one_verb_with_typed_arguments() {
         panic!("not a force: {:?}", order.verb);
     };
     assert_eq!(force.package_digest.len(), 64);
+    assert_eq!(force.index_digest, "cd".repeat(32));
     assert_eq!((force.halt_generation, order.r#try), (3, 1));
 }
 
@@ -713,6 +715,8 @@ fn wire_names_are_pinned() {
                 "already_bad",
                 "already_halted",
                 "unknown_target",
+                "index_digest_mismatch",
+                "index_invalid",
             ],
         ),
         (
