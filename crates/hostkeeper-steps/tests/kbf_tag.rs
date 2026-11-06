@@ -14,7 +14,7 @@ use hostkeeper_steps::runner::{
 };
 use hostkeeper_steps::selfupdate::{Layout, START_LIMIT_BURST, fallback_unit, main_dropin};
 use hostkeeper_steps::systemd::unit_name;
-use hostkeeper_steps::{Loaded, Record, RecordStore, RunError, Stamp};
+use hostkeeper_steps::{BootId, Loaded, Record, RecordStore, RunError, Stamp};
 use support::{Rig, Scratch};
 
 const TAG: &str = "v0.0.64";
@@ -30,7 +30,7 @@ fn fixture(name: &str) -> String {
 
 fn stamp(boot_id: &str, mono_secs: u64) -> Stamp {
     Stamp {
-        boot_id: boot_id.to_owned(),
+        boot_id: BootId::new("a test", boot_id).ok(),
         mono_secs,
     }
 }

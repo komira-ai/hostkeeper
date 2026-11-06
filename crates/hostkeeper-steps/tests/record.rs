@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{HookSel, PARAMS_FILE, Progress, RECORD_FILE, SCHEMA, State};
-use hostkeeper_steps::{CrashPoint, Loaded, Record, RecordError, RecordStore, Stamp};
+use hostkeeper_steps::{BootId, CrashPoint, Loaded, Record, RecordError, RecordStore, Stamp};
 use support::{FakeClock, Scratch};
 
 fn record() -> Record {
@@ -227,7 +227,7 @@ fn only_a_closed_directory_of_the_user_is_private() {
 #[test]
 fn the_record_on_disk_has_this_shape() {
     let stamp = || Stamp {
-        boot_id: "b".to_owned(),
+        boot_id: BootId::new("a test", "b").ok(),
         mono_secs: 7,
     };
     let verdicts = [
@@ -369,7 +369,7 @@ fn every_variant_name_in_the_record_is_pinned() {
 #[test]
 fn an_old_running_record_without_the_unbounded_field_reads_as_bounded() {
     let started = || hostkeeper_steps::Stamp {
-        boot_id: "b".to_owned(),
+        boot_id: BootId::new("a test", "b").ok(),
         mono_secs: 7,
     };
     let old = r#"{"state":"running","started":{"boot_id":"b","mono_secs":7},"deadline_secs":9}"#;

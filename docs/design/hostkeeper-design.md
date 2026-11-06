@@ -654,7 +654,7 @@ The fields on each page are the fields the API returns (`Hosts.Get`, section 4.8
 - Before each step it writes the record with state `running` and a deadline; after it, `done` with the exit code and last line. Writes are temp file, `fsync`, rename, directory `fsync`.
 - On resume the rule is one table (section 6.5). The unit-name `<generation>` is a count of step runs persisted before the unit is launched, so a resumed run can stop the unit it launched.
 - A finished record answers the same order again without running anything. A `Halt` record holds every later order for that service until cleared by `clear_halt` (an order carrying a higher halt generation than the record's). A corrupt record is cleared only by `clear_record` (local, B20). `Deferred` runs again when the order returns.
-- Time is injected: a `Clock` supplies monotonic seconds, boot id and sleep. Elapsed time across a different boot id counts as zero.
+- Time is injected: a `Clock` supplies monotonic seconds, boot id and sleep. Elapsed time across a different boot id counts as zero. A boot id that cannot be read is an error, never an empty id, and a stamp of an unknown boot is of no boot's: the host may have rebooted.
 
 ### 6.3 The dead-man
 

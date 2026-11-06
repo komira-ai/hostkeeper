@@ -58,9 +58,10 @@ use hostkeeper_steps::record::{AwaitingRestart, Loaded};
 use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, START_LIMIT_WINDOW_SECS, settle};
 use hostkeeper_steps::{
     Clock, DaemonStart, Layout, RecordStore, SelfUpdateError, Settled, Stamp, StartLog,
-    StartLogError, SystemClock, should_fall_back,
+    StartLogError, should_fall_back,
 };
 
+use crate::adapters::host_clock;
 use crate::selfupdate::unfinished_other;
 use crate::start::{EXIT_FAILED, StartError, lock_state_dir};
 use crate::verbs::force::SELF_SERVICE;
@@ -171,7 +172,9 @@ pub fn fallback_after_burst(dir: &Path, clock: &dyn Clock) -> Result<Judged, Fal
     let starts = StartLog::load(hk_state)?.of(&awaiting.version);
     let recent = starts
         .last()
-        .is_some_and(|latest| latest.elapsed_secs(clock) < START_LIMIT_WINDOW_SECS);
+        // A start of another boot, or of an unknown one, is read as just made, as a stamp of
+        // another boot has spent no time.
+        .is_some_and(|latest| latest.elapsed_secs(clock).unwrap_or(0) < START_LIMIT_WINDOW_SECS);
     if !(recent & should_fall_back(&starts, START_LIMIT_BURST, START_LIMIT_WINDOW_SECS)) {
         return Ok(Judged::NotYet {
             starts: starts.len(),
@@ -208,7 +211,7 @@ pub fn record_start(
 
 /// The verb on the host's platform.
 pub fn main(dir: &Path) -> ExitCode {
-    main_for(dir, Platform::host().kind, &SystemClock)
+    main_for(dir, Platform::host().kind, &host_clock())
 }
 
 /// The verb on a host of `kind`: [`fallback`] on Linux, [`fallback_after_burst`] on `clock` on

@@ -90,7 +90,7 @@ pub fn should_fall_back(starts: &[Stamp], burst: u32, window_secs: u64) -> bool 
     };
     let within = starts
         .iter()
-        .filter(|start| start.boot_id == latest.boot_id)
+        .filter(|start| start.same_boot(latest))
         .filter(|start| start.mono_secs <= latest.mono_secs)
         .filter(|start| latest.mono_secs - start.mono_secs < window_secs)
         .count();
