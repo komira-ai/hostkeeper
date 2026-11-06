@@ -14,6 +14,8 @@
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
 //!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
 //!   and staged for the deb and the rpm.
+//! - `check-linux-pkg` ([`package::linux_check`]): a built deb or rpm, read back, installs the
+//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing build: which
 //!   package serves each platform, refused unless it has the package of every released platform.
@@ -199,6 +201,16 @@ pub(crate) enum Verb {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Read a built deb or rpm and refuse it unless it installs `/usr/lib/hostkeeper/gh` (a
+    /// regular file, 0755) and `/usr/lib/hostkeeper/trusted_root.json` (0644), both
+    /// root:root, with the bytes of the files `nfpm-stage` wrote.
+    CheckLinuxPkg {
+        /// The `.deb` or `.rpm` nfpm built.
+        package: PathBuf,
+        /// The directory `nfpm-stage` wrote (its `--out`).
+        #[arg(long)]
+        staged: PathBuf,
+    },
     /// Write the release index of a service's packages of a version in a directory, one entry
     /// per released platform, refused when the package of any is missing: `index.json` for
     /// hostkeeper, `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing
@@ -359,6 +371,7 @@ pub(crate) fn run<A: Adapters>(
             trusted_root,
             out,
         }),
+        Verb::CheckLinuxPkg { package, staged } => package::linux_check::check(&package, &staged),
         Verb::CheckMacosPkg {
             expanded,
             version,
@@ -474,6 +487,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::CompareImages { .. }
         | Verb::Index { .. }
         | Verb::NfpmStage { .. }
+        | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }
         | Verb::ChannelStage { .. } => run(verb, || Lent(*ports)),
     }

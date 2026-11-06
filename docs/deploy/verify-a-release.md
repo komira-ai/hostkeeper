@@ -131,6 +131,10 @@ nfpm-stage` takes `gh` out of the same archive, checks the archive against the p
 `gh` that is not a program of the package's architecture and a trusted root with a line that is
 not one, and writes both into `target/nfpm/`, where `packaging/linux/nfpm.yaml` takes them from.
 A missing file or a digest that differs from the pin fails the build, and no deb or rpm is made.
+After nfpm has built them, `cargo xtask release check-linux-pkg` reads the deb and the rpm back
+(the deb's `data.tar.gz`; the rpm's header and payload) and fails the build unless each installs
+both files at these paths, a regular file of exactly this mode, owned by root and group root,
+with the bytes staged.
 
 Bumping the pin: set `GH_VERSION` in `artifacts.yml` to the new release and both `gh-sha256`
 values of the build job's matrix to the SHA-256s of `gh_<version>_linux_amd64.tar.gz` and

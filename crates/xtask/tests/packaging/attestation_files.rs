@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use hostkeeper_daemon::cli::{GH_BINARY, SIGSTORE_TRUSTED_ROOT};
 use sha2::Digest;
-use xtask::test_support::{NFPM_STAGED, gh_member, nfpm_stage};
+use xtask::test_support::{LINUX_PKG_INSTALLED, NFPM_STAGED, gh_member, nfpm_stage};
 
 use crate::nfpm::File;
 use crate::testdir::TestDir;
@@ -254,4 +254,15 @@ fn the_staging_flags_refuse_an_unknown_arch_a_bad_version_or_a_bad_pin() {
     assert!(!out.exists());
     // nfpm.yaml names the step that writes the stage directory.
     assert!(read(NFPM).contains("cargo xtask release nfpm-stage --arch"));
+}
+
+/// Catches the check of the built packages (`release check-linux-pkg`) looking for the two
+/// files anywhere but where nfpm.yaml installs them and the daemon reads them.
+#[test]
+fn the_built_package_check_looks_where_the_daemon_reads() {
+    assert_eq!(LINUX_PKG_INSTALLED, [GH_BINARY, SIGSTORE_TRUSTED_ROOT]);
+    let files = config().files("deb").expect("files");
+    for (dst, name) in LINUX_PKG_INSTALLED.into_iter().zip(NFPM_STAGED) {
+        assert_eq!(installed(&files, dst).src, staged(name));
+    }
 }

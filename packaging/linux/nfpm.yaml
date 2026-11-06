@@ -17,7 +17,9 @@
 #
 #   cargo xtask release nfpm-stage --arch <amd64|arm64> --gh-version <version> --gh-archive <gh_<version>_linux_<arch>.tar.gz> --gh-sha256 <hex> --trusted-root <file> --out target/nfpm
 #
-# writes, with the same ARCH, after checking the archive against its pin and the trusted root;
+# writes, with the same ARCH, after checking the archive against its pin and the trusted root
+# (and `cargo xtask release check-linux-pkg <package> --staged target/nfpm` reads each built
+# package back and refuses it unless it installs both as staged);
 # the pins and the capture are in .github/workflows/artifacts.yml (docs/deploy/verify-a-release.md,
 # "What the deb and the rpm check packages with").
 name: hostkeeper

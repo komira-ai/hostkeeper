@@ -6,11 +6,19 @@ use std::path::Path;
 use clap::ValueEnum;
 
 use super::contract::{Commit, Platform, Service, Version};
+use super::package::linux_check;
 use super::package::nfpm_stage::{self, Arch};
 use super::package::{Request, package_dated};
 
 /// The file names `release nfpm-stage` writes into its `--out`: `gh`, then the trusted root.
 pub const NFPM_STAGED: [&str; 2] = [nfpm_stage::GH_FILE, nfpm_stage::TRUSTED_ROOT_FILE];
+
+/// Where `release check-linux-pkg` requires a deb and an rpm to install `gh`, then the trusted
+/// root.
+pub const LINUX_PKG_INSTALLED: [&str; 2] = [
+    linux_check::INSTALLED_GH,
+    linux_check::INSTALLED_TRUSTED_ROOT,
+];
 
 /// The path of `gh` in its release archive of `gh_version` for `arch` (`amd64` or `arm64`).
 pub fn gh_member(gh_version: &str, arch: &str) -> Result<String, String> {

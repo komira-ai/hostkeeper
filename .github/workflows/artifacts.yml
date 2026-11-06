@@ -132,6 +132,7 @@ jobs:
             runner: ubuntu-24.04
             rust-target: x86_64-unknown-linux-gnu
             deb-arch: amd64
+            rpm-arch: x86_64
             cyclonedx-sha256: fb8dbee9f182173e062a64a387b21a0badc6fab8b2abf9294973f012972bf6d8
             nfpm-archive: Linux_x86_64
             nfpm-sha256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
@@ -140,6 +141,7 @@ jobs:
             runner: ubuntu-24.04-arm
             rust-target: aarch64-unknown-linux-gnu
             deb-arch: arm64
+            rpm-arch: aarch64
             cyclonedx-sha256: 7bf131ca5389b07a4f10c182bcf8a5ad339d64408b6f0d8f6834a0bd6120a06a
             nfpm-archive: Linux_arm64
             nfpm-sha256: a9a75213763783b7669719e505474c748c5ad7dc66591a195619deb50f85c2f4
@@ -246,6 +248,16 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.deb-arch }}
         run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target dist
+      # Each package read back: it installs the staged gh and trusted root at the daemon's paths,
+      # 0755 and 0644, root's, with the staged bytes.
+      - name: The deb installs the staged gh and trusted root
+        env:
+          ARCH: ${{ matrix.deb-arch }}
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper_${RELEASE_VERSION}_$ARCH.deb" --staged target/nfpm
+      - name: The rpm installs the staged gh and trusted root
+        env:
+          RPM_ARCH: ${{ matrix.rpm-arch }}
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --staged target/nfpm
       # The package's unit starts the package's own binary, through the `current` link of the
       # package layout (packaging/linux/package/hostkeeper.service).
       - name: hostkeeper's own package and its SHA-256
