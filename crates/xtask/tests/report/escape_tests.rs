@@ -1,14 +1,12 @@
-//! The ways a number, a cell or a diagram could slip past the rules, each shown refused.
-
-use std::collections::BTreeSet;
+//! The ways a number, a cell or a figure could slip past the rules, each shown refused.
 
 use crate::cells::{
     Kind, cells, open_problems, result_problems, source_rule_problems, stray_open_problems,
 };
 use crate::html::{quantities, tags};
-use crate::markdown::{anchors, glyph_problems, loose_numbers, mask_code};
+use crate::markdown::anchors;
+use crate::page::{glyph_problems, loose_numbers, mask_code};
 use crate::testdir::TestDir;
-use crate::{diagram_problems, rpcs};
 
 /// The numbers `loose_numbers` finds in `text`, read as the check reads it.
 fn loose(text: &str) -> Vec<String> {
@@ -19,14 +17,10 @@ fn loose(text: &str) -> Vec<String> {
 }
 
 #[test]
-fn an_unclosed_comment_or_code_span_hides_nothing() {
-    // Catches: a stray `<!--` (or one quoted in a code span) blanking the rest of the report, and
-    // a lone backtick pairing with one paragraphs later, either of which would hide every
-    // number and cell after it.
-    assert_eq!(
-        loose("see `<!--` here\n\nhosts 77 and"),
-        vec!["line 3: the number 77 stands outside a cell"]
-    );
+fn an_unclosed_comment_or_code_element_hides_nothing() {
+    // Catches: a stray `<!--` blanking the rest of the report, and a `<code>` or `<pre>` never
+    // closed, either of which would hide every number and cell after it; a comment and a code
+    // element that close are still masked, and a `<!--` inside code opens no comment.
     assert_eq!(
         loose("a<!-- never closed 66\nmore 67\n"),
         vec![
@@ -35,12 +29,54 @@ fn an_unclosed_comment_or_code_span_hides_nothing() {
         ]
     );
     assert_eq!(
-        loose("a ` stray\n\nhosts 44 here\n\nb ` close\n"),
-        vec!["line 3: the number 44 stands outside a cell"]
+        loose("a <code>stray\n\nhosts 44 here\n<pre>never 45\n"),
+        vec![
+            "line 3: the number 44 stands outside a cell",
+            "line 4: the number 45 stands outside a cell",
+        ]
     );
     assert_eq!(
-        loose("a `code\nspan 9` b <!-- 8 -->\n"),
+        loose("a <code>code\nspan 9</code> b <!-- 8 -->\n"),
         Vec::<String>::new()
+    );
+    assert_eq!(
+        loose("<code><!--</code> then 77\n"),
+        vec!["line 1: the number 77 stands outside a cell"]
+    );
+}
+
+#[test]
+fn code_is_masked_in_any_letter_case_and_when_nested() {
+    // Catches: an upper-case `<CODE>` read as prose, a `<code>` inside `<pre>` ending the
+    // masking early, and a nested element of the same name ending it at the inner end tag.
+    assert_eq!(
+        loose("<CODE>12</Code> and <Pre>13</PRE>\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        loose("<pre><code>1</code> 2\n3</pre> then 4\n"),
+        vec!["line 2: the number 4 stands outside a cell"]
+    );
+    assert_eq!(
+        loose("<code><code>5</code> 6</code> 7\n"),
+        vec!["line 1: the number 7 stands outside a cell"]
+    );
+}
+
+#[test]
+fn a_style_sheet_or_script_hides_no_cell_or_tag_after_it() {
+    // Catches: a style sheet or script whose text is read as prose (every margin a number), and
+    // one whose end is missed so that what follows it is hidden.
+    assert_eq!(
+        loose("<style>p{margin:0 16px}</style>\n<script>let a = 1;</script> 8\n"),
+        vec!["line 2: the number 8 stands outside a cell"]
+    );
+    assert_eq!(
+        loose("<style>p{margin:0}\n9\n"),
+        vec![
+            "line 1: the number 0 stands outside a cell",
+            "line 2: the number 9 stands outside a cell",
+        ]
     );
 }
 
@@ -60,17 +96,12 @@ fn a_tag_never_spans_lines_so_prose_is_not_swallowed() {
 }
 
 #[test]
-fn a_number_in_an_attribute_or_a_link_label_is_prose() {
-    // Catches: a number written in a `title` or `alt` attribute, or as the text of a link to a
-    // file of the repository, where no reader of the cells looks; a cell's own attributes are
-    // not prose.
+fn a_number_in_a_link_label_or_a_cell_attribute_is_read_as_written() {
+    // Catches: a number written as the text of a link, where a citation should name its
+    // section in words; a cell's own attributes and a link's target are not prose.
     assert_eq!(
-        loose("<span title=\"12 ms\">x</span> <img alt=\"13\"> [12 hosts](../a.md) [ok](#s3)\n"),
-        vec![
-            "line 1: the number 12 stands in the attribute title outside a cell",
-            "line 1: the number 13 stands in the attribute alt outside a cell",
-            "line 1: the number 12 stands outside a cell",
-        ]
+        loose("<a href=\"https://example.com/12\">12 hosts</a> <a href=\"#s3\">ok</a>\n"),
+        vec!["line 1: the number 12 stands outside a cell"]
     );
     assert_eq!(
         loose("<span data-cell=\"c-x2\" data-open=\"run 2\">open</span>\n"),
@@ -84,7 +115,9 @@ fn a_number_in_other_than_ascii_digits_is_refused() {
     // as `&frac12;`, none of which the number rules read; an open cell printing one is refused
     // too. The entities the report uses pass.
     assert_eq!(
-        glyph_problems("½ and ² and ① and ５\n&frac12; &amp; &nbsp; &mdash; a & b; c\n"),
+        glyph_problems(
+            "½ and ² and ① and ５\n&frac12; &amp; &nbsp; &mdash; &dagger; &darr; a & b; c\n"
+        ),
         vec![
             "line 1: '½' is a number not written in ASCII digits",
             "line 1: '²' is a number not written in ASCII digits",
@@ -156,18 +189,14 @@ fn only_a_measurement_may_be_open_and_some_cell_reads_the_code() {
 }
 
 #[test]
-fn every_kind_of_diagram_counts_toward_the_limit() {
-    // Catches: a fourth diagram drawn in another fence language, as a Markdown image, an `<img>`
-    // or a `<picture>`, which a count of mermaid blocks alone would miss.
-    let steps = vec!["prepare".to_owned()];
-    let update = "```mermaid\n%% update\nA->>B: prepare\n```\n";
-    let text = format!("{update}```dot\ndigraph {{}}\n```\n![a](x.svg)\n<img src=\"y.png\">\n");
-    assert_eq!(
-        diagram_problems(&text, &mask_code(&text), &BTreeSet::new(), &steps),
-        vec!["4 diagrams, more than 3"]
-    );
-    let code = format!("{update}`![a](x.svg)` and `<img>`\n```text\n<svg>\n```\n");
-    assert!(diagram_problems(&code, &mask_code(&code), &rpcs([""]), &steps).is_empty());
+fn a_cell_inside_code_is_no_cell() {
+    // Catches: a cell quoted inside a code example counted as a cell of the report, so a
+    // promised measurement could be "present" only as an example.
+    let (found, problems) = cells(&mask_code(
+        "<pre><span data-cell=\"m-a\" data-open=\"x\">open</span></pre>\n",
+    ));
+    assert!(found.is_empty());
+    assert!(problems.is_empty(), "{problems:?}");
 }
 
 #[test]

@@ -6,6 +6,8 @@
 # Where the code and its dependencies live.
 github.com
 crates.io
+# The page of a RustSec advisory, which the advisories issue links each advisory to.
+rustsec.org
 
 # What a package attestation names (hostkeeper-package): the OIDC issuer of GitHub Actions
 # (token.actions.githubusercontent.com), which the coordinator's OIDC allow-list tests name too,
@@ -71,3 +73,25 @@ yaml.org
 =default.target
 =multi-user.target
 =network-online.target
+
+# The documentation of other tools that the technical report's comparison cites, one entry per
+# project's own site (docs/report/hostkeeper.html, its Sources).
+ansible.com
+ansible.readthedocs.io
+redhat.com
+saltproject.io
+puppet.com
+chef.io
+nixos.org
+colmena.cli.rs
+cachix.org
+haskell.org
+kubernetes.io
+k3s.io
+fluxcd.io
+hashicorp.com
+freedesktop.org
+mender.io
+balena.io
+jamf.com
+fleetdm.com

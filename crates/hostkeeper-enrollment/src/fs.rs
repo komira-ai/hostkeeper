@@ -44,6 +44,8 @@ pub trait Fs: Send + Sync {
     fn sync_file(&self, path: &Path) -> io::Result<()>;
     /// Renames `from` over `to`.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// Removes the file `path`; one that does not exist is fine.
+    fn remove(&self, path: &Path) -> io::Result<()>;
     /// Flushes the directory `dir`, so a rename in it is durable.
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
     /// Creates `dir` and its missing parents, each with mode 0700; an existing one is fine.
@@ -131,6 +133,13 @@ impl Fs for RealFs {
         std::fs::rename(from, to)
     }
 
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         File::open(dir)?.sync_all()
     }
@@ -171,6 +180,7 @@ pub enum Op {
     WriteNew(PathBuf),
     SyncFile(PathBuf),
     Rename(PathBuf, PathBuf),
+    Remove(PathBuf),
     SyncDir(PathBuf),
     CreateDir(PathBuf),
     List(PathBuf),
@@ -251,6 +261,11 @@ impl Fs for FaultFs {
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.step(Op::Rename(from.to_path_buf(), to.to_path_buf()))?;
         RealFs.rename(from, to)
+    }
+
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.step(Op::Remove(path.to_path_buf()))?;
+        RealFs.remove(path)
     }
 
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {

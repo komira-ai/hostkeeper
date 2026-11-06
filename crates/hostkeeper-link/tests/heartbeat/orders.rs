@@ -2,12 +2,13 @@
 
 use std::sync::mpsc;
 
-use hostkeeper_link::testing::{identity, verdict};
+use hostkeeper_link::testing::identity;
 use hostkeeper_link::{
     BeatOutcome, CertState, Dispatch, Feature, LinkError, OrderResult, Outcome, PackageDigest,
     ThreadDispatch, Verb,
 };
 
+use crate::verdict;
 use crate::{Rig, forced, recorded, reply, update, version};
 
 /// Catches an order run on the loop's own thread (the loop would stop beating for the whole
@@ -91,7 +92,7 @@ fn a_second_order_while_one_runs_is_not_started_and_is_reported_busy() {
     let beat = &rig.world.link.beats()[2];
     assert_eq!(beat.services[0].updating, Some(version("2.0")));
     assert_eq!(beat.services[1].updating, None);
-    let busy = OrderResult::busy(&second);
+    let busy = OrderResult::busy(&second, version("3.0"));
     assert_eq!(busy.reason.as_ref().map(|r| r.as_str()), Some("busy"));
     assert_eq!(busy.outcome, Outcome::Failed);
     assert_eq!(beat.services[1].last_update, Some(busy));

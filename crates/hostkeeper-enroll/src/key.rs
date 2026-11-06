@@ -4,6 +4,8 @@
 //! Its signatures are deterministic (RFC 6979), so the PKCS#10 request made from one key is the
 //! same bytes every time: a daemon that restarts reposts the same request.
 
+use std::str::FromStr;
+
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{DerSignature, SigningKey};
 use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
@@ -13,6 +15,12 @@ use x509_cert::name::Name;
 use x509_cert::request::RequestBuilder;
 
 use crate::wire::RequestId;
+
+/// The subject of every request this key makes: one common name, the placeholder `host:pending`.
+/// The CA holds a request to a subject of exactly one `CN=host:<id>` and refuses any other, an
+/// empty one included; the host id is assigned at approval, and the CA never takes it from the
+/// request: the certificate's subject is always the approved id.
+const REQUEST_SUBJECT: &str = "CN=host:pending";
 
 /// How many times random bytes are drawn for a key before giving up. A draw fails only when its
 /// 32 bytes are not a P-256 scalar (zero or at least the group order), about once in 2^32 draws.
@@ -115,9 +123,11 @@ impl HostKey {
         RequestId::of_spki(&self.spki_der)
     }
 
-    /// A PKCS#10 request (DER) for this key, with an empty subject: the CA names the host.
+    /// A PKCS#10 request (DER) for this key, with the subject [`REQUEST_SUBJECT`]
+    /// (`CN=host:pending`): the CA names the host.
     pub(crate) fn csr_der(&self) -> Result<Vec<u8>, KeyError> {
-        let builder = RequestBuilder::new(Name::default()).map_err(encode_error)?;
+        let subject = Name::from_str(REQUEST_SUBJECT).map_err(encode_error)?;
+        let builder = RequestBuilder::new(subject).map_err(encode_error)?;
         let request = builder
             .build::<_, DerSignature>(&self.signing)
             .map_err(encode_error)?;

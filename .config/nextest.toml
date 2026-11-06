@@ -11,7 +11,7 @@ filter = 'all()'
 slow-timeout = { period = "120s", terminate-after = 4 }
 
 # The report's open cells: `the_open_cells_are_measurements` (crates/xtask/tests/report) prints
-# the measurement cells of docs/report/hostkeeper.md still waiting for a measurement. They are
+# the measurement cells of docs/report/hostkeeper.html still waiting for a measurement. They are
 # allowed, so the test passes; its output is shown on success too, at the end of the run, so the
 # list is in every CI log.
 [[profile.default.overrides]]

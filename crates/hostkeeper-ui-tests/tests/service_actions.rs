@@ -1,6 +1,6 @@
 //! What an operator does with services in the web app: the Rollout page's assignments, its
-//! Set desired, Assign and Unassign, and the Host page's assigned services, run in the
-//! JavaScript engine against the fake gateway of `support`.
+//! Set desired, Assign, Unassign and minimum version, and the Host page's assigned services and
+//! cancelled uninstalls, run in the JavaScript engine against the fake gateway of `support`.
 
 mod support;
 
@@ -441,6 +441,7 @@ fn host_lists_its_assigned_services_with_installed_against_desired() {
         json!({"host": {"nodeId": "web-2", "role": "web"}}),
     );
     ui.reply(&m("Services/List"), host_entries());
+    ui.reply(&m("Audit/List"), json!({}));
     let out = ui.run(&driver("host", r#"{ nodeId: "web-2" }"#, "[]", ASSIGNED));
     assert_eq!(
         out["out"],
@@ -472,7 +473,8 @@ fn host_lists_its_assigned_services_with_installed_against_desired() {
         bodies(&ui),
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
-            (m("Services/List"), json!({}))
+            (m("Services/List"), json!({})),
+            (m("Audit/List"), json!({"nodeId": "web-2"}))
         ]
     );
 }
@@ -506,7 +508,8 @@ fn host_shows_assignments_when_hosts_get_is_unimplemented() {
         bodies(&ui),
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
-            (m("Services/List"), json!({}))
+            (m("Services/List"), json!({})),
+            (m("Audit/List"), json!({"nodeId": "web-2"}))
         ]
     );
 }
@@ -598,5 +601,321 @@ export async function main() {
             carrying >= expected,
             "{index}: {carrying} text nodes carry the markup"
         );
+    }
+}
+
+/// Rollout's Services.List: `api` with a role's minimum and a host's, `web` with none.
+fn floors(role_min: &str) -> Value {
+    json!({"services": [
+        {"service": "api", "roles": ["web"],
+         "minVersions": [{"role": "web", "version": role_min}, {"host": "db-1", "version": "1.1.0"}]},
+        {"service": "web"},
+    ]})
+}
+
+/// Renders Rollout over `floors("1.2.0")`, runs `then`, renders it again over `floors(after)`,
+/// and returns each render's minimum versions per service.
+fn run_floors(ui: &mut Ui, then: &str, answers: &str, after: &str) -> Value {
+    for role_min in ["1.2.0", after] {
+        ui.reply(&m("Releases/Status"), status());
+        ui.reply(&m("Services/List"), floors(role_min));
+    }
+    ui.run(&driver(
+        "rollout",
+        "{}",
+        answers,
+        &format!(
+            r#"
+const floors = (t) => nodes(t).filter((n) => n.attrs["class"] === "service").map((s) => cell(s, "Minimum versions"));
+const before = floors(tree);
+{then}
+const again = await render(ctx);
+return [before, floors(again)];"#
+        ),
+    ))
+}
+
+#[test]
+fn set_min_version_sends_the_role_scope_and_shows_the_new_floor() {
+    // Catches: a Rollout page with no Set min version, one that sends with a blank role or
+    // version, sends after the operator declined, sends a host scope or an untrimmed value, calls
+    // another method, misses the refresh, or does not show each scope's minimum after it.
+    let mut ui = Ui::start();
+    ui.reply(&m("Services/SetMinVersion"), json!({}));
+    let out = run_floors(
+        &mut ui,
+        r#"
+await click(tree, "set-min-version");
+type(tree, "assign-role", " web ");
+await click(tree, "set-min-version");
+type(tree, "min-version", " 1.3.0 ");
+await click(tree, "set-min-version");
+await click(tree, "set-min-version");"#,
+        "[false, true]",
+        "1.3.0",
+    );
+    assert_eq!(
+        reports(&out),
+        json!([
+            "Name the role and the minimum version.",
+            "Name the role and the minimum version.",
+            "Minimum version not changed.",
+            "Set the minimum version of api for role web to 1.3.0.",
+        ])
+    );
+    assert_eq!(
+        out["seen"]["questions"],
+        json!([
+            "Set the minimum version of api for role web to 1.3.0? No host of the role is ordered below it, rollbacks included.",
+            "Set the minimum version of api for role web to 1.3.0? No host of the role is ordered below it, rollbacks included.",
+        ])
+    );
+    assert_eq!(
+        bodies(&ui)[2..],
+        [
+            (
+                m("Services/SetMinVersion"),
+                json!({"service": "api", "minVersion": {"role": "web", "version": "1.3.0"}})
+            ),
+            (m("Releases/Status"), json!({})),
+            (m("Services/List"), json!({})),
+        ]
+    );
+    assert_eq!(out["seen"]["refreshes"], 1);
+    assert_eq!(
+        out["out"],
+        json!([
+            ["role web 1.2.0, host db-1 1.1.0", "-"],
+            ["role web 1.3.0, host db-1 1.1.0", "-"],
+        ])
+    );
+}
+
+#[test]
+fn set_min_version_shows_a_refusal_and_keeps_the_floor() {
+    // Catches: a refusal (a minimum above the desired version, a role the coordinator does not
+    // know) that is reworded or hidden, and a page that refreshes or shows a new floor as if the
+    // write had landed.
+    let mut ui = Ui::start();
+    ui.refuse(
+        &m("Services/SetMinVersion"),
+        412,
+        "FAILED_PRECONDITION",
+        "below_min_version",
+    );
+    ui.refuse(
+        &m("Services/SetMinVersion"),
+        404,
+        "NOT_FOUND",
+        "unknown_role",
+    );
+    let out = run_floors(
+        &mut ui,
+        r#"
+type(tree, "assign-role", "web");
+type(tree, "min-version", "9.0.0");
+await click(tree, "set-min-version");
+type(tree, "assign-role", "nope");
+await click(tree, "set-min-version");"#,
+        "[true, true]",
+        "1.2.0",
+    );
+    assert_eq!(
+        reports(&out),
+        json!([
+            "FAILED_PRECONDITION below_min_version",
+            "NOT_FOUND unknown_role"
+        ])
+    );
+    assert_eq!(out["seen"]["refreshes"], 0);
+    assert_eq!(
+        out["out"],
+        json!([
+            ["role web 1.2.0, host db-1 1.1.0", "-"],
+            ["role web 1.2.0, host db-1 1.1.0", "-"],
+        ])
+    );
+}
+
+/// An audit entry the coordinator wrote for `service` on `node`.
+fn ended(seq: u64, action: &str, service: &str, node: &str) -> Value {
+    json!({"seq": seq.to_string(), "by": "ACTOR_COORDINATOR", "action": action,
+           "service": service, "nodeId": node})
+}
+
+#[test]
+fn host_marks_a_service_whose_last_uninstall_was_cancelled() {
+    // Catches: a Host page that marks a service whose last uninstall finished, misses one
+    // cancelled after an earlier finished one, takes another host's entry or another action for
+    // a cancel, changes the row of a service still being uninstalled, or reads only the first
+    // page of the audit (the `uninstalled` of hello is on the second), or pages without the
+    // previous page's nextSeq.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Hosts/Get"),
+        json!({"host": {"nodeId": "web-2", "role": "web"}}),
+    );
+    ui.reply(&m("Services/List"), host_entries());
+    ui.reply(
+        &m("Audit/List"),
+        json!({"entries": [
+            ended(1, "uninstall_cancelled", "api", "web-2"),
+            ended(2, "uninstalled", "cache", "web-2"),
+            ended(3, "uninstall_cancelled", "cache", "web-2"),
+            ended(4, "uninstall_cancelled", "hello", "web-2"),
+        ], "nextSeq": "4"}),
+    );
+    ui.reply(
+        &m("Audit/List"),
+        json!({"entries": [
+            ended(5, "uninstalled", "hello", "web-2"),
+            ended(6, "uninstall_cancelled", "tool", "web-9"),
+            ended(7, "unassign", "old", "web-2"),
+            ended(8, "uninstall_cancelled", "gone", "web-2"),
+            ended(9, "assign", "api", "web-2"),
+        ], "nextSeq": "9"}),
+    );
+    ui.reply(&m("Audit/List"), json!({"nextSeq": "9"}));
+    let out = ui.run(&driver("host", r#"{ nodeId: "web-2" }"#, "[]", ASSIGNED));
+    assert_eq!(
+        out["out"],
+        json!([
+            [
+                "Service",
+                "Through",
+                "Installed",
+                "Desired",
+                "State",
+                "Minimum"
+            ],
+            [
+                "api",
+                "role web",
+                "1.3.0",
+                "1.4.0",
+                "behind; uninstall cancelled",
+                "1.2.0"
+            ],
+            [
+                "cache",
+                "this host",
+                "2.0.0",
+                "2.0.0",
+                "at desired; uninstall cancelled",
+                "-"
+            ],
+            [
+                "hello",
+                "role web",
+                "not installed",
+                "1.0.0",
+                "not installed",
+                "-"
+            ],
+            ["tool", "role web", "0.9.0", "none set", "-", "-"],
+            ["old", "role web", "1.0.0", "1.0.0", "at desired", "-"],
+            ["gone", "-", "-", "3.0.0", "uninstalling", "-"],
+        ])
+    );
+    let text = out["text"].as_str().expect("text");
+    assert!(!text.contains("could not be read"), "{text}");
+    assert_eq!(
+        bodies(&ui)[2..],
+        [
+            (m("Audit/List"), json!({"nodeId": "web-2"})),
+            (m("Audit/List"), json!({"nodeId": "web-2", "sinceSeq": "4"})),
+            (m("Audit/List"), json!({"nodeId": "web-2", "sinceSeq": "9"})),
+        ]
+    );
+}
+
+#[test]
+fn host_stops_paging_the_audit_when_next_seq_does_not_move() {
+    // Catches: a Host page that asks for the same page again and again when the coordinator
+    // answers entries with the nextSeq it was given, instead of stopping after that page.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Hosts/Get"),
+        json!({"host": {"nodeId": "web-2", "role": "web"}}),
+    );
+    ui.reply(&m("Services/List"), host_entries());
+    ui.reply(
+        &m("Audit/List"),
+        json!({"entries": [ended(3, "uninstall_cancelled", "api", "web-2")], "nextSeq": "3"}),
+    );
+    ui.reply(
+        &m("Audit/List"),
+        json!({"entries": [ended(3, "uninstall_cancelled", "api", "web-2")], "nextSeq": "3"}),
+    );
+    let out = ui.run(&driver(
+        "host",
+        r#"{ nodeId: "web-2" }"#,
+        "[]",
+        r#"return rows(nodes(tree).filter((n) => n.attrs["class"] === "assigned")[0])[1][4];"#,
+    ));
+    assert_eq!(out["out"], "behind; uninstall cancelled");
+    assert_eq!(
+        bodies(&ui)[2..],
+        [
+            (m("Audit/List"), json!({"nodeId": "web-2"})),
+            (m("Audit/List"), json!({"nodeId": "web-2", "sinceSeq": "3"})),
+        ]
+    );
+}
+
+#[test]
+fn host_shows_why_cancelled_uninstalls_could_not_be_read() {
+    // Catches: a Host page that fails whole, drops its assigned services or hides the refusal
+    // when only Audit.List fails; and one that marks a service with no audit to go on.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Hosts/Get"),
+        json!({"host": {"nodeId": "web-2", "role": "web"}}),
+    );
+    ui.reply(&m("Services/List"), host_entries());
+    ui.refuse(&m("Audit/List"), 503, "UNAVAILABLE", "store_failed");
+    let out = ui.run(&driver(
+        "host",
+        r#"{ nodeId: "web-2" }"#,
+        "[]",
+        r#"const section = nodes(tree).filter((n) => n.attrs["class"] === "assigned")[0];
+return [rows(section).map((r) => r[4]), nodes(section).filter((n) => n.attrs["class"] === "note").map(text)];"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!([
+            [
+                "State",
+                "behind",
+                "at desired",
+                "not installed",
+                "-",
+                "at desired",
+                "uninstalling"
+            ],
+            ["Cancelled uninstalls could not be read: UNAVAILABLE store_failed"]
+        ])
+    );
+}
+
+#[test]
+fn host_reads_no_audit_when_nothing_is_assigned_or_the_list_fails() {
+    // Catches: a Host page that asks Audit.List for a host no service is assigned to (it can
+    // have no cancelled uninstall to show), or after Services.List failed.
+    for (node, listing) in [("web-7", true), ("web-2", false)] {
+        let mut ui = Ui::start();
+        ui.reply(&m("Hosts/Get"), json!({"host": {"nodeId": node}}));
+        if listing {
+            ui.reply(&m("Services/List"), host_entries());
+        } else {
+            ui.refuse(&m("Services/List"), 503, "UNAVAILABLE", "store_failed");
+        }
+        ui.run(&driver(
+            "host",
+            &format!("{{ nodeId: {node:?} }}"),
+            "[]",
+            "",
+        ));
+        assert_eq!(ui.methods(), [m("Hosts/Get"), m("Services/List")], "{node}");
     }
 }

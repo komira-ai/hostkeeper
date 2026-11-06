@@ -1,0 +1,2 @@
+{"fields":{"code":"yanked","graphs":[{"Krate":{"name":"cfg-if","version":"1.0.2"},"parents":[{"Krate":{"name":"probe","version":"0.1.0"}}]}],"labels":[{"column":1,"line":1,"message":"yanked version","span":"cfg-if 1.0.2 registry+https://github.com/rust-lang/crates.io-index"}],"message":"detected yanked crate (try `cargo update -p cfg-if`)","severity":"error"},"type":"diagnostic"}
+{"fields":{"advisories":{"errors":1,"helps":0,"notes":0,"warnings":0}},"type":"summary"}

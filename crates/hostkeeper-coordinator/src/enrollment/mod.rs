@@ -13,7 +13,8 @@
 //!   (or [`RpcError::Internal`]), and the gRPC status of each;
 //! - `nonce`: the single-use nonces a `Poll` is signed over;
 //! - `setup`: the start: the CA key file (made with `--ca-init`), the store, and the
-//!   coordinator's server certificate;
+//!   coordinator's server certificate, which [`Enrollment::renew_server`] makes again while the
+//!   coordinator runs;
 //! - `approve` and `list`: `Enrollment.Approve` and `Enrollment.List` of
 //!   `hostkeeper.operator.v1` as plain functions over the store, and the audit of each
 //!   approval in the coordinator's ops store ([`Enrollment::audit_to`]);
@@ -34,7 +35,7 @@ mod refusal;
 mod rpc;
 mod setup;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_enrollment::ca::{Ca, CaBundle, Signer};
 use hostkeeper_enrollment::enroll::EnrollmentStore;
@@ -54,7 +55,10 @@ pub use mac_nonce::{
 pub use nonce::{NONCE_BYTES, NONCES_PER_REQUEST, Nonces, Random, os_random};
 pub use refusal::{RpcError, refusal_of};
 pub use rpc::{MAX_MESSAGE_BYTES, Method, call};
-pub use setup::{CA_CERT_SUFFIX, Setup, SetupError, ca_certificate_path, pem, server_due, setup};
+pub use setup::{
+    CA_CERT_SUFFIX, Kept, ServerFile, Setup, SetupError, ca_certificate_path, pem, server_due,
+    setup,
+};
 
 use crate::identity::Identity;
 use crate::ops::OpsStore;
@@ -72,11 +76,25 @@ pub enum Admission {
     Denied,
 }
 
-/// The coordinator's enrollment: its store, its CA, its wall clock, its poll nonces, the Mac
-/// path's policy, and the ops store it audits approvals in.
+/// The coordinator's server certificate as the status shows it (`server_certificate`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ServerCertificate {
+    /// The end of the validity of the certificate the server certificate file started with at
+    /// the last look that read it, in unix seconds.
+    pub not_after: u64,
+    /// Why the last look could not renew it; `None` when the last look found it not due or
+    /// renewed it. The certificate in use is still served, and the next look tries again.
+    pub renewal_error: Option<String>,
+}
+
+/// The coordinator's enrollment: its store, its CA, its server certificate file, its wall
+/// clock, its poll nonces, the Mac path's policy, and the ops store it audits approvals in.
 pub struct Enrollment {
     store: EnrollmentStore,
     ca: Ca,
+    server: ServerFile,
+    /// What the last look at `server` found.
+    server_state: Mutex<ServerCertificate>,
     clock: Arc<dyn UnixClock>,
     nonces: Nonces,
     mac: MacPolicy,
@@ -100,12 +118,25 @@ fn store_host(host: &hostkeeper_wire::HostId) -> Option<HostId> {
 
 impl Enrollment {
     /// The enrollment of `store` and `ca`, posting requests at the time `clock` reads, with
-    /// poll nonces drawn from `random`.
+    /// poll nonces drawn from `random`. It keeps the server certificate file `server`, whose
+    /// certificate is valid until `not_after` (unix seconds).
     #[must_use]
-    pub fn new(store: EnrollmentStore, ca: Ca, clock: Arc<dyn UnixClock>, random: Random) -> Self {
+    pub fn new(
+        store: EnrollmentStore,
+        ca: Ca,
+        server: ServerFile,
+        not_after: u64,
+        clock: Arc<dyn UnixClock>,
+        random: Random,
+    ) -> Self {
         Self {
             store,
             ca,
+            server,
+            server_state: Mutex::new(ServerCertificate {
+                not_after,
+                renewal_error: None,
+            }),
             clock,
             nonces: Nonces::new(random),
             mac: MacPolicy::default(),
@@ -133,6 +164,54 @@ impl Enrollment {
     #[must_use]
     pub fn store(&self) -> &EnrollmentStore {
         &self.store
+    }
+
+    /// One look at the server certificate file, at the time the clock reads: it is made again
+    /// when it is due ([`ServerFile::keep`]: a third of its validity or less left). The reload
+    /// loop calls this before it looks at the TLS files, so a new file is served from the same
+    /// tick. A look that fails is logged at error level and kept for the status
+    /// ([`Enrollment::server_certificate`]) until a later look succeeds; the file in use is left
+    /// as it was, and the listener keeps serving it.
+    pub fn renew_server(&self) {
+        let kept = self
+            .server
+            .keep(&self.ca, &self.store, self.clock.now_unix());
+        let mut state = self
+            .server_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match kept {
+            Ok(kept) => {
+                if kept.renewed {
+                    tracing::info!(
+                        path = %self.server.path().display(),
+                        not_after = kept.not_after,
+                        "renewed the coordinator's server certificate"
+                    );
+                }
+                *state = ServerCertificate {
+                    not_after: kept.not_after,
+                    renewal_error: None,
+                };
+            }
+            Err(why) => {
+                tracing::error!(
+                    path = %self.server.path().display(),
+                    %why,
+                    "cannot renew the coordinator's server certificate; the one in use is still served"
+                );
+                state.renewal_error = Some(why);
+            }
+        }
+    }
+
+    /// The server certificate as the last look at its file found it.
+    #[must_use]
+    pub fn server_certificate(&self) -> ServerCertificate {
+        self.server_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The CA certificate and its SHA-256.
