@@ -59,7 +59,10 @@ fn site(name: &str) -> Site {
     for dir in [&bin.join("releases"), &channel] {
         std::fs::create_dir_all(dir).expect("make a scratch directory");
     }
-    std::fs::copy(GH, bin.join("gh")).expect("install the fake gh");
+    // A hard link, not a copy: a copy holds the file open for writing, and a process another
+    // test forks meanwhile keeps that open until it execs, so starting `gh` could fail with
+    // "text file busy". The fake finds its data beside the path it was started by.
+    std::fs::hard_link(GH, bin.join("gh")).expect("install the fake gh");
     Site {
         _root: root,
         bin,
