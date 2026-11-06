@@ -43,10 +43,19 @@ pub enum Feature {
     /// `grpc-v1`: the coordinator serves the heartbeat as gRPC over HTTP/2 on its heartbeat
     /// listener; the daemon uses it for the next heartbeat.
     GrpcV1,
+    /// `install-v1`: the daemon runs the `install` and `uninstall` orders of the gRPC route
+    /// ([`crate::Verb::Install`], [`crate::Verb::Uninstall`]). It says what the loop takes, not
+    /// what the coordinator serves: the loop runs these orders whatever the reply advertises.
+    InstallV1,
+    /// `abort-v1`: the daemon runs the `abort` order of the gRPC route ([`crate::Verb::Abort`]),
+    /// beside the order it stops. Like `install-v1`, it says what the loop takes.
+    AbortV1,
 }
 
-/// The features every heartbeat announces, in this order.
-pub const ANNOUNCED: [Feature; 7] = [
+/// The features every heartbeat announces, in this order. Each names something the loop does:
+/// `install-v1` and `abort-v1` are here because [`crate::Heartbeater`] hands those orders to the
+/// executor.
+pub const ANNOUNCED: [Feature; 9] = [
     Feature::DeferredV1,
     Feature::HaltV1,
     Feature::HeartbeatV2,
@@ -54,6 +63,8 @@ pub const ANNOUNCED: [Feature; 7] = [
     Feature::OrderV1,
     Feature::VerdictAcksV1,
     Feature::GrpcV1,
+    Feature::InstallV1,
+    Feature::AbortV1,
 ];
 
 impl Feature {
@@ -67,6 +78,8 @@ impl Feature {
             Feature::OrderV1 => hostkeeper_wire::wire::ORDER_FEATURE,
             Feature::VerdictAcksV1 => "verdict-acks-v1",
             Feature::GrpcV1 => "grpc-v1",
+            Feature::InstallV1 => "install-v1",
+            Feature::AbortV1 => "abort-v1",
         }
     }
 
