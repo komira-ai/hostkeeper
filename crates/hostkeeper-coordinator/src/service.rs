@@ -184,6 +184,8 @@ pub const FEATURES: &[&str] = &[
     ORDER_FEATURE,
     verdict_file::FEATURE,
     crate::grpc::GRPC_FEATURE,
+    // Scratch check for komira-ai/hostkeeper#116.
+    crate::force::FEATURE,
 ];
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
