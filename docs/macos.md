@@ -261,6 +261,22 @@ What the device run found on macOS 15 (arm64):
 
 So `proc_pidpath` alone is not enough: after a rename over the path it still names the path, whose file is then another. With the image's device and inode it is: a replaced or unlinked file is refused, and never read as the new version.
 
+#### The sealed executable
+
+The digest of the running executable is compared with that of the executable sealed with the
+recorded version, as on Linux. On a Mac the first `[units] run` entry is a launchd label, and the
+sealed executable is the one its `units/<label>.plist` starts: the string of the plist's `Program`
+key when it has one (launchd starts that file then), else the first string of its `ProgramArguments`
+array, read with XML comments skipped and character references decoded
+(`hostkeeper_placed::lint::plist_program`, the parser the placed-unit lint reads plists with). The
+path rules are those of a systemd unit's `ExecStart=`: the path must go through
+`<packages>/<service>/current/`, as the host spells the packages directory, and the rest of it be
+plain names with no `..` component (an empty or `.` component inside the path is dropped, as a path
+reads it); the file hashed is the one at the same place under the version's own directory. A program
+anywhere else, a `Program` key not followed by a string, a plist with neither key, or a file that
+cannot be read gives no digest, and the recorded version is then reported unconfirmed
+(`version_unconfirmed`), never confirmed from another file.
+
 #### Units in a package
 
 A package's `units/` may hold `<label>.plist` files. A label is the service name or starts with
@@ -336,8 +352,5 @@ gate; what they drive is measured against fakes on Linux. They:
 
 - The placed plists of a service package linked into `/Library/LaunchDaemons` by the daemon in a
   real update (the unit control is wired; a device run of an update is not part of the run above).
-- The version of a running service confirmed by the digest of its executable on a Mac: the sealed
-  executable is found from a systemd unit's `ExecStart=` only, so on a Mac the recorded version is
-  reported unconfirmed.
 - The boot id of the monotonic clock on a Mac (the start log and the step records compare stamps
   under it).
