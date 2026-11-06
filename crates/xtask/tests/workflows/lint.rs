@@ -125,7 +125,7 @@ pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
 
 /// The one job of [`PRIVILEGED_WORKFLOW`] that runs on macOS: the device run of the launchd
 /// adapters, the process probe and the package check (`crates/hostkeeper-privileged/tests/
-/// device_mac.rs`).
+/// device_mac.rs`), and hello's update end to end under launchd (`device_mac_e2e.rs`).
 pub const MACOS_DEVICE_JOB: &str = "macos-device";
 
 /// The runners [`MACOS_DEVICE_JOB`] may run on: GitHub's standard hosted arm64 macOS image of a

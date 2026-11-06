@@ -2,8 +2,7 @@
 
 What hostkeeper does differently on a Mac (design section 5.9). The update flow is the same as on
 Linux: an order, the five steps of the hook, a step record, a verdict. This page says what the
-code in this repository does on a Mac today, and lists what the design specifies that is not
-built yet.
+code in this repository does on a Mac today.
 
 ## Built
 
@@ -133,7 +132,7 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 | config | `/etc/hostkeeper/hostkeeper.toml` |
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
 | admin socket | `/var/run/hostkeeper/admin.sock` (macOS has a read-only root and no `/run`) |
-| units linked from a package | `/Library/LaunchDaemons/<label>.plist` (the linking is not built yet) |
+| units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |
 | the daemon's plist program | `/usr/local/bin/hostkeeper` |
 | the daemon's logs | `/var/log/hostkeeper/daemon.out.log` and `daemon.err.log` |
 
@@ -193,6 +192,10 @@ One run of a step:
 6. the last 1 MiB of each output file is kept, as on Linux, and the last line of the kept
    standard output is the step's report; the job is booted out (unloaded) and its directory
    removed.
+
+A step that is not one of the five of an update (the hook's `uninstall`, a `[hook] boot` step)
+runs the same way, as one job: `<hook> <hook args> <step> --params <file>`, bounded by its
+timeout (a timeout of 0 is no bound).
 
 | how the job ended | the step's exit |
 |---|---|
@@ -290,6 +293,20 @@ The plists of a service package are rendered by `hostkeeper_launchd::service_pli
 its arguments, `RunAtLoad` false, and a `KeepAlive` that holds the job alive only while a given path
 exists, so a slot without its marker file never starts.
 
+The daemon places them as it places systemd units (design section 4.7, "Placed paths"): each
+`units/<label>.plist` is linked at `/Library/LaunchDaemons/<label>.plist`, pointing at
+`<packages>/<service>/current/units/<label>.plist`, and recorded in `placed.json`. A plist's label
+must be the service's name or start with `<service>.`. A `run` label gets no `WantedBy=` link and
+needs no `[Install]` section: launchd loads every plist of its directory at boot, so the placed
+link is what enables the job. At each switch of an update (before `cutover`, and back before
+`rollback`) and after a removal, the unit control (`hostkeeper_launchd::LaunchdUnitControl`) acts on
+the links that are new, re-pointed (`current` moved, so the link resolves to another file) or gone
+since its last reload: a job whose link is new or re-pointed is booted out if launchd holds it and
+bootstrapped from its link, and a job whose link is gone is booted out. Loading a job does not
+start it (the plist's `RunAtLoad` and `KeepAlive` decide that), so the hook finds both slots
+loaded and starts the one it wants with `launchctl kickstart`. A job is stopped by its label: an
+uninstall boots out each `run` label, then removes every placed link.
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
@@ -367,8 +384,8 @@ older releases wrote on a Mac, so the on-disk format is unchanged.
 
 The job `macos-device` of `.github/workflows/privileged.yml` runs on a GitHub-hosted arm64 macOS
 runner (`macos-15`) after every merge to `main` and by hand, never on a pull request, as root.
-Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`) are not counted by the coverage
-gate; what they drive is measured against fakes on Linux. They:
+Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs` and `device_mac_e2e.rs`) are not
+counted by the coverage gate; what they drive is measured against fakes on Linux. They:
 
 - start the daemon as a launchd job of the system domain, with a config and directories of their
   own, call `Status` on its admin socket, and read the Mac's boot id in the `.boot-id` its start
@@ -384,9 +401,23 @@ gate; what they drive is measured against fakes on Linux. They:
   path longer than `PROC_PIDPATHINFO_MAXSIZE`, and run by another user;
 - check the package check's verdicts on real files: an ad-hoc signed copy of `/usr/bin/true` is
   valid, one without its signature is unsigned, one with a changed byte is invalid, and a file
-  given `com.apple.quarantine` with `xattr -w` is quarantined.
-
-## Specified, not built yet
-
-- The placed plists of a service package linked into `/Library/LaunchDaemons` by the daemon in a
-  real update (the unit control is wired; a device run of an update is not part of the run above).
+  given `com.apple.quarantine` with `xattr -w` is quarantined;
+- update hello's macOS package end to end (`device_mac_e2e.rs`): the real coordinator, in the
+  test's process, orders each version, and the daemon, a launchd job, fetches it from a release
+  channel the test serves on loopback, checks its attestation with the pinned `gh` against a test
+  trust root, unpacks it with the checks above, links its plists and runs hello's hook in step
+  jobs. The package is the released one with the test's paths and port, and with a `bin/hello`
+  that answers `/version` with the version it was installed as. The test asserts from
+  `/Library/LaunchDaemons`, the package directory, `launchctl print` of the slots' jobs, the
+  daemon's `Status` and the coordinator:
+  - install `1.0.0`: both plists are links into `current` and resolve to `1.0.0`'s, launchd holds
+    both jobs loaded from them, `hello.a` serves `1.0.0`, and `Status` reports hello live and
+    healthy with the running executable confirmed as `1.0.0`'s;
+  - update to `1.1.0`: `current` is `1.1.0`, both jobs were booted out and bootstrapped again from
+    `1.1.0`'s plists and run its program, `hello.b` serves it, and `Status` confirms it;
+  - update to `1.2.0`, whose server answers `/readyz` with 503: the update fails in
+    `gate_release`, reason `not_ready`, `current` is `1.1.0` again, both jobs are loaded from
+    `1.1.0`'s plists and none from `1.2.0`'s, `hello.b` serves `1.1.0`, and the coordinator marks
+    `1.2.0` bad;
+  - uninstall: both plists are gone, launchd holds neither job, and hello's package directory and
+    its paths in `placed.json` are gone.

@@ -16,7 +16,7 @@ marked **specified, not built**, with the pull request that builds it.
 |---|---|---|
 | the package, its hook, its units and its release assets | `examples/hello`, `cargo xtask release package --service hello`, `artifacts.yml`, for linux-x86_64, linux-arm64 and macos-arm64 | — |
 | running a hook step on a Linux host | the daemon runs each step through `SystemdLauncher` | — |
-| running a hook step on a Mac | `LaunchdLauncher` (`hostkeeper-launchd`) | the daemon running its steps through it (`docs/macos.md`) |
+| running a hook step on a Mac | the daemon runs each step as a launchd job through `LaunchdLauncher` (`hostkeeper-launchd`), and links and loads the package's plists (`docs/macos.md`) | — |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
 | assigning to a role | the rollout file's `roles`, `Services.Assign` (komira-ai/hostkeeper#45), the Rollout page's Assign, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host |
 | setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow and its hello caller `hello-desired.yml`, the Rollout page's Set desired (through the gateway) | — |
@@ -237,6 +237,5 @@ and the Host page's `Assigned services` shows hello with `State` `uninstalling`.
 
 - A hand-off without a gap: hello restarts. tierstore's port forward is its own (design
   `docs/design/host-updates.md`, section 4.1).
-- The macOS hosts: the daemon does not run its steps through launchd yet (`docs/macos.md`).
 - More than one platform in one proof from CI: `hello-desired.yml` sets one platform's package
   digest. An operator can name the release index instead (see "The release index" above).

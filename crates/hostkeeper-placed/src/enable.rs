@@ -1,7 +1,8 @@
 //! Enabling the `run` units (design section 4.7, "Units, enable and boot"): the daemon writes
 //! their `WantedBy=` links itself, `<unit dir>/<target>.wants/<unit>` pointing at the placed
 //! unit file (for an instance, at its template's), and records each in `placed.json` as a
-//! `wants_link`, by the same write-ahead path as every other placed path.
+//! `wants_link`, by the same write-ahead path as every other placed path. A launchd label has
+//! none: its placed plist is what launchd loads at boot.
 
 use std::path::PathBuf;
 
@@ -17,8 +18,8 @@ use crate::store::PathKind;
 
 impl Placer<'_> {
     /// The `WantedBy=` links of the `run` units of `manifest`, from the `[Install]` section of
-    /// each unit file of its version directory. A `run` unit whose file has no `WantedBy=` is
-    /// [`crate::LintError::NoWantedBy`].
+    /// each unit file of its version directory. A systemd `run` unit whose file has no
+    /// `WantedBy=` is [`crate::LintError::NoWantedBy`]; a launchd label adds no link.
     pub(crate) fn wants_claims(&self, manifest: &Manifest) -> Result<Claims, PlacedError> {
         let texts = unit_texts(self.fs, &self.roots, manifest)?;
         let unit_dir = self.roots.unit_dir();

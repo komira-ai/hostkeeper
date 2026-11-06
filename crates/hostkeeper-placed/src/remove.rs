@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::Manifest;
-use hostkeeper_config::names::ServiceName;
+use hostkeeper_config::names::{PLIST_SUFFIX, ServiceName};
 
 use crate::check::occupant;
 use crate::error::{Owner, PlacedError, io_at};
@@ -44,13 +44,22 @@ enum Found {
     Foreign,
 }
 
+/// The unit a unit file named `file` is stopped as: a launchd plist by its label
+/// (`hello.a.plist` is the job `hello.a`), a systemd unit file by its own name.
+fn unit_of(file: String) -> String {
+    match file.strip_suffix(PLIST_SUFFIX) {
+        Some(label) => label.to_owned(),
+        None => file,
+    }
+}
+
 /// The unit to stop before the path of `entry` at `path` goes: the unit of a `WantedBy=` link,
 /// or a unit file that is not a template (a template's instances are stopped by their links).
 fn stop_name(path: &Path, entry: &Entry) -> Option<String> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     match entry.kind {
         PathKind::WantsLink => Some(name),
-        PathKind::Unit => (!name.contains("@.")).then_some(name),
+        PathKind::Unit => (!name.contains("@.")).then(|| unit_of(name)),
         PathKind::File => None,
     }
 }
@@ -101,7 +110,7 @@ impl Placer<'_> {
         let kept: BTreeSet<String> = record
             .of_service(service)
             .filter(|(path, entry)| keep.contains(*path) & (entry.kind != PathKind::File))
-            .map(|(path, _)| file_name_of(path))
+            .map(|(path, _)| unit_of(file_name_of(path)))
             .collect();
         let mut removal = Removal::default();
         if stop {

@@ -133,8 +133,29 @@ pub struct World {
     pub roots: Roots,
 }
 
+/// The unit directory of a Mac, where launchd reads its plists.
+pub const LAUNCHD_DIR: &str = "/Library/LaunchDaemons";
+
 impl World {
     pub fn new(name: &str) -> World {
+        World::with_roots(name, Roots::linux())
+    }
+
+    /// A host whose unit directory is launchd's, [`LAUNCHD_DIR`]; the state and packages
+    /// directories are as on Linux, as they are on a Mac.
+    pub fn launchd(name: &str) -> World {
+        let linux = Roots::linux();
+        World::with_roots(
+            name,
+            Roots::new(
+                linux.state_dir(),
+                Path::new(LAUNCHD_DIR),
+                linux.packages().dir(),
+            ),
+        )
+    }
+
+    fn with_roots(name: &str, roots: Roots) -> World {
         let base = Path::new(env!("CARGO_TARGET_TMPDIR"));
         let scratch = hostkeeper_testkit::Scratch::under(base, &format!("placed-{name}"))
             .expect("create the scratch directory");
@@ -143,10 +164,11 @@ impl World {
             fs: FaultFs::new(scratch.path(), log.clone()),
             units: FakeUnitControl::new(log.clone()),
             log,
-            roots: Roots::linux(),
+            roots,
             scratch,
         };
-        for dir in ["/var/lib/hostkeeper/packages", "/etc/systemd/system"] {
+        let dirs = [world.roots.packages().dir(), world.roots.unit_dir()];
+        for dir in dirs {
             fs::create_dir_all(world.host(dir)).expect("create a host directory");
         }
         world

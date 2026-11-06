@@ -24,7 +24,11 @@
 //! tierstore-shaped package (the program `tierstore-like` and `fixtures/tierstore-shaped/`),
 //! roll it back on a failed `verify` and force it back with no fetch; its rig is `tests/e2e/`,
 //! test code outside the measured set, whose root-free parts `tests/tierstore_rig.rs` runs in
-//! the pull-request set.
+//! the pull-request set. `tests/device_mac_e2e.rs` (a macOS file, in the job `macos-device`)
+//! runs the same path on a Mac with hello's macOS package (the program `hello-e2e` as its
+//! `bin/hello`): install, update, a failed `verify` rolled back and uninstall under launchd,
+//! with the rig's macOS host (`tests/e2e/mac_host.rs`); `tests/hello_rig.rs` checks its packages
+//! in the pull-request set.
 //!
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
 //!   contract in the modes a test picks, and `serve`, a long-running main process for a unit. Its

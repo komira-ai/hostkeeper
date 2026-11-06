@@ -3,7 +3,8 @@
 //! `<packages>/<service>/current/`.
 //!
 //! The rules are checked here again, whatever the loader checked, because a [`Manifest`]'s
-//! fields can be set by any caller: a unit file's name is the service's; a `[[files]] path` is
+//! fields can be set by any caller: a unit file's name is the service's (a systemd unit of the
+//! service, or a launchd plist `<label>.plist` whose label is the service's); a `[[files]] path` is
 //! absolute, in the path grammar (no `.` or `..` component) and under none of
 //! [`REFUSED_PREFIXES`], compared on whole components (`/etc/hostkeeperx` is not
 //! `/etc/hostkeeper`); a `[[files]] source` is relative, below `files/`, with no `.` or `..`
@@ -14,7 +15,8 @@ use std::path::PathBuf;
 
 use hostkeeper_config::manifest::{Manifest, REFUSED_PREFIXES};
 use hostkeeper_config::names::{
-    ServiceName, UnitName, Version, check_path, check_relative, is_within,
+    PLIST_SUFFIX, ServiceName, UnitName, Version, check_path, check_relative, is_within,
+    plist_label,
 };
 
 use crate::error::ClaimError;
@@ -83,10 +85,16 @@ impl Claims {
         let current = roots.packages().current(service);
         let mut claims = Claims::empty(&manifest.name, &manifest.version);
         for file in &manifest.unit_files {
-            UnitName::of(service, file, true).map_err(|_| ClaimError::UnitName {
-                service: service.to_owned(),
-                file: file.clone(),
-            })?;
+            let named = match file.ends_with(PLIST_SUFFIX) {
+                true => plist_label(service, file).is_ok(),
+                false => UnitName::of(service, file, true).is_ok(),
+            };
+            if !named {
+                return Err(ClaimError::UnitName {
+                    service: service.to_owned(),
+                    file: file.clone(),
+                });
+            }
             claims.add(Claim {
                 path: roots.unit_dir().join(file),
                 kind: PathKind::Unit,
