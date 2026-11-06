@@ -9,6 +9,7 @@ use std::rc::Rc;
 use super::*;
 
 use hostkeeper_config::daemon::Sha256Hex;
+use hostkeeper_steps::{BootId, BootIdError};
 
 use crate::ports::{CommitId, SourceRef};
 use crate::testing::{FakeClock, commit_id, digest, listing, scratch, signers, source_ref};
@@ -852,7 +853,7 @@ impl Clock for PassesAfterOneLook {
         }
     }
 
-    fn boot_id(&self) -> String {
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
         self.inner.boot_id()
     }
 

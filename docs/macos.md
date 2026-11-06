@@ -350,6 +350,19 @@ hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
 pkg's plist.
 
+### Boot id
+
+The daemon's clock reads the boot id through a port, `hostkeeper_steps::BootIdSource`. On a Mac
+it is `hostkeeper_launchd::SysctlBootId`: the `kern.bootsessionuuid` sysctl, a UUID the kernel
+makes at each boot, accepted only as a UUID (`hostkeeper_launchd::parse_boot_session_uuid`), so a
+boot id is never empty. One that cannot be read or parsed is an error, read as "the host may have
+rebooted", never as the same boot: a stamp of an unknown boot measures no elapsed time (the step
+runner begins such a window again once, when it first meets it, then counts it on its own
+process's monotonic clock); the start pass reads the step records as after a boot, alerts
+`journal_unavailable`, writes no `.boot-id` and runs no hook; and starts of an unknown boot are no
+burst for the fallback. A stamp of an unknown boot is stored with an empty `boot_id`, the value
+older releases wrote on a Mac, so the on-disk format is unchanged.
+
 ### The device run
 
 The job `macos-device` of `.github/workflows/privileged.yml` runs on a GitHub-hosted arm64 macOS
@@ -358,12 +371,14 @@ Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`) are not counted b
 gate; what they drive is measured against fakes on Linux. They:
 
 - start the daemon as a launchd job of the system domain, with a config and directories of their
-  own, and call `Status` on its admin socket;
+  own, call `Status` on its admin socket, and read the Mac's boot id in the `.boot-id` its start
+  pass wrote;
 - run the fixture hook in mode `sleep` as a step job through `LaunchdLauncher` with a bound of 5
   seconds: the job is booted out at the bound, the step has no exit code (a failed step), and
   launchd no longer holds the job;
 - read a running job, an ended job and an unknown label through the observer's service manager:
   active, inactive, not found;
+- read the boot id from `kern.bootsessionuuid` twice: a UUID, the same on both reads;
 - check the process identity against real processes and print what `proc_pidpath` and the image
   lookup give when the file is unchanged, renamed over, unlinked, started through a link, at a
   path longer than `PROC_PIDPATHINFO_MAXSIZE`, and run by another user;
@@ -375,5 +390,3 @@ gate; what they drive is measured against fakes on Linux. They:
 
 - The placed plists of a service package linked into `/Library/LaunchDaemons` by the daemon in a
   real update (the unit control is wired; a device run of an update is not part of the run above).
-- The boot id of the monotonic clock on a Mac (the start log and the step records compare stamps
-  under it).

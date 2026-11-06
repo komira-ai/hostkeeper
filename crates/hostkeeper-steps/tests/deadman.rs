@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_steps::{Clock, DeadMan, LaunchError, StepCall, StepExit, StepLauncher, Watch};
+use hostkeeper_steps::{
+    BootId, BootIdError, Clock, DeadMan, LaunchError, StepCall, StepExit, StepLauncher, Watch,
+};
 use support::{Fake, FakeClock, Reply, Rig};
 
 fn deadman(fake: &Arc<Fake>, clock: &Arc<FakeClock>) -> (Arc<Watch>, DeadMan) {
@@ -279,7 +281,7 @@ impl Clock for EndsAt {
         self.clock.mono_secs()
     }
 
-    fn boot_id(&self) -> String {
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
         self.clock.boot_id()
     }
 

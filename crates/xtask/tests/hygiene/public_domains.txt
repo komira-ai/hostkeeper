@@ -72,11 +72,12 @@ yaml.org
 =hostkeeper.agent.v1.health
 =hostkeeper.agent.v1.claims
 =hostkeeper.operator.v1.services
-# systemd targets in packaging/linux/hostkeeper.service and its test (`target` is a top-level
-# domain), not hosts.
+# systemd targets in packaging/linux/hostkeeper.service and its test, and in the channel sync's
+# units of docs/deploy/channel-sync (`target` is a top-level domain), not hosts.
 =default.target
 =multi-user.target
 =network-online.target
+=timers.target
 
 # The documentation of other tools that the technical report's comparison cites, one entry per
 # project's own site (docs/report/hostkeeper.html, its Sources).

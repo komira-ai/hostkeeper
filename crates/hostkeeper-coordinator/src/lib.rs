@@ -126,6 +126,10 @@ mod assignment_tests;
 #[cfg(test)]
 mod audit_file_tests;
 #[cfg(test)]
+mod audit_refusal_tests;
+#[cfg(test)]
+mod audit_rotation_tests;
+#[cfg(test)]
 mod backup_refusal_tests;
 #[cfg(test)]
 mod backup_tests;

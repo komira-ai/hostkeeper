@@ -44,12 +44,12 @@ use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_package::ports::{Attest, Attested, Verifier, VerifyError};
 use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
-use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher, SystemClock};
+use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher};
 use hostkeeper_unpack::Owner;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-use crate::adapters::{Adapters, host_claims};
+use crate::adapters::{Adapters, host_claims, host_clock};
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
 use crate::links::{DaemonLog, HostLink, Links};
@@ -311,7 +311,7 @@ fn daemon(
     notifier: &dyn ReadyNotifier,
 ) -> Result<(), StartError> {
     let own_version = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION"))?;
-    note_start(settings, Platform::host().kind, own_version, &SystemClock);
+    note_start(settings, Platform::host().kind, own_version, &host_clock());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build();
@@ -421,7 +421,7 @@ pub fn host_enroller(
         claims: host_claims(kind, Box::new(HostIoreg::system())),
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
-        clock: Box::new(SystemClock),
+        clock: Box::new(host_clock()),
     };
     Enroller::open(settings, ports).map_err(|error| error.to_string())
 }
@@ -573,7 +573,7 @@ pub fn host_ports(
     own_version: HostkeeperVersion,
     adapters: Adapters,
 ) -> Result<Ports, StartError> {
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let clock: Arc<dyn Clock> = Arc::new(host_clock());
     let fetcher = NetFetcher::new(
         UreqTransport::new(&tls_roots(&files.ca_bundle)),
         Arc::clone(&clock),

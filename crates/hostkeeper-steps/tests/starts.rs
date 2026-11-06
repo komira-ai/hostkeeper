@@ -9,13 +9,13 @@ use std::os::unix::fs::PermissionsExt;
 
 use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, START_LIMIT_WINDOW_SECS, main_dropin};
 use hostkeeper_steps::starts::{MAX_STARTS, STARTS_FILE};
-use hostkeeper_steps::{DaemonStart, Stamp, StartLog, StartLogError, should_fall_back};
+use hostkeeper_steps::{BootId, DaemonStart, Stamp, StartLog, StartLogError, should_fall_back};
 use serde_json::{Value, json};
 use support::Scratch;
 
 fn at(boot: &str, mono_secs: u64) -> Stamp {
     Stamp {
-        boot_id: boot.to_owned(),
+        boot_id: BootId::new("a test", boot).ok(),
         mono_secs,
     }
 }
@@ -89,6 +89,16 @@ fn should_fall_back_agrees_for_systemd_and_launchd_starts() {
         (
             "a start after the latest does not count",
             vec![at("b", 100), at("b", 500), at("b", 110)],
+            false,
+        ),
+        (
+            "three starts of unknown boots are of no one boot",
+            vec![at("", 100), at("", 110), at("", 120)],
+            false,
+        ),
+        (
+            "starts of an unknown boot do not count with a known latest",
+            vec![at("", 100), at("", 110), at("b", 120)],
             false,
         ),
     ];
