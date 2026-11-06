@@ -9,7 +9,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 ## Route
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
-`Services`, `Enrollment`, `Audit`):
+`Services`, `Enrollment`, `Audit`, `Alerts`):
 
 ```
 POST /<package>.<Service>/<Method>

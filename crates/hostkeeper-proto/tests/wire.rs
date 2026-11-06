@@ -367,7 +367,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 }
 
 /// The RPCs of the coordinator's services, pinned.
-const RPCS: [(&str, &[&str]); 6] = [
+const RPCS: [(&str, &[&str]); 7] = [
     (
         "hostkeeper.agent.v1.Coordinator",
         &[
@@ -425,6 +425,10 @@ const RPCS: [(&str, &[&str]); 6] = [
     (
         "hostkeeper.operator.v1.Audit",
         &["List(ListAuditRequest) ListAuditResponse"],
+    ),
+    (
+        "hostkeeper.operator.v1.Alerts",
+        &["List(ListAlertsRequest) ListAlertsResponse"],
     ),
 ];
 
@@ -694,7 +698,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 12] = [
+    let cases: [(&str, &str, &[&str]); 15] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -709,6 +713,31 @@ fn wire_names_are_pinned() {
                 "bad_signature",
                 "renewal_not_allowed",
             ],
+        ),
+        (
+            "hostkeeper.operator.v1.AlertsRefusal",
+            "ALERTS_REFUSAL_",
+            &["unauthorized", "forbidden", "store_failed"],
+        ),
+        (
+            "hostkeeper.operator.v1.AlertKind",
+            "ALERT_KIND_",
+            &[
+                "halt",
+                "waiting_for_operator",
+                "duplicate",
+                "duplicate_claim_pending",
+                "failed_canary",
+                "held_on_bad_version",
+                "abandoned_while_updating",
+                "silent_host",
+                "cert_near_expiry",
+            ],
+        ),
+        (
+            "hostkeeper.operator.v1.AlertSeverity",
+            "ALERT_SEVERITY_",
+            &["critical", "warning"],
         ),
         (
             "hostkeeper.agent.v1.EnrollState",

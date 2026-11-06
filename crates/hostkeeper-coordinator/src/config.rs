@@ -54,6 +54,9 @@ use hostkeeper_wire::identity::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::alerts::{
+    DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
+};
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation};
 use crate::backup::{
     Backup, BackupError, Report, Restore, backup, ops_path, restore, restore_marker,
@@ -396,6 +399,18 @@ pub struct Serve {
         value_parser = clap::value_parser!(u64).range(1..)
     )]
     pub release_channel_timeout_secs: u64,
+    /// How long a host the coordinator has heard from may go without a heartbeat before it is an
+    /// alert (`silent_host`), in seconds.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_SILENT_HOST_SECS,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub alert_silent_host_secs: u64,
+    /// How long before the certificate the coordinator serves its hosts expires it is an alert
+    /// (`cert_near_expiry`), in seconds; 0 alerts only once it has expired.
+    #[arg(long, default_value_t = DEFAULT_CERT_WINDOW_SECS)]
+    pub alert_cert_window_secs: u64,
 }
 
 /// Where the listeners are bound.
@@ -541,7 +556,11 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_prefixes(prefixes)
         .with_ops(ops)
         .with_verdicts(verdicts)
-        .with_ui(ui);
+        .with_ui(ui)
+        .with_alert_thresholds(Thresholds {
+            silent_after: Duration::from_secs(flags.alert_silent_host_secs),
+            cert_window_secs: flags.alert_cert_window_secs,
+        });
     if let Some(channel) = channel {
         coordinator = coordinator.with_release_channel(channel);
     }
@@ -716,6 +735,7 @@ where
     let tokens = parts.coordinator.tokens().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
+    let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let serving = together(
         serve(
             heartbeat,
@@ -725,16 +745,13 @@ where
         ),
         serve(control, coordinator, CLIENT_PATIENCE, MAX_CONNECTIONS),
     );
-    match together(
-        serving,
-        reload_every(
-            enrollment,
-            vec![parts.heartbeat_tls, parts.control_tls],
-            tokens,
-            parts.reload,
-        ),
-    )
-    .await {}
+    let reloading = reload_every(
+        enrollment,
+        vec![parts.heartbeat_tls, parts.control_tls],
+        tokens,
+        parts.reload,
+    );
+    match together(serving, together(reloading, observing)).await {}
 }
 
 /// Resolves on SIGTERM or SIGINT.

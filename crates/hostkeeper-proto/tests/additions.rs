@@ -65,6 +65,21 @@ fn record() -> op::InventoryRecord {
     }
 }
 
+/// An alert with every field set.
+fn alert() -> op::Alert {
+    op::Alert {
+        kind: op::AlertKind::DuplicateClaimPending.into(),
+        severity: op::AlertSeverity::Warning.into(),
+        host_id: "db-2".to_owned(),
+        service: "db".to_owned(),
+        version: "1.2.0".to_owned(),
+        message: "a pending request claims the identity of db-1".to_owned(),
+        first_observed_unix: 1_800_000_000,
+        request_id: "ab".repeat(32),
+        other_host_id: "db-1".to_owned(),
+    }
+}
+
 /// One message of each type added since the baseline, every field set, by full name.
 fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
     let request_id = "ab".repeat(32);
@@ -157,6 +172,13 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 next_seq: 41,
             }),
         ),
+        (
+            "hostkeeper.operator.v1.ListAlertsResponse",
+            round_trip(&op::ListAlertsResponse {
+                alerts: vec![alert()],
+            }),
+        ),
+        ("hostkeeper.operator.v1.Alert", round_trip(&alert())),
         (
             "hostkeeper.operator.v1.ListPendingRequest",
             round_trip(&op::ListPendingRequest {
@@ -381,7 +403,7 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 26);
+    assert_eq!(messages.len(), 28);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

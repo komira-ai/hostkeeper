@@ -438,3 +438,56 @@ fn services_assign_and_unassign_by_role_run_through_ctl() {
         assert_eq!(bridge.paths(), [UNASSIGN, ASSIGN], "{kind:?}");
     }
 }
+
+/// Proves: `hostkeeper ctl alerts list`, the command generated from `Alerts.List`, prints the
+/// coordinator's alerts over both transports: for a halted `web`, one critical `halt` alert of
+/// `web` at 2.0, the same by `--transport grpc` and `--transport gateway` but for when each
+/// coordinator first observed it; each calls `Alerts.List` once.
+///
+/// Catches: an `alerts` command missing from ctl, or one that answers differently by transport.
+#[test]
+fn alerts_list_runs_through_ctl_over_both_transports() {
+    let mut printed = Vec::new();
+    for (name, kind) in [
+        ("ctl-alerts-grpc", TransportKind::Grpc),
+        ("ctl-alerts-gateway", TransportKind::Gateway),
+    ] {
+        let farm = rig(name, "");
+        Runtime::new()
+            .expect("a runtime")
+            .block_on(crate::marks_support::set(&farm, "web", "2.0", 1));
+        farm.coordinator
+            .halt(
+                &crate::marks_support::operator(),
+                hostkeeper_proto::hostkeeper::operator::v1::HaltRequest {
+                    service: "web".to_owned(),
+                    reason: "a bad disk".to_owned(),
+                },
+            )
+            .expect("halted");
+        let coordinator = Arc::new(farm.coordinator);
+        let bridge = Bridge::new(kind, &coordinator);
+        let ran = run_ctl(&bridge, OPERATOR, vec!["alerts".into(), "list".into()]);
+        assert_eq!((ran.code, ran.stderr.as_str()), (0, ""), "{name}");
+        assert_eq!(bridge.paths(), ["/hostkeeper.operator.v1.Alerts/List"]);
+        let mut answer: Value = serde_json::from_str(&ran.stdout).expect("JSON");
+        let first = answer["alerts"][0]
+            .as_object_mut()
+            .expect("an alert")
+            .remove("firstObservedUnix");
+        assert!(first.is_some(), "{name}: {}", ran.stdout);
+        printed.push(answer);
+    }
+    assert_eq!(printed[0], printed[1], "the same answer");
+    assert_eq!(
+        printed[0],
+        serde_json::json!({"alerts": [{
+            "kind": "ALERT_KIND_HALT",
+            "severity": "ALERT_SEVERITY_CRITICAL",
+            "service": "web",
+            "version": "2.0",
+            "message": "web is halted at 2.0 by an operator: nothing is ordered for it until an \
+                        operator clears the halt",
+        }]})
+    );
+}

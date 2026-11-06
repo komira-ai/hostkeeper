@@ -274,7 +274,14 @@ async fn every_operator_method_admits_exactly_its_credential() {
         .collect();
     assert_eq!(
         services,
-        BTreeSet::from(["Audit", "Enrollment", "Hosts", "Releases", "Services"])
+        BTreeSet::from([
+            "Alerts",
+            "Audit",
+            "Enrollment",
+            "Hosts",
+            "Releases",
+            "Services"
+        ])
     );
     assert!(paths.contains(&SET_DESIRED) && paths.contains(&CONVERGE));
     for path in paths {

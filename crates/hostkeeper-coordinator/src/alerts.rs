@@ -1,0 +1,719 @@
+//! Alerts: the conditions that need a person, derived from what the coordinator holds
+//! (`Alerts.List`, design section 6.7).
+//!
+//! The coordinator has no pager. Every condition that needs a person is derived here, one
+//! derivation per kind ([`Kind`]), by [`derive`]: a pure function of the fleet, the ops state, the
+//! services, what the enrollment store says ([`EnrollmentFacts`]) and the time ([`At`]). The same
+//! derivation answers `Alerts.List` and writes the error log lines with an `alert=` field (each
+//! kind's [`Kind::log_token`]), so the two cannot disagree: an alert is logged once when an
+//! observation first finds it ([`Book`]), at the next observation after its condition appears.
+//! The coordinator observes every [`OBSERVE_EVERY`] ([`observe_every`]) and at every
+//! `Alerts.List`.
+//!
+//! A condition that ends is forgotten: if it comes back it is logged again and first observed
+//! anew. Nothing of the book is stored, so a restarted coordinator observes and logs every
+//! standing condition anew.
+//!
+//! What each kind reads:
+//! - `halt`: a halt of a service the rollout file defines (the ops state);
+//! - `waiting_for_operator`: a pending enrollment request that is no duplicate claim;
+//! - `duplicate`: a host heard since the start whose identity two live daemons report (the
+//!   enrollment store's mark, the same the rollout gate reads);
+//! - `duplicate_claim_pending`: a pending request that is a duplicate claim, with the enrolled
+//!   host it collides with when one is known (its renewal's host, or a recorded approval with its
+//!   machine id or one of its universally administered MACs);
+//! - `failed_canary`: a canary's failure noted by the reconcile ([`Fleet::failed_canaries`]),
+//!   while its version stays marked bad; kept in memory, like the fleet's orders;
+//! - `held_on_bad_version`: a held host running a version marked bad ([`crate::holds`]);
+//! - `abandoned_while_updating`: an `exclude_abandon` among the changes the ops state keeps (its
+//!   last 64), while the host stays excluded from the service;
+//! - `silent_host`: a host heard since the start whose last heartbeat is at least
+//!   `--alert-silent-host-secs` old;
+//! - `cert_near_expiry`: the certificate the coordinator serves its hosts (with an enrollment
+//!   store), when it expires within `--alert-cert-window-secs`, or has expired.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use hostkeeper_enrollment::enroll::{RecordedApproval, RequestState, RequestView, StoreError};
+use hostkeeper_enrollment::names::MacAddress;
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+use hostkeeper_wire::HostId;
+
+use crate::fleet::Fleet;
+use crate::holds::bad_version;
+use crate::operator::Caller;
+use crate::ops::{HaltOrigin, OpsState};
+use crate::service::Coordinator;
+use crate::services::Services;
+
+/// How often the running coordinator observes the alerts: one heartbeat interval.
+pub const OBSERVE_EVERY: Duration = Duration::from_secs(15);
+
+/// The default of `--alert-silent-host-secs`: twenty heartbeat intervals.
+pub const DEFAULT_SILENT_HOST_SECS: u64 = 300;
+
+/// The default of `--alert-cert-window-secs`: 14 days.
+pub const DEFAULT_CERT_WINDOW_SECS: u64 = 14 * 24 * 3600;
+
+/// The thresholds of the alerts that are a matter of time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Thresholds {
+    /// A host whose last heartbeat is this old, or older, is silent.
+    pub silent_after: Duration,
+    /// A certificate that expires within this many seconds is near its expiry.
+    pub cert_window_secs: u64,
+}
+
+impl Default for Thresholds {
+    fn default() -> Self {
+        Self {
+            silent_after: Duration::from_secs(DEFAULT_SILENT_HOST_SECS),
+            cert_window_secs: DEFAULT_CERT_WINDOW_SECS,
+        }
+    }
+}
+
+/// What an alert is about, in the order `Alerts.List` answers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    /// A service is halted.
+    Halt,
+    /// A host waits for an operator to approve its enrollment.
+    WaitingForOperator,
+    /// Two live daemons report one host's identity.
+    Duplicate,
+    /// A pending request claims an identity another host or request has.
+    DuplicateClaimPending,
+    /// A canary failed a release.
+    FailedCanary,
+    /// A held host runs a version marked bad.
+    HeldOnBadVersion,
+    /// An operator abandoned a host that may be mid-update.
+    AbandonedWhileUpdating,
+    /// A host has not heartbeated for the silent-host threshold.
+    SilentHost,
+    /// The coordinator's certificate for its hosts expires soon.
+    CertNearExpiry,
+}
+
+impl Kind {
+    /// The `alert=` field of its log line. The four kinds the coordinator logged before
+    /// `Alerts.List` keep the tokens they had (`canary_failed`, `exclude_abandon`,
+    /// `duplicate_claim`, `halt`), so a log search keeps finding them.
+    #[must_use]
+    pub const fn log_token(self) -> &'static str {
+        match self {
+            Self::Halt => "halt",
+            Self::WaitingForOperator => "waiting_for_operator",
+            Self::Duplicate => "duplicate",
+            Self::DuplicateClaimPending => "duplicate_claim",
+            Self::FailedCanary => "canary_failed",
+            Self::HeldOnBadVersion => "held_on_bad_version",
+            Self::AbandonedWhileUpdating => "exclude_abandon",
+            Self::SilentHost => "silent_host",
+            Self::CertNearExpiry => "cert_near_expiry",
+        }
+    }
+
+    /// How soon it needs a person: a stop, or a risk now, is critical.
+    #[must_use]
+    pub const fn severity(self) -> proto::AlertSeverity {
+        match self {
+            Self::Halt | Self::Duplicate | Self::FailedCanary => proto::AlertSeverity::Critical,
+            Self::WaitingForOperator
+            | Self::DuplicateClaimPending
+            | Self::HeldOnBadVersion
+            | Self::AbandonedWhileUpdating
+            | Self::SilentHost
+            | Self::CertNearExpiry => proto::AlertSeverity::Warning,
+        }
+    }
+
+    /// Its value in `hostkeeper.operator.v1`.
+    #[must_use]
+    pub const fn proto(self) -> proto::AlertKind {
+        match self {
+            Self::Halt => proto::AlertKind::Halt,
+            Self::WaitingForOperator => proto::AlertKind::WaitingForOperator,
+            Self::Duplicate => proto::AlertKind::Duplicate,
+            Self::DuplicateClaimPending => proto::AlertKind::DuplicateClaimPending,
+            Self::FailedCanary => proto::AlertKind::FailedCanary,
+            Self::HeldOnBadVersion => proto::AlertKind::HeldOnBadVersion,
+            Self::AbandonedWhileUpdating => proto::AlertKind::AbandonedWhileUpdating,
+            Self::SilentHost => proto::AlertKind::SilentHost,
+            Self::CertNearExpiry => proto::AlertKind::CertNearExpiry,
+        }
+    }
+}
+
+/// What makes an alert the same alert from one observation to the next: its kind and what it
+/// concerns, each empty when it concerns none. The order of the answer.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Subject {
+    /// Its kind.
+    pub kind: Kind,
+    /// The service.
+    pub service: String,
+    /// The host, by node id.
+    pub host: String,
+    /// The version.
+    pub version: String,
+    /// The pending enrollment request, by its id.
+    pub request: String,
+    /// The enrolled host a duplicate claim collides with.
+    pub other_host: String,
+}
+
+impl Subject {
+    fn of(kind: Kind) -> Self {
+        Self {
+            kind,
+            service: String::new(),
+            host: String::new(),
+            version: String::new(),
+            request: String::new(),
+            other_host: String::new(),
+        }
+    }
+}
+
+/// A condition that needs a person.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Alert {
+    /// What it is about.
+    pub subject: Subject,
+    /// What happened and what a person does about it.
+    pub message: String,
+}
+
+/// A pending enrollment request, as the alerts read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Waiting {
+    /// Its id, in hex.
+    pub request_id: String,
+    /// When the coordinator received it, unix seconds.
+    pub posted_unix: u64,
+    /// The host it renews, if it is a renewal.
+    pub renewal_of: Option<String>,
+    /// Whether it is a duplicate claim.
+    pub duplicate_claim: bool,
+    /// For a duplicate claim, the enrolled host it collides with, when one is known.
+    pub other_host: Option<String>,
+}
+
+/// What the enrollment store holds that the alerts read, read once per observation (an empty
+/// one for a coordinator without `--enrollment-dir`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EnrollmentFacts {
+    /// The pending requests, duplicate claims included.
+    pub waiting: Vec<Waiting>,
+    /// The hosts heard since the start that the store marks duplicate.
+    pub duplicates: BTreeSet<HostId>,
+    /// When the certificate the coordinator serves its hosts expires, unix seconds.
+    pub server_not_after: Option<u64>,
+}
+
+/// When an observation is made: by the coordinator's clock (since its start, the clock the
+/// fleet keeps its heartbeats by) and in unix seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct At {
+    /// The coordinator's clock.
+    pub now: Duration,
+    /// Unix seconds.
+    pub unix: u64,
+}
+
+/// Every alert of `fleet`, `ops`, `services` and `enrollment` at `at`, by [`Subject`]: one
+/// derivation per kind. Pure: it reads nothing else, and nothing changes.
+#[must_use]
+pub fn derive(
+    fleet: &Fleet,
+    ops: &OpsState,
+    services: &Services,
+    enrollment: &EnrollmentFacts,
+    at: At,
+    thresholds: &Thresholds,
+) -> Vec<Alert> {
+    let mut alerts = halts(ops, services);
+    alerts.extend(waiting_for_operator(enrollment));
+    alerts.extend(duplicates(enrollment));
+    alerts.extend(duplicate_claims(enrollment));
+    alerts.extend(failed_canaries(fleet, ops, services));
+    alerts.extend(held_on_bad_versions(fleet, ops, services));
+    alerts.extend(abandoned(ops, services));
+    alerts.extend(silent_hosts(fleet, at.now, thresholds.silent_after));
+    alerts.extend(cert_near_expiry(
+        enrollment,
+        at.unix,
+        thresholds.cert_window_secs,
+    ));
+    alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
+    alerts.dedup_by(|a, b| a.subject == b.subject);
+    alerts
+}
+
+/// `halt`: each service the rollout file defines whose halt stands.
+fn halts(ops: &OpsState, services: &Services) -> Vec<Alert> {
+    services
+        .defs()
+        .filter_map(|def| {
+            let halt = ops.services.get(&def.name)?.halt.as_ref()?;
+            let by = if halt.origin == HaltOrigin::Operator {
+                "an operator".to_owned()
+            } else {
+                format!("{}, check {}", halt.node_id, halt.check)
+            };
+            Some(Alert {
+                subject: Subject {
+                    service: def.name.clone(),
+                    host: halt.node_id.clone(),
+                    version: halt.target.to_string(),
+                    ..Subject::of(Kind::Halt)
+                },
+                message: format!(
+                    "{} is halted at {} by {by}: nothing is ordered for it until an operator \
+                     clears the halt",
+                    def.name, halt.target
+                ),
+            })
+        })
+        .collect()
+}
+
+/// `waiting_for_operator`: each pending request that is no duplicate claim.
+fn waiting_for_operator(enrollment: &EnrollmentFacts) -> Vec<Alert> {
+    enrollment
+        .waiting
+        .iter()
+        .filter(|request| !request.duplicate_claim)
+        .map(|request| {
+            let what = request.renewal_of.as_ref().map_or_else(
+                || "a host's enrollment".to_owned(),
+                |host| format!("the renewal of {host}"),
+            );
+            Alert {
+                subject: Subject {
+                    host: request.renewal_of.clone().unwrap_or_default(),
+                    request: request.request_id.clone(),
+                    ..Subject::of(Kind::WaitingForOperator)
+                },
+                message: format!(
+                    "request {} ({what}, received at unix {}) waits for an operator's approval",
+                    request.request_id, request.posted_unix
+                ),
+            }
+        })
+        .collect()
+}
+
+/// `duplicate`: each host the enrollment store marks duplicate.
+fn duplicates(enrollment: &EnrollmentFacts) -> Vec<Alert> {
+    enrollment
+        .duplicates
+        .iter()
+        .map(|host| Alert {
+            subject: Subject {
+                host: host.to_string(),
+                ..Subject::of(Kind::Duplicate)
+            },
+            message: format!(
+                "two live daemons report the identity of {host} (a cloned disk): it is ordered \
+                 nothing until a new key replaces it"
+            ),
+        })
+        .collect()
+}
+
+/// `duplicate_claim_pending`: each pending request that is a duplicate claim.
+fn duplicate_claims(enrollment: &EnrollmentFacts) -> Vec<Alert> {
+    enrollment
+        .waiting
+        .iter()
+        .filter(|request| request.duplicate_claim)
+        .map(|request| {
+            let whose = request
+                .other_host
+                .as_ref()
+                .map_or_else(|| "another host or request".to_owned(), Clone::clone);
+            Alert {
+                subject: Subject {
+                    host: request.renewal_of.clone().unwrap_or_default(),
+                    request: request.request_id.clone(),
+                    other_host: request.other_host.clone().unwrap_or_default(),
+                    ..Subject::of(Kind::DuplicateClaimPending)
+                },
+                message: format!(
+                    "request {} claims an identity {whose} has: approve it only with replace, \
+                     or leave it",
+                    request.request_id
+                ),
+            }
+        })
+        .collect()
+}
+
+/// `failed_canary`: each canary failure the fleet noted whose version is still marked bad.
+fn failed_canaries(fleet: &Fleet, ops: &OpsState, services: &Services) -> Vec<Alert> {
+    services
+        .defs()
+        .flat_map(|def| {
+            let bad = ops
+                .services
+                .get(&def.name)
+                .map(|marks| marks.bad.as_slice())
+                .unwrap_or_default();
+            fleet
+                .failed_canaries(&def.name)
+                .filter(|(version, _)| bad.iter().any(|b| b.as_str() == *version))
+                .map(|(version, node)| Alert {
+                    subject: Subject {
+                        service: def.name.clone(),
+                        host: node.to_owned(),
+                        version: version.to_owned(),
+                        ..Subject::of(Kind::FailedCanary)
+                    },
+                    message: format!(
+                        "{node}, a canary of {}, failed {version}: it is marked bad and rolled \
+                         back",
+                        def.name
+                    ),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// `held_on_bad_version`: each held host of a service that runs a version of it marked bad.
+fn held_on_bad_versions(fleet: &Fleet, ops: &OpsState, services: &Services) -> Vec<Alert> {
+    services
+        .defs()
+        .flat_map(|def| {
+            fleet
+                .hosts_of(&def.name)
+                .filter_map(|(id, _)| {
+                    let version = bad_version(fleet, ops, &def.name, id)?;
+                    Some(Alert {
+                        subject: Subject {
+                            service: def.name.clone(),
+                            host: id.to_string(),
+                            version: version.to_string(),
+                            ..Subject::of(Kind::HeldOnBadVersion)
+                        },
+                        message: format!(
+                            "an operator holds {id} on {} {version}, which is marked bad: it is \
+                             not ordered off it until the hold is released",
+                            def.name
+                        ),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// `abandoned_while_updating`: each `exclude_abandon` the ops state keeps, of a service the
+/// rollout file defines, whose host is still excluded from it.
+fn abandoned(ops: &OpsState, services: &Services) -> Vec<Alert> {
+    ops.audit
+        .iter()
+        .filter(|entry| entry.action == "exclude_abandon")
+        .filter_map(|entry| {
+            let service = entry.service.as_deref()?;
+            let node = entry.node_id.as_deref()?;
+            services.get(service)?;
+            ops.excluded
+                .iter()
+                .any(|e| e.service == service && e.node_id == node)
+                .then(|| Alert {
+                    subject: Subject {
+                        service: service.to_owned(),
+                        host: node.to_owned(),
+                        ..Subject::of(Kind::AbandonedWhileUpdating)
+                    },
+                    message: format!(
+                        "an operator abandoned {node} while it may have been updating {service} \
+                         ({}): its update slot was freed, and it stays excluded until included",
+                        entry.reason.as_deref().unwrap_or("no reason")
+                    ),
+                })
+        })
+        .collect()
+}
+
+/// `silent_host`: each host heard since the start whose last heartbeat is `silent_after` old
+/// or older at `now`.
+fn silent_hosts(fleet: &Fleet, now: Duration, silent_after: Duration) -> Vec<Alert> {
+    fleet
+        .nodes()
+        .filter_map(|(id, node)| {
+            let silent = now.saturating_sub(node.seen);
+            (silent >= silent_after).then(|| Alert {
+                subject: Subject {
+                    host: id.to_string(),
+                    ..Subject::of(Kind::SilentHost)
+                },
+                message: format!(
+                    "{id} has not heartbeated for {} s (the threshold is {} s)",
+                    silent.as_secs(),
+                    silent_after.as_secs()
+                ),
+            })
+        })
+        .collect()
+}
+
+/// `cert_near_expiry`: the certificate the coordinator serves its hosts, when it expires
+/// before `unix` plus `window` seconds.
+fn cert_near_expiry(enrollment: &EnrollmentFacts, unix: u64, window: u64) -> Vec<Alert> {
+    enrollment
+        .server_not_after
+        .filter(|not_after| *not_after < unix.saturating_add(window))
+        .map(|not_after| {
+            let when = if not_after <= unix {
+                format!("expired at unix {not_after}")
+            } else {
+                format!("expires at unix {not_after}, in {} s", not_after - unix)
+            };
+            Alert {
+                subject: Subject::of(Kind::CertNearExpiry),
+                message: format!(
+                    "the certificate the coordinator serves its hosts {when}: its renewal is \
+                     failing (see the coordinator's log)"
+                ),
+            }
+        })
+        .into_iter()
+        .collect()
+}
+
+/// For a duplicate claim `view`, the enrolled host it collides with: the host it renews, else a
+/// host whose recorded approval has its machine id or one of its universally administered MACs.
+fn collides_with(view: &RequestView, approvals: &[RecordedApproval]) -> Option<String> {
+    if let Some(host) = &view.renewal_of {
+        return Some(host.to_string());
+    }
+    let macs: Vec<MacAddress> = view
+        .claims
+        .all_macs()
+        .into_iter()
+        .filter(MacAddress::is_universal_unicast)
+        .collect();
+    let machine = view.claims.machine_id.as_str();
+    approvals
+        .iter()
+        .filter(|approval| approval.request_id != view.request_id)
+        .find(|approval| {
+            (!machine.is_empty() && approval.claims.machine_id == machine)
+                || approval
+                    .claims
+                    .all_macs()
+                    .iter()
+                    .any(|mac| macs.contains(mac))
+        })
+        .map(|approval| approval.host_id.clone())
+}
+
+/// An alert as an observation found it: with when it was first observed, unix seconds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Observed {
+    /// The alert.
+    pub alert: Alert,
+    /// When it was first observed.
+    pub first_unix: u64,
+}
+
+/// The alerts the last observation found, each with when it was first observed: in memory only.
+#[derive(Debug, Default)]
+pub struct Book {
+    thresholds: Thresholds,
+    seen: Mutex<BTreeMap<Subject, u64>>,
+}
+
+impl Book {
+    /// A book that derives with `thresholds`.
+    #[must_use]
+    pub fn new(thresholds: Thresholds) -> Self {
+        Self {
+            thresholds,
+            seen: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Notes `alerts`, found at `unix`: an alert the last observation did not find is first
+    /// observed now and logged; one it found keeps its time; one it found and this did not is
+    /// forgotten.
+    fn observe(&self, alerts: Vec<Alert>, unix: u64) -> Vec<Observed> {
+        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
+        let observed: Vec<Observed> = alerts
+            .into_iter()
+            .map(|alert| {
+                let first_unix = seen.get(&alert.subject).copied().unwrap_or_else(|| {
+                    log(&alert);
+                    unix
+                });
+                Observed { alert, first_unix }
+            })
+            .collect();
+        *seen = observed
+            .iter()
+            .map(|one| (one.alert.subject.clone(), one.first_unix))
+            .collect();
+        observed
+    }
+}
+
+/// The error log line of `alert`, with its `alert=` field.
+fn log(alert: &Alert) {
+    let subject = &alert.subject;
+    tracing::error!(
+        alert = subject.kind.log_token(),
+        service = %subject.service,
+        node_id = %subject.host,
+        version = %subject.version,
+        request_id = %subject.request,
+        other_host_id = %subject.other_host,
+        "{}",
+        alert.message
+    );
+}
+
+/// `observed` as `Alerts.List` answers it.
+fn alert_proto(observed: Observed) -> proto::Alert {
+    let Observed { alert, first_unix } = observed;
+    let subject = alert.subject;
+    proto::Alert {
+        kind: subject.kind.proto().into(),
+        severity: subject.kind.severity().into(),
+        host_id: subject.host,
+        service: subject.service,
+        version: subject.version,
+        message: alert.message,
+        first_observed_unix: first_unix,
+        request_id: subject.request,
+        other_host_id: subject.other_host,
+    }
+}
+
+impl Coordinator {
+    /// The same coordinator deriving its alerts with `thresholds` (`--alert-silent-host-secs`,
+    /// `--alert-cert-window-secs`) instead of the defaults.
+    #[must_use]
+    pub fn with_alert_thresholds(mut self, thresholds: Thresholds) -> Self {
+        self.alerts = Book::new(thresholds);
+        self
+    }
+
+    /// Observes the alerts now: reads the enrollment store, derives every alert ([`derive`])
+    /// and logs each the last observation did not find ([`Book`]).
+    ///
+    /// # Errors
+    /// [`StoreError`]: the enrollment store could not be read; nothing is noted or logged.
+    pub fn observe_alerts(&self) -> Result<Vec<Observed>, StoreError> {
+        let heard: Vec<HostId> = self
+            .lock_fleet()
+            .nodes()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let enrollment = self.enrollment_facts(&heard)?;
+        let at = At {
+            now: (self.clock)(),
+            unix: self.ops.unix_now(),
+        };
+        let ops = self.ops.state();
+        let alerts = derive(
+            &self.lock_fleet(),
+            &ops,
+            &self.services,
+            &enrollment,
+            at,
+            &self.alerts.thresholds,
+        );
+        Ok(self.alerts.observe(alerts, at.unix))
+    }
+
+    /// `Alerts.List`: every alert now, as an observation finds it ([`Self::observe_alerts`]).
+    /// Changes nothing but the book of alerts.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, `store_failed` (the enrollment store could not be read).
+    pub fn list_alerts(
+        &self,
+        caller: &Caller,
+        _request: proto::ListAlertsRequest,
+    ) -> Result<proto::ListAlertsResponse, proto::AlertsRefusal> {
+        caller.operator()?;
+        let observed = self.observe_alerts().map_err(|why| {
+            tracing::error!(%why, "the alerts could not be listed: the enrollment store could not be read");
+            proto::AlertsRefusal::StoreFailed
+        })?;
+        Ok(proto::ListAlertsResponse {
+            alerts: observed.into_iter().map(alert_proto).collect(),
+        })
+    }
+
+    /// What the enrollment store says that the alerts read, of the hosts `heard`: nothing
+    /// without one.
+    fn enrollment_facts(&self, heard: &[HostId]) -> Result<EnrollmentFacts, StoreError> {
+        let Some(enrollment) = self.enrollment() else {
+            return Ok(EnrollmentFacts::default());
+        };
+        let store = enrollment.store();
+        let pending = store.pending()?;
+        let approvals = if pending
+            .iter()
+            .any(|view| view.state == RequestState::DuplicateClaim)
+        {
+            store.recorded_approvals()?
+        } else {
+            Vec::new()
+        };
+        let waiting = pending
+            .iter()
+            .map(|view| {
+                let duplicate_claim = view.state == RequestState::DuplicateClaim;
+                Waiting {
+                    request_id: view.request_id.to_hex(),
+                    posted_unix: view.posted_unix,
+                    renewal_of: view.renewal_of.as_ref().map(ToString::to_string),
+                    duplicate_claim,
+                    other_host: duplicate_claim
+                        .then(|| collides_with(view, &approvals))
+                        .flatten(),
+                }
+            })
+            .collect();
+        Ok(EnrollmentFacts {
+            waiting,
+            duplicates: heard
+                .iter()
+                .filter(|host| enrollment.is_duplicate(host))
+                .cloned()
+                .collect(),
+            server_not_after: Some(enrollment.server_certificate().not_after),
+        })
+    }
+}
+
+/// Observes the alerts of `coordinator` every `interval`, for as long as the future is polled:
+/// the first look one `interval` after the start. An observation that cannot read the
+/// enrollment store is logged at error. It never returns.
+pub async fn observe_every(coordinator: Arc<Coordinator>, interval: Duration) -> Infallible {
+    let mut ticks = tokio::time::interval(interval);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticks.tick().await;
+    loop {
+        ticks.tick().await;
+        // The enrollment store's request files are read here, on the runtime, as `Alerts.List`
+        // reads them.
+        if let Err(why) = coordinator.observe_alerts() {
+            tracing::error!(%why, "the alerts could not be observed: the enrollment store could not be read");
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "alerts_tests.rs"]
+mod tests;

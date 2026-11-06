@@ -10,8 +10,8 @@
 //! - `hostkeeper.operator.v1`: `Hosts` and `Releases`, what an operator and CI ask of the
 //!   coordinator.
 //! - `hostkeeper.operator.v1` also holds `Services`: which hosts run each service, and the
-//!   operator's holds; `Enrollment`, the hosts waiting for an operator's approval; and `Audit`,
-//!   the log of every change.
+//!   operator's holds; `Enrollment`, the hosts waiting for an operator's approval; `Audit`,
+//!   the log of every change; and `Alerts`, the conditions that need a person.
 //! - `hostkeeper.local.v1`: `Admin`, what root on the host may ask of its daemon with the
 //!   coordinator down (status, abort, clear a corrupt step record).
 //!
@@ -37,7 +37,7 @@ pub mod hostkeeper {
     }
     pub mod operator {
         /// What an operator and CI ask of the coordinator: `Hosts`, `Releases`, `Services`,
-        /// `Enrollment` and `Audit`.
+        /// `Enrollment`, `Audit` and `Alerts`.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.operator.v1");
         }

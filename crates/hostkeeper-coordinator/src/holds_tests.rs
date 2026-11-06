@@ -676,8 +676,8 @@ async fn unhold_releases_the_pair_to_the_then_desired_version() {
 /// heartbeats; the status flags the held host and no other; an unheld host is ordered off the
 /// bad version.
 ///
-/// Catches: a bad mark that reaches a held host, an alert logged on every beat or never, a
-/// status flag raised for hosts that are not held.
+/// Catches: a bad mark that reaches a held host, an alert logged at every observation of the
+/// alerts or never, a status flag raised for hosts that are not held.
 #[tokio::test]
 async fn automatic_rollback_and_mark_bad_skip_a_held_pair_and_alert() {
     let rig = rig("holds-bad-version", "");
@@ -711,6 +711,7 @@ async fn automatic_rollback_and_mark_bad_skip_a_held_pair_and_alert() {
             ask(&rig, "d1", "daemon", web_at("2.0")),
             ServiceReply::Nothing
         );
+        rig.coordinator.observe_alerts().expect("observed");
     }
     let lines = alerts();
     assert_eq!(lines.len(), 1, "{}", log.text());
@@ -745,6 +746,7 @@ async fn automatic_rollback_and_mark_bad_skip_a_held_pair_and_alert() {
         ask(&rig, "d1", "daemon", web_at("1.5")),
         ServiceReply::Nothing
     );
+    rig.coordinator.observe_alerts().expect("observed");
     assert_eq!(alerts().len(), 2, "{}", log.text());
 
     // Released, the host is ordered off it.

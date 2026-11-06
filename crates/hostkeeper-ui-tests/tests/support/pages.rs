@@ -70,6 +70,23 @@ pub fn hosts_reply() -> Value {
     ]})
 }
 
+/// A reply of `Alerts.List` with one alert of each of five kinds, a halt first, as the
+/// coordinator orders them.
+pub fn alerts_reply() -> Value {
+    let alert = |kind: &str, severity: &str, host: &str, message: &str| {
+        json!({"kind": format!("ALERT_KIND_{kind}"), "severity": format!("ALERT_SEVERITY_{severity}"),
+               "hostId": host, "service": "api", "message": message,
+               "firstObservedUnix": "1800000000"})
+    };
+    json!({"alerts": [
+        alert("HALT", "CRITICAL", "web-2", "api is halted at 1.4.0 by web-2, check disk_full"),
+        alert("WAITING_FOR_OPERATOR", "WARNING", "", "request ab waits for an operator's approval"),
+        alert("FAILED_CANARY", "CRITICAL", "web-4", "web-4, a canary of api, failed 1.3.0"),
+        alert("HELD_ON_BAD_VERSION", "WARNING", "web-2", "an operator holds web-2 on api 1.3.0"),
+        alert("SILENT_HOST", "WARNING", "new-1", "new-1 has not heartbeated for 300 s"),
+    ]})
+}
+
 pub fn status_reply() -> Value {
     json!({
         "services": [

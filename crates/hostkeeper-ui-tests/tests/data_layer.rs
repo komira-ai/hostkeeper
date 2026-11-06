@@ -505,6 +505,7 @@ fn signing_out_forgets_the_token_and_shows_sign_in() {
     let mut ui = Ui::start();
     ui.reply(LIST, json!({"hosts": []}));
     ui.reply("hostkeeper.operator.v1.Releases/Status", json!({}));
+    ui.reply("hostkeeper.operator.v1.Alerts/List", json!({}));
     ui.run(&format!(
         r#"
 import {{ fakeDocument, domNamed, fire }} from "../test/kit.js";
@@ -540,7 +541,11 @@ export async function main() {
     assert!(!after.contains("refused"), "{after}");
     assert_eq!(
         ui.methods(),
-        [LIST, "hostkeeper.operator.v1.Releases/Status"]
+        [
+            LIST,
+            "hostkeeper.operator.v1.Releases/Status",
+            "hostkeeper.operator.v1.Alerts/List"
+        ]
     );
 }
 
