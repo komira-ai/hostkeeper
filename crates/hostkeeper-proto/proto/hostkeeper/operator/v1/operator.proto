@@ -206,6 +206,13 @@ enum ReleasesRefusal {
   // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
   // changed, and asking again is safe once the file takes lines again.
   RELEASES_REFUSAL_AUDIT_UNAVAILABLE = 18;
+  // FAILED_PRECONDITION: `SetDesired` of a version the coordinator's release channel does not
+  // hold yet, or whose index could not be read. Nothing changed; retry once the channel holds it.
+  RELEASES_REFUSAL_NOT_IN_CHANNEL = 19;
+  // FAILED_PRECONDITION: `SetDesired` of a version whose index in the coordinator's release
+  // channel names another service or version, or no package with the digest the set names.
+  // Nothing changed; the channel holds another artifact, so the same set is refused again.
+  RELEASES_REFUSAL_CHANNEL_DIGEST_MISMATCH = 20;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower

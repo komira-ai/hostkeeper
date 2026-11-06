@@ -17,7 +17,9 @@
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
-//! files of that directory under `/ui/` (`crate::ui`).
+//! files of that directory under `/ui/` (`crate::ui`). With `--release-channel` a set of the
+//! desired state is refused unless the release channel holds the version (`crate::channel`):
+//! the URL is checked at start (`https://` only), and the channel is fetched only by a set.
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
 //! the whole start can be driven over in-memory connections.
 //!
@@ -56,6 +58,8 @@ use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation};
 use crate::backup::{
     Backup, BackupError, Report, Restore, backup, ops_path, restore, restore_marker,
 };
+use crate::channel::ReleaseChannel;
+use crate::channel_https::{ChannelTlsError, ChannelUrl, ChannelUrlError, HttpsChannel};
 use crate::desired::{DesiredStore, StoreError};
 use crate::enrollment::{
     AllowlistError, MacAllowlist, MacPolicy, NoDeviceState, Setup, SetupError, os_random, setup,
@@ -195,6 +199,12 @@ pub enum StartError {
     /// The file of verdicts is refused.
     #[error(transparent)]
     Verdicts(#[from] VerdictsError),
+    /// `--release-channel` is not an `https://` base URL.
+    #[error("--release-channel: {0}")]
+    ReleaseChannel(#[from] ChannelUrlError),
+    /// The TLS client of the release channel could not be made.
+    #[error("--release-channel: {0}")]
+    ReleaseChannelTls(#[from] ChannelTlsError),
 }
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
@@ -360,6 +370,32 @@ pub struct Serve {
     /// intervals (30); a lower value is refused at start.
     #[arg(long, default_value_t = QUIET_START.as_secs())]
     pub quiet_secs: u64,
+    /// The release channel the hosts fetch packages from, as `https://<host>[:<port>][/<path>]`
+    /// (the daemon config's `release_channel`). With it, a set of the desired state is refused
+    /// `not_in_channel` unless `<channel>/<service>/<version>/index.json` is there (retry once
+    /// the channel holds it), and `channel_digest_mismatch` when that index is of another
+    /// service or version or lists no package with the set's digest. Only `https://` is taken;
+    /// another scheme stops the start. Without it nothing is fetched and no set is refused for
+    /// the channel.
+    #[arg(long)]
+    pub release_channel: Option<String>,
+    /// How long the connection to the release channel and its TLS handshake may take, in
+    /// seconds.
+    #[arg(
+        long,
+        default_value_t = 10,
+        requires = "release_channel",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub release_channel_connect_secs: u64,
+    /// How long one fetch from the release channel may take in all, in seconds.
+    #[arg(
+        long,
+        default_value_t = 30,
+        requires = "release_channel",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub release_channel_timeout_secs: u64,
 }
 
 /// Where the listeners are bound.
@@ -397,6 +433,7 @@ pub struct Parts {
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
 /// `--private-listen` is a wildcard address, `--quiet-secs` is below two heartbeat intervals,
+/// `--release-channel` is not an `https://` base URL,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, the legacy service or an
 /// allow-list entry names a service `--rollout-file` does not define, an entry names no
@@ -431,6 +468,19 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let services = Services::from_file(&flags.rollout_file)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
+    let channel = flags
+        .release_channel
+        .as_deref()
+        .map(|text| -> Result<ReleaseChannel, StartError> {
+            let fetcher = HttpsChannel::new(
+                ChannelUrl::parse(text)?,
+                roots.clone(),
+                Duration::from_secs(flags.release_channel_connect_secs),
+                Duration::from_secs(flags.release_channel_timeout_secs),
+            )?;
+            Ok(ReleaseChannel::new(Arc::new(fetcher)))
+        })
+        .transpose()?;
     let legacy = flags.legacy_service.as_deref();
     if let Some(name) = legacy.filter(|name| services.get(name).is_none()) {
         return Err(StartError::LegacyService(name.to_owned()));
@@ -492,6 +542,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_ops(ops)
         .with_verdicts(verdicts)
         .with_ui(ui);
+    if let Some(channel) = channel {
+        coordinator = coordinator.with_release_channel(channel);
+    }
     let heartbeat_tls = match (
         &flags.enrollment_dir,
         &flags.ca_key_file,
