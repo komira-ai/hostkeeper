@@ -36,7 +36,9 @@ use hostkeeper_observe::{ActiveState, ProcessProbe, ServiceManager, UnitState};
 use hostkeeper_privileged::{Mode, Rig};
 use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
 use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
-use hostkeeper_steps::{BootId, BootIdSource, Bound, StepCall, StepLauncher};
+use hostkeeper_steps::{
+    ArtifactError, BootId, BootIdSource, Bound, Staged, StepCall, StepLauncher,
+};
 use hostkeeper_testkit::Scratch;
 use hostkeeper_unpack::{MacVerify, SignatureVerdict};
 use hyper_util::rt::TokioIo;
@@ -253,6 +255,63 @@ fn real_codesign_and_quarantine_verdicts() {
     println!("quarantine: marked {marked_verdict}, clean {clean_verdict}");
     assert!(marked_verdict);
     assert!(!clean_verdict);
+}
+
+/// A directory the test made, removed when it is dropped, failed or not.
+struct Made(PathBuf);
+
+impl Drop for Made {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Catches a sealed package refused as `artifact_changed` on a Mac because its packages
+/// directory is reached through `/var`, which is a link to `/private/var` (every install
+/// halted at `prepare` so): a tree made, closed and sealed under `/var` the way the daemon's
+/// `/var/lib/hostkeeper/packages` is, is accepted by the check every step makes, which returns
+/// the hook on the real path under `/private/var`; the same tree with one byte of a file
+/// changed is `Changed`.
+#[test]
+fn a_tree_sealed_under_var_passes_its_check_and_a_changed_one_does_not() {
+    as_root();
+    let base = Made(PathBuf::from(format!(
+        "/var/hk-seal-{}",
+        std::process::id()
+    )));
+    // `create_dir_all` would take over a directory that is already there.
+    fs::create_dir(&base.0).unwrap_or_else(|e| panic!("create {}: {e}", base.0.display()));
+    fs::set_permissions(&base.0, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let tree = base.0.join("1.0.0");
+    fs::create_dir_all(tree.join("bin")).expect("the tree");
+    fs::write(tree.join("bin/hook"), "#!/bin/sh\n").expect("the hook");
+    fs::write(tree.join("manifest.toml"), "name = \"x\"\n").expect("a file");
+    // Closed as the unpack closes a tree: files 0555 or 0444, directories 0555.
+    for (path, mode) in [
+        ("bin/hook", 0o555),
+        ("manifest.toml", 0o444),
+        ("bin", 0o555),
+    ] {
+        fs::set_permissions(tree.join(path), fs::Permissions::from_mode(mode)).expect("chmod");
+    }
+    fs::set_permissions(&tree, fs::Permissions::from_mode(0o555)).expect("chmod");
+    let real = fs::canonicalize(&base.0)
+        .expect("the real path")
+        .join("1.0.0");
+    println!("{} is {}", tree.display(), real.display());
+    assert!(real.starts_with("/private/var"), "{}", real.display());
+
+    let staged = Staged::seal(&tree).expect("sealed");
+    let hook = Path::new("bin/hook");
+    assert_eq!(
+        staged.check(hook).expect("the check passes"),
+        real.join("bin/hook")
+    );
+
+    // Root writes a 0444 file in a 0555 directory; its mode stays 0444.
+    fs::write(tree.join("manifest.toml"), "name = \"y\"\n").expect("change a byte");
+    let err = staged.check(hook).expect_err("a changed tree");
+    assert!(matches!(err, ArtifactError::Changed { .. }), "{err:?}");
 }
 
 /// One row of the `proc_pidpath` findings.

@@ -13,10 +13,10 @@ use std::sync::{Arc, Mutex, mpsc};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_steps::record::State;
 use hostkeeper_steps::{
-    ArtifactError, DeadMan, Finished, LaunchError, Loaded, RunError, StepCall, StepExit,
+    ArtifactError, DeadMan, Finished, LaunchError, Loaded, RunError, Staged, StepCall, StepExit,
     StepLauncher, StepRunner,
 };
-use support::Rig;
+use support::{Event, Rig};
 
 fn halted() -> Finished {
     Finished {
@@ -104,6 +104,56 @@ fn a_changed_untrusted_or_unsupported_release_still_halts() {
     fs::set_permissions(&sock, fs::Permissions::from_mode(0o755)).unwrap();
     let err = order.staged.check(hook).unwrap_err();
     assert!(matches!(err, ArtifactError::Unsupported(_)), "{err:?}");
+    assert_eq!(rig.runner().run(&order).unwrap(), halted());
+    assert!(rig.fake.events().is_empty());
+}
+
+/// Catches a release reached through a link above it being halted as `artifact_changed`, as
+/// every package was on macOS, where `/var` is a link to `/private/var`: both releases sealed
+/// through a linked parent run every step to `Succeeded`, each hook run from the real path (no
+/// link in it) while the step is still given the directory it was sealed as; the same release
+/// with one byte of a file changed still halts with nothing run.
+#[test]
+fn a_release_behind_a_linked_parent_runs_and_a_changed_one_still_halts() {
+    let rig = Rig::new("runf-linked-parent");
+    let real = fs::canonicalize(rig.scratch.path()).unwrap();
+    let var = rig.scratch.path().join("var");
+    std::os::unix::fs::symlink(&real, &var).unwrap();
+    let mut order = rig.order();
+    order.staged = Staged::seal(&var.join("new")).unwrap();
+    order.previous = Some(Staged::seal(&var.join("old")).unwrap());
+    assert_eq!(order.staged.dir(), var.join("new"));
+
+    let got = rig.runner().run(&order).unwrap();
+    assert_eq!(got.verdict, succeeded());
+    assert_eq!(
+        rig.fake.steps(),
+        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
+    );
+    for run in rig.fake.runs() {
+        let Event::Run {
+            step,
+            executable,
+            artifact,
+            ..
+        } = run
+        else {
+            unreachable!("runs() holds runs only")
+        };
+        assert_eq!(executable, real.join("new/hook"), "{step:?}");
+        let sealed_as = (step == Step::Prepare).then(|| var.join("new"));
+        assert_eq!(artifact, sealed_as, "{step:?}");
+    }
+
+    let rig = Rig::new("runf-linked-changed");
+    let real = fs::canonicalize(rig.scratch.path()).unwrap();
+    let var = rig.scratch.path().join("var");
+    std::os::unix::fs::symlink(&real, &var).unwrap();
+    let mut order = rig.order();
+    order.staged = Staged::seal(&var.join("new")).unwrap();
+    fs::write(rig.new_dir.join("lib/data"), "nex").unwrap();
+    let err = order.staged.check(Path::new("hook")).unwrap_err();
+    assert!(matches!(err, ArtifactError::Changed { .. }), "{err:?}");
     assert_eq!(rig.runner().run(&order).unwrap(), halted());
     assert!(rig.fake.events().is_empty());
 }
