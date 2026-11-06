@@ -54,7 +54,8 @@ use crate::registry::{Digest, IndexRecord, Package, Release};
 use crate::service::{Coordinator, kept};
 use crate::services::{ServiceDef, Services};
 
-/// The feature a daemon announces to be sent a `force`.
+/// The feature a daemon announces to be sent a `force`. The coordinator advertises it too
+/// ([`crate::service::FEATURES`]): a daemon runs a force only while the reply advertises it.
 pub const FEATURE: &str = "forced-v1";
 
 /// The service no force may name: hostkeeper updates itself by its own path (design 6.6).

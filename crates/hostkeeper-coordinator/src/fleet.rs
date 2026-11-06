@@ -200,6 +200,10 @@ pub struct Fleet {
     /// The canaries that failed a release, per service and version, by node id
     /// ([`crate::reconcile::Change::CanaryFailed`]): kept in memory only, like the orders.
     canaries: BTreeMap<(String, String), String>,
+    /// The highest order try heard of each host and service, from every verdict its heartbeats
+    /// carried (an acknowledged one read back from the verdicts file among them): what
+    /// [`Self::next_try`] numbers past. Kept in memory only, never lowered.
+    tries: BTreeMap<(HostId, String), u64>,
 }
 
 impl Fleet {
@@ -221,6 +225,7 @@ impl Fleet {
             marks: Marks::default(),
             aborts: BTreeMap::new(),
             canaries: BTreeMap::new(),
+            tries: BTreeMap::new(),
         }
     }
 
@@ -241,6 +246,24 @@ impl Fleet {
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
         now < self.started.saturating_add(self.quiet)
+    }
+
+    /// The try of the next order of `service` for the host `id`: one past the highest try any
+    /// heartbeat of the host has carried for the service, whatever order its verdict ended, and 1
+    /// when none carried one. The daemon keys tries per service (design 8.3): its step record
+    /// holds the try of the service's last order and refuses the same try of another package
+    /// (`try_conflict`) and a lower one (`stale_try`). The highest is kept, not the last heard, so
+    /// a verdict that stops being sent once acknowledged, one that names no try, or an older one
+    /// heard after a newer never lowers it. A resend before the host reports keeps the try; a
+    /// restarted coordinator rebuilds it from the heartbeats, an acknowledged verdict read back
+    /// from the verdicts file among them (design 8.2).
+    #[must_use]
+    pub fn next_try(&self, service: &str, id: &HostId) -> u64 {
+        self.tries
+            .get(&(id.clone(), service.to_owned()))
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1)
     }
 
     /// The release failures of `service` about `version` heard since the start, each once: the
@@ -453,6 +476,10 @@ impl Fleet {
         }
         self.defers.observe(&key, &beat, deferred_order, now);
         self.verdicts.observe(&key.1, &key.0, &beat);
+        if let Some(heard) = beat.last_update.as_ref().and_then(|r| r.order_try) {
+            let highest = self.tries.entry(key.clone()).or_default();
+            *highest = (*highest).max(heard);
+        }
         let (kept, other) = if counted {
             (&mut self.hosts, &mut self.outside)
         } else {

@@ -162,6 +162,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
                 Feature::DeferredV1,
                 Feature::HaltV1,
                 Feature::HeartbeatV2,
+                Feature::ForcedV1,
                 Feature::OrderV1,
                 Feature::VerdictAcksV1,
                 Feature::GrpcV1
