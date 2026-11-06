@@ -18,7 +18,9 @@
 //!
 //! On both systems the fallback puts nothing back when no update waits for its restart and
 //! `current` is not `previous` already ([`FallbackError::NothingWaits`]): the binary that runs was
-//! not switched in by an update, so it is not the one that failed. On Linux systemd runs the
+//! not switched in by an update, so it is not the one that failed. A new binary that confirmed its
+//! update at its start ([`crate::selfupdate`]) has run, and is not put back either, even when that
+//! start fails later. On Linux systemd runs the
 //! fallback unit whenever the daemon's unit fails its start limit, for any reason (a config that
 //! does not load, three restarts within the window); the verb then exits [`EXIT_FAILED`], the
 //! unit's `ExecStartPost=` lines do not run, and the daemon's unit stays failed until

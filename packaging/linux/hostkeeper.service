@@ -47,7 +47,7 @@ TimeoutStartSec=infinity
 ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper
 ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd
 # The daemon exits 0 to be started again after its own update, so a clean exit restarts it too.
-# RestartSec= is the drop-in's (hostkeeper_steps::selfupdate::main_dropin).
+# The drop-in the daemon writes (hostkeeper_steps::selfupdate::main_dropin) sets the same two.
 Restart=always
 RestartSec=1
 # /run/hostkeeper, the directory of the admin socket: root's alone.

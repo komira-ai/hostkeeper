@@ -322,7 +322,9 @@ fn after_boot(daemon: &Daemon, report: &mut BootReport, notifier: &dyn ReadyNoti
 
 /// Once the daemon is ready: the units of hostkeeper's own update for a host of `kind`, written
 /// where they differ ([`Daemon::install_self_units`]). One that could not be installed is an
-/// alert, and the start goes on; the next start tries again.
+/// alert, and the start goes on. A file that could not be written is written by the next start;
+/// files written whose reload failed stay, and the next start, finding them in place, does not
+/// reload again: systemd reads them at its next reload or boot.
 fn install_self_units(daemon: &Daemon, kind: PlatformKind, report: &mut BootReport) {
     let installed = daemon
         .install_self_units(kind)

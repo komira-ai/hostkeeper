@@ -19,8 +19,8 @@
 //!
 //! Each step can run again, so a seed a crash cut short is finished by the next start. It exits
 //! 0 when `current` starts a binary, and [`EXIT_FAILED`] with a message naming the cause when it
-//! could not make it so (the binary cannot be read, the version is the one `previous` names but
-//! its file is gone).
+//! could not make it so (the binary cannot be read, which is checked before anything is changed;
+//! the version is the one `previous` names but its file is gone).
 
 use std::fs;
 use std::io;
@@ -86,6 +86,8 @@ pub fn seed(state_dir: &Path, binary: &Path, version: &str) -> Result<Seeded, Se
         let path = path.to_path_buf();
         move |source| SeedError::Io { path, source }
     };
+    // The binary is read before anything is changed, so that one that is not there is named.
+    fs::File::open(binary).map_err(at(binary))?;
     let service = state_dir.join(SELF_SERVICE);
     files::make_private(&service).map_err(at(&service))?;
     files::make_private(layout.dir()).map_err(at(layout.dir()))?;

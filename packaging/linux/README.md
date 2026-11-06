@@ -40,6 +40,8 @@ start runs the binary the last update chose.
   `/etc/systemd/system/hostkeeper.service.d/self-update.conf`, whose `OnFailure=` runs that unit,
   and then runs `systemctl daemon-reload`. When the new binary fails three starts within 300
   seconds, the fallback unit points `current` back at `previous` and starts the daemon again.
+  A new binary that confirmed its update at its start has run, and is not put back even when
+  that start fails later.
   When no update is waiting for its restart (a config that does not load, three restarts for
   another reason), the fallback changes nothing and the unit stays failed until `systemctl
   reset-failed hostkeeper.service`.

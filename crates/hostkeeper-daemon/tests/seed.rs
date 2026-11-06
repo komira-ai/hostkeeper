@@ -187,14 +187,14 @@ fn a_seed_that_cannot_run_writes_nothing_and_says_why() {
     fs::remove_file(&host.binary).expect("no binary");
     let error = host.seed().expect_err("nothing to copy");
     assert_eq!(error.exit_code(), EXIT_FAILED);
-    let staged = host.layout().version_path(OWN);
     assert!(
         error
             .to_string()
-            .starts_with(&format!("{}: ", staged.display())),
+            .starts_with(&format!("{}: ", host.binary.display())),
         "{error}"
     );
     assert_eq!(host.layout().current().expect("current"), None);
+    assert!(!binary_dir(&host.state).exists(), "nothing was made");
     assert_eq!(run(&host), format!("{:?}", ExitCode::from(EXIT_FAILED)));
 
     let host = Host::new("seed-previous-gone");
