@@ -346,6 +346,42 @@ fn release_channel_stage_stages_a_release_once_and_then_changes_nothing_with_sta
 }
 
 #[test]
+fn release_channel_sync_without_its_channel_fails_with_status_1_and_bad_flags_status_2() {
+    // Catches: a missing channel directory made, synced into or reported as success (the
+    // request is refused before GitHub is asked anything), or a bad flag read as a failure.
+    let d = dir("channel-sync");
+    let o = run(
+        &d,
+        &[
+            "release",
+            "channel-sync",
+            "--repo",
+            "komira-ai/tierstore",
+            "--channel-dir",
+            "missing",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).starts_with("xtask: --channel-dir missing: "),
+        "{}",
+        stderr(&o)
+    );
+    assert!(!d.join("missing").exists());
+    for bad in [
+        ["--repo", "no-slash", "--channel-dir", "."],
+        ["--since", "0.1.0", "--channel-dir", "."],
+        ["--every-secs", "0", "--channel-dir", "."],
+    ] {
+        let mut argv = vec!["release", "channel-sync", "--repo", "a/b"];
+        argv.extend(bad);
+        let o = run(&d, &argv);
+        assert_eq!(o.status.code(), Some(2), "{bad:?}: {}", stderr(&o));
+        assert_eq!(stdout(&o), "");
+    }
+}
+
+#[test]
 fn release_channel_stage_refusals_are_failures_with_status_1_and_bad_names_status_2() {
     // Catches: a rebuilt package written over a staged one, a release lacking a required
     // platform staged, or a name outside the daemon's grammar reported as a failure (status 1)
