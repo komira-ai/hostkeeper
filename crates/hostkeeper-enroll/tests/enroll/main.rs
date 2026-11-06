@@ -1,9 +1,13 @@
-//! The enroller against an in-memory coordinator, a fake wall clock, a fake monotonic clock and a
-//! pki directory in a scratch directory. No test sleeps, reads the real time or opens a socket.
+//! The enroller against an in-memory coordinator (in `coordinator.rs`, the coordinator's own
+//! enrollment and CA), a fake wall clock, a fake monotonic clock and a pki directory in a
+//! scratch directory. No test sleeps, reads the real time or opens a socket.
 //!
 //! - `acceptance.rs`: the behaviours of design section 5.7, steps 1 to 4;
 //! - `returns.rs`: repeated returns after expiry, approvals given while the daemon was down,
 //!   lost replies, changed claims, and the bytes a poll signs;
+//! - `coordinator.rs`: the requests the enroller makes, held to the CA's profile and posted to
+//!   the coordinator's own enrollment and CA, through approval, the first certificate and its
+//!   renewal;
 //! - `faults.rs`: a failed fsync or a crash at each point of the store's writes;
 //! - `refusals.rs`: each check an issued certificate must pass, and each way the coordinator
 //!   can break the protocol;
@@ -16,6 +20,7 @@
 
 mod acceptance;
 mod bmc;
+mod coordinator;
 mod enrollment;
 mod faults;
 mod host;

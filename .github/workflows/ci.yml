@@ -43,7 +43,8 @@ jobs:
   # each one, and `cargo xtask install-tool` checks its SHA-256 before anything is unpacked or
   # installed. cargo-deny checks licences, bans and sources, as deny.toml configures them.
   # Advisories are not checked here: a new advisory against a crate we already use would fail
-  # every open pull request for something none of them did.
+  # every open pull request for something none of them did. advisories.yml checks them daily
+  # and on every push to main, and keeps what it finds in one issue.
   lint:
     runs-on: ubuntu-latest
     permissions:

@@ -14,7 +14,7 @@ use hostkeeper_daemon::link_adapters::{
     DaemonHalts, DaemonOrders, MAX_DETAIL, order_result, wire_order,
 };
 use hostkeeper_daemon::packages::PackageError;
-use hostkeeper_daemon::verb::{Forced, Hooked, NO_TRY, PackageDigest as WireDigest};
+use hostkeeper_daemon::verb::{Forced, Hooked, NO_TRY, PackageDigest as WireDigest, Unhooked};
 use hostkeeper_daemon::{Refusal, Reply, Verb as Decoded};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_link::{
@@ -54,6 +54,15 @@ fn force_order(service: &str, version: &str, order_try: u64) -> Order {
     }
 }
 
+/// The version the loop gives the executor with `order`, which names one: its own.
+fn version_of(order: &Order) -> Version {
+    order
+        .target()
+        .expect("an order that names a version")
+        .version
+        .clone()
+}
+
 fn token(text: &str) -> Reason {
     Reason::new(text).expect("a reason token")
 }
@@ -63,7 +72,7 @@ fn token(text: &str) -> Reason {
 fn plain(order: &Order, outcome: Outcome) -> OrderResult {
     OrderResult {
         order: order.reference(),
-        target: order.target().version.clone(),
+        target: version_of(order),
         outcome,
         phase: None,
         class: None,
@@ -105,6 +114,66 @@ fn a_link_order_is_decoded_by_the_daemon_as_the_verb_and_target_it_names() {
     );
 }
 
+/// Catches an install, an uninstall or an abort of the loop that the daemon decodes as another
+/// verb, or with a field changed: each is decoded as the verb it names, with the order's
+/// service, try, and for an install its version and digest.
+#[test]
+fn an_install_uninstall_and_abort_are_decoded_as_the_verbs_they_name() {
+    let order = |id: &str, verb: Verb| Order {
+        id: order_id(id),
+        order_try: 2,
+        verb,
+    };
+    let install = wire_order(&order("install-1", Verb::Install(target("web", "2.0.0"))));
+    assert_eq!((install.order_id.as_str(), install.r#try), ("install-1", 2));
+    assert_eq!(
+        Decoded::try_from(&install),
+        Ok(Decoded::Install(Hooked {
+            service: name("web"),
+            version: Version::new("2.0.0").expect("a version"),
+            digest: WireDigest::new(&d()).expect("a digest"),
+            order_try: NonZeroU64::new(2).expect("a try from 1"),
+        }))
+    );
+    let uninstall = wire_order(&order("uninstall-1", Verb::Uninstall(name("web"))));
+    assert_eq!(
+        Decoded::try_from(&uninstall),
+        Ok(Decoded::Uninstall(Unhooked {
+            service: name("web"),
+            order_try: NonZeroU64::new(2).expect("a try from 1"),
+        }))
+    );
+    let abort = wire_order(&order("abort-1", Verb::Abort(name("web"))));
+    assert_eq!(abort.order_id, "abort-1");
+    assert_eq!(Decoded::try_from(&abort), Ok(Decoded::Abort(name("web"))));
+}
+
+/// Catches an uninstall's verdict that names no version or one of its own making: the verdict of
+/// an order that names none is at the version the loop gave, whatever the daemon answered.
+#[test]
+fn an_uninstalls_verdict_names_the_version_the_loop_gave() {
+    let removal = Order {
+        id: order_id("uninstall-1"),
+        order_try: 1,
+        verb: Verb::Uninstall(name("web")),
+    };
+    let at = Version::new("1.4.0").expect("a version");
+    let done = Reply::Finished {
+        verdict: Verdict::Succeeded {
+            promotion_pending: false,
+        },
+        reason: None,
+        resent: false,
+    };
+    let result = order_result(&removal, &at, &done);
+    assert_eq!(result.target, at);
+    assert_eq!(result.outcome, Outcome::Succeeded);
+    assert_eq!(
+        order_result(&removal, &at, &Reply::Running),
+        OrderResult::busy(&removal, at)
+    );
+}
+
 /// Catches an order that does not reach `Daemon::order`, or a reply that is not the verdict of
 /// the order: an update through the adapter makes the daemon fetch the package and run the five
 /// steps, writes the order's try and digest in the step record, and is reported `succeeded` with
@@ -116,7 +185,7 @@ fn an_order_in_the_reply_reaches_daemon_order_and_its_reply_is_the_next_last_upd
     rig.add("web", "2.0.0");
     let orders = DaemonOrders::new(Arc::new(rig.daemon()));
     let order = update_order("web", "2.0.0", 3);
-    let result = orders.execute(&order);
+    let result = orders.execute(&order, &version_of(&order));
     assert_eq!(result, plain(&order, Outcome::Succeeded));
     assert_eq!(result.order.id.as_str(), "order-web-2.0.0");
     assert_eq!(result.order.order_try, 3);
@@ -133,7 +202,7 @@ fn an_order_in_the_reply_reaches_daemon_order_and_its_reply_is_the_next_last_upd
         ),
         ("web", "2.0.0", d().as_str(), Some(3))
     );
-    assert_eq!(orders.execute(&order), result);
+    assert_eq!(orders.execute(&order, &version_of(&order)), result);
     assert_eq!(rig.launcher.steps("web"), steps);
 }
 
@@ -152,19 +221,22 @@ fn a_busy_order_and_a_running_one_are_reported_failed_busy_under_their_own_id_an
     let first = update_order("alpha", "2.0.0", 1);
     let running = {
         let (orders, first) = (Arc::clone(&orders), first.clone());
-        thread::spawn(move || orders.execute(&first))
+        thread::spawn(move || orders.execute(&first, &version_of(&first)))
     };
     gate.entered();
     let other = update_order("alpha", "3.0.0", 2);
     assert_eq!(
-        orders.execute(&other),
+        orders.execute(&other, &version_of(&other)),
         OrderResult {
             reason: Some(token("busy")),
             detail: Some("alpha is locked by an order to update it to 2.0.0".to_owned()),
             ..plain(&other, Outcome::Failed)
         }
     );
-    assert_eq!(orders.execute(&first), OrderResult::busy(&first));
+    assert_eq!(
+        orders.execute(&first, &version_of(&first)),
+        OrderResult::busy(&first, version_of(&first))
+    );
     gate.release();
     assert_eq!(
         running.join().expect("the first order"),
@@ -186,7 +258,7 @@ fn a_halt_is_reported_in_the_halt_phase_and_the_orders_it_refuses_are_not() {
     let orders = DaemonOrders::new(Arc::new(rig.daemon()));
     let first = update_order("web", "2.0.0", 1);
     assert_eq!(
-        orders.execute(&first),
+        orders.execute(&first, &version_of(&first)),
         OrderResult {
             phase: Some(Phase::Halt),
             ..plain(&first, Outcome::Failed)
@@ -194,7 +266,7 @@ fn a_halt_is_reported_in_the_halt_phase_and_the_orders_it_refuses_are_not() {
     );
     let second = update_order("web", "2.1.0", 2);
     assert_eq!(
-        orders.execute(&second),
+        orders.execute(&second, &version_of(&second)),
         OrderResult {
             reason: Some(token("halted")),
             detail: Some("update 2.1.0 try 2 of web; the step record holds try 1".to_owned()),
@@ -217,7 +289,7 @@ fn a_deferral_and_a_failure_keep_their_outcome_phase_and_class() {
     let orders = DaemonOrders::new(Arc::new(rig.daemon()));
     let deferred = update_order("alpha", "2.0.0", 1);
     assert_eq!(
-        orders.execute(&deferred),
+        orders.execute(&deferred, &version_of(&deferred)),
         plain(
             &deferred,
             Outcome::Deferred {
@@ -227,7 +299,7 @@ fn a_deferral_and_a_failure_keep_their_outcome_phase_and_class() {
     );
     let failed = update_order("beta", "2.0.0", 1);
     assert_eq!(
-        orders.execute(&failed),
+        orders.execute(&failed, &version_of(&failed)),
         OrderResult {
             phase: Some(Phase::BeforeCommit),
             class: Some(Class::Release),
@@ -246,7 +318,7 @@ fn an_order_the_runner_stopped_without_a_verdict_is_reported_failed_with_its_tok
     rig.launcher.lose("web", Step::Prepare);
     let orders = DaemonOrders::new(Arc::new(rig.daemon()));
     let order = update_order("web", "2.0.0", 1);
-    let result = orders.execute(&order);
+    let result = orders.execute(&order, &version_of(&order));
     let detail = result.detail.clone().expect("the daemon's text");
     assert!(!detail.is_empty());
     assert_eq!(
@@ -268,7 +340,7 @@ fn an_order_the_daemon_cannot_decode_is_reported_failed_invalid_order() {
     let orders = DaemonOrders::new(Arc::new(rig.daemon()));
     let order = update_order("web", "2.0.0", 0);
     assert_eq!(
-        orders.execute(&order),
+        orders.execute(&order, &version_of(&order)),
         OrderResult {
             reason: Some(token("invalid_order")),
             detail: Some(format!("the order's try {NO_TRY}")),
@@ -289,7 +361,7 @@ fn a_forced_order_reaches_the_daemon_as_a_force_and_its_verdict_is_forced() {
     let (daemon, _) = rig.booted();
     let orders = DaemonOrders::new(Arc::new(daemon));
     let order = force_order(WEB, "2.0.0", 4);
-    let result = orders.execute(&order);
+    let result = orders.execute(&order, &version_of(&order));
     assert_eq!(result, plain(&order, Outcome::Succeeded));
     assert!(result.forced);
     let force = rig
@@ -323,7 +395,7 @@ fn a_forced_order_that_fails_before_the_switch_is_reported_failed_and_forced() {
     );
     let orders = DaemonOrders::new(Arc::new(rig.daemon()));
     let order = force_order(WEB, "2.0.0", 1);
-    let result = orders.execute(&order);
+    let result = orders.execute(&order, &version_of(&order));
     assert!(result.forced);
     assert_eq!(
         result,
@@ -359,7 +431,11 @@ fn every_refusal_is_reported_under_its_own_token() {
                     detail: Some("why".to_owned()),
                     ..plain(&order, Outcome::Failed)
                 };
-                assert_eq!(order_result(&order, &reply), expected, "{reply:?}");
+                assert_eq!(
+                    order_result(&order, &version_of(&order), &reply),
+                    expected,
+                    "{reply:?}"
+                );
             }
         }
     }
@@ -460,7 +536,11 @@ fn a_finished_order_is_reported_as_its_verdict() {
                     reason: reason.map(token),
                     ..plain(&order, *outcome)
                 };
-                assert_eq!(order_result(&order, &reply), expected, "{reply:?}");
+                assert_eq!(
+                    order_result(&order, &version_of(&order), &reply),
+                    expected,
+                    "{reply:?}"
+                );
             }
         }
     }
@@ -484,7 +564,7 @@ fn a_reason_that_is_not_a_token_is_left_out_and_said_in_the_detail() {
             resent: false,
         };
         assert_eq!(
-            order_result(&order, &reply),
+            order_result(&order, &version_of(&order), &reply),
             OrderResult {
                 phase: Some(Phase::BeforeCommit),
                 class: Some(Class::Release),
@@ -507,6 +587,7 @@ fn a_detail_is_cut_to_512_bytes_on_a_character_boundary() {
     let refused = |detail: String| {
         order_result(
             &order,
+            &version_of(&order),
             &Reply::Refused {
                 refusal: Refusal::StoreFailed,
                 detail,
@@ -526,7 +607,9 @@ fn a_detail_is_cut_to_512_bytes_on_a_character_boundary() {
         reason: Some("A".repeat(1000)),
         resent: false,
     };
-    let note = order_result(&order, &reply).detail.expect("the note");
+    let note = order_result(&order, &version_of(&order), &reply)
+        .detail
+        .expect("the note");
     assert_eq!(note.len(), MAX_DETAIL);
     assert!(note.starts_with("\"AAAA"), "{note}");
 }
@@ -539,8 +622,8 @@ fn a_running_order_is_answered_busy() {
         update_order("web", "2.0.0", 1),
         force_order("web", "2.0.0", 1),
     ] {
-        let busy = order_result(&order, &Reply::Running);
-        assert_eq!(busy, OrderResult::busy(&order));
+        let busy = order_result(&order, &version_of(&order), &Reply::Running);
+        assert_eq!(busy, OrderResult::busy(&order, version_of(&order)));
         assert_eq!(busy.reason, Some(token("busy")));
         assert_eq!(busy.forced, order.is_forced());
         assert_eq!(busy.detail, None);
@@ -567,7 +650,7 @@ fn a_halt_generation_in_a_reply_is_the_one_a_force_reads() {
     let service = name(WEB);
     let halted = update_order(WEB, "1.0.0", 1);
     assert_eq!(
-        orders.execute(&halted),
+        orders.execute(&halted, &version_of(&halted)),
         OrderResult {
             phase: Some(Phase::Halt),
             ..plain(&halted, Outcome::Failed)

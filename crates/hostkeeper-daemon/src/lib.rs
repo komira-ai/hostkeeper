@@ -23,7 +23,11 @@
 //!   protocol checked, its steps run under the step lock, then the follow-on that switches the
 //!   binary and asks the daemon to exit; at start, the update settled by the binary that runs.
 //!   [`fallback`] is the verb `self-update-fallback` the fallback unit runs (on macOS the
-//!   fallback timer job, and the verb then decides the burst from the start log itself).
+//!   fallback timer job, and the verb then decides the burst from the start log itself), and
+//!   [`selfunits`] the drop-in and fallback unit (on macOS the fallback job) the daemon writes at
+//!   each start where they differ, telling the service manager only then; [`seed`] is the verb
+//!   `self-update-seed` the unit runs before each start, which gives the binary directory its
+//!   first binary.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -84,6 +88,8 @@ pub mod place;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
+pub mod seed;
+pub mod selfunits;
 pub mod selfupdate;
 pub mod socket;
 pub mod stamp;

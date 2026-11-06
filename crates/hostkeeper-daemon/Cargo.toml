@@ -86,6 +86,10 @@ bytes.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
+# tests/coordinator_link.rs: the shipped heartbeat link against the coordinator's own listener on
+# loopback, behind the TLS of a test CA (`rcgen`) the coordinator serves with (`hostkeeper-tls`).
+hostkeeper-tls = { path = "../hostkeeper-tls" }
+rcgen.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 # Its own tests turn on `testing`.

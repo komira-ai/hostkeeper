@@ -12,8 +12,12 @@
 //!   which the heartbeat listener serves (its chain ends in the CA a daemon pins). The start
 //!   makes a new one, with a new key, a serial from the store and the DNS names of
 //!   `--server-name`, valid [`SERVER_VALIDITY_CAP_SECS`], when the file is missing, does not
-//!   start with a certificate, or has less than a third of its validity left. Nothing else
-//!   renews it; a coordinator is restarted within its validity.
+//!   start with a certificate, or has less than a third of its validity left ([`server_due`]).
+//!   While the coordinator runs, each tick of the reload loop asks the same question of the
+//!   file and makes it again the same way ([`ServerFile::keep`], through
+//!   [`crate::enrollment::Enrollment::renew_server`]). The new file is written whole: a
+//!   temporary file beside it (mode 0600), fsync, rename over the old one, fsync of the
+//!   directory; a write that fails removes the temporary file and leaves the old one served.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,7 +25,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use hostkeeper_enrollment::ca::{Ca, CaError, CaFiles, P256Key, SERVER_VALIDITY_CAP_SECS, Signer};
 use hostkeeper_enrollment::enroll::{EnrollmentStore, StoreError};
-use hostkeeper_enrollment::fs::{Fs, write_atomic};
+use hostkeeper_enrollment::fs::{Fs, temp_name, write_atomic};
 use hostkeeper_enrollment::validity::UnixClock;
 use rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256, PublicKeyData};
 
@@ -96,29 +100,138 @@ pub fn pem(label: &str, der: &[u8]) -> String {
     out
 }
 
+/// The validity of the certificate the server certificate file whose bytes are `file` starts
+/// with, as unix seconds `(not_before, not_after)`; `None` when its first PEM block is no
+/// certificate.
+fn validity_of(file: &[u8]) -> Option<(i64, i64)> {
+    let (_, block) = x509_parser::pem::parse_x509_pem(file).ok()?;
+    let certificate = block.parse_x509().ok()?;
+    let validity = certificate.validity();
+    Some((
+        validity.not_before.timestamp(),
+        validity.not_after.timestamp(),
+    ))
+}
+
 /// Whether the server certificate file whose bytes are `file` is made again at `now` (unix
 /// seconds): there is none, its first PEM block is no certificate, or less than a third of its
 /// validity is left.
 #[must_use]
 pub fn server_due(file: Option<&[u8]>, now: u64) -> bool {
-    let window = file
-        .and_then(|bytes| x509_parser::pem::parse_x509_pem(bytes).ok())
-        .and_then(|(_, block)| {
-            let certificate = block.parse_x509().ok()?;
-            let validity = certificate.validity();
-            Some((
-                validity.not_before.timestamp(),
-                validity.not_after.timestamp(),
-            ))
-        });
+    due(file.and_then(validity_of), now)
+}
+
+/// [`server_due`] of a file whose certificate's validity is `window` (`None`: no certificate).
+fn due(window: Option<(i64, i64)>, now: u64) -> bool {
     window.is_none_or(|(start, end)| {
         let third = end.saturating_sub(start) / 3;
         i64::try_from(now).unwrap_or(i64::MAX) >= end.saturating_sub(third)
     })
 }
 
-/// Opens or makes the CA, opens the store and makes the server certificate when it is due, all
-/// through `fs`, at the time `clock` reads; the poll nonces are drawn from `random`.
+/// The coordinator's server certificate file (`--server-cert-file`) and the names it is made
+/// for (`--server-name`), written through a file-system port.
+pub struct ServerFile {
+    fs: Arc<dyn Fs>,
+    path: PathBuf,
+    dir: PathBuf,
+    name: String,
+    names: Vec<String>,
+}
+
+impl std::fmt::Debug for ServerFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerFile")
+            .field("path", &self.path)
+            .field("names", &self.names)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What one look at the server certificate file found and did ([`ServerFile::keep`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Kept {
+    /// The file was made again.
+    pub renewed: bool,
+    /// The end of the validity of the certificate the file now starts with, in unix seconds.
+    pub not_after: u64,
+}
+
+impl ServerFile {
+    /// The file `path` for the DNS names `names`, through `fs`.
+    ///
+    /// # Errors
+    /// The text of why: `path` does not name a file.
+    pub fn new(fs: Arc<dyn Fs>, path: &Path, names: &[String]) -> Result<ServerFile, String> {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "does not name a file".to_owned())?;
+        let dir = path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        Ok(ServerFile {
+            fs,
+            path: path.to_path_buf(),
+            dir: dir.to_path_buf(),
+            name: name.to_owned(),
+            names: names.to_vec(),
+        })
+    }
+
+    /// The file's path.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Reads the file and, when it is due at `now` ([`server_due`]), makes it again: a new key,
+    /// a serial from `store`, a certificate `ca` signs for [`SERVER_VALIDITY_CAP_SECS`], written
+    /// whole (a temporary file of mode 0600 beside it, fsync, rename over it, fsync of the
+    /// directory). A write that fails removes the temporary file; the file is then as it was.
+    ///
+    /// # Errors
+    /// The text of why: the file cannot be read, the key, serial or certificate cannot be
+    /// made, or the file cannot be written.
+    pub fn keep(&self, ca: &Ca, store: &EnrollmentStore, now: u64) -> Result<Kept, String> {
+        let existing = self.fs.read(&self.path).map_err(|e| e.to_string())?;
+        let window = existing.as_deref().and_then(validity_of);
+        // A certificate that is not due ends after `now`, so its end is a `u64`.
+        let in_use = window
+            .filter(|_| !due(window, now))
+            .and_then(|(_, end)| u64::try_from(end).ok());
+        match in_use {
+            Some(not_after) => Ok(Kept {
+                renewed: false,
+                not_after,
+            }),
+            None => {
+                let (text, not_after) = server_pem(ca, store, &self.names)?;
+                self.write(text.as_bytes())?;
+                Ok(Kept {
+                    renewed: true,
+                    not_after,
+                })
+            }
+        }
+    }
+
+    /// Writes `bytes` over the file whole, removing the temporary file when a step fails.
+    fn write(&self, bytes: &[u8]) -> Result<(), String> {
+        write_atomic(&*self.fs, &self.dir, &self.name, bytes, SERVER_FILE_MODE).map_err(|why| {
+            // The rename is the last step that can leave the temporary file; once it is done
+            // removing the name is a no-op.
+            let _ = self.fs.remove(&self.dir.join(temp_name(&self.name)));
+            why.to_string()
+        })
+    }
+}
+
+/// Opens or makes the CA, opens the store and makes the server certificate when it is due
+/// ([`ServerFile::keep`]), all through `fs`, at the time `clock` reads; the poll nonces are
+/// drawn from `random`. The enrollment keeps the server certificate file, so the reload loop
+/// renews it ([`Enrollment::renew_server`]).
 ///
 /// # Errors
 /// [`SetupError`]: the CA's files are refused or missing without `--ca-init`, the store's
@@ -146,41 +259,35 @@ pub fn setup(
         path: setup.server_cert.to_path_buf(),
         reason,
     };
-    let name = setup
-        .server_cert
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| server("does not name a file".to_owned()))?;
-    let dir = setup
-        .server_cert
-        .parent()
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let existing = fs
-        .read(setup.server_cert)
-        .map_err(|e| server(e.to_string()))?;
-    if server_due(existing.as_deref(), clock.now_unix()) {
-        let text = server_pem(&ca, &store, setup.server_names).map_err(server)?;
-        write_atomic(&*fs, dir, name, text.as_bytes(), SERVER_FILE_MODE)
-            .map_err(|e| server(e.to_string()))?;
+    let file = ServerFile::new(fs, setup.server_cert, setup.server_names).map_err(server)?;
+    let kept = file.keep(&ca, &store, clock.now_unix()).map_err(server)?;
+    if kept.renewed {
         tracing::info!(names = ?setup.server_names, "made the coordinator's server certificate");
     }
-    Ok(Enrollment::new(store, ca, clock, random))
+    Ok(Enrollment::new(
+        store,
+        ca,
+        file,
+        kept.not_after,
+        clock,
+        random,
+    ))
 }
 
-/// A new server certificate for `names`, as the file holds it: the certificate, the CA
-/// certificate, and the new key.
-fn server_pem(ca: &Ca, store: &EnrollmentStore, names: &[String]) -> Result<String, String> {
+/// A new server certificate for `names`, as the file holds it (the certificate, the CA
+/// certificate, and the new key), and the end of its validity in unix seconds.
+fn server_pem(ca: &Ca, store: &EnrollmentStore, names: &[String]) -> Result<(String, u64), String> {
     let pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(|e| e.to_string())?;
     let key = P256Key::from_spki(&pair.subject_public_key_info()).map_err(|e| e.to_string())?;
     let serial = store.allocate_serial().map_err(|e| e.to_string())?;
     let certificate = ca
         .issue_server(&key, names, SERVER_VALIDITY_CAP_SECS, serial)
         .map_err(|e| e.to_string())?;
-    Ok(format!(
+    let text = format!(
         "{}{}{}",
         pem("CERTIFICATE", &certificate.der),
         pem("CERTIFICATE", ca.bundle().certificate_der()),
         pair.serialize_pem()
-    ))
+    );
+    Ok((text, certificate.not_after))
 }

@@ -4,6 +4,7 @@ use std::os::unix::ffi::OsStrExt;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::release::contract::{REPO, SIGNER_REF, SIGNER_WORKFLOW};
 use crate::release::fakes::{FakeExec, nth_commit};
 
 const REPO_NAME: &str = "komira-ai/hostkeeper";
@@ -242,13 +243,14 @@ fn on_main_refuses_a_reply_without_a_status() {
 #[test]
 fn open_issues_skips_pull_requests_and_reads_a_null_body_as_empty() {
     // Catches: a pull request taken for an issue (GitHub lists both), or a null body failing.
-    let path = format!("repos/{REPO_NAME}/issues?state=open&per_page=100");
-    let reply = json!([
+    let path = issues_path();
+    let reply = json!([[
         { "number": 3, "title": "A pull request", "body": "x", "pull_request": {} },
         { "number": 4, "title": "No body", "body": null },
         { "number": 5, "title": "With body", "body": "text" }
-    ]);
-    let api = gh(&["gh", "api", &path], &reply.to_string());
+    ]]);
+    let line = issues_line(&path);
+    let api = gh(&line, &reply.to_string());
     assert_eq!(
         api.open_issues(&repo()),
         Ok(vec![
@@ -264,29 +266,70 @@ fn open_issues_skips_pull_requests_and_reads_a_null_body_as_empty() {
             },
         ])
     );
-    assert_eq!(calls(&api), vec![words(&["gh", "api", &path])]);
+    assert_eq!(calls(&api), vec![words(&line)]);
+}
+
+/// The path of the open issues, a hundred to a page.
+fn issues_path() -> String {
+    format!("repos/{REPO_NAME}/issues?state=open&per_page=100")
+}
+
+/// The command line that lists every page of `path`.
+fn issues_line(path: &str) -> [&str; 5] {
+    ["gh", "api", "--paginate", "--slurp", path]
+}
+
+#[test]
+fn open_issues_reads_every_page_in_order() {
+    // Catches: only the first page of a hundred read, so an issue past it is not found and a
+    // caller looking for its one issue by title opens a second; and an empty page refused.
+    let path = issues_path();
+    let first: Vec<Value> = (1..=100)
+        .map(|n| json!({ "number": n, "title": format!("Issue {n}"), "body": "" }))
+        .collect();
+    let reply =
+        json!([first, [{ "number": 101, "title": "Past the first page", "body": "b" }], []]);
+    let api = gh(&issues_line(&path), &reply.to_string());
+    let issues = api.open_issues(&repo()).expect("issues");
+    assert_eq!(issues.len(), 101);
+    assert_eq!(issues[0].number, 1);
+    assert_eq!(
+        issues[100],
+        Issue {
+            number: 101,
+            title: "Past the first page".to_owned(),
+            body: "b".to_owned()
+        }
+    );
 }
 
 #[test]
 fn open_issues_refuses_an_issue_without_a_title_and_a_reply_that_is_no_list() {
     // Catches: an issue without its title matched against the tracking title as empty, and an
     // error object read as no open issues, which would open a second tracking issue.
-    let path = format!("repos/{REPO_NAME}/issues?state=open&per_page=100");
-    let what = format!("gh api {path}");
-    let titleless = gh(&["gh", "api", &path], r#"[{"number":4}]"#);
+    let path = issues_path();
+    let line = issues_line(&path);
+    let what = format!("gh api --paginate --slurp {path}");
+    let titleless = gh(&line, r#"[[{"number":4}]]"#);
     assert_eq!(
         titleless.open_issues(&repo()),
         Err(failure(&what, "title is missing or not a string"))
     );
-    let numberless = gh(&["gh", "api", &path], r#"[{"title":"x"}]"#);
+    let numberless = gh(&line, r#"[[{"title":"x"}]]"#);
     assert_eq!(
         numberless.open_issues(&repo()),
         Err(failure(&what, "number is missing or not a number"))
     );
-    let object = gh(&["gh", "api", &path], r#"{"message":"Bad"}"#);
+    let object = gh(&line, r#"{"message":"Bad"}"#);
     assert_eq!(
         object.open_issues(&repo()),
         Err(failure(&what, "the reply is missing or not a list"))
+    );
+    // One page that is not a list (a reply not slurped) is refused, not read as no issues.
+    let unslurped = gh(&line, r#"[{"number":4,"title":"x"}]"#);
+    assert_eq!(
+        unslurped.open_issues(&repo()),
+        Err(failure(&what, "a page is missing or not a list"))
     );
 }
 
@@ -362,6 +405,52 @@ fn edit_issue_patches_the_body_of_the_numbered_issue() {
             "gh: HTTP 403"
         ))
     );
+}
+
+#[test]
+fn close_issue_comments_then_closes_the_numbered_issue_as_completed() {
+    // Catches: the issue closed without the comment saying why, closed before the comment (a
+    // failed comment would leave it closed with no word), the wrong number or state, and a
+    // failed comment passed over.
+    let path = format!("repos/{REPO_NAME}/issues/7");
+    let comments = format!("{path}/comments");
+    let comment = [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        comments.as_str(),
+        "-f",
+        "body=None remain\nat main",
+    ];
+    let close = [
+        "gh",
+        "api",
+        "--method",
+        "PATCH",
+        path.as_str(),
+        "-f",
+        "state=closed",
+        "-f",
+        "state_reason=completed",
+    ];
+    let api = Gh::new(
+        FakeExec::default()
+            .on(&comment, true, "{}", "")
+            .on(&close, true, "{}", ""),
+    );
+    assert_eq!(api.close_issue(&repo(), 7, "None remain\nat main"), Ok(()));
+    assert_eq!(calls(&api), vec![words(&comment), words(&close)]);
+
+    let refused = failing(&comment, "gh: HTTP 403\n");
+    assert_eq!(
+        refused.close_issue(&repo(), 7, "None remain\nat main"),
+        Err(failure(
+            &format!("gh api --method POST {comments} -f body=None remain\nat main"),
+            "gh: HTTP 403"
+        ))
+    );
+    assert_eq!(calls(&refused), vec![words(&comment)]);
 }
 
 fn release_json() -> Value {
@@ -617,7 +706,12 @@ fn verify_online_pins_the_repository_signer_ref_and_commit() {
     let reply = json!([element(SIGNER_URI)]).to_string();
     let api = scripted(&line, &reply);
     assert_eq!(
-        api.verify(Path::new("/x/asset"), None, &commit()),
+        api.verify(
+            &Signer::hostkeeper(),
+            Path::new("/x/asset"),
+            None,
+            &commit()
+        ),
         Ok(vec![attestation()])
     );
     assert_eq!(calls(&api), vec![line]);
@@ -631,6 +725,7 @@ fn verify_offline_adds_the_bundle() {
     let api = scripted(&line, &reply);
     assert_eq!(
         api.verify(
+            &Signer::hostkeeper(),
             Path::new("/x/asset"),
             Some(Path::new("/x/asset.sigstore.json")),
             &commit()
@@ -646,7 +741,12 @@ fn verify_with_no_attestation_in_the_reply_is_an_empty_list() {
     let line = verify_line("/x/asset", None);
     let api = scripted(&line, "[]");
     assert_eq!(
-        api.verify(Path::new("/x/asset"), None, &commit()),
+        api.verify(
+            &Signer::hostkeeper(),
+            Path::new("/x/asset"),
+            None,
+            &commit()
+        ),
         Ok(Vec::new())
     );
 }
@@ -658,7 +758,12 @@ fn verify_reports_a_failed_verification_with_gh_stderr() {
     let refs: Vec<&str> = line.iter().map(String::as_str).collect();
     let api = failing(&refs, "Error: verification failed\n");
     assert_eq!(
-        api.verify(Path::new("/x/asset"), None, &commit()),
+        api.verify(
+            &Signer::hostkeeper(),
+            Path::new("/x/asset"),
+            None,
+            &commit()
+        ),
         Err(failure(&line.join(" "), "Error: verification failed"))
     );
 }
@@ -675,7 +780,12 @@ fn verify_refuses_a_malformed_signer_uri() {
         let reply = json!([element(uri)]).to_string();
         let api = scripted(&line, &reply);
         assert_eq!(
-            api.verify(Path::new("/x/asset"), None, &commit()),
+            api.verify(
+                &Signer::hostkeeper(),
+                Path::new("/x/asset"),
+                None,
+                &commit()
+            ),
             Err(failure(
                 &line.join(" "),
                 &format!("buildSignerURI {uri:?} is not https://github.com/<workflow>@<ref>")
@@ -716,13 +826,23 @@ fn verify_refuses_an_element_that_lacks_a_field() {
         let reply = without(json!([element(SIGNER_URI)]), &pointer).to_string();
         let api = scripted(&line, &reply);
         assert_eq!(
-            api.verify(Path::new("/x/asset"), None, &commit()),
+            api.verify(
+                &Signer::hostkeeper(),
+                Path::new("/x/asset"),
+                None,
+                &commit()
+            ),
             Err(failure(&line.join(" "), why))
         );
     }
     let object = scripted(&line, "{}");
     assert_eq!(
-        object.verify(Path::new("/x/asset"), None, &commit()),
+        object.verify(
+            &Signer::hostkeeper(),
+            Path::new("/x/asset"),
+            None,
+            &commit()
+        ),
         Err(failure(
             &line.join(" "),
             "the reply is missing or not a list"
@@ -739,10 +859,104 @@ fn verify_refuses_a_file_or_bundle_path_that_is_not_utf8() {
         "gh attestation verify",
         "the path /x/a\u{fffd}b is not UTF-8",
     );
-    assert_eq!(api.verify(bad, None, &commit()), Err(expected.clone()));
     assert_eq!(
-        api.verify(Path::new("/x/asset"), Some(bad), &commit()),
+        api.verify(&Signer::hostkeeper(), bad, None, &commit()),
+        Err(expected.clone())
+    );
+    assert_eq!(
+        api.verify(
+            &Signer::hostkeeper(),
+            Path::new("/x/asset"),
+            Some(bad),
+            &commit()
+        ),
         Err(expected)
     );
     assert_eq!(calls(&api), Vec::<Vec<String>>::new());
+}
+
+#[test]
+fn the_release_source_lists_the_releases_as_the_store_does() {
+    // Catches: the sync reading another listing than the one `publish` reads.
+    let path = format!("repos/{REPO_NAME}/releases?per_page=100");
+    let reply = json!([release_json()]).to_string();
+    let api = gh(&["gh", "api", &path], &reply);
+    assert_eq!(ReleaseSource::list(&api, &repo()), api.releases(&repo()));
+    assert!(ReleaseSource::list(&api, &repo()).is_ok_and(|list| list.len() == 1));
+}
+
+#[test]
+fn download_asks_gh_for_the_one_asset_into_the_directory() {
+    // Catches: a download of every asset, of the asset of another release or repository, or
+    // into another directory; or a failed download read as done.
+    let line = [
+        "gh",
+        "release",
+        "download",
+        "v0.1.5",
+        "--repo",
+        REPO_NAME,
+        "--pattern",
+        "SHA256SUMS",
+        "--dir",
+        "/w/assets",
+    ];
+    let api = gh(&line, "");
+    assert_eq!(
+        api.download(&repo(), "v0.1.5", "SHA256SUMS", Path::new("/w/assets")),
+        Ok(())
+    );
+    assert_eq!(calls(&api), vec![words(&line)]);
+    let failed = failing(&line, "HTTP 404");
+    assert_eq!(
+        failed.download(&repo(), "v0.1.5", "SHA256SUMS", Path::new("/w/assets")),
+        Err(failure(
+            &line[1..].join(" ").replace("release", "gh release"),
+            "HTTP 404"
+        ))
+    );
+    let bad = Path::new(OsStr::from_bytes(b"/w/a\xffb"));
+    assert_eq!(
+        Gh::new(FakeExec::default()).download(&repo(), "v0.1.5", "SHA256SUMS", bad),
+        Err(failure(
+            "gh release download",
+            "the path /w/a\u{fffd}b is not UTF-8"
+        ))
+    );
+}
+
+#[test]
+fn verify_for_another_repository_pins_its_own_signer() {
+    // Catches: another repository's asset verified against hostkeeper's signer, so that no
+    // release of it ever verifies (or one signed by hostkeeper's workflow does).
+    let tierstore: Repo = "komira-ai/tierstore".parse().expect("a repository");
+    let signer = Signer::of(&tierstore);
+    let line = words(&[
+        "gh",
+        "attestation",
+        "verify",
+        "/x/asset",
+        "--repo",
+        "komira-ai/tierstore",
+        "--signer-workflow",
+        "komira-ai/tierstore/.github/workflows/artifacts.yml",
+        "--source-ref",
+        "refs/heads/main",
+        "--source-digest",
+        commit().as_str(),
+        "--deny-self-hosted-runners",
+        "--format",
+        "json",
+    ]);
+    let uri =
+        "https://github.com/komira-ai/tierstore/.github/workflows/artifacts.yml@refs/heads/main";
+    let api = scripted(&line, &json!([element(uri)]).to_string());
+    let got = api.verify(&signer, Path::new("/x/asset"), None, &commit());
+    assert_eq!(
+        got.map(|list| list
+            .into_iter()
+            .map(|a| a.signer_workflow)
+            .collect::<Vec<_>>()),
+        Ok(vec![signer.workflow.clone()])
+    );
 }

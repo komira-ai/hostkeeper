@@ -7,7 +7,7 @@ image, network boot, signing and publishing the packages are not here.
 
 | file | what |
 |---|---|
-| `hostkeeper.service` | the unit: the daemon as root, `Type=notify`, with its paths as flags; it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other |
+| `hostkeeper.service` | the unit, the daemon's only one: the daemon as root, `Type=notify`, with its paths as flags, started from the binary directory of its own update with `Restart=always`; it conflicts with kbf's update agent and its root half and is ordered after them, so a handoff stops one before it starts the other. hostkeeper's own package carries it too |
 | `hostkeeper.tmpfiles.conf` | the daemon's directories and their modes, as `/usr/lib/tmpfiles.d/hostkeeper.conf` |
 | `hostkeeper.toml.template` | the daemon config with a `@@NAME@@` placeholder in each value that belongs to a site |
 | `nfpm.yaml` | the deb and the rpm, for nfpm |
@@ -15,10 +15,46 @@ image, network boot, signing and publishing the packages are not here.
 | `overlay/` | the same files laid out as an image root, for a boot-image build to copy |
 
 `cargo test -p xtask --test packaging` reads every file here and checks it: the unit's keys and
-command line, that the directories are the design's with the design's modes, that the template
-is refused until each placeholder is filled and loads once they are, that the packages carry
-exactly the four files and no key, certificate, token or config, that the scripts never start
-the unit, and that the overlay equals these sources.
+command lines, that it starts `current` of the daemon's binary directory and restarts the
+daemon's exit after its own update, that it agrees with the drop-in the daemon writes, that it is
+the one unit file and the one hostkeeper's package is built with, that the directories are the
+design's with the design's modes, that the template is refused until each placeholder is filled
+and loads once they are, that the packages carry exactly the four files and no key, certificate,
+token or config, that the scripts never start the unit, and that the overlay equals these
+sources.
+
+## The binary the unit starts
+
+The unit does not start `/usr/bin/hostkeeper` itself. It starts
+`/var/lib/updater/state/hostkeeper/bin/current`, the binary directory of hostkeeper's own update
+(design section 6.6): each version is one executable in `versions/<version>`, and `current` and
+`previous` are links to them. Before each start, `ExecStartPre=` runs
+`/usr/bin/hostkeeper self-update-seed`, which, when `current` starts no executable file, copies
+`/usr/bin/hostkeeper` in as its own version and points `current` at it; otherwise it changes
+nothing. So the first start of a host runs the binary the package installed, and every later
+start runs the binary the last update chose.
+
+- A self-update stages the new binary in `versions/`, switches `current`, and exits 0;
+  `Restart=always` starts the new binary. At each start the daemon writes, where they differ,
+  `/etc/systemd/system/hostkeeper-fallback.service` and the drop-in
+  `/etc/systemd/system/hostkeeper.service.d/self-update.conf`, whose `OnFailure=` runs that unit,
+  and then runs `systemctl daemon-reload`. When the new binary fails three starts within 300
+  seconds, the fallback unit points `current` back at `previous` and starts the daemon again.
+  A new binary that confirmed its update at its start has run, and is not put back even when
+  that start fails later.
+  When no update is waiting for its restart (a config that does not load, three restarts for
+  another reason), the fallback changes nothing and the unit stays failed until `systemctl
+  reset-failed hostkeeper.service`.
+- Once `current` exists, upgrading the deb or the rpm replaces `/usr/bin/hostkeeper` and does not
+  change the binary the daemon runs: hostkeeper's own update does that. A self-update also links
+  the unit its package carries in `/etc/systemd/system/`, which then takes the place of the one
+  the package installed; the two are the same file.
+- The binary directory is under `/var/lib`, so the unit executes a file there: a host whose
+  `/var/lib` is mounted `noexec`, or whose SELinux policy does not let systemd execute files of
+  that directory, cannot start the daemon this way.
+- A host whose unit predates this one (`ExecStart=/usr/bin/hostkeeper`, `Restart=on-failure`)
+  gets it from the deb, the rpm or a boot image built from these files, not from a self-update:
+  under that unit the daemon's exit after a self-update is final.
 
 ## The packages
 
@@ -35,7 +71,8 @@ packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-
 
 all owned by root. On a first install the post-install script makes the directories of
 `hostkeeper.conf` and enables the unit. It does not start it: the daemon first runs at the next
-boot, or when the operator runs `systemctl start hostkeeper.service`. An upgrade leaves the unit
+boot, or when the operator runs `systemctl start hostkeeper.service`, from the copy of
+`/usr/bin/hostkeeper` its seed puts in the binary directory (above). An upgrade leaves the unit
 enabled or disabled as it was. Removing the package disables the unit; it does not stop a
 running daemon, and it removes none of the daemon's directories.
 
@@ -67,7 +104,8 @@ has a config but no certificate yet, its enrollment, is design section 5.7.
 | `etc/hostkeeper/hostkeeper.toml.template` | the config template |
 
 The image build copies the tree onto the image root (`cp -a overlay/. <image root>/`, keeping
-the link), installs the daemon as `/usr/bin/hostkeeper` (the deb or the rpm does that too), and
+the link), installs the daemon as `/usr/bin/hostkeeper` (the deb or the rpm does that too; the
+unit's seed copies it into the binary directory at the first start), and
 fills `etc/hostkeeper/hostkeeper.toml.template` into `etc/hostkeeper/hostkeeper.toml` in the
 image, root's, mode 0600, as above. Nothing else. The overlay files are the files of this
 directory, byte for byte; the test above fails when they differ.
