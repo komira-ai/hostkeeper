@@ -110,7 +110,8 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::Channel(ChannelRefusal::DigestMismatch) => {
             proto::ReleasesRefusal::ChannelDigestMismatch
         }
-        SetError::Store(_) | SetError::Ops(_) => {
+        SetError::Ops(why) => why.into(),
+        SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");
             proto::ReleasesRefusal::StoreFailed
         }

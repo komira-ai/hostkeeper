@@ -32,6 +32,7 @@ pub(crate) fn hosts(refusal: HostsRefusal) -> Status {
         HostsRefusal::InvalidRequest => Code::InvalidArgument,
         HostsRefusal::UnknownService | HostsRefusal::UnknownHost => Code::NotFound,
         HostsRefusal::Capacity => Code::ResourceExhausted,
+        HostsRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "HOSTS_REFUSAL_")
 }
@@ -42,7 +43,7 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         ReleasesRefusal::Unspecified | ReleasesRefusal::StoreFailed => Code::Internal,
         ReleasesRefusal::Unauthorized => Code::Unauthenticated,
         ReleasesRefusal::Forbidden => Code::PermissionDenied,
-        ReleasesRefusal::KeysUnavailable => Code::Unavailable,
+        ReleasesRefusal::KeysUnavailable | ReleasesRefusal::AuditUnavailable => Code::Unavailable,
         ReleasesRefusal::InvalidRequest
         | ReleasesRefusal::ConfirmMismatch
         | ReleasesRefusal::UnknownTarget => Code::InvalidArgument,
@@ -75,6 +76,7 @@ pub(crate) fn services(refusal: ServicesRefusal) -> Status {
         ServicesRefusal::NotAssigned
         | ServicesRefusal::NotHeld
         | ServicesRefusal::BelowMinVersion => Code::FailedPrecondition,
+        ServicesRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "SERVICES_REFUSAL_")
 }
@@ -94,6 +96,7 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         | EnrollmentRefusal::RecordExists
         | EnrollmentRefusal::RecordConflict => Code::AlreadyExists,
         EnrollmentRefusal::PendingFull | EnrollmentRefusal::Capacity => Code::ResourceExhausted,
+        EnrollmentRefusal::AuditUnavailable => Code::Unavailable,
         EnrollmentRefusal::InvalidHostId
         | EnrollmentRefusal::InvalidRole
         | EnrollmentRefusal::InvalidService

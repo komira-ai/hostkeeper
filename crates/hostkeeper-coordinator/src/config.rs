@@ -35,6 +35,7 @@ use std::convert::Infallible;
 use std::ffi::OsString;
 use std::io;
 use std::net::SocketAddr;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::process::ExitCode;
@@ -53,6 +54,7 @@ use hostkeeper_wire::identity::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation};
 use crate::backup::{
     Backup, BackupError, Report, Restore, backup, ops_path, restore, restore_marker,
 };
@@ -288,6 +290,15 @@ pub struct Serve {
     /// coordinator. The audit file `<ops-file>.audit` is beside it.
     #[arg(long)]
     pub ops_file: Option<PathBuf>,
+    /// The most bytes the audit file `<ops-file>.audit` holds before it is rotated: a line that
+    /// would take it past this is written to a fresh file, and the full one is sealed as
+    /// `<ops-file>.audit.<n>`. At least 1; 0 is refused.
+    #[arg(long, default_value_t = DEFAULT_MAX_BYTES)]
+    pub audit_max_bytes: NonZeroU64,
+    /// How many sealed segments of the audit file are kept: at each rotation the oldest beyond
+    /// this are deleted. At least 1; 0 is refused.
+    #[arg(long, default_value_t = DEFAULT_RETAINED)]
+    pub audit_retained_segments: NonZeroUsize,
     /// The rollout file: TOML with a `[[service]]` table for each service the coordinator
     /// manages, the roles it runs on and how its rollout goes (`docs/design/host-updates.md`).
     /// Required; an empty file defines none. Which of them a CI token may set is said by the
@@ -508,7 +519,11 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         Arc::new(spent),
     );
     let desired = DesiredStore::open(&flags.state_file, legacy)?;
-    let ops = OpsStore::open(&ops_path)?;
+    let rotation = Rotation {
+        max_bytes: flags.audit_max_bytes,
+        retained: flags.audit_retained_segments,
+    };
+    let ops = OpsStore::open_with(&ops_path, rotation)?;
     let verdicts = VerdictFile::open(&verdicts_path(&flags.state_file))?;
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);

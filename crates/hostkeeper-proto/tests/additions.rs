@@ -478,7 +478,7 @@ fn an_older_reader_keeps_the_assignments_of_services() {
 
 /// Catches: a refusal of `Releases.SetDesired` for the release channel taking the number of a
 /// value the release before already gave a meaning, or renumbering one: the baseline knows no
-/// value 18 or 19, and every value it knows keeps its name and number. A caller of the release
+/// value 19 or 20, and every value it knows keeps its name and number. A caller of the release
 /// before reads the new refusals by their token, the status message, which needs no value.
 #[test]
 fn the_release_channel_refusals_are_new_values_of_releases() {
@@ -487,8 +487,8 @@ fn the_release_channel_refusals_are_new_values_of_releases() {
         .get_enum_by_name("hostkeeper.operator.v1.ReleasesRefusal")
         .expect("released");
     for (added, number) in [
-        (op::ReleasesRefusal::NotInChannel, 18),
-        (op::ReleasesRefusal::ChannelDigestMismatch, 19),
+        (op::ReleasesRefusal::NotInChannel, 19),
+        (op::ReleasesRefusal::ChannelDigestMismatch, 20),
     ] {
         assert_eq!(added as i32, number, "{added:?}");
         assert!(refusal.get_value(number).is_none(), "{added:?}");

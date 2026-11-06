@@ -59,6 +59,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             (HostsRefusal::UnknownHost, NotFound, "unknown_host"),
             (HostsRefusal::Capacity, ResourceExhausted, "capacity"),
             (HostsRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                HostsRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
         ],
         refusal::hosts,
     );
@@ -128,6 +133,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 "unknown_target",
             ),
             (
+                ReleasesRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+            (
                 ReleasesRefusal::NotInChannel,
                 FailedPrecondition,
                 "not_in_channel",
@@ -169,6 +179,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 ServicesRefusal::BelowMinVersion,
                 FailedPrecondition,
                 "below_min_version",
+            ),
+            (
+                ServicesRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
             ),
         ],
         refusal::services,
@@ -247,6 +262,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
             (EnrollmentRefusal::NoRecord, NotFound, "no_record"),
             (EnrollmentRefusal::Capacity, ResourceExhausted, "capacity"),
+            (
+                EnrollmentRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
         ],
         refusal::enrollment,
     );

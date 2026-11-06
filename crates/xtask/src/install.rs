@@ -145,6 +145,18 @@ fn unpack_error(e: impl fmt::Display) -> Error {
     Error::Unpack(e.to_string())
 }
 
+/// Checks `bytes` against `sha256` and unpacks them: the file, written nowhere.
+pub(crate) fn checked(bytes: &[u8], sha256: &Sha256, unpack: &Unpack) -> Result<Vec<u8>, Error> {
+    let actual = Sha256::of(bytes);
+    if actual != *sha256 {
+        return Err(Error::Mismatch {
+            expected: *sha256,
+            actual,
+        });
+    }
+    unpack.apply(bytes)
+}
+
 /// Checks `bytes` against `sha256`, unpacks them and installs the file at `out`, through the
 /// temporary file numbered `n`.
 fn install_as(
@@ -154,14 +166,7 @@ fn install_as(
     out: &Path,
     n: u64,
 ) -> Result<(), Error> {
-    let actual = Sha256::of(bytes);
-    if actual != *sha256 {
-        return Err(Error::Mismatch {
-            expected: *sha256,
-            actual,
-        });
-    }
-    let file = unpack.apply(bytes)?;
+    let file = checked(bytes, sha256, unpack)?;
     write_executable(out, &file, n).map_err(|e| Error::Install {
         path: out.to_owned(),
         why: e.to_string(),
