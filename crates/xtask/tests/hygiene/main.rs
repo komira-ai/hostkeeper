@@ -4,8 +4,9 @@
 //! The files come from `git ls-files` at the repository root. A file whose bytes are not UTF-8 is
 //! binary and is skipped; every other tracked file is read. The deny list of internal repository
 //! names ([`DENIED_FILE`]) is not scanned, because its job is to hold the digests of those
-//! names. The licence text ([`LICENCE_FILE`]) is scanned by every rule but the date rule, because
-//! it is the verbatim third-party notice with its authors' date. Test sources that need a text a
+//! names. The licence text ([`LICENCE_FILE`]) and the Sigstore trusted root ([`TRUSTED_ROOT_FILE`])
+//! are scanned by every rule but the date rule, because each is verbatim third-party text with
+//! its authors' dates. Test sources that need a text a
 //! rule refuses build it from pieces at run time, so that this directory passes its own lint.
 
 mod links;
@@ -19,8 +20,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rules::{
-    EXACT, Finding, LICENCE_FILE, Lists, dates, emails, entries, home_paths, hostnames, ipv4s,
-    lint, repositories,
+    EXACT, Finding, LICENCE_FILE, Lists, TRUSTED_ROOT_FILE, dates, emails, entries, home_paths,
+    hostnames, ipv4s, lint, repositories,
 };
 use sha2::{Digest, Sha256};
 use tlds::{FILE_SUFFIXES, IANA_TEXT, PRIVATE_TLDS, is_tld, parse_tlds};
@@ -806,4 +807,36 @@ fn hygiene_lint_exact_entries_allow_only_the_name() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn hygiene_lint_reads_the_trusted_root_for_everything_but_dates() {
+    // Catches: the trusted root's validity dates refused (it is Sigstore's text, compared byte
+    // for byte with the live root), the date exemption reaching a file beside it, and the trusted
+    // root skipped by the other rules, so that an address, a home path or an unlisted host added
+    // to it goes unflagged.
+    let lists = Lists {
+        public: public(),
+        denied: HashSet::new(),
+    };
+    let old = ["2021", "03", "07"].join("-");
+    let valid = format!("{{\"validFor\":{{\"start\":\"{old}T03:20:29Z\"}}}}\n");
+    assert_clean(lint(TRUSTED_ROOT_FILE, &valid, &lists), "the date alone");
+    let beside = "packaging/sigstore/other.json";
+    assert_eq!(
+        reasons(lint(beside, &valid, &lists)),
+        [format!("{beside}:1: the date `{old}` is before 2026-09-01")]
+    );
+    let ip = ["10", "0", "0", "1"].join(".");
+    let host = ["log", "corp"].join(".");
+    let text = format!("{{\"baseUrl\":\"https://{ip}\"}}\n{{\"uri\":\"{host}\"}}\n");
+    assert_eq!(
+        reasons(lint(TRUSTED_ROOT_FILE, &text, &lists)),
+        [
+            format!(
+                "{TRUSTED_ROOT_FILE}:1: the IPv4 address `{ip}` is not loopback, unspecified or a documentation address"
+            ),
+            format!("{TRUSTED_ROOT_FILE}:2: {}", host_reason(&host)),
+        ]
+    );
 }

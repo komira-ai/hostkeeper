@@ -12,7 +12,8 @@ use std::sync::Arc;
 use clap::Parser;
 use hostkeeper_daemon::cli::{
     self, Cli, Command, DEFAULT_ADMIN_SOCKET, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR,
-    DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED, Unwired,
+    DEFAULT_STATE_DIR, DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS, DaemonFlags, EXIT_CONFIG, EXIT_FAILED,
+    EXIT_LOCKED, UNWIRED, Unwired,
 };
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
@@ -212,12 +213,17 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
             admin_socket: DEFAULT_ADMIN_SOCKET.into(),
             notify_systemd: false,
+            trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
             link: LoopFlags {
                 heartbeat_secs: DEFAULT_HEARTBEAT_SECS,
             },
         }
     );
     assert_eq!(flags.settings().trusted_uid, 0);
+    assert_eq!(
+        flags.settings().trusted_root_max_age_days,
+        DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS
+    );
     let readme = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
         .expect("the README");
     let documented = [
@@ -227,6 +233,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--admin-socket` | `{DEFAULT_ADMIN_SOCKET}`"),
         "`--notify-systemd` | off".to_owned(),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
+        format!("`--trusted-root-max-age-days` | `{DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS}`"),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
         format!("| {EXIT_CONFIG} |"),
@@ -318,4 +325,24 @@ fn hostkeeper_ci_runs_the_ci_client() {
     assert!(matches!(cli.command, Command::Ci(_)), "{cli:?}");
     let code = cli::run(cli);
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(2)));
+}
+
+/// Catches `--trusted-root-max-age-days` not reaching the daemon's settings, or a limit of 0
+/// accepted (every root would be reported stale the second after it is written): 30 is the
+/// settings' limit, and 0 is a usage error.
+#[test]
+fn the_trusted_root_age_limit_flag_reaches_the_settings_and_is_at_least_one() {
+    let parsed = Cli::try_parse_from(["hostkeeper", "daemon", "--trusted-root-max-age-days", "30"]);
+    let Ok(Cli {
+        command: Command::Daemon(flags),
+    }) = parsed
+    else {
+        panic!("the flag parses: {parsed:?}");
+    };
+    assert_eq!(flags.settings().trusted_root_max_age_days.get(), 30);
+    let zero = Cli::try_parse_from(["hostkeeper", "daemon", "--trusted-root-max-age-days", "0"]);
+    assert_eq!(
+        zero.map(|_| ()).map_err(|error| error.kind()),
+        Err(clap::error::ErrorKind::ValueValidation)
+    );
 }

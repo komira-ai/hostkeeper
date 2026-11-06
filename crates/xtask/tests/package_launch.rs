@@ -26,6 +26,13 @@ const FIXTURE: &str = env!("CARGO_BIN_EXE_xtask-exec-fixture");
 /// package carry it.
 const UNIT: &str = "../../packaging/linux/hostkeeper.service";
 
+/// The Sigstore trusted root the release packages, as committed.
+const TRUSTED_ROOT: &str = "../../packaging/sigstore/trusted_root.json";
+
+/// Where the daemon reads the packaged trusted root, from the packages directory
+/// (`hostkeeper_daemon::trusted_root::PACKAGED_TRUSTED_ROOT`).
+const PACKAGED_TRUSTED_ROOT: &str = "hostkeeper/current/files/trusted_root.json";
+
 /// A commit time for every entry of the archive.
 const MTIME: u64 = 1_800_000_000;
 
@@ -66,8 +73,15 @@ fn exec_start(unit: &str, state: &Path) -> Result<(PathBuf, Vec<String>), String
 fn installed(dir: &Path) -> (PathBuf, String) {
     let version = hostkeeper_unpack::running_hostkeeper().to_string();
     let out = dir.join("out");
-    xtask::test_support::linux_package(&version, Path::new(FIXTURE), &repo_file(UNIT), &out, MTIME)
-        .expect("package");
+    xtask::test_support::linux_package(
+        &version,
+        Path::new(FIXTURE),
+        &repo_file(UNIT),
+        &repo_file(TRUSTED_ROOT),
+        &out,
+        MTIME,
+    )
+    .expect("package");
     let archive = out.join(format!("hostkeeper-{version}-linux-x86_64.tar.zst"));
     let bytes = std::fs::read(&archive).expect("the package");
     let digest = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
@@ -177,5 +191,30 @@ fn the_committed_unit_starts_the_packaged_program_through_the_binary_directory()
     ] {
         assert_eq!(exec_start(text, &state), Err(why.to_owned()));
     }
+    unseal(&packages);
+}
+
+/// Catches a hostkeeper package whose trusted root the daemon would not find once the package is
+/// installed: a root left out of the package, put under another name, refused by the daemon's
+/// unpacker, changed on the way, or left writable; and a root reached by any path but the
+/// version `current` names.
+#[test]
+fn the_committed_trusted_root_is_where_the_daemon_reads_it_once_installed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("trusted-root");
+    let (packages, version) = installed(&dir);
+    let root = packages.join(PACKAGED_TRUSTED_ROOT);
+    let before = std::fs::read(&root).expect_err("no current yet");
+    assert_eq!(before.kind(), std::io::ErrorKind::NotFound);
+
+    std::os::unix::fs::symlink(&version, packages.join("hostkeeper/current"))
+        .expect("link current");
+    let committed = std::fs::read(repo_file(TRUSTED_ROOT)).expect("the committed root");
+    assert_eq!(std::fs::read(&root).expect("the installed root"), committed);
+    let mode = std::fs::metadata(&root)
+        .expect("stat the root")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o444);
     unseal(&packages);
 }
