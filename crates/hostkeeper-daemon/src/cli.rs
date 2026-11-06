@@ -371,7 +371,8 @@ async fn start_and_serve(
 ///   ([`host_claims`]); one that cannot be made is made again after a wait on the daemon's
 ///   clock, and every heartbeat reports what the loop last said of the certificate;
 /// - the heartbeat loop reads the certificate and key of the pki directory's `current` link at
-///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock;
+///   every heartbeat ([`PkiCertSource`]), and beats every `period` seconds on the daemon's clock, and once
+///   more as soon as a running order ends;
 ///   its link ([`HostLink`]) is the JSON route and gRPC over mutual TLS to the same
 ///   `coordinator`, pinned to the same `ca_sha256`, trusting the CA bundle of the pki directory's
 ///   `current` generation, its connections bounded on the daemon's clock; the link is made at the

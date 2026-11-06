@@ -33,8 +33,8 @@ use hostkeeper_link::testing::{
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, BeatOutcome, CertState, ClientIdentity, CoordinatorLink,
     DEFAULT_HEARTBEAT_SECS, Feature, Health, Heartbeat, Heartbeater, LinkError, Order, OrderId,
-    OrderRef, OrderResult, Outcome, PackageDigest, Reason, Reply, ServiceFacts, StopFlag, Target,
-    Verb,
+    OrderRef, OrderResult, Outcome, PackageDigest, Reason, Reply, ServiceFacts, Sleeper, StopFlag,
+    Target, Tick, Verb,
 };
 use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
@@ -42,7 +42,7 @@ use hostkeeper_oidc::testkit::{
 };
 use hostkeeper_oidc::{OidcConfig, Verifier};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
-use hostkeeper_proto::hostkeeper::operator::v1::AbortRequest;
+use hostkeeper_proto::hostkeeper::operator::v1::{AbortRequest, GetHostRequest};
 use hostkeeper_wire::identity::Identity;
 use hostkeeper_wire::wire::{self, ServiceBeat, UpdateResult};
 use support::{OWN, Rig, Scratch, d};
@@ -405,6 +405,100 @@ fn an_install_the_coordinator_orders_installs_the_service_and_converges() {
     assert_eq!(host.ordered()[1..], [None, None]);
     assert_eq!(convergence(&coordinator), "converged");
     assert!(ANNOUNCED.contains(&Feature::InstallV1));
+}
+
+/// The version of `web` that `Hosts.Get` answers installed on `host-1`; none when it lists
+/// none.
+fn listed_version(coordinator: &Coordinator) -> Option<String> {
+    let operator = Caller::Operator("operator".parse().expect("a token name"));
+    let request = GetHostRequest {
+        node_id: "host-1".to_owned(),
+    };
+    let host = coordinator
+        .get_host(&operator, &request)
+        .expect("Hosts.Get answers the host")
+        .host
+        .expect("a host");
+    host.services
+        .into_iter()
+        .find(|service| service.service == SERVICE)
+        .and_then(|service| service.installed_version)
+}
+
+/// The heartbeat loop's waits: in the first, the install the first heartbeat ordered runs to its
+/// end; the second stops the loop. Before each wait it notes what `Hosts.Get` lists of `web`.
+struct InstallInTheWait {
+    dispatch: Arc<ManualDispatch>,
+    coordinator: Arc<Coordinator>,
+    /// Each wait asked, in seconds, and the version `Hosts.Get` listed as it began.
+    waits: Mutex<Vec<(u64, Option<String>)>>,
+}
+
+impl Sleeper for InstallInTheWait {
+    fn sleep(&self, secs: u64) -> Tick {
+        let mut waits = self.waits.lock().expect("the log is not poisoned");
+        waits.push((secs, listed_version(&self.coordinator)));
+        if waits.len() == 1 {
+            assert!(self.dispatch.run_next(), "the install runs");
+            Tick::Beat
+        } else {
+            Tick::Stop
+        }
+    }
+}
+
+/// Catches a host whose new service the coordinator lists only a heartbeat period after its
+/// install ended: the coordinator orders the install at the first heartbeat, the real executor
+/// runs it to its end within the first second of the loop's wait, and by the next wait
+/// `Hosts.Get` lists `web` installed at the target, with fewer seconds waited in between than
+/// one heartbeat period, on the loop's own sleeper and not the wall clock.
+#[test]
+fn hosts_get_lists_an_installed_service_without_another_heartbeat_period() {
+    let rig = Rig::new("typed-install-listed");
+    rig.stage(SERVICE, TARGET);
+    for (step, line) in HOOK_LINES {
+        rig.launcher.replies(SERVICE, step, &[(0, line)]);
+    }
+    let dir = Scratch::new("typed-install-listed-coordinator");
+    let coordinator = coordinator(dir.path());
+    let host = Host::new(&rig, &coordinator);
+    let sleeper = InstallInTheWait {
+        dispatch: Arc::clone(&host.dispatch),
+        coordinator: Arc::clone(&coordinator),
+        waits: Mutex::new(Vec::new()),
+    };
+    let mut seen = Vec::new();
+    host.heartbeater
+        .run(&sleeper, &mut |outcome| seen.push(outcome.clone()));
+
+    assert_eq!(seen, [BeatOutcome::Sent, BeatOutcome::Sent]);
+    assert_eq!(
+        rig.launcher.steps(SERVICE),
+        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
+    );
+    let ordered = host
+        .ordered
+        .lock()
+        .expect("the log is not poisoned")
+        .clone();
+    assert!(
+        matches!(&ordered[0], Some(Order { verb: Verb::Install(target), .. })
+            if target.service.as_str() == SERVICE && target.version.as_str() == TARGET),
+        "{ordered:?}"
+    );
+    let waits = sleeper
+        .waits
+        .lock()
+        .expect("the log is not poisoned")
+        .clone();
+    let listed: Vec<Option<&str>> = waits.iter().map(|(_, at)| at.as_deref()).collect();
+    assert_eq!(listed, [None, Some(TARGET)], "{waits:?}");
+    let waited = waits[0].0;
+    assert!(
+        waited < DEFAULT_HEARTBEAT_SECS.get(),
+        "listed after {waited} seconds of a {DEFAULT_HEARTBEAT_SECS}-second period"
+    );
+    assert_eq!(listed_version(&coordinator).as_deref(), Some(TARGET));
 }
 
 /// Catches an abort the coordinator never sends (the daemon did not announce `abort-v1`), an

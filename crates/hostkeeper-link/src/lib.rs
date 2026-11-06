@@ -1,7 +1,7 @@
 //! The heartbeat loop of the hostkeeper daemon (docs/design/hostkeeper-design.md, sections 5.2,
 //! 8.2 to 8.4 and 11).
 //!
-//! Every period the [`Heartbeater`] sends the coordinator the facts of every service installed
+//! Every period, and again as soon as a running order ends, the [`Heartbeater`] sends the coordinator the facts of every service installed
 //! on the host, announces its features, hands the order of the reply to the executor, and puts
 //! the verdict of an order in every following heartbeat until the coordinator acknowledges it by
 //! order id and try. It is a function of ports only, each a trait of [`ports`]:
