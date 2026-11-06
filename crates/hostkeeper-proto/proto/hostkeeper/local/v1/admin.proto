@@ -65,6 +65,15 @@ message StatusRequest {}
 message StatusResponse {
   // Every service installed on the host, in name order.
   repeated ServiceRecord services = 1;
+  // The age of the Sigstore trusted root the daemon checks package attestations with: the
+  // seconds since its file was last written on the host (hostkeeper's package carries one, so an
+  // update of hostkeeper writes it). Absent when there is no file.
+  optional uint64 trusted_root_age_secs = 2;
+  // Why that root needs attention, as a token: `trusted_root_stale` (older than the daemon's
+  // `--trusted-root-max-age-days`), `trusted_root_missing` (no file) or
+  // `trusted_root_unparseable` (a file that cannot be read or is not trusted roots). Empty when
+  // the root needs none. A signal only: package checks go on with the root there is.
+  string trusted_root_reason = 3;
 }
 
 message AbortRequest {

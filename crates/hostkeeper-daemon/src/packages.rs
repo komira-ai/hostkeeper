@@ -17,6 +17,7 @@ use hostkeeper_hook::{Class, Outcome};
 use hostkeeper_steps::Staged;
 
 use crate::refusal::Refusal;
+use crate::trusted_root::RootReport;
 use crate::verb::PackageDigest;
 
 /// The unpacked version directory of one package, sealed: nothing from it runs unless the tree
@@ -144,5 +145,12 @@ pub trait Packages: Send + Sync {
     /// default removes nothing.
     fn remove_orphans(&self, _service: &ServiceName) -> Result<(), PackageError> {
         Ok(())
+    }
+
+    /// The age of the Sigstore trusted root the store checks attestations with, and the reason
+    /// it needs attention, read now: what the admin `Status` reports of it. The default has no
+    /// root to report.
+    fn trusted_root(&self) -> Option<RootReport> {
+        None
     }
 }

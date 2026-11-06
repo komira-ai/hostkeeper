@@ -35,6 +35,7 @@ use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
+use crate::trusted_root::RootReport;
 use crate::verb::Verb;
 use crate::verbs;
 use crate::verbs::abort::Aborted;
@@ -528,6 +529,10 @@ pub struct DaemonStatus {
     pub version: HostkeeperVersion,
     /// Every service with a package directory, a state directory or a tombstone, by name.
     pub services: Vec<ServiceStatus>,
+    /// The Sigstore trusted root the package store checks attestations with: its age and the
+    /// reason it needs attention ([`Packages::trusted_root`]); `None` from a store that reports
+    /// none.
+    pub trusted_root: Option<RootReport>,
 }
 
 /// Why [`Daemon::status`] could not list the services.
@@ -802,6 +807,7 @@ impl Daemon {
         Ok(DaemonStatus {
             version: ctx.own_version,
             services,
+            trusted_root: ctx.packages.trusted_root(),
         })
     }
 }

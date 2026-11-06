@@ -627,3 +627,48 @@ fn the_store_is_send_and_sync() {
     fn is_port<T: Packages + Send + Sync>() {}
     is_port::<RealPackages>();
 }
+
+/// Catches a store that reports no trusted root when it was given one, one that reports a root
+/// it was not given, or a report taken once and kept: the store without a root reports none (as
+/// the port's default does), and with one it reports that root's age and reason as of each call.
+#[test]
+fn the_store_reports_the_trusted_root_it_was_given_as_of_each_call() {
+    use hostkeeper_daemon::trusted_root::{RootProblem, RootReport, TrustedRoot};
+    use hostkeeper_link::testing::FakeClock as UnixFake;
+
+    let rig = Rig::new("trusted-root-report");
+    let bare = rig
+        .open(Vec::new(), Answer::Confirms)
+        .expect("open the store");
+    assert_eq!(bare.trusted_root(), None);
+    assert_eq!(FakePackages::new(&rig.packages).trusted_root(), None);
+
+    let packaged = rig
+        .packages
+        .join("hostkeeper/current/files/trusted_root.json");
+    let installed = rig.packages.join("no-such-root.json");
+    let clock = Arc::new(UnixFake::new(5_000, 0));
+    let root = Arc::new(TrustedRoot::new(
+        packaged,
+        installed.clone(),
+        1,
+        Arc::clone(&clock) as Arc<dyn hostkeeper_link::UnixClock>,
+    ));
+    let store = rig
+        .open(Vec::new(), Answer::Confirms)
+        .expect("open the store")
+        .with_trusted_root(root);
+    let missing = RootReport {
+        path: installed.clone(),
+        age_secs: None,
+        problem: Some(RootProblem::Missing),
+    };
+    assert_eq!(store.trusted_root(), Some(missing));
+    fs::write(
+        &installed,
+        "{\"mediaType\":\"application/vnd.dev.sigstore.trustedroot+json;version=0.1\"}\n",
+    )
+    .expect("write the root");
+    let now = store.trusted_root().expect("a report");
+    assert_eq!((now.path, now.problem), (installed, None));
+}

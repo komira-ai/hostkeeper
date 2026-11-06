@@ -77,13 +77,22 @@ pub fn entries(text: &str) -> Vec<String> {
     out
 }
 
-/// The licence text, verbatim from its authors, dated as they dated it: the one file the date
-/// rule does not read. Every other rule reads it.
+/// The licence text, verbatim from its authors, dated as they dated it: a file the date rule
+/// does not read. Every other rule reads it.
 pub const LICENCE_FILE: &str = "LICENSE";
 
-/// Every rule, over one file. The date rule skips the licence text and nothing else does.
+/// The Sigstore trusted root, verbatim as `gh attestation trusted-root` prints it, with the dates
+/// Sigstore's keys are valid from (trusted-root.yml compares it byte for byte with the live one):
+/// the other file the date rule does not read. Every other rule reads it.
+pub const TRUSTED_ROOT_FILE: &str = "packaging/sigstore/trusted_root.json";
+
+/// The files whose dates are third-party data, kept verbatim.
+const DATED_BY_OTHERS: [&str; 2] = [LICENCE_FILE, TRUSTED_ROOT_FILE];
+
+/// Every rule, over one file. The date rule skips the licence text and the trusted root, and
+/// nothing else does.
 pub fn lint(path: &str, text: &str, lists: &Lists) -> Vec<Finding> {
-    let mut out = if path == LICENCE_FILE {
+    let mut out = if DATED_BY_OTHERS.contains(&path) {
         Vec::new()
     } else {
         dates(path, text)

@@ -259,9 +259,12 @@ jobs:
           RPM_ARCH: ${{ matrix.rpm-arch }}
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --staged target/nfpm
       # The package carries the unit the deb and the rpm install (packaging/linux/hostkeeper.service),
-      # the one unit file of the daemon: it starts the binary the self-update switches.
+      # the one unit file of the daemon: it starts the binary the self-update switches. It also
+      # carries the committed Sigstore trusted root, which the daemon checks every package against,
+      # so each update of hostkeeper brings the root of its release (trusted-root.yml says when the
+      # committed root is no longer the live one).
       - name: hostkeeper's own package and its SHA-256
-        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --unit packaging/linux/hostkeeper.service --out dist
+        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --unit packaging/linux/hostkeeper.service --trusted-root packaging/sigstore/trusted_root.json --out dist
       - name: hello's package and its SHA-256
         run: cargo xtask release package --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       # The same binary and units, started with --fail-ready: a build whose verify fails, so that
@@ -362,8 +365,9 @@ jobs:
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
       - name: Tarball of the binary
         run: gtar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper | gzip -n > "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      # The package carries the committed trusted root (see the Linux build job).
       - name: hostkeeper's own package and its SHA-256
-        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --out dist
+        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --trusted-root packaging/sigstore/trusted_root.json --out dist
       - name: hello's package and its SHA-256
         run: cargo xtask release package --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       # The same binary and plists, started with --fail-ready (see the Linux build job).
