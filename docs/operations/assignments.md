@@ -62,6 +62,17 @@ again after its backoff; one that failed is left for the operator, and like a fa
 holds the slot until the host heartbeats healthy (or an operator excludes it with `abandon`).
 An excluded host is ordered nothing at all.
 
+## Status and convergence
+
+`Releases.Status`, `Releases.Converge` (and `GET /v1/convergence`) and the Rollout page count
+the hosts a service is assigned to, by the same rule the rollout gate orders by: the rollout
+file's roles and the operator's entries alike. A role an operator assigned the service to is
+counted after the rollout file's roles, by name, once one of its hosts reports the service. A host
+that is assigned the service and does not list it is `missing`, and the service is not
+`converged`, while the host's daemon could be ordered the install (it lists every service it runs
+and takes installs, and the release index lists a package for its platform). A host or role an
+`Unassign` takes the service off is no longer counted, whatever it still runs.
+
 ## Minimum versions
 
 `Services.SetMinVersion` sets, for a role or a host, the version below which the rollout gate

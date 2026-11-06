@@ -35,7 +35,8 @@
 //!                                # desired state to it forgets the last good version
 //! defer_backoff = { initial_secs = 300, factor = 2, max_secs = 3600 }   # the defaults
 //!
-//! [service.selector]             # optional; absent: a host belongs if it announces the service
+//! [service.selector]             # optional; absent: a host belongs if it announces the service,
+//!                                # or is missing it while it could be ordered to install it
 //! roles = ["daemon"]             # default: every role of the service
 //! labels = { zone = "a" }        # operator-set labels the host must carry
 //! ```

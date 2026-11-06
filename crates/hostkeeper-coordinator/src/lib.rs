@@ -135,6 +135,8 @@ mod assign_edge_tests;
 #[cfg(test)]
 mod assign_support;
 #[cfg(test)]
+mod assigned_counts_tests;
+#[cfg(test)]
 mod assignment_tests;
 #[cfg(test)]
 mod audit_file_tests;
