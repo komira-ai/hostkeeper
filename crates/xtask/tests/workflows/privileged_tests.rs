@@ -504,7 +504,11 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     let targets = committed_targets();
     assert_eq!(
         targets["privileged"],
-        BTreeSet::from(["observer".to_owned(), "transient_unit".to_owned()])
+        BTreeSet::from([
+            "observer".to_owned(),
+            "transient_unit".to_owned(),
+            "unit_control".to_owned()
+        ])
     );
     assert_eq!(
         targets[MACOS_DEVICE_JOB],

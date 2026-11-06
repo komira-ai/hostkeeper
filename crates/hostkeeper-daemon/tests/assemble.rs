@@ -16,7 +16,7 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::manifest::{Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_daemon::adapters::Adapters;
+use hostkeeper_daemon::adapters::{Adapters, RunnerLauncher, SYSTEMCTL_DEADLINE};
 use hostkeeper_daemon::boot::{ALERT_START, BootReport, BootStep, Stage, alert_line};
 use hostkeeper_daemon::cli::{
     CA_BUNDLE, CA_BUNDLE_MACOS, CA_BUNDLE_RHEL, DEADMAN_POLL_SECS, GH_BINARY, GH_BINARY_MACOS,
@@ -34,6 +34,8 @@ use hostkeeper_daemon::{NoNotifier, Ports, ReadyNotifier, Refusal};
 use hostkeeper_hook::{Invocation, Step};
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::testing::FakeClock as FakeUnixClock;
+use hostkeeper_observe::fake::FakeCommandRunner;
+use hostkeeper_observe::{CommandOutput, RunError};
 use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier, VerifyError};
 use hostkeeper_placed::testing::{Event, FsWrite, Log as PlacedLog, UnitCall};
 use hostkeeper_steps::{Bound, Stamp, StepCall};
@@ -46,9 +48,18 @@ const RESTORE: &str = r#"boot = "restore""#;
 const ROOT_LINE: &str =
     "{\"mediaType\":\"application/vnd.dev.sigstore.trustedroot+json;version=0.1\"}\n";
 
-/// The adapters of a Linux host.
+/// The adapters of a Linux host, the unit control's `systemctl` run through `systemctl` (which
+/// answers what it is told and records each command).
+fn linux_over(systemctl: &FakeCommandRunner) -> Adapters {
+    Adapters::linux(
+        &Platform::linux(),
+        RunnerLauncher::new(systemctl.clone(), SYSTEMCTL_DEADLINE),
+    )
+}
+
+/// The adapters of a Linux host whose `systemctl` is never asked.
 fn linux() -> Adapters {
-    Adapters::linux(&Platform::linux())
+    linux_over(&FakeCommandRunner::default())
 }
 
 /// A readiness notifier that puts a mark in the placed log, in its place among the writes and
@@ -386,9 +397,10 @@ fn the_registration_socket_directory_is_beside_the_admin_socket_directory() {
 /// with the packages directory there the ports open with the sweep of the real store (a service
 /// entry that is a file is an `io_error`), the dead-man poll and the host's directories for
 /// placement; without it the start is `Io` naming it; `gh`'s home under the state directory is
-/// made mode 0700, and one that cannot be made is `Io` naming it. Catches a launcher left
-/// unwired: the ports' launcher is the host's systemd launcher, which refuses a hook that is not
-/// there by its path before it spawns anything.
+/// made mode 0700, and one that cannot be made is `Io` naming it. Catches a launcher or a unit
+/// control left unwired: the ports' launcher is the host's systemd launcher, which refuses a hook
+/// that is not there by its path before it spawns anything, and their unit control runs
+/// `systemctl` through the adapters' launcher.
 #[test]
 fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
     let rig = Rig::new("assemble-host-ports");
@@ -430,7 +442,15 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
 
     make_dir(&rig.packages, 0o755);
     fs::write(rig.packages.join("web"), "x").expect("a file where a service goes");
-    let ports = host_ports(&config(), &rig.settings(), &files, OWN, linux()).expect("the ports");
+    let systemctl = FakeCommandRunner::default();
+    let ports = host_ports(
+        &config(),
+        &rig.settings(),
+        &files,
+        OWN,
+        linux_over(&systemctl),
+    )
+    .expect("the ports");
     assert_eq!(ports.deadman_poll_secs, Some(DEADMAN_POLL_SECS));
     assert_eq!(ports.placement.roots.packages().dir(), rig.packages);
     let swept = ports.packages.remove_orphans(&name("web"));
@@ -499,6 +519,32 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
         Some(format!(
             "the hook did not start: {}: No such file or directory (os error 2)",
             missing.display()
+        ))
+    );
+
+    // The unit control is the adapters' `systemctl`, not the unwired one that refused.
+    systemctl.then(Ok(CommandOutput {
+        exit_code: Some(0),
+        stdout: Vec::new(),
+        truncated: false,
+    }));
+    assert_eq!(ports.units.daemon_reload(), Ok(()));
+    assert_eq!(
+        systemctl.calls(),
+        vec![(
+            vec!["systemctl".to_owned(), "daemon-reload".to_owned()],
+            SYSTEMCTL_DEADLINE
+        )]
+    );
+    // Nothing more answered: the next command cannot run, and that is the call's error.
+    assert_eq!(
+        ports
+            .units
+            .stop_unit("web.service")
+            .map_err(|e| e.to_string()),
+        Err(format!(
+            "systemctl stop -- web.service failed: {}",
+            RunError::Empty
         ))
     );
 }

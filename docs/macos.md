@@ -118,8 +118,8 @@ fakes on Linux, and on a Mac in the device run below.
 The daemon picks its adapters by the platform it was built for
 (`hostkeeper_daemon::adapters::Adapters::for_platform`): on a Mac the step launcher, the
 observer's service manager and process probe, and the unit control over `launchctl` and
-`/Library/LaunchDaemons`, the package check above, and the Mac claims; on Linux what it ran
-before. The admin socket's default is the platform's (`/var/run/hostkeeper/admin.sock` on a Mac),
+`/Library/LaunchDaemons`, the package check above, and the Mac claims; on Linux the systemd
+step launcher, observer and unit control (`systemctl`), and no package check. The admin socket's default is the platform's (`/var/run/hostkeeper/admin.sock` on a Mac),
 in a directory the daemon makes mode 0700.
 
 #### One daemon, run by launchd
