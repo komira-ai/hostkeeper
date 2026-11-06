@@ -869,9 +869,11 @@ attestation verify</code> runs offline against the Sigstore trusted root and the
 <code>[trusted_signers]</code> entry (organisation, workflow, ref globs, hosted runner). There is no unsigned
 mode. The bundle is read up to
 <span data-cell="c-bundle" data-source="crates/hostkeeper-package/src/bundle.rs" data-item="MAX_BUNDLE_BYTES">1 MiB</span>.
-The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code>
-(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>), but no
-package of this repository installs them. Until an operator places them, every package check ends
+The pinned <code>gh</code> and the trusted root are expected under <code>/usr/lib/hostkeeper/</code> on Linux
+and under <code>/usr/local/lib/hostkeeper/</code> on a Mac
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-daemon/src/cli.rs">crates/hostkeeper-daemon/src/cli.rs</a>). The macOS
+installer pkg installs both (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/macos.md">docs/macos.md</a>); no Linux
+package does. Until an operator places them on a Linux host, every package check there ends
 <code>attestation_unavailable</code>.</p>
 <p><strong>Unpack.</strong> One streaming pass (zstd, tar, a SHA-256 per file) writes into a private staging
 directory, under hard bounds: a zstd window of at most
@@ -1100,8 +1102,8 @@ itself and falls back after
 starts within
 <span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
 The timer job meant to run it is rendered but not installed.</li>
-<li>The installer is an unsigned <code>.pkg</code> holding the binary and the daemon&rsquo;s plist, with no scripts. The
-operator writes <code>hostkeeper.toml</code>.</li>
+<li>The installer is an unsigned <code>.pkg</code> holding the binary, the daemon&rsquo;s plist, its log directory and
+newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root, with no scripts. The operator writes <code>hostkeeper.toml</code>.</li>
 </ul>
 <p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine

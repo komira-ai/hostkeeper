@@ -79,12 +79,21 @@ pub const DEFAULT_ADMIN_SOCKET: &str = if cfg!(target_os = "macos") {
 };
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
-/// The host's CA bundle (PEM): the roots the package fetch's HTTPS client trusts.
+/// The CA bundle (PEM) of a Debian-family Linux host: the roots the package fetch's HTTPS client
+/// trusts. A Linux host whose bundle is neither this nor [`CA_BUNDLE_RHEL`] is given this path.
 pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
-/// The pinned `gh` that checks a package's attestation.
+/// The CA bundle of a RHEL-family Linux host.
+pub const CA_BUNDLE_RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
+/// The CA bundle of a Mac, the system roots macOS keeps as PEM.
+pub const CA_BUNDLE_MACOS: &str = "/etc/ssl/cert.pem";
+/// The pinned `gh` that checks a package's attestation, on a Linux host.
 pub const GH_BINARY: &str = "/usr/lib/hostkeeper/gh";
-/// The Sigstore trusted root, as `gh attestation trusted-root` prints it.
+/// The pinned `gh` on a Mac, where the installer pkg puts it (`/usr` itself is read-only there).
+pub const GH_BINARY_MACOS: &str = "/usr/local/lib/hostkeeper/gh";
+/// The Sigstore trusted root, as `gh attestation trusted-root` prints it, on a Linux host.
 pub const SIGSTORE_TRUSTED_ROOT: &str = "/usr/lib/hostkeeper/trusted_root.json";
+/// The Sigstore trusted root on a Mac, where the installer pkg puts it.
+pub const SIGSTORE_TRUSTED_ROOT_MACOS: &str = "/usr/local/lib/hostkeeper/trusted_root.json";
 /// The directory `gh` runs in, under the state directory.
 pub const GH_HOME: &str = ".gh";
 /// How often each service's dead-man looks at its running step on a host, in seconds.
@@ -410,13 +419,40 @@ pub struct HostFiles {
 }
 
 impl HostFiles {
-    /// Where a host keeps them: [`CA_BUNDLE`], [`GH_BINARY`], [`SIGSTORE_TRUSTED_ROOT`] and
-    /// [`PKI_DIR`].
+    /// Where this host keeps them: [`HostFiles::for_platform`] for the platform this binary was
+    /// built for, asking the filesystem which CA bundle exists.
     pub fn host() -> HostFiles {
+        HostFiles::for_platform(Platform::host().kind, Path::exists)
+    }
+
+    /// Where a host of `kind` keeps them, `exists` saying whether a path is there; the pki
+    /// directory is [`PKI_DIR`] on both.
+    ///
+    /// - A Mac: [`CA_BUNDLE_MACOS`], [`GH_BINARY_MACOS`] and [`SIGSTORE_TRUSTED_ROOT_MACOS`],
+    ///   whatever `exists` says.
+    /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
+    ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
+    ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
+    pub fn for_platform(kind: PlatformKind, exists: impl Fn(&Path) -> bool) -> HostFiles {
+        let (ca_bundle, gh, trusted_root) = match kind {
+            PlatformKind::Macos => (
+                CA_BUNDLE_MACOS,
+                GH_BINARY_MACOS,
+                SIGSTORE_TRUSTED_ROOT_MACOS,
+            ),
+            PlatformKind::Linux => (
+                [CA_BUNDLE, CA_BUNDLE_RHEL]
+                    .into_iter()
+                    .find(|bundle| exists(Path::new(bundle)))
+                    .unwrap_or(CA_BUNDLE),
+                GH_BINARY,
+                SIGSTORE_TRUSTED_ROOT,
+            ),
+        };
         HostFiles {
-            ca_bundle: PathBuf::from(CA_BUNDLE),
-            gh: PathBuf::from(GH_BINARY),
-            trusted_root: PathBuf::from(SIGSTORE_TRUSTED_ROOT),
+            ca_bundle: PathBuf::from(ca_bundle),
+            gh: PathBuf::from(gh),
+            trusted_root: PathBuf::from(trusted_root),
             pki: PathBuf::from(PKI_DIR),
         }
     }
