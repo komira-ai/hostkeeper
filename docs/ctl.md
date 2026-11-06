@@ -281,7 +281,7 @@ Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState).
 `/hostkeeper.operator.v1.Releases/Converge`
 
 How far a service's hosts are from its desired version. Changes nothing. Takes CI's OIDC
-token only.
+token or the operator token.
 
 | flag | value | meaning |
 |---|---|---|

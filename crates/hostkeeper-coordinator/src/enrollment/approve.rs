@@ -264,14 +264,20 @@ fn audited_request(entry: &AuditEntry) -> Option<&str> {
 impl Enrollment {
     /// From now on, audits into `ops`; and audits there now every approval the store recorded
     /// whose entry the audit log does not hold (one whose audit did not land before a crash).
+    /// Once the audit file's retention has deleted segments, an approval made before the oldest
+    /// line kept is not audited again: its entry went with its segment.
     /// Called when a coordinator takes this enrollment, at its start.
     pub fn audit_to(&self, ops: Arc<OpsStore>) {
-        match (self.store.recorded_approvals(), ops.audit_log()) {
-            (Ok(approvals), Ok(log)) => {
+        let kept = ops
+            .audit_log()
+            .and_then(|log| Ok((log, ops.audit_pruned_before()?)));
+        match (self.store.recorded_approvals(), kept) {
+            (Ok(approvals), Ok((log, pruned_before))) => {
                 let audited: BTreeSet<&str> = log.iter().filter_map(audited_request).collect();
                 for approval in approvals
                     .iter()
                     .filter(|approval| !audited.contains(approval.request_id.to_hex().as_str()))
+                    .filter(|approval| pruned_before.is_none_or(|t| approval.approved_unix >= t))
                 {
                     tracing::info!(
                         request_id = %approval.request_id,

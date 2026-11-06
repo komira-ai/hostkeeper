@@ -14,7 +14,7 @@ const LOG_DIR_AT: usize = 10;
 fn the_payload_holds_the_log_directory_and_the_newsyslog_file_owned_by_root() {
     // Catches: a pkg that leaves launchd's StandardOutPath without its directory, so the
     // daemon's output is lost on a fresh Mac, or one that installs no rotation for it.
-    let want = payload(BINARY.to_vec(), b"plist".to_vec());
+    let want = payload(contents(BINARY, b"plist"));
     assert_eq!(want[LOG_DIR], Want::Dir);
     assert_eq!(
         want[NEWSYSLOG],
@@ -282,7 +282,7 @@ fn check_refuses_a_payload_without_the_log_directory_or_the_newsyslog_file_namin
                 .map(|name| {
                     format!(
                         "/{} ({name:?}) is in the payload, which holds only the binary, the \
-                         plist, the newsyslog file, the log directory and their directories, \
+                         plist, the newsyslog file, the log directory, gh, the trusted root and their directories, \
                          each once",
                         &name[2..]
                     )

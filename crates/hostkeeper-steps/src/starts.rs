@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::bad::write_private;
-use crate::clock::Stamp;
+use crate::clock::{BootId, Stamp};
 
 /// The file's name in the state directory of the service `hostkeeper`.
 pub const STARTS_FILE: &str = "starts";
@@ -123,7 +123,11 @@ impl StartLog {
             .map(|start| {
                 serde_json::json!({
                     "version": start.version,
-                    "at": {"boot_id": start.at.boot_id, "mono_secs": start.at.mono_secs},
+                    // An unknown boot is written as `""`, the form of `Stamp`'s own encoding.
+                    "at": {
+                        "boot_id": start.at.boot_id.as_ref().map_or("", BootId::as_str),
+                        "mono_secs": start.at.mono_secs,
+                    },
                 })
             })
             .collect();

@@ -47,6 +47,13 @@ name = "xtask-exec-fixture"
 path = "tests/bin/exec_fixture.rs"
 required-features = ["test-support"]
 
+# The `gh` the channel-sync deploy test (tests/channel_sync.rs) runs the committed unit's and
+# sidecar's commands with: it answers from files beside it. A program of the tests, not shipped.
+[[bin]]
+name = "xtask-gh-fixture"
+path = "tests/bin/gh_fixture.rs"
+required-features = ["test-support"]
+
 [features]
 # Builds the launch test's fixture program and `xtask::test_support`. Off for everything else.
 test-support = []

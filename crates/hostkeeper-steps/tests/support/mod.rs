@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use hostkeeper_hook::{Params, Step};
 use hostkeeper_steps::record::CrashGate;
 use hostkeeper_steps::{
-    Bound, Bounds, Clock, LaunchError, RecordStore, Staged, StepCall, StepExit, StepLauncher,
-    StepRunner, UpdateOrder,
+    BootId, BootIdError, Bound, Bounds, Clock, LaunchError, RecordStore, Staged, StepCall,
+    StepExit, StepLauncher, StepRunner, UpdateOrder,
 };
 
 /// A directory under the target directory, unique to the test, removed when it is dropped.
@@ -67,8 +67,9 @@ impl Clock for FakeClock {
         self.mono.load(Ordering::SeqCst)
     }
 
-    fn boot_id(&self) -> String {
-        self.boot.lock().unwrap().clone()
+    /// The id set by [`FakeClock::reboot`]; an empty one cannot be read.
+    fn boot_id(&self) -> Result<BootId, BootIdError> {
+        BootId::new("the fake clock", &self.boot.lock().unwrap())
     }
 
     fn sleep_secs(&self, secs: u64) {
