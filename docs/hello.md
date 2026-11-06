@@ -33,7 +33,9 @@ marked **specified, not built**, with the pull request that builds it.
 
 The committed goldens in `examples/hello/package/` are these files byte for byte, and list each
 entry and its mode. `/readyz` answers 200, or 503 when the server runs with `--fail-ready`.
-`/version` answers the version.
+`/version` answers the version of the package: `<version>`, or `<version>-fail-ready` when the
+server runs with `--fail-ready`, as the failing build's units start it. So `/version` alone tells
+the failing build from the good one.
 
 **Two slots, one at a time.** Both slots serve on port 9310, so only one runs. A slot runs only
 while its marker `/var/lib/updater/hooks/hello/slots/<slot>` exists. The systemd unit checks it
@@ -157,8 +159,9 @@ that served `<v1>` is stopped. When the hosts have baked, `<v2>` is the last goo
 Set the desired version to `<v2>-fail-ready`, with the digest of its package (the Rollout page's
 `Set desired` does it, or dispatch `hello-desired.yml` with `version` `<v2>` and `variant`
 `fail-ready`). That build runs
-the server with `--fail-ready`, so `/readyz` answers 503. (Its `/version` answers `<v2>`: `verify`
-stops at the 503 and never compares it.)
+the server with `--fail-ready`, so `/readyz` answers 503. Its `/version` answers
+`<v2>-fail-ready`, its own version, so a probe of `/version` tells it from `<v2>` (`verify` stops at
+the 503 and never compares it).
 
 **Watch:**
 

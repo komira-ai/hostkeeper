@@ -70,6 +70,10 @@ hostkeeper-package = { path = "../hostkeeper-package" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The daemon's unpacker (design 5.5), which the package test unpacks the produced archive with.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+# The example service hello, whose command-line parser and served version the hello package test
+# checks the package's units and manifest against: the version a package names is the one its
+# server answers `/version` with.
+hello = { path = "../../examples/hello" }
 # The enrollment runbook's test (tests/enrollment_doc.rs) parses each `hostkeeper ctl` line of
 # docs/operations/enrollment.md with ctl's own parser over the generated command table, and
 # reads the refusal tokens from the protos' descriptors.

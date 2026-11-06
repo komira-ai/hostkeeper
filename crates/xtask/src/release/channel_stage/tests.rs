@@ -17,6 +17,9 @@ use crate::release::fakes::{FakeHistory, Fakes, scratch};
 use crate::release::ports::Adapters;
 use crate::testdir::TestDir;
 
+/// hello and its failing build staged into one tree.
+mod fail_ready;
+
 const SERVICE: &str = "tierstore";
 const VERSION: &str = "1.5.0";
 /// The daemon config's `release_channel` in the fetch tests; the in-process origin serves `--out`

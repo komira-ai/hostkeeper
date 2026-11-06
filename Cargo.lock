@@ -4190,6 +4190,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "flate2",
+ "hello",
  "hex",
  "hostkeeper-config",
  "hostkeeper-ctl",

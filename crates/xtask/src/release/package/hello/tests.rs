@@ -539,6 +539,97 @@ fn the_failing_build_is_its_own_package_file_with_its_own_digest_on_each_platfor
     assert_ne!(plain, built(&x86));
 }
 
+/// The arguments the package's unit (Linux) or the plist of slot `a` (macOS) starts the server
+/// with, after the program itself.
+fn server_arguments(package: &[u8], platform: Platform) -> Vec<String> {
+    if platform == Platform::MacosArm64 {
+        let plist = text_of(package, "units/hello.a.plist");
+        let (_, rest) = plist
+            .split_once("<key>ProgramArguments</key>\n\t<array>\n")
+            .expect("ProgramArguments");
+        let (array, _) = rest.split_once("\t</array>").expect("the end of the array");
+        let mut words = array.lines().map(|line| {
+            line.trim()
+                .strip_prefix("<string>")
+                .and_then(|w| w.strip_suffix("</string>"))
+                .expect("a string")
+                .to_owned()
+        });
+        assert_eq!(
+            words.next().as_deref(),
+            Some("/var/lib/hostkeeper/packages/hello/current/bin/hello")
+        );
+        return words.collect();
+    }
+    let unit = text_of(package, "units/hello@.service");
+    let line = unit
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))
+        .expect("an ExecStart line");
+    let mut words = line.split(' ').map(str::to_owned);
+    assert_eq!(
+        words.next().as_deref(),
+        Some("/var/lib/hostkeeper/packages/hello/current/bin/hello")
+    );
+    words.collect()
+}
+
+#[test]
+fn each_package_names_the_version_its_server_answers_on_version() {
+    // Catches: a failing build whose server answers `/version` with the plain version while its
+    // manifest and index name `<V>-fail-ready` (so the two builds are told apart only by
+    // `/readyz`), the package and the server disagreeing on the suffix, or the plain package's
+    // server answering a suffixed version. The units' arguments are read with hello's own parser.
+    let released: crate::release::contract::Version = hello::VERSION
+        .parse()
+        .expect("hello's version is a release version");
+    let mut answered = BTreeSet::new();
+    for platform in [Platform::LinuxX86_64, Platform::MacosArm64] {
+        let name = platform.name();
+        for fail_ready in [false, true] {
+            let dir = scratch(&format!("hello-served-{name}-{fail_ready}"));
+            let (history, commit) = history();
+            let mut r = request(&dir, &commit, platform, fail_ready, "out");
+            r.version = released;
+            package(&history, &r).expect("package");
+            let bytes = built(&r);
+            let manifest = text_of(&bytes, "manifest.toml");
+            let named = manifest
+                .lines()
+                .find_map(|line| line.strip_prefix("version = \""))
+                .and_then(|rest| rest.strip_suffix('"'))
+                .expect("a version line");
+            let args: Vec<std::ffi::OsString> = server_arguments(&bytes, platform)
+                .into_iter()
+                .map(Into::into)
+                .collect();
+            let Ok(hello::cli::Command::Serve {
+                fail_ready: started_failing,
+                ..
+            }) = hello::cli::parse(&args)
+            else {
+                panic!("{name}: the unit does not start the server: {args:?}");
+            };
+            assert_eq!(started_failing, fail_ready, "{name}");
+            let kind = Package::of(Service::Hello, fail_ready).expect("a hello package");
+            assert_eq!(named, kind.version_text(&released), "{name}");
+            assert_eq!(
+                hello::served_version(started_failing),
+                named,
+                "{name} fail_ready={fail_ready}"
+            );
+            answered.insert(named.to_owned());
+        }
+    }
+    assert_eq!(
+        answered,
+        BTreeSet::from([
+            hello::VERSION.to_owned(),
+            format!("{}-fail-ready", hello::VERSION)
+        ])
+    );
+}
+
 /// The manifest of the failing build of `platform` loaded with the manifest loader as the order
 /// for `version` of hello.
 fn loaded_failing(
