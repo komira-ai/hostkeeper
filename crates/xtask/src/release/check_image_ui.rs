@@ -3,8 +3,9 @@
 //!
 //! The image is read as `compare-images` reads it: the OCI image layout of the tarball, the
 //! first manifest of its index, and that manifest's layers. Each layer is a tar, gzip-compressed
-//! or not, and the layers are applied in order: an entry replaces what an earlier layer had at
-//! its path, and a whiteout (`.wh.<name>`) or an opaque marker (`.wh..wh..opq`) removes what an
+//! or not (a zstd layer is refused by name), and the layers are applied in order: an entry
+//! replaces what an earlier layer had at its path (a file or a link also removes what was below
+//! a directory there), and a whiteout (`.wh.<name>`) or an opaque marker (`.wh..wh..opq`) removes what an
 //! earlier layer had below it. In the file system that results, [`IMAGE_UI_DIR`] must be a
 //! directory holding exactly the directories and files of `ui/`, each file with the bytes of
 //! `ui/`'s, every entry owned by root (uid and gid 0), each file of mode 0644 and each directory
@@ -23,6 +24,9 @@ const FILE_MODE: u32 = 0o644;
 
 /// The mode of each directory of the web app in the image.
 const DIR_MODE: u32 = 0o755;
+
+/// The first bytes of a zstd frame: a layer compressed so is refused by name.
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 
 /// The marker of a whiteout entry of a layer.
 const WHITEOUT: &str = ".wh.";
@@ -90,6 +94,9 @@ fn image_tree(bytes: &[u8]) -> Result<Tree, String> {
 /// `tree`.
 fn apply(tree: &mut Tree, blob: &[u8]) -> Result<(), String> {
     let unreadable = |_: std::io::Error| "it is not a readable tar archive".to_owned();
+    if blob.starts_with(&ZSTD_MAGIC) {
+        return Err("it is compressed with zstd, which this check does not read".to_owned());
+    }
     let reader: Box<dyn Read + '_> = if blob.starts_with(&[0x1f, 0x8b]) {
         Box::new(flate2::read::GzDecoder::new(blob))
     } else {
@@ -138,6 +145,10 @@ fn apply(tree: &mut Tree, blob: &[u8]) -> Result<(), String> {
             }
             _ => Kind::Other,
         };
+        if kind != Kind::Dir {
+            // A file or a link over a directory replaces it, and what was below it.
+            remove_below(tree, &path);
+        }
         tree.insert(path, Node { kind, mode, owner });
     }
     Ok(())

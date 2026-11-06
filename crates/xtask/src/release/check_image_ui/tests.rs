@@ -213,12 +213,16 @@ fn a_file_missing_changed_extra_or_of_another_kind_is_refused_by_its_path() {
     );
 
     // `pages` replaced by a file of that name: it is not a directory, and what was below it
-    // stays in the tree as the earlier layer left it.
+    // is gone with it.
     let flat = with_layer(&[file(&format!("{ROOT}/pages"), b"x")]);
     let problems = refusal("ui-flat", &flat);
-    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert_eq!(problems.len(), 2, "{problems:?}");
     assert!(
         problems[0].starts_with(&format!("{} is not a directory, as ", at("pages"))),
+        "{problems:?}"
+    );
+    assert!(
+        problems[1].starts_with(&format!("{} is missing: ", at("pages/fleet.js"))),
         "{problems:?}"
     );
 }
@@ -275,6 +279,13 @@ fn an_image_without_the_directory_is_refused_once() {
     assert_eq!(refusal("ui-emptied", &emptied), want);
     let everything = with_layer(&[file(".wh..wh..opq", b"")]);
     assert_eq!(refusal("ui-everything", &everything), want);
+    // A link over an ancestor directory takes the web app below it away.
+    let linked = with_layer(&[Entry {
+        kind: tar::EntryType::Symlink,
+        mode: 0o777,
+        ..file("usr/share", b"")
+    }]);
+    assert_eq!(refusal("ui-linked-away", &linked), want);
 }
 
 #[test]
@@ -293,6 +304,10 @@ fn an_unreadable_image_or_ui_is_a_failure_naming_it() {
         (
             image_of(&[(b"not a tar at all".repeat(64), None)]),
             "layer 0: it is not a readable tar archive",
+        ),
+        (
+            image_of(&[([&ZSTD_MAGIC[..], b"frame"].concat(), None)]),
+            "layer 0: it is compressed with zstd, which this check does not read",
         ),
         (
             image_of(&[(layer(&[]), Some("md5:00"))]),
