@@ -41,18 +41,24 @@
 //! record, `try_conflict`, `stale_try`). An order that arrives while another runs is not
 //! started, and its verdict is `busy`. An order for a service that is not installed is not run,
 //! but for an `install`, which is for a service the host does not run. A forced order runs only
-//! while the reply advertises `forced-v1`; an update, an install or an uninstall whose target a
-//! deferral declines runs only once the retry time has come, by the [`UnixClock`]. A worker that
-//! ended with no verdict leaves no mark: the same order sent again runs.
+//! while the reply advertises `forced-v1`; an update, an install or an uninstall whose version a
+//! deferral names runs only once the retry time has come, by the [`UnixClock`] (for an
+//! uninstall, the version it names is the one the service runs, so a deferred uninstall sent
+//! again waits out its own deferral). A worker that ended with no verdict leaves no mark: the
+//! same order sent again runs.
 //!
 //! The verdict of an order names its target version; an `uninstall` names none, and its verdict
-//! names the version the service runs, as the last step records listed it. An uninstall that
-//! succeeded leaves no verdict to send: the service is gone from the next heartbeat, which is
-//! the report, and the verdicts of it not yet acknowledged go with it.
+//! names the version the service runs, as the last step records listed it. While an order runs,
+//! its service's `updating` is that version: an uninstall reports the version it removes, and an
+//! install reports nothing until its service is listed. An uninstall that succeeded leaves no
+//! verdict to send: the service is gone from the next heartbeat, which is the report, and the
+//! verdicts of it not yet acknowledged go with it.
 //!
 //! **Abort.** An `abort` is not one of the orders above: it goes to the executor at once, on a
 //! worker of its own, beside the order it stops, whatever runs. The order it stops reports how
-//! it ended (in the halt phase); the abort's own answer is logged, never sent as a verdict. An
+//! it ended (in the halt phase); the abort's own answer is logged, never sent as a verdict. Each
+//! abort that arrives is run, a resend too: the executor answers a resend of the same order and
+//! try from its first answer and stops nothing more. An
 //! abort of a service the loop runs no order of and does not list is not run: the abort that
 //! stops a step the daemon left running before a restart is the admin socket's.
 

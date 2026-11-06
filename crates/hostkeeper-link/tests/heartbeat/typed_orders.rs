@@ -271,3 +271,98 @@ fn an_abort_answered_with_no_reason_is_logged_as_its_outcome() {
         ["order abort-1 try 1 of x answered succeeded"]
     );
 }
+
+/// Catches an install held back by the rule for orders of services not installed when its
+/// service is listed (the executor decides whether that install is a resend or a refusal), and an
+/// install that arrives while another order runs started beside it: the first goes to the
+/// executor at its own version; the second is `busy` at its own version.
+#[test]
+fn an_install_of_a_listed_service_runs_and_one_while_busy_is_busy() {
+    let rig = Rig::new("typed-install-listed");
+    rig.install(vec![recorded("web", "1.0"), recorded("x", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    let listed = install("install-1", 1, "web", "2.0");
+    let busy = install("install-2", 1, "x", "3.0");
+    rig.world.link.answer(Ok(reply(Some(listed.clone()), &[])));
+    rig.world.link.answer(Ok(reply(Some(busy.clone()), &[])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    assert_eq!(rig.world.dispatch.pending(), 1);
+    assert!(rig.world.dispatch.run_next());
+    assert_eq!(rig.world.orders.orders(), [listed]);
+    assert_eq!(rig.world.orders.targets(), [version("2.0")]);
+    assert_eq!(
+        rig.world.link.beats()[2].services[1].last_update,
+        Some(OrderResult::busy(&busy, version("3.0")))
+    );
+}
+
+/// Catches a deferred uninstall dropped like a succeeded one, or one sent again before its
+/// retry time: its verdict is sent at the version the service runs, and the same uninstall sent
+/// again while the deferral stands is not run.
+#[test]
+fn a_deferred_uninstall_is_reported_and_not_run_again_before_its_retry_time() {
+    let world = World::with_orders(FakeSink::new(|order, target| {
+        let mut result = hostkeeper_link::testing::verdict(
+            order,
+            target,
+            Outcome::Deferred {
+                retry_after_secs: 600,
+            },
+        );
+        result.reason = reason("drain_bound");
+        result
+    }));
+    let rig = Rig::with_world("typed-uninstall-deferred", world);
+    rig.install(vec![recorded("x", "1.0")]);
+    let mut heartbeater = rig.heartbeater();
+    let removal = uninstall("uninstall-1", 1, "x");
+    let again = uninstall("uninstall-1", 2, "x");
+    rig.world
+        .link
+        .answer(Ok(reply(Some(removal.clone()), &[Feature::DeferredV1])));
+    rig.world
+        .link
+        .answer(Ok(reply(Some(again), &[Feature::DeferredV1])));
+    heartbeater.beat_once();
+    assert!(rig.world.dispatch.run_next());
+    heartbeater.beat_once();
+    assert_eq!(rig.world.dispatch.pending(), 0);
+    assert_eq!(rig.world.orders.orders(), [removal]);
+    let report = rig.world.link.beats()[1].services[0].deferred.clone();
+    assert_eq!(report.map(|d| d.target), Some(version("1.0")));
+    let until = hostkeeper_link::testing::START_UNIX + 600;
+    assert_eq!(
+        rig.world.log.lines(),
+        [format!(
+            "order uninstall-1 try 2 of x is not run: deferred until unix second {until}"
+        )]
+    );
+}
+
+/// Catches an abort of one service given the target of another service's running order, and
+/// an abort sent twice run once only by the loop (the executor owns the answer to a resend):
+/// an abort of `y` while an update of `x` runs is given `y`'s listed version, and each of the
+/// two arrivals goes to the executor.
+#[test]
+fn an_abort_of_another_service_names_its_own_version_and_each_arrival_runs() {
+    let rig = Rig::new("typed-abort-other");
+    rig.install(vec![recorded("x", "1.0"), recorded("y", "4.2")]);
+    let mut heartbeater = rig.heartbeater();
+    let stop = abort("abort-1", "y");
+    rig.world
+        .link
+        .answer(Ok(reply(Some(update("o-1", 1, "x", "2.0")), &[])));
+    rig.world.link.answer(Ok(reply(Some(stop.clone()), &[])));
+    rig.world.link.answer(Ok(reply(Some(stop), &[])));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    assert_eq!(rig.world.dispatch.pending(), 3);
+    while rig.world.dispatch.run_next() {}
+    assert_eq!(
+        rig.world.orders.targets(),
+        [version("2.0"), version("4.2"), version("4.2")]
+    );
+}
