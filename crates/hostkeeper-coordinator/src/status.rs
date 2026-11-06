@@ -1,6 +1,7 @@
 //! What an operator reads of the coordinator (`GET /v1/status`): every service with its desired
-//! state, its hosts as it sees them and why each is not ordered, its convergence, and the ops
-//! state; and the convergence `GET /v1/convergence` answers ([`convergence_of`]).
+//! state, its hosts as it sees them and why each is not ordered, its convergence, the ops state
+//! and, with enrollment, the server certificate; and the convergence `GET /v1/convergence`
+//! answers ([`convergence_of`]).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -13,6 +14,7 @@ use serde::Serialize;
 use crate::converge::{Convergence, RoleCounts, converge_service};
 use crate::decide::Why;
 use crate::desired::Desired;
+use crate::enrollment::ServerCertificate;
 use crate::fleet::{Fleet, Host};
 use crate::halt;
 use crate::membership::{Member, account, deferred_count, members};
@@ -136,6 +138,11 @@ pub struct Status {
     pub ops: OpsState,
     /// The commit this coordinator was built from ([`crate::BUILD_COMMIT`]).
     pub commit: &'static str,
+    /// With enrollment, the coordinator's server certificate: when it ends, and why the last
+    /// renewal failed, if it did ([`crate::enrollment::Enrollment::renew_server`]). Left out
+    /// without enrollment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_certificate: Option<ServerCertificate>,
 }
 
 /// The host `id` as the status shows it for `service`: whether it is up and holds a slot

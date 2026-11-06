@@ -18,9 +18,9 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Linux host | the daemon runs each step through `SystemdLauncher` | — |
 | running a hook step on a Mac | `LaunchdLauncher` (`hostkeeper-launchd`) | the daemon running its steps through it (`docs/macos.md`) |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
-| assigning to a role | the rollout file's `roles`, `Services.Assign` (komira-ai/hostkeeper#45), the Rollout page's Assign, and the coordinator's `install` order | the daemon announcing `install-v1`, without which it is never ordered an install |
+| assigning to a role | the rollout file's `roles`, `Services.Assign` (komira-ai/hostkeeper#45), the Rollout page's Assign, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host |
 | setting the desired version | `hostkeeper ctl releases set-desired`, CI's set-desired workflow, the Rollout page's Set desired (through the gateway) | — |
-| unassigning with uninstall | the daemon's uninstall verb, hello's `uninstall` step, `Services.Unassign` (komira-ai/hostkeeper#45) and the Rollout page's Unassign | the daemon announcing `install-v1` |
+| unassigning with uninstall | the daemon's uninstall verb, hello's `uninstall` step, `Services.Unassign` (komira-ai/hostkeeper#45), the Rollout page's Unassign, and the daemon's heartbeat loop, which runs the uninstall | the daemon's heartbeat link to the coordinator (`NoLink`) |
 
 ## The package
 
@@ -85,8 +85,10 @@ makes that directory, owner only, on its first step.
 
 The rollout entry assigns hello to every host of the role, and the coordinator orders an
 install on each host of the role that does not run hello (`docs/operations/assignments.md`).
-**Specified, not built:** the install goes only to a daemon that announces `install-v1`, which
-the daemon does not yet. Nothing is ordered until a desired version is set.
+The install goes only to a daemon that announces `install-v1`; the daemon's heartbeat loop
+announces it and runs the install. **Specified, not built:** the heartbeat link that carries the
+order to the host; the shipped daemon gives its loop `NoLink`. Nothing is ordered until a desired
+version is set.
 
 An alternative to the rollout entry: in the Rollout page, section `hello`, type the role in
 `Role` and press `Assign to the role`.
@@ -160,7 +162,9 @@ One failed host is enough for the rollback: the entry sets `rollback_after_faile
 
 ## 5. Unassign with uninstall
 
-**Specified, not built:** the uninstall goes only to a daemon that announces `install-v1`.
+The uninstall goes only to a daemon that announces `install-v1`, which the daemon's heartbeat
+loop does. **Specified, not built:** the heartbeat link that carries the order to the host
+(`NoLink`).
 Unassign hello in the Rollout page, section `hello`: type the role in `Role`, tick `Uninstall
 from each host that loses its last assignment`, press `Unassign from the role` and confirm. Or
 unassign it from the role (`--role <role>`) or from each host with ctl:

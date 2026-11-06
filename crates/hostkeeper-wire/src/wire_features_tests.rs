@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use crate::version::Version;
 use crate::wire::{
-    Answer, Class, CommitState, Heartbeat, Outcome, Phase, Reply, ServiceReply, Token,
-    UpdateResult, read_heartbeat,
+    Answer, Class, CommitState, Heartbeat, MAX_FEATURES, Outcome, Phase, Reply, ServiceReply,
+    Token, UpdateResult, read_heartbeat,
 };
 
 fn v(text: &str) -> Version {
@@ -200,14 +200,42 @@ fn an_unknown_phase_class_or_reason_reads_as_absent_and_keeps_the_result() {
     assert_eq!(result, UpdateResult::new(v("1.1"), Outcome::Failed));
 }
 
+/// Catches: a feature list cut at the old bound of 8, which would drop the whole list of an agent
+/// that announces nine (the hostkeeper daemon with `install-v1` and `abort-v1`): nine names and
+/// [`MAX_FEATURES`] names are read as sent, by the strict read and by the coordinator's reader,
+/// and one more is refused by the one and dropped by the other.
+#[test]
+fn a_feature_list_up_to_the_bound_is_read_whole_and_one_over_it_is_not() {
+    let names = |n: usize| -> Vec<String> { (0..n).map(|i| format!("f{i}")).collect() };
+    assert_eq!(MAX_FEATURES, 16);
+    for n in [9, MAX_FEATURES] {
+        let mut wire = full_beat();
+        wire["agent_features"] = json!(names(n));
+        assert_eq!(read(&wire).expect("read").agent_features, names(n), "{n}");
+        let got =
+            read_heartbeat(&serde_json::to_vec(&wire).expect("json"), Some("kbf")).expect("read");
+        assert_eq!(got.extras_dropped, None, "{n}");
+        assert_eq!(got.beat.agent_features, names(n), "{n}");
+    }
+    let mut over = full_beat();
+    over["agent_features"] = json!(names(MAX_FEATURES + 1));
+    assert!(read(&over).is_err());
+    let got = read_heartbeat(&serde_json::to_vec(&over).expect("json"), Some("kbf")).expect("read");
+    assert_eq!(
+        got.extras_dropped.as_deref(),
+        Some("agent_features: too many features")
+    );
+    assert_eq!(got.beat.agent_features, Vec::<String>::new());
+}
+
 /// Catches: a bad new field accepted by the strict read, one case at a time.
 #[test]
 fn the_strict_read_refuses_each_bad_new_field() {
-    let nine: Vec<String> = (0..9).map(|i| format!("f{i}")).collect();
+    let too_many: Vec<String> = (0..=MAX_FEATURES).map(|i| format!("f{i}")).collect();
     let nine_steps: serde_json::Map<String, Value> =
         (0..9).map(|i| (format!("s{i}"), json!(1))).collect();
     let bad = [
-        ("agent_features", json!(nine)),
+        ("agent_features", json!(too_many)),
         ("agent_features", json!(["a", "a"])),
         ("agent_features", json!(["a".repeat(33)])),
         ("agent_features", json!(["Upper"])),
@@ -240,9 +268,9 @@ fn the_strict_read_refuses_each_bad_new_field() {
 /// field: the coordinator's reader drops that field alone, says so, and keeps the others.
 #[test]
 fn a_bad_optional_field_is_dropped_alone_and_the_host_is_still_read() {
-    let nine: Vec<String> = (0..9).map(|i| format!("f{i}")).collect();
+    let too_many: Vec<String> = (0..=MAX_FEATURES).map(|i| format!("f{i}")).collect();
     let bad = [
-        ("agent_features", json!(nine)),
+        ("agent_features", json!(too_many)),
         ("agent_features", json!(["a", "a"])),
         ("agent_features", json!(["a".repeat(33)])),
         ("agent_features", json!(["Upper"])),

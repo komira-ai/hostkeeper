@@ -1,7 +1,7 @@
 //! The bound of a heartbeat: the service limit and the 16 KiB.
 
+use crate::verdict;
 use hostkeeper_link::beat::{DROP_ORDER, MAX_SERVICES_PER_HEARTBEAT};
-use hostkeeper_link::testing::verdict;
 use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, DeferredReport, Fitted, Health, Heartbeat, LinkError, Liveness,
     MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Outcome, Oversize, Platform, Reason,
