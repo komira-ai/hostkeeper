@@ -155,13 +155,19 @@ The publish keeps a version directory whole or absent:
 
 1. Write `.<version>.seal.tmp`, fsync it.
 2. Rename it to `<version>.seal`; fsync the service directory.
-3. Rename `.stage-<random>` to `<version>`; fsync the service directory.
+3. Rename `.stage-<random>` (still 0700, every directory below it already 0555) to
+   `<version>`; fsync the service directory.
+4. Make `<version>` 0555; fsync it.
 
-A version directory therefore never exists without its seal. What a crash leaves (a
+The tree is renamed before its top directory is made read-only because macOS refuses to rename
+a directory its caller cannot write, even to a new name in the same parent; the mode of the top
+directory is not part of the tree digest, so the seal is the same either way. A version directory
+therefore never exists without its seal. What a crash leaves (a
 `.stage-*` directory, a `.<version>.seal.tmp`, a seal with no version beside it) is an orphan:
 every unpack removes the orphans of its service before it stages, and `remove_orphans` is the
 same removal for the daemon to run at start and before each fetch of that service. A version that is already on the host,
-sealed for the same archive and unchanged, is used as it is.
+sealed for the same archive and unchanged, is used as it is, its directory made 0555 (finishing
+step 4 when a crash came between it and step 3).
 
 ## Changing the format
 

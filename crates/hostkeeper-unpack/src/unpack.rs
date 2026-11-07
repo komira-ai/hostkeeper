@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::daemon::{Bounds, Sha256Hex};
@@ -22,7 +23,7 @@ use sha2::{Digest, Sha256};
 use crate::archive::{self, BLOCK, BUFFER, Extended, MAX_EXTENDED_BYTES, Stop, Stream, Tar};
 use crate::error::{Rule, UnpackError, escape};
 use crate::fs::{PackageFs, ServiceLock};
-use crate::publish::publish;
+use crate::publish::{publish, settle};
 use crate::seal;
 use crate::verify::{self, HEAD_BYTES, Platform, StagedEntry, is_mach_o};
 
@@ -95,9 +96,11 @@ pub fn running_hostkeeper() -> HostkeeperVersion {
 /// otherwise) and owner and times not taken from the archive; checks the archive's SHA-256;
 /// on macOS (`platform` is [`Platform::MacOs`]) checks every entry of the staged tree for a
 /// quarantine attribute and every Mach-O file for a valid code signature, before the manifest
-/// is read (on Linux no such call is made); loads the manifest; makes the tree read-only and
-/// durable and reads it back (it must be what was written); writes the seal, then renames the
-/// tree in. On any error the staging directory, a temporary seal and a seal without its
+/// is read (on Linux no such call is made); loads the manifest; makes every directory below the
+/// staging directory read-only, makes the tree durable and reads it back (it must be what was
+/// written); writes the seal, renames the tree in, then makes the version directory itself 0555
+/// (a version that a crash left before that is made 0555 by the next unpack that finds it
+/// sealed for its archive). On any error the staging directory, a temporary seal and a seal without its
 /// version are removed, and nothing else is touched; see [`UnpackError`] for the one error
 /// after which the version stays.
 pub fn unpack(
@@ -185,7 +188,8 @@ fn remove_orphans_locked(dir: &Path, fs: &dyn PackageFs) -> Result<(), UnpackErr
 }
 
 /// The version as it is on the host: `None` when there is no `<version>`, the version when it
-/// is sealed for the order's archive and its tree has the seal's digest, an error otherwise.
+/// is sealed for the order's archive and its tree has the seal's digest (its directory made 0555
+/// when it is not), an error otherwise.
 fn existing(
     layout: &Layout,
     order: &UnpackOrder,
@@ -232,6 +236,15 @@ fn existing(
         checked => checked.map_err(|e| UnpackError::of_io("cannot read the version", e))?,
     }
     let manifest = Manifest::load(&dir, &expected(order), &running_hostkeeper())?;
+    // A crash between the publish's rename of the tree and the mode after it leaves the version
+    // sealed and whole but still 0700; this is where it is made 0555. The mode of the version
+    // directory is not part of the tree digest, so the seal is untouched; a version already 0555
+    // is not written to (one that cannot be looked at is settled, and the settle says why).
+    let read_only = std::fs::symlink_metadata(&dir)
+        .is_ok_and(|meta| meta.permissions().mode() & 0o7777 == 0o555);
+    if !read_only {
+        settle(fs, Path::new(order.service.as_str()), version)?;
+    }
     Ok(Some(Unpacked {
         dir,
         seal,
@@ -274,9 +287,14 @@ fn stage_and_publish(
     }
     let manifest = Manifest::load(&real, &expected(order), &running_hostkeeper())?;
     let sealing = |e| UnpackError::of_io("cannot seal the staging directory", e);
-    // Contents first, then the directories that hold them, the staging directory last.
+    // Contents first, then the directories that hold them. The staging directory itself stays
+    // writable by its owner (0700) until it is renamed in: macOS refuses to rename a directory
+    // its caller cannot write, even within one parent, and so refuses a non-root unpack of a
+    // read-only one. The publish makes it 0555 after the rename. Its mode is not part of the
+    // tree digest (the tree itself is not an entry), so what is read back and sealed is the
+    // same either way.
     let dirs: Vec<&Path> = pass.dirs.iter().rev().map(PathBuf::as_path).collect();
-    for dir in dirs.iter().copied().chain([stage]) {
+    for dir in dirs.iter().copied() {
         fs.set_mode(dir, 0o555).map_err(sealing)?;
     }
     for dir in dirs.iter().copied().chain([stage]) {
