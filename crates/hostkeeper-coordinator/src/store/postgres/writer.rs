@@ -279,9 +279,12 @@ impl Writer {
             self.lose(&why, None);
             return WriteFail::Lost(why);
         }
-        if let Some(session) = self.session.as_mut()
-            && let Err(e) = session.batch("ROLLBACK")
-        {
+        // The session is there: a statement of it failed.
+        let rolled_back = self
+            .session
+            .as_mut()
+            .map_or(Ok(()), |session| session.batch("ROLLBACK"));
+        if let Err(e) = rolled_back {
             let why = describe(&e);
             self.lose(&why, None);
             return WriteFail::Lost(why);

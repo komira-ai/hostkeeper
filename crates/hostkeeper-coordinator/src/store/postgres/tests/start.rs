@@ -333,3 +333,83 @@ fn a_landing_without_its_change_gives_memory_nothing() {
     let none: OpsState = OpsState::default();
     assert_eq!(landing.ops_over(&none), None);
 }
+
+/// Proves: the three stores take a landed change into memory: the desired state its commit set,
+/// the verdicts it counted, and the operations state with its audit lines no longer pending and
+/// the state as last committed laid over too; a landing with no part of a store leaves that
+/// store as it was.
+///
+/// Catches: a store that keeps its memory as it was before a change the database holds, or one
+/// that commits a landed change's audit lines again.
+#[test]
+fn the_stores_take_a_landed_change_and_leave_what_it_had_no_part_in() {
+    use crate::desired::DesiredStore;
+    use crate::ops::{AuditEntry, OpsStore, Write};
+    use crate::store::{Fake, Shared};
+    use crate::verdict_file::VerdictFile;
+    let fake: Shared = Arc::new(Fake::new());
+
+    let (before, after) = (desired_at("1.0", 'a'), desired_at("2.0", 'b'));
+    let desired = DesiredStore::over(Arc::clone(&fake), before.clone());
+    desired.take_landed(&landed(&Commit::default()));
+    assert_eq!(
+        desired.get("kbf").map(|d| d.version.to_string()),
+        Some("1.0".to_owned())
+    );
+    desired.take_landed(&landed(&Commit {
+        desired: Some((&before, &after)),
+        ..Commit::default()
+    }));
+    assert_eq!(
+        desired.get("kbf").map(|d| d.version.to_string()),
+        Some("2.0".to_owned())
+    );
+
+    let none = crate::verdict_file::Held::default();
+    let verdicts = VerdictFile::over(Arc::clone(&fake), none.clone());
+    verdicts.take_landed(&landed(&Commit::default()));
+    assert!(verdicts.counted().is_empty());
+    let rich = rich_verdicts();
+    verdicts.take_landed(&landed(&Commit {
+        verdicts: Some((&none, &rich)),
+        ..Commit::default()
+    }));
+    assert_eq!(verdicts.counted().len(), 2);
+
+    // A raise pending (its commit refused), then a change that landed: memory and the state as
+    // last committed both take it, and its line is no longer pending.
+    let failing = Fake::new();
+    failing.fail();
+    let ops = OpsStore::over(Arc::new(failing.clone()), OpsState::default());
+    // Refused, and standing in memory, pending.
+    let refused = ops.change(Write::Halt, AuditEntry::new("coordinator", "halt"), |_| {});
+    assert!(refused.is_err());
+    assert!(ops.halt_unwritten());
+    let mut taken = OpsState::default();
+    taken.excluded = rich_ops().excluded;
+    let line = lines(7, 7);
+    ops.take_landed(&landed(&Commit::default()));
+    assert!(
+        ops.state().excluded.is_empty(),
+        "no operations part, nothing taken"
+    );
+    ops.take_landed(&landed(&Commit {
+        ops: Some((&OpsState::default(), &taken)),
+        audit: &line,
+        ..Commit::default()
+    }));
+    assert_eq!(ops.state().excluded, taken.excluded);
+    assert!(ops.state().audit.iter().any(|entry| entry.seq == 7));
+    failing.heal();
+    ops.retry_unwritten(std::time::Duration::ZERO);
+    assert!(!ops.halt_unwritten());
+    assert_eq!(
+        normal(failing.ops()).excluded,
+        taken.excluded,
+        "the base took it too"
+    );
+    assert!(
+        failing.audit().iter().all(|line| line.seq != 7),
+        "a landed line is not committed again"
+    );
+}

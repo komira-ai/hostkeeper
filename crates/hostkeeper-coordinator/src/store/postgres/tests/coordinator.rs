@@ -217,8 +217,14 @@ impl Farm {
         Holding::the_lock(&self.database).release();
     }
 
-    /// Asks for a revival and waits until the writer's thread has made it.
+    /// Asks for a revival and waits until the writer's thread has made it. A revival a heartbeat
+    /// posted runs first: once the lock is free it may take it, and then the store is up already
+    /// (and the lock not free for the barrier).
     fn revive(&self) {
+        self.revival_ran();
+        if self.store.health() == Health::Up {
+            return;
+        }
         self.lock_is_free();
         self.store.revive();
         self.store.on_writer(|_| ()).expect("the writer runs");
@@ -588,6 +594,51 @@ async fn store_unreachable_stands_while_the_session_is_lost() {
 
     farm.revive();
     assert_eq!(unreachable(&farm), Vec::<String>::new());
+}
+
+/// Proves: while the session is lost, an enrollment store that cannot be read (its table held
+/// past the read's lock timeout) does not refuse the alerts' list: `store_unreachable` is listed;
+/// with the session up, the same unreadable store refuses the list `store_failed`.
+///
+/// Catches: the alert that says the database is lost hidden by the very loss it reports.
+#[tokio::test]
+async fn store_unreachable_is_listed_when_the_enrollment_store_cannot_be_read() {
+    let short = Timeouts {
+        lock: Duration::from_millis(200),
+        statement: Duration::from_secs(2),
+        ..waits()
+    };
+    let farm = Farm::start("pg-alert-unread", short, true).seeded().await;
+    let list = |farm: &Farm| {
+        farm.rig
+            .coordinator
+            .list_alerts(&operator(), proto::ListAlertsRequest::default())
+    };
+    let hold = |farm: &Farm| {
+        Holding::start(
+            &farm.database,
+            "BEGIN; LOCK TABLE \"hostkeeper\".enrollment_requests IN ACCESS EXCLUSIVE MODE",
+            "ROLLBACK",
+        )
+    };
+    let table = hold(&farm);
+    assert_eq!(
+        list(&farm).map(drop),
+        Err(proto::AlertsRefusal::StoreFailed),
+        "with the session up, an unreadable store refuses the list"
+    );
+    table.release();
+    // Ending the coordinator's sessions ends every other one too, so the table is held again.
+    farm.lose_session();
+    let table = hold(&farm);
+    let kinds: Vec<i32> = list(&farm)
+        .expect("the alerts")
+        .alerts
+        .into_iter()
+        .map(|alert| alert.kind)
+        .collect();
+    assert_eq!(kinds, [i32::from(proto::AlertKind::StoreUnreachable)]);
+    table.release();
 }
 
 fn host_record(host: &str, role: &str) -> pb::Host {
