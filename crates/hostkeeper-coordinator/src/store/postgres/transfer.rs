@@ -1,7 +1,7 @@
 //! The database's side of `import` and `export` (`docs/design/coordinator-storage.md`, section
 //! 11): the whole state written into a database that holds none, in one transaction that reads
 //! it back and compares it before it commits; and the whole state read out of a database under
-//! the coordinator's lock.
+//! the coordinator's lock, its schema first brought up to this build as a start brings it.
 //!
 //! Both run on one session of their own, on the caller's thread (neither runs in a runtime), and
 //! take the coordinator's advisory lock without waiting, so a coordinator serving on the database
@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
+use hostkeeper_enrollment::enroll::FIRST_SERIAL;
 use hostkeeper_enrollment::enroll::records::Snapshot;
 
 use super::rows::{Stmt, Tables, Val};
@@ -81,6 +82,8 @@ pub(crate) struct Moved {
     pub(crate) records: Snapshot,
     /// The time of the oldest audit line the files still held when older ones were deleted.
     pub(crate) pruned_before: Option<u64>,
+    /// How many lines of the audit files this build could not read, and so are not in `audit`.
+    pub(crate) unread: usize,
 }
 
 /// Why an import or an export was refused.
@@ -149,7 +152,7 @@ fn holding(session: &mut Session) -> Result<Option<(&'static str, i64)>, Databas
         .map(|table| (*table, format!("SELECT count(*) FROM {table}")))
         .chain([(
             "enrollment_serial",
-            "SELECT count(*) FROM enrollment_serial WHERE next <> 2".to_owned(),
+            format!("SELECT count(*) FROM enrollment_serial WHERE next <> {FIRST_SERIAL}"),
         )]);
     for (table, sql) in counts {
         let rows: i64 = session
@@ -164,13 +167,17 @@ fn holding(session: &mut Session) -> Result<Option<(&'static str, i64)>, Databas
 }
 
 /// What the database of `dsn` holds, for an import that writes nothing: the first table that
-/// holds state, if one does. Takes no lock, runs no migration and writes nothing.
+/// holds state, if one does. Takes no lock, runs no migration and writes nothing; a schema newer
+/// than this build, which `--apply` would refuse, is refused.
 ///
 /// # Errors
-/// [`DatabaseError`]: the database is not up, or refused.
+/// [`DatabaseError`]: the database is not up, refused, or holds a newer schema.
 pub(crate) fn plan(dsn: &Dsn) -> Result<Option<(&'static str, i64)>, DatabaseError> {
     let mut session = connect(dsn, false)?;
     session.batch("BEGIN READ ONLY").map_err(|e| refused(&e))?;
+    let set =
+        migrate::checked(&migrate::SHIPPED).map_err(|e| DatabaseError::Schema(e.to_string()))?;
+    migrate::refuse_newer(&mut session, &set).map_err(|e| DatabaseError::Schema(e.to_string()))?;
     holding(&mut session)
 }
 
@@ -275,6 +282,7 @@ fn read_moved(session: &mut Session, now: u64) -> Result<Moved, MoveError> {
         audit,
         records,
         pruned_before: pruned.and_then(|n| u64::try_from(n).ok()),
+        unread: 0,
     })
 }
 

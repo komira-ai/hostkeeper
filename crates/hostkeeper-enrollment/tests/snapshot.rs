@@ -332,7 +332,7 @@ impl Fs for Phantom {
 /// while it was read, which the import refuses rather than move part of it.
 #[test]
 fn a_snapshot_refuses_a_record_that_is_gone_after_it_was_listed() {
-    for sub in ["issued", "hosts", "deny", "mac-nonces"] {
+    for sub in ["requests", "issued", "hosts", "deny", "mac-nonces"] {
         let from = scratch("snapshot-gone");
         every_record(from.path());
         let refused = FileRecords::read_snapshot(Arc::new(Phantom(sub)), from.path());
@@ -345,4 +345,46 @@ fn a_snapshot_refuses_a_record_that_is_gone_after_it_was_listed() {
             "{sub}: {refused:?}"
         );
     }
+}
+
+/// Catches a list in the order of its file names where the key's order differs: `web-1.pb` lists
+/// before `web.pb`, while the database, and the store, order the host ids `web` before `web-1`.
+#[test]
+fn a_snapshot_lists_the_deny_rows_and_hosts_in_the_order_of_their_host_ids() {
+    let from = scratch("snapshot-order");
+    every_record(from.path());
+    for host in ["web", "web-1", "web-10"] {
+        let mut deny = pb::Deny::decode(DENY).expect("the fixture deny row");
+        deny.host_id = host.to_owned();
+        put(
+            from.path(),
+            &format!("deny/{host}.pb"),
+            &deny.encode_to_vec(),
+        );
+        let mut row = pb::Host::decode(HOST).expect("the fixture host");
+        row.host_id = host.to_owned();
+        put(
+            from.path(),
+            &format!("hosts/{host}.pb"),
+            &row.encode_to_vec(),
+        );
+    }
+    let snapshot = read(from.path()).expect("read the snapshot");
+    let ids = |ids: Vec<&str>| ids.into_iter().map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(
+        snapshot
+            .deny
+            .iter()
+            .map(|d| d.host_id.clone())
+            .collect::<Vec<_>>(),
+        ids(vec!["old-1", "web", "web-1", "web-10"])
+    );
+    assert_eq!(
+        snapshot
+            .hosts
+            .iter()
+            .map(|h| h.host_id.clone())
+            .collect::<Vec<_>>(),
+        ids(vec!["web", "web-1", "web-10"])
+    );
 }

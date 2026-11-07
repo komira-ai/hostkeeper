@@ -195,8 +195,8 @@ fn read_files(paths: &StatePaths, legacy: Option<&str>, now: u64) -> Result<Move
     let spent = jti_file::read_live(&jti_path(state), now).map_err(StartError::from)?;
     let active = audit_file::path_of(&ops);
     let mut audit = Vec::new();
-    AuditLog::open(active.clone(), DEFAULT_ROTATION)
-        .and_then(|log| log.each(&mut |line| audit.push(line)))
+    let unread = AuditLog::open(active.clone(), DEFAULT_ROTATION)
+        .and_then(|log| log.each_counted(&mut |line| audit.push(line)))
         .map_err(StartError::from)?;
     let pruned_before = audit_file::pruned_before(&active).map_err(StartError::from)?;
     let records = match &paths.enrollment_dir {
@@ -213,6 +213,7 @@ fn read_files(paths: &StatePaths, legacy: Option<&str>, now: u64) -> Result<Move
         audit,
         records,
         pruned_before,
+        unread,
     })
 }
 
@@ -243,6 +244,15 @@ pub(crate) fn import(
         .transpose()?;
     let now = clock();
     let moved = read_files(paths, flags.legacy_service.as_deref(), now)?;
+    // The record of the files read; none read is a flag that names the wrong place, whose import
+    // would fill the database with nothing and so refuse the import of the right one.
+    let manifest = backup::manifest_of(paths)?;
+    if manifest["files"].as_array().is_none_or(Vec::is_empty) {
+        return Err(BackupError::NothingThere {
+            path: paths.state_file.clone(),
+        }
+        .into());
+    }
     let dsn = Dsn::read(&flags.database_dsn_file).map_err(DatabaseError::from)?;
     let counts = transfer::counts_of(&moved)?;
     let mut lines = vec![format!(
@@ -267,6 +277,12 @@ pub(crate) fn import(
                 .is_err()
         })
         .count();
+    if moved.unread > 0 {
+        lines.push(format!(
+            "{} lines of the audit files are not ones this build reads (written by a newer release, or cut short): they are not imported",
+            moved.unread
+        ));
+    }
     if unlogged > 0 {
         lines.push(format!(
             "{unlogged} entries of the ops file's audit ring are older than its audit file, which holds no line of them: they are not imported"
@@ -281,7 +297,6 @@ pub(crate) fn import(
         });
         return Ok(Report::of(lines));
     }
-    let manifest = backup::manifest_of(paths)?;
     // The ring of the ops file may name changes older than its audit file, which has no line, and
     // so no time, for them: they are not imported, and no number they took is taken again.
     let ring = &moved.loaded.ops.audit;
@@ -393,3 +408,7 @@ pub(crate) fn export(
 #[cfg(test)]
 #[path = "transfer_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "transfer_export_tests.rs"]
+mod export_tests;

@@ -111,7 +111,11 @@ hostkeeper-coordinator import --state-file <file> [--ops-file <file>] [--enrollm
 
 - **Without `--apply`** it reads every file and the database and writes nothing anywhere: no lock
   file is made, no migration runs. It prints the rows each table would hold and whether the
-  database holds state already, which `--apply` would refuse.
+  database holds state already, which `--apply` would refuse; a database of a newer schema is
+  refused, as `--apply` refuses it.
+- Flags that name no file of a file store (a mistyped `--state-file`) are refused, with
+  `--apply` and without: an import of nothing would leave a database that refuses the next
+  import.
 - **With `--apply`** it takes the lock `<state-file>.lock`, so a running file coordinator refuses it,
   and then the database's lock, so a coordinator serving on the database refuses it too. It refuses
   `<ops-file>.halts.unfinished` (start the file coordinator once on the files, so that it settles
@@ -126,6 +130,8 @@ hostkeeper-coordinator import --state-file <file> [--ops-file <file>] [--enrollm
   files. A difference rolls the whole import back and names the first table that differs.
 - A desired-state file in the single-state form is the state of `--legacy-service`, as `serve`
   reads it.
+- Audit lines this release cannot read (one cut short, one a newer release wrote) are not
+  imported, and the import says how many.
 - The entries of the ops file's audit ring that its audit file has no line of (changes older than
   the audit file) are not imported, and the import says how many; the row `state_imported` is
   numbered past them.
@@ -142,8 +148,9 @@ hostkeeper-coordinator export --database-dsn-file <file> --state-file <file> [--
     [--enrollment-dir <dir>] [--legacy-service <name>] --into-empty
 ```
 
-- It takes the database's lock, so a coordinator serving on the database refuses it, and reads
-  everything in one read-only snapshot.
+- It takes the database's lock, so a coordinator serving on the database refuses it, brings the
+  schema up to this release as a start does (a newer schema is refused), and reads everything in
+  one read-only snapshot.
 - It writes as `restore` does: only into targets that hold no state, never over a file, with
   `<state-file>.restore-unfinished` while it writes, and what it wrote removed again when a write
   fails. A database that holds the enrollment store needs `--enrollment-dir`.

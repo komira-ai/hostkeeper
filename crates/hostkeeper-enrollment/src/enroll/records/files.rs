@@ -143,8 +143,15 @@ impl FileRecords {
         write_atomic(&*self.fs, &dir, &name, bytes, FILE_MODE).map_err(io_at(&dir.join(&name)))
     }
 
-    /// The names in the subdirectory `sub`, sorted; none when it is not there.
+    /// The names in the subdirectory `sub`, sorted.
     fn list(&self, sub: &str) -> Result<Vec<String>, StoreError> {
+        let dir = self.dir.join(sub);
+        self.fs.list(&dir).map_err(io_at(&dir))
+    }
+
+    /// [`Self::list`], a subdirectory that is not there holding nothing, as [`FileRecords::open`]
+    /// would make it empty: what a read that makes no directory lists.
+    fn listed(&self, sub: &str) -> Result<Vec<String>, StoreError> {
         let dir = self.dir.join(sub);
         match self.fs.list(&dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -480,8 +487,14 @@ impl FileRecords {
         };
         let mut snapshot = Snapshot::default();
         let mut consumed = BTreeMap::new();
-        for (id, request) in records.requests()? {
-            let row = RequestRow::check(records.place(&RecordKey::Request(id)), request, &id)?;
+        let ids = records.listed(REQUESTS)?;
+        for id in ids
+            .iter()
+            .filter_map(|name| name.strip_suffix(".pb").and_then(KeyHash::from_hex))
+        {
+            let path = records.place(&RecordKey::Request(id));
+            let request = there(&path, records.request(&id)?)?;
+            let row = RequestRow::check(path, request, &id)?;
             row.renewal_of()?;
             row.host_id()?;
             let hash = row
@@ -492,7 +505,7 @@ impl FileRecords {
             consumed.extend(hash.map(|hash| (hash, id)));
             snapshot.requests.push(row.pb);
         }
-        for name in records.list(ISSUED)? {
+        for name in records.listed(ISSUED)? {
             let Some(id) = name.strip_suffix(".pb").and_then(KeyHash::from_hex) else {
                 continue;
             };
@@ -502,17 +515,29 @@ impl FileRecords {
             kept_under(&path, Record::Issued(issued.clone()), &key)?;
             snapshot.issued.push(issued);
         }
-        for host in records.host_ids()? {
+        let mut hosts: Vec<HostId> = records
+            .listed(HOSTS)?
+            .iter()
+            .filter_map(|name| name.strip_suffix(".pb"))
+            .filter_map(|name| HostId::parse(name).ok())
+            .collect();
+        hosts.sort();
+        for host in hosts {
             let key = RecordKey::Host(host.clone());
             let path = records.place(&key);
             let found = HostRow::check(&path, there(&path, records.host(&host)?)?)?.pb;
             kept_under(&path, Record::Host(found.clone()), &key)?;
             snapshot.hosts.push(found);
         }
-        for name in records.list(DENY)? {
-            let Some(host) = name.strip_suffix(".pb").and_then(|n| HostId::parse(n).ok()) else {
-                continue;
-            };
+        // In the order of the host ids, not of the file names: `web-1.pb` lists before `web.pb`.
+        let mut denied: Vec<HostId> = records
+            .listed(DENY)?
+            .iter()
+            .filter_map(|name| name.strip_suffix(".pb"))
+            .filter_map(|name| HostId::parse(name).ok())
+            .collect();
+        denied.sort();
+        for host in denied {
             let key = RecordKey::Deny(host.clone());
             let path = records.place(&key);
             let deny = there(&path, records.deny(&host)?)?;
@@ -520,7 +545,7 @@ impl FileRecords {
             kept_under(&path, Record::Deny(deny.clone()), &key)?;
             snapshot.deny.push(deny);
         }
-        for name in records.list(MAC_NONCES)? {
+        for name in records.listed(MAC_NONCES)? {
             let Some(hash) = name
                 .strip_suffix(".pb")
                 .and_then(|n| hex::decode(n).ok())

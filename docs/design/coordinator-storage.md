@@ -738,7 +738,9 @@ open: the ops file's audit ring entries that its audit file holds no line of are
 have no time), and `state_imported` is numbered past them; until M8's table lands, an enrollment
 store that holds MDM device records is refused; and a history the import found pruned is exported
 as the sealed segment `<ops-file>.audit.2`, so the file store gives back the same
-`audit_pruned_before`.
+`audit_pruned_before`. An import also refuses flags that name no file, and says how many audit
+lines it could not read and so did not import; `export` runs the migrations a start runs before it
+reads.
 
 **`hostkeeper-coordinator import`** takes the file flags of `serve` (`--state-file`, `--ops-file`, `--enrollment-dir`,
 `--legacy-service`) and `--database-dsn-file`. A desired-state file in the single-state form is read as the state of
