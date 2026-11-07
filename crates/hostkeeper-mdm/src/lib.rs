@@ -1,5 +1,6 @@
 //! `hostkeeper-mdm`: the MDM kit's binary, which applies [`hostkeeper_mdm_core`]'s rendered
-//! output to the Linux host of the MDM server stack (docs/design/hostkeeper-mdm.md, task M4).
+//! output to the Linux host of the MDM server stack (docs/design/hostkeeper-mdm.md, tasks M4 and
+//! M5).
 //!
 //! The stack is NanoHUB, a SCEP server, NanoDEP and Caddy as capped systemd services on one
 //! Linux host, which enrolls the farm's Macs. This crate links no other crate of the workspace
@@ -7,8 +8,9 @@
 //! `hostkeeper-mdm-step`, the host-step layer (crates/xtask/tests/layering keeps it so). Every
 //! verb checks the host read only, makes a plan of the steps that would change it, prints the
 //! plan by default, and carries it out with `--apply`. It is the port of komira-ai/kbf's
-//! `mdm-host`, with the fixes of komira-ai/kbf#2248 that the design gives task M4
-//! (`MIGRATION.md` lists them with their tests).
+//! `mdm-host`, with the fixes of komira-ai/kbf#2248 that the design gives task M4, and of the
+//! `push-cert` and `dep` verbs of kbf-deploy's `mdm` module (`MIGRATION.md` lists them with
+//! their tests).
 //!
 //! # Verbs
 //!
@@ -38,7 +40,26 @@
 //!   active, listeners, certificate lifetime, modes), then one line per installed file
 //!   compared with `hostkeeper-mdm-core`'s render of the same settings.
 //!
-//! Not in this binary yet: `push-cert`, `dep` and `migrate` (design task M5).
+//! * `hostkeeper-mdm push-cert --settings FILE (--cert PEM --key PEM | --profile-only [--topic
+//!   TOPIC]) [--apply]`: as root, the APNs push certificate checked (an MDM push certificate,
+//!   unexpired by the injected clock, with its own unencrypted key, the key file 0600, neither
+//!   file inside a git work tree) and given to NanoHUB's API on loopback unless NanoHUB has it
+//!   already, then the enrollment profile written to `MDM_STATE/www/enroll.mobileconfig`, mode
+//!   0640, root's and the service group's, which the proxy serves at `/enroll`. The SCEP
+//!   challenge in it is never printed.
+//! * `hostkeeper-mdm dep (get-cert --out FILE | upload-token --token FILE | define-profile |
+//!   assign --serial SERIAL...) --settings FILE [--apply]`: as root, NanoDEP linked to Apple
+//!   Business Manager through depserver's API on loopback: its token certificate, the server
+//!   token, the ADE profile (defined once per change, then depsyncer started) and its assignment
+//!   to devices already in ABM (exit 1 unless Apple assigns every one).
+//! * `hostkeeper-mdm migrate --from OLD --settings NEW --bin-dir DIR --profile-id ID [--apply]`:
+//!   as root, the old kit's live stack moved to this kit's names while no Mac is enrolled: the
+//!   new settings written from the old ones, NanoHUB's push certificate and NanoDEP's ABM token
+//!   copied from the old state, the old units stopped and disabled, and this kit installed (a
+//!   fresh SCEP CA under its final name included). The old state directory is never changed.
+//!
+//! A call to NanoHUB's or NanoDEP's API (`api`) is printed as a step is, with its method, URL and
+//! body size, and made only with `--apply`.
 //!
 //! # Rules every verb keeps
 //!
@@ -56,8 +77,11 @@
 //!   to 0600 root files.
 //! * Exit 0 done (or nothing to do), 1 a step, a download or a check failed, or the host could
 //!   not be read (`FAILED: ...` on stderr; a link or an untrusted owner met on the way to a path
-//!   the verb reads is such a failure), 2 refused (`REFUSED: ...` on stderr).
+//!   the verb reads is such a failure), 2 refused (`REFUSED: ...` on stderr). `dep assign` also
+//!   exits 1 when Apple did not assign every device.
 //! * Settings come from the file `--settings` names, never from the environment.
+//! * No API key, token, private key or challenge is put on a command line or printed: an API key
+//!   travels in a call's Basic authentication header only.
 
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 

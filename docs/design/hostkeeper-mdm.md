@@ -88,7 +88,7 @@ the nonce before the request, and a gate call named `CheckSerial` where the code
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
 | Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). Its enrollment side (config profile, nonce, pkg) is not built, and it runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its nine decline tokens, the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. No nonce is issued yet, so no Mac is approved by a nonce today. |
-| MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). Its binary, `crates/hostkeeper-mdm` (task M4), has the verbs `fetch`, `install`, `tls` and `verify`, with M4's fixes of komira-ai/kbf#2248. **Not built**: the verbs `push-cert`, `dep` and `migrate` and the enrollment profile at `/enroll` (M5), so the stack installs but enrolls no Mac yet. |
+| MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). Its binary, `crates/hostkeeper-mdm` (task M4), has the verbs `fetch`, `install`, `tls` and `verify`, with M4's fixes of komira-ai/kbf#2248, and (task M5) `push-cert` with the enrollment profile at `/enroll`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), `migrate --from`, and the pkg directory and its `/pkg/<sha256>.pkg` route. The live stack is still the old kit's until `migrate --apply` runs on the MDM host (task M7). |
 | Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). The enroller reads the nonce from the managed preferences and posts it once for its own request (**Built**, task M13: `crates/hostkeeper-enroll/src/managed.rs`, `crates/hostkeeper-enroll/src/enroller.rs`). |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
@@ -424,7 +424,7 @@ Two routes give management without a wipe.
   to 10 runs a day per device.
 - **B2: the Mac is not in ABM.** It is not added without a wipe, because Apple Configurator adds a
   Mac only at Setup Assistant. The Mac enrolls by the profile instead: the operator downloads the
-  enrollment profile from the MDM host (the kit serves it at `/enroll`, to build in M5), opens it, and approves it
+  enrollment profile from the MDM host (the kit serves it at `/enroll`; **Built**: `hostkeeper-mdm push-cert` writes it), opens it, and approves it
   in System Settings. That is a person at the Mac, or screen sharing, because Apple documents no
   scripted approval. Apple's supervision page says a Mac on macOS 11 or later enrolled by
   profile-based Device Enrollment and approved by a local administrator is supervised too. The
@@ -472,7 +472,9 @@ manifest has one item:
 
 - `assets`: one `software-package` asset;
 - its `url`: `https://<MDM host>/pkg/<sha256>.pkg`, served by the kit's proxy from the gate's pkg
-  directory;
+  directory (**Built**, task M5: the directory is the kit's setting `MDM_PKG_DIR`, root's and
+  mode 0755, `/var/lib/<unit prefix>-pkg` by default; the route answers only a name of 64
+  lower-case hex digits and `.pkg`, and every other path under `/pkg/` is 404);
 - the hash: the single whole-file `sha256` key, the pkg's digest. Apple's schema
   (`other/manifesturl.yaml`) calls it "The SHA-256 hash value the device uses when verifying the
   hash of the manifest item data", and the device then ignores the chunked keys;
@@ -623,7 +625,7 @@ CA, the ADE profile, the unit and path names. The order:
    gate, `kbf-mdm`, is not ported. It was never deployed, its two ends do not agree on a protocol,
    and its OS-update and erase verbs are not v1 work. The design takes only its lessons: the
    loopback-only NanoHUB URL, the trusted-file checks, and profiles by allowlisted digest.
-   **Built** for M2 to M4: `crates/hostkeeper-mdm-core` and `crates/hostkeeper-mdm`, recorded in
+   **Built** for M2 to M5: `crates/hostkeeper-mdm-core` and `crates/hostkeeper-mdm`, recorded in
    `MIGRATION.md`, and `crates/hostkeeper-mdm-step`.
 2. **Rename to hostkeeper names.**
    - user `hostkeeper-mdm`;
