@@ -86,8 +86,8 @@ stage 2 of 3 (4 hosts)", then yours) and the plan as it stands. It is refused:
 | `no_desired` | the service has no desired version |
 | `unknown_service` | the coordinator does not manage the service |
 | `invalid_request` | the reason is missing, too long or has a control character |
-| `audit_unavailable` | the audit line could not be appended (a full disk); nothing changed, ask again once the disk has room |
-| `store_failed` | the position could not be written; nothing changed (for `Pause`, which is written memory first, the pause stands) |
+| `audit_unavailable` | the audit line could not be appended (a full disk, on the file store; the database store commits the line with the change and never answers this); nothing changed, ask again once the disk has room |
+| `store_failed` | the position could not be written (on the database store, also while its session is lost); nothing changed (for `Pause`, which is written memory first, the pause stands) |
 
 An `auto` stage needs no Advance: the coordinator enters it at the heartbeat that finds the stage
 before it done, and writes the same `rollout_advance` entry under the name `coordinator`.
@@ -157,6 +157,11 @@ version starts the plan over. A plan that never goes past its first stage writes
 A coordinator of the release before this one, started on the same files, reads the halts file
 without the position and orders one host at a time, as it did; this release finds the position
 again on its next start.
+
+On the database store ([coordinator-state.md](coordinator-state.md#the-database-store)) the
+position is the row of the service in the table `rollouts` and the hosts recorded done are rows of
+`rollout_done`, read back at start the same way. While the database's session is lost the
+coordinator is quiet: no stage is entered and no host is ordered until the session is back.
 
 ## Force, holds and abort
 

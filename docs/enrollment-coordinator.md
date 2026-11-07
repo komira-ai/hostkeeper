@@ -17,16 +17,16 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 
 | flag | what it is |
 |---|---|
-| `--enrollment-dir <dir>` | The enrollment store. Turns enrollment on; requires the three below. |
-| `--ca-key-file <file>` | The CA's key: PKCS#8, mode 0600, owned by the coordinator's user. A key file open to group or others, another user's, or a symbolic link stops the start. Its certificate is beside it, `<file>.cert`. |
+| `--enrollment-dir <dir>` | The enrollment store of the file store. Requires the three below. With `--database-dsn-file` it is refused: the enrollment store is the database's ([coordinator-state.md](operations/coordinator-state.md#the-database-store)). |
+| `--ca-key-file <file>` | The CA's key: PKCS#8, mode 0600, owned by the coordinator's user. A key file open to group or others, another user's, or a symbolic link stops the start. Its certificate is beside it, `<file>.cert`. Turns enrollment on; requires `--enrollment-dir` or `--database-dsn-file`, and `--server-cert-file` and `--server-name`. |
 | `--ca-init` | Make the CA when `--ca-key-file` does not exist. Without it a missing CA stops the start. |
 | `--server-cert-file <file>` | The coordinator's server certificate, the CA certificate and the server key, one PEM file (mode 0600) the coordinator writes. The heartbeat listener serves it. |
 | `--server-name <name>` | A DNS name the server certificate names, as daemons dial the coordinator; repeat it for each. |
-| `--lan-listen <address:port>` | A third listener, on the farm LAN, for network-installed hosts: it serves what the heartbeat listener serves, with its TLS and its checks (below), and the server certificate names its IP address. The address of one interface: a wildcard address stops the start. Requires `--enrollment-dir`. |
-| `--max-pending-enrollments <n>` | How many requests may wait for an operator at once, 1 or more; 256 when not given. A new request over it is refused `pending_full`; no waiting request is dropped for it, and a host posting its waiting request again is still answered. Requires `--enrollment-dir`. |
-| `--enrollment-request-ttl <time>` | How long a request waits for an operator before it expires: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second; `72h` when not given. Requires `--enrollment-dir`. |
-| `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--enrollment-dir`. |
-| `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and `--enrollment-dir`. |
+| `--lan-listen <address:port>` | A third listener, on the farm LAN, for network-installed hosts: it serves what the heartbeat listener serves, with its TLS and its checks (below), and the server certificate names its IP address. The address of one interface: a wildcard address stops the start. Requires `--ca-key-file`. |
+| `--max-pending-enrollments <n>` | How many requests may wait for an operator at once, 1 or more; 256 when not given. A new request over it is refused `pending_full`; no waiting request is dropped for it, and a host posting its waiting request again is still answered. Requires `--ca-key-file`. |
+| `--enrollment-request-ttl <time>` | How long a request waits for an operator before it expires: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second; `72h` when not given. Requires `--ca-key-file`. |
+| `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--ca-key-file`. |
+| `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and `--enrollment-dir`, where the gate's device records are: the gate does not run on the database store in this release. |
 | `--mdm-api-key-file <file>` | NanoHUB's API key (NanoHUB's `-api-key`): one key of visible ASCII, in a file of mode 0600 or 0400 owned by the coordinator's user; a link, another mode or owner, or an empty file stops the start, and the message names the flag, never the path or the key. Requires `--mdm-api-url`. |
 | `--mdm-webhook-listen <addr>` | Where the gate serves NanoHUB's webhook: a loopback address and port, as `127.0.0.1:9100`; another address stops the start. Requires `--mdm-api-url`. |
 | `--mdm-profile-identifier <id>` | The farm's MDM profile identifier, as the kit's settings say it (`com.komira.hostkeeper.mdm`): two to sixteen labels of letters, digits and `-`, at most 200 characters; anything else stops the start. With it and `--mdm-daemon-config` the gate runs its enrollment side (below): it installs the config profile `<id>.config` and pushes the nonce profile `<id>.nonce`. Requires `--mdm-api-url` and `--mdm-daemon-config`. |
@@ -75,6 +75,18 @@ of it is `UNIMPLEMENTED`), its JSON gateway, the private listener's JSON routes 
 (404 `not_found`). The start line names it after the other two, as `lan=<address:port>`.
 
 ## State files
+
+On the database store (`--database-dsn-file`) the enrollment store is the tables
+`enrollment_requests`, `enrollment_issued`, `enrollment_hosts`, `enrollment_deny`,
+`enrollment_serial` and `mac_nonces`, one column per field of the messages below, and an approval
+(the host, the request, the deny row cleared, the Mac nonce consumed) is one transaction. The
+store's lock is its in-process mutex; the database's advisory lock keeps other coordinators off.
+The heartbeat's reads (a host's key and role, its deny row, its duplicate mark) come from a copy of
+the hosts and the deny rows in memory, loaded at start and changed after each commit, so a
+heartbeat runs no query; the first heartbeat time and the duplicate mark are each written once.
+An enrollment change's audit row is the coordinator's second transaction, as its second write is
+on the files: when it fails, the change stands, the failure is logged, and the next start audits
+it.
 
 Under `--enrollment-dir`, every file one binary protobuf message with a schema number, written
 whole (temporary file, fsync, rename, directory fsync), mode 0600:
@@ -363,7 +375,8 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
 
 Back up the CA key file and its `.cert` once, right after the CA is made, sealed and offline:
 [docs/operations/ca-backup.md](operations/ca-backup.md). Rotating the CA is not built. The enrollment
-store is backed up with the rest of the coordinator's state, by `hostkeeper-coordinator backup`:
+store is backed up with the rest of the coordinator's state: by `hostkeeper-coordinator backup` on
+the file store, and with the database on the database store:
 [docs/operations/coordinator-state.md](operations/coordinator-state.md).
 
 ## What a host is told

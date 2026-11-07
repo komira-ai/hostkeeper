@@ -25,7 +25,8 @@ with a reason; `Services.Unhold` releases it. A hold freezes the service where i
 - Automatic rollback and a version marked bad do not reach a held pair. A held host that runs a
   version marked bad is an alert: `Alerts.List` lists it, an error-level log line with
   `alert=held_on_bad_version` is logged once when it appears, and the status flags the host.
-- Holds are kept in the ops file and survive a restart. `Services.List` shows them.
+- Holds are kept in the ops file (on the database store, the table `holds`) and survive a restart.
+  `Services.List` shows them.
 - Holding the same service in the same scope again replaces the reason. `Unhold` releases the
   pairs to the desired version at their next heartbeat, and they become eligible for the
   plan's stages again.
@@ -112,6 +113,18 @@ The `force` and `abort` orders travel only on the typed heartbeat of `hostkeeper
 JSON heartbeat route carries neither.
 
 ## The audit file
+
+On the database store (`--database-dsn-file`, [coordinator-state.md](coordinator-state.md#the-database-store))
+every change is one row of the table `audit`, committed in the same transaction as the change
+itself, so there is no case where the change is written and its line is not: `audit_unavailable`
+is never returned for these calls there, and a change whose commit fails is refused `store_failed`
+and changes nothing. Every row is kept (no rotation; `--audit-max-bytes` and
+`--audit-retained-segments` are refused beside the database), and `Audit.List` is one query over
+the table with the same filters, paging and `since_seq` cursor. The three calls below that stand
+without their line stand on the database store while its session is lost: their change is in
+memory, with its row, and both are committed together once the session is back
+([coordinator-state.md](coordinator-state.md#the-database-store)). The rest of this section is the
+file store.
 
 Every change is one JSON line of the audit file `<ops-file>.audit`, appended and fsynced;
 `Audit.List` reads it back. The file is rotated by size:

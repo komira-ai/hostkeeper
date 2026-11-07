@@ -1,13 +1,98 @@
-# The coordinator's state: backing it up and restoring it
+# The coordinator's state: where it is, backing it up and restoring it
 
-The coordinator keeps its durable state in files named by three flags of `serve`: `--state-file`,
-`--ops-file` (by default the state file's name with `.ops` added) and, when it is the hosts' CA,
-`--enrollment-dir`. `hostkeeper-coordinator backup` copies all of it into a snapshot directory, and
-`hostkeeper-coordinator restore` puts a snapshot back. Both take the same flags `serve` names the
-state by. The CA's key is not part of the state and never in a snapshot: back it up once, sealed and
-offline, as [ca-backup.md](ca-backup.md) says.
+The coordinator keeps its durable state in one of two stores, chosen by the flags of `serve`:
 
-## What each file holds
+- **The file store**: files named by three flags, `--state-file`, `--ops-file` (by default the state
+  file's name with `.ops` added) and, when it is the hosts' CA, `--enrollment-dir`.
+  `hostkeeper-coordinator backup` copies all of it into a snapshot directory, and
+  `hostkeeper-coordinator restore` puts a snapshot back. Both take the same flags `serve` names the
+  state by. Most of this page is about the file store.
+- **The database store**: one Postgres database, named by `--database-dsn-file`, with
+  `--halt-marker-file` beside it ([The database store](#the-database-store) below). `backup` and
+  `restore` are for the file store only.
+
+The CA's key is not part of the state in either store and never in a snapshot: back it up once,
+sealed and offline, as [ca-backup.md](ca-backup.md) says.
+
+## The database store
+
+`serve --database-dsn-file <file> --halt-marker-file <file>` keeps everything the files of the file
+store hold in the tables of one Postgres database (16 or newer), in the schema `hostkeeper`: the
+desired state and its registry of digests, the spent CI token ids, the verdicts, every operator
+change (exclusions, labels, halts and their reports, holds, assignments, minimum versions,
+uninstall intents, the inventory, the marks of last good and bad versions, the plan positions),
+the whole audit log, and the enrollment store. The design is
+[coordinator-storage.md](../design/coordinator-storage.md).
+
+- **The connection string** is the one line of the file `--database-dsn-file` names, a libpq
+  string in keyword form: `host=127.0.0.1 port=5432 dbname=hostkeeper user=hostkeeper
+  password=<secret> sslmode=disable`. The file must be a regular file (not a link) owned by the
+  coordinator's user, mode 0600 or 0400, at most 4 KiB. The password is never on the command line or
+  in the environment, and no error shows the string or the file's path: an error names the flag.
+  This release connects without TLS, so a string with `sslmode` `require`, `verify-ca` or
+  `verify-full` is refused; keep the database on the coordinator's machine, on loopback.
+- **Flags beside it.** `--database-dsn-file` is refused beside `--state-file`, `--ops-file`,
+  `--enrollment-dir`, `--audit-max-bytes` and `--audit-retained-segments`, each named
+  (`--database-dsn-file and --ops-file are both given: ...`), and it requires `--halt-marker-file`.
+  Enrollment is on when `--ca-key-file` is given (with `--server-cert-file` and `--server-name`, as
+  with the file store); the enrollment store is the database's. The MDM gate's flags still need
+  `--enrollment-dir`, where its device records are, so the gate does not run on the database store
+  in this release.
+- **The start.** `serve` opens one session, takes the coordinator's advisory lock of the database
+  without waiting, runs the migrations the database lacks (each in its own transaction, recorded in
+  `schema_version`), raises the lease's epoch, and loads the state. Nothing is read or written
+  before the lock is held. It refuses to start, naming why, when:
+  - the database is not up (`the database is not up: ...`): nothing listens, or it is starting up.
+    The supervisor starts the coordinator again; the code has no wait loop;
+  - the server refuses (`the database refused the coordinator: ...`): a login, a database that is
+    not there, or a setting. A database with `fsync`, `synchronous_commit` or `full_page_writes`
+    off is refused, naming the setting: the coordinator acknowledges what is committed;
+  - another session holds the lock: `another coordinator holds the lock of this database`;
+  - the database holds a migration this release does not know, and that migration says older
+    releases must not run on it: `the database's schema is newer than this coordinator (migration
+    <n>, <name>)`;
+  - a migration fails: it is rolled back whole, and the start names it.
+- **One writer.** Every write goes through the session that holds the lock. Each transaction moves
+  the lease's commit counter on, and the database refuses that from any session without the lock,
+  so a coordinator that lost its session can commit nothing. Reads that are not decisions
+  (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
+  Decisions read memory: a heartbeat in the steady state runs no query.
+- **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
+  waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
+  that runs out loses the session.
+- **A lost session.** When a write finds the session gone (the server restarted, the network
+  dropped, a wait ran out), the coordinator orders nothing (its status says it is quiet, and an
+  operator's force or abort waits too), refuses every change that lowers protection
+  `store_failed`, keeps a change that raises protection (a halt, a bad mark, a pause, an abort) in
+  memory, still answers heartbeats, and raises the critical alert `store_unreachable`
+  ([holds-and-force.md](holds-and-force.md)). At each heartbeat it opens a new session and takes the
+  lock again, on a thread of its own. With the lock it reads the lease:
+  - the same epoch: no other coordinator led meanwhile. A commit whose session was lost while it was
+    in flight is settled by the lease's counter (when it landed, memory takes it and the log says
+    so), the changes in memory are committed, and the coordinator orders again;
+  - another epoch: another coordinator led the database meanwhile and this one's memory is stale.
+    It logs every change it drops by its audit number, removes the marker, and exits non-zero
+    (`another coordinator led the database while this one's session was lost ...`); its supervisor
+    starts it again on the database as the other left it.
+- **The marker** (`--halt-marker-file`, on a local disk that stays writable when the database is
+  not) lists the audit number of every change in memory and not yet committed, with the epoch:
+  `{"unwritten":[41,42],"epoch":3}`. It is written before such a change's commit is tried and
+  removed once nothing is pending. A start that finds it removes it when every number it lists has
+  its row in the `audit` table (each such change commits its audit row with it); otherwise it
+  refuses to start, naming the numbers that did not land: look each up in the log, make it again by
+  hand if it still matters (a halt is raised again by the host's next report while the host is up),
+  and remove the file. A marker this release cannot read refuses the start as one of the file store
+  does.
+- **The audit log** is the table `audit`, which refuses every `UPDATE`, `DELETE` and `TRUNCATE`
+  (a guard against a bug or a hand-typed statement, not against the database's owner). Every row is
+  kept; there is no rotation.
+- **Backups** of the database are taken with the database's own tools while the coordinator runs:
+  `pg_dump` reads one consistent snapshot. The deployment's timer and the restore drill come with
+  the compose deployment ([coordinator-storage.md](../design/coordinator-storage.md), section 10).
+
+The rest of this page is the file store.
+
+## What each file holds (the file store)
 
 | file | holds | without it |
 |---|---|---|

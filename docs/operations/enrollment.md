@@ -475,12 +475,12 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial or notes | correct the field; `--reason` is 1 to 256 bytes |
 | `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied, or it expired; a `reject` of a request approved or issued | list again; an expired request is approved only after its host posts again (retire an enrolled host with `hosts retire`) |
 | `denied` | FAILED_PRECONDITION | the host id was retired (`hosts retire`) | `--replace true`, or another host id |
-| `store_failed` | INTERNAL | the change could not be written; nothing changed | read the coordinator's log and ask again |
+| `store_failed` | INTERNAL | the change could not be written (on the database store, also while its session is lost: the alert `store_unreachable` stands); nothing changed | read the coordinator's log and ask again |
 | `record_exists` | ALREADY_EXISTS | `add-record` for a host id that has a record | remove the record first |
 | `record_conflict` | ALREADY_EXISTS | `add-record` with a MAC or a serial another record holds | remove or correct the other record |
 | `no_record` | NOT_FOUND | `remove-record` of a host id with no record | check the host id with `list-records` |
 | `capacity` | RESOURCE_EXHAUSTED | `add-record` past the 10000 records the coordinator keeps | remove records no longer needed |
-| `audit_unavailable` | UNAVAILABLE | `add-record` or `remove-record` whose audit line could not be appended (a full disk); nothing changed | free the disk of the audit file, then ask again |
+| `audit_unavailable` | UNAVAILABLE | `add-record` or `remove-record` whose audit line could not be appended (a full disk, on the file store; the database store commits the line with the change and never answers this); nothing changed | free the disk of the audit file, then ask again |
 | `record_mismatch` | FAILED_PRECONDITION | `approve` names a host id other than that of the one record the request matches | leave out `--host-id`, or `--replace true` |
 | `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
 
