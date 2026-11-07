@@ -1,31 +1,43 @@
-//! The rules of the two network-install jobs of `privileged.yml` ([`super::net_install`]): the
+//! The rules of `net-install.yml` ([`super::net_install`]), the workflow of the two
+//! network-install jobs: its triggers, paths and concurrency, its two jobs and their runner, the
 //! test targets of each, the apt steps that install QEMU and the firmware, and the ISO held to the
-//! pin of `packaging/netboot/pins.toml`. Each rule is shown to refuse its defect by putting it
-//! into the committed workflow and reading the exact problems it reports.
+//! pin of `packaging/netboot/pins.toml`; and that `privileged.yml`, which a release waits for, has
+//! none of these jobs. Each rule is shown to refuse its defect by putting it into the committed
+//! workflow and reading the exact problems it reports.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use super::lint::PRIVILEGED_WORKFLOW;
-use super::net_install::{NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_FIRST_LINE};
+use super::lint::{PRIVILEGED_WORKFLOW, entry, lint};
 use super::net_install::{
-    NET_INSTALL_ARM64_JOB, NET_INSTALL_JOB, NET_JOBS, apt_steps, iso_problems,
+    CONCURRENCY_PROBLEM, FILE, GROUP, NET_INSTALL_ARM64_JOB, NET_INSTALL_JOB, NET_JOBS, ON_PROBLEM,
+    PATHS, apt_steps, iso_problems,
 };
-use super::privileged_tests::{committed_targets, shape_problems, starts_with_attribute};
+use super::net_install::{NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_FIRST_LINE};
+use super::privileged_tests::{
+    committed_targets, net_install_targets, shape_problems, starts_with_attribute,
+};
+use super::release::REQUIRED_WORKFLOWS;
 use super::workflows;
+use super::yaml::{self, Node};
 
 const UPDATE: &str = "sudo apt-get update";
 const INSTALL_X86: &str = "sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf";
 const INSTALL_ARM: &str =
     "sudo apt-get install --yes --no-install-recommends qemu-system-arm qemu-efi-aarch64";
 
-/// The committed privileged.yml.
-fn committed() -> String {
+/// The committed workflow `name`.
+fn committed_file(name: &str) -> String {
     workflows()
         .into_iter()
-        .find(|(file, _)| file == PRIVILEGED_WORKFLOW)
-        .expect("privileged.yml is in the repository")
+        .find(|(file, _)| file == name)
+        .unwrap_or_else(|| panic!("{name} is in the repository"))
         .1
+}
+
+/// The committed net-install.yml.
+fn committed() -> String {
+    committed_file(FILE)
 }
 
 /// The committed packaging/netboot/pins.toml.
@@ -75,7 +87,12 @@ fn with_first_step(text: &str, job: &str, run: &str) -> String {
 }
 
 fn problems(text: &str) -> Vec<String> {
-    shape_problems(text, &committed_targets())
+    shape_problems(FILE, text, &net_install_targets())
+}
+
+/// The shape problems of privileged.yml's `text`, held to its own three jobs.
+fn privileged_problems(text: &str) -> Vec<String> {
+    shape_problems(PRIVILEGED_WORKFLOW, text, &committed_targets())
 }
 
 fn not_allowed_here(run: &str) -> String {
@@ -98,10 +115,11 @@ fn refused_arm(run: &str) -> String {
 
 #[test]
 fn the_committed_network_install_jobs_pass_the_shape_apt_and_iso_rules() {
-    // Catches: a rule set that refuses the committed privileged.yml, which names one `sudo apt-get
+    // Catches: a rule set that refuses the committed net-install.yml, which names one `sudo apt-get
     // update` and one install of its listed packages in each network-install job before the build,
     // the ISO of each job at the pin, and the test file of each job under its own first line.
     let text = committed();
+    assert_eq!(lint(FILE, &text), Vec::<String>::new());
     assert_eq!(problems(&text), Vec::<String>::new());
     assert_eq!(iso_problems(&text, &pins()), Vec::<String>::new());
     for (job, install) in [
@@ -118,7 +136,7 @@ fn the_committed_network_install_jobs_pass_the_shape_apt_and_iso_rules() {
         });
         assert_eq!(seen, (true, true), "{job} updates and installs");
     }
-    let targets = committed_targets();
+    let targets = net_install_targets();
     assert_eq!(
         targets[NET_INSTALL_JOB],
         BTreeSet::from(["net_install".to_owned()])
@@ -185,15 +203,15 @@ fn the_shape_check_holds_each_network_install_job_to_its_own_targets() {
             "job net-install-arm64: the run as root step names the test targets {}, not {\"net_install_arm64\"}",
         ]
     );
-    let swapped = BTreeMap::from_iter(committed_targets().into_iter().map(|(job, targets)| {
-        let swap = match job {
-            NET_INSTALL_JOB => "net_install_arm64",
-            NET_INSTALL_ARM64_JOB => "net_install",
-            _ => return (job, targets),
+    let swapped = BTreeMap::from_iter(net_install_targets().into_keys().map(|job| {
+        let swap = if job == NET_INSTALL_JOB {
+            "net_install_arm64"
+        } else {
+            "net_install"
         };
         (job, BTreeSet::from([swap.to_owned()]))
     }));
-    assert_eq!(shape_problems(&text, &swapped).len(), 4);
+    assert_eq!(shape_problems(FILE, &text, &swapped).len(), 4);
     let privileged_only = replace_in_job(
         &text,
         NET_INSTALL_JOB,
@@ -206,24 +224,24 @@ fn the_shape_check_holds_each_network_install_job_to_its_own_targets() {
         problems(&missing),
         [
             "no job net-install-arm64",
-            "job net-install-arm64-gone is not a job of privileged.yml"
+            "job net-install-arm64-gone is not a job of net-install.yml"
         ]
     );
 }
 
 #[test]
 fn an_apt_step_outside_the_network_install_jobs_is_refused() {
-    // Catches: the apt allowance let into the `privileged` job (or any job that is not one of the
-    // two), where an apt install is refused as an apt step and as a second `sudo`; and an apt step
-    // that does not use `sudo`.
-    let text = committed();
+    // Catches: the apt allowance let into a job of privileged.yml (the `privileged` job, or any
+    // job that is not one of the two network-install jobs), where an apt install is refused as an
+    // apt step and as a second `sudo`; and an apt step that does not use `sudo`.
+    let text = committed_file(PRIVILEGED_WORKFLOW);
     for (job, run) in [
         ("privileged", INSTALL_X86),
         ("privileged", UPDATE),
         ("first-boot", UPDATE),
         ("macos-device", INSTALL_X86),
     ] {
-        let found = problems(&with_first_step(&text, job, run));
+        let found = privileged_problems(&with_first_step(&text, job, run));
         assert_eq!(
             found,
             [
@@ -236,9 +254,61 @@ fn an_apt_step_outside_the_network_install_jobs_is_refused() {
     }
     let plain = "apt-get install --yes ovmf";
     assert_eq!(
-        problems(&with_first_step(&text, "privileged", plain)),
+        privileged_problems(&with_first_step(&text, "privileged", plain)),
         [format!("job privileged: {}", not_allowed_here(plain))]
     );
+    // The allowance is the job's in net-install.yml, not its name's: the committed jobs, judged
+    // as jobs of another workflow that has them, have their apt steps refused.
+    let net = committed();
+    let found = shape_problems(PRIVILEGED_WORKFLOW, &net, &net_install_targets());
+    let want: Vec<String> = [
+        (NET_INSTALL_JOB, INSTALL_X86),
+        (NET_INSTALL_ARM64_JOB, INSTALL_ARM),
+    ]
+    .iter()
+    .flat_map(|(job, install)| {
+        [
+            format!("job {job}: {}", not_allowed_here(UPDATE)),
+            format!("job {job}: {}", not_allowed_here(install)),
+            format!("job {job}: sudo is named 3 times, not once"),
+            format!("job {job}: 3 run as root steps, not one"),
+        ]
+    })
+    .collect();
+    assert_eq!(found, want);
+}
+
+/// The section of the job `job` in `text`, from its key to the blank line that ends it.
+fn job_section(text: &str, job: &str) -> String {
+    let mut found = String::new();
+    edit_job(text, job, |section| {
+        found = section.to_owned();
+        section.to_owned()
+    });
+    found
+}
+
+#[test]
+fn a_network_install_job_back_in_privileged_yml_is_refused() {
+    // Catches: the network-install jobs moved back into privileged.yml, whose successful run each
+    // release waits for: a release would wait hours on an emulated install again. Each job is
+    // refused as no job of that file, by the shape check and by the release's list of workflows,
+    // which does not name net-install.yml's.
+    let privileged = committed_file(PRIVILEGED_WORKFLOW);
+    let net = committed();
+    for job in [NET_INSTALL_JOB, NET_INSTALL_ARM64_JOB] {
+        let back = format!("{privileged}\n{}", job_section(&net, job));
+        assert_eq!(
+            privileged_problems(&back),
+            [format!("job {job} is not a job of privileged.yml")],
+            "{job}"
+        );
+    }
+    let doc = yaml::load(&net).expect("net-install.yml parses");
+    let name = entry(&doc, "name").and_then(Node::as_str);
+    assert_eq!(name, Some("net-install"));
+    assert!(!REQUIRED_WORKFLOWS.contains(&"net-install"));
+    assert_eq!(REQUIRED_WORKFLOWS, ["artifacts", "ci", "privileged"]);
 }
 
 #[test]
@@ -518,4 +588,267 @@ fn a_test_file_belongs_to_the_job_whose_first_line_it_starts_with() {
         "//! No attribute.\n",
         NET_INSTALL_FIRST_LINE
     ));
+}
+
+/// The `on` block of the committed net-install.yml: from `on:` to the line before
+/// `permissions: {}`.
+fn on_block(text: &str) -> String {
+    let start = text.find("\non:\n").expect("an `on:` block") + 1;
+    let end = text
+        .find("\npermissions: {}\n")
+        .expect("permissions after `on`")
+        + 1;
+    text[start..end].to_owned()
+}
+
+/// An `on` whose `push` is the lines `push` and whose other triggers are the lines `rest`.
+fn on_with(push: &str, rest: &str) -> String {
+    format!("on:\n  push:\n{push}{rest}\n")
+}
+
+/// `branches: [main]` and `paths`, one `- ` entry each, as lines of `push`.
+fn push_lines(paths: &[&str]) -> String {
+    let listed: String = paths.iter().map(|p| format!("      - {p}\n")).collect();
+    format!("    branches: [main]\n    paths:\n{listed}")
+}
+
+const SCHEDULE_AND_DISPATCH: &str = "  schedule:\n    - cron: '41 2 * * *'\n  workflow_dispatch:\n";
+
+/// The pull-request rule's refusal of each committed job, which runs as root.
+fn root_on_pull_request(text: &str) -> Vec<String> {
+    let doc = yaml::load(text).expect("parses");
+    let jobs = entry(&doc, "jobs").expect("jobs");
+    [NET_INSTALL_JOB, NET_INSTALL_ARM64_JOB]
+        .iter()
+        .map(|job| {
+            let mut values = Vec::new();
+            super::lint::scalars(entry(jobs, job).expect("the job"), &mut values);
+            let line = super::lint::root_line(&values).expect("the job runs as root");
+            format!("job {job}: privileged on pull_request (`{line}`)")
+        })
+        .collect()
+}
+
+#[test]
+fn the_committed_triggers_are_a_push_to_main_with_the_paths_a_schedule_and_dispatch() {
+    // Catches: a committed `on` that drifted from the rule (another path, one left out, a second
+    // schedule), and the rule's own spelling of it refusing the committed file; and the order of
+    // the triggers, a quoted branch or `{}` for no inputs taken for another workflow.
+    let text = committed();
+    let on = on_block(&text);
+    assert_eq!(on, on_with(&push_lines(PATHS), SCHEDULE_AND_DISPATCH));
+    let same = [
+        format!(
+            "on:\n  workflow_dispatch: {{}}\n  schedule:\n    - cron: '0 1 * * *'\n  push:\n{}\n",
+            push_lines(PATHS).replace("[main]", "[\"main\"]")
+        ),
+        on_with(
+            &push_lines(PATHS),
+            "  schedule:\n    - cron: '41 2 * * *'\n  workflow_dispatch: {}\n",
+        ),
+    ];
+    for same in same {
+        assert_eq!(
+            lint(FILE, &with_on(&text, &same)),
+            Vec::<String>::new(),
+            "{same}"
+        );
+    }
+    // Every path the brief of the workflow names is among them, the workflow itself included.
+    for path in [
+        ".github/workflows/net-install.yml",
+        "crates/hostkeeper-pxe*/**",
+        "packaging/netboot/**",
+        "packaging/linux/**",
+        "crates/hostkeeper-privileged/tests/net_install*.rs",
+        "crates/hostkeeper-privileged/tests/netinstall/**",
+    ] {
+        assert!(PATHS.contains(&path), "{path}");
+    }
+}
+
+/// `text` with its `on` block replaced by `on`.
+fn with_on(text: &str, on: &str) -> String {
+    text.replacen(&on_block(text), on, 1)
+}
+
+#[test]
+fn net_install_yml_on_anything_but_its_three_triggers_is_refused() {
+    // Catches: net-install.yml run for every push to main again (no paths, or another list of
+    // them), for a push of another branch or of tags, with a paths filter that is not a list,
+    // without its schedule or with two, a schedule that is not one cron, dispatch inputs, another
+    // trigger, an `on` that is not a mapping, or no `on`.
+    let text = committed();
+    let paths = push_lines(PATHS);
+    let fewer = push_lines(&PATHS[1..]);
+    let mut more = PATHS.to_vec();
+    more.push("crates/**");
+    let more = push_lines(&more);
+    let mut reordered = PATHS.to_vec();
+    reordered.swap(0, 1);
+    let reordered = push_lines(&reordered);
+    let cases = [
+        on_with("    branches: [main]\n", SCHEDULE_AND_DISPATCH),
+        on_with(&fewer, SCHEDULE_AND_DISPATCH),
+        on_with(&more, SCHEDULE_AND_DISPATCH),
+        on_with(&reordered, SCHEDULE_AND_DISPATCH),
+        on_with(
+            &paths.replace("[main]", "[main, next]"),
+            SCHEDULE_AND_DISPATCH,
+        ),
+        on_with(&paths.replace("[main]", "[next]"), SCHEDULE_AND_DISPATCH),
+        on_with(&paths.replace("[main]", "main"), SCHEDULE_AND_DISPATCH),
+        on_with(&format!("{paths}    tags: ['v*']\n"), SCHEDULE_AND_DISPATCH),
+        on_with(
+            &paths.replace("    branches: [main]\n", "    branches-ignore: [next]\n"),
+            SCHEDULE_AND_DISPATCH,
+        ),
+        on_with(
+            "    branches: [main]\n    paths: crates/**\n",
+            SCHEDULE_AND_DISPATCH,
+        ),
+        on_with(&paths, "  workflow_dispatch:\n"),
+        on_with(
+            &paths,
+            "  schedule:\n    - cron: '41 2 * * *'\n    - cron: '41 14 * * *'\n  workflow_dispatch:\n",
+        ),
+        on_with(
+            &paths,
+            "  schedule:\n    - cron: [x]\n  workflow_dispatch:\n",
+        ),
+        on_with(
+            &paths,
+            "  schedule:\n    - cron: '41 2 * * *'\n      timezone: UTC\n  workflow_dispatch:\n",
+        ),
+        on_with(&paths, "  schedule: '41 2 * * *'\n  workflow_dispatch:\n"),
+        on_with(&paths, "  schedule:\n    - cron: '41 2 * * *'\n"),
+        on_with(
+            &paths,
+            "  schedule:\n    - cron: '41 2 * * *'\n  workflow_dispatch:\n    inputs:\n      target:\n        type: string\n",
+        ),
+        on_with(
+            &paths,
+            "  schedule:\n    - cron: '41 2 * * *'\n  workflow_dispatch:\n  workflow_call:\n",
+        ),
+        "on: [push, schedule, workflow_dispatch]\n".to_owned(),
+        "on: push\n".to_owned(),
+        String::new(),
+    ];
+    for on in cases {
+        assert_eq!(lint(FILE, &with_on(&text, &on)), [ON_PROBLEM], "{on}");
+    }
+}
+
+#[test]
+fn net_install_yml_run_for_a_pull_request_is_refused() {
+    // Catches: the network-install jobs run for a pull request, by `pull_request` beside the three
+    // triggers, in place of them, by a review event or the merge queue: the file is refused for
+    // its `on`, and each job, which runs as root, by the pull-request rule, as in any workflow but
+    // pr-device.yml.
+    let text = committed();
+    let jobs = root_on_pull_request(&text);
+    let paths = push_lines(PATHS);
+    for trigger in [
+        "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "merge_group",
+    ] {
+        let beside = on_with(&paths, &format!("{SCHEDULE_AND_DISPATCH}  {trigger}:\n"));
+        let found = lint(FILE, &with_on(&text, &beside));
+        let mut want = jobs.clone();
+        want.push(ON_PROBLEM.to_owned());
+        assert_eq!(found, want, "{trigger}");
+    }
+    let alone = lint(
+        FILE,
+        &with_on(
+            &text,
+            "on:\n  pull_request:\n    paths: [packaging/netboot/**]\n",
+        ),
+    );
+    let mut want = jobs;
+    want.push(ON_PROBLEM.to_owned());
+    assert_eq!(alone, want);
+}
+
+#[test]
+fn the_concurrency_of_net_install_yml_is_one_group_per_branch_that_cancels() {
+    // Catches: superseded runs left to pile up on main (`cancel-in-progress: false`, or none), a
+    // group per commit (each commit's run kept, so none is ever cancelled), one group shared with
+    // another workflow, an extra key, or no concurrency at all.
+    let text = committed();
+    let block = format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: true\n");
+    assert_eq!(text.matches(&block).count(), 1, "the committed concurrency");
+    let cases = [
+        block.replace("cancel-in-progress: true", "cancel-in-progress: false"),
+        block.replace("  cancel-in-progress: true\n", ""),
+        block.replace(GROUP, "net-install-${{ github.sha }}"),
+        block.replace(GROUP, "privileged-${{ github.ref }}"),
+        block.replace(GROUP, "net-install"),
+        format!("{block}  extra: x\n"),
+        "concurrency: net-install\n".to_owned(),
+        String::new(),
+    ];
+    for concurrency in cases {
+        let found = lint(FILE, &text.replacen(&block, &concurrency, 1));
+        assert_eq!(found, [CONCURRENCY_PROBLEM], "{concurrency}");
+    }
+}
+
+#[test]
+fn net_install_yml_holds_exactly_its_two_jobs_on_the_listed_runner() {
+    // Catches: another job let into the one workflow besides privileged.yml that runs as root, a
+    // network-install job missing (renamed or removed), and a job on a runner whose image moves
+    // under us (`ubuntu-latest`), on arm (no KVM), or on macOS.
+    let text = committed();
+    let renamed = text.replace("\n  net-install-arm64:\n", "\n  net-install-arm:\n");
+    assert_eq!(
+        lint(FILE, &renamed),
+        [
+            "no job net-install-arm64",
+            "job net-install-arm is not a job of net-install.yml"
+        ]
+    );
+    let extra = format!(
+        "{text}\n{}",
+        job_section(&text, NET_INSTALL_JOB).replacen("  net-install:\n", "  another:\n", 1)
+    );
+    assert_eq!(
+        lint(FILE, &extra),
+        ["job another is not a job of net-install.yml"]
+    );
+    for runner in ["ubuntu-latest", "ubuntu-24.04-arm", "macos-15"] {
+        let moved = replace_in_job(
+            &text,
+            NET_INSTALL_ARM64_JOB,
+            "    runs-on: ubuntu-24.04\n",
+            &format!("    runs-on: {runner}\n"),
+        );
+        assert_eq!(
+            lint(FILE, &moved),
+            ["job net-install-arm64: privileged job on a runner outside the privileged list"],
+            "{runner}"
+        );
+    }
+}
+
+#[test]
+fn no_job_of_net_install_yml_holds_a_write_scope() {
+    // Catches: a write scope granted in the network-install workflow, which no entry of the table
+    // of write scopes names.
+    let text = committed();
+    let found = lint(
+        FILE,
+        &replace_in_job(
+            &text,
+            NET_INSTALL_JOB,
+            "      contents: read\n",
+            "      contents: write\n",
+        ),
+    );
+    assert_eq!(
+        found,
+        ["job net-install: `contents: write` is not allowed in net-install.yml"]
+    );
 }

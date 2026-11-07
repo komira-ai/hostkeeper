@@ -3,7 +3,7 @@
 //! pull-request set: the router's DHCP the end-to-end tests fake ([`netinstall::router::Router`]),
 //! a pure function of a packet and the leases given, and the reading of a serial console into
 //! lines ([`netinstall::events::Lines`]). The end-to-end tests themselves run as root in
-//! privileged.yml only. The rig drives Linux's network namespaces, so this file is Linux's only.
+//! net-install.yml only. The rig drives Linux's network namespaces, so this file is Linux's only.
 
 mod e2e;
 mod netinstall;
