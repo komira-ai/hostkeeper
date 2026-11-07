@@ -615,7 +615,20 @@ impl Coordinator {
         let acking =
             verdict_file::asks(&beat) && self.features.iter().any(|f| f == verdict_file::FEATURE);
         let mut heard = if acking {
-            verdict_file::fill(&self.verdicts, legacy, &who.host_id, &mut beat)
+            let wanted = |name: &str| self.desired.get(name).map(|want| want.version);
+            let (heard, superseded) =
+                verdict_file::fill(&self.verdicts, legacy, &who.host_id, &mut beat, &wanted);
+            for name in superseded {
+                if let Err(error) = self.verdicts.supersede(&name, &who.host_id) {
+                    tracing::warn!(
+                        service = %name,
+                        node_id = %who.host_id,
+                        %error,
+                        "a superseded verdict is not forgotten; it is not read, and is forgotten at a later heartbeat"
+                    );
+                }
+            }
+            heard
         } else {
             Vec::new()
         };

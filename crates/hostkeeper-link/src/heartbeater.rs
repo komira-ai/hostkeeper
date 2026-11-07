@@ -101,7 +101,7 @@ use crate::beat::{
 };
 use crate::deferral::{Book, Deferral};
 use crate::names::Reason;
-use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply, Verb};
+use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
     CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
     RecordedService, RenewalSource, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
@@ -566,11 +566,12 @@ impl Heartbeater {
         let in_order = self.advertised.has(Feature::VerdictAcksV1);
         let mut counted_now = Vec::new();
         for (service, queue) in &mut self.pending {
-            let acks = |result: &OrderResult| {
+            let ack_of = |result: &OrderResult| {
                 acknowledged
                     .iter()
-                    .any(|ack| ack.service.as_str() == service && ack.order == result.order)
+                    .find(|ack| ack.service.as_str() == service && ack.order == result.order)
             };
+            let acks = |result: &OrderResult| ack_of(result).is_some();
             // Oldest first: what is older than an acknowledged verdict is ended with it.
             let ended = if in_order {
                 queue.iter().rposition(acks).map_or(0, |at| at + 1)
@@ -580,24 +581,21 @@ impl Heartbeater {
             let mut at = 0;
             queue.retain(|result| {
                 at += 1;
-                let counted = acks(result);
-                if counted {
-                    counted_now.push((service.clone(), result.order.clone()));
+                let counted = ack_of(result);
+                if let Some(ack) = counted {
+                    counted_now.push(ack.clone());
                     let refs = self.acked.entry(service.clone()).or_default();
                     refs.push(result.order.clone());
                     if refs.len() > ACKED_KEPT {
                         refs.remove(0);
                     }
                 }
-                !counted && at > ended
+                counted.is_none() && at > ended
             });
         }
         self.pending.retain(|_, queue| !queue.is_empty());
-        for (service, order) in counted_now {
-            let Ok(name) = ServiceName::new(&service) else {
-                continue;
-            };
-            if let Err(e) = self.ports.records.acknowledged(&name, &order) {
+        for Acknowledged { service, order } in counted_now {
+            if let Err(e) = self.ports.records.acknowledged(&service, &order) {
                 self.log(&format!(
                     "error: the acknowledgement of order {} try {} of {service} is not kept: {e}",
                     order.id.as_str(),

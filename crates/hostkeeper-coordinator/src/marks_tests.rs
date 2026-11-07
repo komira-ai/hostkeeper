@@ -495,6 +495,66 @@ async fn exclude_without_abandon_keeps_the_slot() {
     assert_eq!(hold_of(&rig, "d2"), Some(Why::Gate(Gate::NoSlot)));
 }
 
+/// A heartbeat of a new daemon at `running` of `web` whose last update, to `target`, failed, and
+/// which reports `web` unhealthy: the shape of a host the farm excluded after its update stalled.
+fn failed_unhealthy(running: &str, target: &str) -> Heartbeat {
+    let mut one = runs(WEB, running);
+    one.health = agent_health_unhealthy();
+    one.last_update = Some(hostkeeper_wire::wire::UpdateResult {
+        reason: hostkeeper_wire::wire::Token::parse("protocol_unreadable"),
+        order_id: hostkeeper_wire::wire::OrderId::parse("install-1"),
+        order_try: Some(1),
+        ..hostkeeper_wire::wire::UpdateResult::new(
+            version(target),
+            hostkeeper_wire::wire::Outcome::Failed,
+        )
+    });
+    beat_of(NEW_DAEMON, vec![one])
+}
+
+fn agent_health_unhealthy() -> hostkeeper_wire::wire::Health {
+    hostkeeper_wire::wire::Health::Unhealthy
+}
+
+/// Excluding a host whose last update failed and that stays unhealthy frees its role's update
+/// slot, with or without `abandon`, and it stays free at that host's later heartbeats: the
+/// service no longer orders it and nothing of an update runs there. Before, the excluded host's
+/// next heartbeat (failed, not healthy) took the slot again, so the next host of the role sat at
+/// `no_slot` until an operator raised `max_updating`.
+///
+/// Catches: an excluded host that counts against its role's `max_updating` while it runs no
+/// update, after an abandon or without one. (One slot, one stage.)
+#[tokio::test]
+async fn an_excluded_host_that_failed_and_is_unhealthy_holds_no_slot() {
+    for abandon in [true, false] {
+        let rig = rig(&format!("marks-excluded-failed-{abandon}"), ONE_STAGE);
+        set_one_slot(&rig, WEB, "2.0", 1).await;
+        assert_eq!(
+            ask(&rig, "d1", "daemon", failed_unhealthy("2.0", "1.5")),
+            ServiceReply::Nothing
+        );
+        assert_eq!(
+            ask(&rig, "d2", "daemon", daemon("1.0")),
+            ServiceReply::Nothing
+        );
+        assert_eq!(hold_of(&rig, "d2"), Some(Why::Gate(Gate::NoSlot)));
+
+        rig.coordinator
+            .exclude(&operator(), exclude_of("d1", WEB, abandon))
+            .expect("excluded");
+        assert_eq!(
+            ask(&rig, "d1", "daemon", failed_unhealthy("2.0", "1.5")),
+            ServiceReply::Nothing,
+            "abandon: {abandon}"
+        );
+        assert_eq!(
+            ask(&rig, "d2", "daemon", daemon("1.0")),
+            update(WEB, "2.0"),
+            "abandon: {abandon}"
+        );
+    }
+}
+
 /// `Audit.List` pages the audit file in order: a limit of 0 or above 256 is 256, `since_seq`
 /// continues from `next_seq`, each filter keeps only its entries, the coordinator's and CI's
 /// entries read as their actors, and a filter that is no actor, action, service name or node id is
