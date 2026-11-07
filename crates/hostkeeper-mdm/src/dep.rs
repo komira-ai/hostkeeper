@@ -341,12 +341,12 @@ fn define_profile(
     Ok(())
 }
 
-/// The `profile_uuid` of Apple's answer to a profile definition: 16 to 64 hex digits.
 /// Whether `text` is a profile uuid as Apple answers it: 16 to 64 hex digits.
 fn is_uuid(text: &str) -> bool {
     (16..=64).contains(&text.len()) && text.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// The `profile_uuid` of Apple's answer to a profile definition: 16 to 64 hex digits.
 fn profile_uuid(answer: &[u8]) -> Result<String, DepError> {
     let value: serde_json::Value = serde_json::from_slice(answer).unwrap_or_default();
     let uuid = value
