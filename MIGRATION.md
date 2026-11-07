@@ -449,3 +449,117 @@ section 12, tasks M3 and M4).
 (`tests/kbf_f89ed5c/kbf_names.conf`), the units, the Caddyfile, the enrollment profile, the ADE
 profile, the pins and the SCEP and DEP arguments equal kbf-deploy's own files, except the three
 differences that file names (comment wording, the slice's `Description=`, `auto_advance_setup`).
+
+# The MDM kit's binary
+
+The binary of the MDM kit (docs/design/hostkeeper-mdm.md, section 8, task M4) was imported from
+kbf's `main` at the commit the core came from, `5d7a2c405f9e23949661ee1e2b34fc029a623cbd`, where it
+is the crate `crates/mdm-host`. kbf's copy stays until the design's task M6a deletes it. The first
+commit of the import is the crate as moved, unchanged in behaviour; each fix below is a later commit
+with a test that fails on that first one.
+
+| kbf | hostkeeper | what it holds |
+|---|---|---|
+| `mdm-host` | `hostkeeper-mdm` | the binary and its verbs `fetch`, `install` (and `--uninstall`), `tls` and `verify` |
+
+| kbf name | hostkeeper name |
+|---|---|
+| Rust path `mdm_host`, binary `mdm-host` | `hostkeeper_mdm`, `hostkeeper-mdm` |
+| the flag `--config` of `install`, `tls` and `verify` | `--settings` (design section 3) |
+| example user, unit prefix and directories `js-mdm`, `/var/lib/js-mdm`, `/etc/js-mdm`, `/opt/js-mdm/bin` | as the core: `hostkeeper-mdm`, `/var/lib/hostkeeper-mdm`, `/etc/hostkeeper-mdm`, `/opt/hostkeeper-mdm/bin` |
+
+## What changed
+
+What the move itself changed, without a change of behaviour:
+
+- **The roots of the downloads.** kbf's `fetch` trusted the bundled web roots (`webpki-roots`),
+  whose licence (CDLA-Permissive-2.0) `deny.toml` does not allow. `fetch` trusts the host's roots
+  (`rustls-native-certs`), as the coordinator's HTTPS clients do. Every download is checked against
+  its sha256 pin after it arrives, so the roots guard the transfer, not what is installed.
+- **The host, its trusted owners and the clock are injected.** `run` takes a `System`: a `Machine`
+  that makes the verb's `Host`, the downloads, the random source and the unix second, which `main`
+  reads once. The `Machine` grants the owners `hostkeeper-mdm-step`'s `RealHost::trust_below` asks
+  for (design task M3): the service user's below `MDM_STATE` for `install`, `tls` and `verify`, and
+  `--bin-dir`'s owner below it for `install`.
+- The read-only accessors of the core's `MdmConfig` replace kbf's public fields.
+
+The fixes of komira-ai/kbf#2248 that the design gives this task, each with a test that fails on the
+crate as it was moved:
+
+- **Restarts are planned from the installed state.** kbf restarted a service only when this run
+  changed one of its inputs, so a run that stopped after replacing a binary but before the restart
+  left the old process running, and the rerun saw nothing to do. `install` now writes an empty 0600
+  root file `/run/<MDM_UNIT_PREFIX>/restart/<unit>` before it changes a service's inputs, restarts
+  every service that has one (whether or not anything changed in this run) and removes it right
+  after that service's restart; `/run` is a tmpfs, so a reboot clears it with the services it
+  restarts. `--uninstall` removes them
+  (`a_restart_that_a_failed_run_did_not_reach_is_done_by_the_rerun`,
+  `only_the_unit_with_a_marker_is_restarted_when_nothing_else_differs`,
+  `a_proxy_marker_waits_for_the_certificate_and_is_removed_by_its_restart`,
+  `uninstall_removes_the_pending_restart_markers`).
+- **Malformed ACME settings are refused, not skipped.** `verify` read them with
+  `Acme::parse(..).ok()`, so a malformed one skipped the certificate job's units. Now, when the
+  settings set any `MDM_ACME_*` key, all five must be set and valid or `verify` is refused (exit 2);
+  with none set the units are skipped as before (`verify_refuses_a_malformed_acme_setting`,
+  `verify_refuses_acme_settings_with_a_key_missing`,
+  `verify_skips_the_certificate_units_when_no_acme_key_is_set`).
+- **`lego run --help` must exit 0.** kbf looked only at its text
+  (`a_lego_whose_help_exits_non_zero_is_refused_even_when_it_lists_every_flag`).
+- **Archive limits are exact and safe at `u64::MAX`.** A zip member listed larger than the limit is
+  refused even when its output would fit (kbf truncated it to the limit and accepted it); a zip
+  member must inflate to exactly its listed size; the tar path reads `limit + 1` with saturating
+  arithmetic; every offset read from a zip is added with saturating arithmetic
+  (`a_zip_member_listed_larger_than_the_limit_is_refused_even_if_its_output_fits`,
+  `a_zip_member_must_come_out_exactly_the_listed_size`,
+  `a_member_of_exactly_the_limit_is_read_and_one_byte_more_is_refused`,
+  `a_limit_of_u64_max_reads_a_member_on_both_packings`,
+  `hostile_zip_offsets_near_the_integer_limits_are_refused_not_panicked_on`).
+- **Environment files are read by systemd's rules.** kbf took the first `KEY=` line as it stood.
+  The secret files are now read as systemd's `EnvironmentFile=` reads them: the last assignment of
+  a key wins (so `KEY=abc` then `KEY=` is empty), quotes and backslashes are taken as systemd takes
+  them, and comments and white space likewise. A construct whose systemd reading is not certain (a
+  quote left open, text after a closing quote, a backslash in single quotes, a continued line that
+  starts with white space) and bytes that are not UTF-8 are refused, naming the file and line, by
+  `tls` and by `install`, which never makes such a file again
+  (`an_empty_assignment_after_a_value_leaves_no_value`, `quotes_around_a_value_are_dropped`,
+  `constructs_with_an_uncertain_reading_are_refused`,
+  `a_secret_file_systemd_would_not_read_with_certainty_is_refused_by_its_cause`, and the rest of
+  `tests/secret.rs`).
+- **A typed error for `Tool::named`.** The core's `Tool::named` returns `UnknownTool`, which
+  `fetch --only` reports (`only_with_an_unknown_tool_is_refused_with_the_unknown_tool_message`).
+- **Downloads.** A body of exactly the limit is accepted (ureq refused the read after the last
+  permitted byte, so kbf refused it), and at most five redirects are followed, a longer chain or a
+  cycle being an error (`a_body_of_exactly_the_limit_is_accepted_and_one_byte_more_is_refused`,
+  `a_chain_of_exactly_the_redirect_limit_is_followed_and_one_more_is_refused`). Tests of what was
+  already right: an HTTPS-to-HTTP redirect is refused, a redirect cycle is an error, and a body cut
+  short, with a length or chunked, is an error.
+- **TLS.** A directory or link at the certificate path, and a certificate `openssl` cannot read,
+  are refused before any change (kbf took the first for a certificate and started the proxy). A
+  key that is missing, not a regular file or not the certificate's makes a new issuance, as does a
+  certificate that ends within `verify`'s 21 days; the reload path unit is started before the
+  certificate unit, so the new certificate restarts the proxy
+  (`a_directory_or_a_link_at_the_certificate_path_is_refused_before_any_change`,
+  `a_certificate_file_openssl_cannot_read_is_refused_before_any_change`,
+  `a_missing_or_mismatched_key_plans_a_new_issuance_and_says_why`,
+  `a_certificate_ending_soon_is_renewed_once_after_the_reload_path_is_watching`,
+  `the_reload_path_watches_the_certificate_and_its_service_try_restarts_the_proxy`).
+- **Install.** A SCEP depot is a CA only when it holds both `ca.pem` and `ca.key` (the files
+  `scepserver ca -init` writes) as regular files that `openssl` reads as one key pair; a depot
+  holding one of them, or a damaged pair, is refused before any change, never made again over. A
+  host whose `uname -m` is not `x86_64` is refused first, since the pins are linux-amd64 builds.
+  `--uninstall` stops the certificate and reload jobs before it moves their files, and a second
+  uninstall in the same second takes `<seconds>-1` and keeps the first snapshot
+  (`a_depot_with_only_the_key_is_refused`, `a_certificate_and_a_key_that_are_not_a_pair_are_refused`,
+  `an_unsupported_architecture_is_refused_before_anything_else`,
+  `uninstall_stops_the_certificate_and_reload_jobs_before_moving_their_files`,
+  `uninstalls_in_the_same_second_keep_every_snapshot`).
+- **Whole-output redaction.** The output of `install` and of `tls`, dry run and apply, is compared
+  whole with the expected text, and no secret value is in it
+  (`the_whole_output_of_an_apply_is_the_plan_and_shows_no_secret`,
+  `the_whole_output_of_a_dry_run_is_the_plan_and_shows_no_secret`,
+  `the_whole_output_of_a_dry_run_and_an_apply_holds_no_dns_credential`).
+
+## Tests that hold the MDM binary import
+
+The tests kbf's crate had are kept, renamed to hostkeeper's names, in
+`crates/hostkeeper-mdm/tests/`; each fix above adds its own.
