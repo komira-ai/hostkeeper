@@ -95,7 +95,8 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         | EnrollmentRefusal::DuplicateClaim
         | EnrollmentRefusal::NotPending
         | EnrollmentRefusal::Denied
-        | EnrollmentRefusal::RecordMismatch => Code::FailedPrecondition,
+        | EnrollmentRefusal::RecordMismatch
+        | EnrollmentRefusal::RecordContested => Code::FailedPrecondition,
         EnrollmentRefusal::HostIdTaken
         | EnrollmentRefusal::RecordExists
         | EnrollmentRefusal::RecordConflict => Code::AlreadyExists,

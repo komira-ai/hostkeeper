@@ -309,10 +309,12 @@ thing:
   in the Linux match (and only when both sides have one); the serial and the UUID are for the person to compare. A
   value the record does not hold is shown as "not recorded", and a claim the request leaves out as "not claimed";
   neither is shown as agreement. A request that leaves out its BMC MAC still matches on a data MAC (**Built**), so
-  "not claimed" beside a recorded BMC MAC is shown as a warning.
-- **Say that "matched" is not proof.** Beside the match line, the screen says: "Matched means this request claims a
-  data MAC of the record and does not contradict its BMC MAC. The machine wrote the claims itself, and anyone who read
-  the label or the network can write the same. Approve only the key hash shown on this machine's console."
+  "not claimed" beside a recorded BMC MAC is shown as a warning. **Built**: `PendingEnrollment` carries the matched
+  record's serial and BMC MAC (`record_serial`, `record_bmc_mac`) for the screen to show.
+- **Say that "matched" is not proof.** Beside the match line of a matched Linux request, the screen says (**Built**):
+  "Matched means this request claims a data MAC of the record and does not contradict its BMC MAC. The machine wrote
+  the claims itself, and anyone who read the label or the network can write the same. Approve only the key hash shown
+  on this machine's console."
 - **Show the key hash on the machine's console.** This is the one check an attacker elsewhere on the LAN cannot fake.
   While a request is pending, the daemon writes its key hash, the coordinator it posted to, and the request's state to
   `/run/hostkeeper/enrollment.issue`. The deb ships `/etc/issue.d/hostkeeper.issue` as a link to it, so the login
@@ -322,12 +324,13 @@ thing:
   seed sets the installed kernel's `console=` to that port and enables its serial getty, which `--serial-console
   <ttyS port>` does. The operator doc's check with `openssl` (docs/operations/enrollment.md, "Check the key hash")
   stays as the way to read it over SSH, for a machine with neither.
-- **Refuse a contested record.** Today two pending requests that match one record both show `matched`, with that
-  record's host id. Designed: `Enrollment.List` marks each of them `contested`, naming the others. `Enrollment.Approve`
-  then refuses `record_contested` while another pending request matches the same record, until the operator rejects
-  the others. An attacker who posted first therefore cannot be approved by a hurried click on the first `matched` row;
-  the operator has to decide which machine is real, by the console's key hash. This is additive: a new field on
-  `PendingEnrollment` and a new refusal value.
+- **Refuse a contested record.** Two pending requests that match one record both show `matched`, with that record's
+  host id, and `Enrollment.List` marks each of them contested, naming the others (`PendingEnrollment.contested_by`,
+  **Built**). `Enrollment.Approve` refuses `record_contested` while another pending request matches the same record,
+  with or without `replace`, until the operator rejects the others (**Built**). An attacker who posted first therefore
+  cannot be approved by a hurried click on the first `matched` row; the operator has to decide which machine is real,
+  by the console's key hash. This is additive: a new field on `PendingEnrollment` and a new refusal value. A request
+  that matches several records contests the requests of each.
 
 **Q15 stays (a) for Linux in v1.** None of the claims above approves anything by itself, and nothing auto-approves.
 

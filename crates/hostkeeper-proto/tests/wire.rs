@@ -603,6 +603,9 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
             ("unenrolled_reason", 14),
             ("unenrolled_unix", 15),
             ("request_ttl_secs", 16),
+            ("contested_by", 17),
+            ("record_serial", 18),
+            ("record_bmc_mac", 19),
         ],
     ),
     (
@@ -878,6 +881,7 @@ fn wire_names_are_pinned() {
                 "capacity",
                 "audit_unavailable",
                 "record_mismatch",
+                "record_contested",
             ],
         ),
         (
