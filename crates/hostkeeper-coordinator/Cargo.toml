@@ -93,6 +93,8 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.
 hyper = { workspace = true, features = ["client"] }
+# The MDM commands and profiles a fake NanoHUB heard, read in the gate's tests.
+plist.workspace = true
 # The descriptors of the enrollment calls, read in their tests.
 prost-types.workspace = true
 rustls = { workspace = true, features = ["tls12"] }
