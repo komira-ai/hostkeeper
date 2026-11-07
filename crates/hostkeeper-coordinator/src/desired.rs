@@ -50,6 +50,7 @@ use crate::registry::{Digest, IndexRecord, Package, Registry, RegistryError, Rel
 use crate::release_index;
 use crate::services::Services;
 use crate::store::{BackendError, Commit, Files, Shared};
+use crate::write_record::{WriteAsk, WriteError, WriteId, WriteRecord};
 
 /// The most any count may be: a typo's order of magnitude, not a plan.
 pub const MAX_COUNT: u32 = 10_000;
@@ -173,11 +174,18 @@ fn write_max_updating<S: serde::Serializer>(limits: &RoleLimits, s: S) -> Result
 /// The minimums in the order the format writes them. The format requires `storage` and
 /// `frontend`, so a state that names neither writes them as 0, which is what none means.
 fn write_min_up<S: serde::Serializer>(limits: &RoleLimits, s: S) -> Result<S::Ok, S::Error> {
-    let mut written = limits.clone();
-    for role in FORMAT_MIN_UP {
-        written.0.entry(role.to_owned()).or_insert(0);
+    s.collect_map(limits.min_up_written().ordered(&FORMAT_MIN_UP))
+}
+
+impl RoleLimits {
+    /// The minimums as the format writes them: `storage` and `frontend` named, 0 when not set.
+    pub(crate) fn min_up_written(&self) -> RoleLimits {
+        let mut written = self.clone();
+        for role in FORMAT_MIN_UP {
+            written.0.entry(role.to_owned()).or_insert(0);
+        }
+        written
     }
-    s.collect_map(written.ordered(&FORMAT_MIN_UP))
 }
 
 /// The limits as written, with the format's four roles filled in with their defaults.
@@ -244,6 +252,18 @@ pub enum DesiredError {
     /// The text of a release index does not have the SHA-256 the set named.
     #[error("index_digest_mismatch: the release index does not have the digest named")]
     IndexDigestMismatch,
+    /// The set names `if_generation` and it is not the service's generation now.
+    #[error("generation_conflict: the service's generation is {now}, not {asked}")]
+    GenerationConflict {
+        /// The generation the set named.
+        asked: u64,
+        /// The generation now.
+        now: u64,
+    },
+    /// The set names `if_generation` or a write id, and the store keeps neither (the
+    /// desired-state file).
+    #[error("the desired-state store keeps no generation or write id")]
+    Unrecorded,
 }
 
 impl DesiredError {
@@ -258,7 +278,9 @@ impl DesiredError {
             | Self::Count
             | Self::UnknownService
             | Self::NoLegacyService
-            | Self::Registry(_) => None,
+            | Self::Registry(_)
+            | Self::GenerationConflict { .. }
+            | Self::Unrecorded => None,
         }
     }
 }
@@ -439,6 +461,9 @@ pub(crate) struct Held {
     pub(crate) desired: BTreeMap<String, Desired>,
     /// The registry of digests, by service; a service with none is not listed.
     pub(crate) digests: BTreeMap<String, Registry>,
+    /// How each service's writes are recorded ([`crate::write_record`]), kept only over a backend
+    /// that keeps them; a service never written is not listed.
+    pub(crate) records: BTreeMap<String, WriteRecord>,
 }
 
 /// One service's state as the file writes it: the desired state, then its registry when it holds
@@ -533,6 +558,11 @@ impl Held {
 
     fn digests_of(&self, service: &str) -> Registry {
         self.digests.get(service).cloned().unwrap_or_default()
+    }
+
+    /// The record of `service`'s writes: the default for one never written.
+    fn record_of(&self, service: &str) -> WriteRecord {
+        self.records.get(service).cloned().unwrap_or_default()
     }
 
     /// The entry of `name`, whose state is `desired`, as the file writes it.
@@ -713,11 +743,15 @@ impl DesiredStore {
     /// (a package digest or a release index), records its version and release in the service's
     /// registry ([`Registry::record`], which
     /// drops past the cap only a version `keep` does not keep), in the same replacement of the
-    /// file. When the state and the registry are already what is asked, nothing is written.
+    /// file. Over a backend that keeps write records ([`Backend::keeps_write_records`]) the
+    /// service's generation is raised by one in the same commit, so every set is written;
+    /// otherwise, when the state and the registry are already what is asked, nothing is written.
     ///
     /// # Errors
     /// [`StoreError`], as [`Self::set`]: on [`StoreError::Io`] neither the state nor the
     /// registry changed, in the file or in memory.
+    ///
+    /// [`Backend::keeps_write_records`]: crate::store::Backend::keeps_write_records
     pub fn record(
         &self,
         service: &str,
@@ -730,6 +764,62 @@ impl DesiredStore {
         self.replace(service, desired, release, &keep)
     }
 
+    /// [`Self::record`] for a write that asks `ask` of the store: with `if_generation`, only
+    /// over that generation; with a write id, kept as the last write's. Answers the service's
+    /// record after the write, none over a backend that keeps no records.
+    ///
+    /// # Errors
+    /// [`WriteError`], as [`Self::admits`] (checked under the writers' lock, so no write lands
+    /// between the check and the commit), or the store's; on either nothing changed.
+    pub(crate) fn record_as(
+        &self,
+        service: &str,
+        desired: Desired,
+        keep: impl Fn(&Version) -> bool,
+        ask: &WriteAsk,
+    ) -> Result<Option<WriteRecord>, WriteError> {
+        let release = desired
+            .release()
+            .map(|release| (desired.version.clone(), release));
+        let staged = self.staged(service, desired, release, &keep, ask.write_id.clone());
+        self.admit(&staged.before, service, ask)?;
+        let record = staged.after.records.get(service).cloned();
+        self.commit_staged(staged)?;
+        Ok(record)
+    }
+
+    /// Whether a write of `service` that asks `ask` would be taken now.
+    ///
+    /// # Errors
+    /// [`WriteError::Unrecorded`]: it asks for a precondition or a write id and the backend keeps
+    /// no write records. [`WriteError::Conflict`]: its `if_generation` is not the service's
+    /// generation now.
+    pub(crate) fn admits(&self, service: &str, ask: &WriteAsk) -> Result<(), WriteError> {
+        self.admit(&self.lock(), service, ask)
+    }
+
+    fn admit(&self, held: &Held, service: &str, ask: &WriteAsk) -> Result<(), WriteError> {
+        if ask.needs_records() && !self.backend.keeps_write_records() {
+            return Err(WriteError::Unrecorded);
+        }
+        ask.admits(held.record_of(service).generation)
+    }
+
+    /// Whether the backend keeps write records ([`crate::write_record`]).
+    #[must_use]
+    pub(crate) fn keeps_write_records(&self) -> bool {
+        self.backend.keeps_write_records()
+    }
+
+    /// How the writes of `service` are recorded now: none when the backend keeps no records,
+    /// and generation 0 with nothing else before the first write.
+    #[must_use]
+    pub(crate) fn write_record(&self, service: &str) -> Option<WriteRecord> {
+        self.backend
+            .keeps_write_records()
+            .then(|| self.lock().record_of(service))
+    }
+
     /// The one replacement of the file: the state of `service`, and the version and digest to
     /// record, if any, with the cap's `keep`.
     fn replace(
@@ -739,7 +829,12 @@ impl DesiredStore {
         release: Option<(Version, Release)>,
         keep: &dyn Fn(&Version) -> bool,
     ) -> Result<Recorded, StoreError> {
-        let staged = self.staged(service, desired, release, keep);
+        let staged = self.staged(service, desired, release, keep, None);
+        self.commit_staged(staged)
+    }
+
+    /// Commits `staged` and takes it into memory; nothing when it changes nothing.
+    fn commit_staged(&self, staged: Staged<'_>) -> Result<Recorded, StoreError> {
         let Some(part) = staged.part() else {
             return Ok(Recorded::Unchanged);
         };
@@ -774,19 +869,28 @@ impl DesiredStore {
         let release = desired
             .release()
             .map(|release| (desired.version.clone(), release));
-        self.staged(service, desired, release, &keep)
+        self.staged(service, desired, release, &keep, None)
     }
 
+    /// The state with `desired` set for `service` and its release recorded; over a backend that
+    /// keeps write records, with the service's record raised by one write whose id is `id`.
     fn staged(
         &self,
         service: &str,
         desired: Desired,
         release: Option<(Version, Release)>,
         keep: &dyn Fn(&Version) -> bool,
+        id: Option<WriteId>,
     ) -> Staged<'_> {
         let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         let before = self.lock().clone();
         let mut after = before.clone();
+        if self.backend.keeps_write_records() {
+            let record = before
+                .record_of(service)
+                .after(before.desired.get(service), &desired, id);
+            after.records.insert(service.to_owned(), record);
+        }
         after.desired.insert(service.to_owned(), desired);
         if let Some((version, release)) = release {
             let mut registry = after.digests_of(service);

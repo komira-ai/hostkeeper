@@ -21,7 +21,9 @@ use crate::release_index_support::{
     verb_of,
 };
 use crate::rollback_tests::{AUTO, round, status, two_failed};
+use crate::service::ci_calls::Setter;
 use crate::testutil::{LEGACY, OPERATOR, version};
+use crate::write_record::WriteAsk;
 
 const X86: Platform = Platform::LinuxX86_64;
 const ARM: Platform = Platform::LinuxArm64;
@@ -332,8 +334,13 @@ async fn an_operators_set_over_an_index_is_audited_with_the_index_digest() {
     let index = sha(&text);
     let body = index_body(WEB, "2.0", &text, &index);
     rig.coordinator
-        .set_desired_operator("operator", body.to_string().as_bytes())
+        .set_desired_by(
+            &Setter::Operator("operator"),
+            body.to_string().as_bytes(),
+            &WriteAsk::default(),
+        )
         .await
+        .map(|(set, _)| set)
         .expect("the operator's set is accepted");
     let audit = rig.coordinator.ops().state().audit;
     let entry = audit.last().expect("an audit entry");

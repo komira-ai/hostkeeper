@@ -143,6 +143,7 @@ pub mod tokens;
 pub mod ui;
 pub mod verdict_file;
 pub mod verdicts;
+pub(crate) mod write_record;
 
 #[cfg(test)]
 mod agent_service_tests;

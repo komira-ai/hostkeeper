@@ -14,7 +14,9 @@ use crate::http::{DESIRED_PATH, Surface, handle};
 use crate::registry::{Digest, Release};
 use crate::rollback_tests::{ONE, round, services_of, wanted};
 use crate::service::SetError;
+use crate::service::ci_calls::Setter;
 use crate::testutil::{LEGACY, OPERATOR, Rig, ci_token, version};
+use crate::write_record::WriteAsk;
 use hostkeeper_wire::wire::ServiceReply;
 
 /// A desired-state body of `version`, naming `digest` as its package digest when there is one.
@@ -213,15 +215,25 @@ async fn an_operators_set_is_checked_against_the_channel_too() {
     let before = files(&rig);
     let refused = rig
         .coordinator
-        .set_desired_operator(OPERATOR, body("2.0", None).as_bytes())
+        .set_desired_by(
+            &Setter::Operator(OPERATOR),
+            body("2.0", None).as_bytes(),
+            &WriteAsk::default(),
+        )
         .await
+        .map(|(set, _)| set)
         .expect_err("refused");
     assert_eq!(refused.reason(), Some("not_in_channel"));
     assert_eq!(files(&rig), before);
     fake.hold(LEGACY, "2.0", &index(LEGACY, "2.0", &[D1]));
     rig.coordinator
-        .set_desired_operator(OPERATOR, body("2.0", Some(D1)).as_bytes())
+        .set_desired_by(
+            &Setter::Operator(OPERATOR),
+            body("2.0", Some(D1)).as_bytes(),
+            &WriteAsk::default(),
+        )
         .await
+        .map(|(set, _)| set)
         .expect("set");
     assert_eq!(wanted(&rig), version("2.0"));
 }

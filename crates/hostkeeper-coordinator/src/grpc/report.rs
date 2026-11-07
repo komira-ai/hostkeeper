@@ -57,7 +57,8 @@ pub(crate) fn status(status: &Status, only: &str) -> proto::StatusResponse {
 }
 
 /// The convergence as `Releases.Converge` answers it. It names no write record and no force: the
-/// convergence report holds neither.
+/// convergence report holds neither, and `Converge` adds the write record of the desired-state
+/// store while the status adds the force.
 pub(crate) fn convergence(convergence: &Convergence) -> proto::Convergence {
     proto::Convergence {
         desired: convergence.desired.as_ref().map(|v| v.as_str().to_owned()),

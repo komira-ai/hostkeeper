@@ -995,7 +995,7 @@ pub(crate) fn kept(marks: &crate::ops::ServiceOps, version: &Version) -> bool {
 }
 
 #[path = "service_ci.rs"]
-mod ci_calls;
+pub(crate) mod ci_calls;
 /// The calls of the heartbeat path that ask enrollment, those that act for a CI token already
 /// checked, the rollout gate's orders for a heartbeat, and the care of the store's link.
 #[path = "service_enrollment.rs"]

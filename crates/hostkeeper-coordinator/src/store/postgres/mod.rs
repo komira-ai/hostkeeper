@@ -20,6 +20,7 @@
 //!   turned out to be is taken by the stores ([`Landing`]). Another epoch found deposes the store.
 
 mod dsn;
+mod generations;
 pub(crate) mod migrate;
 mod records;
 pub(crate) mod rows;
@@ -718,6 +719,11 @@ impl Backend for Postgres {
 
     fn epoch(&self) -> Option<u64> {
         Some(self.inner.epoch)
+    }
+
+    /// Migration `0003`'s columns of `desired` keep them.
+    fn keeps_write_records(&self) -> bool {
+        true
     }
 }
 
