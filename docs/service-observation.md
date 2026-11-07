@@ -28,12 +28,24 @@ For each installed service, once per round:
 The unit set is read before and after the version and health probes; a unit whose activity or
 main pid changed in between discards the round.
 
+**The daemon's own service.** `hostkeeper` is observed through the unit the daemon itself runs
+as, which the platform's adapters name: `hostkeeper.service` on Linux, which its package's
+`[units] run` names too, and on a Mac the launchd job `dev.hostkeeper.hostkeeper`, which the
+installer pkg places and the macOS package does not name (`Observer::with_run_of`: units given
+for a service whose manifest names none). Its version is confirmed against the file of that
+version in the daemon's binary directory (`<state-dir>/hostkeeper/bin/versions/<version>`, the
+copy of the release's binary that the self-update staged and that the unit starts through
+`bin/current`), not through the unit file, whose program is outside the package. So the daemon
+reports its own service live, healthy and at the version it runs on both platforms; while the
+package's `current` names a version the job does not run (the moment between the switch and the
+restart, or after a fallback), it is `version_mismatch`.
+
 ## States
 
 | State | When |
 |---|---|
 | `absent` | No `current`, or the service manager knows none of the run units |
-| `unmonitored` | The manifest has no `[units] run`: no unit or process to observe; its health URL, if any, is probed once |
+| `unmonitored` | The manifest has no `[units] run` and the observer was given no units for the service: no unit or process to observe; its health URL, if any, is probed once |
 | `transitioning` | A run unit is starting or stopping, even beside an active one: a hand-over under way |
 | `live` | At least one run unit is active and none is starting or stopping; an inactive standby instance beside it is not a stop |
 | `stopped` | Every run unit is inactive, failed or unknown to the manager |

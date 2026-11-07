@@ -126,6 +126,9 @@ hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 # The macOS device test's `Status` call to the daemon's admin socket: the admin service's client,
 # over a Unix socket.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The macOS self-update test that the real coordinator in process drives: each heartbeat read as
+# the coordinator's JSON route reads it, from the host it names.
+hostkeeper-wire = { path = "../hostkeeper-wire" }
 hyper-util = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tonic = { workspace = true, features = ["channel"] }

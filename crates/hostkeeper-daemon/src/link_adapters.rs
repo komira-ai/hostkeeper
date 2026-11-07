@@ -27,18 +27,20 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Phase, Verdict};
 use hostkeeper_link::{
-    Health, HeldHalts, Liveness, Observation, Order, OrderResult, OrderSink, Outcome, Reason,
-    RecordedService, Renewal, RenewalSource, ServiceObserver, ServiceRecords, Target, Verb,
+    Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult, OrderSink,
+    Outcome, Reason, RecordedService, Renewal, RenewalSource, ServiceObserver, ServiceRecords,
+    Target, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
-use hostkeeper_steps::record::{Loaded, State};
+use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
 
 use crate::executor::{Ctx, Daemon, Reply};
 use crate::installed::{self, CURRENT};
 use crate::observer;
 use crate::refusal::Refusal;
+use crate::verbs::force::SELF_SERVICE;
 
 /// The most bytes of a verdict's `detail` (`UpdateResult.detail` of `hostkeeper.agent.v1`).
 pub const MAX_DETAIL: usize = 512;
@@ -253,6 +255,22 @@ impl ServiceRecords for DaemonRecords {
             .filter_map(|service| recorded(ctx, service))
             .collect())
     }
+
+    /// The coordinator acknowledged the verdict of `order` of `service`: when it is the settled
+    /// update of hostkeeper itself that its record keeps to report ([`settled_result`]), the
+    /// record stops keeping it, so no later start sends it again. Any other is left alone. A
+    /// record that cannot be read or written is the error, which the loop logs; the verdict is
+    /// then sent again at the next start, and acknowledged again.
+    fn acknowledged(&self, service: &ServiceName, order: &OrderRef) -> io::Result<()> {
+        if service.as_str() != SELF_SERVICE {
+            return Ok(());
+        }
+        let store = self.daemon.ctx().store(service);
+        store
+            .verdict_acknowledged(order.id.as_str(), order.order_try)
+            .map(|_| ())
+            .map_err(|e| io::Error::other(e.to_string()))
+    }
 }
 
 /// `service` as the heartbeat lists it: at the version its `current` link names, `None` when
@@ -260,28 +278,63 @@ impl ServiceRecords for DaemonRecords {
 /// the record is unfinished, and nothing when it is finished, absent, newer or unreadable (the
 /// executor refuses the service's orders while it cannot read the record); and the try the
 /// record holds, finished or not, none when it is absent, newer or unreadable or names no try.
-/// The record keeps no order id of a hooked order, so no verdict is given back here: after a
+/// The record keeps no order id of a hooked order, so no verdict is given back from it: after a
 /// restart the coordinator's resend of the order is answered from the record (design 8.3), and
 /// the try tells a coordinator that never heard the verdict which try to number past.
+///
+/// The one verdict given back is that of a settled update of hostkeeper itself, as the service
+/// `hostkeeper`'s: its record keeps the order's id until the coordinator acknowledges the
+/// verdict (`Progress::report_order_id`, [`settled_result`]). The coordinator ends that order
+/// once the host runs its target and never resends it, and the binary that ran it exited
+/// before its verdict was sent, so the loop sends it, from each start's first heartbeat until it
+/// is acknowledged ([`DaemonRecords::acknowledged`]), in place of whatever older verdict the
+/// coordinator still holds for the host.
 pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
     let version = installed::linked_version(&ctx.dirs.packages, &service, CURRENT)?;
-    let (updating, record_try) = match ctx.store(&service).load() {
+    let (updating, record_try, last_result) = match ctx.store(&service).load() {
         Ok(Loaded::Current(record)) => {
             let updating = match record.state {
                 State::Finished { .. } => None,
                 _ => Version::new(&record.target_version).ok(),
             };
-            (updating, record.order_try)
+            let settled = (service.as_str() == SELF_SERVICE)
+                .then(|| settled_result(&record))
+                .flatten();
+            (updating, record.order_try, settled)
         }
-        _ => (None, None),
+        _ => (None, None, None),
     };
     Some(RecordedService {
         name: service,
         version,
         updating,
-        last_result: None,
+        last_result,
         record_try,
     })
+}
+
+/// The verdict a finished record of an update of hostkeeper itself keeps to report: under the
+/// order id the settlement kept (`Progress::report_order_id`) and the record's try, at its
+/// target, as an order that ended with the record's verdict ([`finished`]); `None` for a record
+/// that keeps none, is unfinished, names no try, or whose id or target the loop cannot send.
+pub fn settled_result(record: &Record) -> Option<OrderResult> {
+    let State::Finished { verdict, reason } = &record.state else {
+        return None;
+    };
+    let base = OrderResult {
+        order: OrderRef {
+            id: OrderId::new(record.progress.report_order_id.as_deref()?).ok()?,
+            order_try: record.order_try?,
+        },
+        target: Version::new(&record.target_version).ok()?,
+        outcome: Outcome::Failed,
+        phase: None,
+        class: None,
+        reason: None,
+        forced: false,
+        detail: None,
+    };
+    Some(finished(base, verdict, reason.as_deref()))
 }
 
 /// The service-observer port over the daemon's observer.
@@ -307,6 +360,7 @@ impl ServiceObserver for DaemonObserver {
         observer::observe(
             self.daemon.observer(),
             &ctx.dirs.packages,
+            &crate::selfupdate::binary_dir(&ctx.dirs.state),
             &ctx.own_version,
             service,
         )

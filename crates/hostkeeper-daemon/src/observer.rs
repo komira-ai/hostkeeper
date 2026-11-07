@@ -8,7 +8,15 @@
 //!   probe. It takes no lock of the daemon's.
 //! - [`SealedExe`] is the observer's [`ExpectedExe`] over the package tree: the digest of the
 //!   executable the first `[units] run` unit of a version starts, found through its unit file
-//!   (`ExecStart=`) or its launchd plist (`Program`, else the first `ProgramArguments` string).
+//!   (`ExecStart=`) or its launchd plist (`Program`, else the first `ProgramArguments` string);
+//!   for the daemon's own service, `hostkeeper`, the file of the version in the binary directory
+//!   its unit starts `current` of ([`SealedExe::with_binary_dir`]).
+//! - [`OwnService`] is how the daemon itself runs on the host: the unit or launchd job it runs
+//!   as, and its binary directory. The observer watches that unit as the service `hostkeeper`
+//!   whenever the package's manifest names no `[units] run` (a Mac's package has none: the
+//!   installer pkg places the daemon's job, `dev.hostkeeper.hostkeeper`), so the daemon reports
+//!   its own service live, healthy and at the version it runs on every platform, as it reports
+//!   `hostkeeper.service` on Linux.
 //! - [`host_observer`] builds the observer of a host over `systemctl`, `/proc` and TCP.
 //! - [`service_health`] is the heartbeat's health of a service's observation.
 //!
@@ -29,8 +37,11 @@ use hostkeeper_observe::{
 use hostkeeper_placed::lint::{COMMAND_PREFIXES, plist_program};
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
 
+use hostkeeper_steps::Layout;
+
 use crate::executor::ServiceStatus;
 use crate::installed::{self, CURRENT};
+use crate::verbs::force::SELF_SERVICE;
 
 /// How long each probe of a status read may wait, to connect and for each read after that.
 pub const STATUS_DEADLINE: Deadline = Deadline {
@@ -50,8 +61,14 @@ const PROC: &str = "/proc";
 /// The part of `service` the observer reads: the version `current` names as the recorded
 /// version, and the manifest of that version. `None` when there is no `current`, or its manifest
 /// does not load for `own`.
+///
+/// For the daemon's own service, `hostkeeper`, the recorded version is the one `current` of
+/// the binary directory `binaries` names, the binary its unit starts, when it names one: the
+/// package's `current` names the release the last update placed, which is not the binary that
+/// runs between the switch and the restart, nor after a fallback put the previous binary back.
 pub fn service_input(
     packages: &Path,
+    binaries: &Path,
     own: &HostkeeperVersion,
     service: &ServiceName,
 ) -> Option<ServiceInput> {
@@ -63,10 +80,13 @@ pub fn service_input(
         platform: hostkeeper_config::platform::Platform::current(),
     };
     let manifest = Manifest::load(&dir, &expected, own).ok()?;
+    let started = (service.as_str() == SELF_SERVICE)
+        .then(|| Layout::new(binaries).current().ok().flatten())
+        .flatten();
     Some(ServiceInput {
         service: service.to_string(),
         current: Some(Current::from_manifest(&manifest)),
-        recorded_version: Some(version.to_string()),
+        recorded_version: Some(started.unwrap_or_else(|| version.to_string())),
     })
 }
 
@@ -74,10 +94,12 @@ pub fn service_input(
 pub fn observe(
     observer: &Observer,
     packages: &Path,
+    binaries: &Path,
     own: &HostkeeperVersion,
     service: &ServiceName,
 ) -> Option<Observation> {
-    service_input(packages, own, service).map(|input| observer.observe(&input, STATUS_DEADLINE))
+    service_input(packages, binaries, own, service)
+        .map(|input| observer.observe(&input, STATUS_DEADLINE))
 }
 
 /// The health the heartbeat reports of the service `status` describes, and its version, as
@@ -97,11 +119,19 @@ pub fn service_health(status: &ServiceStatus) -> Option<(Health, Option<String>)
 /// A version has no digest when it has no seal (`<version>.seal`), its manifest does not load,
 /// it runs no unit, the command is not through `current` or has a `..`, or the file cannot be
 /// read.
+///
+/// Given the daemon's binary directory ([`SealedExe::with_binary_dir`]), a version of the
+/// service `hostkeeper` is instead the file `versions/<version>` of that directory: the copy of
+/// the release's binary the self-update staged (or the first binary the deb or the pkg seeded),
+/// which the daemon's unit starts through the directory's `current` on both platforms, whether
+/// or not the package of that version is still installed. It has no digest when that file
+/// cannot be read.
 #[derive(Debug)]
 pub struct SealedExe {
     packages: PathBuf,
     host_packages: PathBuf,
     own: HostkeeperVersion,
+    binaries: Option<PathBuf>,
 }
 
 impl SealedExe {
@@ -112,7 +142,16 @@ impl SealedExe {
             packages: packages.to_path_buf(),
             host_packages: host_packages.to_path_buf(),
             own,
+            binaries: None,
         }
+    }
+
+    /// The same sealed executables, the service `hostkeeper`'s found in the binary directory
+    /// `binary_dir` (`<state-dir>/hostkeeper/bin`, [`crate::selfupdate::binary_dir`]).
+    #[must_use]
+    pub fn with_binary_dir(mut self, binary_dir: &Path) -> SealedExe {
+        self.binaries = Some(binary_dir.to_path_buf());
+        self
     }
 
     /// Where the executable of `version` of `service` is.
@@ -122,6 +161,9 @@ impl SealedExe {
             version: Version::new(version).ok()?,
             platform: hostkeeper_config::platform::Platform::current(),
         };
+        if let Some(binaries) = self.binaries.as_deref().filter(|_| service == SELF_SERVICE) {
+            return Some(Layout::new(binaries).version_path(expected.version.as_str()));
+        }
         let service_dir = self.packages.join(service);
         let sealed = fs::metadata(service_dir.join(format!("{version}.seal")))
             .is_ok_and(|seal| seal.is_file());
@@ -173,36 +215,58 @@ impl ExpectedExe for SealedExe {
     }
 }
 
+/// How the daemon itself runs on its host: the unit (Linux) or launchd job (macOS) it runs as,
+/// which the platform's adapters name (`crate::adapters::Adapters::own_unit`), and the binary
+/// directory that unit starts `current` of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnService {
+    /// The unit or job the daemon runs as: `hostkeeper.service`, or `dev.hostkeeper.hostkeeper`.
+    pub unit: String,
+    /// `<state-dir>/hostkeeper/bin` ([`crate::selfupdate::binary_dir`]).
+    pub binary_dir: PathBuf,
+}
+
 /// The observer of a Linux host: `systemctl show` for the units, `/proc` for the processes, TCP
 /// to the loopback for health, and the executables sealed under `packages_dir` ([`SealedExe`],
 /// the unit files spelling that directory as it is) to confirm the version, for a daemon of
-/// version `own`. Making it reads nothing.
-pub fn host_observer(packages_dir: &Path, own: HostkeeperVersion) -> Observer {
+/// version `own` that runs as `own_service`. Making it reads nothing.
+pub fn host_observer(
+    packages_dir: &Path,
+    own: HostkeeperVersion,
+    own_service: &OwnService,
+) -> Observer {
     observer_with(
         Box::new(systemd_manager()),
         Box::new(proc_probe()),
         packages_dir,
         own,
+        own_service,
     )
 }
 
 /// The observer of a host whose units `manager` reads and whose processes `process` reads:
-/// otherwise as [`host_observer`]. Making it reads nothing.
+/// otherwise as [`host_observer`]. The service `hostkeeper` is observed through
+/// `own_service`'s unit when its manifest names none, and its version confirmed against the
+/// file in `own_service`'s binary directory. Making it reads nothing.
 pub fn observer_with(
     manager: Box<dyn ServiceManager>,
     process: Box<dyn ProcessProbe>,
     packages_dir: &Path,
     own: HostkeeperVersion,
+    own_service: &OwnService,
 ) -> Observer {
+    let expected =
+        SealedExe::new(packages_dir, packages_dir, own).with_binary_dir(&own_service.binary_dir);
     Observer::new(
         hostkeeper_observe::Ports {
             manager,
             process,
             health: Box::new(HttpHealthClient::new(TcpConnect)),
-            expected: Box::new(SealedExe::new(packages_dir, packages_dir, own)),
+            expected: Box::new(expected),
         },
         ObserveOptions::default(),
     )
+    .with_run_of(SELF_SERVICE, vec![own_service.unit.clone()])
 }
 
 /// The host's systemd: `systemctl show`, bounded in time and output.

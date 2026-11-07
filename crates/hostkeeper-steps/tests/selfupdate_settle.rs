@@ -83,6 +83,7 @@ fn waiting(mut rec: Record, version: &str) -> Record {
     rec.progress.awaiting_restart = Some(AwaitingRestart {
         version: version.to_owned(),
         verdict_promotion_pending: false,
+        order_id: None,
     });
     rec
 }
@@ -152,6 +153,7 @@ impl Host {
             "v2",
             &self.v2,
             Path::new(UPDATER),
+            None,
         )
     }
 }
@@ -308,6 +310,7 @@ fn the_new_binary_confirms_once_after_its_hook() {
     pending.progress.awaiting_restart = Some(AwaitingRestart {
         version: "v2".to_owned(),
         verdict_promotion_pending: true,
+        order_id: None,
     });
     host.store().save(&pending).unwrap();
     assert!(
@@ -516,6 +519,7 @@ fn an_update_to_the_running_binary_is_finished_at_once() {
             "v1",
             &host.v2,
             Path::new(UPDATER),
+            None,
         )
     };
     assert_eq!(run(&with_reason).unwrap(), FollowOn::NotNeeded);
@@ -788,6 +792,7 @@ fn a_record_with_awaiting_restart_loads_in_the_old_reader_shape() {
         Some(AwaitingRestart {
             version: "1.5.0".to_owned(),
             verdict_promotion_pending: false,
+            order_id: None,
         })
     );
     let written = serde_json::to_value(&*rec).unwrap();

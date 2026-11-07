@@ -14,8 +14,11 @@
 //! carrying the standing verdict of the host ([`fill`]): every rule that reads a host's report
 //! (the gate's `failed_here`, the halt, the bake, the end of an order, the counting) reads what
 //! it read while the daemon resent it, and after a restart too, so a restarted coordinator does
-//! not order a host the version it failed again, on a new try 1 that holds the fleet's slot. A
-//! verdict the agent reports replaces the standing one; one with no order id or no try cannot
+//! not order a host the version it failed again, on a new try 1 that holds the fleet's slot.
+//! A standing verdict about another version than the one a host runs, once that is the version
+//! wanted, is superseded instead: not read, and forgotten (the host reached the version wanted
+//! by an order whose own verdict it never sent, as a self-update's binary exits before it
+//! reports). A verdict the agent reports replaces the standing one; one with no order id or no try cannot
 //! be acknowledged, so it is not stored and ends the standing one. An agent that did not
 //! announce the feature is answered and read exactly as before.
 //!
@@ -33,6 +36,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_wire::HostId;
+use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Heartbeat, UpdateResult, VerdictAck};
 use serde::{Deserialize, Serialize};
 
@@ -174,6 +178,24 @@ impl VerdictFile {
             .cloned()
     }
 
+    /// Forgets the verdict about `service` that stands for `host`, if one does: a later
+    /// heartbeat of the host showed it superseded ([`fill`], which names only a verdict that
+    /// stands). Written before it is gone from memory.
+    ///
+    /// # Errors
+    /// [`VerdictsError::Io`]: the file was not written; nothing changed in memory.
+    pub(crate) fn supersede(&self, service: &str, host: &HostId) -> Result<(), VerdictsError> {
+        let mut held = self.held();
+        let mut next = held.clone();
+        if let Some(kept) = next.services.get_mut(service) {
+            kept.standing.remove(host.as_str());
+        }
+        next.services.retain(|_, kept| !kept.is_empty());
+        (self.write)(&next)?;
+        *held = next;
+        Ok(())
+    }
+
     /// Every verdict counted: the service, the host and its report.
     pub(crate) fn counted(&self) -> Vec<(String, HostId, UpdateResult)> {
         self.held()
@@ -310,27 +332,49 @@ pub(crate) fn asks(beat: &Heartbeat) -> bool {
 
 /// `beat` of `host`, an agent that announced [`FEATURE`], with the standing verdict of each
 /// service whose entry carries none, the legacy service's (`legacy`, the top-level fields)
-/// among them; and what the heartbeat itself said of each.
+/// among them; what the heartbeat itself said of each; and the services whose standing verdict
+/// the heartbeat superseded, which the caller forgets ([`VerdictFile::supersede`]).
+///
+/// A standing verdict is superseded, and not read, when the host runs the service at the
+/// version `wanted` gives for it (the desired version) and the verdict is about another
+/// version: the host reached the version wanted since, by an order whose own verdict it never
+/// sent (a self-update, whose binary exits before it reports), and the older verdict is not its
+/// report any more. Read in its place, a failure of an older target would count against the
+/// host (its update slot, the report) for as long as it ran the version wanted. A verdict about
+/// the version the host runs, and every verdict of a host that does not run the version wanted
+/// (a failure it fell back from, which the gate reads so that it does not order that version
+/// again), stand.
 pub(crate) fn fill(
     file: &VerdictFile,
     legacy: Option<&str>,
     host: &HostId,
     beat: &mut Heartbeat,
-) -> Vec<Heard> {
+    wanted: &dyn Fn(&str) -> Option<Version>,
+) -> (Vec<Heard>, Vec<String>) {
     let mut heard = Vec::new();
+    let mut superseded = Vec::new();
+    let mut standing = |name: &str, runs: &Version| {
+        let kept = file.standing(name, host)?;
+        let reached = wanted(name).is_some_and(|want| want == *runs) && kept.target != *runs;
+        if reached {
+            superseded.push(name.to_owned());
+            return None;
+        }
+        Some(kept)
+    };
     if let Some(name) = legacy {
         heard.push((name.to_owned(), beat.last_update.clone()));
         if beat.last_update.is_none() {
-            beat.last_update = file.standing(name, host);
+            beat.last_update = standing(name, &beat.version);
         }
     }
     for one in beat.services.iter_mut().flatten() {
         heard.push((one.name.clone(), one.last_update.clone()));
         if one.last_update.is_none() {
-            one.last_update = file.standing(&one.name, host);
+            one.last_update = standing(&one.name, &one.version);
         }
     }
-    heard
+    (heard, superseded)
 }
 
 /// Stores what the heartbeat of `host` said (`heard`, of the services it is counted or kept

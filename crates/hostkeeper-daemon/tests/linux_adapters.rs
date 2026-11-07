@@ -49,6 +49,7 @@ fn the_linux_unit_control_runs_systemctl_for_each_call() {
     assert_eq!(adapters.kind, PlatformKind::Linux);
     assert_eq!(adapters.unit_dir, Path::new("/etc/systemd/system"));
     assert!(adapters.package_check.is_none());
+    assert_eq!(adapters.own_unit, "hostkeeper.service");
     let units = &adapters.units;
 
     assert_eq!(units.daemon_reload(), Ok(()));

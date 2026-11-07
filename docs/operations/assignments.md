@@ -62,7 +62,7 @@ coordinator restart, in the ops file, and ends when the host reports the service
 services it lists (audited as `uninstalled`, by the coordinator), or when the service is
 assigned to the host again (`uninstall_cancelled`). An uninstall the host declined is ordered
 again after its backoff; one that failed is left for the operator, and like a failed update it
-holds the slot until the host heartbeats healthy (or an operator excludes it with `abandon`).
+holds the slot until the host heartbeats healthy (or an operator excludes it, which frees it).
 An excluded host is ordered nothing at all.
 
 ## Status and convergence

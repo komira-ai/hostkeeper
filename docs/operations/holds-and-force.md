@@ -59,8 +59,11 @@ host, as before.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
   is sent once, and only to a daemon that announced the `abort-v1` feature; an abort asked
   again while one is queued queues nothing more.
-- `Hosts.Exclude` takes a host out of a service. Its update slot stays held until the host's own
-  heartbeats or its order's age free it. With `abandon`, for a host that is gone mid-update,
+- `Hosts.Exclude` takes a host out of a service. Its update slot stays held while the host runs
+  an update (it reports one `updating` or its promotion pending) or has an order outstanding,
+  until the host's own heartbeats or its order's age free it; an excluded host whose last update
+  failed and that is not healthy holds none, since nothing of an update runs there and the
+  service no longer orders it. With `abandon`, for a host that is gone mid-update,
   the slot is freed at once; the audit entry is `exclude_abandon` with `possibly_mid_update` in
   its reason. It is an alert while the host stays excluded (`Alerts.List`, and an
   `alert=exclude_abandon` line logged once when it appears).

@@ -445,7 +445,7 @@ fn begin(ctx: &Ctx, order: &Forced, target: &Target) -> Result<(Record, ForceRec
         phase: ForcePhase::Started,
         order_try: order.package.order_try.get(),
         halt_generation: order.halt_generation,
-        order_id: order.order_id.clone(),
+        order_id: order.package.order_id.clone(),
         verdict: None,
     };
     let rec = Record {
