@@ -1,5 +1,5 @@
-//! The packages: `nfpm.yaml`, the files and the link it puts in the deb and the rpm and their
-//! names, and the two package scripts.
+//! The packages: `nfpm.yaml`, the files and the link it puts in the deb and the rpm, and the two
+//! package scripts. Their file names are in `package_names.rs`.
 
 use std::collections::BTreeMap;
 
@@ -136,7 +136,7 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
     refuses(check_nfpm_keys, &cases);
 }
 
-/// The six files of the package, sorted as [`Config::files`] sorts them: `gh` and the trusted
+/// The seven files of the package, sorted as [`Config::files`] sorts them: `gh` and the trusted
 /// root at the daemon's own paths, from where `release nfpm-stage` writes them.
 pub fn package_files() -> Vec<nfpm::File> {
     let file = |dst: &str, src: &str, mode: &str| nfpm::File {
@@ -148,6 +148,11 @@ pub fn package_files() -> Vec<nfpm::File> {
     };
     let mut files = vec![
         file("/usr/bin/hostkeeper", "target/release/hostkeeper", "0755"),
+        file(
+            "/usr/bin/hostkeeper-pxe",
+            "target/release/hostkeeper-pxe",
+            "0755",
+        ),
         file(INSTALLED_UNIT, "packaging/linux/hostkeeper.service", "0644"),
         file(
             "/usr/lib/tmpfiles.d/hostkeeper.conf",
@@ -260,8 +265,8 @@ fn with_content(text: &str, src: &str, dst: &str) -> String {
 }
 
 /// Catches a package that carries a key, a certificate, a token or a live `hostkeeper.toml`
-/// (by name, or a private key in a source's text), a file too many or too few, a file with
-/// another mode, owner or place, and a console issue link that is missing, is somewhere else
+/// (by name, or a private key in a source's text), a file too many or too few (hostkeeper-pxe
+/// left out among them), a file with another mode, owner, source or place, and a console issue link that is missing, is somewhere else
 /// than `/etc/issue.d`, or points at another file than the one the daemon writes.
 #[test]
 fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
@@ -318,6 +323,30 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
                 &text,
                 "    dst: /usr/bin/hostkeeper\n    file_info:\n      mode: 0755\n",
                 "    dst: /usr/bin/hostkeeper\n    file_info:\n      mode: 0700\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0755\n",
+                "    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0750\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "  - src: target/release/hostkeeper-pxe\n    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0755\n      owner: root\n      group: root\n",
+                "",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "  - src: target/release/hostkeeper-pxe\n",
+                "  - src: target/release/hostkeeper\n",
             ),
             "not [",
         ),
@@ -428,128 +457,6 @@ fn rpm_and_deb_share_one_file_list() {
         (format!("{text}{other_script}"), "the deb runs the scripts"),
     ];
     refuses(check_one_list, &cases);
-}
-
-/// The platforms of hostkeeper's packages: the closed list of the release index (one package
-/// per OS and CPU family). Held here until hostkeeper-config's shared `Platform` replaces it.
-#[derive(Clone, Copy, Debug)]
-enum Platform {
-    LinuxX86_64,
-    LinuxArm64,
-    MacosArm64,
-}
-
-impl Platform {
-    const ALL: [Platform; 3] = [
-        Platform::LinuxX86_64,
-        Platform::LinuxArm64,
-        Platform::MacosArm64,
-    ];
-
-    /// The `ARCH` nfpm builds the platform's deb and rpm with; none for macOS, whose package
-    /// is a pkg, not built here.
-    fn nfpm_arch(self) -> Option<&'static str> {
-        match self {
-            Platform::LinuxX86_64 => Some("amd64"),
-            Platform::LinuxArm64 => Some("arm64"),
-            Platform::MacosArm64 => None,
-        }
-    }
-}
-
-/// The file names of the deb and then the rpm of every Linux platform, for version 1.2.3.
-fn file_names(text: &str) -> Result<Vec<String>, String> {
-    let config = Config::parse(text)?;
-    let mut out = Vec::new();
-    for packager in ["deb", "rpm"] {
-        for arch in Platform::ALL.iter().filter_map(|p| p.nfpm_arch()) {
-            out.push(config.file_name(packager, "1.2.3", arch)?);
-        }
-    }
-    Ok(out)
-}
-
-/// Catches a package name, version or architecture that does not come out as
-/// `hostkeeper_<version>_<arch>.deb` and `hostkeeper-<version>-1.<arch>.rpm` for both
-/// architectures, or a value read from any other variable of the environment.
-#[test]
-fn package_file_names_follow_the_pattern() {
-    let text = read(NFPM);
-    let wanted = [
-        "hostkeeper_1.2.3_amd64.deb",
-        "hostkeeper_1.2.3_arm64.deb",
-        "hostkeeper-1.2.3-1.x86_64.rpm",
-        "hostkeeper-1.2.3-1.aarch64.rpm",
-    ];
-    assert_eq!(file_names(&text), Ok(wanted.map(str::to_owned).to_vec()));
-    let names = |t: &str| file_names(t).map(|names| names.join(" "));
-    // A fixed architecture names the arm64 packages amd64.
-    let fixed = names(&altered(&text, "arch: \"${ARCH}\"", "arch: amd64"));
-    assert_eq!(
-        fixed,
-        Ok("hostkeeper_1.2.3_amd64.deb hostkeeper_1.2.3_amd64.deb hostkeeper-1.2.3-1.x86_64.rpm hostkeeper-1.2.3-1.x86_64.rpm".to_owned())
-    );
-    let typo = names(&altered(&text, "name: hostkeeper\n", "name: hostkeper\n"));
-    assert!(
-        typo.as_ref().is_ok_and(|n| !n.contains("hostkeeper_")),
-        "{typo:?}"
-    );
-    for (from, to, words) in [
-        (
-            "version: \"${VERSION}\"",
-            "version: \"${VERSION}-${GIT_SHA}\"",
-            "version is",
-        ),
-        (
-            "arch: \"${ARCH}\"",
-            "arch: \"${HOSTKEEPER_ARCH}\"",
-            "arch is",
-        ),
-        ("name: hostkeeper\n", "", "nfpm.yaml has no name"),
-    ] {
-        let refused = names(&altered(&text, from, to)).expect_err(to);
-        assert!(refused.contains(words), "{refused:?} lacks {words:?}");
-    }
-    // Only the inputs nfpm.yaml documents: a version nfpm would rewrite, or an architecture
-    // that is not one of the Linux platforms', is refused, not given a name nfpm would not use.
-    let config = Config::parse(&text).expect("nfpm.yaml parses");
-    for (version, arch, refusal) in [
-        (
-            "v1.2.3",
-            "amd64",
-            "VERSION \"v1.2.3\" is not MAJOR.MINOR.PATCH in digits",
-        ),
-        (
-            "1.2.3-rc.1",
-            "amd64",
-            "VERSION \"1.2.3-rc.1\" is not MAJOR.MINOR.PATCH in digits",
-        ),
-        (
-            "1.2.3+build.5",
-            "amd64",
-            "VERSION \"1.2.3+build.5\" is not MAJOR.MINOR.PATCH in digits",
-        ),
-        (
-            "1.2",
-            "amd64",
-            "VERSION \"1.2\" is not MAJOR.MINOR.PATCH in digits",
-        ),
-        (
-            "",
-            "amd64",
-            "VERSION \"\" is not MAJOR.MINOR.PATCH in digits",
-        ),
-        ("1.2.3", "", "ARCH \"\" is not amd64 or arm64"),
-        ("1.2.3", "x86_64", "ARCH \"x86_64\" is not amd64 or arm64"),
-    ] {
-        for packager in ["deb", "rpm"] {
-            assert_eq!(
-                config.file_name(packager, version, arch),
-                Err(refusal.to_owned()),
-                "{packager} {version:?} {arch:?}"
-            );
-        }
-    }
 }
 
 fn check_enable(post: &str, pre: &str) -> Result<(), String> {

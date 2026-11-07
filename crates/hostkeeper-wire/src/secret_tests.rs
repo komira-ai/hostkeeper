@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use hostkeeper_testkit::Scratch;
 
-use crate::secret::{SecretError, TOKEN_FLAG, euid, file_rule, read_secret, read_token};
+use crate::secret::{
+    SecretError, TOKEN_FLAG, euid, file_rule, open_token, read_secret, read_token,
+};
 
 const TOKEN: &str = "tok-0123456789abcdef0123456789abcdef";
 
@@ -82,6 +84,41 @@ fn the_token_is_read_on_every_call() {
     let rotated = "rotated-0123456789abcdef0123456789abcdef";
     std::fs::write(&path, rotated).expect("rewrite");
     assert_eq!(read_token(&path).as_deref(), Ok(rotated));
+}
+
+/// `open_token` checks the file when it opens it and reads it later from the descriptor it
+/// keeps: the token is read after the file is made unreadable and removed, a file the rule
+/// refuses is refused at the open, a file that holds no token at the read, and the `Debug` of
+/// an open token shows nothing of it.
+///
+/// Catches `hostkeeper-pxe serve` reading the token by its path after it dropped to a user that
+/// cannot open it, or a check of the file deferred past the open.
+#[test]
+fn an_open_token_is_checked_at_the_open_and_read_from_its_descriptor() {
+    let scratch = scratch("tokopen");
+    let dir = scratch.path();
+    let path = file(dir, "token", &format!("{TOKEN}\n"), 0o600);
+    let open = open_token(&path).expect("opened");
+    assert_eq!(format!("{open:?}"), "OpenToken");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    std::fs::remove_file(&path).expect("remove");
+    assert_eq!(open.read().as_deref(), Ok(TOKEN));
+    let readable = file(dir, "readable", TOKEN, 0o644);
+    assert_eq!(
+        open_token(&readable).map(|_| ()),
+        Err(SecretError::Rule {
+            flag: TOKEN_FLAG.to_owned(),
+            why: "its mode must be 0600 or 0400",
+        })
+    );
+    let short = file(dir, "short", "tok-short", 0o600);
+    let opened = open_token(&short).expect("the file passes the rule");
+    assert_eq!(
+        opened.read(),
+        Err(SecretError::Token {
+            flag: TOKEN_FLAG.to_owned()
+        })
+    );
 }
 
 /// Catches a secret read past its limit, or cut at it: `read_secret` returns the file's bytes

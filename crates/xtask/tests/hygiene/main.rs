@@ -265,8 +265,8 @@ fn hygiene_lint_refuses_a_date_before_the_cutoff() {
 #[test]
 fn hygiene_lint_refuses_a_non_documentation_ipv4() {
     // Catches: a private or public IPv4 address that is not flagged, an address just outside a
-    // documentation range that is let through, or loopback, unspecified and documentation
-    // addresses, numbers that are not four octets, and version-like names that are flagged.
+    // documentation range (or beside the limited broadcast address) that is let through, or
+    // loopback, unspecified, the limited broadcast and documentation addresses, numbers that are not four octets, and version-like names that are flagged.
     let refused = [
         ["10", "0", "0", "1"].join("."),
         ["192", "168", "1", "20"].join("."),
@@ -274,6 +274,7 @@ fn hygiene_lint_refuses_a_non_documentation_ipv4() {
         ["192", "0", "3", "1"].join("."),
         ["198", "51", "101", "1"].join("."),
         ["203", "0", "112", "9"].join("."),
+        ["255", "255", "255", "254"].join("."),
     ];
     let text = refused
         .iter()
@@ -285,7 +286,7 @@ fn hygiene_lint_refuses_a_non_documentation_ipv4() {
         .enumerate()
         .map(|(i, ip)| {
             format!(
-                "net.md:{}: the IPv4 address `{ip}` is not loopback, unspecified or a documentation address",
+                "net.md:{}: the IPv4 address `{ip}` is not loopback, unspecified, the limited broadcast or a documentation address",
                 i + 1
             )
         })
@@ -296,6 +297,7 @@ fn hygiene_lint_refuses_a_non_documentation_ipv4() {
         "127.0.0.1",
         "127.255.255.254",
         "0.0.0.0",
+        "255.255.255.255",
         "192.0.2.1",
         "198.51.100.77",
         "203.0.113.255",
@@ -665,7 +667,7 @@ fn hygiene_lint_reports_every_finding_at_once() {
     };
     let want = [
         format!(
-            "x.md:1: the IPv4 address `{ip}` is not loopback, unspecified or a documentation address"
+            "x.md:1: the IPv4 address `{ip}` is not loopback, unspecified, the limited broadcast or a documentation address"
         ),
         format!(
             "x.md:2: the path prefix `{}` names a home directory",
@@ -710,7 +712,7 @@ fn hygiene_lint_reads_the_licence_text_for_everything_but_dates() {
     // The rules report in turn: addresses, then paths, then e-mail, then hosts.
     let want = [
         format!(
-            "LICENSE:2: the IPv4 address `{ip}` is not loopback, unspecified or a documentation address"
+            "LICENSE:2: the IPv4 address `{ip}` is not loopback, unspecified, the limited broadcast or a documentation address"
         ),
         format!(
             "LICENSE:3: the path prefix `{}` names a home directory",
@@ -871,7 +873,7 @@ fn hygiene_lint_reads_the_trusted_root_for_everything_but_dates() {
         reasons(lint(TRUSTED_ROOT_FILE, &text, &lists)),
         [
             format!(
-                "{TRUSTED_ROOT_FILE}:1: the IPv4 address `{ip}` is not loopback, unspecified or a documentation address"
+                "{TRUSTED_ROOT_FILE}:1: the IPv4 address `{ip}` is not loopback, unspecified, the limited broadcast or a documentation address"
             ),
             format!("{TRUSTED_ROOT_FILE}:2: {}", host_reason(&host)),
         ]

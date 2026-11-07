@@ -8,7 +8,9 @@
 # arm64 for linux-arm64. nfpm expands ${VERSION} and ${ARCH} and names the files
 # hostkeeper_<version>_<arch>.deb (amd64, arm64) and hostkeeper-<version>-1.<arch>.rpm (x86_64,
 # aarch64). The packages carry the daemon, its unit, its tmpfiles rules, the template of its
-# config, and the pinned `gh` and the Sigstore trusted root its attestation check runs on, and
+# config, the pinned `gh` and the Sigstore trusted root its attestation check runs on, the boot
+# server of network install, `hostkeeper-pxe` (docs/design/network-install.md, section 3), which
+# has no unit and runs only when an operator starts it in the foreground, and
 # one link, /etc/issue.d/hostkeeper.issue, to the console's issue file the daemon writes while
 # the host waits for its enrollment (/run/hostkeeper/enrollment.issue), and nothing else: no
 # key, no certificate, no token and no hostkeeper.toml, which whoever installs the package
@@ -41,6 +43,12 @@ license: Apache-2.0
 contents:
   - src: target/release/hostkeeper
     dst: /usr/bin/hostkeeper
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: target/release/hostkeeper-pxe
+    dst: /usr/bin/hostkeeper-pxe
     file_info:
       mode: 0755
       owner: root

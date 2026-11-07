@@ -14,7 +14,7 @@ before it uses them.
 | Signer workflow | `komira-ai/hostkeeper/.github/workflows/artifacts.yml` |
 | Source ref | `refs/heads/main` |
 | Tag | `v<X.Y.Z>` |
-| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>` |
+| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; `hostkeeper-pxe X.Y.Z`, with no commit |
 
 The workflow `artifacts.yml` builds the assets on a push to `refs/heads/main`, writes one
 `SHA256SUMS`, and signs build-provenance attestations (sigstore) for every summed asset, plus SBOM
@@ -39,7 +39,7 @@ platforms; the installer pkg is for `macos-arm64`.
 | `hello-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hello-<version>-fail-ready-<platform>.tar.zst` | hello's failing build: the same package at the version `<version>-fail-ready`, whose unit (or plists) start `hello` with `--fail-ready`, so that it never reports ready (the build a host is rolled back from); it differs from the hello package only in the manifest's `version` and the command line its unit or plists start it with |
 | `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
-| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
+| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
