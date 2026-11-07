@@ -25,10 +25,15 @@
 //! the serial with the claims): `Hosts.List` and `Hosts.Get` show the record it matches
 //! ([`show_inventory`]), and `Enrollment.ListRecords` marks each record a host is enrolled
 //! against (`enrolled`), and lists only those, or only the others, when asked.
+//!
+//! Apart from the match, each record says what the enrollment store holds for its host id
+//! (`host_held`, [`Coordinator::host_held`]): no host, an approved host, or a denied or retired
+//! one. It is read from the store by host id, so it holds after a restart and for a host never
+//! heard from, which `Hosts.List` (the hosts heard from since start) does not show.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hostkeeper_enrollment::enroll::{Claims, EnrolledHost, RequestView, StoreError};
+use hostkeeper_enrollment::enroll::{Claims, EnrolledHost, HostHeld, RequestView, StoreError};
 use hostkeeper_enrollment::names::{KeyHash, MacAddress};
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
@@ -292,8 +297,23 @@ pub(crate) fn unreadable<E>(refusal: E) -> impl FnOnce(StoreError) -> E {
     }
 }
 
-/// `record` as `hostkeeper.operator.v1` says it; `enrolled` when a host is enrolled against it.
-fn record_proto(record: &InventoryRecord, enrolled: bool) -> proto::InventoryRecord {
+/// What the store holds for a host id, as `hostkeeper.operator.v1` says it.
+fn held_proto(held: HostHeld) -> proto::HostHeld {
+    match held {
+        HostHeld::None => proto::HostHeld::None,
+        HostHeld::Approved => proto::HostHeld::Approved,
+        HostHeld::Denied => proto::HostHeld::Denied,
+        HostHeld::Retired => proto::HostHeld::Retired,
+    }
+}
+
+/// `record` as `hostkeeper.operator.v1` says it; `enrolled` when a host is enrolled against it,
+/// and `held` what the enrollment store holds for its host id.
+fn record_proto(
+    record: &InventoryRecord,
+    enrolled: bool,
+    held: proto::HostHeld,
+) -> proto::InventoryRecord {
     proto::InventoryRecord {
         host_id: record.host_id.clone(),
         role: record.role.clone(),
@@ -304,6 +324,7 @@ fn record_proto(record: &InventoryRecord, enrolled: bool) -> proto::InventoryRec
         added_by: record.by.clone(),
         added_unix: record.at_unix,
         enrolled,
+        host_held: held.into(),
     }
 }
 
@@ -437,17 +458,36 @@ impl Coordinator {
             .map(Option::flatten)
     }
 
+    /// What the enrollment store holds for the host id `host_id`
+    /// ([`hostkeeper_enrollment::enroll::EnrollmentStore::held`]): `UNSPECIFIED` without
+    /// enrollment, which has no store to read, and `NONE` for an id the store cannot hold.
+    ///
+    /// # Errors
+    /// [`StoreError`] when the host id's deny or host file cannot be read.
+    pub(crate) fn host_held(&self, host_id: &str) -> Result<proto::HostHeld, StoreError> {
+        let Some(enrollment) = self.enrollment() else {
+            return Ok(proto::HostHeld::Unspecified);
+        };
+        let held = hostkeeper_enrollment::names::HostId::parse(host_id)
+            .ok()
+            .map(|host| enrollment.store().held(&host))
+            .transpose()?
+            .unwrap_or(HostHeld::None);
+        Ok(held_proto(held))
+    }
+
     /// `Enrollment.AddRecord`: records a server the operator built, before it first boots.
     /// Under the ops file's lock: a record for the host id is refused, and so is a MAC or a
     /// serial another record holds, and a record past [`MAX_RECORDS`]. The answer's record is
-    /// `enrolled` when a host already enrolled matches it, and no other record.
+    /// `enrolled` when a host already enrolled matches it, and no other record, and says what
+    /// the enrollment store holds for its host id (`host_held`).
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_host_id`, `invalid_role`, `invalid_request` (a
     /// MAC, the serial, the notes, more than [`MAX_DATA_MACS`] data MACs, a data MAC that is
     /// also the BMC MAC, or neither a data MAC nor a serial), `record_exists`,
-    /// `record_conflict`, `capacity`, `store_failed` (also when the enrolled hosts cannot be
-    /// read: nothing is written then).
+    /// `record_conflict`, `capacity`, `store_failed` (also when the enrolled hosts, or what the
+    /// store holds for the host id, cannot be read: nothing is written then).
     pub fn add_record(
         &self,
         caller: &Caller,
@@ -457,6 +497,9 @@ impl Coordinator {
         let record = record_of(request, by, self.ops.unix_now())?;
         let hosts = self
             .enrolled_hosts()
+            .map_err(unreadable(proto::EnrollmentRefusal::StoreFailed))?;
+        let held = self
+            .host_held(&record.host_id)
             .map_err(unreadable(proto::EnrollmentRefusal::StoreFailed))?;
         let mut audit = AuditEntry::new(by, "record_add");
         audit.node_id = Some(record.host_id.clone());
@@ -488,7 +531,7 @@ impl Coordinator {
             Ok(())
         })?;
         Ok(proto::AddRecordResponse {
-            record: Some(record_proto(&record, enrolled)),
+            record: Some(record_proto(&record, enrolled, held)),
             entry: Some(entry_proto(&done)),
         })
     }
@@ -496,11 +539,13 @@ impl Coordinator {
     /// `Enrollment.ListRecords`: the records by host id, after the host id `page_token` names,
     /// at most `limit` ([`MAX_PAGE`] for 0 or above it), each `enrolled` when a host is
     /// enrolled against it; with `enrolled` set, only the records whose `enrolled` is that.
-    /// Changes nothing.
+    /// Each record of the page says what the enrollment store holds for its host id
+    /// (`host_held`, [`Coordinator::host_held`]), read after the page is chosen. Changes nothing.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a page token that is no host id),
-    /// `store_failed` (the enrolled hosts cannot be read).
+    /// `store_failed` (the enrolled hosts, or what the store holds for a host id of the page,
+    /// cannot be read).
     pub fn list_records(
         &self,
         caller: &Caller,
@@ -520,17 +565,29 @@ impl Coordinator {
         let hosts = self
             .enrolled_hosts()
             .map_err(unreadable(proto::EnrollmentRefusal::StoreFailed))?;
-        let (records, more) = self.ops.read(|state| {
+        let (mut records, more) = self.ops.read(|state| {
             let enrolled = RecordIndex::new(&state.inventory).enrolled(&hosts);
             let mut rest = state
                 .inventory
                 .iter()
                 .filter(|r| after.as_ref().is_none_or(|after| r.host_id > *after))
-                .map(|r| record_proto(r, enrolled.contains(&r.host_id)))
+                .map(|r| {
+                    record_proto(
+                        r,
+                        enrolled.contains(&r.host_id),
+                        proto::HostHeld::Unspecified,
+                    )
+                })
                 .filter(|r| request.enrolled.is_none_or(|want| r.enrolled == want));
             let page: Vec<proto::InventoryRecord> = rest.by_ref().take(size).collect();
             (page, rest.next().is_some())
         });
+        for record in &mut records {
+            let held = self
+                .host_held(&record.host_id)
+                .map_err(unreadable(proto::EnrollmentRefusal::StoreFailed))?;
+            record.set_host_held(held);
+        }
         let next_page_token = match records.last() {
             Some(last) if more => last.host_id.clone(),
             _ => String::new(),

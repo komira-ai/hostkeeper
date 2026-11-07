@@ -63,6 +63,7 @@ fn record() -> op::InventoryRecord {
         added_by: "alice".to_owned(),
         added_unix: 1_800_000_000,
         enrolled: true,
+        host_held: op::HostHeld::Approved.into(),
     }
 }
 

@@ -48,8 +48,16 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 pass it as `--page-token` for the next page. Each record says `enrolled: true` when a host is
 enrolled against it (the claims of the request the host's key was approved from match this record
 and no other, and the host is not denied); `--enrolled true` lists only those records, and
-`--enrolled false` only the others, which is the list of servers still to come online. There is no call that reads one record by host id:
-list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
+`--enrolled false` only the others, which is the list of servers still to come online. Each
+record also says `hostHeld`: what the enrollment store holds for the record's host id, read from
+the store, so the same after a coordinator restart and whether or not the host has sent a
+heartbeat: `HOST_HELD_NONE` (no host by that id), `HOST_HELD_APPROVED` (approved and not denied),
+`HOST_HELD_DENIED` (retired with `hosts retire`, an update still in flight) or
+`HOST_HELD_RETIRED` (retired, final). A coordinator without enrollment answers
+`HOST_HELD_UNSPECIFIED`. `hostkeeper-pxe` offers a network install only for a record whose
+`hostHeld` is `HOST_HELD_NONE` ([network install](../design/network-install.md), section 3), so a
+retired host's record keeps its machine from being reinstalled by accident. There is no call that
+reads one record by host id: list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
 
 ## Bootstrap a Linux node
 

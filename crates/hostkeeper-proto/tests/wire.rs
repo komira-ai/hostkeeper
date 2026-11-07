@@ -620,6 +620,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 35] = [
             ("added_by", 7),
             ("added_unix", 8),
             ("enrolled", 9),
+            ("host_held", 10),
         ],
     ),
     (
@@ -747,7 +748,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 16] = [
+    let cases: [(&str, &str, &[&str]); 17] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -888,6 +889,11 @@ fn wire_names_are_pinned() {
             "hostkeeper.operator.v1.InventoryMatch",
             "INVENTORY_MATCH_",
             &["matched", "unmatched", "ambiguous"],
+        ),
+        (
+            "hostkeeper.operator.v1.HostHeld",
+            "HOST_HELD_",
+            &["none", "approved", "denied", "retired"],
         ),
         (
             "hostkeeper.operator.v1.EnrollmentRequestState",
