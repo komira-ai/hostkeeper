@@ -291,7 +291,7 @@ pub struct AuditEntry {
     /// file an earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
-    /// `mdm_nonce_pushed`, by `mdm-gate`).
+    /// `mdm_nonce_pushed` and `mdm_install_sent`, by `mdm-gate`).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]

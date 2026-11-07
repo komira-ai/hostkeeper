@@ -10,8 +10,9 @@ use std::sync::Arc;
 use hostkeeper_enrollment::fs::{FaultFs, Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_mdm_gate::{
-    CommandUuid, DeviceRecord, DeviceStore, FileDeviceStore, Gate, Handled, NonceRecord, Phase,
-    ProfileAnswer, ProfileCommand, SCHEMA, Sent, StoreError, WebhookError,
+    CommandUuid, DeviceRecord, DeviceStore, FileDeviceStore, Gate, Handled, InstallRecord,
+    NonceRecord, Phase, PkgDigest, ProfileAnswer, ProfileCommand, SCHEMA, Sent, StoreError,
+    WebhookError,
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
@@ -431,6 +432,18 @@ fn full(id_text: &str) -> DeviceRecord {
         }),
         removal: Some(ProfileCommand::new(CommandUuid::from_random([5; 16]), 23)),
     });
+    record.install = Some(InstallRecord {
+        sha256: PkgDigest::parse(&"c".repeat(64)).expect("a digest"),
+        sends: 4,
+        last: ProfileCommand {
+            uuid: CommandUuid::from_random([6; 16]),
+            sent_unix: 24,
+            answer: Some(ProfileAnswer {
+                acknowledged: true,
+                at_unix: 25,
+            }),
+        },
+    });
     record
 }
 
@@ -556,7 +569,115 @@ fn the_enrollment_fields_are_read_by_the_release_before_them_and_the_other_way()
     assert_eq!((config.uuid.as_str(), config.answer), (GOOD_UUID, None));
 }
 
-/// Catches: a field lost in the file (any of the nineteen, and those of the profile commands), an unset optional read back as set
+/// The pkg install's field (20) of a record, as `store.rs` writes it.
+#[derive(Clone, PartialEq, prost::Message)]
+struct InstallPb {
+    #[prost(string, tag = "1")]
+    sha256: String,
+    #[prost(uint32, tag = "2")]
+    sends: u32,
+    #[prost(message, optional, tag = "3")]
+    last: Option<ProfilePb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct InstallFieldPb {
+    #[prost(message, optional, tag = "20")]
+    install: Option<InstallPb>,
+}
+
+/// Catches: the pkg install's field made a change the release before it cannot read (a reader
+/// of fields 1 to 19 reads a record that has it, and every field it knows is the same), or a
+/// record without it (written before it) not read as one with no pkg sent; a malformed digest,
+/// UUID or a missing command in it read as a device, not refused.
+#[test]
+fn the_install_field_is_read_by_the_release_before_it_and_the_other_way() {
+    let scratch = scratch("store-install-field");
+    let dir = scratch.path().join("devices");
+    let record = full(UDID);
+    store_in(&dir).save(&record).expect("saved");
+    let bytes = std::fs::read(dir.join(format!("{UDID}.pb"))).expect("the file");
+    let file = FilePb::decode(bytes.as_slice()).expect("a file");
+    let before =
+        EnrollFieldsPb::decode(file.record.as_slice()).expect("the release before reads it");
+    assert_eq!(
+        before.config_profile.map(|profile| profile.sent_unix),
+        Some(18)
+    );
+    let before = RecordPb::decode(file.record.as_slice()).expect("the release before reads it");
+    assert_eq!((before.phase, before.enrollment), (3, 7));
+
+    let name = format!("{UDID}.pb");
+    let (_, loaded) = load_file(
+        "store-before-install",
+        &name,
+        &file_of(&good(UDID).encode_to_vec()),
+    );
+    assert_eq!(loaded.expect("read")[0].install, None);
+
+    let with = |install: InstallPb| {
+        let mut bytes = good(UDID).encode_to_vec();
+        bytes.extend(
+            InstallFieldPb {
+                install: Some(install),
+            }
+            .encode_to_vec(),
+        );
+        file_of(&bytes)
+    };
+    let last = |uuid: &str| {
+        Some(ProfilePb {
+            uuid: uuid.to_owned(),
+            sent_unix: 30,
+        })
+    };
+    let reason = "the pkg install's digest or UUID is malformed";
+    let cases = [
+        InstallPb {
+            sha256: "C".repeat(64),
+            sends: 1,
+            last: last(GOOD_UUID),
+        },
+        InstallPb {
+            sha256: "c".repeat(64),
+            sends: 1,
+            last: last("not-a-uuid"),
+        },
+        InstallPb {
+            sha256: "c".repeat(64),
+            sends: 1,
+            last: None,
+        },
+    ];
+    for install in cases {
+        let (path, loaded) = load_file("store-install-corrupt", &name, &with(install));
+        assert_eq!(
+            loaded.expect_err("refused").to_string(),
+            corrupt(&path, reason)
+        );
+    }
+    let (_, loaded) = load_file(
+        "store-install-fine",
+        &name,
+        &with(InstallPb {
+            sha256: "c".repeat(64),
+            sends: 2,
+            last: last(GOOD_UUID),
+        }),
+    );
+    let install = loaded.expect("read").remove(0).install.expect("an install");
+    assert_eq!(
+        (
+            install.sha256.as_str(),
+            install.sends,
+            install.last.uuid.as_str()
+        ),
+        ("c".repeat(64).as_str(), 2, GOOD_UUID)
+    );
+    assert_eq!((install.last.sent_unix, install.last.answer), (30, None));
+}
+
+/// Catches: a field lost in the file (any of the twenty, and those of the profile commands), an unset optional read back as set
 /// or the other way round, a phase changed; a rewrite that leaves two files or a mode wider
 /// than 0600.
 #[test]

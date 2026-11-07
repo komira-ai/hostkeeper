@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1305" width="1200" height="1305" role="img" aria-label="Mac path in seven steps: the operator allowlists the serial, the Mac enrolls by ADE, the gate in the coordinator installs the config profile, the pkg starts the daemon which posts an enrollment request, the gate pushes a one-time nonce profile bound to that request only when every condition holds, the daemon reposts with the nonce, and the coordinator auto-approves; any miss leaves the request pending for an operator.">
 <title>Mac path</title>
-<desc>The operator adds the serial in ABM and to the coordinator's allowlist. The Mac enrolls by ADE and the MDM gate, linked into the coordinator, installs the config profile. The gate's send of the pkg (task M14) is not built; the pkg starts the daemon, which posts an enrollment request without a nonce. The gate then pushes a one-time nonce profile bound to that request, only if the device is enrolled and supervised, the serial is allowlisted, exactly one candidate request exists and no nonce is live. The daemon reposts the request with the nonce and the coordinator auto-approves only when the serial, the gate's device state and the nonce all check out; otherwise the request stays pending for an operator approval by key hash.</desc>
+<desc>The operator adds the serial in ABM and to the coordinator's allowlist. The Mac enrolls by ADE and the MDM gate, linked into the coordinator, installs the config profile. The gate then sends InstallEnterpriseApplication with an inline manifest naming one pkg by its allowlisted SHA-256, again an hour after the Mac's last answer until the daemon's request appears; the pkg starts the daemon, which posts an enrollment request without a nonce. The gate then pushes a one-time nonce profile bound to that request, only if the device is enrolled and supervised, the serial is allowlisted, exactly one candidate request exists and no nonce is live. The daemon reposts the request with the nonce and the coordinator auto-approves only when the serial, the gate's device state and the nonce all check out; otherwise the request stays pending for an operator approval by key hash.</desc>
 <defs><marker id="mac-path-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="mac-path-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -74,15 +74,15 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="350" y="365" class="t-m lbl" text-anchor="middle">commands</text>
 <circle cx="350" cy="380" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="350" y="384" class="b" font-size="12" text-anchor="middle">3</text>
-<rect x="410" y="429" width="380" height="48" rx="5" class="box-p"/>
-<text x="600" y="449" class="t-m" text-anchor="middle">task M14, not built: InstallEnterpriseApplication</text>
-<text x="600" y="466" class="t-m" text-anchor="middle">with inline manifest by allowlisted SHA-256</text>
-<path d="M410,453 L290,453" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<rect x="410" y="429" width="380" height="48" rx="5" class="box-b"/>
+<text x="600" y="449" class="t-m" text-anchor="middle">MDM gate: InstallEnterpriseApplication, inline manifest,</text>
+<text x="600" y="466" class="t-m" text-anchor="middle">allowlisted SHA-256; again an hour after the last answer</text>
+<path d="M410,453 L290,453" class="ln" marker-end="url(#mac-path-ak)"/>
 <text x="350" y="438" class="t-m lbl" text-anchor="middle">send pkg</text>
 <circle cx="350" cy="453" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="350" y="457" class="b" font-size="12" text-anchor="middle">3</text>
-<path d="M290,512 L910,512" class="ln-d" marker-end="url(#mac-path-ak)"/>
-<text x="600" y="498" class="t-m lbl" text-anchor="middle">installer pkg by digest (M14)</text>
+<path d="M290,512 L910,512" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="600" y="498" class="t-m lbl" text-anchor="middle">installer pkg by digest</text>
 <circle cx="345" cy="512" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="345" y="516" class="b" font-size="12" text-anchor="middle">3</text>
 <rect x="410" y="605" width="380" height="50" rx="5" class="box-b"/>

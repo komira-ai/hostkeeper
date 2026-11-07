@@ -74,6 +74,9 @@ const FIELDS: [(&str, &[Field]); 4] = [
             ("security_info_unix", 14, true),
             ("unanswered", 15, false),
             ("last_error", 16, false),
+            ("install_sends", 17, false),
+            ("install_last_sent_unix", 18, true),
+            ("install_sha256", 19, false),
         ],
     ),
 ];

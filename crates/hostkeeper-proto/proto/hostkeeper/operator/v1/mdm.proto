@@ -115,4 +115,11 @@ message MdmDevice {
   repeated MdmCommand unanswered = 15;
   // The last thing that went wrong with a command for it; empty when nothing did.
   string last_error = 16;
+  // How many times NanoHUB queued the gate's `InstallEnterpriseApplication` of the hostkeeper
+  // pkg in this enrollment; 0 before the first.
+  uint32 install_sends = 17;
+  // When the gate last sent it in this enrollment; absent before the first send.
+  optional uint64 install_last_sent_unix = 18;
+  // The SHA-256 of the pkg it last sent, 64 lower-case hex digits; empty before the first send.
+  string install_sha256 = 19;
 }

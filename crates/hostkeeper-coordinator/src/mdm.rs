@@ -22,6 +22,11 @@
 //! enrollment is built ([`Mdm::attach`]), is told of each new request, and looks at every
 //! device once a minute besides ([`hostkeeper_mdm_gate::enroll::run`]).
 //!
+//! With `--mdm-pkg-allowlist` and `--mdm-host` as well, the enrollment side installs the
+//! hostkeeper pkg ([`hostkeeper_mdm_gate::install`]): the newest pkg on the allowlist, which is
+//! read at start and must be root's alone, by `InstallEnterpriseApplication` with an inline
+//! manifest naming its digest, fetched from `https://<--mdm-host>/pkg/<sha256>.pkg`.
+//!
 //! Without the three flags the coordinator runs no gate: its port is [`NoDeviceState`], and
 //! `Mdm.ListDevices` answers no device.
 
@@ -36,13 +41,14 @@ use futures::future::{Either, select};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use clap::Args;
-use hostkeeper_enrollment::fs::RealFs;
+use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_mdm_gate::{
     ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CONFIG_FLAG, DaemonProfile, DaemonProfileError,
-    EnrollSide, Enrollments, EnrollmentsError, FileDeviceStore, Gate, IdentifierError, NanoHub,
-    Nonce, ProfileIdentifier, Random, StoreError, Waiting, enroll, webhook,
+    EnrollSide, Enrollments, EnrollmentsError, FileDeviceStore, Gate, IdentifierError, Install,
+    MdmHost, MdmHostError, NanoHub, Nonce, PkgAllowlist, PkgAllowlistError, ProfileIdentifier,
+    Random, StoreError, Waiting, enroll, webhook,
 };
 
 use crate::enrollment::{
@@ -85,6 +91,19 @@ pub struct MdmFlags {
     /// the daemon's own loader. It holds no secret. Requires --mdm-profile-identifier.
     #[arg(long, requires = "mdm_profile_identifier")]
     pub mdm_daemon_config: Option<PathBuf>,
+    /// The pkg allowlist: a TOML file of root's that no one else can write, of `[[pkg]]`
+    /// entries, each the pkg's `sha256`, its `version` and its `path` (`<sha256>.pkg` in the
+    /// MDM kit's pkg directory). With it the gate sends each Mac on --mac-serial-allowlist the
+    /// newest pkg on the list by `InstallEnterpriseApplication`, once the Mac has its config
+    /// profile and until its daemon has posted, again an hour after the Mac's last answer.
+    /// Read at start. Requires --mdm-profile-identifier and --mdm-host.
+    #[arg(long, requires_all = ["mdm_profile_identifier", "mdm_host"])]
+    pub mdm_pkg_allowlist: Option<PathBuf>,
+    /// The MDM host's DNS name, as its proxy's certificate names it, as `mdm.example.com`:
+    /// the Mac fetches the pkg from `https://<this name>/pkg/<sha256>.pkg`. Requires
+    /// --mdm-pkg-allowlist.
+    #[arg(long, requires = "mdm_pkg_allowlist")]
+    pub mdm_host: Option<String>,
 }
 
 /// Why the gate did not start.
@@ -119,6 +138,12 @@ pub enum MdmError {
     /// `--mdm-daemon-config` is refused by the daemon's loader.
     #[error(transparent)]
     Config(#[from] DaemonProfileError),
+    /// `--mdm-pkg-allowlist` is refused.
+    #[error(transparent)]
+    PkgAllowlist(#[from] PkgAllowlistError),
+    /// `--mdm-host` is not a DNS name.
+    #[error(transparent)]
+    Host(#[from] MdmHostError),
 }
 
 /// The running gate, and where its webhook is served.
@@ -159,8 +184,10 @@ impl Mdm {
             return Err(MdmError::Listen(listen));
         }
         let side = side_of(flags)?;
+        let install = install_of(flags, Arc::new(RealFs))?;
         let store = FileDeviceStore::open(Arc::new(RealFs), &enrollment_dir.join(DEVICES_DIR))?;
-        let gate = Gate::open(Box::new(store), NanoHub::new(url, key), clock, random)?;
+        let gate = Gate::open(Box::new(store), NanoHub::new(url, key), clock, random)?
+            .with_install(install);
         let (gate, attached) = match side {
             Some((identifier, config)) => {
                 let attached = Arc::new(Attached::default());
@@ -252,6 +279,22 @@ fn side_of(flags: &MdmFlags) -> Result<Option<(ProfileIdentifier, DaemonProfile)
         source,
     })?;
     Ok(Some((identifier, DaemonProfile::from_toml(&text)?)))
+}
+
+/// The pkg install, when `--mdm-pkg-allowlist` and `--mdm-host` are given: the allowlist read
+/// from `fs`, which must find it root's alone.
+fn install_of(flags: &MdmFlags, fs: Arc<dyn Fs>) -> Result<Option<Install>, MdmError> {
+    let (Some(allowlist), Some(host)) = (&flags.mdm_pkg_allowlist, &flags.mdm_host) else {
+        // clap requires the two together: without them the gate sends no pkg.
+        return Ok(None);
+    };
+    let host = MdmHost::parse(host)?;
+    let allowlist = PkgAllowlist::load(&*fs, allowlist)?;
+    Ok(Some(Install {
+        allowlist,
+        host,
+        fs,
+    }))
 }
 
 /// The coordinator's enrollment, as the gate asks it once [`Mdm::attach`] gave it. Held weakly:

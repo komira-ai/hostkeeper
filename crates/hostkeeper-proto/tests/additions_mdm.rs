@@ -44,6 +44,9 @@ fn device() -> op::MdmDevice {
             sent_unix: 1_800_000_030,
         }],
         last_error: "NanoHUB did not queue the command".to_owned(),
+        install_sends: 2,
+        install_last_sent_unix: Some(1_800_000_040),
+        install_sha256: "ab".repeat(32),
     }
 }
 
@@ -123,8 +126,9 @@ fn an_absent_optional_of_a_device_stays_absent_and_a_zero_is_written() {
             read.checked_out_unix,
             read.device_information_unix,
             read.security_info_unix,
+            read.install_last_sent_unix,
         ),
-        (None, None, None, None, None, None, None)
+        (None, None, None, None, None, None, None, None)
     );
     let zero = op::MdmDevice {
         supervised: Some(false),
@@ -134,6 +138,7 @@ fn an_absent_optional_of_a_device_stays_absent_and_a_zero_is_written() {
         checked_out_unix: Some(0),
         device_information_unix: Some(0),
         security_info_unix: Some(0),
+        install_last_sent_unix: Some(0),
         ..bare.clone()
     };
     let bytes = round_trip(&zero);

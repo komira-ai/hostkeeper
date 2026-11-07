@@ -1,7 +1,8 @@
 //! What the enrollment side's tests share: a fake of the coordinator's enrollment (the
 //! allowlist, the waiting requests, the last approval, the nonces it issues and the audit lines
 //! it is given), a gate with the enrollment side over a scratch directory that a test can
-//! restart, and readers of the profiles in the commands NanoHUB heard.
+//! restart, with the pkg install when a test gives it an allowlist, and readers of the
+//! profiles and pkg installs in the commands NanoHUB heard.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -9,12 +10,15 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_mdm_gate::{
-    DaemonProfile, EnrollSide, Enrollments, EnrollmentsError, Gate, Nonce, ProfileIdentifier,
-    Random, StoreError, Waiting,
+    DaemonProfile, EnrollSide, Enrollments, EnrollmentsError, Gate, Install, MdmHost, Nonce,
+    PkgAllowlist, ProfileIdentifier, Random, StoreError, Waiting,
 };
 use plist::{Dictionary, Value};
 
 use super::{Clock, FakeNanoHub, Heard, Rig, UDID, counting, open_on};
+
+/// The MDM host's name in the tests.
+pub const HOST: &str = "mdm.example.com";
 
 /// The farm's profile identifier in the tests.
 pub const IDENTIFIER: &str = "com.example.hostkeeper.mdm";
@@ -175,6 +179,10 @@ pub fn side(fake: &Arc<FakeEnrollments>) -> EnrollSide {
 pub struct EnrollRig {
     pub rig: Rig,
     pub fake: Arc<FakeEnrollments>,
+    /// The pkg allowlist's text, when the gate has the pkg install.
+    allowlist: Option<String>,
+    /// The file system the gate keeps its records through.
+    fs: Arc<dyn Fs>,
 }
 
 impl EnrollRig {
@@ -195,14 +203,44 @@ impl EnrollRig {
     async fn on(name: &str, fs: Arc<dyn Fs>, random: Random) -> Self {
         let mut rig = Rig::new(name).await;
         let fake = Arc::new(FakeEnrollments::default());
-        rig.gate = gate_on(&rig, &fake, random, fs).expect("the gate opens");
-        Self { rig, fake }
+        rig.gate = gate_on(&rig, &fake, random, Arc::clone(&fs), None).expect("the gate opens");
+        Self {
+            rig,
+            fake,
+            allowlist: None,
+            fs,
+        }
+    }
+
+    /// The same rig whose gate has the pkg install of the allowlist `text`, as a new gate over
+    /// the same directory and fake.
+    pub fn install(&mut self, text: &str) {
+        self.install_with(text, counting());
+    }
+
+    /// [`Self::install`], the new gate drawing its UUIDs from `random`.
+    pub fn install_with(&mut self, text: &str, random: Random) {
+        self.allowlist = Some(text.to_owned());
+        self.rig.gate = gate_on(
+            &self.rig,
+            &self.fake,
+            random,
+            Arc::clone(&self.fs),
+            self.allowlist.as_deref(),
+        )
+        .expect("the gate opens");
     }
 
     /// A new gate with the enrollment side over the same directory and fake, as after a
     /// restart of the coordinator: its memory is gone.
     pub fn restart(&mut self) -> Result<(), StoreError> {
-        self.rig.gate = gate_on(&self.rig, &self.fake, counting(), Arc::new(RealFs))?;
+        self.rig.gate = gate_on(
+            &self.rig,
+            &self.fake,
+            counting(),
+            Arc::new(RealFs),
+            self.allowlist.as_deref(),
+        )?;
         Ok(())
     }
 
@@ -272,6 +310,17 @@ impl EnrollRig {
             .collect()
     }
 
+    /// The `InstallEnterpriseApplication` commands NanoHUB heard, in order, as their
+    /// `Command` dictionaries.
+    pub fn installs(&self) -> Vec<Dictionary> {
+        self.hub()
+            .heard()
+            .iter()
+            .filter(|heard| heard.command().0 == "InstallEnterpriseApplication")
+            .map(command_dict)
+            .collect()
+    }
+
     /// The UUID of the last command of `kind` NanoHUB heard.
     pub fn last_uuid(&self, kind: &str) -> String {
         self.hub()
@@ -289,8 +338,16 @@ fn gate_on(
     fake: &Arc<FakeEnrollments>,
     random: Random,
     fs: Arc<dyn Fs>,
+    allowlist: Option<&str>,
 ) -> Result<Gate, StoreError> {
-    Ok(open_on(fs, &rig.dir(), &rig.hub, &rig.clock, random)?.with_enrollment(side(fake)))
+    let install = allowlist.map(|text| Install {
+        allowlist: PkgAllowlist::parse(text).expect("the allowlist parses"),
+        host: MdmHost::parse(HOST).expect("a host"),
+        fs: Arc::new(RealFs),
+    });
+    Ok(open_on(fs, &rig.dir(), &rig.hub, &rig.clock, random)?
+        .with_enrollment(side(fake))
+        .with_install(install))
 }
 
 /// The `Command` dictionary of a command NanoHUB heard.

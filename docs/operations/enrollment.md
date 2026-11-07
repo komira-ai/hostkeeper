@@ -213,6 +213,13 @@ audits each push `mdm_nonce_pushed` by `mdm-gate`. A Mac with two pending reques
 serial and its platform UUID gets no nonce at all: deny the one that is not its daemon's, and the
 gate pushes a nonce to the other at its next look.
 
+With `--mdm-pkg-allowlist` and `--mdm-host` the gate also sends the Mac the newest pkg on its
+allowlist, before its daemon has posted, and again an hour after the Mac's last answer until a
+request from it appears; each send is audited `mdm_install_sent` by `mdm-gate` with its count, and
+`hostkeeper ctl mdm list-devices` shows the count and the last send
+([enrollment-coordinator.md](../enrollment-coordinator.md)). A Mac whose count grows and that never
+posts did not install the pkg: read `/var/log/install.log` on the Mac.
+
 A coordinator without those flags pushes no nonce: every Mac then waits for an operator, with
 `mac_nonce_presented` false, and is approved as a Linux request is. So does a Mac the gate does
 not see enrolled and supervised, or whose serial is not on `--mac-serial-allowlist`.
