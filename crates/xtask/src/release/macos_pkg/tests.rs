@@ -4,7 +4,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 
 use super::*;
-use crate::release::fakes::{FakeExec, FakePkgbuild, PkgCall, scratch, tree_of};
+use crate::release::fakes::{FakeExec, FakePkgbuild, PkgCall, ProductCall, scratch, tree_of};
 use crate::testdir::TestDir;
 
 /// The binary the pkg holds; nothing runs it.
@@ -71,6 +71,31 @@ pub(super) fn package_info() -> String {
     package_info_with(
         "identifier=\"dev.hostkeeper.hostkeeper\" version=\"0.1.5\" install-location=\"/\"",
     )
+}
+
+/// The `Distribution` `productbuild --package` writes for the component pkg of 0.1.5 (the layout
+/// assumed in [`distribution`], to be confirmed on the macOS runner), with `refs` as the
+/// `<pkg-ref>` that refers to the component and `extra` among the root element's children.
+pub(super) fn distribution_with(refs: &str, extra: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<installer-gui-script \
+         minSpecVersion=\"1\">\n    <pkg-ref id=\"dev.hostkeeper.hostkeeper\"/>\n    <options \
+         customize=\"never\" require-scripts=\"false\"/>\n    <choices-outline>\n        <line \
+         choice=\"default\">\n            <line choice=\"dev.hostkeeper.hostkeeper\"/>\n        \
+         </line>\n    </choices-outline>\n    <choice id=\"default\"/>\n    <choice \
+         id=\"dev.hostkeeper.hostkeeper\" visible=\"false\">\n        <pkg-ref \
+         id=\"dev.hostkeeper.hostkeeper\"/>\n    </choice>\n    {refs}\n    <product \
+         id=\"dev.hostkeeper.hostkeeper\" version=\"0.1.5\"/>\n    {extra}\n\
+         </installer-gui-script>\n"
+    )
+}
+
+/// The reference to the component of the good `Distribution`.
+pub(super) const COMPONENT_REF: &str = "<pkg-ref id=\"dev.hostkeeper.hostkeeper\" \
+    version=\"0.1.5\" onConclusion=\"none\">#hostkeeper.pkg</pkg-ref>";
+
+pub(super) fn distribution_text() -> String {
+    distribution_with(COMPONENT_REF, "")
 }
 
 /// One portable (`odc`) cpio entry: a header, the name and its NUL, the data.
@@ -169,8 +194,9 @@ pub(super) fn write_sources(dir: &Path) -> Sources {
     sources
 }
 
-/// A pkg expanded as `pkgutil --expand` leaves it, with `entries` as its payload, and the binary,
-/// `gh` and trusted root it is checked against, in a scratch directory of its own.
+/// A product archive expanded as `pkgutil --expand` leaves it (`pkg` holds the `Distribution` and
+/// the component's directory), with `entries` as the component's payload, and the binary, `gh`
+/// and trusted root it is checked against, in a scratch directory of its own.
 pub(super) struct Expanded {
     pub(super) dir: TestDir,
 }
@@ -178,9 +204,12 @@ pub(super) struct Expanded {
 impl Expanded {
     pub(super) fn new(name: &str, entries: &[Vec<u8>]) -> Expanded {
         let dir = scratch(name);
-        std::fs::create_dir(dir.join("pkg")).expect("the expanded pkg");
+        std::fs::create_dir(dir.join("pkg")).expect("the expanded product archive");
+        std::fs::create_dir(dir.join("pkg").join(COMPONENT)).expect("the expanded component");
         write_sources(&dir);
         let expanded = Expanded { dir };
+        std::fs::write(expanded.product().join(DISTRIBUTION), distribution_text())
+            .expect("the distribution");
         expanded.write("Bom", b"BOMStore");
         expanded.write("PackageInfo", package_info().as_bytes());
         expanded.write("Payload", &gzip(&odc(entries)));
@@ -193,8 +222,14 @@ impl Expanded {
         Expanded::new(name, &good_entries(BINARY))
     }
 
-    pub(super) fn pkg(&self) -> PathBuf {
+    /// The top directory of the product archive.
+    pub(super) fn product(&self) -> PathBuf {
         self.dir.join("pkg")
+    }
+
+    /// The directory of the component in the product archive.
+    pub(super) fn pkg(&self) -> PathBuf {
+        self.product().join(COMPONENT)
     }
 
     pub(super) fn sources(&self) -> Sources {
@@ -213,7 +248,7 @@ impl Expanded {
     }
 
     pub(super) fn check(&self) -> Result<Vec<String>, Error> {
-        check(&self.pkg(), &version(), &self.sources())
+        check(&self.product(), &version(), &self.sources())
     }
 
     pub(super) fn problems(&self) -> Vec<String> {
@@ -433,17 +468,20 @@ fn mode_of(path: &Path) -> u32 {
 }
 
 #[test]
-fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_runs_pkgbuild_once()
+fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_wraps_the_component()
 {
     // Catches: a pkg with anything but its payload and its postinstall (another script, a
     // config, a stray file) or without gh, the trusted root or the postinstall, a mode launchd or
     // the installer would refuse, a gh or postinstall that cannot run, or a mode that would
-    // change a system directory, or pkgbuild asked for another identifier, version or file name.
+    // change a system directory, pkgbuild asked for another identifier, version or file name, a
+    // component written outside the stage, or the component, not the product, left in the output
+    // directory.
     let dir = scratch("macos-pkg-build");
     let r = request(&dir);
     let fake = FakePkgbuild::default();
     let lines = build(&fake, &r).expect("build");
     let pkg = r.out.join("hostkeeper-0.1.5-macos-arm64.pkg");
+    let component = r.stage.join("hostkeeper.pkg");
     let root = r.stage.join("root");
     let scripts = r.stage.join("scripts");
     assert_eq!(
@@ -453,8 +491,25 @@ fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_r
             scripts: scripts.clone(),
             identifier: "dev.hostkeeper.hostkeeper".to_owned(),
             version: version(),
-            pkg: pkg.clone(),
+            pkg: component.clone(),
         }]
+    );
+    assert_eq!(
+        *fake.product_calls.borrow(),
+        [ProductCall {
+            component: component.clone(),
+            identifier: "dev.hostkeeper.hostkeeper".to_owned(),
+            version: version(),
+            product: pkg.clone(),
+        }]
+    );
+    assert_eq!(
+        std::fs::read(&component).expect("the component"),
+        FakePkgbuild::BYTES
+    );
+    assert_eq!(
+        tree_of(&r.out),
+        ["hostkeeper-0.1.5-macos-arm64.pkg".to_owned()]
     );
     assert_eq!(*fake.trees.borrow(), [TREE.map(str::to_owned).to_vec()]);
     assert_eq!(
@@ -464,9 +519,13 @@ fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_r
             file_sha256(&pkg).expect("hash")
         )]
     );
-    assert_eq!(std::fs::read(&pkg).expect("the pkg"), FakePkgbuild::BYTES);
+    assert_eq!(
+        std::fs::read(&pkg).expect("the pkg"),
+        FakePkgbuild::PRODUCT_BYTES
+    );
     let mut laid_out: Vec<String> = TREE.iter().map(|p| format!("root/{p}")).collect();
-    laid_out.extend(["root/", "scripts/", "scripts/postinstall"].map(str::to_owned));
+    laid_out
+        .extend(["hostkeeper.pkg", "root/", "scripts/", "scripts/postinstall"].map(str::to_owned));
     laid_out.sort();
     assert_eq!(tree_of(&r.stage), laid_out);
     assert_eq!(mode_of(&r.stage), 0o755);
@@ -602,8 +661,9 @@ fn a_missing_binary_gh_or_trusted_root_or_an_unwritable_place_is_an_io_error_nam
 }
 
 #[test]
-fn a_pkgbuild_failure_is_passed_on() {
-    // Catches: a failed pkgbuild reported as a built pkg.
+fn a_pkgbuild_or_productbuild_failure_is_passed_on() {
+    // Catches: a failed pkgbuild or productbuild reported as a built pkg, or productbuild run over
+    // a component that was not built.
     let dir = scratch("macos-pkg-pkgbuild-fails");
     let r = request(&dir);
     let fake = FakePkgbuild {
@@ -615,6 +675,35 @@ fn a_pkgbuild_failure_is_passed_on() {
         Err(Error::Port(PortError::new("pkgbuild", "no root")))
     );
     assert!(!r.out.join("hostkeeper-0.1.5-macos-arm64.pkg").exists());
+    assert!(fake.product_calls.borrow().is_empty());
+    let dir = scratch("macos-pkg-productbuild-fails");
+    let r = request(&dir);
+    let fake = FakePkgbuild {
+        fail_product: Some(PortError::new("productbuild", "no package")),
+        ..FakePkgbuild::default()
+    };
+    assert_eq!(
+        build(&fake, &r),
+        Err(Error::Port(PortError::new("productbuild", "no package")))
+    );
+    assert!(!r.out.join("hostkeeper-0.1.5-macos-arm64.pkg").exists());
+}
+
+/// The command line the adapter runs for `productbuild` over the component `component`, into the
+/// product `product`.
+fn productbuild_line(component: &str, product: &str) -> Vec<String> {
+    [
+        "productbuild",
+        "--package",
+        component,
+        "--identifier",
+        "dev.hostkeeper.hostkeeper",
+        "--version",
+        "0.1.5",
+        product,
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 /// The command line the adapter runs for the tree `root`, the scripts directory `scripts` and
@@ -659,6 +748,59 @@ fn pkgbuild_runs_once_with_a_fixed_argument_list_and_the_scripts_directory() {
         Ok(())
     );
     assert_eq!(*cli.exec.calls.borrow(), std::slice::from_ref(&line));
+}
+
+#[test]
+fn productbuild_runs_once_over_the_component_with_a_fixed_argument_list_and_no_signature() {
+    // Catches: productbuild run over another file than the component, without the product's
+    // identifier or version (the Distribution would carry none, and the check refuses it), with
+    // a signing identity, or any argument out of place.
+    let line = productbuild_line("/stage/hostkeeper.pkg", "/out/x.pkg");
+    let words: Vec<&str> = line.iter().map(String::as_str).collect();
+    let cli = PkgbuildCli::new(FakeExec::default().on(&words, true, "", ""));
+    assert_eq!(
+        cli.build_product(
+            Path::new("/stage/hostkeeper.pkg"),
+            "dev.hostkeeper.hostkeeper",
+            &version(),
+            Path::new("/out/x.pkg")
+        ),
+        Ok(())
+    );
+    assert_eq!(*cli.exec.calls.borrow(), std::slice::from_ref(&line));
+}
+
+#[test]
+fn a_productbuild_that_fails_or_cannot_start_is_a_port_error_with_its_words() {
+    // Catches: a failed productbuild taken as success, or an error that does not say what ran.
+    let line = productbuild_line("/c.pkg", "/p.pkg");
+    let words: Vec<&str> = line.iter().map(String::as_str).collect();
+    let what = format!("productbuild {}", line[1..].join(" "));
+    let cli = PkgbuildCli::new(FakeExec::default().on(&words, false, "", "productbuild: no\n"));
+    let build = |cli: &PkgbuildCli<FakeExec>, component: &str| {
+        cli.build_product(
+            Path::new(component),
+            "dev.hostkeeper.hostkeeper",
+            &version(),
+            Path::new("/p.pkg"),
+        )
+    };
+    assert_eq!(
+        build(&cli, "/c.pkg"),
+        Err(PortError::new(&what, "productbuild: no"))
+    );
+    let other = build(&cli, "/other.pkg").expect_err("not scripted");
+    assert_eq!(
+        other.what,
+        format!(
+            "productbuild {}",
+            productbuild_line("/other.pkg", "/p.pkg")[1..].join(" ")
+        )
+    );
+    assert!(
+        other.why.starts_with("not scripted: productbuild"),
+        "{other:?}"
+    );
 }
 
 #[test]
@@ -711,6 +853,20 @@ fn a_path_that_is_not_utf8_is_a_port_error_and_runs_nothing() {
             )
         );
     }
+    let e = cli
+        .build_product(bad, "dev.hostkeeper.hostkeeper", &version(), pkg)
+        .expect_err("not UTF-8");
+    assert_eq!(
+        e,
+        PortError::new(
+            format!("productbuild {}", bad.display()),
+            "the path is not UTF-8"
+        )
+    );
+    let e = cli
+        .build_product(good, "dev.hostkeeper.hostkeeper", &version(), bad)
+        .expect_err("not UTF-8");
+    assert_eq!(e.why, "the path is not UTF-8");
     assert!(cli.exec.calls.borrow().is_empty());
 }
 
@@ -800,5 +956,6 @@ fn an_odc_archive_that_is_cut_short_or_malformed_is_refused_with_where() {
     );
 }
 
+mod distribution;
 mod logs;
 mod self_update;

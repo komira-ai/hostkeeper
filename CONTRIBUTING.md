@@ -114,10 +114,9 @@ ctl` (`tests/support/pair.rs`):
   ignored until the coordinator has a flag for the host certificates' validity
   (komira-ai/hostkeeper#100);
 - `install_uninstall.rs`, a package served by a release channel of the test over HTTPS:
-  `an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, and, ignored
-  until the gaps they found are fixed, `a_new_desired_version_is_installed_over_the_installed_one`
-  (komira-ai/hostkeeper#109) and `an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host`
-  (komira-ai/hostkeeper#110).
+  `an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`,
+  `a_new_desired_version_is_installed_over_the_installed_one` and
+  `an_uninstall_takes_the_package_its_file_and_its_unit_off_the_host`.
 
 The daemon fixes paths on the host that these tests cannot move. Both tests claim its pki
 directory `/etc/updater`, its self-update units and `/var/lib/hostkeeper`; `install_uninstall.rs`

@@ -90,7 +90,10 @@ hostkeeper ctl enrollment approve --request-id <id> --key-sha256 <key_sha256 as 
 `List` answers the waiting requests oldest first (the time the coordinator first received each,
 then its id), a page at a time (`limit` at most 256; `next_page_token` until the last page), each
 with its claims, its `key_sha256`, `renewal_of`, whether it is a `duplicate_claim` and whether a
-Mac nonce was presented. It never answers a CSR or a nonce. With `unenrolled` it answers, in the same order and pages, the
+Mac nonce was presented, its match against the host inventory (with the one record's host id,
+role, serial and BMC MAC), and `contested_by`: the ids of the other pending requests that match a
+record it matches, looked for among every pending request, not the page. It never answers a CSR
+or a nonce. With `unenrolled` it answers, in the same order and pages, the
 requests that expired in their place (Request expiry, below).
 
 `Approve` names the request, the SHA-256 of its key as listed (compared whole, in constant time;
@@ -98,7 +101,8 @@ another request's key hash is `key_mismatch`), the host id, the role, the servic
 coordinator manages) and a reason. A request (not a renewal) that matches exactly one record of
 the host inventory is approved as that record's host id: an empty host id is it, and the answer's
 `host_id` names it; another host id is `record_mismatch` unless `replace` is set. Any other request
-names its host id. Under the store's lock it is refused when the request is not
+names its host id. Before that, a request that another pending request contests (they match one
+record) is `record_contested`, `replace` or not, until the operator rejects all but one. Under the store's lock it is refused when the request is not
 pending, is a `duplicate_claim`, or names a host id another key holds or an operator denied,
 unless `replace` is set. One write of the request file records the approval: host id, role,
 services (the host's first assignment), the operator's token name, the time and the reason. The
@@ -155,6 +159,7 @@ again, as it did before it expired.
 | `unknown_request` | no request has the id |
 | `key_mismatch` | the key hash is not the request's |
 | `record_mismatch` | the request matches one inventory record, the host id is another, and `replace` is not set |
+| `record_contested` | another pending request matches an inventory record the request matches; `replace` does not set it aside |
 | `not_pending` | the request was approved, issued or denied already, or it expired |
 | `duplicate_claim` | the request is a duplicate claim and `replace` is not set |
 | `host_id_taken` | another key holds the host id and `replace` is not set |
