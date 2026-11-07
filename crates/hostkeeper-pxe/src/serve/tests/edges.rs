@@ -206,3 +206,48 @@ fn a_send_or_a_transfer_socket_that_fails_is_logged() {
     assert_eq!(run.stop().0, Ok(()));
     assert!(!super::kit::waiting(&reader));
 }
+
+/// A `HEAD` of a seed answers its size and is not its fetch: the MAC stays in the answer set,
+/// and its next DISCOVER still gets the offer; the `GET` that follows is the fetch.
+///
+/// Catches a probe of a seed (`curl -I`) that takes the machine out of the answer set before
+/// its installer has the seed.
+#[test]
+fn a_head_of_a_seed_is_not_its_fetch() {
+    let kit = Kit::new("edges-head-seed");
+    let firmware = client();
+    let mut run = kit.start(kit.args("proxy", firmware.local_addr().expect("its address"), &[]));
+    tftp_read(
+        run.tftp,
+        &format!("/grub/hostkeeper/x86_64/{RECORDED}"),
+        &[],
+    )
+    .expect("a menu");
+    run.wait("install linux-x86_64 as host new-1");
+    let head = http(run.http, "HEAD", &format!("/seed/{RECORDED}/meta-data"));
+    assert_eq!(head.status, 200);
+    assert!(head.head.contains("content-length: 30"), "{}", head.head);
+    assert_eq!(head.body, b"");
+    firmware
+        .send_to(
+            &super::kit::dhcp(1, RECORDED, Some("PXEClient"), Some(7), None),
+            run.dhcp,
+        )
+        .expect("send");
+    assert!(
+        run.wait(&format!("DHCPDISCOVER from {RECORDED}"))
+            .ends_with("proxy offer sent, boot file hostkeeper/shimx64.efi (linux-x86_64)")
+    );
+    let get = http(run.http, "GET", &format!("/seed/{RECORDED}/meta-data"));
+    assert_eq!(get.body, b"instance-id: hostkeeper-new-1\n");
+    run.wait("its install started");
+    let (result, lines) = run.stop();
+    assert_eq!(result, Ok(()));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.contains("its install started"))
+            .count(),
+        1
+    );
+}

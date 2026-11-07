@@ -64,7 +64,13 @@ async fn answer(server: &Server, request: Request<Incoming>, peer: SocketAddr) -
             let name = path.get(1..).unwrap_or_default();
             let content = match request.uri().query() {
                 Some(_) => None,
-                None => server.content(name, Protocol::Http).await,
+                None => {
+                    let protocol = match method == Method::HEAD {
+                        true => Protocol::Head,
+                        false => Protocol::Http,
+                    };
+                    server.content(name, protocol).await
+                }
             };
             match content {
                 Some(content) => {

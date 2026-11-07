@@ -72,7 +72,10 @@ pub struct Settings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Protocol {
     Tftp,
+    /// An HTTP `GET`.
     Http,
+    /// An HTTP `HEAD`: it reads a name's size, and is not a seed's fetch.
+    Head,
 }
 
 /// What a name reads.
@@ -306,10 +309,13 @@ impl Server {
         if let Some(request) = menu_request(name) {
             return Some(Content::Text(self.menu(name, request).await));
         }
-        if protocol == Protocol::Http
+        if protocol != Protocol::Tftp
             && let Some((mac, file)) = seed_request(name)
         {
-            return self.seed(name, mac, file).await.map(Content::Text);
+            return self
+                .seed(name, mac, file, protocol == Protocol::Head)
+                .await
+                .map(Content::Text);
         }
         let tftp_served = self
             .sealed
@@ -317,7 +323,7 @@ impl Server {
             .any(|(_, set)| set.shim == name || set.grub == name);
         self.sealed
             .file(name)
-            .filter(|_| protocol == Protocol::Http || tftp_served)
+            .filter(|_| protocol != Protocol::Tftp || tftp_served)
             .map(Content::File)
     }
 
@@ -367,8 +373,15 @@ impl Server {
         }
     }
 
-    /// The seed file `file` of `mac`, or `None` when it is refused.
-    async fn seed(&self, name: &str, mac: MacAddress, file: SeedFile) -> Option<String> {
+    /// The seed file `file` of `mac`, or `None` when it is refused. A `probe` (an HTTP `HEAD`)
+    /// is answered as a fetch is, but does not count as the seed's fetch.
+    async fn seed(
+        &self,
+        name: &str,
+        mac: MacAddress,
+        file: SeedFile,
+        probe: bool,
+    ) -> Option<String> {
         let (install, seeded) = {
             let state = self.state();
             (
@@ -388,7 +401,10 @@ impl Server {
                 .menus
                 .get(&mac)
                 .is_some_and(|record| record.host_id == install.record().host_id);
-            if !same {
+            // A fetch of the same seed that came in meanwhile may have taken the MAC out of the
+            // set already: that is the same install, not a refusal.
+            let refused = !same & !self.state().seeded.contains(&mac);
+            if refused {
                 self.log.line(format_args!(
                     "seed {name}: refused: {mac} is no longer in the answer set as host {}: {}",
                     install.record().host_id,
@@ -396,11 +412,16 @@ impl Server {
                 ));
                 return None;
             }
-            self.state().seeded.insert(mac);
-            self.log.line(format_args!(
-                "seed {name}: fetched by {mac}, host {}: its install started, and it leaves the answer set for the rest of the run",
-                install.record().host_id
-            ));
+            let first = match probe {
+                true => false,
+                false => self.state().seeded.insert(mac),
+            };
+            if first {
+                self.log.line(format_args!(
+                    "seed {name}: fetched by {mac}, host {}: its install started, and it leaves the answer set for the rest of the run",
+                    install.record().host_id
+                ));
+            }
         }
         let made = seed(&SeedInputs {
             install: &install,
