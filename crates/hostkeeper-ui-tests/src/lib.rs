@@ -6,9 +6,13 @@
 //!
 //! - [`UI_FILES`]: every file of the app, read at build time with `include_str!`, so no test
 //!   needs a path or a working directory;
-//! - [`call_sites`] and [`check_calls`]: the operator API methods the app's pages call, read
-//!   from the source, and the check that each is a method of the protobuf descriptors;
-//! - [`listed_calls`]: `ui/calls.json`, the list of those methods with the pages that call them;
+//! - [`client_gen`]: the generator of the app's API client, `ui/gen/client.js`, and its
+//!   TypeScript declarations, `ui/gen/client.d.ts`, from the command table and the descriptors
+//!   of `hostkeeper-proto`;
+//! - [`call_sites`] and [`check_calls`]: the client's functions the app's pages call, read
+//!   from the source, and the check that each method is one of the protobuf descriptors;
+//! - [`derived_calls`], [`calls_json`] and [`listed_calls`]: `ui/calls.json`, the list of those
+//!   functions with their methods and the pages that call them, derived from the source;
 //! - [`scan`]: what the sources must never contain (token storage, logging, a URL of another
 //!   origin, an inline script or handler, markup built from text).
 //!
@@ -18,12 +22,13 @@
 //! (`tests/real_router.rs`).
 
 mod calls;
+pub mod client_gen;
 mod lexis;
 pub mod scan;
 mod sources;
 
 pub use calls::{
-    CallSite, ListError, Listed, ScanError, UnknownCall, call_sites, check_calls,
-    descriptor_methods, listed_calls,
+    CallSite, DeriveError, ListError, Listed, ScanError, UnknownCall, call_sites, calls_json,
+    check_calls, derived_calls, descriptor_methods, listed_calls,
 };
 pub use sources::{UI_FILES, UiFile};

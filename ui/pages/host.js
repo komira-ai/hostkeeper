@@ -156,31 +156,31 @@ function serviceSection(ctx, nodeId, view) {
             && !ctx.confirm(`Exclude ${nodeId} from ${service} and free the update slot it holds (abandon)?`)) {
             return "Not excluded.";
           }
-          await ctx.api.call("hostkeeper.operator.v1.Hosts/Exclude",
+          await ctx.api.hosts.exclude(
             { service, nodeId, reason: reason(), abandon: form.abandon === true });
           ctx.refresh();
           return `Excluded ${nodeId} from ${service}.`;
         })),
         action(ctx, "Include", "include", async () => {
-          await ctx.api.call("hostkeeper.operator.v1.Hosts/Include", { service, nodeId });
+          await ctx.api.hosts.include({ service, nodeId });
           ctx.refresh();
           return `Included ${nodeId} in ${service}.`;
         }),
         action(ctx, "Abort the running update", "abort", needReason(async () => {
-          const reply = await ctx.api.call("hostkeeper.operator.v1.Hosts/Abort", { nodeId, service, reason: reason() });
+          const reply = await ctx.api.hosts.abort({ nodeId, service, reason: reason() });
           ctx.refresh();
           return reply.queued === true
             ? `Abort of ${service} queued for ${nodeId}'s next heartbeat.`
             : `Nothing to abort: ${nodeId} runs nothing of ${service}, so no abort was queued.`;
         })),
         action(ctx, "Hold here", "hold", needReason(async () => {
-          await ctx.api.call("hostkeeper.operator.v1.Services/Hold",
+          await ctx.api.services.hold(
             { scope: { host: nodeId }, service, reason: reason() });
           ctx.refresh();
           return `Held ${service} on ${nodeId}.`;
         })),
         action(ctx, "Release the hold here", "unhold", needReason(async () => {
-          await ctx.api.call("hostkeeper.operator.v1.Services/Unhold",
+          await ctx.api.services.unhold(
             { scope: { host: nodeId }, service, reason: reason() });
           ctx.refresh();
           return `Released the hold of ${service} on ${nodeId}.`;
@@ -253,7 +253,7 @@ async function uninstallEnds(ctx, listing, nodeId) {
   try {
     let request = { nodeId };
     for (;;) {
-      const page = await ctx.api.call("hostkeeper.operator.v1.Audit/List", request);
+      const page = await ctx.api.audit.list(request);
       const got = list(page, "entries");
       entries.push(...got);
       const next = typeof page.nextSeq === "string" ? page.nextSeq : "0";
@@ -331,13 +331,13 @@ export async function render(ctx) {
   let host;
   let failure = null;
   try {
-    host = (await ctx.api.call("hostkeeper.operator.v1.Hosts/Get", { nodeId })).host || {};
+    host = (await ctx.api.hosts.get({ nodeId })).host || {};
   } catch (error) {
     failure = error;
   }
   let listing;
   try {
-    listing = { entries: list(await ctx.api.call("hostkeeper.operator.v1.Services/List", {}), "services") };
+    listing = { entries: list(await ctx.api.services.list({}), "services") };
   } catch (error) {
     listing = { error };
   }
@@ -378,7 +378,7 @@ export async function render(ctx) {
           && !ctx.confirm(`Remove every label of ${nodeId}?`)) {
           return "Labels not changed.";
         }
-        await ctx.api.call("hostkeeper.operator.v1.Hosts/SetLabels", { nodeId, labels });
+        await ctx.api.hosts.setLabels({ nodeId, labels });
         ctx.refresh();
         return `Labels of ${nodeId} set.`;
       })),
@@ -406,7 +406,7 @@ function retireSection(ctx, nodeId) {
       if (!ctx.confirm(`Retire ${nodeId}? Its heartbeats and renewals are refused from then on.`)) {
         return "Not retired.";
       }
-      const reply = await ctx.api.call("hostkeeper.operator.v1.Hosts/Retire", { nodeId, reason });
+      const reply = await ctx.api.hosts.retire({ nodeId, reason });
       ctx.refresh();
       return reply.updateInFlight === true
         ? `Retired ${nodeId}: its update slot is freed when it reports its update final.`
