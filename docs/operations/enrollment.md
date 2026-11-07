@@ -106,9 +106,9 @@ to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper 
   the coordinator refused the request; the token is in
   [Refusals of the host's calls](#refusals-of-the-hosts-calls).
 
-The host has no command that reports its enrollment. The daemon's root admin socket
-(`/run/hostkeeper/admin.sock`) serves `Status`, `Abort` and `ClearRecord`, but has no client
-yet, and `Status` carries no enrollment state, host id or key hash.
+On the host, as root, `hostkeeper admin status` reports its enrollment over the daemon's admin
+socket (`/run/hostkeeper/admin.sock`, [docs/admin.md](../admin.md)), and a Linux node's console
+shows it ([Check the key hash](#check-the-key-hash)).
 
 ## The pending request and its match
 
@@ -186,10 +186,41 @@ happens: the daemon sends no nonce, and the coordinator has no MDM device-state 
 decline one. Every Mac waits for an operator, with `mac_nonce_presented` false, and is approved
 as a Linux request is.
 
+Once the gate and the daemon send nonces, three things follow for an operator. A nonce approves
+only the request it was issued for: a second request presenting it (another key on the same Mac)
+stays pending and is audited `mac_auto_approve_declined` with `nonce_wrong_request`; deny it.
+A Mac approved by its nonce is assigned the services of its allowlist entry, audited `assign` by
+`mdm-nonce`, as an approval assigns the services it names. A Mac wiped and enrolled in MDM again
+takes its own host id over from its old key without an operator (`enroll_replace` by
+`mdm-nonce`); that does not apply to a denied host id, which stays `denied`, nor to a host id
+approved for a request that claimed another serial, which is `host_id_taken`: approve those by
+key hash with `--replace true` as below.
+
 ## Check the key hash
 
 Claims identify nothing: any machine can claim any MAC. Before approving, check that the request
-is the key of the server in front of you. On the node, as root:
+is the key of the server in front of you.
+
+On a Linux node, the login prompt of its console shows the hash. After each step of its
+enrollment, whenever the text changes, the daemon writes the request's state, the coordinator it
+posts to and the key hash to `/run/hostkeeper/enrollment.issue`, and asks the gettys to draw
+their prompt again (`agetty --reload`); the deb, the rpm and the boot-image overlay link
+`/etc/issue.d/hostkeeper.issue` to that file, and agetty shows it above the prompt:
+
+```
+hostkeeper enrollment: pending approval; approve only the request whose key_sha256 is the key sha256 below
+  coordinator: https://coordinator.example
+  key sha256:  4f2a9c0e8b7d6a5f4e3d2c1b0a99887766554433221100ffeeddccbbaa998877
+```
+
+The first line says instead `nothing sent: the coordinator's CA is not the pinned ca_sha256`
+when `ca_sha256` or `coordinator` is wrong, `error: <why>` when the coordinator cannot be reached
+or another step failed (the daemon's log says the same), `denied: <reason>` for a denied request,
+and `approved, enrolled as host:<id>` once the host holds its certificate. The local console
+(tty1) shows it; a serial console shows it only when a getty runs on it. The text is made of
+printable ASCII only: any other character, and a backslash, is written as `?`.
+
+Without a console, on the node, as root:
 
 ```
 openssl pkey -inform DER -in /etc/updater/pki/pending/key -pubout -outform DER | sha256sum
@@ -197,7 +228,8 @@ openssl pkey -inform DER -in /etc/updater/pki/pending/key -pubout -outform DER |
 
 The key is a P-256 key, PKCS#8 DER; the hash is that of its public key's DER
 SubjectPublicKeyInfo, and must equal `key_sha256` of the request. Once the host is enrolled, the
-same key is `/etc/updater/pki/current/key`. The admin socket's `Status` does not give the hash.
+same key is `/etc/updater/pki/current/key`. `hostkeeper admin status` gives it too, as
+`enrollment.key_sha256` ([docs/admin.md](../admin.md)).
 
 ## Approve
 

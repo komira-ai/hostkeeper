@@ -378,6 +378,7 @@ impl Host {
             enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
             renewal: hostkeeper_enroll::RenewalState::default(),
             watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
+            console: None,
         };
         Host {
             heartbeater: links.heartbeater(&daemon),

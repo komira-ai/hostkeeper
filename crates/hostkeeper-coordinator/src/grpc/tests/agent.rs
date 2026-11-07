@@ -610,3 +610,75 @@ fn the_host_clock_and_certificate_reach_the_reader() {
         assert_eq!(bare.get(key), None, "{key}");
     }
 }
+
+/// Proves the `Enroll` route answers through the coordinator, which assigns what a nonce
+/// approval approves: a Mac's request with a nonce issued for it, sent through the router to a
+/// coordinator whose allowlist names its serial and whose gate says the device is enrolled and
+/// supervised, is approved (answered with no waiting state), audited `enroll_approve` and then
+/// `assign` by `mdm-nonce`, and its host is assigned `kbf`.
+#[tokio::test]
+async fn an_enroll_approved_by_its_nonce_assigns_the_entry_services() {
+    use crate::assignment::Entry;
+    use crate::enrollment::tests::support::{SERIAL, audit_after, audit_of, mac_request};
+    use crate::enrollment::{DeviceStatus, FakeDeviceState, MacAllowlist, MacPolicy, os_random};
+    use hostkeeper_enrollment::fs::RealFs;
+
+    let gate = Arc::new(FakeDeviceState::default());
+    gate.set(
+        SERIAL,
+        Ok(DeviceStatus {
+            enrolled: true,
+            supervised: true,
+            enrolled_since_unix: None,
+        }),
+    );
+    let policy = MacPolicy {
+        device_state: gate,
+        allowlist: MacAllowlist::parse(
+            "[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\nservices = [\"kbf\"]\n",
+        )
+        .expect("an allowlist"),
+    };
+    let enrollment =
+        EnrollmentRig::configured("grpc-agent-mac", Arc::new(RealFs), os_random(), |e| {
+            e.with_mac(policy)
+        });
+    let farm = farm_enrolled("grpc-agent-mac-coordinator", &enrollment.enrollment).await;
+    let c = &farm.coordinator;
+    let key = HostKey::new();
+    let nonce = enrollment
+        .enrollment
+        .issue_mac_nonce(SERIAL, &key.key_hash())
+        .expect("a nonce");
+    let before = audit_of(c).len();
+    let request = mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes());
+    let answer: proto::EnrollResponse = call(c, &None, PATHS[0], &request).await.decode();
+    assert_eq!(answer.request_id, key.key_hash().to_hex());
+    assert_eq!(answer.state, proto::EnrollState::Unspecified as i32);
+    let actions: Vec<(String, String, Option<String>)> = audit_after(c, before)
+        .into_iter()
+        .map(|(by, action, node, _)| (by, action, node))
+        .collect();
+    let host = Some("mac-c02xk1abjg5j".to_owned());
+    assert_eq!(
+        actions,
+        [
+            (
+                "coordinator".to_owned(),
+                "enroll_requested".to_owned(),
+                None
+            ),
+            (
+                "mdm-nonce".to_owned(),
+                "enroll_approve".to_owned(),
+                host.clone()
+            ),
+            ("mdm-nonce".to_owned(), "assign".to_owned(), host),
+        ]
+    );
+    let assigned = c.ops().state().assignments;
+    assert_eq!(
+        assigned["kbf"].hosts.get("mac-c02xk1abjg5j"),
+        Some(&Entry::Include)
+    );
+}

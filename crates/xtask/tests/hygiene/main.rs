@@ -2,7 +2,9 @@
 //! [`rules`], and each rule is shown to refuse its defect by running it on a text that holds one.
 //!
 //! The files come from `git ls-files` at the repository root. A file whose bytes are not UTF-8 is
-//! binary and is skipped; every other tracked file is read. The deny list of internal repository
+//! binary and is skipped; every other tracked file is read. A tracked link is read as git keeps
+//! it, as the path it points at, and is not followed: a link may point at a path that exists only
+//! on a host (the overlay's console issue link points into `/run`). The deny list of internal repository
 //! names ([`DENIED_FILE`]) is not scanned, because its job is to hold the digests of those
 //! names. The licence text ([`LICENCE_FILE`]) and the Sigstore trusted root ([`TRUSTED_ROOT_FILE`])
 //! are scanned by every rule but the date rule, because each is verbatim third-party text with
@@ -13,6 +15,8 @@ mod links;
 mod retired;
 mod rules;
 mod rust_text;
+#[path = "../../src/testdir.rs"]
+mod testdir;
 mod tlds;
 
 use std::collections::HashSet;
@@ -64,15 +68,22 @@ fn scanned(paths: Vec<String>) -> Vec<String> {
 }
 
 /// `(path, text)` of every scanned file that is text. A directory (a submodule) and a file that
-/// is not UTF-8 are skipped; a file that cannot be read panics.
+/// is not UTF-8 are skipped; a link's text is the path it points at, as git keeps it, whether
+/// or not that path exists; a file that cannot be read panics.
 fn texts(root: &Path, paths: Vec<String>) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for path in paths {
         let full = root.join(&path);
-        if full.is_dir() {
+        let meta = std::fs::symlink_metadata(&full).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        if meta.is_dir() {
             continue;
         }
-        let bytes = std::fs::read(&full).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let bytes = if meta.file_type().is_symlink() {
+            let target = std::fs::read_link(&full).unwrap_or_else(|e| panic!("read {path}: {e}"));
+            target.into_os_string().into_encoded_bytes()
+        } else {
+            std::fs::read(&full).unwrap_or_else(|e| panic!("read {path}: {e}"))
+        };
         if let Ok(text) = String::from_utf8(bytes) {
             out.push((path, text));
         }
@@ -112,6 +123,32 @@ fn assert_clean(found: Vec<Finding>, text: &str) {
 
 fn public() -> Vec<String> {
     vec!["github.com".to_string()]
+}
+
+/// Catches a lint that stops at a tracked link whose target is not there, follows a link instead
+/// of reading the path it holds, or reads a directory: a file is read as its text, a link that
+/// points at nothing and a link to a file as the paths they hold, and a directory not at all.
+#[test]
+fn a_link_is_read_as_the_path_it_points_at_and_never_followed() {
+    let base = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let dir = testdir::TestDir::under(base, "hygiene-links");
+    std::fs::write(dir.join("notes.md"), "a note\n").expect("a file");
+    std::os::unix::fs::symlink("/run/nowhere/enrollment.issue", dir.join("dangling"))
+        .expect("a dangling link");
+    std::os::unix::fs::symlink("notes.md", dir.join("to-notes")).expect("a link to the file");
+    std::fs::create_dir(dir.join("submodule")).expect("a directory");
+    let paths = ["notes.md", "dangling", "to-notes", "submodule"].map(str::to_owned);
+    assert_eq!(
+        texts(&dir, paths.to_vec()),
+        [
+            ("notes.md".to_owned(), "a note\n".to_owned()),
+            (
+                "dangling".to_owned(),
+                "/run/nowhere/enrollment.issue".to_owned()
+            ),
+            ("to-notes".to_owned(), "notes.md".to_owned()),
+        ]
+    );
 }
 
 #[test]

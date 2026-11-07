@@ -160,6 +160,7 @@ fn an_expired_request_is_neither_approved_nor_issued() {
         approved_unix: NOW + TTL + 2,
         reason: "late".to_owned(),
         mac_nonce: None,
+        mac_enrolled_since_unix: None,
     };
     let recorded = store
         .approve_recorded(&id, &id, &decision("web-1", true), &record)

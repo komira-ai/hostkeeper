@@ -19,8 +19,8 @@ command lines, that it starts `current` of the daemon's binary directory and res
 daemon's exit after its own update, that it agrees with the drop-in the daemon writes, that it is
 the one unit file and the one hostkeeper's package is built with, that the directories are the
 design's with the design's modes, that the template is refused until each placeholder is filled
-and loads once they are, that the packages carry exactly the six files and no key, certificate,
-token or config, that `gh` and the trusted root are installed at the daemon's own paths from
+and loads once they are, that the packages carry exactly the six files and the console's issue
+link and no key, certificate, token or config, that `gh` and the trusted root are installed at the daemon's own paths from
 where `cargo xtask release nfpm-stage` writes them, that the scripts never start the unit, and
 that the overlay equals these sources.
 
@@ -83,6 +83,13 @@ the `gh` archive against its pin and writes both into `target/nfpm/`; where they
 the pin is bumped and what a stale trusted root does are in
 `docs/deploy/verify-a-release.md`, "What the deb and the rpm check packages with".
 
+The packages also install one link, `/etc/issue.d/hostkeeper.issue`, to
+`/run/hostkeeper/enrollment.issue`: the console's issue file, which the daemon writes after each
+step of its enrollment (the request's state, the coordinator and the key hash), so the login
+prompt of the machine's console shows the key hash to check before approving
+([docs/operations/enrollment.md](../../docs/operations/enrollment.md#check-the-key-hash)). The
+link points at nothing until the daemon first writes the file.
+
 On a first install the post-install script makes the directories of `hostkeeper.conf` and
 enables the unit. It does not start it: the daemon first runs at the next
 boot, or when the operator runs `systemctl start hostkeeper.service`, from the copy of
@@ -119,6 +126,7 @@ unit by hand to its approval and first heartbeat, is
 | `etc/systemd/system/multi-user.target.wants/hostkeeper.service` | a link to the unit (relative, so it resolves in this tree too), which enables it |
 | `usr/lib/tmpfiles.d/hostkeeper.conf` | the directories |
 | `etc/hostkeeper/hostkeeper.toml.template` | the config template |
+| `etc/issue.d/hostkeeper.issue` | a link to `/run/hostkeeper/enrollment.issue`, the console's issue file, as the packages install it |
 
 The image build copies the tree onto the image root (`cp -a overlay/. <image root>/`, keeping
 the link), installs the daemon as `/usr/bin/hostkeeper` and `gh` and the trusted root under

@@ -15,7 +15,8 @@
 //!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
 //!   and staged for the deb and the rpm.
 //! - `check-linux-pkg` ([`package::linux_check`]): a built deb or rpm, read back, installs the
-//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's.
+//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's, and the
+//!   console's issue link pointing at the daemon's issue file.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing build: which
 //!   package serves each platform, refused unless it has the package of every released platform.
