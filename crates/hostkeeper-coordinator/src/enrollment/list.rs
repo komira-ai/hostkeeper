@@ -7,8 +7,14 @@
 //! page goes on after it whatever was approved or posted in between, and no request is listed
 //! twice or skipped. The store is read without its write lock. An answer carries what the
 //! host claimed, never its CSR and never a nonce.
+//!
+//! [`Enrollment::contests`] reads every pending request, not a page of them, and gives the
+//! contested ones by the host inventory ([`contests`]), for the list to mark and for
+//! `Enrollment.Approve` to refuse.
 
-use hostkeeper_enrollment::enroll::{Claims, RequestState, RequestView};
+use std::collections::{BTreeMap, BTreeSet};
+
+use hostkeeper_enrollment::enroll::{Claims, RequestState, RequestView, StoreError};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
@@ -16,6 +22,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 
 use super::Enrollment;
 use super::expiry::REASON_EXPIRED;
+use crate::inventory::{InventoryRecord, contests};
 
 /// The most requests one page lists: a `limit` of 0, or above it, is this.
 pub const MAX_PENDING_PAGE: usize = 256;
@@ -40,6 +47,12 @@ fn place_in(token: &str) -> Option<Place> {
         .ok()
         .filter(|_| first_seen.bytes().all(|b| b.is_ascii_digit()))?;
     Some((first_seen, KeyHash::from_hex(id)?))
+}
+
+/// What to answer, and log, when the requests cannot be read.
+fn unreadable(why: StoreError) -> EnrollmentRefusal {
+    tracing::error!(%why, "cannot read the enrollment requests");
+    EnrollmentRefusal::StoreFailed
 }
 
 /// What the host claimed, as the agent's protocol spells it.
@@ -112,10 +125,7 @@ impl Enrollment {
         } else {
             self.store.pending()
         };
-        let mut pending = listed.map_err(|why| {
-            tracing::error!(%why, "cannot read the enrollment requests");
-            EnrollmentRefusal::StoreFailed
-        })?;
+        let mut pending = listed.map_err(unreadable)?;
         pending.sort_by_key(place_of);
         pending.retain(|view| after.is_none_or(|after| place_of(view) > after));
         let more = pending.len() > limit;
@@ -128,5 +138,23 @@ impl Enrollment {
             requests: pending.into_iter().map(pending_proto).collect(),
             next_page_token,
         })
+    }
+
+    /// The contested pending requests by the host inventory `inventory` ([`contests`]): for
+    /// each pending request that matches a record another pending request matches, the ids of
+    /// those others. Every pending request is read, whatever page a list shows; with no record,
+    /// none is read and none is contested. Changes nothing.
+    ///
+    /// # Errors
+    /// `store_failed` (a request file could not be read).
+    pub fn contests(
+        &self,
+        inventory: &[InventoryRecord],
+    ) -> Result<BTreeMap<KeyHash, BTreeSet<KeyHash>>, EnrollmentRefusal> {
+        if inventory.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let pending = self.store.pending().map_err(unreadable)?;
+        Ok(contests(&pending, inventory))
     }
 }

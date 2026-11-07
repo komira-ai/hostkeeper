@@ -9,6 +9,7 @@
 mod approve;
 mod approve_refusals;
 mod audit;
+mod contested;
 mod expiry;
 mod heartbeat;
 mod inventory;

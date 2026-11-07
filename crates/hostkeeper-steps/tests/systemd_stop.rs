@@ -2,7 +2,8 @@
 //! `SIGTERM` of `systemctl stop` as a clean end of a service, so `systemd-run --wait` exits `0`
 //! for a hook stopped that way; the spawner here answers as it does, and the launcher must still
 //! report a failed step. A stop of another unit, or one made before the run started, changes
-//! nothing of the run.
+//! nothing of the run. An additive step (the hook's `uninstall`, whose caller stops its unit just
+//! before it runs it) is held to the same rules.
 
 mod support;
 
@@ -14,7 +15,8 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use hostkeeper_hook::{Invocation, Step};
 use hostkeeper_steps::{
-    Captured, Program, Ring, Spawner, StepCall, StepExit, StepLauncher, SystemdLauncher,
+    AdditiveCall, Captured, Program, Ring, Spawner, StepCall, StepExit, StepLauncher,
+    SystemdLauncher,
 };
 use support::{Scratch, secs};
 
@@ -191,6 +193,81 @@ fn a_stop_before_the_run_says_nothing_of_the_run() {
     let (scratch, hook) = hook_file("stop-before");
     let params = scratch.path().join("params.toml");
     let exit = launcher.run(&call(&hook, &params, unit)).unwrap();
+    assert_eq!(
+        exit,
+        StepExit {
+            code: Some(0),
+            last_line: Some(LAST_LINE.to_owned()),
+        }
+    );
+    assert_eq!(held.stops(), [unit]);
+}
+
+fn uninstall<'a>(executable: &'a Path, params: &'a Path, unit: &'a str) -> AdditiveCall<'a> {
+    AdditiveCall {
+        service: "svc",
+        step: "uninstall",
+        hook_args: &[],
+        params,
+        executable,
+        unit,
+        timeout_secs: 600,
+    }
+}
+
+/// Catches an uninstall the dead-man or an abort stopped read as a success: the additive step
+/// stopped while it runs reports no exit code, keeping its last line, as a step does; a stop of
+/// another unit while it runs leaves it its exit code. Each launcher first runs the step once
+/// unstopped, read by its exit code, so a launcher that runs no additive step fails here instead
+/// of waiting for a run that never starts.
+#[test]
+fn an_additive_step_the_launcher_stopped_reports_no_exit_code() {
+    let (scratch, hook) = hook_file("stop-additive");
+    let params = scratch.path().join("params.toml");
+    for (stop, code) in [
+        ("updater-svc-uninstall-3", None),
+        ("updater-other-uninstall-3", Some(0)),
+    ] {
+        let held = Arc::new(Held::default());
+        let launcher = SystemdLauncher::new(Spawns(Arc::clone(&held)));
+        let unit = "updater-svc-uninstall-3";
+        let first = launcher
+            .run_additive(&uninstall(&hook, &params, unit))
+            .unwrap();
+        assert_eq!(first.code, Some(0));
+        held.state.lock().unwrap().hold_next_run = true;
+        let exit = std::thread::scope(|scope| {
+            let running = scope.spawn(|| launcher.run_additive(&uninstall(&hook, &params, unit)));
+            held.wait_running();
+            launcher.stop(stop).unwrap();
+            running.join().unwrap().unwrap()
+        });
+        assert_eq!(
+            exit,
+            StepExit {
+                code,
+                last_line: Some(LAST_LINE.to_owned()),
+            },
+            "stopping {stop}"
+        );
+        assert_eq!(held.stops(), [stop]);
+    }
+}
+
+/// Catches the stop an uninstall makes of its unit just before it runs it (a unit of that name
+/// left by a daemon that died mid-uninstall) carried over to the run: the uninstall is read by its
+/// own exit code, so a hook that succeeded is not reported failed.
+#[test]
+fn a_stop_before_an_additive_step_says_nothing_of_it() {
+    let held = Arc::new(Held::default());
+    let launcher = SystemdLauncher::new(Spawns(Arc::clone(&held)));
+    let unit = "updater-svc-uninstall-3";
+    launcher.stop(unit).unwrap();
+    let (scratch, hook) = hook_file("stop-before-additive");
+    let params = scratch.path().join("params.toml");
+    let exit = launcher
+        .run_additive(&uninstall(&hook, &params, unit))
+        .unwrap();
     assert_eq!(
         exit,
         StepExit {

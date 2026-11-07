@@ -39,21 +39,29 @@
 //! changes no system directory; `/usr/local/lib` and `/usr/local/lib/hostkeeper` are made with
 //! that mode when they are not there.
 //!
-//! The pkg has one script, `postinstall` ([`scripts`]): the installed binary's
-//! `self-update-seed`, which points `current` of the binary directory at that binary when
-//! `current` starts nothing, so the job's first start works before any self-update. Nothing else
-//! runs at install: the daemon is not started, and the config is not written (the operator's
-//! bootstrap places `hostkeeper.toml` and loads the job).
+//! The pkg has one script, `postinstall` ([`scripts`]), which runs three commands at install:
+//! the installed binary's `self-update-seed`, which points `current` of the binary directory at
+//! that binary when `current` starts nothing, so the job's first start works before any
+//! self-update; its `mac-config`, which writes `/etc/hostkeeper/hostkeeper.toml` from the managed
+//! preferences the MDM installed, keeps a config that is there and fails with neither; and
+//! `launchctl bootstrap`, which loads the daemon's job. The pkg carries no config of its own.
+//!
+//! The file the verbs name is a distribution pkg ([`distribution`]): `pkgbuild` builds the
+//! component pkg that holds the payload and the script, and `productbuild` wraps it, as the one
+//! package of the product, in the file the MDM installs.
 //!
 //! The pkg is not signed: an installer signature needs an Apple Developer ID Installer
 //! identity. It is attested like every other asset (build provenance by the artifacts
 //! workflow), and an MDM installs it by its digest (design section 5.9). The binary in it keeps
 //! the ad-hoc code signature the linker gives it, which the macOS unpack check accepts.
 //!
-//! [`build`] lays the payload's tree and the scripts directory out in a new directory and runs
-//! `pkgbuild` over them through the [`BuildPkg`] port ([`PkgbuildCli`] is its adapter). [`check`]
-//! reads a pkg that `pkgutil --expand` has expanded into a directory: the directory holds exactly
-//! the files `Bom`, `PackageInfo` and `Payload` and the directory `Scripts`, into which
+//! [`build`] lays the payload's tree and the scripts directory out in a new directory, runs
+//! `pkgbuild` over them into the component pkg in that directory, and runs `productbuild` over
+//! the component into the output directory, through the [`BuildPkg`] port ([`PkgbuildCli`] is its
+//! adapter). [`check`] reads a product archive that `pkgutil --expand` has expanded into a
+//! directory: the directory holds exactly the file `Distribution` ([`distribution`] says what it
+//! must hold) and the directory of the component ([`COMPONENT`]); the component's directory holds
+//! exactly the files `Bom`, `PackageInfo` and `Payload` and the directory `Scripts`, into which
 //! `pkgutil --expand` expands the pkg's scripts archive; `PackageInfo` names the identifier, the
 //! version, the install location and the `postinstall` and no other script; `Scripts` holds that
 //! `postinstall` alone, a regular file of mode 0755; and `Payload`, a gzip-compressed cpio
@@ -75,7 +83,10 @@ use super::contract::{Version, installer_name};
 use super::ports::{BuildPkg, Exec, PortError};
 use super::{Error, file_sha256};
 
+mod distribution;
 mod scripts;
+
+use distribution::{COMPONENT, DISTRIBUTION, distribution_problems, open_tag};
 
 use scripts::{
     POSTINSTALL, SCRIPT_MODE, package_info_scripts_problems, postinstall_text, scripts_problems,
@@ -134,14 +145,20 @@ const TYPE_FILE: u32 = 0o100_000;
 /// Where the pkg installs its payload.
 const INSTALL_LOCATION: &str = "/";
 
-/// The files of an expanded pkg, sorted, and its one directory: `pkgutil --expand` leaves a flat
-/// component package's `Payload` an archive and expands its scripts archive into `Scripts`.
+/// The files of an expanded component pkg, sorted, and its one directory: `pkgutil --expand`
+/// leaves a component package's `Payload` an archive and expands its scripts archive into
+/// `Scripts`.
 const EXPANDED_FILES: [&str; 3] = ["Bom", "PackageInfo", "Payload"];
 const EXPANDED_SCRIPTS: &str = "Scripts";
 
 /// The directories of the stage: the payload's tree and the scripts directory.
 const STAGE_ROOT: &str = "root";
 const STAGE_SCRIPTS: &str = "scripts";
+
+/// What the top directory of an expanded product archive holds: the file `Distribution` and the
+/// directory of the component.
+const PRODUCT_FILES: [&str; 1] = [DISTRIBUTION];
+const PRODUCT_DIRS: [&str; 1] = [COMPONENT];
 
 /// The magic of a portable (`odc`) cpio header, its size, and the name of the last entry.
 const ODC_MAGIC: &[u8; 6] = b"070707";
@@ -349,10 +366,10 @@ pub(crate) struct Request {
     pub(crate) version: Version,
     /// The binary, `gh` and the trusted root the pkg installs.
     pub(crate) sources: Sources,
-    /// The directory the pkg is laid out in, which must not exist: the payload's tree in `root`
-    /// and the scripts directory in `scripts`.
+    /// The directory the pkg is laid out in, which must not exist: the payload's tree in `root`,
+    /// the scripts directory in `scripts` and the component pkg `pkgbuild` writes ([`COMPONENT`]).
     pub(crate) stage: PathBuf,
-    /// The directory the pkg is written to.
+    /// The directory the product pkg is written to.
     pub(crate) out: PathBuf,
 }
 
@@ -363,8 +380,9 @@ fn make_dir(at: &Path) -> Result<(), Error> {
         .map_err(Error::io(format!("set the mode of {}", at.display())))
 }
 
-/// Lays the payload out under `request.stage`'s `root` and the scripts under its `scripts`, and
-/// builds the pkg from them into `request.out`; the lines to print.
+/// Lays the payload out under `request.stage`'s `root` and the scripts under its `scripts`,
+/// builds the component pkg from them into the stage, and wraps it as the product pkg in
+/// `request.out`; the lines to print, which name the product with its digest.
 pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<String>, Error> {
     let contents = request.sources.contents()?;
     let stage = &request.stage;
@@ -402,33 +420,55 @@ pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<St
     }
     std::fs::create_dir_all(&request.out)
         .map_err(Error::io(format!("create {}", request.out.display())))?;
+    let component = stage.join(COMPONENT);
+    pkgbuild.build_pkg(&root, &scripts, &identifier(), &request.version, &component)?;
     let name = installer_name(&request.version);
-    let pkg = request.out.join(&name);
-    pkgbuild.build_pkg(&root, &scripts, &identifier(), &request.version, &pkg)?;
-    let hex = file_sha256(&pkg)?;
+    let product = request.out.join(&name);
+    pkgbuild.build_product(&component, &identifier(), &request.version, &product)?;
+    let hex = file_sha256(&product)?;
     Ok(vec![format!("{name}: sha256 {hex}")])
 }
 
-/// Runs `pkgbuild` through an [`Exec`].
+/// Runs `pkgbuild` and `productbuild` through an [`Exec`].
 pub(crate) struct PkgbuildCli<E> {
     exec: E,
 }
 
 impl<E> PkgbuildCli<E> {
-    /// The adapter running `pkgbuild` through `exec`.
+    /// The adapter running `pkgbuild` and `productbuild` through `exec`.
     pub(crate) fn new(exec: E) -> PkgbuildCli<E> {
         PkgbuildCli { exec }
     }
 }
 
-/// `path` as UTF-8, for a command line.
-fn utf8(path: &Path) -> Result<String, PortError> {
+/// `path` as UTF-8, for the command line of `program`.
+fn utf8(program: &str, path: &Path) -> Result<String, PortError> {
     path.to_str().map(str::to_owned).ok_or_else(|| {
         PortError::new(
-            format!("pkgbuild {}", path.display()),
+            format!("{program} {}", path.display()),
             "the path is not UTF-8",
         )
     })
+}
+
+impl<E: Exec> PkgbuildCli<E> {
+    /// Runs `program` with `args`; a failure to start or a failed status is a [`PortError`] that
+    /// names the command line.
+    fn run(&self, program: &str, args: &[String]) -> Result<(), PortError> {
+        let what = format!("{program} {}", args.join(" "));
+        let ran = self
+            .exec
+            .spawn(program, args)
+            .map_err(|e| PortError::new(&what, e.to_string()))?;
+        if ran.success {
+            Ok(())
+        } else {
+            Err(PortError::new(
+                what,
+                String::from_utf8_lossy(&ran.stderr).trim().to_owned(),
+            ))
+        }
+    }
 }
 
 impl<E: Exec> BuildPkg for PkgbuildCli<E> {
@@ -442,9 +482,9 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
     ) -> Result<(), PortError> {
         let args = vec![
             "--root".to_owned(),
-            utf8(root)?,
+            utf8("pkgbuild", root)?,
             "--scripts".to_owned(),
-            utf8(scripts)?,
+            utf8("pkgbuild", scripts)?,
             "--identifier".to_owned(),
             identifier.to_owned(),
             "--version".to_owned(),
@@ -453,21 +493,28 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
             INSTALL_LOCATION.to_owned(),
             "--ownership".to_owned(),
             "recommended".to_owned(),
-            utf8(pkg)?,
+            utf8("pkgbuild", pkg)?,
         ];
-        let what = format!("pkgbuild {}", args.join(" "));
-        let ran = self
-            .exec
-            .spawn("pkgbuild", &args)
-            .map_err(|e| PortError::new(&what, e.to_string()))?;
-        if ran.success {
-            Ok(())
-        } else {
-            Err(PortError::new(
-                what,
-                String::from_utf8_lossy(&ran.stderr).trim().to_owned(),
-            ))
-        }
+        self.run("pkgbuild", &args)
+    }
+
+    fn build_product(
+        &self,
+        component: &Path,
+        identifier: &str,
+        version: &Version,
+        product: &Path,
+    ) -> Result<(), PortError> {
+        let args = vec![
+            "--package".to_owned(),
+            utf8("productbuild", component)?,
+            "--identifier".to_owned(),
+            identifier.to_owned(),
+            "--version".to_owned(),
+            version.to_string(),
+            utf8("productbuild", product)?,
+        ];
+        self.run("productbuild", &args)
     }
 }
 
@@ -567,26 +614,7 @@ fn shown(path: &str) -> String {
 /// element or its attributes are not `name="value"` pairs.
 fn pkg_info_attributes(text: &str) -> Option<BTreeMap<String, String>> {
     let start = text.find("<pkg-info")? + "<pkg-info".len();
-    let mut rest = &text[start..];
-    let mut found = BTreeMap::new();
-    loop {
-        rest = rest.trim_start();
-        if rest.starts_with('>') | rest.starts_with("/>") {
-            return Some(found);
-        }
-        let (name, after) = rest.split_once("=\"")?;
-        let (value, after) = after.split_once('"')?;
-        let name = name.trim();
-        let well_formed = !name.is_empty()
-            & name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() | matches!(b, b'-' | b'_' | b':'));
-        if !well_formed {
-            return None;
-        }
-        found.insert(name.to_owned(), value.to_owned());
-        rest = after;
-    }
+    open_tag(&text[start..]).map(|(attributes, ..)| attributes)
 }
 
 /// What is wrong with the `PackageInfo` text `text` of the pkg of `version`, one line each.
@@ -752,65 +780,93 @@ fn read_payload(expanded: &Path) -> Result<Result<Vec<CpioEntry>, String>, Error
         .and_then(|_| read_odc(&cpio).map_err(|e| format!("{name}: {e}"))))
 }
 
-/// The `release check-macos-pkg <expanded> --version V --binary B --gh G --trusted-root R`
-/// verb: checks the pkg that `pkgutil --expand` expanded into `expanded` against `version` and
-/// the files of `sources`, and lists every problem it finds.
-pub(crate) fn check(
-    expanded: &Path,
-    version: &Version,
-    sources: &Sources,
-) -> Result<Vec<String>, Error> {
-    let what = format!("read {}", expanded.display());
-    // Each name with whether it is a regular file and whether it is a directory; a symbolic
-    // link is neither (`DirEntry::file_type` does not follow it).
-    let mut names: Vec<(String, bool, bool)> = std::fs::read_dir(expanded)
+/// One entry of a directory of an expanded pkg: its name and whether it is a regular file and
+/// whether it is a directory; a symbolic link is neither (`DirEntry::file_type` does not follow
+/// it).
+struct Listed {
+    name: String,
+    file: bool,
+    dir: bool,
+}
+
+/// The entries of `dir`, sorted by name.
+fn list(dir: &Path) -> Result<Vec<Listed>, Error> {
+    let mut listed: Vec<Listed> = std::fs::read_dir(dir)
         .and_then(|read| read.collect::<Result<Vec<_>, _>>())
-        .map_err(Error::io(&what))?
+        .map_err(Error::io(format!("read {}", dir.display())))?
         .iter()
         .map(|e| {
             let kind = e.file_type().ok();
-            (
-                e.file_name().to_string_lossy().into_owned(),
-                kind.is_some_and(|k| k.is_file()),
-                kind.is_some_and(|k| k.is_dir()),
-            )
+            Listed {
+                name: e.file_name().to_string_lossy().into_owned(),
+                file: kind.is_some_and(|k| k.is_file()),
+                dir: kind.is_some_and(|k| k.is_dir()),
+            }
         })
         .collect();
-    names.sort();
-    let mut problems = Vec::new();
+    listed.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(listed)
+}
+
+/// Checks that the directory `dir` of an expanded pkg holds exactly the regular files `files` and
+/// the directories `dirs`: every other entry is a problem that says the directory `holds only`
+/// `only`, and every one missing is a problem. The names that are there, as they must be.
+fn layer(
+    dir: &Path,
+    files: &[&str],
+    dirs: &[&str],
+    only: &str,
+    problems: &mut Vec<String>,
+) -> Result<Vec<String>, Error> {
+    let listed = list(dir)?;
     let present = |want: &str| {
-        names.iter().any(|(name, file, dir)| {
-            (name == want)
-                & if want == EXPANDED_SCRIPTS {
-                    *dir
-                } else {
-                    *file & EXPANDED_FILES.contains(&want)
-                }
+        listed.iter().any(|e| {
+            (e.name == want) & ((e.file & files.contains(&want)) | (e.dir & dirs.contains(&want)))
         })
     };
-    for (name, ..) in &names {
-        if !present(name) {
-            problems.push(format!(
-                "{name}: an expanded pkg of hostkeeper holds only the files Bom, PackageInfo and \
-                 Payload and the directory Scripts"
-            ));
+    for entry in &listed {
+        if !present(&entry.name) {
+            problems.push(format!("{}: {only}", entry.name));
         }
     }
-    for missing in EXPANDED_FILES.iter().chain([&EXPANDED_SCRIPTS]) {
-        if !present(missing) {
-            problems.push(format!("missing {missing}"));
-        }
+    let wanted = files.iter().chain(dirs);
+    for missing in wanted.clone().filter(|name| !present(name)) {
+        problems.push(format!("missing {missing}"));
     }
-    if present("PackageInfo") {
-        let path = expanded.join("PackageInfo");
+    Ok(wanted
+        .filter(|name| present(name))
+        .map(|name| (*name).to_owned())
+        .collect())
+}
+
+/// What is wrong with the component pkg expanded into `component`, one line each: its parts, its
+/// `PackageInfo`, its scripts and its payload.
+fn component_problems(
+    component: &Path,
+    version: &Version,
+    sources: &Sources,
+    problems: &mut Vec<String>,
+) -> Result<(), Error> {
+    let only = "an expanded pkg of hostkeeper holds only the files Bom, PackageInfo and Payload \
+                and the directory Scripts";
+    let present = layer(
+        component,
+        &EXPANDED_FILES,
+        &[EXPANDED_SCRIPTS],
+        only,
+        problems,
+    )?;
+    let has = |name: &str| present.iter().any(|p| p == name);
+    if has("PackageInfo") {
+        let path = component.join("PackageInfo");
         let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
-        package_info_problems(&String::from_utf8_lossy(&bytes), version, &mut problems);
+        package_info_problems(&String::from_utf8_lossy(&bytes), version, problems);
     }
-    if present(EXPANDED_SCRIPTS) {
-        scripts_problems(&expanded.join(EXPANDED_SCRIPTS), &mut problems)?;
+    if has(EXPANDED_SCRIPTS) {
+        scripts_problems(&component.join(EXPANDED_SCRIPTS), problems)?;
     }
-    if present("Payload") {
-        match read_payload(expanded)? {
+    if has("Payload") {
+        match read_payload(component)? {
             Err(why) => problems.push(why),
             Ok(entries) => {
                 let contents = sources.contents()?;
@@ -820,21 +876,55 @@ pub(crate) fn check(
                 ];
                 for (path, problems_of) in read_back {
                     if let Some(entry) = entries.iter().find(|e| payload_path(&e.name) == path) {
-                        problems_of(&entry.data, &mut problems);
+                        problems_of(&entry.data, problems);
                     }
                 }
-                payload_problems(&entries, payload(contents), sources, &mut problems);
+                payload_problems(&entries, payload(contents), sources, problems);
             }
         }
+    }
+    Ok(())
+}
+
+/// The `release check-macos-pkg <expanded> --version V --binary B --gh G --trusted-root R`
+/// verb: checks the product archive that `pkgutil --expand` expanded into `expanded` against
+/// `version` and the files of `sources`, and lists every problem it finds: the archive holds the
+/// `Distribution` and the one component, and the component is the pkg described above.
+pub(crate) fn check(
+    expanded: &Path,
+    version: &Version,
+    sources: &Sources,
+) -> Result<Vec<String>, Error> {
+    let mut problems = Vec::new();
+    let only = format!(
+        "an expanded product archive of hostkeeper holds only the file {DISTRIBUTION} and the \
+         directory {COMPONENT}"
+    );
+    let present = layer(
+        expanded,
+        &PRODUCT_FILES,
+        &PRODUCT_DIRS,
+        &only,
+        &mut problems,
+    )?;
+    let has = |name: &str| present.iter().any(|p| p == name);
+    if has(DISTRIBUTION) {
+        let path = expanded.join(DISTRIBUTION);
+        let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
+        distribution_problems(&String::from_utf8_lossy(&bytes), version, &mut problems);
+    }
+    if has(COMPONENT) {
+        component_problems(&expanded.join(COMPONENT), version, sources, &mut problems)?;
     }
     if !problems.is_empty() {
         return Err(Error::Refused(problems));
     }
     Ok(vec![format!(
-        "check-macos-pkg: {} installs exactly {} ({BINARY_MODE:o}), {} ({PLIST_MODE:o}), {} \
-         ({NEWSYSLOG_MODE:o}), {GH_PATH} ({GH_MODE:o}), {TRUSTED_ROOT_PATH} \
-         ({TRUSTED_ROOT_MODE:o}) and the directory {} ({DIR_MODE:o}), owned by root and wheel, \
-         with the label {}, version {version} and the one script {POSTINSTALL}",
+        "check-macos-pkg: {} is a product archive of the one component {COMPONENT}, which \
+         installs exactly {} ({BINARY_MODE:o}), {} ({PLIST_MODE:o}), {} ({NEWSYSLOG_MODE:o}), \
+         {GH_PATH} ({GH_MODE:o}), {TRUSTED_ROOT_PATH} ({TRUSTED_ROOT_MODE:o}) and the directory \
+         {} ({DIR_MODE:o}), owned by root and wheel, with the label {}, version {version} and \
+         the one script {POSTINSTALL}",
         expanded.display(),
         shown(&binary_path()),
         shown(&plist_path()),
