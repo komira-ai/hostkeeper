@@ -562,3 +562,62 @@ fn rollouts_pause_resume_and_advance_run_through_ctl_over_both_transports() {
         assert_eq!(bridge.paths(), [PAUSE, PAUSE, RESUME, ADVANCE], "{kind:?}");
     }
 }
+
+/// Proves: `hostkeeper ctl mdm list-devices --limit 1`, the command generated from
+/// `Mdm.ListDevices`, prints the first device of the gate with its fields and the token of the
+/// next page over `--transport grpc` and over `--transport gateway`, the same JSON by both;
+/// `--page-token` with that token prints the second and no token; a token that is no
+/// enrollment id exits 2 with exactly `refused: invalid_request`; and every run calls
+/// `Mdm.ListDevices` once.
+///
+/// Catches: an `mdm` command missing from ctl, a flag that does not reach the request, or an
+/// answer that differs by transport.
+#[test]
+fn mdm_list_devices_runs_through_ctl_over_both_transports() {
+    let mut printed = Vec::new();
+    for (name, kind) in [
+        ("ctl-mdm-grpc", TransportKind::Grpc),
+        ("ctl-mdm-gateway", TransportKind::Gateway),
+    ] {
+        let (served, _gate) = super::mdm::gated(name, &super::mdm::two_records());
+        let bridge = Bridge::new(kind, &served.coordinator);
+        let list = |extra: &[&str]| -> Ran {
+            let mut command: Vec<OsString> = vec!["mdm".into(), "list-devices".into()];
+            command.extend(extra.iter().map(OsString::from));
+            run_ctl(&bridge, OPERATOR, command)
+        };
+
+        let first = list(&["--limit", "1"]);
+        assert_eq!((first.code, first.stderr.as_str()), (0, ""), "{name}");
+        let first: Value = serde_json::from_str(&first.stdout).expect("JSON");
+        assert_eq!(first["gate"], true, "{name}");
+        assert_eq!(first["nextPageToken"], "AAAA-FULL", "{name}");
+        assert_eq!(first["devices"].as_array().map(Vec::len), Some(1), "{name}");
+        let device = &first["devices"][0];
+        assert_eq!(device["enrollmentId"], "AAAA-FULL", "{name}");
+        assert_eq!(device["phase"], "MDM_PHASE_ENROLLED", "{name}");
+        assert_eq!(device["serial"], "C02XK1ABJG5J", "{name}");
+        assert_eq!(device["supervised"], true, "{name}");
+
+        let second = list(&["--page-token", "AAAA-FULL"]);
+        assert_eq!((second.code, second.stderr.as_str()), (0, ""), "{name}");
+        let second: Value = serde_json::from_str(&second.stdout).expect("JSON");
+        assert_eq!(second["devices"][0]["enrollmentId"], "BBBB-BARE", "{name}");
+        assert!(second.get("nextPageToken").is_none(), "{name}: {second}");
+
+        let refused = list(&["--page-token", "../x"]);
+        assert_eq!(refused.code, 2, "{name}");
+        assert_eq!(refused.stdout, "", "{name}");
+        assert_eq!(refused.stderr, "refused: invalid_request\n", "{name}");
+        assert_eq!(
+            bridge.paths(),
+            ["/hostkeeper.operator.v1.Mdm/ListDevices"; 3],
+            "{name}"
+        );
+        printed.push((first, second));
+    }
+    assert_eq!(
+        printed[0], printed[1],
+        "the same answers by both transports"
+    );
+}

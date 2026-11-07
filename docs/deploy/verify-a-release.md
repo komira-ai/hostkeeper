@@ -39,8 +39,8 @@ platforms; the installer pkg is for `macos-arm64`.
 | `hello-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hello-<version>-fail-ready-<platform>.tar.zst` | hello's failing build: the same package at the version `<version>-fail-ready`, whose unit (or plists) start `hello` with `--fail-ready`, so that it never reports ready (the build a host is rolled back from); it differs from the hello package only in the manifest's `version` and the command line its unit or plists start it with |
 | `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
-| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, and the pinned `gh` and Sigstore trusted root it checks packages with |
-| `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files |
+| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
+| `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-coordinator-<version>-<linux-platform>.image.tar` | the coordinator's container image `hostkeeper-coordinator:<version>`: a tarball that is an OCI image layout and that `docker load` also reads |
@@ -48,13 +48,18 @@ platforms; the installer pkg is for `macos-arm64`.
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
+| `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, and of `netboot.json` |
 
 Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
 own, and a host trusts a package for its own attestation and manifest, never for its entry in the
 index. (`SHA256SUMS` lists every index, so the provenance of a release covers their bytes too.)
 Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
+`netboot.json` is attested with a bundle of its own, unlike the indexes: it is the trust anchor of
+the boot files it pins, which come from Canonical, not from this release. The design's
+`hostkeeper-pxe fetch` (item N8 of docs/design/network-install.md, not built yet) verifies that
+attestation before it trusts a digest in it.
 
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
 distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It
@@ -84,6 +89,8 @@ SHA256SUMS
 index.json
 hello-index.json
 hello-fail-ready-index.json
+netboot.json
+netboot.json.sigstore.json
 hostkeeper-<version>-<platform>.tar.gz
 hostkeeper-<version>-<platform>.tar.gz.sigstore.json
 hostkeeper-<version>-<platform>.cdx.json
@@ -137,7 +144,8 @@ A missing file or a digest that differs from the pin fails the build, and no deb
 After nfpm has built them, `cargo xtask release check-linux-pkg` reads the deb and the rpm back
 (the deb's `data.tar.gz`; the rpm's header and payload) and fails the build unless each installs
 both files at these paths, a regular file of exactly this mode, owned by root and group root,
-with the bytes staged.
+with the bytes staged, and installs `/etc/issue.d/hostkeeper.issue` as a link to
+`/run/hostkeeper/enrollment.issue`, the console's issue file the daemon writes.
 
 Bumping the pin: set the workflow-level `GH_VERSION` in `artifacts.yml` to the new release and both `gh-sha256`
 values of the build job's matrix to the SHA-256s of `gh_<version>_linux_amd64.tar.gz` and
@@ -223,8 +231,8 @@ gh attestation trusted-root > trusted_root.jsonl
 This saved root is only for checking a release by hand. A hostkeeper host needs no such step: its
 root ships in the packages (see [The trusted root on a host](#the-trusted-root-on-a-host)).
 
-Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg` you use, with the
-bundle released next to it (the other assets have no bundle and are verified online, step 3):
+Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, and `netboot.json`,
+you use, with the bundle released next to it (the other assets have no bundle and are verified online, step 3):
 
 ```sh
 gh attestation verify release/<asset> \

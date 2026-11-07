@@ -17,7 +17,9 @@
 //! release missing one is refused. macos-arm64 also ships the installer pkg of a Mac's first
 //! install ([`installer_name`]). A release carries three kinds of package ([`Package`]):
 //! hostkeeper's own (`index.json`), `hello`, the example service of `examples/hello`
-//! (`hello-index.json`), and hello's failing build (`hello-fail-ready-index.json`).
+//! (`hello-index.json`), and hello's failing build (`hello-fail-ready-index.json`). It also
+//! carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
+//! platforms.
 
 use std::fmt;
 use std::str::FromStr;
@@ -85,6 +87,11 @@ pub(crate) const HELLO_INDEX: &str = "hello-index.json";
 /// The release index of the failing build of hello: the same schema as [`INDEX`], `service`
 /// `hello`, its version the release's followed by [`FAIL_READY_SUFFIX`].
 pub(crate) const HELLO_FAIL_READY_INDEX: &str = "hello-fail-ready-index.json";
+
+/// The boot sets of network install: for each Linux platform the Ubuntu ISO, shim, network
+/// GRUB, kernel and initrd a bare machine boots, each with its size and SHA-256 (see `netboot`).
+/// Attested, with a bundle of its own.
+pub(crate) const NETBOOT: &str = "netboot.json";
 
 /// What a provenance bundle's file name adds to its asset's.
 pub(crate) const BUNDLE_SUFFIX: &str = ".sigstore.json";
@@ -381,7 +388,7 @@ impl Platform {
 
     /// The architecture as a deb and as an rpm name it, for a Linux platform; none for macOS,
     /// which has neither.
-    fn linux_arches(self) -> Option<(&'static str, &'static str)> {
+    pub(crate) fn linux_arches(self) -> Option<(&'static str, &'static str)> {
         match self {
             Platform::LinuxX86_64 => Some(("amd64", "x86_64")),
             Platform::LinuxArm64 => Some(("arm64", "aarch64")),
@@ -523,9 +530,10 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// the bundle of each binary tarball, Linux package, installer, hostkeeper package, hello package,
 /// hello's failing build and image; and once, [`INDEX`] (the release index of the hostkeeper
 /// packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`] (that of the
-/// failing build) and `SHA256SUMS`.
+/// failing build), [`NETBOOT`] (the boot sets of network install) and its bundle, and
+/// `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
-    let mut names = vec![SUMS.to_owned()];
+    let mut names = vec![SUMS.to_owned(), NETBOOT.to_owned(), bundle_of(NETBOOT)];
     names.extend(Package::ALL.map(|p| p.index_name().to_owned()));
     for &platform in platforms {
         let p = platform.name();

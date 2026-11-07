@@ -15,10 +15,15 @@
 //!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
 //!   and staged for the deb and the rpm.
 //! - `check-linux-pkg` ([`package::linux_check`]): a built deb or rpm, read back, installs the
-//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's.
+//!   staged `gh` and trusted root at the daemon's paths, with their modes, root's, and the
+//!   console's issue link pointing at the daemon's issue file.
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing build: which
 //!   package serves each platform, refused unless it has the package of every released platform.
+//! - `netboot` ([`netboot`]): `netboot.json`, the boot sets of network install for the two Linux
+//!   platforms, rendered from the committed pins (`packaging/netboot/pins.toml`), which it
+//!   refuses unless each platform has its ISO, shim, GRUB, kernel and initrd, each pinned well
+//!   formed.
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
 //!   install, and the check of its payload read back from the built pkg.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
@@ -60,6 +65,7 @@ mod github;
 mod index;
 mod locate;
 mod macos_pkg;
+mod netboot;
 #[cfg(test)]
 mod no_network;
 mod package;
@@ -244,6 +250,22 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
+    /// Write `netboot.json`, the boot sets of network install, from the pins: for each of
+    /// linux-x86_64 and linux-arm64 the Ubuntu ISO, shim, network GRUB, kernel and initrd, each
+    /// with the name it is served as, its size, its SHA-256 and where it comes from. Pins that
+    /// miss a platform, a file or a key, or hold one of the wrong form, are refused, every
+    /// problem named, and nothing is written.
+    Netboot {
+        /// The pins, `packaging/netboot/pins.toml`.
+        #[arg(long)]
+        pins: PathBuf,
+        /// The release the asset belongs to.
+        #[arg(long)]
+        version: Version,
+        /// The directory of the release's assets; `netboot.json` is written there.
+        #[arg(long)]
+        dir: PathBuf,
+    },
     /// Build the installer pkg of a Mac's first install: `pkgbuild` builds a component pkg of the
     /// daemon binary, its launchd plist, its log directory and newsyslog file, the pinned `gh`
     /// and the Sigstore trusted root, nothing else, and one script, a postinstall that seeds the
@@ -425,6 +447,7 @@ pub(crate) fn run<A: Adapters>(
             Some(package) => index::write_index(&dir, package, &version),
             None => Err(Error::Failed(package::FAIL_READY_ONLY_HELLO.to_owned())),
         },
+        Verb::Netboot { pins, version, dir } => netboot::write_netboot(&pins, &version, &dir),
         Verb::NfpmStage {
             arch,
             gh_version,
@@ -593,6 +616,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::CompareImages { .. }
         | Verb::CheckImageUi { .. }
         | Verb::Index { .. }
+        | Verb::Netboot { .. }
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }

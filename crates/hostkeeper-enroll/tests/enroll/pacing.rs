@@ -2,7 +2,7 @@
 //! after every step, whatever it did.
 
 use hostkeeper_enroll::{
-    Enroller, Enrollment, HostId, NOT_ENROLLED, RETRY_SECS, RenewalState, RequestId,
+    Enroller, Enrollment, Error, HostId, NOT_ENROLLED, Outcome, RETRY_SECS, RenewalState, RequestId,
 };
 
 use crate::support::{HOST, T0, WEEK, World, csr_spki};
@@ -13,18 +13,28 @@ fn run(enroller: &mut Enroller, steps: usize, before: impl FnMut(usize)) -> Vec<
     run_seeing(enroller, steps, before).0
 }
 
-/// [`run`], with the enrollment the loop reported after each step.
+/// What a step came to, as the loop reported it: `pending`, `enrolled`, or `other` for what
+/// this file's steps do not come to.
+fn came_to(step: &Result<Outcome, Error>) -> &'static str {
+    match step {
+        Ok(Outcome::Pending) => "pending",
+        Ok(Outcome::Enrolled(_)) => "enrolled",
+        _ => "other",
+    }
+}
+
+/// [`run`], with what each step came to and the enrollment the loop reported after it.
 fn run_seeing(
     enroller: &mut Enroller,
     steps: usize,
     mut before: impl FnMut(usize),
-) -> (Vec<String>, Vec<Enrollment>) {
+) -> (Vec<String>, Vec<(&'static str, Enrollment)>) {
     let mut lines = Vec::new();
     let mut seen = Vec::new();
     let mut step = 0;
     enroller.run_loop(
         &mut |line: &str| lines.push(line.to_owned()),
-        &mut |enrollment| seen.push(enrollment),
+        &mut |outcome, enrollment| seen.push((came_to(outcome), enrollment)),
         &RenewalState::default(),
         &mut || {
             let go = step < steps;
@@ -39,9 +49,9 @@ fn run_seeing(
 }
 
 /// Catches an enrollment not reported after a step, reported before the step it follows, or
-/// reported once for several steps: three steps report three enrollments, pending with the key
-/// the first step posted, and enrolled once the step after the approval stored the
-/// certificate.
+/// reported once for several steps, and a step reported with what another step came to: three
+/// steps report three enrollments, each beside its own step, pending with the key the first
+/// step posted, and enrolled once the step after the approval stored the certificate.
 #[test]
 fn the_loop_reports_the_enrollment_after_each_step() {
     let world = World::new("pacing-seen");
@@ -58,7 +68,14 @@ fn the_loop_reports_the_enrollment_after_each_step() {
         host_id: HostId::new(HOST).expect("a host id"),
         not_after: T0 + WEEK,
     };
-    assert_eq!(seen, [pending.clone(), pending, enrolled]);
+    assert_eq!(
+        seen,
+        [
+            ("pending", pending.clone()),
+            ("pending", pending),
+            ("enrolled", enrolled)
+        ]
+    );
     assert_eq!(world.sleeps(), [RETRY_SECS; 3]);
 }
 

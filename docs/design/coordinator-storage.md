@@ -67,8 +67,10 @@ storage trait (section 4.1).
 | Rollout file, tokens, OIDC allow-list, TLS files, CA key and certificate, server certificate, Mac allowlist, UI | files | files, unchanged |
 | Fleet, orders, bake, deferrals, tries, poll nonces, the enrollment store's live-machine map | memory | memory, unchanged |
 
-The MDM gate's device records (hostkeeper-mdm.md section 6.1, task M8, not built) are a table of the same database,
-`mdm_devices`, added by M8's own migration (the next free number when it lands, after C3); they are not a file.
+The MDM gate's device records (hostkeeper-mdm.md section 6.1, task M8, built before this store) are a table of the same
+database, `mdm_devices`, added by M8's migration (the next free number when it lands, after C3). Until then they are a
+file per device, `<--enrollment-dir>/mdm-devices/<enrollment id>.pb`, behind the gate's `DeviceStore`; the table is a
+second `DeviceStore`, and the import reads the files into it.
 
 ## 3. The schema
 

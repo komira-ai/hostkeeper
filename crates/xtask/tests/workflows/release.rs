@@ -19,9 +19,9 @@
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
-//!   [`PACKAGES`] for every platform of [`PLATFORMS`] and copies the bundle of each beside it
-//!   ([`package_problems`]): a host trusts only attested packages, so a release asset list that
-//!   names a package's bundle needs the steps that make it.
+//!   [`PACKAGES`] for every platform of [`PLATFORMS`], and each file of [`ATTESTED_FILES`], and
+//!   copies the bundle of each beside it ([`package_problems`]): a host trusts only attested
+//!   packages, so a release asset list that names a bundle needs the steps that make it.
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
@@ -113,6 +113,12 @@ pub const PACKAGES: [(&str, &str); 3] =
 
 /// The platforms the release ships packages for.
 pub const PLATFORMS: [&str; 3] = ["linux-x86_64", "linux-arm64", "macos-arm64"];
+
+/// The release's other files that the attest job attests alone, each as its `subject-path` and
+/// its name: `netboot.json`, the boot sets of network install, whose attestation is what the
+/// design's `hostkeeper-pxe fetch` (docs/design/network-install.md, item N8) is to trust its
+/// digests by.
+pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.json")];
 
 /// Whether the attest job may run `run`: one of [`ATTEST_RUNS`], or a [`BUNDLE_COPY`].
 fn attest_may_run(run: &str) -> bool {
@@ -510,9 +516,10 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
     problems
 }
 
-/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], that the attest job does not
-/// attest (a provenance step whose `subject-path` is the file) or whose bundle it does not copy
-/// to `<file>.sigstore.json` from the outputs of that same step.
+/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], and per file of
+/// [`ATTESTED_FILES`], that the attest job does not attest (a provenance step whose
+/// `subject-path` is the file) or whose bundle it does not copy to `<file>.sigstore.json` from the
+/// outputs of that same step.
 fn package_problems(attest: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
     for (prefix, middle) in PACKAGES {
@@ -521,36 +528,48 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
                 "dist/{prefix}-${{{{ needs.version.outputs.version }}}}{middle}-{platform}.tar.zst"
             );
             let file = format!("{prefix}-<version>{middle}-{platform}.tar.zst");
-            let id = steps(attest)
-                .iter()
-                .find(|s| {
-                    text_of(Some(s), "uses")
-                        .is_some_and(|u| u.starts_with("actions/attest-build-provenance@"))
-                        && text_of(entry(s, "with"), "subject-path") == Some(subject.as_str())
-                })
-                .and_then(|s| text_of(Some(s), "id"));
-            let Some(id) = id else {
-                problems.push(format!(
-                    "artifacts.yml: job attest does not attest {file} (a provenance step with an id and the subject-path {subject})"
-                ));
-                continue;
-            };
-            let bundle = format!("steps.{id}.outputs.bundle-path");
-            let copy = format!(
-                "cp \"$BUNDLE\" \"dist/{prefix}-${{V}}{middle}-{platform}.tar.zst.sigstore.json\""
-            );
-            let copied = steps(attest).iter().any(|s| {
-                text_of(Some(s), "run") == Some(copy.as_str())
-                    && text_of(entry(s, "env"), "BUNDLE").is_some_and(|b| {
-                        b.trim_start_matches("${{ ").trim_end_matches(" }}") == bundle
-                    })
-            });
-            if !copied {
-                problems.push(format!(
-                    "artifacts.yml: job attest does not copy the bundle of {file} from the step {id} to dist/{prefix}-${{V}}{middle}-{platform}.tar.zst.sigstore.json"
-                ));
-            }
+            let copied = format!("{prefix}-${{V}}{middle}-{platform}.tar.zst");
+            problems.extend(attest_problem(attest, &subject, &file, &copied));
         }
     }
+    for (subject, file) in ATTESTED_FILES {
+        problems.extend(attest_problem(attest, subject, file, file));
+    }
     problems
+}
+
+/// What is wrong, if anything, with the attestation of `file` in the attest job: no provenance
+/// step with an id whose `subject-path` is `subject`, or no copy of that step's bundle to
+/// `dist/<copied>.sigstore.json` (`copied` the file's name as the copy spells it).
+fn attest_problem(
+    attest: Option<&Node>,
+    subject: &str,
+    file: &str,
+    copied: &str,
+) -> Option<String> {
+    let id = steps(attest)
+        .iter()
+        .find(|s| {
+            text_of(Some(s), "uses")
+                .is_some_and(|u| u.starts_with("actions/attest-build-provenance@"))
+                && text_of(entry(s, "with"), "subject-path") == Some(subject)
+        })
+        .and_then(|s| text_of(Some(s), "id"));
+    let Some(id) = id else {
+        return Some(format!(
+            "artifacts.yml: job attest does not attest {file} (a provenance step with an id and the subject-path {subject})"
+        ));
+    };
+    let bundle = format!("steps.{id}.outputs.bundle-path");
+    let copy = format!("cp \"$BUNDLE\" \"dist/{copied}.sigstore.json\"");
+    let done = steps(attest).iter().any(|s| {
+        text_of(Some(s), "run") == Some(copy.as_str())
+            && text_of(entry(s, "env"), "BUNDLE")
+                .is_some_and(|b| b.trim_start_matches("${{ ").trim_end_matches(" }}") == bundle)
+    });
+    (!done).then(|| {
+        format!(
+            "artifacts.yml: job attest does not copy the bundle of {file} from the step {id} to dist/{copied}.sigstore.json"
+        )
+    })
 }
