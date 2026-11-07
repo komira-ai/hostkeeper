@@ -1577,6 +1577,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-mdm-step"
+version = "0.1.0"
+dependencies = [
+ "hostkeeper-mdm-step",
+ "hostkeeper-testkit",
+ "rustix",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-observe"
 version = "0.1.0"
 dependencies = [
