@@ -331,8 +331,8 @@ fn service_lines(service: &ServiceRecord, out: &mut Lines) {
 }
 
 /// A step record, every key under `at`: `order_id`, `order_try`, `version`, `step`, `outcome`
-/// (`none` while it runs), `phase` and `class` (`none` unless it failed with one), `reason` and
-/// `forced`.
+/// (`none` while it runs), `phase` and `class` (`none` unless it failed with one), `reason`,
+/// `forced`, `started_unix`, and `finished_unix` (`none` while it runs).
 fn record_lines(at: &str, record: &StepRecord, out: &mut Lines) {
     out.text(&format!("{at}.order_id"), &record.order_id);
     out.push(&format!("{at}.order_try"), record.order_try);
@@ -352,6 +352,12 @@ fn record_lines(at: &str, record: &StepRecord, out: &mut Lines) {
     );
     out.text(&format!("{at}.reason"), &record.reason);
     out.push(&format!("{at}.forced"), record.forced);
+    out.push(&format!("{at}.started_unix"), record.started_unix);
+    let finished = match record.finished_unix {
+        0 => "none".to_owned(),
+        secs => secs.to_string(),
+    };
+    out.push(&format!("{at}.finished_unix"), finished);
 }
 
 /// The text of `hostkeeper admin abort <service>`: `aborted: <service>`, then the order as its

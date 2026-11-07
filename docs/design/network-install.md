@@ -4,7 +4,7 @@ Status: design, for review. This document makes network install of new Linux mac
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
 this document and hostkeeper-design.md disagree on network install, this document wins. What is built is marked
-**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8, N9, N9b, N10 and N12 of section 12); every other statement about
+**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8, N9, N9b, N10, N11 and N12 of section 12); every other statement about
 new code is **Designed**, and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
@@ -881,6 +881,21 @@ the number of manual steps.
   board that does not boot network first, and three per farm. The first real machine records them. For comparison, the
   steps of today's hand install of a node are counted from its current runbook at the same time. No count is quoted
   before then.
+- **Built** (item N11): `cargo xtask netinstall-report` (`crates/xtask/src/netinstall_report.rs`), run by the job
+  `net-install`, which keeps the report as the artifact `net-install-report`. As built:
+  - **Inputs**: four files of one machine, with its MAC, record host id, mode and `--service`s: `serve`'s standard
+    error (power-on, the earliest `DHCPDISCOVER` or, in router mode, `DHCPREQUEST` from the MAC; the install's start,
+    its earliest seed fetch as the record's host); `enrollment list --output json` taken while it was pending, since
+    a request leaves that list at its approval (the earliest `firstSeenUnix` of the record's requests); `hosts get`
+    and, on the host, `hostkeeper admin status`, taken once it serves.
+  - **Serving is the host daemon's record**, as no time of it reaches the coordinator: when the first service's last
+    order ended `succeeded` ("the version running and confirmed healthy"). `hostkeeper admin status` now prints each
+    step record's `started_unix` and `finished_unix`, additive lines (`docs/admin.md`). Serving is by the host's
+    clock, which the report says; an interval that ends before it starts prints `out of order`, never a number.
+  - **The report**: the events and the intervals between them, as two tables, then the machine's time (power-on to
+    pending, and approved to serving), the person's wait and power-on to serving. `net_install.rs` keeps the files of
+    the guest's first install beside `hostkeeper-pxe.log` and asserts no time; the arm64 job makes no report. The
+    runbook's "Measure the first machine" is the real machine's procedure.
 
 ## 12. Tasks
 
@@ -901,7 +916,7 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N9 | `hostkeeper-pxe serve`: `--mode` (proxy or router), sockets and privilege drop, the answer set from records (their `host_held`, N9b) and pending requests and its platform rule, the MAC leaving the set at its seed fetch, `--reinstall`, the per-MAC menus, HTTP and TFTP from the sealed directory, the seal check; released as a binary with no enabled unit | N6, N7, N8, N14 | M |
 | N9b | `InventoryRecord.host_held`: what the enrollment store holds for the record's host id (`NONE`, `APPROVED`, `DENIED`, `RETIRED`; `UNSPECIFIED` without a store), read by host id in `Enrollment.ListRecords` and `Enrollment.AddRecord`; the tests of section 11 | N1b | S |
 | N10 | Privileged end-to-end: the `net-install` job (x86-64, proxy mode then router mode) and the `net-install-arm64` job with the one arm64 test the hosted runners allow (section 11), and the workflow lint | N2, N3, N9 | M |
-| N11 | `cargo xtask netinstall-report`, and the report artifact of N10 | N10 | S |
+| N11 | `cargo xtask netinstall-report`, and the report artifact of N10. **Built**: `crates/xtask/src/netinstall_report.rs`, the artifact `net-install-report` | N10 | S |
 | N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hostkeeper ctl` and `hostkeeper-pxe` lines a test parses with each program's parser | N9 | S |
 | N13 | First real machine of each platform on the farm, by the runbook, recording the measurement. Done by hand by the operator, not in CI | N10, N12 | S |
 | N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built") | N1b | S |

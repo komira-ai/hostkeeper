@@ -9,7 +9,8 @@
 //! only bound.
 //!
 //! What the tests keep, passed or failed, is under `target/privileged-artifacts/<test>/`: the
-//! guest's console, the logs of `hostkeeper-pxe`, of the router's DHCP and of the coordinator.
+//! guest's console, the logs of `hostkeeper-pxe`, of the router's DHCP and of the coordinator,
+//! and what a test keeps with [`Rig::keep`].
 //! [`router::Router`] and [`events::Lines`] need no root; `tests/net_install_rig.rs` runs them in
 //! the pull-request set.
 
@@ -176,6 +177,12 @@ impl Rig {
     /// The test's scratch directory.
     pub fn scratch(&self) -> &Path {
         self.bench.scratch()
+    }
+
+    /// Keeps `bytes` as `name` beside the logs, under `target/privileged-artifacts/<test>/`, mode
+    /// 0644 so that the job's later steps, which do not run as root, read it.
+    pub fn keep(&self, name: &str, bytes: &[u8]) {
+        put(&self.artifacts.join(name), bytes, 0o644);
     }
 
     /// The guest's address, the first of the router's pool.

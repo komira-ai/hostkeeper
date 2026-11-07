@@ -13,6 +13,11 @@
 //!   kit's pkgs, built on a Mac, and the sends of its steps to an enrolled Mac through NanoHUB,
 //!   with what each did (`mdm_signing_test`). Not a CI step: an operator runs it
 //!   (`docs/operations/pkg-signing-test.md`).
+//! - `netinstall-report`: the measurement of network install (item N11 of
+//!   `docs/design/network-install.md`): one machine's events from power-on to serving and the
+//!   intervals between them, from the times `hostkeeper-pxe`, the coordinator and the host's
+//!   daemon recorded (`netinstall_report`). The end-to-end job `net-install` runs it; an operator
+//!   runs it once on the first real machine (`docs/operations/network-install.md`).
 //!
 //! The workflows that call them are in `.github/workflows`; `tests/workflows` holds each of
 //! them to the rules of this repository. The crate's one export is [`main`], the entry point of
@@ -22,6 +27,7 @@
 mod advisories;
 mod install;
 mod mdm_signing_test;
+mod netinstall_report;
 mod release;
 
 #[cfg(feature = "test-support")]
@@ -49,6 +55,8 @@ enum Error {
     Advisories(#[from] advisories::Error),
     #[error(transparent)]
     SigningTest(#[from] mdm_signing_test::Error),
+    #[error(transparent)]
+    NetinstallReport(#[from] netinstall_report::Error),
 }
 
 #[derive(Parser)]
@@ -96,6 +104,11 @@ enum Verb {
         #[command(subcommand)]
         verb: mdm_signing_test::Verb,
     },
+    /// The measurement of network install: one machine's events from power-on to serving and
+    /// the intervals between them, with the person's wait apart from the machine's time, from
+    /// the log of `hostkeeper-pxe serve`, what `hostkeeper ctl` printed of its request and host,
+    /// and what `hostkeeper admin status` printed on it. Reads no clock.
+    NetinstallReport(netinstall_report::Flags),
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -123,6 +136,7 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
             &release::real::exec(),
             mdm_signing_test::NanoHubHttp::new,
         )?),
+        Verb::NetinstallReport(flags) => Ok(netinstall_report::run(&flags)?),
     }
 }
 
@@ -142,7 +156,8 @@ pub fn main() -> ExitCode {
                 Error::Install(_)
                 | Error::Release(_)
                 | Error::Advisories(_)
-                | Error::SigningTest(_) => ExitCode::FAILURE,
+                | Error::SigningTest(_)
+                | Error::NetinstallReport(_) => ExitCode::FAILURE,
             }
         }
     }

@@ -352,6 +352,8 @@ fn halted() -> StepRecord {
         outcome: StepOutcome::Failed.into(),
         phase: FailurePhase::Halt.into(),
         reason: "aborted_by_operator".to_owned(),
+        started_unix: 1_800_000_300,
+        finished_unix: 1_800_000_360,
         ..StepRecord::default()
     }
 }
@@ -375,6 +377,8 @@ fn status_prints_each_service_in_its_lines() {
                         step: "verify".to_owned(),
                         outcome: StepOutcome::Succeeded.into(),
                         forced: true,
+                        started_unix: 1_800_000_100,
+                        finished_unix: 1_800_000_160,
                         ..StepRecord::default()
                     }),
                     state: Some(ServiceState {
@@ -393,6 +397,7 @@ fn status_prints_each_service_in_its_lines() {
                         order_try: 3,
                         version: "9.0.0".to_owned(),
                         step: "prepare".to_owned(),
+                        started_unix: 1_800_000_200,
                         ..StepRecord::default()
                     }),
                     last: None,
@@ -441,6 +446,8 @@ service[api].last.phase: none
 service[api].last.class: none
 service[api].last.reason: -
 service[api].last.forced: true
+service[api].last.started_unix: 1800000100
+service[api].last.finished_unix: 1800000160
 service[db.main].lifecycle: installing
 service[db.main].record_problem: unreadable
 service[db.main].liveness: unknown
@@ -453,6 +460,8 @@ service[db.main].current.phase: none
 service[db.main].current.class: none
 service[db.main].current.reason: -
 service[db.main].current.forced: false
+service[db.main].current.started_unix: 1800000200
+service[db.main].current.finished_unix: none
 service[db.main].last: none
 "
     );
@@ -499,6 +508,8 @@ record.phase: halt
 record.class: none
 record.reason: aborted_by_operator
 record.forced: false
+record.started_unix: 1800000300
+record.finished_unix: 1800000360
 "
             .to_owned(),
             err: String::new(),
