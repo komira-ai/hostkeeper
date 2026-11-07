@@ -12,7 +12,7 @@ use std::sync::PoisonError;
 
 use super::files::{DenyState, claims_of_pb, corrupt};
 use super::store::{EnrollmentStore, LIVE_WINDOW_SECS};
-use super::{EnrolledHost, RequestState, StoreError};
+use super::{EnrolledHost, HostHeld, RequestState, StoreError};
 use crate::names::{HostId, KeyHash, Role};
 
 impl EnrollmentStore {
@@ -131,6 +131,25 @@ impl EnrollmentStore {
             enrolled.extend(self.enrolled_host(&host)?);
         }
         Ok(enrolled)
+    }
+
+    /// What the store holds for `host` ([`HostHeld`]): its deny row when it has one that is not
+    /// cleared, else an approved host when its host file is there, else nothing. A deny row
+    /// cleared by an approval with `replace` is the approved host of that approval. Read
+    /// without the store's lock.
+    ///
+    /// # Errors
+    /// [`StoreError`] when its deny or host file cannot be read or decoded.
+    pub fn held(&self, host: &HostId) -> Result<HostHeld, StoreError> {
+        match self.load_deny(host)? {
+            Some(DenyState::Retiring) => return Ok(HostHeld::Denied),
+            Some(DenyState::Retired) => return Ok(HostHeld::Retired),
+            Some(DenyState::Cleared) | None => {}
+        }
+        Ok(match self.load_host(host)? {
+            Some(_) => HostHeld::Approved,
+            None => HostHeld::None,
+        })
     }
 
     /// Whether `host` is denied and may still have an update in flight.
