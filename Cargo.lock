@@ -1739,6 +1739,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-pxe-seed"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hostkeeper-config",
+ "hostkeeper-enrollment",
+ "hostkeeper-wire",
+ "saphyr-parser",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-steps"
 version = "0.1.0"
 dependencies = [
