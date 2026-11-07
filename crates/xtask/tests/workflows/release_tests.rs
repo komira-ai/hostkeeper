@@ -803,6 +803,47 @@ fn attest_job_attests_every_package_for_every_platform_and_copies_each_bundle() 
 }
 
 #[test]
+fn attest_job_attests_the_command_line_and_copies_its_bundle() {
+    // Catches: a release asset list that names the bundle of `hkctl-<version>` while
+    // artifacts.yml has no step that signs it, one that signs another file under its name, or
+    // one that copies the bundle of another step beside it.
+    let hkctl = attest_steps(
+        "hkctl",
+        "Name the bundle of the command line",
+        "hkctl-${V}",
+        "hkctl-${{ needs.version.outputs.version }}",
+    );
+    let text = workflow("artifacts.yml");
+    assert!(
+        text.contains(&hkctl),
+        "the helper writes the steps as the file has them"
+    );
+    assert_refused(
+        "artifacts.yml",
+        &with_in(&text, &hkctl, ""),
+        "artifacts.yml: job attest does not attest hkctl-<version> (a provenance step with an id and the subject-path dist/hkctl-${{ needs.version.outputs.version }})",
+    );
+    assert_refused(
+        "artifacts.yml",
+        &with_in(
+            &text,
+            "subject-path: dist/hkctl-${{ needs.version.outputs.version }}",
+            "subject-path: dist/hkctl",
+        ),
+        "artifacts.yml: job attest does not attest hkctl-<version>",
+    );
+    assert_refused(
+        "artifacts.yml",
+        &with_in(
+            &text,
+            "steps.hkctl.outputs.bundle-path",
+            "steps.netboot.outputs.bundle-path",
+        ),
+        "artifacts.yml: job attest does not copy the bundle of hkctl-<version> from the step hkctl to dist/hkctl-${V}.sigstore.json",
+    );
+}
+
+#[test]
 fn attest_job_attests_every_binary_tarball_with_its_bundle_and_its_sbom() {
     // Catches: a binary tarball (hostkeeper-mdm's in particular, on either Linux platform) that
     // the release lists while the attest job does not sign it, signs it without copying its

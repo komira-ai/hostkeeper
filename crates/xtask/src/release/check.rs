@@ -12,7 +12,9 @@
 //!    packages in the directory: it reads as the index of its service at the package's version
 //!    (the release's, and for hello's failing build the release's followed by `-fail-ready`),
 //!    lists every package with its size and SHA-256, and is written canonically;
-//! 5. each attested asset verifies twice, online and from its bundle, and every attestation
+//! 5. `hkctl-<version>` is a bash script whose one version line is the release's
+//!    (`hkctl::problems`);
+//! 6. each attested asset verifies twice, online and from its bundle, and every attestation
 //!    returned names this repository's signer workflow and ref, the pinned commit, and the
 //!    SHA-256 of the file.
 
@@ -21,8 +23,9 @@ use std::path::Path;
 
 use super::contract::{
     Commit, DIGEST_SUFFIX, Package, Platform, SUMS, Signer, Version, asset_names, attested_names,
-    bundle_of, summed_names,
+    bundle_of, hkctl_name, summed_names,
 };
+use super::hkctl;
 use super::index::ReleaseIndex;
 use super::ports::{Attestation, PortError, Verifier};
 use super::{Error, file_sha256};
@@ -44,6 +47,7 @@ pub(crate) fn check(
     for package in Package::ALL {
         check_index(dir, package, version, &present, &mut problems)?;
     }
+    check_hkctl(dir, version, &present, &mut problems)?;
     let attested = attested_names(version);
     for name in attested.iter().filter(|n| present.contains(*n)) {
         check_attestations(verifier, dir, name, commit, &mut problems)?;
@@ -180,6 +184,24 @@ fn check_index(
     Ok(())
 }
 
+/// Step 5: `hkctl-<version>` is the script `release hkctl` writes for the version. It is skipped
+/// when the asset is absent (step 1 reported that).
+fn check_hkctl(
+    dir: &Path,
+    version: &Version,
+    present: &BTreeSet<String>,
+    problems: &mut Vec<String>,
+) -> Result<(), Error> {
+    let name = hkctl_name(version);
+    if !present.contains(&name) {
+        return Ok(());
+    }
+    let path = dir.join(&name);
+    let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
+    problems.extend(hkctl::problems(&String::from_utf8_lossy(&bytes), version));
+    Ok(())
+}
+
 /// Step 3: the digest file of each package holds exactly the package's digest and name. A pair
 /// with a file missing is skipped (step 1 reported that).
 fn check_digest_files(
@@ -207,7 +229,7 @@ fn check_digest_files(
     Ok(())
 }
 
-/// Step 4 for one attested asset: verified online, then from its bundle.
+/// Step 6 for one attested asset: verified online, then from its bundle.
 fn check_attestations(
     verifier: &dyn Verifier,
     dir: &Path,

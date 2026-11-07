@@ -60,12 +60,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 68 assets of v0.1.5 match SHA256SUMS, and 48 attestations of \
+            "release check: the 70 assets of v0.1.5 match SHA256SUMS, and 50 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 48);
+    assert_eq!(calls.len(), 50);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -245,7 +245,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 48);
+    assert_eq!(everything.len(), 50);
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 48);
+    assert_eq!(lines.len(), 50);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
@@ -704,5 +704,38 @@ fn an_index_that_leaves_out_the_macos_package_is_listed() {
              SHA-256 digests"
                 .to_owned()
         ]
+    );
+}
+
+#[test]
+fn an_hkctl_asset_that_is_not_the_releases_script_is_listed() {
+    // Catches: `release check` passing a command line of another release, or a file that is not
+    // the script at all, as `hkctl-<version>`.
+    let (dir, commit) = assets("check-hkctl");
+    let verifier = FakeVerifier::good(&commit);
+    let name = crate::release::contract::hkctl_name(&version());
+    std::fs::write(
+        dir.join(&name),
+        "#!/usr/bin/env bash\n_hk_version='hkctl 0.1.4+0123456789ab'\n",
+    )
+    .expect("write");
+    let lines = refused(run(&verifier, &dir, &commit));
+    assert!(
+        lines.contains(&format!(
+            "{name} does not hold exactly one version line `_hk_version='hkctl 0.1.5+<12 hex>'`"
+        )),
+        "{lines:?}"
+    );
+    std::fs::write(dir.join(&name), "not a script\n").expect("write");
+    let lines = refused(run(&verifier, &dir, &commit));
+    assert!(
+        lines.contains(&format!("{name} does not start with `#!/usr/bin/env bash`")),
+        "{lines:?}"
+    );
+    // Absent, it is listed once, as missing, and no later step reads it.
+    std::fs::remove_file(dir.join(&name)).expect("remove");
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        [format!("missing {name}")]
     );
 }

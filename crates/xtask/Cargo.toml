@@ -23,6 +23,10 @@ hex.workspace = true
 # test (tests/packaging) also loads the config template with the daemon config's loader, and the
 # package test loads the produced `manifest.toml` with the manifest loader.
 hostkeeper-config = { path = "../hostkeeper-config" }
+# The release asset `hkctl-<version>` (`release hkctl`): the script the emitter makes from the
+# command table of the protos. The enrollment runbook's test also reads the protos' descriptors.
+hostkeeper-hkctl = { path = "../hostkeeper-hkctl" }
+hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The daemon's launchd label, plist and paths the macOS installer pkg installs
 # (`release macos-pkg`), and the launchd plists of a macOS service package
 # (`release package --service hello`), rendered with the renderer the daemon's own plists use.
@@ -93,7 +97,6 @@ hello = { path = "../../examples/hello" }
 # docs/operations/enrollment.md with ctl's own parser over the generated command table, and
 # reads the refusal tokens from the protos' descriptors.
 hostkeeper-ctl = { path = "../hostkeeper-ctl" }
-hostkeeper-proto = { path = "../hostkeeper-proto" }
 prost-reflect.workspace = true
 saphyr-parser.workspace = true
 
