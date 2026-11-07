@@ -23,7 +23,9 @@
 //! - the TLS certificate in `MDM_STATE/lego/certificates/` exists and is valid for 21 more days;
 //! - `MDM_STATE` is a 0700 directory of `MDM_USER`'s; `MDM_ETC` a 0750 directory of root's;
 //!   `nanohub.env`, `nanodep.env`, `scep.env` and `dns.env` under it are 0600 files of root's;
-//! - `MDM_PKG_DIR` is a 0755 directory of root's.
+//! - `MDM_PKG_DIR` is a 0755 directory of root's;
+//! - `MDM_STATE/www/enroll.mobileconfig` (the enrollment profile `push-cert` writes) is a 0640
+//!   file of root's, group `MDM_USER`: the proxy reads it through the group.
 
 use std::fmt;
 use std::io::Write;
@@ -171,6 +173,14 @@ pub fn checks(host: &dyn Host, v: &Verify<'_>) -> Vec<Check> {
         format!("{} is a 0755 directory of root", c.pkg_dir()),
         mode_is(host, c.pkg_dir().as_str(), Kind::Dir, 0o755, 0),
     );
+    row(
+        format!(
+            "{} is a 0640 file of root, group {}",
+            profile_path(c),
+            c.user()
+        ),
+        profile_file(host, c),
+    );
     rows
 }
 
@@ -219,6 +229,31 @@ fn state_dir(host: &dyn Host, c: &MdmConfig) -> Outcome {
     let ids = ids(host, &Account::new(c.user(), c.user())).map_err(text)?;
     let (uid, _) = ids.ok_or(format!("no user {}", c.user()))?;
     mode_is(host, c.state().as_str(), Kind::Dir, 0o700, uid)
+}
+
+/// Where `push-cert` writes the enrollment profile.
+fn profile_path(c: &MdmConfig) -> String {
+    format!("{}/www/enroll.mobileconfig", c.state())
+}
+
+/// The enrollment profile is a 0640 file of root's in the service user's group.
+fn profile_file(host: &dyn Host, c: &MdmConfig) -> Outcome {
+    let path = profile_path(c);
+    let (_, gid) = ids(host, &Account::new(c.user(), c.user()))
+        .map_err(text)?
+        .ok_or(format!("no user {}", c.user()))?;
+    let meta = host
+        .stat(&path)
+        .map_err(text)?
+        .ok_or(format!("{path} is not there (push-cert writes it)"))?;
+    let got = (meta.kind, meta.mode, meta.uid, meta.gid);
+    match got == (Kind::File, 0o640, 0, gid) {
+        true => Ok(String::new()),
+        false => Err(format!(
+            "is {:?} {:04o} uid {} gid {}, not File 0640 uid 0 gid {gid}",
+            got.0, got.1, got.2, got.3
+        )),
+    }
 }
 
 fn mode_is(host: &dyn Host, path: &str, kind: Kind, mode: u32, uid: u32) -> Outcome {

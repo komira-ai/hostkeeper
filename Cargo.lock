@@ -1562,6 +1562,7 @@ dependencies = [
 name = "hostkeeper-mdm"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "clap",
  "flate2",
  "getrandom 0.4.3",
@@ -1569,13 +1570,17 @@ dependencies = [
  "hostkeeper-mdm-core",
  "hostkeeper-mdm-step",
  "hostkeeper-testkit",
+ "rcgen",
  "rustix",
  "rustls",
  "rustls-native-certs",
+ "serde_json",
  "sha2",
  "tar",
  "thiserror",
+ "time",
  "ureq",
+ "x509-parser",
 ]
 
 [[package]]
