@@ -700,9 +700,12 @@ volumes:
   files, run `password.sql` again through the same `docker compose exec ... psql --file`, and restart the coordinator.
   C5's acceptance is the setup above on a fresh machine, ending in a healthy database and a coordinator that holds the
   lock.
-- **Health.** The database has a health check and the coordinator starts only once it passes. The coordinator has none
-  of its own: its image has no shell or client to run one. It exits on a refusal and the restart policy starts it again
-  (section 5).
+- **Health.** The database has a health check and the coordinator starts only once it passes. The coordinator's image
+  has no shell or client to run one, so the coordinator has no compose `healthcheck` and no `HEALTHCHECK`; it exits on a
+  refusal and the restart policy starts it again (section 5). Its health is a route a probe outside the container asks
+  instead: `serve --health-listen <loopback address:port>` answers `GET /healthz` with `200 ok`, or `503` and one of
+  `starting`, `store_unreachable` and `not_writer` (two-programs.md section 2.7,
+  [coordinator-health.md](../deploy/coordinator-health.md)).
 
 ## 10. Backups and the restore drill
 
