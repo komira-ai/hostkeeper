@@ -164,15 +164,23 @@ fn run_executes_without_a_shell_or_environment() {
 }
 
 /// Catches effective ids that are not the process's, and a default host that is not rooted at
-/// the system's `/`: the scratch directory's absolute path is stat'ed through it.
+/// the system's `/`: the scratch directory's absolute path resolves through it to itself. (A
+/// stat would walk the directories above the scratch directory, whose owners are the
+/// machine's, not the test's.)
 #[test]
 fn the_default_host_is_the_machine_with_the_process_ids() {
     let (dir, host) = scratch("ids");
     assert_eq!(host.euid(), rustix::process::geteuid().as_raw());
     assert_eq!(host.egid(), rustix::process::getegid().as_raw());
-    let absolute = dir.path().to_str().unwrap();
-    let meta = RealHost::default().stat(absolute).unwrap().unwrap();
-    assert_eq!((meta.kind, meta.uid), (Kind::Dir, me(&dir).0));
+    let real = std::fs::canonicalize(dir.path()).unwrap();
+    let real = real.to_str().unwrap();
+    assert_eq!(RealHost::default().canonical(real).unwrap(), real);
+    assert_eq!(
+        RealHost::default()
+            .canonical(&format!("{real}/not-yet"))
+            .unwrap(),
+        format!("{real}/not-yet")
+    );
 }
 
 fn mode_and_owner(path: &Path) -> (u32, u32, u32) {
@@ -322,6 +330,14 @@ fn the_operators_and_the_services_directories_are_trusted_below_their_grants() {
             as_root.stat(path).unwrap_err().to_string(),
             not_trusted(path, &root)
         );
+        assert_eq!(
+            as_root.remove(path).unwrap_err().to_string(),
+            not_trusted(path, &root)
+        );
+        assert!(
+            dir.path().join(path.trim_start_matches('/')).exists(),
+            "{path}"
+        );
     }
 
     let granted = RealHost::trusting(dir.path(), &[])
@@ -350,9 +366,13 @@ fn the_operators_and_the_services_directories_are_trusted_below_their_grants() {
         );
     }
     // A grant whose directory has a `..` grants nothing.
-    let dotted = RealHost::trusting(dir.path(), &[]).trust_below("/srv/operator/../operator/bin", user);
+    let dotted =
+        RealHost::trusting(dir.path(), &[]).trust_below("/srv/operator/../operator/bin", user);
     assert_eq!(
-        dotted.read("/srv/operator/bin/nanohub").unwrap_err().to_string(),
+        dotted
+            .read("/srv/operator/bin/nanohub")
+            .unwrap_err()
+            .to_string(),
         not_trusted("/srv/operator/bin/nanohub", &root)
     );
 }
