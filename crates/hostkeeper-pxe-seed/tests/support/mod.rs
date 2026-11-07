@@ -12,7 +12,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use hostkeeper_pxe_seed::inputs::{
-    BootServer, DaemonConfigText, InstallDisk, LinuxPlatform, Record, SerialConsole,
+    BootServer, DaemonConfigText, InstallDisk, IsoName, LinuxPlatform, Record, SerialConsole,
 };
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
 use hostkeeper_pxe_seed::menu::{Install, MenuChoice, MenuRequest, Mode};
@@ -145,4 +145,15 @@ pub fn install(record: &Record, platform: LinuxPlatform) -> Install {
         MenuChoice::Install(install) => install,
         MenuChoice::LocalDisk(reason) => panic!("not an install: {reason}"),
     }
+}
+
+/// The served name of the platform's live-server ISO in the release's `netboot.json` today (the
+/// file name of its pinned URL, packaging/netboot/pins.toml).
+pub fn iso(platform: LinuxPlatform) -> IsoName {
+    match platform {
+        LinuxPlatform::X86_64 => "ubuntu-24.04.5-live-server-amd64.iso",
+        LinuxPlatform::Arm64 => "ubuntu-24.04.5-live-server-arm64.iso",
+    }
+    .parse()
+    .expect("an ISO name")
 }

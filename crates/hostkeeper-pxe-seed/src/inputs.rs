@@ -116,6 +116,44 @@ impl BootServer {
     }
 }
 
+/// The longest [`IsoName`], in bytes: a file name.
+pub const MAX_ISO_NAME: usize = 255;
+
+/// Why a live-server ISO's served name was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the ISO's served name is not 1 to 255 of A-Za-z0-9._+-, not starting with a dot and ending in .iso"
+)]
+pub struct IsoNameError;
+
+/// The name a platform's live-server ISO is served under: its `name` in the release's
+/// `netboot.json` (network-install.md section 5), which is the file name of its URL, such as
+/// `ubuntu-24.04.5-live-server-amd64.iso`. It changes with the pinned Ubuntu release, so it is an
+/// input, not a constant. One file name: no `/`, nothing a URL or a GRUB word would need to quote.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IsoName(String);
+
+impl IsoName {
+    /// The name.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for IsoName {
+    type Err = IsoNameError;
+
+    fn from_str(text: &str) -> Result<IsoName, IsoNameError> {
+        let ok = (1..=MAX_ISO_NAME).contains(&text.len())
+            & text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() | matches!(b, b'.' | b'_' | b'+' | b'-'))
+            & !text.starts_with('.')
+            & text.ends_with(".iso");
+        ok.then(|| IsoName(text.to_owned())).ok_or(IsoNameError)
+    }
+}
+
 /// What a menu and a seed need of an inventory record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {

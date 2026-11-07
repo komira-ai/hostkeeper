@@ -11,8 +11,8 @@ use base64::engine::general_purpose::STANDARD;
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_pxe_seed::inputs::{
-    BootServer, BootServerError, DaemonConfigText, InstallDisk, InstallDiskError, LinuxPlatform,
-    SerialConsole, SerialConsoleError,
+    BootServer, BootServerError, DaemonConfigText, InstallDisk, InstallDiskError, IsoName,
+    IsoNameError, LinuxPlatform, SerialConsole, SerialConsoleError,
 };
 use hostkeeper_pxe_seed::keys::{AuthorizedKeys, KEY_TYPES, KeysError};
 use hostkeeper_pxe_seed::layout::{deb_path, initrd_path, iso_path, kernel_path};
@@ -283,9 +283,8 @@ fn each_platform_names_its_own_files() {
             LinuxPlatform::X86_64,
             ["linux-x86_64", "amd64", "x86_64"],
             [
-                "/boot/linux-x86_64/vmlinuz",
-                "/boot/linux-x86_64/initrd",
-                "/boot/linux-x86_64/live-server.iso",
+                "/vmlinuz-linux-x86_64",
+                "/initrd-linux-x86_64",
                 "/deb/hostkeeper_amd64.deb",
             ],
         ),
@@ -293,9 +292,8 @@ fn each_platform_names_its_own_files() {
             LinuxPlatform::Arm64,
             ["linux-arm64", "arm64", "arm64"],
             [
-                "/boot/linux-arm64/vmlinuz",
-                "/boot/linux-arm64/initrd",
-                "/boot/linux-arm64/live-server.iso",
+                "/vmlinuz-linux-arm64",
+                "/initrd-linux-arm64",
                 "/deb/hostkeeper_arm64.deb",
             ],
         ),
@@ -312,7 +310,6 @@ fn each_platform_names_its_own_files() {
             [
                 kernel_path(platform),
                 initrd_path(platform),
-                iso_path(platform),
                 deb_path(platform)
             ],
             paths
@@ -321,4 +318,41 @@ fn each_platform_names_its_own_files() {
     for cpu in ["", "i386", "arm", "riscv64", "x86-64", "aarch64", "ARM64"] {
         assert_eq!(LinuxPlatform::from_grub_cpu(cpu), None, "{cpu}");
     }
+}
+
+/// Catches an ISO name that would need quoting in a URL or a GRUB word, or that is not one file
+/// name: the served names of `netboot.json` are read, every other is refused.
+#[test]
+fn an_iso_name_is_one_file_name_ending_in_iso() {
+    for name in [
+        "ubuntu-24.04.5-live-server-amd64.iso",
+        "ubuntu-24.04.5-live-server-arm64.iso",
+        "a.iso",
+        "x_y+z.iso",
+        &format!("{}.iso", "a".repeat(251)),
+    ] {
+        let iso: IsoName = name.parse().expect(name);
+        assert_eq!(iso.as_str(), name);
+        assert_eq!(iso_path(&iso), format!("/{name}"));
+    }
+    for name in [
+        "",
+        ".iso",
+        ".hidden.iso",
+        "ubuntu.img",
+        "ubuntu.ISO",
+        "boot/ubuntu.iso",
+        "../ubuntu.iso",
+        "ubuntu live.iso",
+        "ubuntu;x.iso",
+        "ubuntu$x.iso",
+        "caf\u{e9}.iso",
+        &format!("{}.iso", "a".repeat(252)),
+    ] {
+        assert_eq!(name.parse::<IsoName>(), Err(IsoNameError), "{name:?}");
+    }
+    assert_eq!(
+        IsoNameError.to_string(),
+        "the ISO's served name is not 1 to 255 of A-Za-z0-9._+-, not starting with a dot and ending in .iso"
+    );
 }

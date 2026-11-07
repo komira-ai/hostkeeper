@@ -2,39 +2,40 @@
 //! `hostkeeper-pxe serve`, which serves each of these paths and refuses every other.
 //!
 //! By TFTP, below GRUB's `$prefix`: the fixed `grub.cfg`, and the menu of a MAC at
-//! `hostkeeper/<grub cpu>/<mac>` ([`MENU_DIR`]). By HTTP: the kernel, the initrd and the
-//! live-server ISO of each platform under `/boot/<platform>/`, the deb of each platform under
-//! `/deb/`, and each machine's seed under `/seed/<mac>/`.
+//! `hostkeeper/<grub cpu>/<mac>` ([`MENU_DIR`]). By HTTP, at the names the release's
+//! `netboot.json` serves them as (network-install.md section 5): the kernel
+//! `/vmlinuz-<platform>`, the initrd `/initrd-<platform>`, and the live-server ISO under its own
+//! file name ([`crate::inputs::IsoName`]); then the deb of each platform under `/deb/`, and each
+//! machine's seed under `/seed/<mac>/`.
 
 use hostkeeper_enrollment::names::MacAddress;
 
-use crate::inputs::LinuxPlatform;
+use crate::inputs::{IsoName, LinuxPlatform};
 
 /// The directory, below GRUB's `$prefix`, that holds the menu of each MAC.
 pub const MENU_DIR: &str = "hostkeeper";
 
-/// The HTTP path of the platform's kernel.
+/// The HTTP path of the platform's kernel: `/` and its served name in `netboot.json`,
+/// `vmlinuz-<platform>`.
 pub const fn kernel_path(platform: LinuxPlatform) -> &'static str {
     match platform {
-        LinuxPlatform::X86_64 => "/boot/linux-x86_64/vmlinuz",
-        LinuxPlatform::Arm64 => "/boot/linux-arm64/vmlinuz",
+        LinuxPlatform::X86_64 => "/vmlinuz-linux-x86_64",
+        LinuxPlatform::Arm64 => "/vmlinuz-linux-arm64",
     }
 }
 
-/// The HTTP path of the platform's initrd.
+/// The HTTP path of the platform's initrd: `/` and its served name in `netboot.json`,
+/// `initrd-<platform>`.
 pub const fn initrd_path(platform: LinuxPlatform) -> &'static str {
     match platform {
-        LinuxPlatform::X86_64 => "/boot/linux-x86_64/initrd",
-        LinuxPlatform::Arm64 => "/boot/linux-arm64/initrd",
+        LinuxPlatform::X86_64 => "/initrd-linux-x86_64",
+        LinuxPlatform::Arm64 => "/initrd-linux-arm64",
     }
 }
 
-/// The HTTP path of the platform's Ubuntu 24.04 live-server ISO.
-pub const fn iso_path(platform: LinuxPlatform) -> &'static str {
-    match platform {
-        LinuxPlatform::X86_64 => "/boot/linux-x86_64/live-server.iso",
-        LinuxPlatform::Arm64 => "/boot/linux-arm64/live-server.iso",
-    }
+/// The HTTP path of a live-server ISO: `/` and its served name.
+pub fn iso_path(iso: &IsoName) -> String {
+    format!("/{}", iso.as_str())
 }
 
 /// The HTTP path of the platform's hostkeeper deb.

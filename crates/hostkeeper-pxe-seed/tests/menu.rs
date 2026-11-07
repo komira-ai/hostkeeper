@@ -10,9 +10,10 @@ use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_pxe_seed::inputs::{LinuxPlatform, Record};
 use hostkeeper_pxe_seed::layout::MENU_DIR;
 use hostkeeper_pxe_seed::menu::{
-    GRUB_CFG, LOCAL_DISK_MENU, LocalDiskReason, MenuChoice, MenuRequest, Mode, install_menu,
+    GRUB_CFG, Install, LOCAL_DISK_MENU, LocalDiskReason, MenuChoice, MenuRequest, Mode,
+    install_menu,
 };
-use support::{grub, record, server, server_on};
+use support::{grub, iso, record, server, server_on};
 
 const MAC: &str = "52:54:00:12:34:56";
 
@@ -28,6 +29,14 @@ fn choose(path: &str, mode: Mode, set: Option<&Record>) -> MenuChoice {
 }
 
 const MODES: [Mode; 2] = [Mode::Proxy, Mode::Router];
+
+/// The install of a choice that is one.
+fn install_of(choice: &MenuChoice) -> &Install {
+    let MenuChoice::Install(install) = choice else {
+        panic!("not an install: {choice:?}");
+    };
+    install
+}
 
 /// Asserts `choice` is an install of `platform` on the machine of `mac`, carrying `record`.
 fn assert_install(choice: &MenuChoice, mac: MacAddress, record: &Record, platform: LinuxPlatform) {
@@ -64,21 +73,42 @@ fn the_install_menu_of_each_platform_is_its_golden() {
     ];
     for (platform, golden) in goldens {
         assert_eq!(
-            install_menu(&server(), platform, mac()),
+            install_menu(&server(), platform, &iso(platform), mac()),
             golden,
             "{platform}"
         );
     }
-    assert!(install_menu(&server(), LinuxPlatform::X86_64, mac()).contains("ds=nocloud\\;s="));
+    assert!(
+        install_menu(
+            &server(),
+            LinuxPlatform::X86_64,
+            &iso(LinuxPlatform::X86_64),
+            mac()
+        )
+        .contains("ds=nocloud\\;s=")
+    );
 }
 
 /// Catches a boot server on a port other than 80 whose port is dropped from the URLs, and a
 /// port 80 that is written out, which a GRUB that reads no port in `(http,...)` would not take.
 #[test]
 fn a_port_other_than_80_is_in_every_url_of_the_menu() {
-    let menu = install_menu(&server_on(8080), LinuxPlatform::X86_64, mac());
+    let menu = install_menu(
+        &server_on(8080),
+        LinuxPlatform::X86_64,
+        &iso(LinuxPlatform::X86_64),
+        mac(),
+    );
     assert_eq!(menu, include_str!("golden/install-x86_64-port-8080.cfg"));
-    assert!(!install_menu(&server(), LinuxPlatform::X86_64, mac()).contains(":80"));
+    assert!(
+        !install_menu(
+            &server(),
+            LinuxPlatform::X86_64,
+            &iso(LinuxPlatform::X86_64),
+            mac()
+        )
+        .contains(":80")
+    );
 }
 
 /// Catches a local-disk menu that waits, or does anything but hand the boot back to the
@@ -99,8 +129,8 @@ fn a_mac_in_the_answer_set_whose_platform_agrees_gets_the_install_menu() {
             let choice = choose(&path, mode, Some(&node));
             assert_install(&choice, mac(), &node, platform);
             assert_eq!(
-                choice.text(&server()),
-                install_menu(&server(), platform, mac())
+                install_of(&choice).menu(&server(), &iso(platform)),
+                install_menu(&server(), platform, &iso(platform), mac())
             );
         }
     }
@@ -136,7 +166,6 @@ fn router_mode_boots_the_disk_of_a_record_with_no_platform() {
                 host_id: node.host_id.clone(),
             })
         );
-        assert_eq!(choice.text(&server()), LOCAL_DISK_MENU);
     }
 }
 
@@ -162,7 +191,6 @@ fn a_platform_that_disagrees_with_grub_boots_the_disk() {
                     stated,
                 })
             );
-            assert_eq!(choice.text(&server()), LOCAL_DISK_MENU);
         }
     }
 }
@@ -255,8 +283,8 @@ fn every_spelling_of_a_mac_is_the_one_mac() {
             .choose(Mode::Router, &|asked| (asked == expected).then_some(&node));
         assert_install(&choice, expected, &node, LinuxPlatform::X86_64);
         assert!(
-            choice
-                .text(&server())
+            install_of(&choice)
+                .menu(&server(), &iso(LinuxPlatform::X86_64))
                 .contains(&format!("/seed/{expected}/"))
         );
     }
@@ -377,7 +405,7 @@ fn each_install_menu_reads_as_one_entry_booting_its_platform_with_its_seed() {
             _ => format!("192.0.2.10:{port}"),
         };
         for platform in LinuxPlatform::ALL {
-            let text = install_menu(&server_on(port), platform, mac());
+            let text = install_menu(&server_on(port), platform, &iso(platform), mac());
             let commands = grub::read(&text).expect("GRUB reads it");
             let top: Vec<Vec<String>> = commands.iter().map(spelled).collect();
             let title = format!("Install Ubuntu 24.04 and hostkeeper ({platform})");
@@ -393,19 +421,22 @@ fn each_install_menu_reads_as_one_entry_booting_its_platform_with_its_seed() {
             assert_eq!(commands[0].block, None);
             assert_eq!(commands[1].block, None);
             let entry = commands[2].block.as_ref().expect("the entry's block");
-            let boot = format!("/boot/{platform}");
+            let iso = iso(platform);
             assert_eq!(
                 entry.iter().map(spelled).collect::<Vec<_>>(),
                 [
                     vec![
                         "linux".to_owned(),
-                        format!("(http,{host}){boot}/vmlinuz"),
+                        format!("(http,{host})/vmlinuz-{platform}"),
                         "ip=dhcp".to_owned(),
-                        format!("url=http://{host}{boot}/live-server.iso"),
+                        format!("url=http://{host}/{}", iso.as_str()),
                         "autoinstall".to_owned(),
                         format!("ds=nocloud;s=http://{host}/seed/{MAC}/"),
                     ],
-                    vec!["initrd".to_owned(), format!("(http,{host}){boot}/initrd")],
+                    vec![
+                        "initrd".to_owned(),
+                        format!("(http,{host})/initrd-{platform}")
+                    ],
                 ],
                 "{platform} on {port}"
             );

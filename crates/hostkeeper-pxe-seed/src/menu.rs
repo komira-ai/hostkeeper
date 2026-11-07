@@ -10,7 +10,7 @@ use std::fmt;
 use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_wire::names::HostId;
 
-use crate::inputs::{BootServer, LinuxPlatform, Record};
+use crate::inputs::{BootServer, IsoName, LinuxPlatform, Record};
 use crate::layout::{MENU_DIR, initrd_path, iso_path, kernel_path, seed_dir};
 
 /// The fixed `grub.cfg`: one command, which loads the menu of GRUB's CPU and of the MAC GRUB
@@ -135,6 +135,12 @@ impl Install {
     pub fn platform(&self) -> LinuxPlatform {
         self.platform
     }
+
+    /// The install menu of this install ([`install_menu`]), whose ISO is `iso`: the served name
+    /// of the live-server ISO of [`Install::platform`].
+    pub fn menu(&self, server: &BootServer, iso: &IsoName) -> String {
+        install_menu(server, self.platform, iso, self.mac)
+    }
 }
 
 /// The menu [`MenuRequest::choose`] gave.
@@ -144,16 +150,6 @@ pub enum MenuChoice {
     Install(Install),
     /// Boot the local disk.
     LocalDisk(LocalDiskReason),
-}
-
-impl MenuChoice {
-    /// The text of the menu: [`install_menu`] or [`LOCAL_DISK_MENU`].
-    pub fn text(&self, server: &BootServer) -> String {
-        match self {
-            MenuChoice::Install(install) => install_menu(server, install.platform, install.mac),
-            MenuChoice::LocalDisk(_) => LOCAL_DISK_MENU.to_owned(),
-        }
-    }
 }
 
 /// Why a request got the local-disk menu, for `hostkeeper-pxe`'s log.
@@ -205,10 +201,15 @@ impl fmt::Display for LocalDiskReason {
 }
 
 /// The install menu of `platform` for the machine of `mac`: one entry, no wait. It loads the
-/// platform's kernel and initrd from the boot server by HTTP, with the live-server ISO's URL,
-/// `autoinstall`, and the NoCloud seed of the MAC. The `;` of `ds=nocloud;s=...` is escaped,
-/// where it would otherwise end GRUB's command.
-pub fn install_menu(server: &BootServer, platform: LinuxPlatform, mac: MacAddress) -> String {
+/// platform's kernel and initrd from the boot server by HTTP, with the URL of the live-server
+/// ISO served as `iso`, `autoinstall`, and the NoCloud seed of the MAC. The `;` of
+/// `ds=nocloud;s=...` is escaped, where it would otherwise end GRUB's command.
+pub fn install_menu(
+    server: &BootServer,
+    platform: LinuxPlatform,
+    iso: &IsoName,
+    mac: MacAddress,
+) -> String {
     let device = server.grub_device();
     format!(
         "\
@@ -221,7 +222,7 @@ menuentry \"Install Ubuntu 24.04 and hostkeeper ({platform})\" {{
 ",
         kernel = kernel_path(platform),
         initrd = initrd_path(platform),
-        iso = server.url(iso_path(platform)),
+        iso = server.url(&iso_path(iso)),
         seed = server.url(&seed_dir(mac)),
     )
 }
