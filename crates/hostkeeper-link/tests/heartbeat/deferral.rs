@@ -498,7 +498,12 @@ fn an_unusable_deferral_file_is_logged_removed_and_ignored() {
     assert_eq!(rig.world.dispatch.pending(), 1);
     heartbeater.beat_once();
     heartbeater.beat_once();
-    let not_written = "error: the deferral of x is not written: Is a directory (os error 21)";
+    // unlink(2) of a directory fails with EISDIR on Linux and with EPERM on macOS.
+    let not_written = if cfg!(target_os = "macos") {
+        "error: the deferral of x is not written: Operation not permitted (os error 1)"
+    } else {
+        "error: the deferral of x is not written: Is a directory (os error 21)"
+    };
     assert_eq!(
         rig.world.log.lines(),
         [

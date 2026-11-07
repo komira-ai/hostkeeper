@@ -499,13 +499,22 @@ fn a_macos_set_that_cannot_be_built_stops_the_start() {
         "{error}"
     );
 
-    let error = Adapters::for_platform(&Platform::macos())
-        .err()
-        .expect("this is a Linux build");
-    assert!(matches!(
-        error,
-        StartError::NoAdapters { platform: "macOS" }
-    ));
+    // A Linux build has no macOS adapters to give; a Mac's build gives its host set.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let error = Adapters::for_platform(&Platform::macos())
+            .err()
+            .expect("this is a Linux build");
+        assert!(matches!(
+            error,
+            StartError::NoAdapters { platform: "macOS" }
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let adapters = Adapters::for_platform(&Platform::macos()).expect("this is a Mac build");
+        assert_eq!(adapters.kind, PlatformKind::Macos);
+    }
 }
 
 /// Catches a Linux set that is not the systemd set: the systemd unit directory and no package

@@ -230,7 +230,6 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--config` | `{DEFAULT_CONFIG}`"),
         format!("`--state-dir` | `{DEFAULT_STATE_DIR}`"),
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
-        format!("`--admin-socket` | `{DEFAULT_ADMIN_SOCKET}`"),
         "`--notify-systemd` | off".to_owned(),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
         format!("`--trusted-root-max-age-days` | `{DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS}`"),
@@ -242,6 +241,25 @@ fn daemon_flag_defaults_are_the_documented_ones() {
     for line in documented {
         assert!(readme.contains(&line), "the README does not state {line}");
     }
+    // The admin socket's default is the host platform's: its row states the Linux one first and
+    // the macOS one after it, so the default of either build is in it.
+    let row = readme
+        .lines()
+        .find(|line| line.starts_with("| `--admin-socket` |"))
+        .expect("the README's row of `--admin-socket`");
+    for path in [
+        "/run/hostkeeper/admin.sock",
+        "/var/run/hostkeeper/admin.sock",
+    ] {
+        assert!(
+            row.contains(&format!("`{path}`")),
+            "{row} does not state {path}"
+        );
+    }
+    assert!(
+        row.contains(&format!("`{DEFAULT_ADMIN_SOCKET}`")),
+        "{row} does not state {DEFAULT_ADMIN_SOCKET}"
+    );
 }
 
 /// Catches the config and lock errors sharing an exit status with each other or with a usage

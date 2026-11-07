@@ -135,7 +135,7 @@ only, never from the environment:
 | `--config` | `/etc/hostkeeper/hostkeeper.toml` | the daemon config, owned by root and not writable by group or others |
 | `--state-dir` | `/var/lib/updater/state` | a directory per service with its step record, params file and held halt generation, and the daemon's lock file `lock`; the directory of the service `hostkeeper` also holds its binaries (`bin/`) and its list of bad versions (`bad-versions`), see [Updating hostkeeper itself](#updating-hostkeeper-itself) |
 | `--packages-dir` | `/var/lib/hostkeeper/packages` | a directory per service with its version directories and the links `current` and `previous` |
-| `--admin-socket` | `/run/hostkeeper/admin.sock` | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
+| `--admin-socket` | `/run/hostkeeper/admin.sock` (macOS: `/var/run/hostkeeper/admin.sock`) | the admin socket, mode 0600 in a directory of mode 0700, served to uid 0 only |
 | `--notify-systemd` | off | once the boot work is over, send `READY=1` to the notify socket systemd sets for a `Type=notify` unit; without that socket the daemon exits 1 |
 | `--heartbeat-secs` | `15` | seconds between two heartbeats, at least 1; the end of a running order is reported within a second, without waiting for the period |
 | `--trusted-root-max-age-days` | `90` | days after which the Sigstore trusted root that package attestations are checked against is reported `trusted_root_stale` in the admin `Status`, at least 1; a signal only, package checks go on (see [docs/deploy/verify-a-release.md](docs/deploy/verify-a-release.md#the-trusted-root-on-a-host)) |

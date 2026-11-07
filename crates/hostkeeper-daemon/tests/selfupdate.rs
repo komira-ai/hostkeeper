@@ -17,9 +17,10 @@ use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::fallback::{self, FallbackError};
 use hostkeeper_daemon::selfupdate::{RELEASE_BINARY, binary_dir, protocol_line};
 use hostkeeper_daemon::start;
-use hostkeeper_daemon::testing::{Log, Signal, spawn};
+use hostkeeper_daemon::testing::{FakeClock, Log, Signal, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply, StoreSeam};
 use hostkeeper_hook::{Step, Verdict};
+use hostkeeper_launchd::PlatformKind;
 use hostkeeper_steps::record::{AwaitingRestart, State};
 use hostkeeper_steps::{
     BAD_VERSIONS_FILE, BadVersions, CrashPoint, RecordStore, SelfUpdateError, Settled,
@@ -41,6 +42,34 @@ fn waiting_for(version: &str) -> Option<AwaitingRestart> {
 fn code(code: ExitCode) -> String {
     format!("{code:?}")
 }
+
+/// The fallback verb as the systemd unit of a Linux host runs it, whatever host this test runs
+/// on: the verb on a Mac judges a burst of starts first (`tests/selfupdate_mac.rs`), the verb on
+/// Linux acts on what the record and `previous` say.
+fn linux_verb(dir: &std::path::Path) -> ExitCode {
+    fallback::main_for(dir, PlatformKind::Linux, &*FakeClock::new())
+}
+
+/// Makes the host's own verb act: on a Mac, three starts of [`NEW`] in the start log, a burst
+/// that is just made (a start of another boot has spent no time); on Linux systemd counts the
+/// starts and nothing is needed.
+#[cfg(target_os = "macos")]
+fn fail_the_start_limit(s: &SelfRig) {
+    let mut log = hostkeeper_steps::StartLog::load(&s.hk_state()).expect("the start log");
+    for mono in [100, 110, 120] {
+        log.record(hostkeeper_steps::DaemonStart {
+            version: NEW.to_owned(),
+            at: hostkeeper_steps::Stamp {
+                boot_id: hostkeeper_steps::BootId::new("a test", "boot").ok(),
+                mono_secs: mono,
+            },
+        })
+        .expect("a start");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn fail_the_start_limit(_: &SelfRig) {}
 
 /// A host that ran the swap to [`NEW`]: its record waits for the restart and `current` names the
 /// new binary; the daemon of [`OLD`] that ran it is returned.
@@ -237,10 +266,7 @@ fn the_fallback_leaves_a_binary_no_update_waits_for() {
             dir.display()
         )
     );
-    assert_eq!(
-        code(fallback::main(&dir)),
-        code(ExitCode::from(EXIT_FAILED))
-    );
+    assert_eq!(code(linux_verb(&dir)), code(ExitCode::from(EXIT_FAILED)));
     assert_eq!(snapshot(&s.rig.state), before);
     assert_eq!(s.current().as_deref(), Some(NEW));
 }
@@ -261,6 +287,7 @@ fn a_fallback_marks_the_version_bad_and_the_coordinator_stops_ordering_it() {
         "--dir".into(),
         dir.clone().into(),
     ];
+    fail_the_start_limit(&s);
     assert_eq!(
         code(cli::run(Cli::parse_from(args))),
         code(ExitCode::SUCCESS)
@@ -378,10 +405,7 @@ fn the_fallback_flips_before_it_writes_and_is_idempotent() {
         "{err}"
     );
     let before = snapshot(&s.rig.state);
-    assert_eq!(
-        code(fallback::main(&dir)),
-        code(ExitCode::from(EXIT_FAILED))
-    );
+    assert_eq!(code(linux_verb(&dir)), code(ExitCode::from(EXIT_FAILED)));
     assert_eq!(snapshot(&s.rig.state), before);
     assert!(hk_record(&s).is_none());
 
