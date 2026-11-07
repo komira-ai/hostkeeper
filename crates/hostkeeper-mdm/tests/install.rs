@@ -451,6 +451,7 @@ fn a_failing_random_source_fails_the_run_and_writes_no_secret() {
         config: config(),
         bin_dir: "/srv/fetch".to_owned(),
         max_archive: 1 << 30,
+        replacing: None,
     };
     let err = run(&env, &a, &kit.pins, Mode::Apply, &mut Vec::new()).unwrap_err();
     assert!(matches!(err, MdmError::Io(_)), "{err}");
@@ -546,6 +547,7 @@ fn an_archive_above_the_size_cap_is_refused() {
         config: config(),
         bin_dir: "/srv/fetch".to_owned(),
         max_archive: 10,
+        replacing: None,
     };
     let err = common::with_env(&host, &net, |env| {
         run(env, &a, &kit.pins, Mode::Apply, &mut Vec::new())

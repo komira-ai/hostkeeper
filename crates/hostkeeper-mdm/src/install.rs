@@ -5,7 +5,9 @@
 //! is not 0 (the plan reads root-only files, so a dry run needs root too); `uname -m` is not
 //! `x86_64` (the pins are linux-amd64 builds); `MDM_STATE`,
 //! `MDM_ETC`, `MDM_BIN` or `MDM_PKG_DIR` is a symbolic link; no interface carries `MDM_BIND`; a port it uses
-//! is held by another process (one held by the kit's own active unit is a rerun); the SCEP depot
+//! is held by another process (one held by the kit's own active unit is a rerun, and, when
+//! `migrate` sets `Install::replacing`, one held by the replaced kit's active unit of the same
+//! role is accepted, since `migrate` stops that unit before the new one starts); the SCEP depot
 //! holds only one of `ca.pem` and `ca.key`, or both but not as two regular files that
 //! `openssl` reads and that hold one key pair; an archive in `--bin-dir` is missing or its
 //! sha256 is not its pin; a secret file is not mode 0600 or not root's.
@@ -98,6 +100,9 @@ pub struct Install {
     pub bin_dir: String,
     /// The largest archive read, in bytes.
     pub max_archive: u64,
+    /// The kit this one replaces (`migrate`): a port held by that kit's active unit of the same
+    /// role is accepted, since the plan of `migrate` stops that unit first. `None` for `install`.
+    pub replacing: Option<UnitNames>,
 }
 
 /// Run `cmd` and return its standard output, or why it failed.
@@ -135,7 +140,7 @@ pub fn run_uninstall(
     Ok(execute(&p, mode, env.host, out)?)
 }
 
-fn root_only(host: &dyn Host, verb: &'static str) -> Result<(), MdmError> {
+pub(crate) fn root_only(host: &dyn Host, verb: &'static str) -> Result<(), MdmError> {
     match host.euid() {
         0 => Ok(()),
         euid => Err(MdmError::NeedsRoot { verb, euid }),
@@ -150,7 +155,7 @@ pub fn plan(
     out: &mut dyn Write,
 ) -> Result<Plan, MdmError> {
     let (c, host) = (&a.config, env.host);
-    preflight(host, c, out)?;
+    preflight(host, c, a.replacing.as_ref(), out)?;
     let binaries = binaries(host, &a.bin_dir, pins, a.max_archive)?;
     writeln!(out, "archives: every one matches its pin")?;
 
@@ -317,7 +322,12 @@ impl<'h> Restarts<'h> {
 }
 
 /// The host checks, read only.
-fn preflight(host: &dyn Host, c: &MdmConfig, out: &mut dyn Write) -> Result<(), MdmError> {
+fn preflight(
+    host: &dyn Host,
+    c: &MdmConfig,
+    replacing: Option<&UnitNames>,
+    out: &mut dyn Write,
+) -> Result<(), MdmError> {
     root_only(host, "install")?;
     architecture(host)?;
     for path in [&c.state(), &c.etc(), &c.bin(), &c.pkg_dir()] {
@@ -340,11 +350,11 @@ fn preflight(host: &dyn Host, c: &MdmConfig, out: &mut dyn Write) -> Result<(), 
     // `ss -Hltn`: `<state> <recv-q> <send-q> <local address:port> <peer>`.
     let listening = checked(host, &Cmd::new(SS_PATH).arg("-Hltn"))?;
     let n = UnitNames::new(c);
-    for (port, unit) in [
-        (c.nanohub_port(), &n.nanohub),
-        (c.scep_port(), &n.scep),
-        (c.dep_port(), &n.depserver),
-        (443, &n.proxy),
+    for (port, unit, replaced) in [
+        (c.nanohub_port(), &n.nanohub, replacing.map(|r| &r.nanohub)),
+        (c.scep_port(), &n.scep, replacing.map(|r| &r.scep)),
+        (c.dep_port(), &n.depserver, replacing.map(|r| &r.depserver)),
+        (443, &n.proxy, replacing.map(|r| &r.proxy)),
     ] {
         let tail = format!(":{port}");
         let held = listening.lines().any(|l| {
@@ -353,18 +363,28 @@ fn preflight(host: &dyn Host, c: &MdmConfig, out: &mut dyn Write) -> Result<(), 
                 .is_some_and(|local| local.ends_with(&tail))
         });
         if held {
-            let active = host.run(
-                &Cmd::new(hostkeeper_mdm_step::SYSTEMCTL)
-                    .arg("is-active")
-                    .arg(unit),
-            )?;
-            if active.code != 0 {
-                return Err(MdmError::PortHeld(port));
+            if is_active(host, unit)? {
+                writeln!(out, "port {port}: held by {unit} (a rerun)")?;
+                continue;
             }
-            writeln!(out, "port {port}: held by {unit} (a rerun)")?;
+            match replaced {
+                Some(old) if is_active(host, old)? => {
+                    let line = format!("port {port}: held by {old} (stopped first by this plan)");
+                    writeln!(out, "{line}")?;
+                }
+                _ => return Err(MdmError::PortHeld(port)),
+            }
         }
     }
     scep_depot(host, c)
+}
+
+/// Whether `systemctl is-active <unit>` succeeds.
+fn is_active(host: &dyn Host, unit: &str) -> Result<bool, MdmError> {
+    let cmd = Cmd::new(hostkeeper_mdm_step::SYSTEMCTL)
+        .arg("is-active")
+        .arg(unit);
+    Ok(host.run(&cmd)?.code == 0)
 }
 
 /// The host must be x86-64: the pinned tools are linux-amd64 builds.

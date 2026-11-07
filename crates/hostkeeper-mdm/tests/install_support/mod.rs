@@ -36,6 +36,7 @@ pub fn install(host: &FakeHost, kit: &Kit, mode: Mode) -> (Result<(), MdmError>,
         config: config(),
         bin_dir: "/srv/fetch".to_owned(),
         max_archive: 1 << 30,
+        replacing: None,
     };
     let mut out = Vec::new();
     let result = common::with_env(host, &net, |env| run(env, &a, &kit.pins, mode, &mut out));
