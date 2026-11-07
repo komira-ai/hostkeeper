@@ -72,7 +72,7 @@ cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 ```
 
 Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below),
-and only when the pull request changes the code those jobs prove. The workflow lint refuses such a
+on every pull request. The workflow lint refuses such a
 job in any other workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
 container) in any workflow but `privileged.yml` and the two copies of its jobs in `pr-device.yml`,
 refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it

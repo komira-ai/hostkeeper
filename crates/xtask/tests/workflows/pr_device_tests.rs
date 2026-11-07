@@ -38,50 +38,75 @@ fn device_with(from: &str, to: &str) -> String {
 /// The start of the job `macos-test`, once in the file.
 const MACOS_TEST: &str = "  macos-test:\n    runs-on: macos-15\n";
 
-/// The `[dependencies]` and `[target.<cfg>.dependencies]` of the manifest `toml` that are crates
-/// of the workspace (a `path`), by the directory each path names, from the crate's `dir`.
-fn path_dependencies(dir: &Path) -> Vec<PathBuf> {
-    let text = std::fs::read_to_string(dir.join("Cargo.toml")).expect("read a manifest");
-    let manifest: toml::Table = text.parse().expect("a manifest parses");
-    let mut tables: Vec<&toml::Table> = manifest
-        .get("dependencies")
-        .and_then(toml::Value::as_table)
-        .into_iter()
+/// The directories of the workspace crates the manifest `manifest` of the crate in `dir` depends on,
+/// through `[dependencies]` and `[build-dependencies]`, on any target (`[target.<cfg>.…]`): a
+/// `path` of its own, from `dir`, or `workspace = true` with a `path` in the root's
+/// `[workspace.dependencies]` (`workspace`), from `root`. A renamed dependency (`package = ...`)
+/// is found by its path all the same.
+fn path_dependencies(
+    manifest: &toml::Table,
+    dir: &Path,
+    workspace: &toml::Table,
+    root: &Path,
+) -> Vec<PathBuf> {
+    let kinds = ["dependencies", "build-dependencies"];
+    let mut tables: Vec<&toml::Table> = kinds
+        .iter()
+        .filter_map(|k| manifest.get(*k).and_then(toml::Value::as_table))
         .collect();
     if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
-        tables.extend(
-            targets
-                .values()
-                .filter_map(|t| t.get("dependencies").and_then(toml::Value::as_table)),
-        );
+        for target in targets.values() {
+            tables.extend(
+                kinds
+                    .iter()
+                    .filter_map(|k| target.get(*k).and_then(toml::Value::as_table)),
+            );
+        }
     }
-    tables
-        .into_iter()
-        .flat_map(|t| t.values())
-        .filter_map(|d| d.get("path").and_then(toml::Value::as_str))
-        .map(|path| dir.join(path))
-        .collect()
+    let mut found = Vec::new();
+    for (name, dependency) in tables.into_iter().flatten() {
+        if let Some(path) = dependency.get("path").and_then(toml::Value::as_str) {
+            found.push(dir.join(path));
+        } else if dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+            let declared = workspace.get(name);
+            if let Some(path) = declared
+                .and_then(|d| d.get("path"))
+                .and_then(toml::Value::as_str)
+            {
+                found.push(root.join(path));
+            }
+        }
+    }
+    found
+}
+
+/// The manifest of the crate (or workspace root) in `dir`.
+fn manifest(dir: &Path) -> toml::Table {
+    let text = std::fs::read_to_string(dir.join("Cargo.toml")).expect("read a manifest");
+    text.parse().expect("a manifest parses")
 }
 
 /// The package name of the crate in `dir`.
 fn package_name(dir: &Path) -> String {
-    let text = std::fs::read_to_string(dir.join("Cargo.toml")).expect("read a manifest");
-    let manifest: toml::Table = text.parse().expect("a manifest parses");
-    manifest["package"]["name"]
+    manifest(dir)["package"]["name"]
         .as_str()
         .expect("a package name")
         .to_owned()
 }
 
 /// The crates the `hostkeeper` and `hello` binaries are built from: the two crates and every
-/// workspace crate they depend on, through normal dependencies, on any target.
+/// workspace crate they depend on, through normal and build dependencies, on any target.
 fn mac_crates() -> BTreeSet<String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let workspace = manifest(&root)["workspace"]["dependencies"]
+        .as_table()
+        .expect("the root's [workspace.dependencies]")
+        .clone();
     let mut pending = vec![root.join("crates/hostkeeper"), root.join("examples/hello")];
     let mut seen = BTreeSet::new();
     while let Some(dir) = pending.pop() {
         if seen.insert(package_name(&dir)) {
-            pending.extend(path_dependencies(&dir));
+            pending.extend(path_dependencies(&manifest(&dir), &dir, &workspace, &root));
         }
     }
     seen
@@ -562,4 +587,58 @@ fn a_top_level_key_that_would_change_the_copies_is_refused() {
             "{added}"
         );
     }
+}
+
+#[test]
+fn the_macs_crates_are_found_through_every_shape_of_path_dependency() {
+    // Catches: a crate of the Mac's binaries missed by the list's own check, so macos-test stops
+    // testing it with the check still green, when it is a build dependency, a dependency of one
+    // target only, a renamed one, or one declared through the root's workspace dependencies; and
+    // a dev-dependency, or an external crate, counted as one of the Mac's crates.
+    let manifest: toml::Table = r#"
+[dependencies]
+a = { path = "../a" }
+external = "1"
+[build-dependencies]
+b = { path = "../b" }
+[target.'cfg(target_os = "macos")'.dependencies]
+c = { path = "../c" }
+[target.'cfg(unix)'.build-dependencies]
+d = { path = "../d" }
+renamed = { package = "e", path = "../e" }
+[dependencies.f]
+workspace = true
+[dependencies.g]
+workspace = true
+[dev-dependencies]
+h = { path = "../h" }
+"#
+    .parse()
+    .expect("parses");
+    let workspace: toml::Table = r#"
+f = { path = "crates/f" }
+g = "2"
+"#
+    .parse()
+    .expect("parses");
+    let found: BTreeSet<PathBuf> = path_dependencies(
+        &manifest,
+        Path::new("crates/x"),
+        &workspace,
+        Path::new("root"),
+    )
+    .into_iter()
+    .collect();
+    let want: BTreeSet<PathBuf> = [
+        "crates/x/../a",
+        "crates/x/../b",
+        "crates/x/../c",
+        "crates/x/../d",
+        "crates/x/../e",
+        "root/crates/f",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect();
+    assert_eq!(found, want);
 }
