@@ -3,8 +3,9 @@
 Status: design, for review. This document makes network install of new Linux machines part of hostkeeper v1. It
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
-this document and hostkeeper-design.md disagree on network install, this document wins. Nothing here is built yet:
-every statement about new code is **Designed**, and section 12 lists the build items.
+this document and hostkeeper-design.md disagree on network install, this document wins. Of the build items, N2 (the
+coordinator's LAN listener, section 7) is built; every other statement about new code is **Designed**, and section 12
+lists the build items.
 
 The tags are those of hostkeeper-design.md. **Built** names code on `main` with a path. **Designed** means nothing
 implements it yet. **[V]** marks a fact about software or hardware we do not own, which must be checked on the real
@@ -267,33 +268,40 @@ section 12.1), this is also what would let Q15 move to (b).
 
 ## 7. LAN enrollment
 
-**Today** (**Built**). The coordinator has two listeners: the heartbeat listener (`--heartbeat-listen`) and the private
-listener (`--private-listen`). Enrollment has no listener of its own. `Enroll` and `Poll` are calls of
+**Before N2** (**Built**). The coordinator had two listeners: the heartbeat listener (`--heartbeat-listen`) and the
+private listener (`--private-listen`). Enrollment has no listener of its own. `Enroll` and `Poll` are calls of
 `hostkeeper.agent.v1.Coordinator` on the heartbeat listener, which with `--enrollment-dir` lets a TLS client with no
 certificate finish the handshake. `Heartbeat` and `Renew` refuse such a caller (`crates/hostkeeper-coordinator/src/
 listen.rs`, `grpc/mod.rs`). On the farm the heartbeat listener is bound to the tailnet address, and a bare machine has
 no tailscale.
 
-**Designed: `--lan-listen <address:port>`**, a third listener. It serves the agent service and nothing else:
+**Built: `--lan-listen <address:port>`** (`crates/hostkeeper-coordinator/src/config.rs`, test
+`crates/hostkeeper-coordinator/tests/lan_listen.rs`), a third listener. It needs `--enrollment-dir`. It is a second
+listener of the heartbeat surface, with the heartbeat listener's TLS source, so it serves the agent service and nothing
+else (Question 1 answered (a)):
 
 - `Enroll` and `Poll` to a caller with no certificate.
-- `Heartbeat` and `Renew` to a host certificate only, with exactly the checks of the heartbeat listener. This depends
-  on Question 1.
-- Never the operator API, the JSON gateway or the UI. A call to any of them on this listener is refused
-  `UNIMPLEMENTED`, as an operator call on the heartbeat listener is today (`grpc/mod.rs`).
+- `Heartbeat` and `Renew` to a host certificate only, with exactly the checks of the heartbeat listener. The JSON
+  heartbeat route (`POST /v1/heartbeat`) is served too, because a daemon's first heartbeat goes there before it learns
+  that the coordinator speaks gRPC (`crates/hostkeeper-link/src/negotiated.rs`).
+- Never the operator API, the JSON gateway or the UI. A gRPC call of the operator API on this listener is refused
+  `UNIMPLEMENTED`, as on the heartbeat listener (`grpc/mod.rs`); a JSON gateway call, a JSON route of the private
+  listener and a path under `/ui/` are answered 404 `not_found`, as there (`http.rs`).
 
-The address must be one interface's, and a wildcard address is refused at start, as for `--private-listen` today. The
-daemon config of a network-installed host names this listener as `coordinator`. Existing hosts keep the tailnet
+The address must be one interface's, and a wildcard address is refused at start, as for `--private-listen`. The start
+line says where it is bound (`lan=<address:port>`, after `control=`). The daemon config of a network-installed host names this listener as `coordinator`. Existing hosts keep the tailnet
 address. One coordinator serves both groups, with one CA and one enrollment store.
 
-**The server certificate's names.** Today the coordinator's server certificate carries DNS names only (`--server-name`,
-**Built**), and it is made again only when its file is missing or a third of its life is left. Two changes are
-designed, in the same pull request as the flag:
+**The server certificate's names** (**Built**, `crates/hostkeeper-coordinator/src/enrollment/setup.rs`). Before N2 the
+coordinator's server certificate carried DNS names only (`--server-name`), and it was made again only when its file was
+missing or a third of its life was left. Two changes came with the flag:
 
-- The IP address of `--lan-listen` is added to the certificate as an IP SAN. A bare machine then dials the coordinator
-  by address, and needs neither a name in the router's DNS nor a hosts file. `--server-name` stays for names.
-- The certificate is made again at start, and at the reload tick, whenever its names differ from the flags. Today a
-  changed `--server-name` takes effect only when someone deletes the file.
+- The IP address of `--lan-listen` is added to the certificate as an IP SAN, after the DNS names (an IPv4 address
+  written as IPv6 is named as IPv4). A bare machine then dials the coordinator by address, and needs neither a name in
+  the router's DNS nor a hosts file. `--server-name` stays for names, and at least one is still required.
+- The certificate is made again at start, and at the reload tick, whenever its names differ from the flags: a DNS name
+  or the address added, removed or changed. The order of the names is not compared, so reordering `--server-name`
+  makes no new certificate.
 
 **The threat.** The enrollment port takes a request from anyone who can reach it, with no certificate (Q15 of
 hostkeeper-design.md). On the farm LAN that is any machine on the LAN. A data MAC is in every frame the machine sends.
@@ -429,15 +437,18 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
   several, and for each `--install-disk` form. It refuses a daemon config the loader refuses, and a private key in
   the SSH keys file. A test asserts that the seed is exactly the golden, with no field beyond the documented ones, so a
   token cannot slip in unnoticed.
-- LAN listener (N2): `Enroll` and `Poll` work with no certificate. `Heartbeat` and `Renew` without one are refused.
-  Each operator service, the JSON gateway and the UI are refused on it. A wildcard address is refused. The listener's
-  IP is in the certificate's SANs, and a changed name list makes a new certificate.
+- LAN listener (N2, **Built**: `crates/hostkeeper-coordinator/tests/lan_listen.rs` and
+  `crates/hostkeeper-coordinator/src/enrollment/tests/server_names.rs`): `Enroll` and `Poll` work with no certificate.
+  `Heartbeat` and `Renew` without one are refused. Each operator service, the JSON gateway and the UI are refused on it.
+  A wildcard address is refused. The listener's IP is in the certificate's SANs, and a changed name list makes a new
+  certificate.
 - Console key hash (N3): exact content of the issue file for pending, approved and untrusted-coordinator states.
 - Contested records (N4): `Approve` is refused `record_contested` while two pending requests match one record, and
   succeeds after the other is rejected. `List` names the contested requests both ways.
 - Reinstall (N4, store level): the existing `a_host_role_is_read_only_for_the_key_the_host_holds` already proves that
   the old key names the host no more. N2 adds the coordinator-level test that a heartbeat with the old certificate,
-  on the LAN listener, is refused `forbidden`.
+  on the LAN listener, is refused `forbidden`
+  (`an_enrolled_host_heartbeats_and_renews_on_the_lan_listener_until_it_is_replaced`, **Built**).
 
 **The end-to-end proof (N10).** One Rust integration test in `crates/hostkeeper-privileged`, behind its feature
 `privileged`, in a new job `net-install` of `privileged.yml`. That workflow runs only on a push to `main` and by hand,
@@ -514,9 +525,9 @@ komira-ai/hostkeeper#102) do not block N10: it checks a first install, which wor
 
 Each question has options and a recommendation. Until it is answered, the design follows the recommendation.
 
-**Question 1. How does a network-installed host reach the coordinator once approved?** Its daemon config names one
-coordinator address, and the daemon both enrolls and heartbeats at that address (hostkeeper-design.md section
-4.1, **Built**). A bare machine has no tailscale.
+**Question 1. How does a network-installed host reach the coordinator once approved?** Answered: (a), built in N2.
+Its daemon config names one coordinator address, and the daemon both enrolls and heartbeats at that address
+(hostkeeper-design.md section 4.1, **Built**). A bare machine has no tailscale.
 
 - (a) **The LAN listener serves the whole agent service**: enrollment with no certificate, and heartbeat and renewal
   with a host certificate, exactly as the tailnet listener does. It never serves the operator API or the UI. The host
