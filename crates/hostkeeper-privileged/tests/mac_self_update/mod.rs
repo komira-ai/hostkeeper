@@ -28,6 +28,11 @@
 //! Dropping the host boots out the daemon's job, the probe's job and the fallback label, prints
 //! the daemon's output when the test is failing, and removes the tree.
 //!
+//! **The coordinator.** By default the test writes it ([`MacSelfHost::offer`]); a test may answer
+//! each heartbeat with the real coordinator in its process instead ([`coordinator::Relay`]). The
+//! daemon's observer watches the test's job as the service `hostkeeper` (the fixture's
+//! `--fixture-own-unit`), as a Mac's daemon watches its own job `dev.hostkeeper.hostkeeper`.
+//!
 //! Every wait reads a state a bounded number of times ([`wait`]) and fails at once when the state
 //! can no longer come (an order refused, [`MacSelfHost::check_not_stuck`]); nothing asserts how
 //! long anything took.
@@ -47,6 +52,8 @@ use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::{Layout, RecordStore, Seal, tree_digest};
 use serde_json::Value;
 
+pub mod coordinator;
+
 /// The daemon program of these tests.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-selfupdate-daemon");
 /// The workload fixture, the hook of every release.
@@ -58,7 +65,7 @@ pub const N: &str = "1.0.0";
 /// The version it is ordered to.
 pub const NEXT: &str = "1.0.1";
 /// The package digest the orders name.
-const DIGEST: &str = "abababababababababababababababababababababababababababababababab";
+pub const DIGEST: &str = "abababababababababababababababababababababababababababababababab";
 /// The order id of the self-update.
 pub const ORDER: &str = "self-update-1";
 /// The reason of the verdict of an update whose new binary has not run yet.
@@ -334,6 +341,8 @@ impl MacSelfHost {
         let mut argv = vec![
             arg("--fixture-dir".to_owned()),
             arg(self.fixture().display().to_string()),
+            arg("--fixture-own-unit".to_owned()),
+            arg(self.label.to_string()),
             arg("daemon".to_owned()),
         ];
         for (flag, value) in [
@@ -408,6 +417,17 @@ impl MacSelfHost {
         let tmp = link.join("order.json.tmp");
         file(&tmp, order.to_string().as_bytes(), 0o644);
         fs::rename(&tmp, link.join("order.json")).expect("place the order");
+    }
+
+    /// The fixture's link directory: the heartbeats the daemon wrote, and the coordinator's
+    /// answer it reads.
+    pub fn link(&self) -> PathBuf {
+        self.fixture().join("link")
+    }
+
+    /// A directory of the test's tree for a coordinator's state files.
+    pub fn coordinator_dir(&self) -> PathBuf {
+        self.path("coordinator")
     }
 
     /// The version `current` of the binary directory names.

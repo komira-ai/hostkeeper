@@ -69,9 +69,10 @@ use crate::mac::HostIoreg;
 use crate::notify::{
     NoNotifier, NoWatchdog, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
 };
-use crate::observer::observer_with;
+use crate::observer::{OwnService, observer_with};
 use crate::prune::{LayoutPrune, NoLockPoint};
 use crate::real_packages::RealPackages;
+use crate::selfupdate::binary_dir;
 use crate::start::{self, Settings, StartError};
 use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
 use crate::unix_clock::SystemUnixClock;
@@ -798,6 +799,10 @@ pub fn host_ports(
             adapters.process,
             &settings.packages_dir,
             own_version,
+            &OwnService {
+                unit: adapters.own_unit,
+                binary_dir: binary_dir(&settings.state_dir),
+            },
         )),
     })
 }

@@ -111,6 +111,13 @@ pub struct AwaitingRestart {
     pub version: String,
     /// What the `Succeeded` the new binary confirms says of the promotion.
     pub verdict_promotion_pending: bool,
+    /// The coordinator's id of the order the update ran for, when it came with one: the binary
+    /// that settles the update reports its verdict under that id and the record's `order_try`,
+    /// since the binary that ran it exits before its verdict is sent. Additive: written only
+    /// when set, and a record without it (every record of a daemon from before it existed)
+    /// loads as `None`, its verdict then reported by no binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
 }
 
 /// How an update waiting for the restart ends ([`RecordStore::settle_awaiting_restart`]).

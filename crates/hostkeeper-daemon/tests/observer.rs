@@ -11,12 +11,15 @@ use std::sync::Arc;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::admin::{self, Peer, service_state};
 use hostkeeper_daemon::observer::{
-    STATUS_DEADLINE, SealedExe, host_observer, observe, observer_with, service_health,
+    OwnService, STATUS_DEADLINE, SealedExe, host_observer, observe, observer_with, service_health,
     service_input,
 };
+use hostkeeper_daemon::selfunits::MAIN_UNIT;
+use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_daemon::testing::{Counted, manifest, spawn};
 use hostkeeper_daemon::{Daemon, Reply};
 use hostkeeper_hook::Step;
+use hostkeeper_launchd::Label;
 use hostkeeper_observe::{
     ActiveState, Current, ExeStat, ExpectedExe, HealthView, Observation, ServiceInput,
     ServiceState as Observed, UnhealthyReason, UnobservedReason, VersionView,
@@ -45,6 +48,14 @@ fn abc() -> [u8; 32] {
         *byte = u8::from_str_radix(&ABC[at * 2..at * 2 + 2], 16).expect("hex");
     }
     out
+}
+
+/// The daemon of `rig` running as `unit`, its binary directory under the rig's state directory.
+fn own_service(rig: &Rig, unit: &str) -> OwnService {
+    OwnService {
+        unit: unit.to_owned(),
+        binary_dir: binary_dir(&rig.state),
+    }
 }
 
 fn name(text: &str) -> ServiceName {
@@ -682,6 +693,7 @@ fn the_observer_confirms_the_version_of_a_mac_service() {
         Box::new(rig.process.clone()),
         &rig.packages,
         OWN,
+        &own_service(&rig, &Label::daemon().to_string()),
     );
 
     let seen = observe(&observer, &rig.packages, &OWN, &name("web")).expect("observed");
@@ -710,7 +722,7 @@ fn the_observer_confirms_the_version_of_a_mac_service() {
 #[test]
 fn the_host_observer_answers_without_asking_the_host() {
     let rig = Rig::new("host-observer");
-    let observer = host_observer(&rig.packages, OWN);
+    let observer = host_observer(&rig.packages, OWN, &own_service(&rig, MAIN_UNIT));
     let input = |current: Option<Current>| ServiceInput {
         service: "web".to_owned(),
         current,

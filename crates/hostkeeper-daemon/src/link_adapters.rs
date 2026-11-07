@@ -27,8 +27,9 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Phase, Verdict};
 use hostkeeper_link::{
-    Health, HeldHalts, Liveness, Observation, Order, OrderResult, OrderSink, Outcome, Reason,
-    RecordedService, Renewal, RenewalSource, ServiceObserver, ServiceRecords, Target, Verb,
+    Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult, OrderSink,
+    Outcome, Reason, RecordedService, Renewal, RenewalSource, ServiceObserver, ServiceRecords,
+    Target, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -39,6 +40,8 @@ use crate::executor::{Ctx, Daemon, Reply};
 use crate::installed::{self, CURRENT};
 use crate::observer;
 use crate::refusal::Refusal;
+use crate::selfupdate::SettledOrder;
+use crate::verbs::force::SELF_SERVICE;
 
 /// The most bytes of a verdict's `detail` (`UpdateResult.detail` of `hostkeeper.agent.v1`).
 pub const MAX_DETAIL: usize = 512;
@@ -260,9 +263,15 @@ impl ServiceRecords for DaemonRecords {
 /// the record is unfinished, and nothing when it is finished, absent, newer or unreadable (the
 /// executor refuses the service's orders while it cannot read the record); and the try the
 /// record holds, finished or not, none when it is absent, newer or unreadable or names no try.
-/// The record keeps no order id of a hooked order, so no verdict is given back here: after a
+/// The record keeps no order id of a hooked order, so no verdict is given back from it: after a
 /// restart the coordinator's resend of the order is answered from the record (design 8.3), and
 /// the try tells a coordinator that never heard the verdict which try to number past.
+///
+/// The one verdict given back is that of the update of hostkeeper itself this binary settled at
+/// its start ([`Ctx::settled_order`]), as the service `hostkeeper`'s: the coordinator ends that
+/// order once the host runs its target and never resends it, and the binary that ran it exited
+/// before its verdict was sent. The loop sends it from its first heartbeat until it is
+/// acknowledged, in place of whatever older verdict the coordinator still held for the host.
 pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
     let version = installed::linked_version(&ctx.dirs.packages, &service, CURRENT)?;
     let (updating, record_try) = match ctx.store(&service).load() {
@@ -275,13 +284,37 @@ pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
         }
         _ => (None, None),
     };
+    let last_result = match service.as_str() == SELF_SERVICE {
+        true => ctx.settled_order().as_ref().and_then(settled_result),
+        false => None,
+    };
     Some(RecordedService {
         name: service,
         version,
         updating,
-        last_result: None,
+        last_result,
         record_try,
     })
+}
+
+/// `settled` as the loop reports it: its order and try, its target, and its verdict as an
+/// order that ended with it ([`finished`]); `None` when its id or target is not one the loop can
+/// send.
+fn settled_result(settled: &SettledOrder) -> Option<OrderResult> {
+    let base = OrderResult {
+        order: OrderRef {
+            id: OrderId::new(&settled.order_id).ok()?,
+            order_try: settled.order_try,
+        },
+        target: Version::new(&settled.target).ok()?,
+        outcome: Outcome::Failed,
+        phase: None,
+        class: None,
+        reason: None,
+        forced: false,
+        detail: None,
+    };
+    Some(finished(base, &settled.verdict, settled.reason.as_deref()))
 }
 
 /// The service-observer port over the daemon's observer.

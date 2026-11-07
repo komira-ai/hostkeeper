@@ -4,10 +4,13 @@
 //!
 //! One round, in order:
 //!
-//! 1. No `current`: [`ServiceState::Absent`], and nothing is asked. No `[units] run`:
-//!    [`ServiceState::Unmonitored`]; the service manager and the process are not asked, and a
-//!    health URL, if the manifest has one, is probed once (a `{port}` in it has no instance to
-//!    be filled from, and is `url_invalid`).
+//! 1. No `current`: [`ServiceState::Absent`], and nothing is asked. No `[units] run`, and no
+//!    units given for the service ([`Observer::with_run_of`]): [`ServiceState::Unmonitored`]; the
+//!    service manager and the process are not asked, and a health URL, if the manifest has one,
+//!    is probed once (a `{port}` in it has no instance to be filled from, and is `url_invalid`).
+//!    A service whose manifest runs no unit but that was given units is observed through those,
+//!    as if its manifest named them (the daemon's own service, whose job the host's installer
+//!    places, not its package).
 //! 2. Read every run unit. Every one `NotFound`: `Absent`. Any `Activating` or `Deactivating`:
 //!    `Transitioning`, even beside an active unit (a hand-over under way is reported as one).
 //!    Else any `Active`: `Live` (a standby instance that is inactive by design does not make a
@@ -270,6 +273,8 @@ pub struct Observer {
     options: ObserveOptions,
     /// Per service, the digest of its last confirmed main executable and what it was taken of.
     cache: Mutex<BTreeMap<String, (ExeKey, [u8; 32])>>,
+    /// Per service, the units it runs as when its manifest's `[units] run` names none.
+    run_of: BTreeMap<String, Vec<String>>,
 }
 
 /// A port error as the reason of a discarded round.
@@ -315,7 +320,18 @@ impl Observer {
             ports,
             options,
             cache: Mutex::new(BTreeMap::new()),
+            run_of: BTreeMap::new(),
         }
+    }
+
+    /// The same observer, observing `service` through `units` whenever the manifest of its
+    /// `current` names no `[units] run`, exactly as if it named them; a manifest that names any
+    /// is read as it is. Given again for the same service, the last `units` stand; given none,
+    /// the service is unmonitored as before.
+    #[must_use]
+    pub fn with_run_of(mut self, service: &str, units: Vec<String>) -> Observer {
+        self.run_of.insert(service.to_owned(), units);
+        self
     }
 
     /// Observes `svc` once. Each health probe may wait as long as `deadline` allows.
@@ -346,7 +362,11 @@ impl Observer {
         let Some(current) = &svc.current else {
             return quiet(ServiceState::Absent);
         };
-        if current.run.is_empty() {
+        let run = match (current.run.is_empty(), self.run_of.get(&svc.service)) {
+            (true, Some(units)) => units.as_slice(),
+            _ => current.run.as_slice(),
+        };
+        if run.is_empty() {
             let health = match &current.health_url {
                 Some(template) => {
                     let failure = self.probe(&svc.service, template, None, deadline)?;
@@ -358,17 +378,16 @@ impl Observer {
             };
             return Ok((ServiceState::Unmonitored, VersionView::NotLive, health));
         }
-        let before = self.read_units(&current.run)?;
+        let before = self.read_units(run)?;
         let state = aggregate(&before);
         let (version, health) = if state == ServiceState::Live {
             let version = self.version(svc, &before)?;
-            (version, self.health(svc, current, &before, deadline)?)
+            (version, self.health(svc, current, run, &before, deadline)?)
         } else {
             (VersionView::NotLive, HealthView::NotProbed)
         };
-        let after = self.read_units(&current.run)?;
-        let changed = current
-            .run
+        let after = self.read_units(run)?;
+        let changed = run
             .iter()
             .zip(before.iter().zip(&after))
             .find(|(_, (b, a))| (b.active != a.active) | (b.main_pid != a.main_pid));
@@ -459,11 +478,12 @@ impl Observer {
             .map(|(_, digest)| *digest)
     }
 
-    /// The health part of a live round.
+    /// The health part of a live round over the run units `run`, whose states are `units`.
     fn health(
         &self,
         svc: &ServiceInput,
         current: &Current,
+        run: &[String],
         units: &[UnitState],
         deadline: Deadline,
     ) -> Round<HealthView> {
@@ -471,7 +491,7 @@ impl Observer {
             return Ok(HealthView::NotProbed);
         };
         let mut first_failure = None;
-        for (unit, state) in current.run.iter().zip(units) {
+        for (unit, state) in run.iter().zip(units) {
             if state.active == ActiveState::Active {
                 let failure = self.probe(&svc.service, template, Some(unit), deadline)?;
                 first_failure = first_failure.or(failure);

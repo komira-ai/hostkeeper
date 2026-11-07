@@ -74,6 +74,10 @@ pub struct Hooked {
     pub index_digest: Option<PackageDigest>,
     /// The coordinator's try of the order, from 1.
     pub order_try: NonZeroU64,
+    /// The coordinator's id of the order; `None` when it carries none. A force keeps it in its
+    /// record and reports it with its verdict; the update of the daemon itself keeps it in its
+    /// wait for the restart ([`crate::selfupdate`]), for the next binary to report its verdict.
+    pub order_id: Option<String>,
 }
 
 /// The arguments of an `uninstall`.
@@ -90,9 +94,6 @@ pub struct Forced {
     pub package: Hooked,
     /// Greater than the generation the service is held under: a force lifts a standing halt.
     pub halt_generation: u64,
-    /// The coordinator's id of the order, kept in the force record and reported with its
-    /// verdict; `None` when the order carries none.
-    pub order_id: Option<String>,
 }
 
 /// One verb with its typed arguments. The executor matches it exhaustively; a verb a later
@@ -146,7 +147,7 @@ fn service(verb: &str, text: &str) -> Result<ServiceName, BadOrder> {
 fn hooked(
     verb: &str,
     (service_text, version, digest, index_digest): (&str, &str, &str, &str),
-    order_try: NonZeroU64,
+    (order_try, order_id): (NonZeroU64, &str),
 ) -> Result<Hooked, BadOrder> {
     let index_digest = match index_digest.is_empty() {
         true => None,
@@ -160,6 +161,7 @@ fn hooked(
         digest: checks::digest(digest).map_err(|_| bad(verb, "package_digest", DIGEST_RULE))?,
         index_digest,
         order_try,
+        order_id: Some(order_id.to_owned()).filter(|id| !id.is_empty()),
     })
 }
 
@@ -177,30 +179,30 @@ impl TryFrom<&Order> for Verb {
             rule: NO_TRY,
         };
         let order_try = NonZeroU64::new(order.r#try).ok_or_else(no_try)?;
+        let of = (order_try, order.order_id.as_str());
         Ok(match verb {
             order::Verb::Update(a) => Verb::Update(hooked(
                 "update",
                 (&a.service, &a.version, &a.package_digest, &a.index_digest),
-                order_try,
+                of,
             )?),
             order::Verb::ForceRollback(a) => Verb::ForceRollback(hooked(
                 "force_rollback",
                 (&a.service, &a.version, &a.package_digest, &a.index_digest),
-                order_try,
+                of,
             )?),
             order::Verb::Install(a) => Verb::Install(hooked(
                 "install",
                 (&a.service, &a.version, &a.package_digest, &a.index_digest),
-                order_try,
+                of,
             )?),
             order::Verb::Force(a) => Verb::Force(Forced {
                 package: hooked(
                     "force",
                     (&a.service, &a.version, &a.package_digest, &a.index_digest),
-                    order_try,
+                    of,
                 )?,
                 halt_generation: a.halt_generation,
-                order_id: Some(order.order_id.clone()).filter(|id| !id.is_empty()),
             }),
             order::Verb::Uninstall(a) => Verb::Uninstall(Unhooked {
                 service: service("uninstall", &a.service)?,

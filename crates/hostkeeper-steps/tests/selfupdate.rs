@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_steps::record::{HookSel, Progress, SCHEMA, State};
+use hostkeeper_steps::record::{HookSel, Loaded, Progress, RECORD_FILE, SCHEMA, State};
 use hostkeeper_steps::selfupdate::{
     FollowOn, Layout, START_LIMIT_BURST, SelfUpdateError, fallback_unit, follow_on, main_dropin,
 };
@@ -209,7 +209,8 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
                 "v1",
                 "v2",
                 &v2,
-                updater
+                updater,
+                None
             )
             .unwrap(),
             FollowOn::NotNeeded
@@ -224,7 +225,8 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
             "v2",
             "v2",
             &v2,
-            updater
+            updater,
+            None
         )
         .unwrap(),
         FollowOn::NotNeeded
@@ -239,7 +241,8 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
             "v1",
             "v2",
             &v2,
-            updater
+            updater,
+            None
         )
         .unwrap(),
         FollowOn::Restart
@@ -252,7 +255,8 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
             "v1",
             "v2",
             &v2,
-            updater
+            updater,
+            None
         )
         .unwrap(),
         FollowOn::Restart
@@ -272,7 +276,8 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
             "v2",
             "v2",
             &v2,
-            updater
+            updater,
+            None
         )
         .unwrap(),
         FollowOn::NotNeeded
@@ -285,7 +290,8 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
             "v2",
             "v3",
             &v2,
-            Path::new("bin/absent")
+            Path::new("bin/absent"),
+            None
         )
         .is_err()
     );
@@ -320,7 +326,8 @@ fn a_binary_that_exits_at_start_is_replaced_by_the_previous() {
             "good",
             "bad",
             &new,
-            Path::new(UPDATER)
+            Path::new(UPDATER),
+            None
         )
         .unwrap(),
         FollowOn::Restart
@@ -432,6 +439,7 @@ fn the_follow_on_stages_only_a_binary_of_the_verified_release() {
         "v2",
         &changed,
         Path::new(UPDATER),
+        None,
     )
     .unwrap_err();
     assert!(
@@ -453,6 +461,7 @@ fn the_follow_on_stages_only_a_binary_of_the_verified_release() {
             "v3",
             &sound,
             path,
+            None,
         )
         .unwrap_err();
         assert!(
@@ -489,7 +498,8 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
             "v1",
             "v2",
             &v2,
-            updater
+            updater,
+            None
         )
         .unwrap(),
         FollowOn::Restart
@@ -504,7 +514,8 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
             "v2",
             "v1",
             &v1,
-            updater
+            updater,
+            None
         )
         .unwrap(),
         FollowOn::Restart
@@ -521,6 +532,7 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
         "v2",
         &not_v2,
         updater,
+        None,
     )
     .unwrap_err();
     assert!(
@@ -649,4 +661,62 @@ fn a_fallback_that_is_not_an_executable_file_is_refused() {
     let err = layout.flip_back().unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::NotFound);
     assert_eq!(links(&layout), (Some("v3".into()), Some("v3".into())));
+}
+
+/// Catches the wait for the restart losing the order it ran for, or a record of a daemon from
+/// before the id that no longer reads: the follow-on of an order with an id keeps it in the wait
+/// (`order_id`), one with none writes the wait without the key, byte for byte as before, and a
+/// wait written without it loads with no id.
+#[test]
+fn the_wait_for_the_restart_keeps_the_order_id_it_was_given() {
+    let s = Scratch::new("su-follow-order-id");
+    let layout = Layout::new(&s.path().join("bin"));
+    layout.stage("v1", &binary(s.path(), "a", "a")).unwrap();
+    layout.switch("v1").unwrap();
+    let v2 = release(s.path(), "v2", &binary(s.path(), "b", "b"));
+    let store = updating(&s, "v2");
+    let followed = follow_on(
+        &ok(),
+        &store,
+        &layout,
+        "v1",
+        "v2",
+        &v2,
+        Path::new(UPDATER),
+        Some("update-0123abcd"),
+    );
+    assert_eq!(followed.unwrap(), FollowOn::Restart);
+    let Loaded::Current(rec) = store.load().unwrap() else {
+        panic!("no record");
+    };
+    let awaiting = rec.progress.awaiting_restart.expect("the wait");
+    assert_eq!(
+        (awaiting.version.as_str(), awaiting.order_id.as_deref()),
+        ("v2", Some("update-0123abcd"))
+    );
+
+    let s = Scratch::new("su-follow-no-order-id");
+    let layout = Layout::new(&s.path().join("bin"));
+    layout.stage("v1", &binary(s.path(), "a", "a")).unwrap();
+    layout.switch("v1").unwrap();
+    let v2 = release(s.path(), "v2", &binary(s.path(), "b", "b"));
+    let store = updating(&s, "v2");
+    let followed = follow_on(
+        &ok(),
+        &store,
+        &layout,
+        "v1",
+        "v2",
+        &v2,
+        Path::new(UPDATER),
+        None,
+    );
+    assert_eq!(followed.unwrap(), FollowOn::Restart);
+    let text = fs::read_to_string(store.dir().join(RECORD_FILE)).unwrap();
+    assert!(text.contains("\"awaiting_restart\""), "{text}");
+    assert!(!text.contains("order_id"), "{text}");
+    let Loaded::Current(rec) = store.load().unwrap() else {
+        panic!("no record");
+    };
+    assert_eq!(rec.progress.awaiting_restart.and_then(|a| a.order_id), None);
 }

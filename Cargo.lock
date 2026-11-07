@@ -1741,6 +1741,7 @@ dependencies = [
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "hostkeeper-unpack",
+ "hostkeeper-wire",
  "hyper-util",
  "p256",
  "rcgen",

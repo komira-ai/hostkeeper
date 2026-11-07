@@ -538,6 +538,9 @@ fn check_version(version: &str) -> io::Result<()> {
 /// leaves it, stages nothing, writes nothing and moves no link. There is no way to give this a
 /// file of no verified release.
 ///
+/// `order_id` is the coordinator's id of the order the update runs for, kept in the wait
+/// ([`AwaitingRestart::order_id`]) so that the binary that settles it can report its verdict.
+///
 /// A version `current` or `previous` already names (a repeat after a crash between the switch
 /// and the restart, or a return to the binary before) is not staged again: it is switched to
 /// when its file holds the bytes of the verified binary, and refused, with nothing changed,
@@ -549,6 +552,10 @@ fn check_version(version: &str) -> io::Result<()> {
 /// ([`SelfUpdateError::NoUpdate`] otherwise, with nothing switched). The record is written before
 /// the switch, so that a crash between the two leaves a record the next start settles
 /// ([`settle`]); a switch that fails takes the wait back. It is safe to call again after a crash.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a separate input of the one step that writes the wait and switches; the order id joins them so the wait is written once, and a struct for the eight would have this one caller"
+)]
 pub fn follow_on(
     finished: &Finished,
     store: &RecordStore,
@@ -557,6 +564,7 @@ pub fn follow_on(
     version: &str,
     release: &Staged,
     binary: &Path,
+    order_id: Option<&str>,
 ) -> Result<FollowOn, SelfUpdateError> {
     let Verdict::Succeeded { promotion_pending } = finished.verdict else {
         return Ok(FollowOn::NotNeeded);
@@ -581,6 +589,7 @@ pub fn follow_on(
     let awaiting = AwaitingRestart {
         version: version.to_owned(),
         verdict_promotion_pending: promotion_pending,
+        order_id: order_id.map(str::to_owned),
     };
     await_restart(store, awaiting.clone())?;
     if let Err(error) = layout.switch(version) {

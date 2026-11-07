@@ -88,19 +88,23 @@ fn plain(order: &Order, outcome: Outcome) -> OrderResult {
 /// id, try, service, version and digest as they were, and a `force` with no halt generation.
 #[test]
 fn a_link_order_is_decoded_by_the_daemon_as_the_verb_and_target_it_names() {
-    let hooked = |order_try: u64| Hooked {
+    let hooked = |order_try: u64, id: &str| Hooked {
         service: name("web"),
         version: Version::new("2.0.0").expect("a version"),
         digest: WireDigest::new(&d()).expect("a digest"),
         index_digest: None,
         order_try: NonZeroU64::new(order_try).expect("a try from 1"),
+        order_id: Some(id.to_owned()),
     };
     let update = wire_order(&update_order("web", "2.0.0", 3));
     assert_eq!(
         (update.order_id.as_str(), update.r#try),
         ("order-web-2.0.0", 3)
     );
-    assert_eq!(Decoded::try_from(&update), Ok(Decoded::Update(hooked(3))));
+    assert_eq!(
+        Decoded::try_from(&update),
+        Ok(Decoded::Update(hooked(3, "order-web-2.0.0")))
+    );
     let forced = wire_order(&force_order("web", "2.0.0", 4));
     assert_eq!(
         (forced.order_id.as_str(), forced.r#try),
@@ -109,9 +113,8 @@ fn a_link_order_is_decoded_by_the_daemon_as_the_verb_and_target_it_names() {
     assert_eq!(
         Decoded::try_from(&forced),
         Ok(Decoded::Force(Forced {
-            package: hooked(4),
+            package: hooked(4, "force-web-2.0.0"),
             halt_generation: 0,
-            order_id: Some("force-web-2.0.0".to_owned()),
         }))
     );
 }
@@ -169,6 +172,7 @@ fn an_install_uninstall_and_abort_are_decoded_as_the_verbs_they_name() {
             digest: WireDigest::new(&d()).expect("a digest"),
             index_digest: None,
             order_try: NonZeroU64::new(2).expect("a try from 1"),
+            order_id: Some("install-1".to_owned()),
         }))
     );
     let uninstall = wire_order(&order("uninstall-1", Verb::Uninstall(name("web"))));
