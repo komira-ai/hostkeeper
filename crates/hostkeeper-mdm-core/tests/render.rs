@@ -154,6 +154,30 @@ fn names_follow_the_prefix_and_the_slice_and_units_refer_to_each_other_by_them()
     }
 }
 
+/// Catches a prefix constructor that disagrees with the settings' one or mixes up the prefix
+/// and the slice: the names of a kit that is not configured (the old kit's) follow the given
+/// prefix, the slice is the given one, and `UnitNames::new` gives the same names as the
+/// constructor with the settings' prefix and slice.
+#[test]
+fn names_of_a_kit_follow_the_given_prefix_and_slice() {
+    let n = UnitNames::with_prefix("old-kit", "old-kit.slice");
+    assert_eq!(n.slice, "old-kit.slice");
+    assert_eq!(n.scep, "old-kit-scep.service");
+    assert_eq!(n.nanohub, "old-kit-nanohub.service");
+    assert_eq!(n.depserver, "old-kit-depserver.service");
+    assert_eq!(n.depsyncer, "old-kit-depsyncer.service");
+    assert_eq!(n.proxy, "old-kit-proxy.service");
+    assert_eq!(n.cert_service, "old-kit-cert.service");
+    assert_eq!(n.cert_timer, "old-kit-cert.timer");
+    assert_eq!(n.reload_path, "old-kit-proxy-reload.path");
+    assert_eq!(n.reload_service, "old-kit-proxy-reload.service");
+    let c = config();
+    assert_eq!(
+        UnitNames::new(&c),
+        UnitNames::with_prefix(c.unit_prefix(), c.slice())
+    );
+}
+
 /// Catches settings that do not reach the files: the ports, the caps, the bind address
 /// and the LAN, and the user, each changed and found where the unit uses it.
 #[test]

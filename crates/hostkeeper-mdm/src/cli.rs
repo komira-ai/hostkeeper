@@ -386,6 +386,7 @@ fn dispatch(
                         config,
                         bin_dir,
                         max_archive: fetch::MAX_ARCHIVE,
+                        replacing: None,
                     };
                     install::run(&env(system, host.as_ref()), &a, pins, mode(apply), out)?;
                 }

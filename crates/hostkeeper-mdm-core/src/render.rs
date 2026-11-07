@@ -54,9 +54,14 @@ pub struct UnitNames {
 impl UnitNames {
     /// The names for the settings `c`.
     pub fn new(c: &MdmConfig) -> UnitNames {
-        let p = c.unit_prefix();
+        UnitNames::with_prefix(c.unit_prefix(), c.slice())
+    }
+
+    /// The names of a kit whose units are `<prefix>-<part>.<kind>` and whose slice is `slice`.
+    pub fn with_prefix(prefix: &str, slice: &str) -> UnitNames {
+        let p = prefix;
         UnitNames {
-            slice: c.slice().to_owned(),
+            slice: slice.to_owned(),
             scep: format!("{p}-scep.service"),
             nanohub: format!("{p}-nanohub.service"),
             depserver: format!("{p}-depserver.service"),
