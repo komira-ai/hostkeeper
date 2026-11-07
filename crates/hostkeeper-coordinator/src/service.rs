@@ -633,8 +633,7 @@ impl Coordinator {
             Vec::new()
         };
         let announced = beat.services.clone().unwrap_or_default();
-        // A change whose commit failed (a halt, a bad mark, a pause, an abort) is committed
-        // again at every heartbeat until it lands.
+        // A change whose commit failed is committed again at every heartbeat until it lands.
         self.ops.retry_unwritten(now);
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
         let platform = beat.platform;
@@ -949,7 +948,6 @@ impl Coordinator {
             .collect();
         Status {
             per_service,
-            // What the code reads: an entry at its default is shown as absent, as it is read.
             ops: ops.without_defaults(),
             desired: self
                 .legacy

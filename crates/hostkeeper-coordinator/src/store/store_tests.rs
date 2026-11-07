@@ -67,6 +67,8 @@ fn a_commit_across_two_backends_puts_the_desired_state_back_when_the_rest_fails(
 
     let one = Fake::new();
     let shared: Shared = Arc::new(one.clone());
+    let store = DesiredStore::over(Arc::clone(&shared), desired::Held::default());
+    assert_eq!(format!("{store:?}"), "DesiredStore { .. }");
     commit_across(&shared, &shared, &change).expect("committed");
     assert_eq!((one.commits(), one.desired()), (1, after));
 }
@@ -318,4 +320,47 @@ fn an_abort_stands_whatever_its_commit_does() {
     assert_eq!((entry.seq, entry.action.as_str()), (1, "abort"));
     assert!(store.halt_unwritten());
     assert_eq!(store.state().audit, [entry]);
+}
+
+/// Proves: the marker is on disk, listing the audit number of every change pending, before each
+/// commit of a memory-first change is tried: the first lists the first change, the second both;
+/// and a start against storage that holds neither names both.
+///
+/// Catches: a marker written after the commit (a crash between them would lose the change with
+/// no marker), or one that lists only the newest change pending.
+#[test]
+fn the_marker_lists_every_pending_change_before_each_commit() {
+    let dir = scratch("store-marker-first");
+    let ops_path = dir.path().join("desired.json.ops");
+    let marker = crate::ops_file::unfinished_path(&ops_path);
+    let fake = Fake::new();
+    let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let (at, record) = (marker.clone(), Arc::clone(&seen));
+    fake.refuse(move |_| {
+        let text = std::fs::read_to_string(&at).unwrap_or_default();
+        record.lock().expect("the record").push(text);
+        Some(store_failure())
+    });
+    let store = OpsStore::on_fake(&fake, OpsState::default()).with_marker(marker.clone());
+    for action in ["mark_bad", "rollout_pause"] {
+        let raised = store.change(
+            crate::ops::Write::AfterMemory,
+            crate::ops::AuditEntry::new("coordinator", action),
+            |_| {},
+        );
+        assert!(raised.is_err(), "storage refuses it");
+    }
+    assert_eq!(
+        *seen.lock().expect("the record"),
+        ["{\"unwritten\":[1]}\n", "{\"unwritten\":[1,2]}\n"]
+    );
+    let listed = crate::config::refuse_unfinished_halt(&ops_path)
+        .expect("a marker this build reads")
+        .expect("a marker");
+    let why = crate::config::settle_unfinished(&ops_path, &listed, &OpsState::default())
+        .expect_err("neither landed");
+    assert!(
+        matches!(&why, StartError::ChangesUnwritten { numbers, .. } if *numbers == [1, 2]),
+        "{why}"
+    );
 }

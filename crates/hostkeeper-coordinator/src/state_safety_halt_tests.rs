@@ -152,6 +152,34 @@ async fn an_unwritten_halt_is_retried_and_blocks_start() {
     );
 }
 
+/// Catches: a marker whose every change the ops file holds kept, or removed without a word: it
+/// is removed and the start logs that the changes landed.
+#[test]
+fn a_marker_whose_changes_landed_is_removed_and_logged() {
+    let dir = scratch("halt-marker-settled");
+    let path = dir.path().join("desired.json.ops");
+    let store = OpsStore::open(&path).expect("an ops store");
+    let entry = store
+        .change(
+            crate::ops::Write::BeforeMemory,
+            crate::ops::AuditEntry::new("operator", "exclude"),
+            |_| {},
+        )
+        .expect("written");
+    let marker = unfinished_path(&path);
+    fs::write(&marker, format!("{{\"unwritten\":[{}]}}\n", entry.seq)).expect("a marker");
+    let log = Log::default();
+    let installed = log.install();
+    let listed = refuse_unfinished_halt(&path)
+        .expect("a marker this build reads")
+        .expect("a marker");
+    settle_unfinished(&path, &listed, &store.state()).expect("settled");
+    drop(installed);
+    assert!(!marker.exists());
+    let said = "the changes the marker listed landed before the coordinator stopped";
+    assert_eq!(log.text().matches(said).count(), 1, "{}", log.text());
+}
+
 /// Catches: a halt that holds no order once its write failed, and a store without a file (no
 /// marker) that forgets the halt is pending: the other hosts are told nothing while the write
 /// fails, and the next heartbeat after the store recovers writes it.

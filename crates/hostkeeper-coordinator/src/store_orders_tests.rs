@@ -182,10 +182,12 @@ async fn a_pending_change_is_committed_before_the_next_change() {
     let taken: Arc<Mutex<Vec<Taken>>> = Arc::default();
     let (gate, record) = (Arc::clone(&failing), Arc::clone(&taken));
     fake.refuse(move |change| {
-        if gate.load(Ordering::SeqCst) {
+        let (_, after) = change.ops?;
+        // Only the halt's own commit fails: a store that went on past it would commit the
+        // exclusion.
+        if gate.load(Ordering::SeqCst) && after.excluded.is_empty() {
             return Some(store_failure());
         }
-        let (_, after) = change.ops?;
         let halted = after.services.get(WEB).is_some_and(|m| m.halt.is_some());
         let seqs = change.audit.iter().map(|line| line.seq).collect();
         let mut taken = record.lock().expect("the record");

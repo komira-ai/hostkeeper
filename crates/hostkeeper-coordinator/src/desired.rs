@@ -506,7 +506,7 @@ pub(crate) fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, Des
 /// # Errors
 /// The state could not be serialised.
 pub(crate) fn encode(held: &Held, legacy: Option<&str>) -> serde_json::Result<Vec<u8>> {
-    let mut text = match held.desired.iter().collect::<Vec<_>>().as_slice() {
+    let encoded = match held.desired.iter().collect::<Vec<_>>().as_slice() {
         [(name, only)] if Some(name.as_str()) == legacy => {
             serde_json::to_vec_pretty(&held.entry(name, only))
         }
@@ -517,7 +517,8 @@ pub(crate) fn encode(held: &Held, legacy: Option<&str>) -> serde_json::Result<Ve
                 .map(|(name, desired)| (name.as_str(), held.entry(name, desired)))
                 .collect(),
         }),
-    }?;
+    };
+    let mut text = encoded?;
     text.push(b'\n');
     Ok(text)
 }

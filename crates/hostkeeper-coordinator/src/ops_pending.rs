@@ -37,7 +37,8 @@ use crate::store::Commit;
 pub(super) struct Pending {
     /// The state as last committed, while memory holds changes it does not.
     base: Option<OpsState>,
-    /// The audit lines of those changes, in their order.
+    /// The audit lines of the changes pending, in their order: kept until they land, after the
+    /// state when only they failed.
     lines: Vec<AuditLine>,
     /// Whether the marker is on disk.
     marked: bool,
@@ -136,18 +137,35 @@ impl OpsStore {
     /// [`OpsError`]: the commit failed; the changes stay pending.
     pub(super) fn flush(&self) -> Result<(), OpsError> {
         let mut pending = self.pending_lock();
-        if let Some(base) = &pending.base {
+        if pending.base.is_some() || !pending.lines.is_empty() {
             let current = self.state();
+            let base = pending.base.clone().unwrap_or_else(|| current.clone());
             let commit = Commit {
-                ops: Some((base, &current)),
+                ops: Some((&base, &current)),
                 audit: &pending.lines,
                 ..Commit::default()
             };
-            self.backend.commit(&commit)?;
-            *pending = Pending {
-                marked: pending.marked,
-                ..Pending::default()
-            };
+            match self.backend.commit(&commit).map_err(OpsError::from) {
+                Ok(()) => {
+                    *pending = Pending {
+                        marked: pending.marked,
+                        ..Pending::default()
+                    };
+                }
+                Err(OpsError::AuditUnavailable(why)) => {
+                    // Only the lines failed: the state is committed without them, as a raise
+                    // always was over files, and the lines stay pending until they land.
+                    let alone = Commit {
+                        ops: Some((&base, &current)),
+                        ..Commit::default()
+                    };
+                    if pending.base.is_some() && self.backend.commit(&alone).is_ok() {
+                        pending.base = None;
+                    }
+                    return Err(OpsError::AuditUnavailable(why));
+                }
+                Err(why) => return Err(why),
+            }
         }
         self.unmark(&mut pending);
         Ok(())
@@ -175,7 +193,7 @@ impl OpsStore {
     #[must_use]
     pub fn halt_unwritten(&self) -> bool {
         let pending = self.pending_lock();
-        pending.base.is_some() || pending.marked
+        pending.base.is_some() || !pending.lines.is_empty() || pending.marked
     }
 
     /// Commits what is pending, when anything is: called at every heartbeat with the
@@ -190,7 +208,7 @@ impl OpsStore {
             // The marker is written again before each try: one removed by hand, or not made,
             // is there while the change is not committed.
             let mut pending = self.pending_lock();
-            if pending.base.is_some() {
+            if pending.base.is_some() || !pending.lines.is_empty() {
                 self.mark(&mut pending);
             }
         }

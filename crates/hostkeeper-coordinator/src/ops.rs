@@ -44,23 +44,26 @@
 //! (`<ops-file>.halts.unfinished` for a store over a file), and removes it once nothing is
 //! pending. A start that finds the marker removes it when the ops file holds every change it
 //! lists, and is refused otherwise, naming the changes that did not land
-//! ([`crate::config::settle_unfinished`], with the start); the operator makes them again by hand if they still
-//! matter, and removes the marker.
+//! ([`crate::config::settle_unfinished`]); the operator makes them again by hand if they
+//! still matter, and removes the marker.
 //!
 //! Every change carries an [`AuditEntry`]: the store numbers it, keeps the last
 //! [`AUDIT_RING`] in the state and logs it on the target `hostkeeper_coordinator::audit`, and
 //! commits it with the change as one line of the audit (over a file, one JSON line of
 //! `<ops-file>.audit`, [`crate::audit_file`]), which keeps every change; the ring is what
-//! `/v1/status` shows. A change is numbered one past the newest number in memory or in storage,
-//! so a refused change takes no number.
+//! `/v1/status` shows. A change is numbered one past the newest number in memory or in storage
+//! ([`crate::store::Backend::last_seq`]): over a backend that commits the lines with the change
+//! (the in-memory one), a refused change takes no number; over a file, a change refused after its
+//! lines were appended keeps their numbers, so no number is held twice.
 //!
 //! The audit is the durable record: a change and its lines are committed together. Over a file
-//! the lines are appended first, before the ops file is written, and a commit whose line cannot
-//! be appended (a full disk) writes nothing of the state: a storage-first change is then refused
-//! with [`OpsError::AuditUnavailable`], and a memory-first one stands, pending, and is answered as
-//! made. An audit line can still name a change whose ops-file write then failed, or, for a change
-//! of several entries (a force), the entries appended before the one that failed; such a line is
-//! never appended again, and no change is made without its lines.
+//! the lines are appended first, before the ops file is written, and a storage-first change whose
+//! line cannot be appended (a full disk) writes nothing of the state and is refused with
+//! [`OpsError::AuditUnavailable`]. A memory-first one stands and is answered as made: its state is
+//! committed without the lines, as a raise always was, and the lines stay pending until they can
+//! be appended. An audit line can still name a change whose ops-file write then failed, or, for a
+//! change of several entries (a force), the entries appended before the one that failed; such a
+//! line is never appended again.
 //!
 //! The caps on the counts (`MAX_HOSTS`, `MAX_EXCLUDED`) are checked under the same lock as the
 //! write ([`OpsStore::try_change`]), on the state the change is applied to.
