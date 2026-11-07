@@ -11,7 +11,7 @@ use hostkeeper_mdm_core::config::MdmConfig;
 use hostkeeper_mdm_core::migrate::{NEW_STATE, NEW_USER, Old, Target};
 use hostkeeper_mdm_core::pins::{BUILT_IN, Pins, Tool};
 use hostkeeper_mdm_core::profile::Topic;
-use hostkeeper_mdm_step::{Account, Host, Mode, ids};
+use hostkeeper_mdm_step::{Host, Mode, Trustee};
 
 use crate::dep::{self, Dep, Serial};
 use crate::fetch::{self, Fetch};
@@ -248,17 +248,19 @@ fn acme_settings(text: &str) -> Result<Option<Acme>, MdmError> {
     }
 }
 
-/// The grant of the state directory to the service user, when the user exists: the state is
-/// that user's, 0700.
-fn state_grant(host: &dyn Host, c: &MdmConfig) -> Result<Vec<Grant>, MdmError> {
-    let user = Account::new(c.user(), c.user());
-    Ok(ids(host, &user)?
-        .map(|(uid, _)| Grant {
-            dir: c.state().to_string(),
-            uid,
-        })
-        .into_iter()
-        .collect())
+/// The grant of the state directory to the service user, by name: the state is that user's,
+/// 0700, and the user is trusted there by the id it has when a path is walked, so also once a
+/// plan that makes it has made it (and nobody is while it does not exist).
+fn state_grant(c: &MdmConfig) -> Vec<Grant> {
+    vec![user_grant(c.state().as_str(), c.user())]
+}
+
+/// The grant of `dir` to the user named `user`.
+fn user_grant(dir: &str, user: &str) -> Grant {
+    Grant {
+        dir: dir.to_owned(),
+        who: Trustee::User(user.to_owned()),
+    }
 }
 
 /// The grant of the directory that holds the operator's file `path` to that directory's owner,
@@ -274,7 +276,7 @@ fn file_grant(system: &System<'_>, path: &str) -> Result<Vec<Grant>, MdmError> {
         .owner(dir)?
         .map(|uid| Grant {
             dir: dir.to_owned(),
-            uid,
+            who: Trustee::Uid(uid),
         })
         .into_iter()
         .collect())
@@ -371,14 +373,14 @@ fn dispatch(
             apply,
         } => {
             let config = MdmConfig::parse(&read_settings(base.as_ref(), &settings)?)?;
-            let mut grants = state_grant(base.as_ref(), &config)?;
+            let mut grants = state_grant(&config);
             match (uninstall, bin_dir) {
                 (false, Some(bin_dir)) => {
                     // The archives are the operator's, fetched as their own user.
                     if let Some(uid) = system.machine.owner(&bin_dir)? {
                         grants.push(Grant {
                             dir: bin_dir.clone(),
-                            uid,
+                            who: Trustee::Uid(uid),
                         });
                     }
                     let host = system.machine.host(&grants);
@@ -399,7 +401,7 @@ fn dispatch(
         Verb::Tls { settings, apply } => {
             let text = read_settings(base.as_ref(), &settings)?;
             let (config, acme) = (MdmConfig::parse(&text)?, Acme::parse(&text)?);
-            let host = system.machine.host(&state_grant(base.as_ref(), &config)?);
+            let host = system.machine.host(&state_grant(&config));
             tls::run(
                 &env(system, host.as_ref()),
                 &config,
@@ -412,7 +414,7 @@ fn dispatch(
             let text = read_settings(base.as_ref(), &settings)?;
             let config = MdmConfig::parse(&text)?;
             let acme = acme_settings(&text)?;
-            let host = system.machine.host(&state_grant(base.as_ref(), &config)?);
+            let host = system.machine.host(&state_grant(&config));
             let v = Verify {
                 config: &config,
                 acme: acme.as_ref(),
@@ -429,7 +431,7 @@ fn dispatch(
             apply,
         } => {
             let config = MdmConfig::parse(&read_settings(base.as_ref(), &settings)?)?;
-            let mut grants = state_grant(base.as_ref(), &config)?;
+            let mut grants = state_grant(&config);
             let with = match (cert, key) {
                 (Some(cert), Some(key)) => {
                     grants.extend(file_grant(system, &cert)?);
@@ -445,7 +447,7 @@ fn dispatch(
         Verb::Dep { verb } => {
             let (settings, d, apply) = verb.split();
             let config = MdmConfig::parse(&read_settings(base.as_ref(), &settings)?)?;
-            let mut grants = state_grant(base.as_ref(), &config)?;
+            let mut grants = state_grant(&config);
             match &d {
                 Dep::GetCert { out: file } => grants.extend(file_grant(system, file)?),
                 Dep::UploadToken { token } => grants.extend(file_grant(system, token)?),
@@ -465,21 +467,17 @@ fn dispatch(
             apply,
         } => {
             let old = Old::parse(&read_settings(base.as_ref(), &from)?)?;
-            let mut grants = Vec::new();
-            // The old state is the old service user's, the new one the new user's once it
-            // exists, and the archives the operator's.
-            for (dir, user) in [(old.state().as_str(), old.user()), (NEW_STATE, NEW_USER)] {
-                if let Some((uid, _)) = ids(base.as_ref(), &Account::new(user, user))? {
-                    grants.push(Grant {
-                        dir: dir.to_owned(),
-                        uid,
-                    });
-                }
-            }
+            // The old state is the old service user's, the new one the new user's (by name:
+            // the plan makes that user, then writes root's files below its state), and the
+            // archives the operator's.
+            let mut grants = vec![
+                user_grant(old.state().as_str(), old.user()),
+                user_grant(NEW_STATE, NEW_USER),
+            ];
             if let Some(uid) = system.machine.owner(&bin_dir)? {
                 grants.push(Grant {
                     dir: bin_dir.clone(),
-                    uid,
+                    who: Trustee::Uid(uid),
                 });
             }
             let host = system.machine.host(&grants);

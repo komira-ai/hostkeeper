@@ -10,13 +10,13 @@ use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use crate::common::{self, FakeNet, Kit, SVC, bind, ready_host};
-use hostkeeper_mdm::MdmError;
 use hostkeeper_mdm::migrate::{Migrate, run};
+use hostkeeper_mdm::{Grant, MdmError};
 use hostkeeper_mdm_core::commands::scep_ca_init_args;
 use hostkeeper_mdm_core::migrate::{Old, Target, new_settings};
 use hostkeeper_mdm_core::render::UnitNames;
 use hostkeeper_mdm_step::fake::{FakeHost, Node};
-use hostkeeper_mdm_step::{GETENT, Mode, SYSTEMCTL};
+use hostkeeper_mdm_step::{GETENT, Host, Mode, SYSTEMCTL, Trustee};
 
 /// The old service user's id.
 pub const OLD_UID: u32 = 800;
@@ -251,16 +251,44 @@ pub fn live_host(kit: &Kit) -> FakeHost {
     host
 }
 
-/// Runs `migrate` on `host` at the injected time of the common fixtures.
+/// The grants the command line runs `migrate` with for [`ask`]: the old state to the old user
+/// and the new state to the new user, by name, and the archives to their owner.
+pub fn grants() -> Vec<Grant> {
+    let user = |dir: &str, name: &str| Grant {
+        dir: dir.to_owned(),
+        who: Trustee::User(name.to_owned()),
+    };
+    vec![
+        user(OLD_STATE, "js-mdm"),
+        user(NEW_STATE, "hostkeeper-mdm"),
+        Grant {
+            dir: "/srv/fetch".to_owned(),
+            who: Trustee::Uid(1000),
+        },
+    ]
+}
+
+/// Runs `migrate` on `host` at the injected time of the common fixtures, judged as the machine
+/// judges it with [`grants`].
 pub fn migrate(
     host: &FakeHost,
     kit: &Kit,
     a: &Migrate,
     mode: Mode,
 ) -> (Result<(), MdmError>, String) {
+    migrate_on(&common::strict(host, &grants()), kit, a, mode)
+}
+
+/// Runs `migrate` on any host at the injected time of the common fixtures.
+pub fn migrate_on(
+    host: &dyn Host,
+    kit: &Kit,
+    a: &Migrate,
+    mode: Mode,
+) -> (Result<(), MdmError>, String) {
     let net = FakeNet::new(Default::default());
     let mut out = Vec::new();
-    let result = common::with_env(host, &net, |env| run(env, a, &kit.pins, mode, &mut out));
+    let result = common::with_env_on(host, &net, |env| run(env, a, &kit.pins, mode, &mut out));
     (result, String::from_utf8(out).unwrap())
 }
 

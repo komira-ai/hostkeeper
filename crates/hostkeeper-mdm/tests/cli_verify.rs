@@ -3,8 +3,9 @@
 
 mod common;
 
-use common::{FakeMachine, FakeNet, SVC, example, kit, ready_host, with_system};
+use common::{FakeMachine, FakeNet, example, kit, ready_host, with_system};
 use hostkeeper_mdm::{Grant, run_with};
+use hostkeeper_mdm_step::Trustee;
 use hostkeeper_mdm_step::fake::FakeHost;
 
 /// Runs the command line `words` on `host`; the exit code, standard output, standard error and
@@ -149,13 +150,21 @@ fn verify_skips_the_certificate_units_when_no_acme_key_is_set() {
 fn grant(dir: &str, uid: u32) -> Grant {
     Grant {
         dir: dir.to_owned(),
-        uid,
+        who: Trustee::Uid(uid),
+    }
+}
+
+/// The grant of the state directory to the service user, by name.
+fn state() -> Grant {
+    Grant {
+        dir: "/var/lib/hostkeeper-mdm".to_owned(),
+        who: Trustee::User("hostkeeper-mdm".to_owned()),
     }
 }
 
 /// Catches the state directory trusted for the wrong user or not at all: install grants
-/// MDM_STATE to the service user's uid and `--bin-dir` to the uid that owns it, the grants the
-/// verb's host is made with (after the grant-free host that reads the settings).
+/// MDM_STATE to the service user by name and `--bin-dir` to the uid that owns it, the grants
+/// the verb's host is made with (after the grant-free host that reads the settings).
 #[test]
 fn install_trusts_the_state_for_the_service_user_and_the_bin_dir_for_its_owner() {
     let host = machine_with_settings(&example());
@@ -167,34 +176,29 @@ fn install_trusts_the_state_for_the_service_user_and_the_bin_dir_for_its_owner()
     assert_eq!((code, err.as_str()), (0, ""));
     assert_eq!(
         grants,
-        vec![
-            vec![],
-            vec![
-                grant("/var/lib/hostkeeper-mdm", SVC),
-                grant("/srv/fetch", 1000)
-            ]
-        ]
+        vec![vec![], vec![state(), grant("/srv/fetch", 1000)]]
     );
 }
 
-/// Catches a bin-dir trusted when there is nothing to trust, or a state trusted for a user who
-/// does not exist yet: with no service user only the bin-dir's owner is granted, and a
-/// `--bin-dir` that is not there is granted to no one.
+/// Catches a bin-dir trusted when there is nothing to trust, or a state grant that waits for
+/// the service user to exist before the run (the plan makes that user, then writes below its
+/// state): with no service user the state is still granted to it by name (a name that trusts
+/// nobody until the user exists), and a `--bin-dir` that is not there is granted to no one.
 #[test]
-fn install_grants_nothing_for_a_user_or_a_bin_dir_that_does_not_exist() {
+fn install_grants_the_state_by_name_and_nothing_for_a_bin_dir_that_does_not_exist() {
     let host = host_without_the_user();
     host.put_dir("/srv/op", 0o755, (1000, 1000));
     let install = |dir: &str| cli(&host, &["install", "--settings", "/cfg", "--bin-dir", dir]).3;
     assert_eq!(
         install("/srv/op"),
-        vec![vec![], vec![grant("/srv/op", 1000)]]
+        vec![vec![], vec![state(), grant("/srv/op", 1000)]]
     );
-    assert_eq!(install("/srv/none"), vec![vec![], vec![]]);
+    assert_eq!(install("/srv/none"), vec![vec![], vec![state()]]);
 }
 
 /// Catches uninstall, tls and verify trusting more or less than the state directory: each makes
-/// its host with MDM_STATE granted to the service user's uid and nothing else, and with no
-/// service user yet, with no grant.
+/// its host with MDM_STATE granted to the service user by name and nothing else, whether or
+/// not that user exists yet.
 #[test]
 fn uninstall_tls_and_verify_trust_only_the_state_for_the_service_user() {
     let verbs: [&[&str]; 3] = [
@@ -203,14 +207,13 @@ fn uninstall_tls_and_verify_trust_only_the_state_for_the_service_user() {
         &["verify", "--settings", "/cfg"],
     ];
     let host = machine_with_settings(&example());
-    let state = grant("/var/lib/hostkeeper-mdm", SVC);
     for words in verbs {
         let (_, _, _, grants) = cli(&host, words);
-        assert_eq!(grants, vec![vec![], vec![state.clone()]], "{words:?}");
+        assert_eq!(grants, vec![vec![], vec![state()]], "{words:?}");
     }
     let bare = host_without_the_user();
     for words in verbs {
         let (_, _, _, grants) = cli(&bare, words);
-        assert_eq!(grants, vec![vec![], vec![]], "{words:?}");
+        assert_eq!(grants, vec![vec![], vec![state()]], "{words:?}");
     }
 }

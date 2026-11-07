@@ -4,13 +4,18 @@
 //! from a reply registered for exactly that line, or for a prefix of it, and fails with an
 //! error for any other: a program a test did not expect is never "run", and never silently
 //! succeeds. The account lookups of `root` are answered from the start.
+//!
+//! The plain fake judges no owner on the way to a path: every directory is as good as any.
+//! [`FakeHost::strict`] is a view of it that judges owners as [`RealHost`](crate::RealHost)
+//! does, with the same grants and the same refusals, for the tests of what a verb trusts.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 
-use crate::{Cmd, GETENT, Host, Kind, Meta, Output};
+use crate::trust::{self, Grant, components, refused};
+use crate::{Cmd, GETENT, Host, Kind, Meta, Output, Trustee, Way};
 
 /// A file or directory in the fake tree. `Debug` prints the length of the content, not the
 /// content: a failed assertion on a tree that holds a secret does not print it.
@@ -49,6 +54,7 @@ struct State {
     unreadable: Vec<String>,
     unstattable: Vec<String>,
     effects: Vec<(Vec<String>, String, Node)>,
+    users: Vec<(Vec<String>, String, u32)>,
 }
 
 /// The fake host.
@@ -122,6 +128,30 @@ impl FakeHost {
         state.effects.push((words(argv), path.to_owned(), node));
     }
 
+    /// Makes the command `argv`, when it runs, leave the user `name` with `id` as its uid and
+    /// gid, and its group (as `useradd` does).
+    pub fn effect_user(&self, argv: &[&str], name: &str, id: u32) {
+        let mut state = self.state.borrow_mut();
+        state.users.push((words(argv), name.to_owned(), id));
+    }
+
+    /// This host judged as [`RealHost::new`](crate::RealHost::new) judges the machine: root and
+    /// the effective user trusted on the way to every path.
+    pub fn strict(&self) -> Strict<'_> {
+        self.trusting(&[0, self.euid])
+    }
+
+    /// This host judged as [`RealHost::trusting`](crate::RealHost::trusting) judges the
+    /// machine: `uids` trusted on the way to every path, and no other user but the owner a
+    /// step asks for and the grants of the view.
+    pub fn trusting(&self, uids: &[u32]) -> Strict<'_> {
+        Strict {
+            host: self,
+            trusted: uids.to_vec(),
+            grants: Vec::new(),
+        }
+    }
+
     /// A symbolic link at `path` to the absolute path `target`.
     pub fn put_symlink(&self, path: &str, target: &str) {
         self.put(path, Kind::Other, 0o777, (0, 0), target.as_bytes());
@@ -161,6 +191,17 @@ impl FakeHost {
     /// Makes `stat` of `path` fail with "permission denied".
     pub fn deny_stat(&self, path: &str) {
         self.state.borrow_mut().unstattable.push(path.to_owned());
+    }
+
+    /// Whether the tree holds a path below `dir`.
+    fn holds_below(&self, dir: &str) -> bool {
+        let prefix = format!("{dir}/");
+        let state = self.state.borrow();
+        state
+            .nodes
+            .range(prefix.clone()..)
+            .next()
+            .is_some_and(|(k, _)| k.starts_with(&prefix))
     }
 
     /// The node at `path`.
@@ -304,7 +345,7 @@ impl Host for FakeHost {
 
     fn run(&self, cmd: &Cmd) -> io::Result<Output> {
         let argv = cmd.argv();
-        let (reply, effects) = {
+        let (reply, effects, users) = {
             let mut state = self.state.borrow_mut();
             state.calls.push(argv.clone());
             let exact = state.exact.iter().find(|(a, _)| *a == argv);
@@ -316,7 +357,13 @@ impl Host for FakeHost {
                 .filter(|(a, _, _)| *a == argv)
                 .cloned()
                 .collect();
-            (reply, effects)
+            let users: Vec<_> = state
+                .users
+                .iter()
+                .filter(|(a, _, _)| *a == argv)
+                .cloned()
+                .collect();
+            (reply, effects, users)
         };
         let reply = reply.ok_or_else(|| {
             io::Error::other(format!("fake host: unexpected command {}", cmd.line()))
@@ -324,6 +371,159 @@ impl Host for FakeHost {
         for (_, path, node) in effects {
             self.state.borrow_mut().nodes.insert(path, node);
         }
+        for (_, name, id) in users {
+            self.add_user(&name, id);
+        }
         Ok(reply)
+    }
+
+    fn way(&self, _path: &str) -> io::Result<Option<Way>> {
+        Ok(None)
+    }
+}
+
+/// A view of a [`FakeHost`] that judges the owner of the root (`/`, root's unless the tree
+/// holds it) and of each directory on the way to a path, for every operation on a path, as the
+/// real host does: each must be a user trusted everywhere, the owner a write or a mkdir asks
+/// for, or a user granted a directory at or above the path. A refusal has the real host's
+/// words. A name the tree does not hold but holds paths below is a directory of root's (a tree
+/// need not hold `/var` to hold `/var/lib/x`). The walk ends at the first name on the way that
+/// is neither a directory nor such a name; what the operation then does is the fake's, but a
+/// mkdir judges each directory it makes on the way as the effective user's, as the real host
+/// makes them.
+pub struct Strict<'a> {
+    host: &'a FakeHost,
+    trusted: Vec<u32>,
+    grants: Vec<Grant>,
+}
+
+impl Strict<'_> {
+    /// This view, also trusting `uid` on the way to `dir` and below it, as
+    /// [`RealHost::trust_below`](crate::RealHost::trust_below).
+    #[must_use]
+    pub fn trust_below(mut self, dir: &str, uid: u32) -> Self {
+        self.grants.push(trust::grant(dir, Trustee::Uid(uid)));
+        self
+    }
+
+    /// This view, also trusting the user `user`, by the id the fake's `getent passwd` gives
+    /// it when a path is walked, on the way to `dir` and below it, as
+    /// [`RealHost::trust_below_user`](crate::RealHost::trust_below_user).
+    #[must_use]
+    pub fn trust_below_user(mut self, dir: &str, user: &str) -> Self {
+        self.grants
+            .push(trust::grant(dir, Trustee::User(user.to_owned())));
+        self
+    }
+
+    /// The users trusted on the way to the path of components `names`.
+    fn resolved(&self, names: &[&str]) -> io::Result<Vec<Trustee>> {
+        trust::resolve(&self.trusted, &self.grants, names, |user| {
+            let found = self.host.run(&Cmd::new(GETENT).arg("passwd").arg(user))?;
+            Ok(trust::id_field(&found))
+        })
+    }
+
+    /// The owners of the root and of each directory on the way to the path of components
+    /// `names` (not the last), up to the first that is not one.
+    fn owners(&self, names: &[&str]) -> Vec<u32> {
+        let root = self.host.node("/").map_or(0, |n| n.uid);
+        let mut owners = vec![root];
+        let mut at = String::new();
+        for name in &names[..names.len().saturating_sub(1)] {
+            at = format!("{at}/{name}");
+            match self.host.node(&at) {
+                Some(n) if n.kind == Kind::Dir => owners.push(n.uid),
+                None if self.host.holds_below(&at) => owners.push(0),
+                _ => break,
+            }
+        }
+        owners
+    }
+
+    /// Refuses `path` when a directory on its way is owned by a user not trusted for it, for
+    /// an operation asking for `owner`; `create` when the operation makes the missing ones.
+    fn vet(&self, path: &str, owner: Option<u32>, create: bool) -> io::Result<()> {
+        let names = components(path)?;
+        if names.is_empty() {
+            return Err(refused(path, "names no file"));
+        }
+        let trusted = trust::uids(&self.resolved(&names)?, owner);
+        let mut owners = self.owners(&names);
+        if create {
+            owners.resize(names.len(), self.host.euid());
+        }
+        let labels = std::iter::once("/").chain(names.iter().copied());
+        for (uid, label) in owners.into_iter().zip(labels) {
+            if !trusted.contains(&uid) {
+                return Err(trust::untrusted(path, label, uid));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Host for Strict<'_> {
+    fn euid(&self) -> u32 {
+        self.host.euid()
+    }
+
+    fn egid(&self) -> u32 {
+        self.host.egid()
+    }
+
+    fn canonical(&self, path: &str) -> io::Result<String> {
+        self.host.canonical(path)
+    }
+
+    fn stat(&self, path: &str) -> io::Result<Option<Meta>> {
+        self.vet(path, None, false)?;
+        self.host.stat(path)
+    }
+
+    fn read(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+        self.vet(path, None, false)?;
+        self.host.read(path)
+    }
+
+    fn read_limited(&self, path: &str, limit: u64) -> io::Result<Option<Vec<u8>>> {
+        self.vet(path, None, false)?;
+        self.host.read_limited(path, limit)
+    }
+
+    fn list(&self, path: &str) -> io::Result<Option<Vec<String>>> {
+        self.vet(path, None, false)?;
+        self.host.list(path)
+    }
+
+    fn write(&self, path: &str, mode: u32, owner: (u32, u32), bytes: &[u8]) -> io::Result<()> {
+        self.vet(path, Some(owner.0), false)?;
+        self.host.write(path, mode, owner, bytes)
+    }
+
+    fn mkdir(&self, path: &str, mode: u32, owner: (u32, u32)) -> io::Result<()> {
+        self.vet(path, Some(owner.0), true)?;
+        self.host.mkdir(path, mode, owner)
+    }
+
+    fn remove(&self, path: &str) -> io::Result<()> {
+        self.vet(path, None, false)?;
+        self.host.remove(path)
+    }
+
+    fn run(&self, cmd: &Cmd) -> io::Result<Output> {
+        self.host.run(cmd)
+    }
+
+    fn way(&self, path: &str) -> io::Result<Option<Way>> {
+        let names = components(path)?;
+        if names.is_empty() {
+            return Err(refused(path, "names no file"));
+        }
+        Ok(Some(Way {
+            root: "/".to_owned(),
+            owners: self.owners(&names),
+            trusted: self.resolved(&names)?,
+        }))
     }
 }
