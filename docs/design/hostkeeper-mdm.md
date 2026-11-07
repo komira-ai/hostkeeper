@@ -710,7 +710,13 @@ CA, the ADE profile, the unit and path names. The order:
      checked before its first step, for a dry run as for an apply, against the owners the earlier
      steps leave on the way: a step the walk would refuse refuses the plan, with nothing done.
    - It prints the back-out and the next steps: `tls`, `push-cert --profile-only` (the enrollment
-     profile, with the new SCEP challenge), `verify`, `dep define-profile`.
+     profile, with the new SCEP challenge), `verify`, `dep define-profile`. Before the stop it
+     writes the old units it stops to `MDM_ETC/migrate-stopped-units` (root's, 0644, one name a
+     line, with those an earlier run wrote), so the back-out of a rerun after the stop still
+     starts them, though systemd then calls them disabled and inactive.
+   - The SCEP depot check reads `ca.key` as `scepserver ca -init` writes it: PEM encrypted with
+     the empty password (no `-key-password`, and the unit passes no `-capass`), given to openssl
+     as `-passin pass:`. Its tests read the pinned scepserver's own output with the real openssl.
 4. **Run it on the MDM host.** This is a held step, which only the owner of the MDM host runs
    (task M7). First the read-only check of
    the live state. Then `migrate --apply`. Then `tls --apply` and `push-cert --profile-only

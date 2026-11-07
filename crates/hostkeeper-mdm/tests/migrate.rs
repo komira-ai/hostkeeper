@@ -192,6 +192,9 @@ fn the_plan_runs_in_the_order_of_the_design() {
     }
     want.push(format!("write {NEW_ETC}/dns.env mode 0600 owner root:root"));
     want.push(format!(
+        "write {NEW_ETC}/migrate-stopped-units mode 0644 owner root:root"
+    ));
+    want.push(format!(
         "systemctl disable --now -- {}",
         stopped().join(" ")
     ));
@@ -238,9 +241,10 @@ fn the_plan_runs_in_the_order_of_the_design() {
 }
 
 /// Catches a rerun that copies again, overwrites what the new services changed, or rewrites the
-/// settings: after an apply (the new services running, the old ones off) a second apply runs no
-/// command that changes anything, changes no path, and prints the settings and every copy as
-/// kept.
+/// settings, or that forgets the old units the first apply stopped: after an apply (the new
+/// services running, the old ones off) the record names the units it stopped, one a line, and
+/// a second apply runs no command that changes anything, changes no path, prints the settings
+/// and every copy as kept, and its back-out still starts those old units.
 #[test]
 fn a_rerun_copies_nothing_and_keeps_the_settings() {
     let kit = kit();
@@ -249,6 +253,11 @@ fn a_rerun_copies_nothing_and_keeps_the_settings() {
     ca_is_made(&host, &a);
     let (result, _) = migrate(&host, &kit, &a, Mode::Apply);
     result.unwrap();
+    let record = format!("{NEW_ETC}/migrate-stopped-units");
+    let node = host.node(&record).unwrap();
+    let lines: String = stopped().iter().map(|u| format!("{u}\n")).collect();
+    assert_eq!((node.mode, node.uid, node.gid), (0o644, 0, 0));
+    assert_eq!(node.bytes, lines.as_bytes());
     install_support::running(&host, &install_support::CORE);
     for unit in old_unit_files() {
         host.reply(&[SYSTEMCTL, "is-enabled", &unit], 1, "disabled\n");
@@ -292,10 +301,83 @@ fn a_rerun_copies_nothing_and_keeps_the_settings() {
         shown.contains(&format!("kept: {NEW_ETC}/dns.env (already there)")),
         "{shown}"
     );
+    let old = format!(
+        "old kit: no unit is enabled or active ({record} names {}, recorded as stopped by an earlier run); the unit files stay\n",
+        stopped().join(" ")
+    );
+    assert!(shown.contains(&old), "{shown}");
+    let back = format!(
+        "back out: systemctl enable --now -- {}\n",
+        stopped().join(" ")
+    );
+    assert!(shown.contains(&back), "{shown}");
+    assert!(!shown.contains("none to start"), "{shown}");
+}
+
+/// Catches a back-out that starts old units nobody stopped: with no record and every old unit
+/// off (the old kit stopped by hand), nothing is recorded, nothing is stopped, and the back-out
+/// says there is no old unit to start.
+#[test]
+fn with_no_record_and_no_old_unit_running_the_back_out_starts_none() {
+    let kit = kit();
+    let host = live_host(&kit);
+    let a = ask(&old_text());
+    ca_is_made(&host, &a);
+    for unit in old_unit_files() {
+        host.reply(&[SYSTEMCTL, "is-enabled", &unit], 1, "disabled\n");
+        host.reply(&[SYSTEMCTL, "is-active", &unit], 3, "inactive\n");
+    }
+    host.reply(&["/usr/bin/ss", "-Hltn"], 0, "");
+    let (result, shown) = migrate(&host, &kit, &a, Mode::Apply);
+    result.unwrap_or_else(|e| panic!("{e}\n{shown}"));
     assert!(
-        shown.contains("old kit: no unit is enabled or active; the unit files stay"),
+        shown.contains("old kit: no unit is enabled or active; the unit files stay\n"),
         "{shown}"
     );
+    assert!(
+        shown.contains("back out: no old unit was running, so none to start\n"),
+        "{shown}"
+    );
+    assert!(
+        host.node(&format!("{NEW_ETC}/migrate-stopped-units"))
+            .is_none()
+    );
+    assert!(!changes(&host).iter().any(|c| c.contains("disable --now")));
+}
+
+/// Catches a record that forgets a unit an earlier run stopped, or names one it did not: with
+/// the record naming the old timer (stopped by a run that then failed) and the other old units
+/// still running, the record is rewritten to name all of them, the stop names only those
+/// running, and the back-out starts all of them; a name in the record with no unit file is
+/// dropped.
+#[test]
+fn a_record_of_an_earlier_stop_is_kept_and_widened_by_the_next_stop() {
+    let kit = kit();
+    let host = live_host(&kit);
+    let a = ask(&old_text());
+    ca_is_made(&host, &a);
+    let n = old_units();
+    host.reply(&[SYSTEMCTL, "is-enabled", &n.cert_timer], 1, "disabled\n");
+    host.reply(&[SYSTEMCTL, "is-active", &n.cert_timer], 3, "inactive\n");
+    host.put_dir(NEW_ETC, 0o750, (0, SVC));
+    let record = format!("{NEW_ETC}/migrate-stopped-units");
+    let text = format!("{}\nkbf-mdm-gone.service\n", n.cert_timer);
+    host.put_file(&record, 0o644, (0, 0), text.as_bytes());
+    let (result, shown) = migrate(&host, &kit, &a, Mode::Apply);
+    result.unwrap_or_else(|e| panic!("{e}\n{shown}"));
+    let running: Vec<String> = stopped()
+        .into_iter()
+        .filter(|u| *u != n.cert_timer)
+        .collect();
+    let lines: String = stopped().iter().map(|u| format!("{u}\n")).collect();
+    assert_eq!(host.node(&record).unwrap().bytes, lines.as_bytes());
+    let stop = format!("{SYSTEMCTL} disable --now -- {}", running.join(" "));
+    assert!(changes(&host).contains(&stop), "{shown}");
+    let back = format!(
+        "back out: systemctl enable --now -- {}\n",
+        stopped().join(" ")
+    );
+    assert!(shown.contains(&back), "{shown}");
 }
 
 /// Catches a copy that overwrites a file that is there: a target that exists (here a push

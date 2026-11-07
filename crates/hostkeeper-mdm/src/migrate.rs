@@ -39,7 +39,9 @@
 //!    of the ABM account downloads again; writing `dns.env`);
 //! 4. the old units, those of the old prefix and slice whose file is in `/etc/systemd/system`,
 //!    that are enabled (`systemctl is-enabled` says `enabled` or `enabled-runtime`; a `static`
-//!    unit is not) or active: stopped and disabled in one step. Their unit files stay;
+//!    unit is not) or active: first their names, with those an earlier run recorded, written to
+//!    `MDM_ETC/migrate-stopped-units` (root's, 0644, one name a line, kept when it holds them
+//!    already), then the units stopped and disabled in one step. Their unit files stay;
 //! 5. the rest of `install`'s plan: `daemon-reload`, and the new services enabled and started.
 //!
 //! The new user does not exist before step 1 makes it, and step 3 writes root's records below
@@ -52,8 +54,10 @@
 //! stopped part way: every step is planned again against the host as that run left it, so what
 //! was done is kept and checked again (the user, the SCEP CA, the unit files, the settings, the
 //! copies) and the rest is done. After the plan (a dry run included) the back-out is printed
-//! (stop the new units, start the old ones) with the next steps: `tls`, `push-cert
-//! --profile-only`, `verify` and `dep define-profile`, each with `--settings` of the new file.
+//! (stop the new units, start the old ones: those this run stops and those the record of step 4
+//! names, so a rerun after the old units were stopped still names them) with the next steps:
+//! `tls`, `push-cert --profile-only`, `verify` and `dep define-profile`, each with `--settings`
+//! of the new file.
 
 use std::io::Write;
 
@@ -67,6 +71,10 @@ use hostkeeper_mdm_step::{
 
 use crate::install::{self, Install, UNITS_DIR};
 use crate::{Env, MdmError, secret};
+
+/// The record, in `MDM_ETC`, of the old units a run stopped: the back-out of a later run starts
+/// them, though systemd then says they are neither enabled nor active.
+const STOPPED_RECORD: &str = "migrate-stopped-units";
 
 /// What `migrate` was asked for.
 pub struct Migrate {
@@ -174,7 +182,8 @@ pub fn run(
     let mut m = Mover::new(host);
     m.settings(&a.settings, &new.text, out)?;
     m.copy_state(a, c, out)?;
-    let stopped = m.stop_old(&there, prefix, out)?;
+    let record = format!("{}/{STOPPED_RECORD}", c.etc());
+    let stopped = m.stop_old(&there, prefix, &record, out)?;
 
     let mut steps = base[..cut].to_vec();
     steps.extend(m.p.finish().steps);
@@ -481,27 +490,46 @@ impl<'h> Mover<'h> {
         Ok(())
     }
 
-    /// The old units in `there` that are enabled or active stopped and disabled, in one step;
-    /// their names.
+    /// The old units in `there` that are enabled or active stopped and disabled, in one step,
+    /// after `record` is written to name them and those it names already; the units of
+    /// `there` the back-out starts: these, in the order of `there`.
     fn stop_old(
         &mut self,
         there: &[String],
         prefix: &str,
+        record: &str,
         out: &mut dyn Write,
     ) -> Result<Vec<String>, MdmError> {
+        let text = self.host.read(record)?.unwrap_or_default();
+        let text = String::from_utf8_lossy(&text);
+        let recorded: Vec<&str> = text.lines().map(str::trim).collect();
         let mut running = Vec::new();
+        let mut back = Vec::new();
         for unit in there {
-            if enabled(self.host, unit)? || self.p.unit_is("is-active", unit)? {
+            let on = enabled(self.host, unit)? || self.p.unit_is("is-active", unit)?;
+            if on {
                 running.push(unit.clone());
+            }
+            if on || recorded.contains(&unit.as_str()) {
+                back.push(unit.clone());
             }
         }
         if there.is_empty() {
             let line = format!("old kit: no unit file with prefix {prefix} (moved already)");
             writeln!(out, "{line}")?;
-        } else if running.is_empty() {
+        } else if running.is_empty() && back.is_empty() {
             let line = "old kit: no unit is enabled or active; the unit files stay";
             writeln!(out, "{line}")?;
+        } else if running.is_empty() {
+            let line = format!(
+                "old kit: no unit is enabled or active ({record} names {}, recorded as stopped by an earlier run); the unit files stay",
+                back.join(" ")
+            );
+            writeln!(out, "{line}")?;
         } else {
+            let lines: String = back.iter().map(|u| format!("{u}\n")).collect();
+            self.p
+                .file(record, 0o644, &Account::root(), lines.as_bytes())?;
             let refs: Vec<&str> = running.iter().map(String::as_str).collect();
             self.p.unit(UnitVerb::DisableNow, &refs);
             let line = format!(
@@ -510,7 +538,7 @@ impl<'h> Mover<'h> {
             );
             writeln!(out, "{line}")?;
         }
-        Ok(running)
+        Ok(back)
     }
 }
 
