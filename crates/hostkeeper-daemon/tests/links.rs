@@ -215,6 +215,7 @@ fn the_enrollment_loop_runs_its_enroller_until_it_is_told_to_stop() {
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(hostkeeper_link::testing::FakeClock::new(0, 0)),
+        managed: None,
     };
     let settings = EnrollSettings {
         ca_sha256: pin(),

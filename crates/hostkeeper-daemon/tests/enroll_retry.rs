@@ -64,6 +64,7 @@ fn down_enroller(rig: &Rig, stop: &StopFlag) -> MakeEnroller {
         entropy: Box::new(OsEntropy),
         wall: Box::new(SystemWallClock),
         clock: Box::new(FakeClock::new(0, 0)),
+        managed: None,
     };
     let settings = EnrollSettings {
         ca_sha256: Sha256Hex::parse(&"00".repeat(32)).expect("a SHA-256"),

@@ -181,12 +181,27 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 
 The enrollment request can carry a one-time nonce from MDM (`mac_nonce`, one hour, one use),
 which lets the coordinator approve a Mac whose serial is in `--mac-serial-allowlist` without an
-operator ([enrollment-coordinator.md](../enrollment-coordinator.md)). In this build that never
-happens: the daemon sends no nonce, and the coordinator has no MDM device-state gate, so it would
-decline one. Every Mac waits for an operator, with `mac_nonce_presented` false, and is approved
-as a Linux request is.
+operator ([enrollment-coordinator.md](../enrollment-coordinator.md)). The MDM puts the nonce in the
+managed preferences of the domain `dev.hostkeeper.enrollment`, which macOS writes to
+`/Library/Managed Preferences/dev.hostkeeper.enrollment.plist`: the key `nonce` (the bytes, as
+data) and the key `request_id` (the request's `key_sha256`). While a Mac is not enrolled, its daemon
+reads that file at every enrollment step, every 5 seconds. When the file's `request_id` is the
+daemon's own pending request and its nonce has not been posted by this run of the daemon, the
+daemon posts its request once more with `mac_nonce` set, then polls as before; `mac_nonce_presented`
+turns true on the request. Each nonce is posted once; a new nonce from the MDM is posted once more.
+The daemon reads the file only when root owns it and no one else can write it. A file that is
+missing, not root's, writable by others, not a property list, without a 32-byte `nonce` or a
+`request_id` of 64 lower-case hex digits, or for another request is ignored and logged nowhere:
+the request waits for an operator as any other, and the journal shows only `not enrolled; waiting
+for approval`. No line the daemon writes holds a byte of the nonce. To see what the daemon reads,
+as root: `plutil -p '/Library/Managed Preferences/dev.hostkeeper.enrollment.plist'` and `ls -l` on
+it.
 
-Once the gate and the daemon send nonces, three things follow for an operator. A nonce approves
+In this build the coordinator has no MDM device-state gate, so it declines every nonce
+(`device_state_unavailable`) and no MDM pushes one. Every Mac waits for an operator, with
+`mac_nonce_presented` false, and is approved as a Linux request is.
+
+Once the gate pushes nonces, three things follow for an operator. A nonce approves
 only the request it was issued for: a second request presenting it (another key on the same Mac)
 stays pending and is audited `mac_auto_approve_declined` with `nonce_wrong_request`; deny it.
 A Mac approved by its nonce is assigned the services of its allowlist entry, audited `assign` by

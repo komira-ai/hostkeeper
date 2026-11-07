@@ -1458,6 +1458,7 @@ dependencies = [
  "hostkeeper-steps",
  "hostkeeper-testkit",
  "p256",
+ "plist",
  "rcgen",
  "rustix",
  "rustls",

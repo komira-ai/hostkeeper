@@ -89,7 +89,7 @@ the nonce before the request, and a gate call named `CheckSerial` where the code
 | Policy gate | None runs. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its nine decline tokens, the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). The only `DeviceState` is `NoDeviceState`, so no Mac is approved by a nonce today. |
 | MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). **Not built**: the binary with its verbs (M4, M5), so nothing in this repository installs the stack yet. |
-| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). **Not built**: the daemon sends no nonce. |
+| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). The enroller reads the nonce from the managed preferences and posts it once for its own request (**Built**, task M13: `crates/hostkeeper-enroll/src/managed.rs`, `crates/hostkeeper-enroll/src/enroller.rs`). |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
 The kit's code is in three places:
@@ -303,9 +303,10 @@ In the payload the keys sit where Apple's `com.apple.ManagedClient.preferences` 
 them: under the domain, then `Forced`, then `mcx_preference_settings`. The path, owner and mode
 of the file macOS writes are to verify in M16.
 
-**The enroller changes (task M13).** Today it posts `Enroll` once per key and then only polls
-(`crates/hostkeeper-enroll/src/enroller.rs`, the `posted` cache). Its `EnrollRequest` has no
-nonce field, and the gRPC adapter always sends `mac_nonce` empty. New:
+**The enroller changes (task M13, **Built**: `crates/hostkeeper-enroll/src/managed.rs`,
+`crates/hostkeeper-enroll/src/enroller.rs`).** Before it, the enroller posted `Enroll` once per key
+and then only polled (the `posted` cache); its `EnrollRequest` had no nonce field, and the gRPC
+adapter always sent `mac_nonce` empty. Now:
 
 - The daemon reads `/Library/Managed Preferences/dev.hostkeeper.enrollment.plist` in each step,
   through a port with a fake for tests.
@@ -315,7 +316,9 @@ nonce field, and the gRPC adapter always sends `mac_nonce` empty. New:
   with `mac_nonce` set. `EnrollRequest.mac_nonce` is field 5, **Built** on the wire. The
   coordinator already approves on such a repost (**Built**: `Enrollment::enroll` runs
   `mac_auto_approve` for a still-pending request that carries a nonce).
-- After that one post the step polls as before.
+- After that one post the step polls as before. The coordinator answers the post of a request
+  it has approved (by the nonce, or earlier) with `ENROLL_STATE_UNSPECIFIED`, which the gRPC
+  adapter reads as decided, so the step's poll brings the certificate.
 - A missing file, a malformed one, a file of the wrong owner, or another request's nonce means
   nothing more is posted. Enrollment never fails over the file, because the operator path must
   keep working.

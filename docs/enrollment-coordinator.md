@@ -208,7 +208,11 @@ is `unknown_host`.
 The MDM policy gate (its own component, not in this coordinator) gives each Mac a one-time nonce
 through `Enrollment::issue_mac_nonce`: 32 random bytes, of which the store keeps the SHA-256
 only, for one serial and the one pending request the gate saw (its key hash), good for one hour
-and one approval. A Mac's `Enroll` carries it (`mac_nonce`). The request is approved, as the
+and one approval. A Mac's `Enroll` carries it (`mac_nonce`): the daemon reads it from the managed
+preferences the MDM installed and posts its pending request once more with it
+([operations/enrollment.md](operations/enrollment.md#the-mac-path)). The answer to that post is
+`ENROLL_STATE_UNSPECIFIED` when the nonce approved the request, as it is for any request no longer
+pending, and the daemon's next `Poll` brings the certificate. The request is approved, as the
 allowlist entry of its serial says and by the approver `mdm-nonce`, only when the serial it claims
 is on `--mac-serial-allowlist`, the gate says the device is enrolled and supervised, and the nonce
 is known, unexpired, unused, was issued for that serial and was issued for that request. A nonce

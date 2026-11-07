@@ -10,7 +10,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hostkeeper_daemon::adapters::{Adapters, host_boot_id, host_claims, host_clock};
+use hostkeeper_daemon::adapters::{Adapters, host_boot_id, host_claims, host_clock, host_managed};
 use hostkeeper_daemon::cli::{DEFAULT_ADMIN_SOCKET, UNWIRED, Unwired};
 use hostkeeper_daemon::ipmi::DevIpmi;
 use hostkeeper_daemon::mac::{
@@ -18,7 +18,7 @@ use hostkeeper_daemon::mac::{
     codesign_args, codesign_verdict, has_attribute, ioreg_args,
 };
 use hostkeeper_daemon::start::StartError;
-use hostkeeper_enroll::{Claims, Ioreg, LinuxClaims};
+use hostkeeper_enroll::{Claims, Ioreg, LinuxClaims, ManagedFile};
 use hostkeeper_launchd::launchctl::print_args;
 use hostkeeper_launchd::{
     FakeLaunchctl, Label, LaunchctlError, LaunchctlOutput, PidInfo, PidInfoError, Platform,
@@ -351,6 +351,21 @@ fn a_macs_claims_are_its_serial_and_platform_uuid_alone() {
         Box::new(FakeIoreg),
         Arc::new(DevIpmi::host()),
     );
+}
+
+/// Catches a Mac whose enroller does not read its managed preferences, or a Linux host that
+/// reads any: a Mac's are the file it is given, read with its checks, and a Linux host has none.
+#[test]
+fn a_mac_reads_its_managed_preferences_and_linux_has_none() {
+    let dir = scratch("managed-preferences");
+    let file = dir.path().join("dev.hostkeeper.enrollment.plist");
+    fs::write(&file, b"managed").expect("write");
+    fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o644)).expect("chmod");
+    let uid = rustix::process::geteuid().as_raw();
+    let mac = host_managed(PlatformKind::Macos, ManagedFile::new(&file, uid))
+        .expect("a Mac's managed preferences");
+    assert_eq!(mac.read().expect("read"), b"managed");
+    assert!(host_managed(PlatformKind::Linux, ManagedFile::new(&file, uid)).is_none());
 }
 
 /// A pid lookup with fixed answers.
