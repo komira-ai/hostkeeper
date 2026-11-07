@@ -1,8 +1,11 @@
-//! The boot-image overlay, `overlay/`: copies of the sources and the link that enables the unit.
+//! The boot-image overlay, `overlay/`: copies of the sources, the link that enables the unit,
+//! and the console's issue link.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+
+use hostkeeper_daemon::console::{ENROLLMENT_ISSUE, ISSUE_LINK};
 
 use crate::{INSTALLED_UNIT, TEMPLATE, TMPFILES, UNIT, config, linux};
 
@@ -13,6 +16,8 @@ const OVERLAY_FILES: [(&str, &str); 3] = [
     ("etc/hostkeeper/hostkeeper.toml.template", TEMPLATE),
 ];
 const ENABLE_LINK: &str = "etc/systemd/system/multi-user.target.wants/hostkeeper.service";
+/// The console's issue link, which points at the issue file the daemon writes.
+const ISSUE: &str = "etc/issue.d/hostkeeper.issue";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Item {
@@ -80,7 +85,7 @@ fn check_overlay(
     let wanted: BTreeSet<&str> = OVERLAY_FILES
         .iter()
         .map(|(path, _)| *path)
-        .chain([ENABLE_LINK])
+        .chain([ENABLE_LINK, ISSUE])
         .collect();
     let found: BTreeSet<&str> = tree.keys().map(String::as_str).collect();
     if found != wanted {
@@ -91,23 +96,32 @@ fn check_overlay(
             return Err(format!("{path} is not a copy of packaging/linux/{src}"));
         }
     }
-    match tree.get(ENABLE_LINK) {
+    points(tree, ENABLE_LINK, INSTALLED_UNIT)?;
+    points(tree, ISSUE, ISSUE_TARGET)
+}
+
+/// What the issue link points at: the daemon's issue file, outside the image (`/run` is made at
+/// boot).
+const ISSUE_TARGET: &str = ENROLLMENT_ISSUE;
+
+/// `link` of `tree` is a link that points at `wanted`, a path from the image root.
+fn points(tree: &BTreeMap<String, Item>, link: &str, wanted: &str) -> Result<(), String> {
+    match tree.get(link) {
         Some(Item::Link(target)) => {
-            let points = format!("/{}", resolve(ENABLE_LINK, target)?);
-            if points != INSTALLED_UNIT {
-                return Err(format!(
-                    "{ENABLE_LINK} points at {points}, not {INSTALLED_UNIT}"
-                ));
+            let points = format!("/{}", resolve(link, target)?);
+            if points != wanted {
+                return Err(format!("{link} points at {points}, not {wanted}"));
             }
             Ok(())
         }
-        _ => Err(format!("{ENABLE_LINK} is not a link")),
+        _ => Err(format!("{link} is not a link")),
     }
 }
 
 /// Catches an overlay file that drifted from its source, an enable link that does not point
-/// at the unit's installed path, a live `hostkeeper.toml` or a program in the overlay, and a
-/// file too many or too few.
+/// at the unit's installed path, an issue link that is not a link or points at another file
+/// than the daemon's issue file or is not where the packages put it, a live `hostkeeper.toml`
+/// or a program in the overlay, and a file too many or too few.
 #[test]
 fn overlay_files_equal_their_sources_and_the_enable_link_points_at_the_unit() {
     let root = linux().join("overlay");
@@ -126,6 +140,15 @@ fn overlay_files_equal_their_sources_and_the_enable_link_points_at_the_unit() {
         installed.iter().any(|dst| dst.as_str() == INSTALLED_UNIT),
         "{installed:?}"
     );
+    // The issue link is where the packages put theirs.
+    let linked: Vec<String> = config()
+        .links("deb")
+        .expect("links")
+        .into_iter()
+        .map(|link| link.dst)
+        .collect();
+    assert_eq!(linked, [format!("/{ISSUE}")]);
+    assert_eq!(ISSUE_LINK, format!("/{ISSUE}"));
     // An absolute link to the unit is as good as the relative one.
     let mut absolute = tree.clone();
     absolute.insert(
@@ -140,6 +163,17 @@ fn overlay_files_equal_their_sources_and_the_enable_link_points_at_the_unit() {
     };
     let mut drifted = fs::read(linux().join(UNIT)).expect("the unit");
     drifted.extend_from_slice(b"# drifted\n");
+    // A relative issue link to the same file is as good as the absolute one.
+    let mut relative = tree.clone();
+    relative.insert(
+        ISSUE.to_owned(),
+        Item::Link(PathBuf::from("../../run/hostkeeper/enrollment.issue")),
+    );
+    assert_eq!(check_overlay(&relative, source), Ok(()));
+    let mut missing = tree.clone();
+    missing.remove(ISSUE);
+    let refused = check_overlay(&missing, source).expect_err("no issue link");
+    assert!(refused.starts_with("the overlay holds"), "{refused:?}");
     let cases = [
         (
             with(OVERLAY_FILES[0].0, Item::File(drifted)),
@@ -164,6 +198,17 @@ fn overlay_files_equal_their_sources_and_the_enable_link_points_at_the_unit() {
             "climbs above the image root",
         ),
         (with(ENABLE_LINK, Item::File(source(UNIT))), "is not a link"),
+        (
+            with(
+                ISSUE,
+                Item::Link(PathBuf::from("/run/hostkeeper/admin.sock")),
+            ),
+            "etc/issue.d/hostkeeper.issue points at /run/hostkeeper/admin.sock",
+        ),
+        (
+            with(ISSUE, Item::File(b"hostkeeper enrollment\n".to_vec())),
+            "etc/issue.d/hostkeeper.issue is not a link",
+        ),
         (
             with("etc/hostkeeper/hostkeeper.toml", Item::File(b"x".to_vec())),
             "a live config",

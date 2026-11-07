@@ -19,7 +19,7 @@ fn noted(
     let mut step = 0;
     enroller.run_loop(
         &mut |_: &str| {},
-        &mut |enrollment| after.push((renewal.get(), enrollment)),
+        &mut |_, enrollment| after.push((renewal.get(), enrollment)),
         renewal,
         &mut || {
             let go = step < steps;

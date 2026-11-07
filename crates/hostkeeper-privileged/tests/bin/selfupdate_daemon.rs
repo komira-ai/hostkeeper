@@ -272,6 +272,7 @@ fn file_links(
         )),
         renewal: hostkeeper_daemon::links::RenewalState::default(),
         watchdog,
+        console: None,
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,

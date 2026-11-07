@@ -22,16 +22,19 @@
 //! ([`Coordinator::assign_host`], the one path by which `Services.Assign` of a host assigns
 //! too), after the approval is recorded: each service is one audit entry `assign`. An
 //! assignment that cannot be written is logged and leaves the approval standing; the operator
-//! assigns the services with `Services.Assign`.
+//! assigns the services with `Services.Assign`. A Mac approved by its MDM nonce at its
+//! `Enroll` ([`Coordinator::enroll`]) has the services of its allowlist entry assigned the same
+//! way, by `mdm-nonce`.
 
 use std::collections::BTreeMap;
 
 use hostkeeper_enrollment::names::KeyHash;
+use hostkeeper_proto::hostkeeper::agent::v1::{EnrollRequest, EnrollResponse};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 use hostkeeper_wire::{HostId, RoleName};
 
-use crate::enrollment::Enrollment;
+use crate::enrollment::{Enrollment, MAC_APPROVER, RpcError};
 use crate::inventory::show_match;
 use crate::operator::{Caller, entry_proto};
 use crate::service::Coordinator;
@@ -90,26 +93,60 @@ impl Coordinator {
         let (role, services) = (request.role.clone(), request.services.clone());
         let records = self.ops.read(|state| state.inventory.clone());
         let approved = enrollment.approve(by, request, &known, &records)?;
-        // The approval checked the host id, the role and the services by the same rules.
-        let assigned = approved
-            .host_id
-            .as_str()
-            .parse::<HostId>()
-            .ok()
-            .zip(role.parse::<RoleName>().ok())
-            .map(|(host, role)| self.assign_host(by, &host, Some(&role), &services));
-        if let Some(Err(refusal)) = assigned {
-            tracing::error!(
-                host_id = %approved.host_id,
-                refusal = refusal.as_str_name(),
-                "the services of an approval were not assigned: assign them with Services.Assign"
-            );
-        }
+        self.assign_approved(by, approved.host_id.as_str(), &role, &services);
         Ok(proto::ApproveResponse {
             host_id: approved.host_id.to_string(),
             certificate_issued_at_poll: true,
             entry: approved.entry.as_ref().map(entry_proto),
         })
+    }
+
+    /// `Enroll` of `hostkeeper.agent.v1.Coordinator` over `enrollment`, this coordinator's
+    /// ([`Enrollment::enrolled`]): when a Mac's request is approved by its nonce, the services
+    /// of its allowlist entry are assigned to its host by `mdm-nonce`, as an operator's
+    /// approval assigns the services it names.
+    ///
+    /// # Errors
+    /// As [`Enrollment::enrolled`].
+    pub fn enroll(
+        &self,
+        enrollment: &Enrollment,
+        request: EnrollRequest,
+    ) -> Result<EnrollResponse, RpcError> {
+        let enrolled = enrollment.enrolled(request)?;
+        if let Some(entry) = &enrolled.by_nonce {
+            let services: Vec<String> = entry
+                .services
+                .iter()
+                .map(|service| service.as_str().to_owned())
+                .collect();
+            self.assign_approved(
+                MAC_APPROVER,
+                entry.host_id.as_str(),
+                entry.role.as_str(),
+                &services,
+            );
+        }
+        Ok(enrolled.response)
+    }
+
+    /// Assigns `services` to `host_id` of `role`, just approved by `by`
+    /// ([`Coordinator::assign_host`]). The approval checked the host id, the role and the
+    /// services by the same rules; an assignment refused is logged and leaves the approval
+    /// standing.
+    fn assign_approved(&self, by: &str, host_id: &str, role: &str, services: &[String]) {
+        let assigned = host_id
+            .parse::<HostId>()
+            .ok()
+            .zip(role.parse::<RoleName>().ok())
+            .map(|(host, role)| self.assign_host(by, &host, Some(&role), services));
+        if let Some(Err(refusal)) = assigned {
+            tracing::error!(
+                host_id,
+                refusal = refusal.as_str_name(),
+                "the services of an approval were not assigned: assign them with Services.Assign"
+            );
+        }
     }
 
     /// `Enrollment.Reject`: rejects a pending request ([`Enrollment::reject`]); the answer
