@@ -15,6 +15,7 @@ mod nfpm;
 mod one_unit;
 mod overlay;
 mod package;
+mod package_names;
 mod script;
 mod self_update;
 mod template;

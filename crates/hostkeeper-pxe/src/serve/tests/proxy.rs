@@ -228,3 +228,70 @@ fn a_mac_leaves_the_answer_set_once_its_seed_is_fetched() {
     assert_eq!(result, Ok(()));
     assert!(!waiting(&firmware));
 }
+
+/// `--install-disk` and `--serial-console` reach the seed the run serves: with
+/// `--install-disk serial=S3A*` and `--serial-console ttyAMA0`, the `user-data` of the recorded
+/// MAC is exactly the seed the generator makes from those values, which matches the disk by its
+/// serial and sets the kernel console and getty of `ttyAMA0`, and not the default disk.
+///
+/// Catches a run that parses the seed flags and then serves the default disk or no serial
+/// console, which would write the wrong disk or leave the BMC's console blank.
+#[test]
+fn the_seed_flags_reach_the_seed_served() {
+    let kit = Kit::new("proxy-seed-flags");
+    let firmware = client();
+    let mut run = kit.start(kit.args(
+        "proxy",
+        firmware.local_addr().expect("its address"),
+        &[
+            "--install-disk",
+            "serial=S3A*",
+            "--serial-console",
+            "ttyAMA0",
+        ],
+    ));
+    tftp_read(
+        run.tftp,
+        &format!("/grub/hostkeeper/x86_64/{RECORDED}"),
+        &[],
+    )
+    .expect("the menu");
+    run.wait("install linux-x86_64 as host new-1");
+    let user = http(run.http, "GET", &format!("/seed/{RECORDED}/user-data"));
+    assert_eq!(user.status, 200);
+    let record = Record {
+        host_id: "new-1".parse().expect("a host id"),
+        role: None,
+        platform: None,
+    };
+    let path = format!("grub/hostkeeper/x86_64/{RECORDED}");
+    let MenuChoice::Install(install) = MenuRequest::parse(&path)
+        .expect("a menu path")
+        .choose(Mode::Proxy, &|_| Some(&record))
+    else {
+        panic!("the install")
+    };
+    let server = BootServer::new(std::net::SocketAddrV4::new(
+        Ipv4Addr::LOCALHOST,
+        run.http.port(),
+    ))
+    .expect("a boot server");
+    let disk: InstallDisk = "serial=S3A*".parse().expect("a disk");
+    let console: hostkeeper_pxe_seed::inputs::SerialConsole = "ttyAMA0".parse().expect("a console");
+    let want = seed(&SeedInputs {
+        install: &install,
+        server,
+        daemon_config: &DaemonConfigText::parse(DAEMON_CONFIG).expect("a config"),
+        keys: &AuthorizedKeys::parse(&std::fs::read_to_string(&kit.keys).expect("the keys file"))
+            .expect("keys"),
+        install_disk: &disk,
+        serial_console: Some(&console),
+    });
+    let served = String::from_utf8(user.body).expect("text");
+    assert_eq!(served, want.user_data);
+    assert!(served.contains("serial: \"S3A*\""), "{served}");
+    assert!(!served.contains("ssd: true"), "{served}");
+    assert!(served.contains("console=ttyAMA0,115200n8"), "{served}");
+    assert!(served.contains("serial-getty@ttyAMA0"), "{served}");
+    assert_eq!(run.stop().0, Ok(()));
+}
