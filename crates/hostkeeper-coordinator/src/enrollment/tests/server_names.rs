@@ -13,8 +13,8 @@ use rcgen::{CertificateParams, KeyPair, SanType};
 use x509_parser::extensions::GeneralName;
 
 use super::support::{Files, FixedClock, NOW, SERVER_NAME};
-use crate::enrollment::{Enrollment, os_random};
-use crate::testutil::scratch;
+use crate::enrollment::{Enrollment, ServerFile, os_random};
+use crate::testutil::{Log, scratch};
 
 /// The subjectAltNames of the certificate the server certificate file at `path` starts with,
 /// in the certificate's order, as `dns:<name>` and `ip:<address>`.
@@ -136,8 +136,9 @@ fn foreign_file(sans: Vec<SanType>) -> String {
 /// Proves: one look of the reload tick makes the file again when the certificate in it names
 /// other names than the flags, though its validity is far from due: one made for the DNS names
 /// alone (the LAN address left out), one that names a URI besides the right names, and one with
-/// no subjectAltName at all. After each, the certificate names exactly the flags' names, and
-/// the next look keeps it.
+/// no subjectAltName at all. Each time it logs at info why, with the names it makes it for.
+/// After each, the certificate names exactly the flags' names, and the next look keeps it,
+/// logging nothing of names.
 ///
 /// Catches: a tick that looks at the validity alone, so that a file put back from before the
 /// LAN listener (a restore, a copy) is served until it is due, two months on.
@@ -155,6 +156,8 @@ fn the_tick_makes_again_a_file_whose_names_differ_from_the_flags() {
     let dns = SanType::DnsName(SERVER_NAME.try_into().expect("a DNS name"));
     let ip = SanType::IpAddress("192.0.2.7".parse().expect("an address"));
     let uri = SanType::URI("spiffe://example/coordinator".try_into().expect("a URI"));
+    let log = Log::default();
+    let _guard = log.install();
     for (what, text) in [
         (
             "DNS names alone",
@@ -164,7 +167,17 @@ fn the_tick_makes_again_a_file_whose_names_differ_from_the_flags() {
         ("no names", foreign_file(Vec::new())),
     ] {
         std::fs::write(&files.server_cert, &text).expect("put in place");
+        let before = log.text().len();
         enrollment.renew_server();
+        let logged = log.text()[before..].to_owned();
+        assert!(
+            logged.contains(
+                "INFO hostkeeper_coordinator::enrollment::setup: the server certificate names \
+                 other names than the flags: making it again names=[\"coordinator.example\"] \
+                 ips=[192.0.2.7]"
+            ),
+            "{what}: {logged}"
+        );
         assert_eq!(
             enrollment.server_certificate().renewal_error,
             None,
@@ -172,7 +185,28 @@ fn the_tick_makes_again_a_file_whose_names_differ_from_the_flags() {
         );
         assert_eq!(sans_of(&files.server_cert), want, "{what}");
         let made = file_of(&files);
+        let before = log.text().len();
         enrollment.renew_server();
         assert_eq!(file_of(&files), made, "{what}: kept at the next look");
+        assert!(!log.text()[before..].contains("other names"), "{what}");
     }
+}
+
+/// Proves: what a server certificate file shows of itself names its path, its DNS names and
+/// its IP addresses, and nothing else of it.
+///
+/// Catches: the LAN address left out of what an operator reads in a log of the file.
+#[test]
+fn a_server_file_shows_its_path_and_its_names() {
+    let file = ServerFile::new(
+        Arc::new(RealFs),
+        Path::new("dir/server.pem"),
+        &["a.example".to_owned()],
+        &["192.0.2.7".parse().expect("an address")],
+    )
+    .expect("a file");
+    assert_eq!(
+        format!("{file:?}"),
+        r#"ServerFile { path: "dir/server.pem", names: ["a.example"], ips: [192.0.2.7], .. }"#
+    );
 }

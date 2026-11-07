@@ -860,12 +860,15 @@ where
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
-    let lan_coordinator = Arc::clone(&coordinator);
-    let serving_lan = async move {
-        let Some(lan) = lan else {
-            return std::future::pending().await;
-        };
-        serve(lan, lan_coordinator, CLIENT_PATIENCE, MAX_CONNECTIONS).await
+    // Without a LAN listener, a future that never finishes stands in for it.
+    let serving_lan = match lan {
+        Some(lan) => Either::Left(serve(
+            lan,
+            Arc::clone(&coordinator),
+            CLIENT_PATIENCE,
+            MAX_CONNECTIONS,
+        )),
+        None => Either::Right(std::future::pending()),
     };
     let serving = together(
         serve(
