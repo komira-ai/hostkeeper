@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780" role="img" aria-label="Mac path: MDM enrollment, package install by digest, per-device nonce, enrollment, auto-approval conditions, and the one launchd daemon.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1305" width="1200" height="1305" role="img" aria-label="Mac path in seven steps: the operator allowlists the serial, the Mac enrolls by ADE, the gate in the coordinator installs the config profile, the pkg starts the daemon which posts an enrollment request, the gate pushes a one-time nonce profile bound to that request only when every condition holds, the daemon reposts with the nonce, and the coordinator auto-approves; any miss leaves the request pending for an operator.">
 <title>Mac path</title>
-<desc>A Mac is enrolled by the MDM gate, which installs the hostkeeper installer pkg by digest and pushes a one-time nonce. The coordinator auto-approves the Mac only when every nonce and serial condition holds, otherwise the request stays pending.</desc>
+<desc>The operator adds the serial in ABM and to the coordinator's allowlist. The Mac enrolls by ADE and the MDM gate, linked into the coordinator, installs the config profile. The pkg (task M14, not built) starts the daemon, which posts an enrollment request without a nonce. The gate then pushes a one-time nonce profile bound to that request, only if the device is enrolled and supervised, the serial is allowlisted, exactly one candidate request exists and no nonce is live. The daemon (task M13, not built) reposts the request with the nonce and the coordinator auto-approves only when the serial, the gate's device state and the nonce all check out; otherwise the request stays pending for an operator approval by key hash.</desc>
 <defs><marker id="mac-path-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="mac-path-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -20,107 +20,192 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 .t-m{fill:#5A5A57;font-size:12px}
 .lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
 </style>
-<rect x="0" y="0" width="1200" height="780" fill="#FFFFFF"/>
-<text x="20" y="28" class="b" font-size="16" text-anchor="start">Mac path: MDM gate, per-device nonce, enrollment, and launchd jobs</text>
-<rect x="20" y="48" width="280" height="640" rx="6" class="box-p"/>
-<text x="32" y="70" class="b" text-anchor="start">Operator and MDM gate</text>
-<rect x="400" y="48" width="400" height="640" rx="6" class="box-p"/>
-<text x="412" y="70" class="b" text-anchor="start">Coordinator</text>
-<rect x="900" y="48" width="280" height="640" rx="6" class="box-p"/>
+<rect x="0" y="0" width="1200" height="1305" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Mac path: seven steps from the allowlist to an approved Mac</text>
+<rect x="20" y="48" width="280" height="1212" rx="6" class="box-p"/>
+<text x="32" y="70" class="b" text-anchor="start">Operator and NanoHUB</text>
+<rect x="400" y="48" width="400" height="1212" rx="6" class="box-p"/>
+<text x="412" y="70" class="b" text-anchor="start">Coordinator, with the MDM gate linked in</text>
+<rect x="900" y="48" width="280" height="1212" rx="6" class="box-p"/>
 <text x="912" y="70" class="b" text-anchor="start">Mac</text>
-<rect x="30" y="90" width="260" height="200" rx="5" class="box-b"/>
-<text x="160" y="116" class="b" text-anchor="middle">MDM gate</text>
-<text x="160" y="134" class="t-m" text-anchor="middle">allowlisted serial</text>
-<text x="160" y="150" class="t-m" text-anchor="middle">enrolled + supervised check</text>
-<text x="160" y="166" class="t-m" text-anchor="middle">one-time nonce, managed profile</text>
-<text x="160" y="182" class="t-m" text-anchor="middle">serial check for the coordinator</text>
-<rect x="30" y="340" width="260" height="56" rx="5" class="box"/>
-<text x="160" y="364" class="b" text-anchor="middle">Device enrolment (ADE)</text>
-<text x="160" y="382" class="t-m" text-anchor="middle">Apple device enrolment</text>
-<path d="M160,340 L160,290" class="ln" marker-end="url(#mac-path-ak)"/>
-<text x="170" y="320" class="t-m lbl" text-anchor="start">enrolled device</text>
-<path d="M290,112 L910,112" class="ln" marker-end="url(#mac-path-ak)"/>
-<circle cx="304" cy="98" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="304" y="102" class="b" font-size="12" text-anchor="middle">1</text>
-<text x="326" y="106" class="t-m lbl" text-anchor="start">MDM enrols the device</text>
-<path d="M290,152 L910,152" class="ln" marker-end="url(#mac-path-ak)"/>
-<circle cx="304" cy="138" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="304" y="142" class="b" font-size="12" text-anchor="middle">2</text>
-<text x="326" y="146" class="t-m lbl" text-anchor="start">install hostkeeper pkg by digest</text>
-<path d="M290,192 L910,192" class="ln" marker-end="url(#mac-path-ak)"/>
-<circle cx="304" cy="178" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="304" y="182" class="b" font-size="12" text-anchor="middle">3</text>
-<text x="326" y="186" class="t-m lbl" text-anchor="start">one-time nonce, managed profile, 1 h</text>
-<rect x="910" y="90" width="260" height="120" rx="5" class="box"/>
-<text x="1040" y="116" class="b" text-anchor="middle">Mac, supervised</text>
-<text x="1040" y="134" class="t-m" text-anchor="middle">pkg postinstall writes</text>
-<text x="1040" y="150" class="t-m" text-anchor="middle">hostkeeper.toml: coordinator, CA hash,</text>
-<text x="1040" y="166" class="t-m" text-anchor="middle">release channel, trusted signers;</text>
-<text x="1040" y="182" class="t-m" text-anchor="middle">no secret</text>
+<rect x="30" y="90" width="260" height="84" rx="5" class="box"/>
+<text x="160" y="112" class="b" text-anchor="middle">Operator</text>
+<text x="160" y="128" class="t-m" text-anchor="middle">adds the serial in ABM (assigned to</text>
+<text x="160" y="144" class="t-m" text-anchor="middle">the farm MDM server) and to the</text>
+<text x="160" y="160" class="t-m" text-anchor="middle">coordinator's allowlist</text>
+<rect x="30" y="205" width="260" height="980" rx="5" class="box-b"/>
+<text x="160" y="230" class="b" text-anchor="middle">NanoHUB (farm MDM server)</text>
+<text x="160" y="246" class="t-m" text-anchor="middle">receives the TokenUpdate check-in;</text>
+<text x="160" y="262" class="t-m" text-anchor="middle">sends the profiles and commands</text>
+<text x="160" y="278" class="t-m" text-anchor="middle">to the Mac</text>
+<rect x="30" y="1198" width="260" height="44" rx="5" class="box"/>
+<text x="160" y="1218" class="b" text-anchor="middle">Operator approval</text>
+<text x="160" y="1234" class="t-m" text-anchor="middle">by key hash</text>
+<rect x="410" y="90" width="380" height="56" rx="5" class="box-b"/>
+<text x="600" y="112" class="b" text-anchor="middle">Allowlist (--mac-serial-allowlist)</text>
+<text x="600" y="128" class="t-m" text-anchor="middle">per serial: host id prefix, role, services</text>
+<path d="M290,118 L410,118" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="350" y="103" class="t-m lbl" text-anchor="middle">serial</text>
+<circle cx="350" cy="118" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="350" y="122" class="b" font-size="12" text-anchor="middle">1</text>
+<path d="M910,225 L290,225" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="600" y="210" class="t-m lbl" text-anchor="middle">TokenUpdate check-in (ADE, supervised)</text>
+<circle cx="345" cy="225" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="345" y="229" class="b" font-size="12" text-anchor="middle">2</text>
+<path d="M290,257 L910,257" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="600" y="242" class="t-m lbl" text-anchor="middle">config profile, no secret</text>
+<circle cx="345" cy="257" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="345" y="261" class="b" font-size="12" text-anchor="middle">3</text>
+<path d="M910,289 L290,289" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="600" y="274" class="t-m lbl" text-anchor="middle">DeviceInformation and SecurityInfo replies</text>
+<circle cx="345" cy="289" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="345" y="293" class="b" font-size="12" text-anchor="middle">3</text>
+<rect x="410" y="312" width="380" height="100" rx="5" class="box-b"/>
+<text x="424" y="334" class="b" text-anchor="start">MDM gate, inside the coordinator</text>
+<text x="424" y="350" class="t-m" text-anchor="start">Webhook on TokenUpdate. Asks DeviceInformation</text>
+<text x="424" y="366" class="t-m" text-anchor="start">(SerialNumber, UDID, IsSupervised) and SecurityInfo;</text>
+<text x="424" y="382" class="t-m" text-anchor="start">installs config profile &lt;profile id&gt;.config,</text>
+<text x="424" y="398" class="t-m" text-anchor="start">domain dev.hostkeeper.config, no secret</text>
+<path d="M290,337 L410,337" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="350" y="322" class="t-m lbl" text-anchor="middle">webhook</text>
+<circle cx="350" cy="337" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="350" y="341" class="b" font-size="12" text-anchor="middle">2</text>
+<path d="M410,380 L290,380" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="350" y="365" class="t-m lbl" text-anchor="middle">commands</text>
+<circle cx="350" cy="380" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="350" y="384" class="b" font-size="12" text-anchor="middle">3</text>
+<rect x="410" y="429" width="380" height="48" rx="5" class="box-p"/>
+<text x="600" y="449" class="t-m" text-anchor="middle">task M14, not built: InstallEnterpriseApplication</text>
+<text x="600" y="466" class="t-m" text-anchor="middle">with inline manifest by allowlisted SHA-256</text>
+<path d="M410,453 L290,453" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="350" y="438" class="t-m lbl" text-anchor="middle">send pkg</text>
+<circle cx="350" cy="453" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="350" y="457" class="b" font-size="12" text-anchor="middle">3</text>
+<path d="M290,512 L910,512" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="600" y="498" class="t-m lbl" text-anchor="middle">installer pkg by digest (M14)</text>
+<circle cx="345" cy="512" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="345" y="516" class="b" font-size="12" text-anchor="middle">3</text>
+<rect x="410" y="605" width="380" height="50" rx="5" class="box-b"/>
+<text x="600" y="627" class="b" text-anchor="middle">Enrollment request, pending</text>
+<text x="600" y="644" class="t-m" text-anchor="middle">serial + platform UUID, no nonce</text>
+<path d="M910,630 L790,630" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="850" y="615" class="t-m lbl" text-anchor="middle">request</text>
+<circle cx="850" cy="630" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="850" y="634" class="b" font-size="12" text-anchor="middle">4</text>
+<rect x="410" y="675" width="380" height="214" rx="5" class="box-b"/>
+<text x="424" y="695" class="b" text-anchor="start">MDM gate: nonce push</text>
+<text x="424" y="711" class="t-m" text-anchor="start">Pushes the nonce profile only when:</text>
+<text x="424" y="727" class="t-m" text-anchor="start">- device enrolled and supervised</text>
+<text x="424" y="743" class="t-m" text-anchor="start">- serial on the allowlist</text>
+<text x="424" y="759" class="t-m" text-anchor="start">- exactly one candidate request: pending, not a</text>
+<text x="424" y="775" class="t-m" text-anchor="start">  duplicate claim, claims the serial, platform UUID</text>
+<text x="424" y="791" class="t-m" text-anchor="start">  equals UDID, posted after this enrollment began</text>
+<text x="424" y="807" class="t-m" text-anchor="start">- no live nonce for the serial</text>
+<text x="424" y="823" class="t-m" text-anchor="start">Profile &lt;profile id&gt;.nonce, domain</text>
+<text x="424" y="839" class="t-m" text-anchor="start">dev.hostkeeper.enrollment; keys nonce, request_id</text>
+<text x="424" y="855" class="t-m" text-anchor="start">Nonce: 1 hour, one use, bound to that</text>
+<text x="424" y="871" class="t-m" text-anchor="start">request's key hash</text>
+<circle cx="410" cy="675" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="410" y="679" class="b" font-size="12" text-anchor="middle">5</text>
+<path d="M410,760 L290,760" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="350" y="745" class="t-m lbl" text-anchor="middle">push nonce</text>
+<circle cx="350" cy="760" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="350" y="764" class="b" font-size="12" text-anchor="middle">5</text>
+<path d="M290,917 L910,917" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="600" y="902" class="t-m lbl" text-anchor="middle">nonce profile</text>
+<circle cx="345" cy="917" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="345" y="921" class="b" font-size="12" text-anchor="middle">5</text>
+<rect x="410" y="945" width="380" height="151" rx="5" class="box-b"/>
+<circle cx="410" cy="945" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="410" y="949" class="b" font-size="12" text-anchor="middle">6</text>
+<text x="424" y="967" class="b" text-anchor="start">Coordinator: mac_auto_approve</text>
+<text x="424" y="983" class="t-m" text-anchor="start">checks in order; any miss stops:</text>
+<text x="424" y="999" class="t-m" text-anchor="start">- serial on the allowlist</text>
+<text x="424" y="1015" class="t-m" text-anchor="start">- gate DeviceState::status(serial): enrolled</text>
+<text x="424" y="1031" class="t-m" text-anchor="start">  and supervised</text>
+<text x="424" y="1047" class="t-m" text-anchor="start">- nonce known, unexpired, unused,</text>
+<text x="424" y="1063" class="t-m" text-anchor="start">  issued for that serial</text>
+<text x="424" y="1079" class="t-m" text-anchor="start">- nonce bound to that request (nonce_wrong_request)</text>
+<path d="M910,1010 L790,1010" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="850" y="995" class="t-m lbl" text-anchor="middle">Enroll + nonce</text>
+<circle cx="850" cy="1010" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="850" y="1014" class="b" font-size="12" text-anchor="middle">6</text>
+<rect x="410" y="1120" width="380" height="82" rx="5" class="box-b"/>
+<circle cx="410" cy="1120" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="410" y="1124" class="b" font-size="12" text-anchor="middle">7</text>
+<text x="424" y="1142" class="b" text-anchor="start">Approved as mdm-nonce</text>
+<text x="424" y="1158" class="t-m" text-anchor="start">host id, role, services from the entry;</text>
+<text x="424" y="1174" class="t-m" text-anchor="start">certificate; install orders as on Linux</text>
+<text x="424" y="1190" class="t-m" text-anchor="start">then RemoveProfile for the nonce profile</text>
+<path d="M600,1096 L600,1120" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="612" y="1112" class="t-m lbl" text-anchor="start">all hold</text>
+<path d="M410,1162 L290,1162" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="350" y="1147" class="t-m lbl" text-anchor="middle">RemoveProfile</text>
+<circle cx="350" cy="1162" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="350" y="1166" class="b" font-size="12" text-anchor="middle">7</text>
+<path d="M790,1142 L910,1142" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="850" y="1127" class="t-m lbl" text-anchor="middle">certificate</text>
+<circle cx="850" cy="1142" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="850" y="1146" class="b" font-size="12" text-anchor="middle">7</text>
+<path d="M790,1177 L910,1177" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="850" y="1162" class="t-m lbl" text-anchor="middle">install orders</text>
+<path d="M410,1085 L300,1085 L300,1220 L290,1220" class="ln-o" marker-end="url(#mac-path-ao)"/>
+<text x="310" y="1196" class="t-m lbl" text-anchor="start">any miss: stays</text>
+<text x="310" y="1211" class="t-m lbl" text-anchor="start">pending</text>
+<rect x="910" y="90" width="260" height="225" rx="5" class="box"/>
 <circle cx="910" cy="90" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="910" y="94" class="b" font-size="12" text-anchor="middle">4</text>
-<rect x="910" y="250" width="260" height="160" rx="5" class="box-o dash"/>
-<text x="1040" y="275" class="b" text-anchor="middle">launchd daemon: hostkeeper</text>
-<text x="1040" y="293" class="t-m" text-anchor="middle">user root, one process</text>
-<text x="1040" y="318" class="t-m" text-anchor="middle">heartbeats, verifies releases,</text>
-<text x="1040" y="334" class="t-m" text-anchor="middle">runs hooks as root</text>
-<text x="1040" y="350" class="t-m" text-anchor="middle">no unprivileged part</text>
-<rect x="910" y="450" width="260" height="70" rx="5" class="box-o dash"/>
-<text x="1040" y="474" class="b" text-anchor="middle">Each step</text>
-<text x="1040" y="492" class="t-m" text-anchor="middle">launchd job as root: timeout,</text>
-<text x="1040" y="508" class="t-m" text-anchor="middle">kill, log capture; no sandbox</text>
-<text x="1040" y="540" class="t-m" text-anchor="middle">(a transient unit on Linux)</text>
-<rect x="410" y="250" width="380" height="208" rx="5" class="box-b"/>
-<text x="600" y="272" class="b" text-anchor="middle">Coordinator</text>
-<text x="600" y="288" class="t-m" text-anchor="middle">auto-approves only if all hold</text>
-<text x="424" y="310" class="t-m" text-anchor="start">- nonce valid</text>
-<text x="424" y="330" class="t-m" text-anchor="start">- nonce unexpired</text>
-<text x="424" y="350" class="t-m" text-anchor="start">- nonce unused</text>
-<text x="424" y="370" class="t-m" text-anchor="start">- nonce consumed in the same transaction as approval</text>
-<text x="424" y="390" class="t-m" text-anchor="start">- nonce issued for the claimed serial</text>
-<text x="424" y="410" class="t-m" text-anchor="start">- device supervised</text>
-<text x="424" y="430" class="t-m" text-anchor="start">- serial on the allowlist</text>
-<circle cx="410" cy="250" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="410" y="254" class="b" font-size="12" text-anchor="middle">7</text>
-<rect x="410" y="478" width="380" height="44" rx="5" class="box-o"/>
-<text x="600" y="498" class="b" text-anchor="middle">any miss: stays pending</text>
-<text x="600" y="514" class="t-m" text-anchor="middle">nothing is installed until an operator decides</text>
-<path d="M600,458 L600,478" class="ln-o" marker-end="url(#mac-path-ao)"/>
-<path d="M910,268 L790,268" class="ln" marker-end="url(#mac-path-ak)"/>
-<text x="850" y="238" class="t-m lbl" text-anchor="middle">request + nonce,</text>
-<text x="850" y="253" class="t-m lbl" text-anchor="middle">serial</text>
-<circle cx="850" cy="268" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="850" y="272" class="b" font-size="12" text-anchor="middle">5</text>
-<path d="M410,268 L290,268" class="ln-d" marker-end="url(#mac-path-ak)"/>
-<text x="350" y="255" class="t-m lbl" text-anchor="middle">CheckSerial</text>
-<circle cx="350" cy="268" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="350" y="272" class="b" font-size="12" text-anchor="middle">6</text>
-<path d="M790,300 L910,300" class="ln-d" marker-end="url(#mac-path-ak)"/>
-<text x="850" y="326" class="t-m lbl" text-anchor="middle">certificate</text>
-<circle cx="850" cy="300" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="850" y="304" class="b" font-size="12" text-anchor="middle">8</text>
-<path d="M790,380 L910,380" class="ln-d" marker-end="url(#mac-path-ak)"/>
-<text x="850" y="362" class="t-m lbl" text-anchor="middle">Install order</text>
-<circle cx="850" cy="380" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="850" y="384" class="b" font-size="12" text-anchor="middle">9</text>
-<text x="910" y="570" class="b" text-anchor="start">Differences from Linux</text>
-<rect x="910" y="580" width="260" height="24" rx="3" class="box"/>
-<text x="1040" y="596" class="t-m" text-anchor="middle">no port hand-over: update with a gap</text>
-<rect x="910" y="608" width="260" height="24" rx="3" class="box"/>
-<text x="1040" y="624" class="t-m" text-anchor="middle">live leases: Deferred leases_live</text>
-<rect x="910" y="636" width="260" height="40" rx="3" class="box"/>
-<text x="1040" y="652" class="t-m" text-anchor="middle">release must carry no quarantine</text>
-<text x="1040" y="667" class="t-m" text-anchor="middle">attribute and a valid signature</text>
-<rect x="30" y="738" width="22" height="14" rx="3" class="box-o"/>
-<text x="60" y="750" class="t-m" text-anchor="start">runs as root</text>
-<rect x="162.862" y="738" width="22" height="14" rx="3" class="box-b"/>
-<text x="192.862" y="750" class="t-m" text-anchor="start">parses network input</text>
-<rect x="349.631" y="738" width="22" height="14" rx="3" class="box"/>
-<text x="379.631" y="750" class="t-m" text-anchor="start">local only</text>
-<rect x="522.923" y="738" width="22" height="14" rx="3" class="box-p"/>
-<text x="552.923" y="750" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
-<path d="M810.769,746 L840.769,746" class="ln" marker-end="url(#mac-path-ak)"/>
-<text x="848.769" y="750" class="t-m" text-anchor="start">request</text>
-<path d="M917.938,746 L947.938,746" class="ln-d" marker-end="url(#mac-path-ak)"/>
-<text x="955.938" y="750" class="t-m" text-anchor="start">reply or report</text>
+<text x="910" y="94" class="b" font-size="12" text-anchor="middle">2</text>
+<text x="1040" y="114" class="b" text-anchor="middle">Mac, wiped or new</text>
+<text x="1040" y="130" class="t-m" text-anchor="middle">enrolls by ADE: supervised,</text>
+<text x="1040" y="146" class="t-m" text-anchor="middle">mandatory, not removable</text>
+<text x="1040" y="162" class="t-m" text-anchor="middle">takes the config profile and</text>
+<text x="1040" y="178" class="t-m" text-anchor="middle">answers DeviceInformation</text>
+<rect x="910" y="472" width="260" height="115" rx="5" class="box"/>
+<circle cx="910" cy="472" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="910" y="476" class="b" font-size="12" text-anchor="middle">4</text>
+<text x="1040" y="494" class="b" text-anchor="middle">Pkg postinstall</text>
+<text x="1040" y="510" class="t-m" text-anchor="middle">self-update-seed;</text>
+<text x="1040" y="526" class="t-m" text-anchor="middle">mac-config writes hostkeeper.toml</text>
+<text x="1040" y="542" class="t-m" text-anchor="middle">from the managed config;</text>
+<text x="1040" y="558" class="t-m" text-anchor="middle">launchctl bootstrap of</text>
+<text x="1040" y="574" class="t-m" text-anchor="middle">dev.hostkeeper.hostkeeper</text>
+<rect x="910" y="605" width="260" height="120" rx="5" class="box-o dash"/>
+<text x="1040" y="627" class="b" text-anchor="middle">launchd daemon: hostkeeper</text>
+<text x="1040" y="643" class="t-m" text-anchor="middle">user root, one process</text>
+<text x="1040" y="659" class="t-m" text-anchor="middle">posts the enrollment request:</text>
+<text x="1040" y="675" class="t-m" text-anchor="middle">serial + platform UUID, no nonce</text>
+<text x="1040" y="691" class="t-m" text-anchor="middle">each step: launchd job as root,</text>
+<text x="1040" y="707" class="t-m" text-anchor="middle">timeout, kill, log capture</text>
+<text x="910" y="752" class="b" text-anchor="start">Differences from Linux</text>
+<rect x="910" y="760" width="260" height="24" rx="5" class="box"/>
+<text x="1040" y="776" class="t-m" text-anchor="middle">no port hand-over: update with a gap</text>
+<rect x="910" y="788" width="260" height="24" rx="5" class="box"/>
+<text x="1040" y="804" class="t-m" text-anchor="middle">live leases: Deferred leases_live</text>
+<rect x="910" y="816" width="260" height="40" rx="5" class="box"/>
+<text x="1040" y="832" class="t-m" text-anchor="middle">release must carry no quarantine</text>
+<text x="1040" y="847" class="t-m" text-anchor="middle">attribute and a valid signature</text>
+<rect x="910" y="890" width="260" height="66" rx="5" class="box"/>
+<text x="1040" y="912" class="b" text-anchor="middle">Nonce profile (managed)</text>
+<text x="1040" y="929" class="t-m" text-anchor="middle">dev.hostkeeper.enrollment:</text>
+<text x="1040" y="946" class="t-m" text-anchor="middle">keys nonce, request_id</text>
+<rect x="910" y="970" width="260" height="80" rx="5" class="box-p"/>
+<text x="1040" y="992" class="b" text-anchor="middle">Daemon, task M13, not built</text>
+<text x="1040" y="1008" class="t-m" text-anchor="middle">reposts Enroll with the same</text>
+<text x="1040" y="1024" class="t-m" text-anchor="middle">key and the nonce</text>
+<rect x="910" y="1120" width="260" height="82" rx="5" class="box"/>
+<text x="1040" y="1142" class="b" text-anchor="middle">Approved Mac</text>
+<text x="1040" y="1158" class="t-m" text-anchor="middle">certificate stored; install</text>
+<text x="1040" y="1174" class="t-m" text-anchor="middle">orders run as on Linux</text>
+<rect x="30" y="1275" width="22" height="14" rx="3" class="box-o"/>
+<text x="60" y="1287" class="t-m" text-anchor="start">runs as root</text>
+<rect x="168.0" y="1275" width="22" height="14" rx="3" class="box-b"/>
+<text x="198.0" y="1287" class="t-m" text-anchor="start">parses network input</text>
+<rect x="358.0" y="1275" width="22" height="14" rx="3" class="box"/>
+<text x="388.0" y="1287" class="t-m" text-anchor="start">local only</text>
+<rect x="483.0" y="1275" width="22" height="14" rx="3" class="box-p"/>
+<text x="513.0" y="1287" class="t-m" text-anchor="start">dashed outline: designed, not built</text>
+<path d="M770.5,1283 L800.5,1283" class="ln" marker-end="url(#mac-path-ak)"/>
+<text x="808.5" y="1287" class="t-m" text-anchor="start">request</text>
+<path d="M868.5,1283 L898.5,1283" class="ln-d" marker-end="url(#mac-path-ak)"/>
+<text x="906.5" y="1287" class="t-m" text-anchor="start">reply or report</text>
 </svg>

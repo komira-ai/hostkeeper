@@ -17,6 +17,8 @@ description = "The MDM policy gate's device side, linked into the coordinator: N
 # The webhook's `raw_payload`, and the basic authentication of NanoHUB's API.
 base64.workspace = true
 bytes.workspace = true
+# The daemon config's loader, which judges the config profile's keys as the Mac will.
+hostkeeper-config = { path = "../hostkeeper-config" }
 # The file-system port and the atomic write of a record, and the clock port the times come from.
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 # The file rule of the API key file (`--mdm-api-key-file`).
@@ -35,6 +37,8 @@ serde_json.workspace = true
 # The digest a record file ends with, so a torn file is refused.
 sha2.workspace = true
 thiserror.workspace = true
+# The daemon config file of the config profile.
+toml.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tracing.workspace = true
 

@@ -83,6 +83,7 @@ use crate::services::{Services, ServicesError};
 use crate::tokens::{OperatorTokens, TokensError};
 use crate::ui::{UiDir, UiDirError};
 use crate::verdict_file::{VerdictFile, VerdictsError, verdicts_path};
+use hostkeeper_mdm_gate::enroll::TICK;
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -694,13 +695,20 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 device_state: Mdm::device_state(mdm.as_ref()),
                 allowlist,
             });
+            // The gate is told of each new request, and asks this enrollment.
+            let enrollment = match Mdm::posted(mdm.as_ref()) {
+                Some(posted) => enrollment.with_posted(posted),
+                None => enrollment,
+            };
+            let enrollment = Arc::new(enrollment);
+            if let Some(mdm) = &mdm {
+                mdm.attach(&enrollment);
+            }
             let client = ClientAuth {
                 optional: true,
                 extra_roots: vec![enrollment.ca_bundle().certificate_der().to_vec()],
             };
-            coordinator = coordinator
-                .with_enrollment(Arc::new(enrollment))
-                .with_mdm(mdm);
+            coordinator = coordinator.with_enrollment(enrollment).with_mdm(mdm);
             let served = TlsFiles {
                 cert: server_cert.clone(),
                 key: server_cert.clone(),
@@ -853,9 +861,9 @@ where
         Some(mdm) => {
             let (addr, accept) = bind(mdm.webhook_listen).await?;
             tracing::info!(%addr, "serving the MDM webhook");
-            Either::Left(hostkeeper_mdm_gate::webhook::serve(
-                accept,
-                Arc::clone(&mdm.gate),
+            Either::Left(together(
+                hostkeeper_mdm_gate::webhook::serve(accept, Arc::clone(&mdm.gate)),
+                hostkeeper_mdm_gate::enroll::run(Arc::clone(&mdm.gate), TICK),
             ))
         }
         None => Either::Right(std::future::pending()),

@@ -163,7 +163,8 @@ impl Enrollment {
     /// A new request while the pending queue is full is refused `pending_full`. A pending
     /// request that carries a Mac nonce is approved by it when every condition of the Mac path
     /// holds ([`Enrollment::mac_auto_approve`]), and the allowlist entry it was approved as is
-    /// returned with the answer; otherwise it stays pending.
+    /// returned with the answer; otherwise it stays pending. A new request (not a repost) is
+    /// told to the MDM gate ([`Enrollment::with_posted`]) once it is recorded.
     ///
     /// # Errors
     /// `bad_csr`, `key_not_p256`, `renewal_not_allowed` (also for a `renewal_of` that is no
@@ -211,6 +212,9 @@ impl Enrollment {
                     posted.request_id, posted.round
                 ),
             ));
+            if let Some(told) = &self.posted {
+                told();
+            }
         }
         let by_nonce = if !request.mac_nonce.is_empty() && posted.state.is_pending() {
             match self.mac_auto_approve(&posted.request_id, &request.mac_nonce) {
