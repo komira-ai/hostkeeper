@@ -211,11 +211,15 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     });
     let first_cert = unix(&first["certNotAfterUnix"]).expect("the host's certificate");
     wait_installed(&mut rig, first_cert - 1);
-    let got = rig.ctl(&["hosts", "get", "--node-id", HOST]);
-    assert!(
-        unix(&got["host"]["firstServingUnix"]).is_some(),
-        "the heartbeat that reported the fixture service installed is kept as serving: {got}"
-    );
+    // The first heartbeat that reports the fixture service healthy is kept as serving: the one
+    // wait_installed saw, or the next.
+    let coordinator = &rig.coordinator;
+    let got = rig.bus.until("the host's serving time", || {
+        let got = coordinator.ctl(&["hosts", "get", "--node-id", HOST])?;
+        unix(&got["host"]["firstServingUnix"])
+            .map(|_| got.clone())
+            .ok_or_else(|| format!("{got}"))
+    });
     rig.keep("host.json", got.to_string().as_bytes());
 
     // 3. Router mode: the enrolled guest boots its disk.

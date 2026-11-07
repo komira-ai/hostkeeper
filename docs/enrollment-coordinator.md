@@ -85,7 +85,7 @@ whole (temporary file, fsync, rename, directory fsync), mode 0600:
 |---|---|
 | `requests/<request id>.pb` | a request: the CSR, the claims, the image, its state, its approval |
 | `issued/<request id>.pb` | the certificate a request was issued |
-| `hosts/<host id>.pb` | an approved host: its key's hash, machine id, role, services, the duplicate mark, when its first heartbeat since the approval was accepted |
+| `hosts/<host id>.pb` | an approved host: its key's hash, machine id, role, services, the duplicate mark, when its first heartbeat since the approval was accepted, and when the first that reported a service the coordinator manages for it serving was |
 | `deny/<host id>.pb` | a denied host: retiring, retired, or cleared by a later approval |
 | `serial.pb` | the next certificate serial |
 | `mac-nonces/<nonce SHA-256>.pb` | a Mac nonce by its SHA-256 only: its serial, the request it was issued for (absent on a nonce stored before that field), when it was issued, the request that consumed it |

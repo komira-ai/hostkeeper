@@ -32,7 +32,7 @@ and a state it does not know, and ignores fields it does not know.
 |---|---|---|
 | `requests/<request id>.pb` | `Request` | the CSR, claims (the BMC MAC among them), image, post time, `renewal_of`, state, the approval (with its approver, time, reason and the SHA-256 of the Mac nonce it consumed), the issuance round and its reserved serial, whether a Mac nonce was presented, and when and under which TTL it expired (the state keeps the waiting state it expired in, so a release before expiry reads it as waiting) |
 | `issued/<request id>.pb` | `Issued` | the certificate of the request's current round, its serial, host id and end |
-| `hosts/<host id>.pb` | `Host` | the key hash (the request id it came from), machine id, role, services, the `duplicate` mark, the time of the first heartbeat accepted since the approval |
+| `hosts/<host id>.pb` | `Host` | the key hash (the request id it came from), machine id, role, services, the `duplicate` mark, the time of the first heartbeat accepted since the approval, and of the first since then that reported a managed service serving (`first_serving_unix`) |
 | `deny/<host id>.pb` | `Deny` | retiring, retired, or cleared by a named request |
 | `serial.pb` | `SerialCounter` | the next serial (the first is 2; 1 is the CA certificate's) |
 | `mac-nonces/<nonce SHA-256>.pb` | `MacNonce` | a Mac nonce by its SHA-256 only: the serial and the request it was issued for (no request on a file written before field 6), when, and the request whose approval consumed it |
