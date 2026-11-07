@@ -1588,6 +1588,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-hkctl"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "hostkeeper-coordinator",
+ "hostkeeper-hkctl",
+ "hostkeeper-oidc",
+ "hostkeeper-proto",
+ "hostkeeper-testkit",
+ "http-body-util",
+ "hyper",
+ "prost-reflect",
+ "protox",
+ "rcgen",
+ "regex",
+ "rustls",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "hostkeeper-hook"
 version = "0.1.0"
 dependencies = [
@@ -4993,6 +5017,7 @@ dependencies = [
  "hostkeeper-config",
  "hostkeeper-ctl",
  "hostkeeper-daemon",
+ "hostkeeper-hkctl",
  "hostkeeper-hook",
  "hostkeeper-launchd",
  "hostkeeper-link",

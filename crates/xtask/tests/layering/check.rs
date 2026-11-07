@@ -30,6 +30,7 @@ const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
 const CTL: &str = "hostkeeper-ctl";
+const HKCTL: &str = "hostkeeper-hkctl";
 const CI: &str = "hostkeeper-ci";
 const DAEMON: &str = "hostkeeper-daemon";
 const ENROLL: &str = "hostkeeper-enroll";
@@ -59,11 +60,12 @@ pub type Layer = (
 /// coordinator in process, behind a listener's TLS (`hostkeeper-tls`), and the daemon's run the
 /// example service hello's hook in process;
 /// hello's tests read its output with the hook contract and load its package with the
-/// manifest loader; the observer's tests run hooks through the step runner; the CLI
-/// crates' tests read the protobuf descriptors, and the web app's send each of its calls to a
-/// coordinator built from its flags, whose CI allow-list is `hostkeeper-oidc`'s testkit
-/// issuer's (the web app's crate generates its API client from the protos' command table and
-/// descriptors, a normal dependency); the privileged tests drive the
+/// manifest loader; `hkctl`'s tests forward the script's calls to a coordinator built from its
+/// flags, whose CI allow-list is `hostkeeper-oidc`'s testkit issuer's; the observer's tests run
+/// hooks through the step runner; the CLI crates' tests read the protobuf descriptors, and the
+/// web app's send each of its calls to a coordinator built from its flags, whose CI allow-list
+/// is `hostkeeper-oidc`'s testkit issuer's (the web app's crate generates its API client from
+/// the protos' command table and descriptors, a normal dependency); the privileged tests drive the
 /// step runner's launcher and dead-man and the observer's adapters against the host, and on a
 /// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
 /// normal dependency), the launchd adapters and the package check, call its admin socket, and
@@ -81,7 +83,7 @@ pub type Layer = (
 /// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
 /// packet with its packet crate. The binary's tests read the protobuf descriptors, and run the macOS
 /// pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 30] = [
+pub const LAYERS: [Layer; 31] = [
     (BINARY, &[DAEMON], &[LAUNCHD, PROTO]),
     (CI, &[CTL], &[PROTO]),
     (CONFIG, &[], &[]),
@@ -102,6 +104,7 @@ pub const LAYERS: [Layer; 30] = [
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),
     (HELLO, &[], &[CONFIG, HOOK]),
+    (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (

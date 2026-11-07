@@ -21,7 +21,8 @@
 //! hostkeeper's own (`index.json`), `hello`, the example service of `examples/hello`
 //! (`hello-index.json`), and hello's failing build (`hello-fail-ready-index.json`). It also
 //! carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
-//! platforms.
+//! platforms, and `hkctl-<version>` ([`hkctl_name`]), the command line, one script for every
+//! platform.
 
 use std::fmt;
 use std::str::FromStr;
@@ -77,6 +78,11 @@ pub(crate) const MDM: &str = "hostkeeper-mdm";
 /// the destination of the Dockerfile's `COPY ui`, and the default UI directory of the
 /// coordinator's `serve` (`hostkeeper_coordinator::config::DEFAULT_UI_DIR`).
 pub(crate) const IMAGE_UI_DIR: &str = "/usr/share/hostkeeper-coordinator/ui";
+
+/// The command line's program name and the stem of its asset, `hkctl-<version>`: one bash
+/// script for every platform, which prints `hkctl X.Y.Z+<12 hex>` for `--version`
+/// (`release hkctl`).
+pub(crate) const HKCTL: &str = hostkeeper_hkctl::PROGRAM;
 
 /// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
 /// `--version` ([`stamp_of`]).
@@ -506,6 +512,11 @@ pub(crate) fn installer_name(version: &Version) -> String {
     )
 }
 
+/// The file name of the command line of `version`, `hkctl-<v>`.
+pub(crate) fn hkctl_name(version: &Version) -> String {
+    format!("{HKCTL}-{version}")
+}
+
 /// The file name of the bundle of the asset `name`.
 pub(crate) fn bundle_of(name: &str) -> String {
     format!("{name}{BUNDLE_SUFFIX}")
@@ -540,10 +551,17 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// the bundle of each binary tarball (the three programs'), Linux package, installer, hostkeeper package, hello package,
 /// hello's failing build and image; and once, [`INDEX`] (the release index of the hostkeeper
 /// packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`] (that of the
-/// failing build), [`NETBOOT`] (the boot sets of network install) and its bundle, and
-/// `SHA256SUMS`.
+/// failing build), [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>`
+/// (the command line, [`hkctl_name`]) and its bundle, and `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
-    let mut names = vec![SUMS.to_owned(), NETBOOT.to_owned(), bundle_of(NETBOOT)];
+    let hkctl = hkctl_name(version);
+    let mut names = vec![
+        SUMS.to_owned(),
+        NETBOOT.to_owned(),
+        bundle_of(NETBOOT),
+        bundle_of(&hkctl),
+        hkctl,
+    ];
     names.extend(Package::ALL.map(|p| p.index_name().to_owned()));
     for &platform in platforms {
         let p = platform.name();

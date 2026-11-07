@@ -9,7 +9,7 @@ use std::path::Path;
 
 use super::contract::{
     Commit, DIGEST_SUFFIX, Package, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer,
-    Version, attested_names, bundle_of, summed_names,
+    Version, attested_names, bundle_of, hkctl_name, summed_names,
 };
 use super::file_sha256;
 use super::index::ReleaseIndex;
@@ -43,6 +43,12 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
         }
         write(name, format!("{name} {marker}\n"));
     }
+    // The command line passes `release check` as the script `release hkctl` writes, stamped with
+    // the 12 digits every commit of [`nth_commit`] below 2^32 starts with.
+    write(
+        &hkctl_name(version),
+        format!("#!/usr/bin/env bash\n# {marker}\n_hk_version='hkctl {version}+000000000000'\n"),
+    );
     for package in Package::ALL {
         let (service, text) = (package.service().name(), package.version_text(version));
         let index = ReleaseIndex::of_dir(dir, service, &text, &Platform::RELEASED)
