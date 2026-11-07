@@ -42,7 +42,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 68);
+    assert_eq!(names.len(), 70);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -218,13 +218,16 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 24);
-    assert_eq!(summed.len(), 43);
+    assert_eq!(attested.len(), 25);
+    assert_eq!(summed.len(), 44);
     for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX] {
         assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
     }
-    // The boot sets of network install are summed and attested, with a bundle of their own.
+    // The boot sets of network install are summed and attested, with a bundle of their own, and
+    // so is the command line, one script for every platform.
     assert!(summed.contains(&NETBOOT.to_owned()) & attested.contains(&NETBOOT.to_owned()));
+    assert_eq!(hkctl_name(&v), "hkctl-0.1.3");
+    assert!(summed.contains(&hkctl_name(&v)) & attested.contains(&hkctl_name(&v)));
     assert!(attested.iter().all(|a| summed.contains(a)));
     assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
     for package in Package::ALL {
@@ -292,6 +295,8 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "hello-0.2.1-macos-arm64.tar.zst.sigstore.json",
             "hello-fail-ready-index.json",
             "hello-index.json",
+            "hkctl-0.2.1",
+            "hkctl-0.2.1.sigstore.json",
             "hostkeeper-0.2.1-macos-arm64.cdx.json",
             "hostkeeper-0.2.1-macos-arm64.pkg",
             "hostkeeper-0.2.1-macos-arm64.pkg.sigstore.json",

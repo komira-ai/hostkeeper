@@ -1,0 +1,123 @@
+// hostkeeper.fixture.v1: the protos hostkeeper-hkctl's tests emit `hkctl` from. Not an API.
+//
+// Served by: nothing; the tests' fake curl answers for it.
+//
+// Authentication: none.
+//
+// Refusals: whatever reply a test gives the fake curl.
+//
+// Units: none.
+//
+// Extending: add what a test needs.
+syntax = "proto3";
+
+package hostkeeper.fixture.v1;
+
+import "hostkeeper/options.proto";
+
+// Widgets, for the tests.
+service Widgets {
+  // Make a widget from every kind of field.
+  rpc Make(Widget) returns (Empty);
+  // A method no real proto has: it appears in the script with no hand edit.
+  rpc BrandNewMethod(Empty) returns (Empty);
+  // Log in with secrets.
+  rpc Login(LoginRequest) returns (LoginResponse);
+  // Hold the call for 'wait_secs', as Releases.WaitConverged does.
+  rpc Wait(WaitRequest) returns (Empty);
+}
+
+// Gadgets, a second service; its comment has a quote: it's "quoted".
+service Gadgets {
+  // Every gadget.
+  rpc List(Empty) returns (Empty);
+  // Set the speed.
+  rpc Tune(TuneRequest) returns (Empty);
+}
+
+message Empty {}
+
+enum Colour {
+  COLOUR_UNSPECIFIED = 0;
+  COLOUR_RED = 1;
+  COLOUR_DARK_BLUE = 2;
+}
+
+// An enum whose zero value is spelled without the enum's prefix.
+enum Speed {
+  UNSPECIFIED = 0;
+  SLOW = 1;
+  FAST = 2;
+}
+
+// The request of Tune.
+message TuneRequest {
+  // How fast.
+  Speed speed = 1;
+  // A field named like hkctl's own --version, which after the method is this field.
+  string version = 2;
+}
+
+message Inner {
+  string note = 1;
+  uint64 count = 2;
+}
+
+// One field of every kind.
+message Widget {
+  // The widget's name.
+  string name = 1;
+  int32 i32 = 2;
+  int64 i64 = 3;
+  uint32 u32 = 4;
+  uint64 u64 = 5;
+  sint32 s32 = 6;
+  sint64 s64 = 7;
+  fixed32 f32 = 8;
+  fixed64 f64 = 9;
+  sfixed32 sf32 = 10;
+  sfixed64 sf64 = 11;
+  float ratio = 12;
+  double weight = 13;
+  bool flag = 14;
+  optional bool maybe = 15;
+  Colour colour = 16;
+  repeated Colour colours = 17;
+  repeated string tags = 18;
+  map<string, string> labels = 19;
+  Inner inner = 20;
+  oneof shape {
+    string round = 21;
+    Inner square = 22;
+  }
+  bytes blob = 23;
+  map<string, uint64> counts = 24;
+  repeated int64 longs = 25;
+  // A name whose JSON name differs from it (`nodeId`).
+  string node_id = 26;
+  optional int32 maybe_count = 27;
+  repeated double weights = 28;
+  repeated bool flags = 29;
+}
+
+message LoginRequest {
+  string user = 1;
+  // The password.
+  string password = 2 [(hostkeeper.secret) = true];
+  bytes key = 3 [(hostkeeper.secret) = true];
+  // Secrets in a list: only through the request file.
+  repeated string recovery_codes = 4 [(hostkeeper.secret) = true];
+}
+
+message LoginResponse {
+  string user = 1;
+  // A secret in a response: a script prints the answer as the gateway sends it, so no method
+  // hkctl emits for the real protos may have one (tests/secrets.rs).
+  string session = 2 [(hostkeeper.secret) = true];
+}
+
+message WaitRequest {
+  string service = 1;
+  // How long to hold the call.
+  uint32 wait_secs = 2;
+}

@@ -1,0 +1,61 @@
+[package]
+name = "hostkeeper-hkctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "`hkctl`: the bash command line of hostkeeper's coordinator, generated from the command table of hostkeeper-proto, its reference docs/cli.md, and the scan that holds the script to bash 3.2."
+
+# `cargo xtask release hkctl` writes the release asset `hkctl-<version>` with this crate's
+# `script`; nothing else ships it, and no host runs it.
+[dependencies]
+# The command table the script and docs/cli.md are generated from.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The scan of a script for constructs newer than bash 3.2.
+regex.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+# The fixture protos of the tests compile to a fixture command table with the generator
+# hostkeeper-proto's build script runs.
+prost-reflect.workspace = true
+protox.workspace = true
+
+# The program the tests of the emitted script put first on PATH as `curl` and as `find`
+# (tests/hkctl_integration.rs): it records its arguments, its environment and what it reads from
+# each `@` argument, answers a canned reply or forwards the request over plain HTTP to a loopback
+# listener of the test, and as `find` runs the host's find. A program of the tests, not shipped:
+# it is built only with `test-support`, which only the tests of this crate turn on.
+[[bin]]
+name = "hostkeeper-hkctl-fake-curl"
+path = "tests/bin/fake_curl.rs"
+required-features = ["test-support"]
+
+[features]
+# Builds the fake curl of the tests. Off for everything else.
+test-support = []
+
+[dev-dependencies]
+bytes.workspace = true
+clap.workspace = true
+# The real coordinator, built from serve's flags, whose router answers the gateway calls the
+# integration tests forward to it.
+hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
+# Its own tests turn on `test-support`.
+hostkeeper-hkctl = { path = ".", features = ["test-support"] }
+hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+http-body-util.workspace = true
+hyper.workspace = true
+# Reads the recorded request bodies back as the fixture's and the real protos' messages.
+prost-reflect = { workspace = true, features = ["serde"] }
+rcgen.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[lints]
+workspace = true

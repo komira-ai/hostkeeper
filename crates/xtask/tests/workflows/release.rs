@@ -19,8 +19,9 @@
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
-//!   [`PACKAGES`] for every platform of [`PLATFORMS`], each binary tarball of [`TARBALLS`] and
-//!   each file of [`ATTESTED_FILES`], and copies the bundle of each beside it
+//!   [`PACKAGES`] for every platform of [`PLATFORMS`], each binary tarball of [`TARBALLS`], each
+//!   file of [`ATTESTED_FILES`] and each versioned file of [`VERSIONED_FILES`], and copies the
+//!   bundle of each beside it
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
 //!   host trusts only attested packages, so a release asset list that names a bundle needs the
 //!   steps that make it.
@@ -131,6 +132,11 @@ pub const TARBALLS: [(&str, &[&str]); 3] = [
 /// design's `hostkeeper-pxe fetch` (docs/design/network-install.md, item N8) is to trust its
 /// digests by.
 pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.json")];
+
+/// The release's other files that the attest job attests alone and whose name carries the
+/// version, each as the stem before `-<version>`: `hkctl-<version>`, the command line of the
+/// coordinator, one script for every platform.
+pub const VERSIONED_FILES: [&str; 1] = ["hkctl"];
 
 /// Whether the attest job may run `run`: one of [`ATTEST_RUNS`], or a [`BUNDLE_COPY`].
 fn attest_may_run(run: &str) -> bool {
@@ -529,7 +535,8 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
 }
 
 /// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], per binary tarball of
-/// [`TARBALLS`] and per file of [`ATTESTED_FILES`], that the attest job does not attest (a
+/// [`TARBALLS`], per file of [`ATTESTED_FILES`] and per file of [`VERSIONED_FILES`], that the
+/// attest job does not attest (a
 /// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
 /// `<file>.sigstore.json` from the outputs of that same step; and one per binary tarball whose
 /// SBOM it does not attest ([`sbom_problem`]).
@@ -558,6 +565,12 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
     }
     for (subject, file) in ATTESTED_FILES {
         problems.extend(attest_problem(attest, subject, file, file));
+    }
+    for stem in VERSIONED_FILES {
+        let subject = format!("dist/{stem}-${{{{ needs.version.outputs.version }}}}");
+        let file = format!("{stem}-<version>");
+        let copied = format!("{stem}-${{V}}");
+        problems.extend(attest_problem(attest, &subject, &file, &copied));
     }
     problems
 }
