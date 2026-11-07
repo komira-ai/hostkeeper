@@ -22,6 +22,10 @@ fn a_good_expanded_pkg_passes_the_check() {
     );
 }
 
+/// What the check says of a part that is not the file or the directory it must be.
+const ONLY: &str = "an expanded pkg of hostkeeper holds only the files Bom, PackageInfo and \
+                    Payload and the directory Scripts";
+
 #[test]
 fn a_pkg_with_another_file_or_without_a_part_is_refused() {
     // Catches: a pkg with a stray file, or a missing bill of materials, payload, info or scripts
@@ -29,118 +33,154 @@ fn a_pkg_with_another_file_or_without_a_part_is_refused() {
     let expanded = Expanded::good("macos-pkg-check-parts");
     expanded.write("Distribution", b"<installer-gui-script/>");
     std::fs::remove_file(expanded.pkg().join("Bom")).expect("remove");
-    std::fs::remove_file(expanded.pkg().join("Scripts")).expect("remove");
-    let only = "an expanded pkg of hostkeeper holds only the files Bom, PackageInfo, Payload and \
-                Scripts";
+    std::fs::remove_dir_all(expanded.pkg().join("Scripts")).expect("remove");
     assert_eq!(
         expanded.problems(),
         [
-            format!("Distribution: {only}"),
+            format!("Distribution: {ONLY}"),
             "missing Bom".to_owned(),
             "missing Scripts".to_owned(),
         ]
     );
-    // A part that is a directory is not that part, and is not read: `pkgutil --expand` leaves
-    // `Scripts` an archive, as it leaves `Payload` (`--expand-full` would make directories).
+    // A payload that is a directory is not the payload, and is not read: `pkgutil --expand`
+    // leaves `Payload` an archive (`--expand-full` would make it a directory).
     let expanded = Expanded::good("macos-pkg-check-payload-dir");
-    for part in ["Payload", "Scripts"] {
-        std::fs::remove_file(expanded.pkg().join(part)).expect("remove");
-        std::fs::create_dir(expanded.pkg().join(part)).expect("a directory");
-    }
-    std::fs::write(
-        expanded.pkg().join("Scripts/postinstall"),
-        postinstall_text(),
-    )
-    .expect("write");
+    std::fs::remove_file(expanded.pkg().join("Payload")).expect("remove");
+    std::fs::create_dir(expanded.pkg().join("Payload")).expect("a directory");
     std::fs::remove_file(expanded.pkg().join("PackageInfo")).expect("remove");
     assert_eq!(
         expanded.problems(),
         [
-            format!("Payload: {only}"),
-            format!("Scripts: {only}"),
+            format!("Payload: {ONLY}"),
             "missing PackageInfo".to_owned(),
             "missing Payload".to_owned(),
-            "missing Scripts".to_owned(),
         ]
     );
 }
 
 #[test]
-fn a_scripts_archive_that_is_not_the_one_postinstall_is_refused() {
+fn scripts_that_is_a_file_or_a_link_and_not_the_directory_pkgutil_makes_is_refused() {
+    // Catches: a check that reads `Scripts` as the gzip cpio archive it is inside the pkg, which
+    // refuses every pkg `pkgutil --expand` expands (it makes `Scripts` a directory), or that
+    // follows a link named `Scripts` to a directory elsewhere.
+    let expanded = Expanded::good("macos-pkg-check-scripts-a-file");
+    let scripts = expanded.pkg().join("Scripts");
+    std::fs::remove_dir_all(&scripts).expect("remove");
+    let archive = [
+        odc_entry(".", 0o040_755, 501, 20, b""),
+        odc_entry(
+            "./postinstall",
+            0o100_755,
+            501,
+            20,
+            postinstall_text().as_bytes(),
+        ),
+    ];
+    expanded.write("Scripts", &gzip(&odc(&archive)));
+    let refused = [format!("Scripts: {ONLY}"), "missing Scripts".to_owned()];
+    assert_eq!(expanded.problems(), refused);
+    // A link to a good scripts directory is not the directory.
+    let elsewhere = Expanded::good("macos-pkg-check-scripts-elsewhere");
+    std::fs::remove_file(&scripts).expect("remove");
+    std::os::unix::fs::symlink(elsewhere.pkg().join("Scripts"), &scripts).expect("a link");
+    assert_eq!(expanded.problems(), refused);
+}
+
+/// How a case lays out the `Scripts` directory of a good expanded pkg (the pkg, its `Scripts`).
+type Lay<'a> = Box<dyn Fn(&Expanded, &Path) + 'a>;
+
+#[test]
+fn a_scripts_directory_that_is_not_the_one_postinstall_is_refused() {
     // Catches: a pkg that runs another script at install, runs a postinstall with other words
     // than the seed (another state directory, another binary, a command that is not the seed),
-    // holds the postinstall twice or not at all, or holds one the installer cannot run.
+    // holds no postinstall, holds one the installer cannot run or that others may write or that
+    // is setuid, or holds a link, a directory or anything else in place of it or beside it.
     let text = postinstall_text();
-    let script = |mode: u32, data: &[u8]| odc_entry("./postinstall", mode, 501, 20, data);
-    let top = odc_entry(".", 0o040_755, 501, 20, b"");
     let other = text.replace(
         "--state-dir '/var/lib/updater/state'",
         "--state-dir '/tmp/state'",
     );
-    let not_ours = "Scripts: ./postinstall is not the postinstall release macos-pkg writes";
-    let cases: [(Vec<Vec<u8>>, Vec<String>); 7] = [
+    let not_ours = "Scripts: postinstall is not the postinstall release macos-pkg writes";
+    let mode = |m: &str| format!("Scripts: postinstall has mode {m}, not 755");
+    let cases: Vec<(Lay<'_>, Vec<String>)> = vec![
         (
-            vec![top.clone(), script(0o100_755, other.as_bytes())],
+            Box::new(|e, _| e.write_script(POSTINSTALL, other.as_bytes(), 0o755)),
             vec![not_ours.to_owned()],
         ),
         (
-            vec![top.clone(), script(0o100_644, text.as_bytes())],
-            vec!["Scripts: ./postinstall has mode 644, which the installer cannot run".to_owned()],
+            Box::new(|e, _| e.write_script(POSTINSTALL, b"", 0o755)),
+            vec![not_ours.to_owned()],
         ),
         (
-            vec![top.clone(), script(0o040_755, b"")],
+            Box::new(|e, _| e.write_script(POSTINSTALL, text.as_bytes(), 0o644)),
+            vec![mode("644")],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, text.as_bytes(), 0o700)),
+            vec![mode("700")],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, text.as_bytes(), 0o775)),
+            vec![mode("775")],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, text.as_bytes(), 0o4755)),
+            vec![mode("4755")],
+        ),
+        (
+            Box::new(|e, _| e.write_script(POSTINSTALL, other.as_bytes(), 0o644)),
+            vec![mode("644"), not_ours.to_owned()],
+        ),
+        (
+            Box::new(|e, _| e.write_script("preinstall", b"#!/bin/sh\n", 0o755)),
+            vec!["Scripts holds \"preinstall\": the pkg's one script is postinstall".to_owned()],
+        ),
+        (
+            Box::new(|e, _| e.write_script("postinstall.orig", text.as_bytes(), 0o755)),
             vec![
-                "Scripts: ./postinstall is of type 40000, not a regular file".to_owned(),
-                not_ours.to_owned(),
+                "Scripts holds \"postinstall.orig\": the pkg's one script is postinstall"
+                    .to_owned(),
             ],
         ),
         (
-            vec![
-                top.clone(),
-                script(0o100_755, text.as_bytes()),
-                odc_entry("./preinstall", 0o100_755, 501, 20, b"#!/bin/sh\n"),
-            ],
-            vec![
-                "Scripts holds \"./preinstall\": the pkg's one script is ./postinstall".to_owned(),
-            ],
+            Box::new(|_, s| std::fs::create_dir(s.join("lib")).expect("a subdirectory")),
+            vec!["Scripts holds \"lib\": the pkg's one script is postinstall".to_owned()],
         ),
         (
-            vec![top.clone()],
-            vec!["Scripts holds ./postinstall 0 times, not once".to_owned()],
+            Box::new(|_, s| {
+                std::os::unix::fs::symlink(POSTINSTALL, s.join("preinstall")).expect("a link");
+            }),
+            vec!["Scripts holds \"preinstall\": the pkg's one script is postinstall".to_owned()],
         ),
         (
-            vec![
-                script(0o100_755, text.as_bytes()),
-                script(0o100_755, text.as_bytes()),
-            ],
-            vec!["Scripts holds ./postinstall 2 times, not once".to_owned()],
+            Box::new(|_, s| std::fs::remove_file(s.join(POSTINSTALL)).expect("remove")),
+            vec!["Scripts holds no postinstall".to_owned()],
         ),
-        // The top directory is not needed: an archive of the postinstall alone is the script.
-        (vec![script(0o100_700, text.as_bytes())], vec![]),
+        // A link to a good postinstall is not followed: the installer would run what it names.
+        (
+            Box::new(|e, s| {
+                std::fs::remove_file(s.join(POSTINSTALL)).expect("remove");
+                let good = e.dir.join("good-postinstall");
+                std::fs::write(&good, &text).expect("write");
+                std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o755))
+                    .expect("its mode");
+                std::os::unix::fs::symlink(&good, s.join(POSTINSTALL)).expect("a link");
+            }),
+            vec!["Scripts: postinstall is of type 120000, not a regular file".to_owned()],
+        ),
+        (
+            Box::new(|_, s| {
+                std::fs::remove_file(s.join(POSTINSTALL)).expect("remove");
+                std::fs::create_dir(s.join(POSTINSTALL)).expect("a directory");
+            }),
+            vec!["Scripts: postinstall is of type 40000, not a regular file".to_owned()],
+        ),
     ];
-    for (n, (entries, want)) in cases.into_iter().enumerate() {
+    for (n, (lay, want)) in cases.into_iter().enumerate() {
         let expanded = Expanded::good(&format!("macos-pkg-check-scripts-{n}"));
-        expanded.write("Scripts", &gzip(&odc(&entries)));
-        let got = match expanded.check() {
-            Ok(_) => Vec::new(),
-            Err(Error::Refused(lines)) => lines,
-            Err(other) => panic!("case {n}: {other:?}"),
-        };
-        assert_eq!(got, want, "case {n}");
+        lay(&expanded, &expanded.pkg().join("Scripts"));
+        assert_eq!(expanded.problems(), want, "case {n}");
     }
-    let expanded = Expanded::good("macos-pkg-check-scripts-not-gzip");
-    expanded.write("Scripts", b"#!/bin/sh\n");
-    let problems = expanded.problems();
-    assert_eq!(problems.len(), 1);
-    assert!(
-        problems[0].starts_with("Scripts is not gzip data: "),
-        "{problems:?}"
-    );
-    expanded.write("Scripts", &gzip(b"not cpio"));
-    assert_eq!(
-        expanded.problems(),
-        ["Scripts: the archive ends at byte 8 without its trailer"]
-    );
 }
 
 #[test]

@@ -107,21 +107,6 @@ pub(super) fn dir_entry(name: &str) -> Vec<u8> {
     odc_entry(name, 0o040_755, 0, 0, b"")
 }
 
-/// The scripts archive `pkgbuild` writes: its top directory and the postinstall, owned by the
-/// user who built the pkg.
-pub(super) fn good_scripts() -> Vec<Vec<u8>> {
-    vec![
-        odc_entry(".", 0o040_755, 501, 20, b""),
-        odc_entry(
-            "./postinstall",
-            0o100_755,
-            501,
-            20,
-            postinstall_text().as_bytes(),
-        ),
-    ]
-}
-
 /// The payload `pkgbuild` writes for the binary `binary`: every entry, in its order.
 pub(super) fn good_entries(binary: &[u8]) -> Vec<Vec<u8>> {
     let plist = plist_text().expect("the plist");
@@ -199,7 +184,8 @@ impl Expanded {
         expanded.write("Bom", b"BOMStore");
         expanded.write("PackageInfo", package_info().as_bytes());
         expanded.write("Payload", &gzip(&odc(entries)));
-        expanded.write("Scripts", &gzip(&odc(&good_scripts())));
+        std::fs::create_dir(expanded.pkg().join("Scripts")).expect("the scripts directory");
+        expanded.write_script(POSTINSTALL, postinstall_text().as_bytes(), SCRIPT_MODE);
         expanded
     }
 
@@ -217,6 +203,13 @@ impl Expanded {
 
     pub(super) fn write(&self, file: &str, bytes: &[u8]) {
         std::fs::write(self.pkg().join(file), bytes).expect("write a file of the pkg");
+    }
+
+    /// Writes `bytes` as the script `name` of the `Scripts` directory, with the mode `mode`.
+    pub(super) fn write_script(&self, name: &str, bytes: &[u8], mode: u32) {
+        let at = self.pkg().join("Scripts").join(name);
+        std::fs::write(&at, bytes).expect("write a script");
+        std::fs::set_permissions(&at, std::fs::Permissions::from_mode(mode)).expect("its mode");
     }
 
     pub(super) fn check(&self) -> Result<Vec<String>, Error> {
@@ -517,8 +510,8 @@ fn what_build_lays_out_is_what_the_check_accepts() {
     let dir = scratch("macos-pkg-round-trip");
     let r = request(&dir);
     build(&FakePkgbuild::default(), &r).expect("build");
-    // The archives pkgbuild makes of the payload's tree (owned by root) and of the scripts
-    // directory (owned by the user who built it): each entry with its mode on disk.
+    // The archive pkgbuild makes of the payload's tree, owned by root: each entry with its mode
+    // on disk.
     let archive = |dir: &Path, uid: u32| {
         let mut entries = vec![odc_entry(".", 0o040_000 | mode_of(dir), uid, uid, b"")];
         for path in tree_of(dir) {
@@ -541,10 +534,14 @@ fn what_build_lays_out_is_what_the_check_accepts() {
     };
     let entries = archive(&r.stage.join("root"), 0);
     let expanded = Expanded::new("macos-pkg-round-trip-expanded", &entries);
-    expanded.write(
-        "Scripts",
-        &gzip(&odc(&archive(&r.stage.join("scripts"), 501))),
-    );
+    // `pkgutil --expand` expands the scripts archive into `Scripts`, each script with its mode.
+    let scripts = expanded.pkg().join("Scripts");
+    std::fs::remove_dir_all(&scripts).expect("remove");
+    std::fs::create_dir(&scripts).expect("the scripts directory");
+    for path in tree_of(&r.stage.join("scripts")) {
+        let from = r.stage.join("scripts").join(&path);
+        std::fs::copy(&from, scripts.join(&path)).expect("copy a script");
+    }
     assert!(expanded.check().is_ok(), "{:?}", expanded.check());
 }
 
