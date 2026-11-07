@@ -9,7 +9,8 @@
 //! tests drive it with an in-memory transport.
 //!
 //! [`UreqTransport`] is the transport of a host: a blocking client with rustls, HTTPS only, that
-//! follows no redirect, uses no proxy, keeps no cookies, sends no credentials and asks for no
+//! follows no redirect (or, made with [`UreqTransport::following_redirects`], a bounded number of
+//! `https://` redirects), uses no proxy, keeps no cookies, sends no credentials and asks for no
 //! compression. Its trusted roots are given to it: the channel's TLS is the web's (design section
 //! 5.1), and the bytes are trusted only once their digest and attestation are checked.
 
@@ -132,8 +133,22 @@ pub struct UreqTransport {
 
 impl UreqTransport {
     /// A client that trusts exactly `roots`, each a DER certificate (a root that cannot be
-    /// parsed is skipped). The daemon gives it the host's roots.
+    /// parsed is skipped), and follows no redirect. The daemon gives it the host's roots.
     pub fn new(roots: &[Vec<u8>]) -> UreqTransport {
+        UreqTransport::with_redirects(roots, 0)
+    }
+
+    /// [`UreqTransport::new`], but following up to `redirects` redirects, each to an `https://`
+    /// URL only (a redirect to another scheme is no connection). The response after the last
+    /// redirect it follows is returned as it came, a further redirect included.
+    /// `hostkeeper-pxe fetch` downloads release assets with it: a GitHub release download
+    /// answers with a redirect to its storage host, and the bytes are trusted only once their
+    /// size, SHA-256 or attestation is checked.
+    pub fn following_redirects(roots: &[Vec<u8>], redirects: u32) -> UreqTransport {
+        UreqTransport::with_redirects(roots, redirects)
+    }
+
+    fn with_redirects(roots: &[Vec<u8>], redirects: u32) -> UreqTransport {
         let roots: Vec<Certificate<'static>> = roots
             .iter()
             .map(|der| Certificate::from_der(der).to_owned())
@@ -145,7 +160,7 @@ impl UreqTransport {
         let config = ureq::Agent::config_builder()
             .https_only(true)
             .http_status_as_error(false)
-            .max_redirects(0)
+            .max_redirects(redirects)
             .max_redirects_will_error(false)
             .proxy(None)
             .tls_config(tls)

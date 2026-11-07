@@ -87,4 +87,5 @@ not `/tmp`. For each platform:
 
 `cargo test -p xtask` then renders the changed pins and refuses one of the wrong form. A pin that
 is well formed but wrong is refused later, never served: `hostkeeper-pxe fetch` (item N8 of the
-design) checks the size and SHA-256 of every file it takes against `netboot.json`.
+design, `crates/hostkeeper-pxe`) checks the size and SHA-256 of every file it takes against
+`netboot.json`.

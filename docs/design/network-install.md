@@ -4,8 +4,8 @@ Status: design, for review. This document makes network install of new Linux mac
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
 this document and hostkeeper-design.md disagree on network install, this document wins. What is built is marked
-**Built** where it is described (so far items N2, N3, N4, N5, N6 and N7 of section 12); every other statement about new
-code is **Designed**, and section 12 lists the build items.
+**Built** where it is described (so far items N2, N3, N4, N5, N6, N7 and N8 of section 12); every other statement about
+new code is **Designed**, and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
 a machine takes two manual steps; a router mode, in which the farm's router names the boot server, stands beside
@@ -392,10 +392,24 @@ The image carries only public facts: the coordinator's LAN address, `ca_sha256`,
    (`netboot.json.sigstore.json`, `.github/workflows/artifacts.yml`, **Built**).
    - `hostkeeper-pxe fetch` downloads the boot set and the hostkeeper deb of each platform into a new directory: both
      platforms by default, or those named by `--platform` (repeatable), so a farm of one architecture does not keep an
-     ISO it never serves. It then verifies
+     ISO it never serves. It verifies
      `netboot.json`'s attestation and the deb's attestation against the operator's `trusted_signers`, with the same
      verifier the daemon uses for packages (hostkeeper-design.md section 5.5). It checks every file's size and
-     SHA-256 against `netboot.json` in one pass while writing it, and writes a seal.
+     SHA-256 against `netboot.json` in one pass while writing it, and writes a seal. **Built**:
+     `crates/hostkeeper-pxe` (item N8). Its flags: `--release`, the `https://` directory of the release's assets
+     (a GitHub release download, whose redirects to `https://` it follows); `--dir`, the new directory;
+     `--daemon-config`, loaded with the daemon's loader, whose `[trusted_signers]` is the signer and whose
+     `bounds.attestation_timeout_secs` and `bounds.max_package_bytes` bound each check and each deb; `--platform`;
+     and `--ca-bundle`, `--gh` and `--trusted-root`, by default where the hostkeeper deb puts them. In order: it
+     downloads `netboot.json` and its bundle and checks the attestation before it reads a pin; downloads and checks
+     each platform's deb (`hostkeeper_<version>_<arch>.deb` of the version `netboot.json` names), so a bad release
+     is refused before an ISO is downloaded; downloads each ISO, stopped one byte past its pinned size; and only
+     once the ISO matches its pin takes the kernel and initrd out of it, and the shim and GRUB out of the debs of
+     its pool, by their Rock Ridge paths (`data.tar.xz` for `shim-signed`, `data.tar.zst` for `grub2-signed`, as
+     the 24.04.5 ISOs carry them). Each file is written under its served name, the deb as
+     `deb/hostkeeper_<arch>.deb`, and the seal, `seal.json`, last: every file with its size and SHA-256, and the
+     commit and ref each attestation confirmed (`crates/hostkeeper-pxe/src/seal.rs`). On any refusal the directory
+     is removed.
    - `hostkeeper-pxe serve` checks the seal at start and refuses to start on any difference. A tampered asset, a
      stale download or a mixed set is therefore never served.
 2. **The machine fetches the files over the farm LAN**, by TFTP and plain HTTP. With Secure Boot on, the firmware
@@ -666,10 +680,11 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
   menu. The menu for a MAC is the install menu exactly when the MAC is in the answer set and the architecture in the
   path agrees with the record's platform, and the local-disk menu for: a MAC not in the set, a MAC that is not
   well-formed, an architecture in the path that disagrees, and, in router mode, a record with no platform.
-- Boot-set verification (N8): `fetch` refuses each of these, naming it: a size mismatch, a digest mismatch, a missing
-  file, a `netboot.json` attested by another organisation, workflow or ref, and a deb whose attestation does not
-  verify. It fetches both platforms by default and only those `--platform` names when given. The verifier is the
-  daemon's, given a fake attestation port, as the daemon's own tests do.
+- Boot-set verification (N8, **Built**: `crates/hostkeeper-pxe/src/fetch_tests.rs` and the reader tests beside it):
+  `fetch` refuses each of these, naming it: a size mismatch, a digest mismatch, a missing file, a `netboot.json`
+  attested by another organisation, workflow or ref, and a deb whose attestation does not verify. It fetches both
+  platforms by default and only those `--platform` names when given. The verifier is the daemon's, given a fake
+  attestation port, as the daemon's own tests do.
 - Serving (N9). Every listen address and port is a flag, so the tests bind ephemeral loopback ports with real UDP and
   TCP sockets, and talk to a fake coordinator (the fake operator service pattern of `crates/hostkeeper-ctl/tests`).
   - The answer set: a record with a host in any state, retired included, or with a pending request that matches it,

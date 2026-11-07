@@ -11,6 +11,9 @@
 //!   the archive's digest, within `attestation_timeout_secs`. It returns a
 //!   [`prove::VerifiedArchive`], the only way out of this crate to the archive's bytes.
 //!
+//! - [`bundle::read`] reads an attestation bundle for the commit, the ref and the digests the
+//!   verifier is asked to confirm; `hostkeeper-pxe fetch` uses it with the same verifier.
+//!
 //! The network and the verifier are ports ([`ports::Fetcher`], [`ports::Verifier`]); [`net`] and
 //! [`gh`] are their real adapters. Every deadline is a point on the injected
 //! [`hostkeeper_steps::Clock`]. A refusal is a [`PackageFailure`]: an outcome, a class and one of
@@ -20,6 +23,7 @@
 //! staging file, and the bundle is read only for the commit and the ref the verifier is asked to
 //! confirm. Nothing here opens, decompresses or unpacks the archive.
 
+pub mod bundle;
 pub mod fetch;
 pub mod gh;
 pub mod index;
@@ -27,7 +31,6 @@ pub mod net;
 pub mod ports;
 pub mod prove;
 
-mod bundle;
 mod der;
 mod failure;
 mod stage;

@@ -57,9 +57,9 @@ own, and a host trusts a package for its own attestation and manifest, never for
 index. (`SHA256SUMS` lists every index, so the provenance of a release covers their bytes too.)
 Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
 `netboot.json` is attested with a bundle of its own, unlike the indexes: it is the trust anchor of
-the boot files it pins, which come from Canonical, not from this release. The design's
-`hostkeeper-pxe fetch` (item N8 of docs/design/network-install.md, not built yet) verifies that
-attestation before it trusts a digest in it.
+the boot files it pins, which come from Canonical, not from this release. `hostkeeper-pxe fetch`
+(item N8 of docs/design/network-install.md, `crates/hostkeeper-pxe`) verifies that attestation
+before it reads a pin in it.
 
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
 distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It

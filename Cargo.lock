@@ -667,6 +667,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1751,6 +1766,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-pxe"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "clap",
+ "flate2",
+ "hex",
+ "hostkeeper-config",
+ "hostkeeper-package",
+ "hostkeeper-steps",
+ "hostkeeper-testkit",
+ "lzma-rs",
+ "rcgen",
+ "regex",
+ "rustls-pki-types",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "hostkeeper-pxe-packets"
 version = "0.1.0"
 dependencies = [
@@ -2301,6 +2341,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d3a9855747c17eaf4383823f135220716ab49bea5fbea7dd42cc9a92f8aa31"
 dependencies = [
  "logos-codegen",
+]
+
+[[package]]
+name = "lzma-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "297e814c836ae64db86b36cf2a557ba54368d03f6afcd7d947c266692f71115e"
+dependencies = [
+ "byteorder",
+ "crc",
 ]
 
 [[package]]
