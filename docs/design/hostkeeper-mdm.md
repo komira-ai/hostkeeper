@@ -88,7 +88,7 @@ the nonce before the request, and a gate call named `CheckSerial` where the code
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
 | Policy gate | None runs. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its nine decline tokens, the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). The only `DeviceState` is `NoDeviceState`, so no Mac is approved by a nonce today. |
-| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its seed postinstall (`docs/macos.md`). **Not built**: the daemon sends no nonce, and the pkg writes no config. |
+| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). **Not built**: the daemon sends no nonce. |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
 The kit's code is in three places:
@@ -132,7 +132,7 @@ Before this document the two disagreed, and nonce delivery depends on the answer
 - Design section 5.9 said "the pkg's postinstall writes the whole daemon config
   (`hostkeeper.toml`: coordinator, CA hash, release channel and trusted signers)", and section 4.6
   said the same. Neither said where a generic release pkg would get those values.
-- `docs/macos.md`, matching the code today, says: "The script starts nothing and writes no
+- `docs/macos.md`, matching the code at that time, said: "The script starts nothing and writes no
   config. The operator's bootstrap places `hostkeeper.toml` and loads the job."
 
 **Decision: the postinstall writes the config, from a managed config profile that the gate
@@ -149,7 +149,7 @@ installs before the pkg.** The pkg itself carries no config. The steps:
 3. The pkg's postinstall runs three commands of the installed binary, in order. Each command stops
    the install with its message if it fails.
    - `self-update-seed`, unchanged (**Built**).
-   - `mac-config`, a new verb. It reads the managed preferences of the domain, which macOS
+   - `mac-config`, a new verb (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`). It reads the managed preferences of the domain, which macOS
      writes to `/Library/Managed Preferences/dev.hostkeeper.config.plist` (a binary or XML
      plist). The path, the file's owner and its mode are to verify on a device (tasks M11 and
      M16), because Apple's payload schema does not state them. The verb accepts the file only when
@@ -166,6 +166,10 @@ installs before the pkg.** The pkg itself carries no config. The steps:
    - `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, only
      when a config file exists after `mac-config`, and after any earlier copy of the job is booted
      out.
+
+   The three commands are **Built** as the pkg's postinstall
+   (`crates/hostkeeper-launchd/src/postinstall.rs`), and `check-macos-pkg` holds the script to its
+   exact bytes (`crates/xtask/src/release/macos_pkg.rs`).
 
 Why the profile and not the pkg:
 
@@ -189,11 +193,12 @@ fails, and the re-send covers it.
 
 **The manual path.** A Mac without MDM, or one being debugged, is installed by hand. The operator
 places `hostkeeper.toml` first, then installs the pkg. `mac-config` finds the file, keeps it, and
-the job is loaded. This is the "operator's bootstrap" of today's `docs/macos.md`, with the job
+the job is loaded. This is the "operator's bootstrap" of the earlier `docs/macos.md`, with the job
 load moved into the pkg. The Mac is then approved by an operator, as a Linux host is.
 
-Design sections 4.6 and 5.9 were changed with this document. Task M10 changes `docs/macos.md`
-and the postinstall check of `check-macos-pkg`.
+Design sections 4.6 and 5.9 were changed with this document. Task M10 changed `docs/macos.md`
+and the postinstall check of `check-macos-pkg` (**Built**: `docs/macos.md`,
+`crates/xtask/src/release/macos_pkg.rs`).
 
 ## 5. The nonce
 
@@ -318,8 +323,10 @@ nonce field, and the gRPC adapter always sends `mac_nonce` empty. New:
 
 The postinstall's `mac-config` and the daemon's nonce read use the same plist reader, the
 `plist` crate. It is already declared in the root `Cargo.toml` (rule R5) and used by xtask's
-`check-macos-pkg` and by tests. M10 adds the production use, updates the root comment that calls
-it test-only, and checks that its features read both binary and XML plists.
+`check-macos-pkg` and by tests. M10 added the production use (**Built**:
+`crates/hostkeeper-daemon/src/mac_config.rs`), updated the root comment that called it
+test-only, and tests that it reads both binary and XML plists
+(`crates/hostkeeper-daemon/tests/mac_config.rs`).
 
 ### 5.4 Re-issue and clean-up
 
@@ -507,9 +514,10 @@ Pkg 4 is the negative case that shows the root payload is what makes pkg 3 pass.
 installs, the farm identity is the answer. If it does not, Developer ID Installer is required, and
 question Q4 asks for it.
 
-Whatever the test says, the release pkg becomes a distribution pkg (`productbuild` around today's
+Whatever the test says, the release pkg becomes a distribution pkg (`productbuild` around the
 component pkg). It costs one tool call in `cargo xtask release macos-pkg`, every source that
-names a format names that one, and `check-macos-pkg` reads both layers.
+names a format names that one, and `check-macos-pkg` reads both layers (**Built**:
+`crates/xtask/src/release/macos_pkg.rs`, `crates/xtask/src/release/macos_pkg/distribution.rs`).
 
 ### 7.3 Who signs, for each outcome
 

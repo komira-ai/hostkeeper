@@ -51,8 +51,9 @@ p256 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
 # safe wrapper over libproc: a macOS-only target dependency, never compiled on Linux. Its build
 # script runs bindgen on macOS.
 libproc = "0.14.11"
-# hostkeeper-steps' tests (dev only): read back the launchd plists `selfupdate` generates, with
-# a property-list decoder (MIT), without its serde support.
+# A property-list decoder (MIT), without its serde support: the daemon's `mac-config` reads the
+# managed preferences of the MDM with it, binary or XML; the tests of hostkeeper-steps and
+# hostkeeper-launchd read back the launchd plists they generate.
 plist = { version = "1.10.3", default-features = false }
 # The protobuf runtime of the code hostkeeper-proto generates, and the descriptor types its tests read.
 prost = "0.14.4"

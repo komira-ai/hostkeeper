@@ -1,19 +1,23 @@
 //! The pkg's one script, `postinstall` ([`postinstall_text`], the text
-//! `hostkeeper_launchd::postinstall::postinstall` writes for the pkg's paths): it gives the binary directory of
-//! hostkeeper's own update its first binary, so that the daemon's launchd job, which starts
-//! `current` of that directory (`hostkeeper_launchd::plist::DAEMON_PROGRAM`), starts the binary
-//! the pkg installed before any self-update. It is the counterpart of the Linux unit's
-//! `ExecStartPre=` (`packaging/linux/hostkeeper.service`): one line that runs the installed
-//! binary's `self-update-seed` (`hostkeeper_daemon::seed`) with the daemon's state directory, so
-//! that it changes nothing when `current` starts a binary already, as after a self-update.
+//! `hostkeeper_launchd::postinstall::Postinstall::pkg` writes for the pkg's paths). It runs three
+//! commands, in order, and one that fails ends the script and fails the install with its message:
+//!
+//! 1. the installed binary's `self-update-seed` (`hostkeeper_daemon::seed`) with the daemon's
+//!    state directory. It gives the binary directory of hostkeeper's own update its first binary,
+//!    so that the daemon's launchd job, which starts `current` of that directory
+//!    (`hostkeeper_launchd::plist::DAEMON_PROGRAM`), starts the binary the pkg installed before
+//!    any self-update; it changes nothing when `current` starts a binary already. It is the
+//!    counterpart of the Linux unit's `ExecStartPre=` (`packaging/linux/hostkeeper.service`).
+//! 2. the installed binary's `mac-config`, which writes `/etc/hostkeeper/hostkeeper.toml` from
+//!    the managed preferences the MDM installed, keeps a config that is there, and fails with
+//!    neither.
+//! 3. `launchctl bootstrap` of the daemon's plist, after a `launchctl bootout` of any copy of the
+//!    job loaded before.
 //!
 //! The installer runs it as root after the payload is in place, with the path of the pkg, the
 //! install location, the target volume and the root of the volume as its arguments, which it
-//! ignores: the pkg installs at `/` ([`super::INSTALL_LOCATION`]) and the seed writes under the
-//! daemon's fixed state directory. A seed that fails (it could not read the binary or write the
-//! directory, or a running daemon holds the state directory's lock while `current` starts
-//! nothing) fails the install with the seed's message, rather than leave a job that launchd cannot
-//! start.
+//! ignores: the pkg installs at `/` ([`super::INSTALL_LOCATION`]) and the commands name fixed
+//! paths.
 //!
 //! The read-back ([`scripts_problems`], [`package_info_scripts_problems`]) holds the built pkg to
 //! exactly that script: `PackageInfo` names `postinstall` and no `preinstall`, and the `Scripts`
@@ -23,8 +27,7 @@
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use hostkeeper_launchd::plist::{DAEMON_STATE_DIR, INSTALLED_BINARY};
-use hostkeeper_launchd::postinstall::postinstall;
+use hostkeeper_launchd::postinstall::Postinstall;
 
 use super::{Error, TYPE_BITS};
 
@@ -37,10 +40,10 @@ pub(super) const SCRIPT_MODE: u32 = 0o755;
 /// The element `pkgbuild` writes in `PackageInfo` for a `postinstall` in the scripts directory.
 const POSTINSTALL_ELEMENT: &str = "<postinstall file=\"./postinstall\"";
 
-/// The text of `postinstall`: the seed of the daemon's state directory from the installed
-/// binary.
+/// The text of `postinstall`: the seed, `mac-config` and the load of the daemon's job, for the
+/// pkg's paths.
 pub(super) fn postinstall_text() -> String {
-    postinstall(Path::new(INSTALLED_BINARY), Path::new(DAEMON_STATE_DIR))
+    Postinstall::pkg().script()
 }
 
 /// What is wrong with the scripts `PackageInfo` names in `text`, one line each: it names the
@@ -55,7 +58,7 @@ pub(super) fn package_info_scripts_problems(text: &str, problems: &mut Vec<Strin
     if !text.contains(POSTINSTALL_ELEMENT) {
         problems.push(format!(
             "PackageInfo names no postinstall script ({POSTINSTALL_ELEMENT}/>): nothing would \
-             give the daemon's job a binary to start"
+             seed the binary, write the config or load the daemon's job"
         ));
     }
 }
