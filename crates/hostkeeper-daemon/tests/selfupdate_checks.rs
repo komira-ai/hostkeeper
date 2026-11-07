@@ -464,6 +464,7 @@ fn waiting(name: &str) -> SelfRig {
     rec.progress.awaiting_restart = Some(AwaitingRestart {
         version: NEW.to_owned(),
         verdict_promotion_pending: false,
+        order_id: None,
     });
     put_record(&s.rig, HK, &rec);
     let new = s.rig.scratch.path().join("new-binary");

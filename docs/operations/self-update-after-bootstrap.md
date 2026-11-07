@@ -56,6 +56,23 @@ the host again. The entry goes once the service is listed; a restart of the daem
 it, and the coordinator may then order the install once more. An earlier daemon keeps such a
 verdict unsent until the service is listed, which a refused install never is.
 
+The daemon that runs a self-update exits before its verdict (`Deferred`, `awaiting_restart`)
+reaches a heartbeat, and the coordinator ends the order once the host runs its target, so it never
+orders it again. The next binary reports the verdict instead: the daemon that ran the order keeps
+the order's id in its step record, the settlement keeps it beside the settled verdict (the new
+binary's `Succeeded`, or after a fallback the `Failed` `self_update_fallback`, whether the
+fallback unit or job or the previous binary's start settled it), and every start of the daemon
+sends that verdict under that id and try, from its first heartbeat until the coordinator
+acknowledges it; the record then stops keeping it. The coordinator then holds it as
+the host's last update of hostkeeper, in place of an older verdict. A daemon keeps the id from the
+release that carries that change on, so a self-update an earlier daemon ran reports no verdict,
+and the coordinator keeps showing the host's older verdict until hostkeeper's next self-update.
+That holds no rollout: the bake and the convergence read the health the running binary reports.
+From the same release on, a Mac's daemon reports its own service as its launchd job
+`dev.hostkeeper.hostkeeper`, live, healthy and at the version it runs; an earlier one reports it
+`unmonitored` and unhealthy, which keeps the host from baking, so a Mac is brought to that release
+by its last self-update from an earlier daemon (or by hand) and bakes from then on.
+
 So a Linux daemon from before that release, installed by the deb, cannot update itself to any
 release. Bring it once, by hand, to that release or a later one the way the host's packaging
 upgrade does: stage that release's binary in the binary directory, switch `current` to it, and restart

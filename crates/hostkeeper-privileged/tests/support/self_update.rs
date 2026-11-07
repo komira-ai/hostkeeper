@@ -360,14 +360,20 @@ impl Host {
             .expect("stage the first binary");
         layout.switch(N).expect("switch to it");
 
-        let mut flags = vec!["--fixture-dir".to_owned(), plain(&paths.fixture)];
+        let main = service_unit(&self.main);
+        // The daemon's observer watches its own unit, the test's, as the service `hostkeeper`.
+        let mut flags = vec![
+            "--fixture-dir".to_owned(),
+            plain(&paths.fixture),
+            "--fixture-own-unit".to_owned(),
+            main.clone(),
+        ];
         if plan.next_fails {
             flags.extend(["--fixture-fail-start".to_owned(), NEXT.to_owned()]);
         }
         if plan.hold_exit {
             flags.extend(["--fixture-hold-exit".to_owned(), plain(&paths.held)]);
         }
-        let main = service_unit(&self.main);
         let fallback = service_unit(&self.fallback);
         let units = [
             (&fallback, fallback_unit(&layout, &main)),

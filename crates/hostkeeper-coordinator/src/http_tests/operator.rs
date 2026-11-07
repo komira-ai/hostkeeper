@@ -33,8 +33,8 @@ fn unwritable(rig: &mut Rig) {
             source: std::io::Error::other("disk full"),
         }))
     });
-    rig.coordinator = Rig::start(&rig.dir, &rig.clock)
-        .with_ops(OpsStore::with_writer(OpsState::default(), writer));
+    rig.coordinator =
+        Rig::start(&rig.dir, &rig.clock).with_ops(OpsStore::refusing(OpsState::default(), writer));
 }
 
 /// Catches: the operator route taking CI's credential (or none): no bearer, CI's OIDC token,
@@ -502,8 +502,7 @@ fn full(rig: &mut Rig, hosts: usize, excluded: usize) {
         });
     }
     let writer = Box::new(|_: &OpsState| Ok(()));
-    rig.coordinator =
-        Rig::start(&rig.dir, &rig.clock).with_ops(OpsStore::with_writer(state, writer));
+    rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_ops(OpsStore::refusing(state, writer));
 }
 
 /// Catches: a file that grows without bound: with the file at its caps, a new labelled host

@@ -390,14 +390,7 @@ fn a_deferral_file_that_cannot_be_used_is_an_error_naming_it() {
     assert!(std::fs::symlink_metadata(&path).is_err());
 
     // A FIFO with no writer is refused at once, not waited on.
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        path.as_path(),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        0,
-    )
-    .expect("a FIFO");
+    hostkeeper_testkit::fifo(path.as_path(), 0o600).expect("a FIFO");
     assert_eq!(
         deferrals.load(&x).expect_err("a FIFO").to_string(),
         format!("{} is not a regular file", path.display())
@@ -486,14 +479,7 @@ fn an_unusable_deferral_file_is_logged_removed_and_ignored() {
     let rig = Rig::new("deferral-fifo");
     rig.install(vec![recorded("x", "1.0")]);
     let path = file_of(&rig);
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        path.as_path(),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        0,
-    )
-    .expect("a FIFO");
+    hostkeeper_testkit::fifo(path.as_path(), 0o600).expect("a FIFO");
     let mut heartbeater = rig.heartbeater();
     ask(&rig, 1, "2.0");
     assert_eq!(heartbeater.beat_once(), hostkeeper_link::BeatOutcome::Sent);
@@ -512,7 +498,12 @@ fn an_unusable_deferral_file_is_logged_removed_and_ignored() {
     assert_eq!(rig.world.dispatch.pending(), 1);
     heartbeater.beat_once();
     heartbeater.beat_once();
-    let not_written = "error: the deferral of x is not written: Is a directory (os error 21)";
+    // unlink(2) of a directory fails with EISDIR on Linux and with EPERM on macOS.
+    let not_written = if cfg!(target_os = "macos") {
+        "error: the deferral of x is not written: Operation not permitted (os error 1)"
+    } else {
+        "error: the deferral of x is not written: Is a directory (os error 21)"
+    };
     assert_eq!(
         rig.world.log.lines(),
         [
@@ -728,6 +719,42 @@ fn a_restart_at_or_after_the_retry_time_on_record_does_not_start_the_wait_again(
         assert_eq!(
             std::fs::read_to_string(file_of(&rig)).expect("the file"),
             on_record
+        );
+    }
+}
+
+/// Catches a deferral left standing beside the verdict that ended it, when the verdict comes
+/// back after a restart (the settled update of the daemon itself, whose binary before the
+/// restart wrote the deferral): a hooked verdict of the deferral's target, given back by the
+/// records, ends it as it does when the order runs in the loop; a forced one keeps it.
+#[test]
+fn a_verdict_given_back_after_a_restart_ends_the_deferral_of_its_target() {
+    for (forced_verdict, kept) in [(false, false), (true, true)] {
+        let rig = Rig::with_world(
+            &format!("deferral-recover-{forced_verdict}"),
+            deferring_once(),
+        );
+        drop(defer(&rig));
+        assert!(file_of(&rig).exists());
+        let order = update("o-1", 1, "x", "2.0");
+        let mut result = verdict(&order, Outcome::Succeeded);
+        result.forced = forced_verdict;
+        rig.install(vec![RecordedService {
+            last_result: Some(result),
+            ..recorded("x", "1.0")
+        }]);
+        let mut heartbeater = rig.heartbeater();
+        rig.world
+            .link
+            .answer(Ok(reply(None, &[Feature::DeferredV1])));
+        heartbeater.beat_once();
+        heartbeater.beat_once();
+        let beats = rig.world.link.beats();
+        let last = beats.last().expect("a beat");
+        assert_eq!(
+            last.services[0].deferred.is_some(),
+            kept,
+            "forced: {forced_verdict}"
         );
     }
 }

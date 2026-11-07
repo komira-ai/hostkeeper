@@ -435,7 +435,7 @@ fn spy(fails: bool) -> Spy {
             Ok(())
         }
     });
-    let store = Arc::new(OpsStore::with_writer(OpsState::default(), writer));
+    let store = Arc::new(OpsStore::refusing(OpsState::default(), writer));
     assert!(cell.set(Arc::clone(&store)).is_ok());
     Spy { store, seen }
 }

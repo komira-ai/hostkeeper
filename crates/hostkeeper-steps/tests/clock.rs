@@ -200,14 +200,27 @@ fn an_unknown_boot_is_the_empty_boot_id_on_disk() {
     assert!(serde_json::from_str::<Stamp>(r#"{"boot_id":3,"mono_secs":9}"#).is_err());
 }
 
-/// Catches a host clock that answers nothing or has no boot id (the record's boot comparison
-/// would then treat every boot alike): the host's clock is read and slept on without comparing
-/// real time, and its boot id, read from the kernel, is a UUID and the same on two reads.
+/// Catches a host clock that answers nothing or gives the boot id of its port wrongly: the
+/// system clock is read and slept on without comparing real time, and its boot id is the port's
+/// answer, the same on two reads.
 #[test]
 fn the_system_clock_answers_and_names_the_boot() {
-    let clock = SystemClock::new(Box::new(ProcBootId::host()));
+    let clock = Script::clock(&[Some(A), Some(A)]);
     let _ = clock.mono_secs();
     clock.sleep_secs(0);
+    let first = clock.boot_id().expect("the port's boot id");
+    assert_eq!(first.as_str(), A);
+    assert_eq!(clock.boot_id().expect("the port's boot id"), first);
+}
+
+/// Catches a Linux host with no boot id (the record's boot comparison would then treat every
+/// boot alike): the boot id of the host's `/proc`, read through the system clock, is a UUID and
+/// the same on two reads. Linux only: a Mac has no such file, its boot id is
+/// `kern.bootsessionuuid` (`hostkeeper-launchd`, tested there).
+#[cfg(target_os = "linux")]
+#[test]
+fn the_linux_host_names_its_boot_by_the_kernels_uuid() {
+    let clock = SystemClock::new(Box::new(ProcBootId::host()));
     let first = clock.boot_id().expect("the host's boot id");
     assert!(BootId::uuid("the host", first.as_str()).is_ok(), "{first}");
     assert_eq!(clock.boot_id().expect("the host's boot id"), first);

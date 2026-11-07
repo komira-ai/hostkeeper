@@ -357,8 +357,9 @@ fn a_deny_row_that_cannot_be_made_final_still_frees_the_slot() {
     let s1 = identity(&coordinator, &certificate);
     let log = Log::default();
     let guard = log.install();
-    // Retiring takes the store's lock (1), then writes the deny row (2): that write fails.
-    fs.fail_at(fs.count() + 2);
+    // Retiring takes the store's lock (1), reads the host (2) and its request (3), then writes
+    // the deny row with the request in one commit, the deny row first (4): that write fails.
+    fs.fail_at(fs.count() + 4);
     assert!(coordinator.final_report(s1, beat("2.0")));
     drop(guard);
     assert!(

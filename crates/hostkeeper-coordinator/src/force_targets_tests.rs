@@ -418,7 +418,7 @@ async fn a_ci_set_that_cannot_end_the_force_answers_an_ops_error() {
     registered(&rig, &[("3.0", 3)]).await;
     let failing = Arc::new(AtomicBool::new(false));
     let switch = Arc::clone(&failing);
-    let ops = OpsStore::with_writer(
+    let ops = OpsStore::refusing(
         OpsState::default(),
         Box::new(move |_| {
             if switch.load(Ordering::SeqCst) {

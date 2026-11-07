@@ -8,11 +8,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::manifest::HostkeeperVersion;
+use hostkeeper_daemon::observer::{OwnService, observer_with};
 use hostkeeper_daemon::selfupdate::{
     ProbeError, ProtocolProbe, REASON_AWAITING_RESTART, RELEASE_BINARY, binary_dir,
 };
-use hostkeeper_daemon::{Daemon, Reply};
+use hostkeeper_daemon::{Daemon, Ports, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
+use hostkeeper_observe::proc::digest_open_file;
+use hostkeeper_observe::{ActiveState, ExeStat};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{HookSel, Progress, SCHEMA, State};
 use hostkeeper_steps::{Layout, Record, RecordStore};
@@ -157,6 +160,42 @@ impl SelfRig {
     pub fn daemon_at(&self, version: &str) -> Daemon {
         Daemon::new(config(), self.rig.dirs(), self.rig.ports(), own(version))
             .with_probe(self.probe.clone())
+    }
+
+    /// A daemon of version `version` on the rig, its probe the rig's, observed as the host
+    /// observes it: the daemon's own observer ([`observer_with`]) over the rig's service manager
+    /// and processes, the daemon running as `unit` from the rig's binary directory.
+    pub fn daemon_running_as(&self, version: &str, unit: &str) -> Daemon {
+        let own_service = OwnService {
+            unit: unit.to_owned(),
+            binary_dir: binary_dir(&self.rig.state),
+        };
+        let observer = observer_with(
+            Box::new(self.rig.manager.clone()),
+            Box::new(self.rig.process.clone()),
+            &self.rig.packages,
+            own(version),
+            &own_service,
+        );
+        let ports = Ports {
+            observer: Arc::new(observer),
+            ..self.rig.ports()
+        };
+        Daemon::new(config(), self.rig.dirs(), ports, own(version)).with_probe(self.probe.clone())
+    }
+
+    /// The service manager runs `unit` as the process `pid`, whose executable is the binary
+    /// directory's file of `version`.
+    pub fn runs(&self, unit: &str, version: &str, pid: u32) {
+        let file = fs::File::open(self.layout().version_path(version)).expect("the binary");
+        let digest = digest_open_file(&file).expect("its digest");
+        let stat = ExeStat {
+            size: 1,
+            mtime_secs: i64::from(pid),
+            mtime_nanos: 0,
+        };
+        self.rig.process.set(pid, u64::from(pid), stat, digest);
+        self.rig.manager.set(unit, ActiveState::Active, Some(pid));
     }
 
     /// The daemon of [`OLD`].

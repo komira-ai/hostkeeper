@@ -17,8 +17,11 @@
 //!   directory, as the real store leaves them once a package is fetched, proven and unpacked (no
 //!   release channel and no attestation, which only a real release has);
 //! - the heartbeat loop's link to the coordinator is files in the fixture's directory: each
-//!   heartbeat is appended to `link/beats.jsonl` as one line of its JSON, and the reply carries
-//!   the order of `link/order.json` when that file is there (no coordinator and no enrollment).
+//!   heartbeat is appended to `link/beats.jsonl` as one line of its JSON (the JSON the
+//!   coordinator's heartbeat route reads), and the reply carries the order of `link/order.json`
+//!   when that file is there, and the features and acknowledged verdicts of `link/answer.json`
+//!   when that one is (no enrollment; a test may answer as the real coordinator in its process
+//!   answers each heartbeat).
 //!
 //! Its own version is the name of the file it runs from, its links resolved (launchd starts
 //! `current`, and macOS gives a program the path it was started by): the binary directory keeps
@@ -35,6 +38,9 @@
 //! - `--fixture-fail-start <version>`: a `daemon` of that version writes one line to standard
 //!   error ([`refused_line`]) and exits 1 before it does anything else: a new binary that cannot
 //!   start. A `daemon` of any other version runs.
+//! - `--fixture-own-unit <label>`: the launchd job (or unit) the daemon runs as, which its
+//!   observer watches as the service `hostkeeper` in place of the platform's own
+//!   (`dev.hostkeeper.hostkeeper`): the test's job has a label of its own.
 //! - `--fixture-hold-exit <file>`: once the daemon has served and asks to exit with status 0 (its
 //!   own update switched `current`), it creates `<file>` with its pid and blocks, unless `<file>`
 //!   is already there: the moment between the follow-on's switch and the exit it asks for, held
@@ -61,8 +67,9 @@ use hostkeeper_daemon::verb::PackageDigest as OrderDigest;
 use hostkeeper_daemon::{Daemon, Ports, Watchdog};
 use hostkeeper_launchd::Platform;
 use hostkeeper_link::{
-    CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Heartbeat, LinkError,
-    Log, Order, OrderId, PackageDigest, Reply, ReplyFault, StopFlag, Target, ThreadDispatch, Verb,
+    Acknowledged, CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Feature,
+    Heartbeat, LinkError, Log, Order, OrderId, OrderRef, PackageDigest, Reply, ReplyFault,
+    StopFlag, Target, ThreadDispatch, Verb,
 };
 use hostkeeper_placed::Roots;
 use hostkeeper_steps::Staged;
@@ -81,6 +88,7 @@ struct Fixture {
     dir: Option<PathBuf>,
     fail_start: Option<String>,
     hold_exit: Option<PathBuf>,
+    own_unit: Option<String>,
 }
 
 /// The line a `daemon` of `version` writes before it exits at `--fixture-fail-start`.
@@ -134,6 +142,7 @@ fn take_fixture_flags(
                 fixture.fail_start = Some(value.to_string_lossy().into_owned());
             }
             "--fixture-hold-exit" => fixture.hold_exit = Some(PathBuf::from(value)),
+            "--fixture-own-unit" => fixture.own_unit = Some(value.to_string_lossy().into_owned()),
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
@@ -171,7 +180,7 @@ fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags) -> ExitCode {
     let Some(dir) = fixture.dir.as_deref() else {
         return usage("daemon needs --fixture-dir");
     };
-    let served = run_daemon(dir, flags, own);
+    let served = run_daemon(dir, fixture.own_unit.as_deref(), flags, own);
     if served.is_ok()
         && let Some(file) = &fixture.hold_exit
         && hold(file)
@@ -220,8 +229,14 @@ fn systemd_vars() -> SystemdVars {
 }
 
 /// Starts the shipped daemon with the fixture's package store and link, and serves it until it
-/// asks to exit for its own update, as `hostkeeper_daemon::cli` does with the host's.
-fn run_daemon(dir: &Path, flags: &DaemonFlags, own: HostkeeperVersion) -> Result<(), StartError> {
+/// asks to exit for its own update, as `hostkeeper_daemon::cli` does with the host's; its
+/// observer watches `own_unit` as the daemon's own job when one is given.
+fn run_daemon(
+    dir: &Path,
+    own_unit: Option<&str>,
+    flags: &DaemonFlags,
+    own: HostkeeperVersion,
+) -> Result<(), StartError> {
     let systemd = systemd_vars();
     let watchdog = cli::watchdog(flags, &systemd);
     let notifier = cli::notifier(flags, systemd.notify_socket)?;
@@ -233,7 +248,10 @@ fn run_daemon(dir: &Path, flags: &DaemonFlags, own: HostkeeperVersion) -> Result
     runtime.block_on(async {
         let platform = Platform::host();
         let config = start::load_config(&settings)?;
-        let adapters = Adapters::for_platform(&platform)?;
+        let mut adapters = Adapters::for_platform(&platform)?;
+        if let Some(unit) = own_unit {
+            adapters.own_unit = unit.to_owned();
+        }
         let mut ports: Ports =
             cli::host_ports(&config, &settings, &HostFiles::host(), own, adapters)?;
         ports.packages = Arc::new(MadePackages {
@@ -344,17 +362,62 @@ impl CoordinatorLink for FileLink {
             .open(self.dir.join("beats.jsonl"))
             .map_err(transport)?;
         writeln!(beats, "{}", beat.to_json()).map_err(transport)?;
-        let text = match fs::read_to_string(self.dir.join("order.json")) {
-            Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Reply::default()),
+        let malformed = || LinkError::BadReply(ReplyFault::Malformed);
+        let (features, acknowledged) = match read_if_there(&self.dir.join("answer.json")) {
+            Ok(Some(text)) => read_answer(&text).ok_or_else(malformed)?,
+            Ok(None) => (Vec::new(), Vec::new()),
             Err(e) => return Err(transport(e)),
         };
-        let order = read_order(&text).ok_or(LinkError::BadReply(ReplyFault::Malformed))?;
+        let order = match read_if_there(&self.dir.join("order.json")) {
+            Ok(Some(text)) => Some(read_order(&text).ok_or_else(malformed)?),
+            Ok(None) => None,
+            Err(e) => return Err(transport(e)),
+        };
         Ok(Reply {
-            order: Some(order),
+            order,
+            features,
+            acknowledged,
             ..Reply::default()
         })
     }
+}
+
+/// The text of `path`; `None` when there is no such file.
+fn read_if_there(path: &Path) -> io::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// The features and acknowledged verdicts of an `answer.json`:
+/// `{"features": ["..."], "acks": [{"service": "...", "order_id": "...", "try": 1}]}`, either
+/// key optional; a feature this daemon does not know is left out, as the loop leaves it out of
+/// a real reply.
+fn read_answer(text: &str) -> Option<(Vec<Feature>, Vec<Acknowledged>)> {
+    let json: Value = serde_json::from_str(text).ok()?;
+    let list = |key: &str| json.get(key).and_then(Value::as_array).cloned();
+    let features = list("features")
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|name| Feature::parse(name.as_str()?))
+        .collect();
+    let acks = list("acks")
+        .unwrap_or_default()
+        .iter()
+        .map(|ack| {
+            let word = |key: &str| ack.get(key).and_then(Value::as_str);
+            Some(Acknowledged {
+                service: ServiceName::new(word("service")?).ok()?,
+                order: OrderRef {
+                    id: OrderId::new(word("order_id")?).ok()?,
+                    order_try: ack.get("try").and_then(Value::as_u64)?,
+                },
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((features, acks))
 }
 
 /// The order of an `order.json`: an `update`, or an `install` when its `verb` says so. Any other

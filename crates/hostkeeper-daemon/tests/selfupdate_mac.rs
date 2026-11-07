@@ -64,10 +64,13 @@ fn code(code: ExitCode) -> String {
     format!("{code:?}")
 }
 
+/// The wait of the update to `version` an order of `SelfRig::order` ran: it keeps that order's
+/// id, for the binary that settles it to report the verdict under.
 fn waiting_for(version: &str) -> Option<AwaitingRestart> {
     Some(AwaitingRestart {
         version: version.to_owned(),
         verdict_promotion_pending: false,
+        order_id: Some(format!("order-{HK}-{version}")),
     })
 }
 

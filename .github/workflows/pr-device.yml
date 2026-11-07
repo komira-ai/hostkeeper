@@ -1,0 +1,199 @@
+# The macOS and privileged jobs of every pull request. ci.yml runs the Linux checks (lint, test
+# and coverage) as before; this workflow adds what before ran only after a merge to main
+# (privileged.yml), so that a change that breaks the Mac or the service managers is red before it
+# merges. Its jobs, each on every pull request:
+#
+# - macos-test: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
+#   code a Mac runs), on a GitHub-hosted macOS runner (macos-15), as the runner's user, with no
+#   fail-fast so that a run reports every failure. The rest of the workspace (the coordinator's
+#   MDM and network-install servers, the release tooling) runs on Linux only and does not build
+#   for macOS; the workflow lint holds the crate list to the binaries' path dependencies.
+# - macos-device: the device tests under launchd as root, privileged.yml's job of that name, step
+#   for step.
+# - privileged: the privileged tests against systemd as root, privileged.yml's job of that name,
+#   step for step.
+#
+# Each is a check of its own name, required of every pull request. A pull request's newer run
+# cancels its older one. No job of it holds a write scope or names a secret or the token, and no
+# cache is saved from a pull request (each copied job's save step runs only on a push, which
+# never starts this workflow): the jobs restore the caches privileged.yml's runs on main saved,
+# and macos-test the one of macos-device. The workflow lint (crates/xtask/tests/workflows,
+# pr_device.rs) holds this file to its trigger, its concurrency, its top-level keys, its three
+# jobs and their runners, the copied jobs to privileged.yml's, and to no secret; it refuses a
+# macOS job or a job as root in any other workflow that runs for a pull request.
+#
+# privileged.yml still runs after every merge to main, and a release still waits for that run on
+# its commit (release.yml); this workflow is no part of a release.
+name: pr-device
+
+on:
+  pull_request:
+
+permissions: {}
+
+# A pull request's newer run cancels its older one, so a burst of pushes holds at most one macOS
+# runner per job.
+concurrency:
+  group: pr-device-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Incremental artifacts only bloat a cached target directory.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # The tests of the Mac's crates, as the runner's user. The build restores the cache of
+  # privileged.yml's macos-device job (this job saves none), whose dependencies it shares.
+  macos-test:
+    runs-on: macos-15
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The system the tests run on, for the log (evidence, not a gate).
+      - name: sw_vers
+        run: sw_vers
+      - run: rustup toolchain install
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-
+      - name: Build the tests of the Mac's crates
+        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-ci -p hostkeeper-config -p hostkeeper-ctl -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+      - name: Run the tests of the Mac's crates
+        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-ci -p hostkeeper-config -p hostkeeper-ctl -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-steps -p hostkeeper-unpack -p hostkeeper-wire
+
+  # privileged.yml's job macos-device; the workflow lint holds it, key for key, to that job.
+  macos-device:
+    runs-on: macos-15
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 45
+    env:
+      # The gh the installer pkg installs at /usr/local/lib/hostkeeper/gh, the same version and
+      # SHA-256 as artifacts.yml's macOS build: device_mac_e2e.rs installs this file at that path
+      # and checks its packages' attestations with it, offline, against a test trust root.
+      GH_VERSION: 2.103.3
+      GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The system the tests run against, for the log (evidence, not a gate).
+      - name: sw_vers
+        run: sw_vers
+      - run: rustup toolchain install
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      - name: Download gh (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+      - name: Check gh (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
+      - name: Unpack gh where the tests find it
+        run: unzip -o -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d target/privileged-tools
+      # device_mac_e2e and device_mac_selfupdate run after device_mac, in the one step that runs
+      # as root.
+      - name: Build the macOS device tests as the runner's user
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test unpack_mac
+      # unpack_mac runs twice: here as the runner's user, as the release check of a package
+      # unpacks it on a hosted runner, and below as root, as the daemon unpacks it on a host.
+      - name: Run the macOS unpack tests as the runner's user
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --test unpack_mac -- --nocapture
+      - name: Run the macOS device tests as root
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test unpack_mac -- --test-threads=1 --nocapture
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  # privileged.yml's job privileged; the workflow lint holds it, key for key, to that job.
+  privileged:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 60
+    env:
+      GH_VERSION: 2.102.1
+      GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The service manager the tests run against, for the log (evidence, not a gate).
+      - name: systemctl version
+        run: systemctl --version
+      - name: systemd-analyze version
+        run: systemd-analyze --version
+      # A runner image without systemd as PID 1 is a setup failure, not a test to skip: this step
+      # fails, and its name says why. (The tests' own check refuses such a host too, with the
+      # same reason.)
+      - name: Fail unless systemd is the service manager (/run/systemd/system is a directory)
+        run: test -d /run/systemd/system
+      - run: rustup toolchain install
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      # The gh a host checks every package's attestation with, the one the deb and the rpm install
+      # as /usr/lib/hostkeeper/gh (artifacts.yml pins the same version and SHA-256): Ubuntu 24.04's
+      # own gh has no `gh attestation`. tierstore_shaped.rs installs this file at that path and
+      # checks its fixture's attestation with it, offline, against a test trust root.
+      - name: Download gh (HTTPS only, redirects included)
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+      - name: Install gh (pinned checksum)
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
+      - name: Build the privileged tests as the runner's user
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped
+      - name: Run the privileged tests as root
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped -- --test-threads=1
+      - name: The journal of the test units
+        if: failure()
+        run: journalctl --unit 'hostkeeper-ci-*' --no-pager
+      # The step units the daemon of tierstore_shaped.rs ran its fixture's hook in.
+      - name: The journal of the step units
+        if: failure()
+        run: journalctl --unit 'updater-hostkeeper-ci-*' --no-pager
+      # What a failed end-to-end test kept before its host root was removed: the hook record
+      # directory, the step record and the journal of the daemon and of its units, per test.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: privileged-end-to-end
+          path: target/privileged-artifacts
+          if-no-files-found: ignore
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

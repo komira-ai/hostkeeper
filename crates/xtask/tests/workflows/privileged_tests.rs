@@ -18,6 +18,7 @@ use super::net_install::{
     NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_ARM64_JOB, NET_INSTALL_FIRST_LINE, NET_INSTALL_JOB,
     NET_JOBS, apt_steps,
 };
+use super::pr_device;
 use super::release::{REQUIRED_WORKFLOWS, publish_problems};
 use super::yaml::{self, Node, Value};
 use super::{push_only, with_in, workflows};
@@ -561,10 +562,24 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         BTreeSet::from(["net_install_arm64".to_owned()])
     );
     assert_eq!(shape_problems(text, &targets), Vec::<String>::new());
+    // Root in no other workflow, but in the jobs of pr-device.yml that are copies of this file's
+    // (pr_device_tests.rs holds them to that).
     for (file, other) in all.iter().filter(|(file, _)| file != PRIVILEGED_WORKFLOW) {
         let doc = yaml::load(other).expect("a workflow parses");
         let mut values = Vec::new();
-        scalars(&doc, &mut values);
+        for (key, value) in entries(&doc) {
+            let jobs = entry(&doc, "jobs").map_or(&[][..], entries);
+            match key.as_str() {
+                Some("jobs") if file == pr_device::FILE => {
+                    for (name, job) in jobs {
+                        if !pr_device::root_allowed(file, name.as_str().unwrap_or_default()) {
+                            scalars(job, &mut values);
+                        }
+                    }
+                }
+                _ => scalars(value, &mut values),
+            }
+        }
         assert_eq!(root_line(&values), None, "{file} runs something as root");
     }
 }

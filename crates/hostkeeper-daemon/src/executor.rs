@@ -819,6 +819,7 @@ impl Daemon {
                     observation: observer::observe(
                         &ctx.observer,
                         &ctx.dirs.packages,
+                        &selfupdate::binary_dir(&ctx.dirs.state),
                         &ctx.own_version,
                         &service,
                     ),

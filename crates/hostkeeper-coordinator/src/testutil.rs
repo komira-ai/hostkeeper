@@ -281,6 +281,14 @@ impl Rig {
     pub fn start_with_allow_list(dir: &Scratch, clock: &Arc<AtomicU64>, text: &str) -> Coordinator {
         let store =
             DesiredStore::open(&dir.path().join("desired.json"), Some(LEGACY)).expect("a store");
+        Self::start_over(store, clock, text)
+            .with_ops(ops_of(dir))
+            .with_verdicts(verdicts_of(dir))
+    }
+
+    /// A coordinator over the desired state of `store`, whose CI tokens are checked against the
+    /// allow-list `text`; its ops store and verdicts are the caller's to give.
+    pub fn start_over(store: DesiredStore, clock: &Arc<AtomicU64>, text: &str) -> Coordinator {
         let (oidc_now, _) = oidc_clock();
         let verifier = Verifier::new(
             AllowList::parse(text).expect("an allow-list"),
@@ -298,8 +306,6 @@ impl Rig {
         .with_services(kbf_services())
         .with_legacy_service(Some(LEGACY.to_owned()))
         .with_prefixes(kbf_prefixes())
-        .with_ops(ops_of(dir))
-        .with_verdicts(verdicts_of(dir))
     }
 
     pub fn restart(&mut self) {

@@ -594,14 +594,7 @@ fn a_seal_that_is_a_link_a_fifo_or_too_large_is_refused() {
         io::ErrorKind::InvalidData
     );
     fs::remove_file(&seal).unwrap();
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        &seal,
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::from_raw_mode(0o644),
-        0,
-    )
-    .unwrap();
+    hostkeeper_testkit::fifo(&seal, 0o644).unwrap();
     let err = hostkeeper_steps::read_seal(&seal).unwrap_err();
     assert_eq!(err.to_string(), "the seal is not a regular file");
     assert_eq!(

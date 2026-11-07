@@ -131,7 +131,7 @@ fn the_audit_file_is_created_by_the_first_change_and_not_by_opening() {
     let empty = scratch("audit-none");
     let volatile = OpsStore::volatile();
     make(&volatile, "alice", "include");
-    let written = OpsStore::with_writer(OpsState::default(), Box::new(|_| Ok(())));
+    let written = OpsStore::refusing(OpsState::default(), Box::new(|_| Ok(())));
     make(&written, "alice", "include");
     assert_eq!(fs::read_dir(empty.path()).expect("a directory").count(), 0);
 }
@@ -243,10 +243,12 @@ fn numbers_continue_from_the_larger_of_the_ring_and_the_audit_file() {
 /// Proves: a line that cannot be appended is an error in the log on the audit target. A change
 /// written before memory is then refused, `AuditUnavailable`, and not made: not in the ring, no
 /// ops file written. A change that raises protection (written after memory) stands: it is
-/// answered, in the ring and in the ops file.
+/// answered, in the ring and in the ops file, and its line is pending under the marker, tried
+/// again by each retry, until the audit file takes it; then the marker is removed.
 ///
 /// Catches: an operator's change made with no audit line, a raise of protection refused for its
-/// audit, or a failure that goes unsaid.
+/// audit or left out of the ops file while the audit is down, a line that is never written once
+/// the disk recovers, or a failure that goes unsaid.
 #[test]
 fn a_change_is_refused_when_its_audit_line_cannot_be_appended_and_a_raise_stands() {
     let dir = scratch("audit-append-fails");
@@ -268,6 +270,10 @@ fn a_change_is_refused_when_its_audit_line_cannot_be_appended_and_a_raise_stands
     );
     assert_eq!(store.state().audit, []);
     assert!(!file.exists(), "no ops file is written");
+    assert!(
+        !store.halt_unwritten(),
+        "a refused change leaves nothing pending"
+    );
 
     let entry = store
         .change(
@@ -277,14 +283,31 @@ fn a_change_is_refused_when_its_audit_line_cannot_be_appended_and_a_raise_stands
         )
         .expect("a raise stands");
     assert_eq!(entry.seq, 1);
-    assert_eq!(store.state().audit, [entry]);
+    assert_eq!(store.state().audit, std::slice::from_ref(&entry));
     let held = fs::read_to_string(&file).expect("read");
     assert_eq!(held.matches("\"action\": \"mark_bad\"").count(), 1);
+    assert!(store.halt_unwritten(), "its line is pending");
+    let marker = crate::ops_file::unfinished_path(&file);
+    assert_eq!(
+        fs::read_to_string(&marker).expect("the marker"),
+        "{\"unwritten\":[1]}\n"
+    );
+    store.retry_unwritten(std::time::Duration::from_secs(1));
+    assert!(
+        store.halt_unwritten(),
+        "still pending while the audit is down"
+    );
     let text = log.text();
-    let refusal = "ERROR hostkeeper_coordinator::audit: the audit file could not be appended to: the change is refused";
-    let stands = "ERROR hostkeeper_coordinator::audit: the audit file could not be appended to: the change stands";
-    assert_eq!(text.matches(refusal).count(), 1, "{text}");
+    let refusal = "ERROR hostkeeper_coordinator::audit: the audit file could not be appended to: the change is not written";
+    let stands = "a change stands in memory and is not yet written";
+    assert_eq!(text.matches(refusal).count(), 3, "{text}");
     assert_eq!(text.matches(stands).count(), 1, "{text}");
+
+    fs::remove_dir(&audit).expect("the audit file can be appended to again");
+    store.retry_unwritten(std::time::Duration::from_secs(2));
+    assert!(!store.halt_unwritten());
+    assert!(!marker.exists(), "the marker is removed");
+    assert_eq!(numbers(&audit), [1]);
 }
 
 /// Proves: an audit file that exists and cannot be read stops the open, naming the file.

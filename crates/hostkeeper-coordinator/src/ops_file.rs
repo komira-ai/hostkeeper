@@ -81,8 +81,8 @@ pub(crate) fn halts_path(ops: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// The marker of a halt being written to the ops file at `ops` ([`crate::ops::Write::Halt`]):
-/// the halts file's name with `.unfinished` added.
+/// The marker of the changes in memory and not yet written to the ops file at `ops`
+/// ([`crate::ops::Marker`]): the halts file's name with `.unfinished` added.
 #[must_use]
 pub(crate) fn unfinished_path(ops: &Path) -> PathBuf {
     let mut path = halts_path(ops).into_os_string();

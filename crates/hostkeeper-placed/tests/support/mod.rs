@@ -339,14 +339,7 @@ impl World {
 /// Makes a named pipe at `disk` (a path on disk): a file that is neither a regular file, a
 /// directory nor a link.
 pub fn fifo(disk: &Path) {
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        disk,
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::from_raw_mode(0o600),
-        0,
-    )
-    .expect("make a named pipe");
+    hostkeeper_testkit::fifo(disk, 0o600).expect("make a named pipe");
 }
 
 /// Pushes the plain components of `path` on `parts` so that the first is popped first.

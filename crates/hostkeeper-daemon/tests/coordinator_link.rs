@@ -465,7 +465,13 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
     let host = &hosts[0];
     assert_eq!(host["node_id"], HOST);
     assert_eq!(host["version"], support::BASE);
-    assert_eq!(host["platform"], "linux-x86_64");
+    // The daemon announces the platform it was built for (`links::PLATFORM`).
+    let platform = if cfg!(target_os = "macos") {
+        "darwin-arm64"
+    } else {
+        "linux-x86_64"
+    };
+    assert_eq!(host["platform"], platform);
     assert_eq!(host["agent"]["name"], "hostkeeper");
     assert_eq!(host["agent"]["version"], OWN.to_string());
     assert_eq!(host["holds_slot"], true, "the update of web is ordered");

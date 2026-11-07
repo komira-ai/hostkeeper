@@ -39,7 +39,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::{Platform, RoleName};
@@ -49,6 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::registry::{Digest, IndexRecord, Package, Registry, RegistryError, Release};
 use crate::release_index;
 use crate::services::Services;
+use crate::store::{BackendError, Commit, Files, Shared};
 
 /// The most any count may be: a typo's order of magnitude, not a plan.
 pub const MAX_COUNT: u32 = 10_000;
@@ -431,11 +432,13 @@ impl Desired {
     }
 }
 
-/// What the file holds of one service: its desired state and its registry of digests.
+/// What the store holds: the desired state of each service, and the registry of digests of each.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct Held {
-    desired: BTreeMap<String, Desired>,
-    digests: BTreeMap<String, Registry>,
+pub(crate) struct Held {
+    /// The desired state, by service.
+    pub(crate) desired: BTreeMap<String, Desired>,
+    /// The registry of digests, by service; a service with none is not listed.
+    pub(crate) digests: BTreeMap<String, Registry>,
 }
 
 /// One service's state as the file writes it: the desired state, then its registry when it holds
@@ -471,7 +474,7 @@ fn parse_entry(value: serde_json::Value) -> Result<(Desired, Registry), DesiredE
 
 /// The services in `bytes`: a map file, or the single state of earlier builds as the
 /// legacy service's (`legacy`; with none set that file is refused).
-fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, DesiredError> {
+pub(crate) fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, DesiredError> {
     let malformed = |e: serde_json::Error| DesiredError::Malformed(e.to_string());
     let value: serde_json::Value = serde_json::from_slice(bytes).map_err(malformed)?;
     let mut held = Held::default();
@@ -494,6 +497,30 @@ fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, DesiredError> 
         held.insert(&name, desired, digests);
     }
     Ok(held)
+}
+
+/// The text of the file holding `held`: the single state of earlier builds while `legacy` is the
+/// only service, which earlier builds read and whose reader refuses the map form; the map
+/// otherwise.
+///
+/// # Errors
+/// The state could not be serialised.
+pub(crate) fn encode(held: &Held, legacy: Option<&str>) -> serde_json::Result<Vec<u8>> {
+    let encoded = match held.desired.iter().collect::<Vec<_>>().as_slice() {
+        [(name, only)] if Some(name.as_str()) == legacy => {
+            serde_json::to_vec_pretty(&held.entry(name, only))
+        }
+        _ => serde_json::to_vec_pretty(&MapFileOut {
+            services: held
+                .desired
+                .iter()
+                .map(|(name, desired)| (name.as_str(), held.entry(name, desired)))
+                .collect(),
+        }),
+    };
+    let mut text = encoded?;
+    text.push(b'\n');
+    Ok(text)
 }
 
 impl Held {
@@ -560,18 +587,45 @@ pub enum Recorded {
     Written,
 }
 
-/// The desired state, in memory and in its file.
-#[derive(Debug)]
+/// The desired state, in memory and in its backend ([`crate::store`]).
 pub struct DesiredStore {
-    path: PathBuf,
-    /// The legacy service: the one whose state alone is written as the single state.
-    legacy: Option<String>,
+    backend: Shared,
     current: Mutex<Held>,
-    /// Syncs the directory of the file after a rename.
-    sync_dir: SyncDir,
     /// Held across a whole replacement, so that writers wait for each other and not readers:
-    /// `current` is only locked to read or to swap, never across the file's fsyncs.
+    /// `current` is only locked to read or to swap, never across the backend's commit.
     writing: Mutex<()>,
+}
+
+impl std::fmt::Debug for DesiredStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DesiredStore").finish_non_exhaustive()
+    }
+}
+
+/// A desired state made and not yet in memory: what [`DesiredStore::stage`] answers, for a change
+/// that commits it with another part ([`crate::force`]). The store's writers wait while it lives.
+pub(crate) struct Staged<'a> {
+    store: &'a DesiredStore,
+    _writer: MutexGuard<'a, ()>,
+    pub(crate) before: Held,
+    pub(crate) after: Held,
+}
+
+impl Staged<'_> {
+    /// The backend the store commits to.
+    pub(crate) fn backend(&self) -> &Shared {
+        &self.store.backend
+    }
+
+    /// The part of a commit it is: none when it changes nothing.
+    pub(crate) fn part(&self) -> Option<(&Held, &Held)> {
+        (self.before != self.after).then_some((&self.before, &self.after))
+    }
+
+    /// Takes it into memory: its commit is durable.
+    pub(crate) fn finish(self) {
+        *self.store.lock() = self.after;
+    }
 }
 
 pub(crate) fn io_at(path: &Path) -> impl FnOnce(io::Error) -> StoreError + '_ {
@@ -597,22 +651,18 @@ impl DesiredStore {
     /// # Errors
     /// [`StoreError`]: the file exists and cannot be read, or holds no desired state.
     pub fn open(path: &Path, legacy: Option<&str>) -> Result<Self, StoreError> {
-        let current = match fs::read(path) {
-            Ok(bytes) => parse_file(&bytes, legacy).map_err(|source| StoreError::Invalid {
-                path: path.to_owned(),
-                source,
-            })?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Held::default(),
-            Err(e) => return Err(io_at(path)(e)),
-        };
-        let sync_dir: SyncDir = sync_dir;
-        Ok(Self {
-            path: path.to_owned(),
-            legacy: legacy.map(str::to_owned),
-            current: Mutex::new(current),
-            sync_dir,
+        let files = Files::default().with_desired(path, legacy);
+        let held = files.load_desired()?;
+        Ok(Self::over(Arc::new(files), held))
+    }
+
+    /// The store of `held`, as loaded from `backend`, to which its changes are committed.
+    pub(crate) fn over(backend: Shared, held: Held) -> Self {
+        Self {
+            backend,
+            current: Mutex::new(held),
             writing: Mutex::new(()),
-        })
+        }
     }
 
     /// The desired state of `service` now, if one was ever set.
@@ -633,11 +683,19 @@ impl DesiredStore {
         self.lock().digests_of(service)
     }
 
-    /// The store with `sync_dir` as its directory sync, to fail the sync after the rename.
+    /// [`Self::open`], with `sync_dir` as the directory sync of the file, to fail the sync after
+    /// the rename.
     #[cfg(test)]
-    pub(crate) fn with_sync_dir(mut self, sync_dir: SyncDir) -> Self {
-        self.sync_dir = sync_dir;
-        self
+    pub(crate) fn open_syncing(
+        path: &Path,
+        legacy: Option<&str>,
+        sync_dir: SyncDir,
+    ) -> Result<Self, StoreError> {
+        let files = Files::default()
+            .with_desired(path, legacy)
+            .with_sync_dir(sync_dir);
+        let held = files.load_desired()?;
+        Ok(Self::over(Arc::new(files), held))
     }
 
     /// Replaces the desired state of `service` (the others stay), in the file first and in
@@ -681,54 +739,70 @@ impl DesiredStore {
         release: Option<(Version, Release)>,
         keep: &dyn Fn(&Version) -> bool,
     ) -> Result<Recorded, StoreError> {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        let before = self.lock().clone();
-        let mut next = before.clone();
-        next.desired.insert(service.to_owned(), desired);
-        if let Some((version, release)) = release {
-            let mut registry = next.digests_of(service);
-            registry.record(&version, release, keep);
-            next.digests.insert(service.to_owned(), registry);
-        }
-        if next == before {
+        let staged = self.staged(service, desired, release, keep);
+        let Some(part) = staged.part() else {
             return Ok(Recorded::Unchanged);
-        }
-        match self.write(&next) {
+        };
+        let commit = Commit {
+            desired: Some(part),
+            ..Commit::default()
+        };
+        match self
+            .backend
+            .commit(&commit)
+            .map_err(BackendError::into_store)
+        {
             Ok(()) => {}
             Err(e @ StoreError::NotSynced { .. }) => {
-                *self.lock() = next;
+                staged.finish();
                 return Err(e);
             }
             Err(e) => return Err(e),
         }
-        *self.lock() = next;
+        staged.finish();
         Ok(Recorded::Written)
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Held> {
-        self.current.lock().unwrap_or_else(PoisonError::into_inner)
+    /// The state [`Self::record`] would make, staged under the writers' lock and not committed:
+    /// for a force, which commits it with its operations entries.
+    pub(crate) fn stage(
+        &self,
+        service: &str,
+        desired: Desired,
+        keep: impl Fn(&Version) -> bool,
+    ) -> Staged<'_> {
+        let release = desired
+            .release()
+            .map(|release| (desired.version.clone(), release));
+        self.staged(service, desired, release, &keep)
     }
 
-    fn write(&self, held: &Held) -> Result<(), StoreError> {
-        // Only the legacy service is the single state of earlier builds, which
-        // refuses the map form.
-        let encoded = match held.desired.iter().collect::<Vec<_>>().as_slice() {
-            [(name, only)] if Some(name.as_str()) == self.legacy.as_deref() => {
-                serde_json::to_vec_pretty(&held.entry(name, only))
-            }
-            _ => serde_json::to_vec_pretty(&MapFileOut {
-                services: held
-                    .desired
-                    .iter()
-                    .map(|(name, desired)| (name.as_str(), held.entry(name, desired)))
-                    .collect(),
-            }),
-        };
-        let mut text = encoded
-            .map_err(io::Error::from)
-            .map_err(io_at(&self.path))?;
-        text.push(b'\n');
-        write_whole_syncing(&self.path, &text, self.sync_dir)
+    fn staged(
+        &self,
+        service: &str,
+        desired: Desired,
+        release: Option<(Version, Release)>,
+        keep: &dyn Fn(&Version) -> bool,
+    ) -> Staged<'_> {
+        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = self.lock().clone();
+        let mut after = before.clone();
+        after.desired.insert(service.to_owned(), desired);
+        if let Some((version, release)) = release {
+            let mut registry = after.digests_of(service);
+            registry.record(&version, release, keep);
+            after.digests.insert(service.to_owned(), registry);
+        }
+        Staged {
+            store: self,
+            _writer: writer,
+            before,
+            after,
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Held> {
+        self.current.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -745,7 +819,7 @@ pub(crate) fn write_whole(path: &Path, text: &[u8]) -> Result<(), StoreError> {
 }
 
 /// The directory fsync of [`write_whole`].
-fn sync_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir).and_then(|d| d.sync_all())
 }
 

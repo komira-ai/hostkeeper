@@ -5,10 +5,8 @@
 mod support;
 
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -211,8 +209,8 @@ fn protected_holds_each_of_its_three_kinds() {
 /// a version, or fails on a read-only tree: of A, B and C with `current` C and `previous` B, A
 /// and its seal go, a seal with no directory X and a directory with no seal Y go, a leftover
 /// directory of a crashed prune goes, and an unpack's staging directory, a temporary seal, the
-/// links' temporary names, a file and a link named as versions, a directory named as a seal and a
-/// name that is not UTF-8 stay as they were.
+/// links' temporary names, a file and a link named as versions, a directory named as a seal stay as
+/// they were.
 #[test]
 fn a_prune_deletes_each_surplus_version_whole_and_nothing_else() {
     let s = Scratch::new("prune-surplus");
@@ -232,7 +230,6 @@ fn a_prune_deletes_each_surplus_version_whole_and_nothing_else() {
     fs::write(dir.join("W"), "a file named as a version").unwrap();
     symlink("B", dir.join("V")).unwrap();
     fs::create_dir(dir.join("U.seal")).unwrap();
-    fs::write(dir.join(OsStr::from_bytes(b"not-utf8-\xff")), "").unwrap();
 
     let report = layout.prune(&Protected::default()).unwrap();
 
@@ -258,7 +255,6 @@ fn a_prune_deletes_each_surplus_version_whole_and_nothing_else() {
         "W",
         "current",
         "current.tmp",
-        "not-utf8-\u{fffd}",
         "previous",
     ];
     left.sort();
@@ -267,6 +263,38 @@ fn a_prune_deletes_each_surplus_version_whole_and_nothing_else() {
     assert_eq!(layout.previous().unwrap().as_deref(), Some("B"));
     layout.check_tree("B").unwrap();
     layout.check_tree("C").unwrap();
+}
+
+/// Catches a prune that deletes or fails on a name that is not UTF-8, which cannot be a version:
+/// the entry stays as it was and the surplus version beside it is deleted. Linux only: macOS
+/// (APFS and HFS+) refuses to create a file whose name is not UTF-8 (`EILSEQ`), so no such name
+/// can be in a package directory there.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_name_that_is_not_utf8_is_left_alone() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let s = Scratch::new("prune-not-utf8");
+    let layout = package(&s, "web");
+    holding(&layout, &["A", "B", "C"], "C", "B");
+    fs::write(layout.dir().join(OsStr::from_bytes(b"not-utf8-\xff")), "").unwrap();
+
+    let report = layout.prune(&Protected::default()).unwrap();
+
+    assert_eq!(report.deleted, set(&["A"]));
+    assert_eq!(
+        names(layout.dir()),
+        [
+            "B",
+            "B.seal",
+            "C",
+            "C.seal",
+            "current",
+            "not-utf8-\u{fffd}",
+            "previous"
+        ]
+    );
 }
 
 /// Catches a prune that reads `current` or `previous` it cannot resolve as "everything is

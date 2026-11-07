@@ -681,16 +681,7 @@ fn a_seal_that_is_a_link_a_fifo_or_too_large_is_unreadable() {
         ),
         (
             "a fifo",
-            Box::new(|p: &Path| {
-                rustix::fs::mknodat(
-                    rustix::fs::CWD,
-                    p,
-                    rustix::fs::FileType::Fifo,
-                    rustix::fs::Mode::from_raw_mode(0o644),
-                    0,
-                )
-                .unwrap()
-            }),
+            Box::new(|p: &Path| hostkeeper_testkit::fifo(p, 0o644).unwrap()),
         ),
         (
             "too large",
@@ -741,14 +732,7 @@ fn a_staged_file_replaced_by_a_link_or_a_fifo_is_not_as_written() {
                 fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
                 fs::remove_file(bin.join("x")).unwrap();
                 if fifo {
-                    rustix::fs::mknodat(
-                        rustix::fs::CWD,
-                        bin.join("x"),
-                        rustix::fs::FileType::Fifo,
-                        rustix::fs::Mode::from_raw_mode(0o555),
-                        0,
-                    )
-                    .unwrap();
+                    hostkeeper_testkit::fifo(&bin.join("x"), 0o555).unwrap();
                 } else {
                     std::os::unix::fs::symlink("../manifest.toml", bin.join("x")).unwrap();
                 }

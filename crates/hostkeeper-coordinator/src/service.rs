@@ -615,12 +615,25 @@ impl Coordinator {
         let acking =
             verdict_file::asks(&beat) && self.features.iter().any(|f| f == verdict_file::FEATURE);
         let mut heard = if acking {
-            verdict_file::fill(&self.verdicts, legacy, &who.host_id, &mut beat)
+            let wanted = |name: &str| self.desired.get(name).map(|want| want.version);
+            let (heard, superseded) =
+                verdict_file::fill(&self.verdicts, legacy, &who.host_id, &mut beat, &wanted);
+            for name in superseded {
+                if let Err(error) = self.verdicts.supersede(&name, &who.host_id) {
+                    tracing::warn!(
+                        service = %name,
+                        node_id = %who.host_id,
+                        %error,
+                        "a superseded verdict is not forgotten; it is not read, and is forgotten at a later heartbeat"
+                    );
+                }
+            }
+            heard
         } else {
             Vec::new()
         };
         let announced = beat.services.clone().unwrap_or_default();
-        // A halt whose write failed is written again at every heartbeat until it lands.
+        // A change whose commit failed is committed again at every heartbeat until it lands.
         self.ops.retry_unwritten(now);
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
         let platform = beat.platform;
@@ -935,7 +948,7 @@ impl Coordinator {
             .collect();
         Status {
             per_service,
-            ops,
+            ops: ops.without_defaults(),
             desired: self
                 .legacy
                 .as_deref()

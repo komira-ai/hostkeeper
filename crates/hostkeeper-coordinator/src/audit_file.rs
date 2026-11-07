@@ -81,7 +81,7 @@ pub(crate) fn path_of(ops: &Path) -> PathBuf {
 }
 
 /// What a change concerned: the keys it has.
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Detail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) service: Option<String>,
@@ -92,7 +92,7 @@ pub(crate) struct Detail {
 }
 
 /// One line of the audit file.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AuditLine {
     pub(crate) seq: u64,
     pub(crate) at_unix: u64,
@@ -741,18 +741,6 @@ impl AuditLog {
     /// The active file.
     pub(crate) fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// [`read_after`] of the files of this log, under the lock that keeps appends one at a
-    /// time: no rotation seals the active file between the listing of the files and their read,
-    /// which would leave the segment it made out of the answer.
-    ///
-    /// # Errors
-    /// [`OpsError::Io`], as [`read_after`].
-    #[cfg(test)]
-    pub(crate) fn read_after(&self, since_seq: u64) -> Result<AuditRead, OpsError> {
-        let _appends = self.lock();
-        read_after(&self.path, since_seq)
     }
 
     /// The page `query` asks for of the files of this log ([`page`]), under the lock that keeps

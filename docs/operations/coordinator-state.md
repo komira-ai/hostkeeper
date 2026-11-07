@@ -20,7 +20,7 @@ offline, as [ca-backup.md](ca-backup.md) says.
 | `<ops-file>.audit.<n>` | The sealed segments of the audit file, the older changes, one JSON line each ([holds-and-force.md](holds-and-force.md#the-audit-file)). Written once the audit file has been rotated. | The audit history before the newest rotation. |
 | `<ops-file>.halts` | The halt reports, who raised each halt, the reports kept while a halt stood, each service's clear generation, and each service's update plan position (`rollouts`: the version it is for, the stages entered, the hosts recorded done, an operator's pause; [rollout-plans.md](rollout-plans.md#what-a-restart-keeps)). Written once there is a halt or a plan that went past its first stage or was paused. | The halt reports and the clear generations: a halted service halts again after its clear. The plan positions: each plan starts at its first stage with no host recorded done, and an operator's pause is gone, so a paused plan goes on until it is paused again. |
 | `<ops-file>.halts.next` | Only after a crash in the middle of a change: the halts file that change staged. The next start settles it. | The ops file holds that change and the halts file does not: what the change added to the halts file (a clear's generation, the reports of its acknowledgements) is lost. |
-| `<ops-file>.halts.unfinished` | Only after a crash while a halt was being written: the marker that refuses a start until the operator settles the halts file by hand and removes the marker. | The halt that was being written may be lost without notice. |
+| `<ops-file>.halts.unfinished` | Only while a change that raises protection (a halt, a bad mark, a pause) or an operator's abort is in memory and not yet written, and after a crash in that window: the marker, listing the audit number of each such change (`{"unwritten":[41,42]}`). A start removes it when the ops file holds every change it lists; otherwise it refuses to start, naming the changes that did not land, until the operator makes them again by hand if they still matter and removes the marker. A marker the release before wrote (an empty file) refuses a start as it did. | A change it lists that did not land may be lost without notice. |
 | `--enrollment-dir` | The enrollment store ([enrollment-coordinator.md](../enrollment-coordinator.md#state-files)): the requests, the certificates issued, the approved hosts (host id, key hash, role, services), the deny rows, the Mac nonces, the next certificate serial, and, with the MDM gate, its record of each device (`mdm-devices/`). | No enrolled host's heartbeat or renewal is admitted. Each host has to enroll again and be approved again. Hosts that were denied are no longer denied. |
 
 ## Backing up
@@ -49,7 +49,7 @@ The flags are the ones `serve` runs with. Leave out `--ops-file` if `serve` runs
   directories under it.
 - It copies `<ops-file>.halts.next` and `<ops-file>.halts.unfinished` as they are, so a restored
   coordinator starts exactly as the old one would have. The next start settles a staged halts
-  file. A marker still refuses the start.
+  file. A marker refuses the start unless the ops file holds every change it lists.
 - Anything else in the enrollment directory is not copied: a `.tmp` file a crash left, or a key or
   certificate file kept there. The backup names each such file it passes over, except the
   store's `lock`.

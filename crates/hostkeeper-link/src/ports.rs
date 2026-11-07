@@ -13,7 +13,7 @@ use hostkeeper_steps::Clock;
 
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal};
 use crate::names::Reason;
-use crate::order::{Order, OrderResult, Reply};
+use crate::order::{Order, OrderRef, OrderResult, Reply};
 
 /// What a reply was refused for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -162,7 +162,8 @@ pub struct RecordedService {
     pub version: Version,
     /// The target of an update whose step record is not finished; none when none is.
     pub updating: Option<Version>,
-    /// The verdict of the last order the record finished; the loop resends it after a restart.
+    /// The verdict of the last order the record finished that the host still has to report; the
+    /// loop sends it after a restart until it is acknowledged ([`ServiceRecords::acknowledged`]).
     pub last_result: Option<OrderResult>,
     /// The try the step record holds, finished or not; none when the record names none or
     /// cannot be read.
@@ -175,6 +176,17 @@ pub trait ServiceRecords: Send + Sync {
     /// # Errors
     /// The step records cannot be read; the loop then sends no heartbeat.
     fn installed(&self) -> io::Result<Vec<RecordedService>>;
+
+    /// The coordinator acknowledged the verdict of `order` of `service`: a record that keeps it
+    /// to report ([`RecordedService::last_result`]) stops keeping it, so that no later start
+    /// sends it again. Records that keep no verdict to report do nothing, as the default does.
+    ///
+    /// # Errors
+    /// The record could not be written; the loop logs it, and the verdict is sent again after
+    /// the next restart.
+    fn acknowledged(&self, _service: &ServiceName, _order: &OrderRef) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// How a service is now, as the observer saw it (design 5.8).

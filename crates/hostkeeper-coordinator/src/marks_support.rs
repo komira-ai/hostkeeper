@@ -13,12 +13,16 @@ use hostkeeper_testkit::Scratch;
 use hostkeeper_wire::wire::{Heartbeat, ServiceBeat, ServiceReply};
 use serde_json::json;
 
+use crate::desired::DesiredStore;
 use crate::identity::Identity;
 use crate::operator::Caller;
+use crate::ops::OpsStore;
 use crate::orders::Order;
 use crate::service::Coordinator;
 use crate::services::Services;
+use crate::store::{Backend, Fake};
 use crate::testutil::{Rig, beat, ci_token, id, role, version};
+use crate::verdict_file::VerdictFile;
 
 /// The service most tests hold, mark and force.
 pub(crate) const WEB: &str = "web";
@@ -68,6 +72,35 @@ pub(crate) fn start(dir: &Scratch, clock: &Arc<AtomicU64>, extra: &str) -> Coord
     Rig::start_with_allow_list(dir, clock, &list)
         .with_services(services_with(extra))
         .with_legacy_service(None)
+}
+
+/// [`start`] with the desired state, the ops store and the verdicts on `fake`, as it holds them:
+/// a start again on what a coordinator before committed.
+pub(crate) fn start_on(fake: &Fake, clock: &Arc<AtomicU64>, extra: &str) -> Coordinator {
+    let list = format!(
+        "{}services = [\"web\", \"db\"]\n",
+        hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER)
+    );
+    let loaded = fake.load().expect("the fake loads");
+    // One backend under the three stores, as `serve` has: a force is one commit of it.
+    let backend: crate::store::Shared = Arc::new(fake.clone());
+    Rig::start_over(
+        DesiredStore::over(Arc::clone(&backend), loaded.desired),
+        clock,
+        &list,
+    )
+    .with_services(services_with(extra))
+    .with_legacy_service(None)
+    .with_ops(OpsStore::over(Arc::clone(&backend), loaded.ops))
+    .with_verdicts(VerdictFile::over(backend, loaded.verdicts))
+}
+
+/// A rig running [`services_with`] `extra` on `fake`, its clock at 2000, past the quiet start.
+pub(crate) fn rig_on(test: &str, fake: &Fake, extra: &str) -> Rig {
+    let mut rig = Rig::new(test);
+    rig.coordinator = start_on(fake, &rig.clock, extra);
+    rig.at(2_000);
+    rig
 }
 
 /// A rig running [`services_with`] `extra`, its clock at 2000, past the quiet start.

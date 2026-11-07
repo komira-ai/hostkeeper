@@ -14,8 +14,11 @@
 //! carrying the standing verdict of the host ([`fill`]): every rule that reads a host's report
 //! (the gate's `failed_here`, the halt, the bake, the end of an order, the counting) reads what
 //! it read while the daemon resent it, and after a restart too, so a restarted coordinator does
-//! not order a host the version it failed again, on a new try 1 that holds the fleet's slot. A
-//! verdict the agent reports replaces the standing one; one with no order id or no try cannot
+//! not order a host the version it failed again, on a new try 1 that holds the fleet's slot.
+//! A standing verdict about another version than the one a host runs, once that is the version
+//! wanted, is superseded instead: not read, and forgotten (the host reached the version wanted
+//! by an order whose own verdict it never sent, as a self-update's binary exits before it
+//! reports). A verdict the agent reports replaces the standing one; one with no order id or no try cannot
 //! be acknowledged, so it is not stored and ends the standing one. An agent that did not
 //! announce the feature is answered and read exactly as before.
 //!
@@ -27,18 +30,19 @@
 //! none stored: a coordinator of the release before never wrote one, and ignores this one.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_wire::HostId;
+use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Heartbeat, UpdateResult, VerdictAck};
 use serde::{Deserialize, Serialize};
 
-use crate::desired::{StoreError, io_at, write_whole};
+use crate::desired::{StoreError, io_at};
 use crate::fleet::Fleet;
+use crate::store::{BackendError, Commit, Fake, Files, Shared};
 
 /// The feature an agent announces to be acknowledged its verdicts.
 pub const FEATURE: &str = hostkeeper_wire::wire::VERDICT_ACKS_FEATURE;
@@ -71,7 +75,7 @@ pub enum VerdictsError {
 
 /// What the file holds: by service.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct Held {
+pub(crate) struct Held {
     #[serde(default)]
     services: BTreeMap<String, Kept>,
 }
@@ -118,13 +122,10 @@ mod host_text {
     }
 }
 
-/// How what the store holds is written: whole, durably.
-type Writer = Box<dyn Fn(&Held) -> Result<(), StoreError> + Send + Sync>;
-
-/// The verdicts stored, and how a change of them is written.
+/// The verdicts stored, and the backend a change of them is committed to ([`crate::store`]).
 pub struct VerdictFile {
     held: Mutex<Held>,
-    write: Writer,
+    backend: Shared,
 }
 
 impl std::fmt::Debug for VerdictFile {
@@ -142,10 +143,7 @@ impl VerdictFile {
     /// each write is taken as done.
     #[must_use]
     pub fn volatile() -> Self {
-        Self {
-            held: Mutex::new(Held::default()),
-            write: Box::new(|_| Ok(())),
-        }
+        Self::over(Arc::new(Fake::new()), Held::default())
     }
 
     /// The verdicts stored in the file at `path`, none if it is not there; changes are written
@@ -154,16 +152,17 @@ impl VerdictFile {
     /// # Errors
     /// [`VerdictsError`]: the file cannot be read, or holds a value this build cannot read.
     pub fn open(path: &Path) -> Result<Self, VerdictsError> {
-        let held = match fs::read(path) {
-            Ok(bytes) => parse(path, &bytes)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Held::default(),
-            Err(e) => return Err(io_at(path)(e).into()),
-        };
-        let path = path.to_owned();
-        Ok(Self {
+        let files = Files::default().with_verdicts(path);
+        let held = files.load_verdicts()?;
+        Ok(Self::over(Arc::new(files), held))
+    }
+
+    /// The verdicts `held`, as loaded from `backend`, to which their changes are committed.
+    pub(crate) fn over(backend: Shared, held: Held) -> Self {
+        Self {
             held: Mutex::new(held),
-            write: Box::new(move |held| write_whole(&path, &text_of(&path, held)?)),
-        })
+            backend,
+        }
     }
 
     fn held(&self) -> std::sync::MutexGuard<'_, Held> {
@@ -177,6 +176,39 @@ impl VerdictFile {
             .get(service)
             .and_then(|kept| kept.standing.get(host.as_str()))
             .cloned()
+    }
+
+    /// Forgets the verdict about `service` that stands for `host`, if one does: a later
+    /// heartbeat of the host showed it superseded ([`fill`], which names only a verdict that
+    /// stands). Written before it is gone from memory.
+    ///
+    /// # Errors
+    /// [`VerdictsError::Io`]: the file was not written; nothing changed in memory.
+    pub(crate) fn supersede(&self, service: &str, host: &HostId) -> Result<(), VerdictsError> {
+        let mut held = self.held();
+        let mut next = held.clone();
+        if let Some(kept) = next.services.get_mut(service) {
+            kept.standing.remove(host.as_str());
+        }
+        next.services.retain(|_, kept| !kept.is_empty());
+        self.commit(&held, &next)?;
+        *held = next;
+        Ok(())
+    }
+
+    /// Commits `next` in place of `held` to the backend.
+    ///
+    /// # Errors
+    /// [`VerdictsError`]: the backend did not take it.
+    fn commit(&self, held: &Held, next: &Held) -> Result<(), VerdictsError> {
+        let commit = Commit {
+            verdicts: Some((held, next)),
+            ..Commit::default()
+        };
+        self.backend.commit(&commit).map_err(|why| match why {
+            BackendError::Verdicts(why) => why,
+            other => VerdictsError::Io(other.into_store()),
+        })
     }
 
     /// Every verdict counted: the service, the host and its report.
@@ -233,7 +265,7 @@ impl VerdictFile {
                 .collect();
         }
         next.services.retain(|_, kept| !kept.is_empty());
-        (self.write)(&next)?;
+        self.commit(&held, &next)?;
         *held = next;
         Ok(())
     }
@@ -277,7 +309,7 @@ fn ackable(report: &UpdateResult) -> bool {
 }
 
 /// The text of the file at `path` holding `held`.
-fn text_of(path: &Path, held: &Held) -> Result<Vec<u8>, StoreError> {
+pub(crate) fn text_of(path: &Path, held: &Held) -> Result<Vec<u8>, StoreError> {
     let mut text = serde_json::to_vec_pretty(held)
         .map_err(io::Error::from)
         .map_err(io_at(path))?;
@@ -286,7 +318,7 @@ fn text_of(path: &Path, held: &Held) -> Result<Vec<u8>, StoreError> {
 }
 
 /// What the file at `path`, whose bytes are `bytes`, holds.
-fn parse(path: &Path, bytes: &[u8]) -> Result<Held, VerdictsError> {
+pub(crate) fn parse(path: &Path, bytes: &[u8]) -> Result<Held, VerdictsError> {
     let invalid = |why: String| VerdictsError::Invalid {
         path: path.to_owned(),
         why,
@@ -308,27 +340,49 @@ pub(crate) fn asks(beat: &Heartbeat) -> bool {
 
 /// `beat` of `host`, an agent that announced [`FEATURE`], with the standing verdict of each
 /// service whose entry carries none, the legacy service's (`legacy`, the top-level fields)
-/// among them; and what the heartbeat itself said of each.
+/// among them; what the heartbeat itself said of each; and the services whose standing verdict
+/// the heartbeat superseded, which the caller forgets ([`VerdictFile::supersede`]).
+///
+/// A standing verdict is superseded, and not read, when the host runs the service at the
+/// version `wanted` gives for it (the desired version) and the verdict is about another
+/// version: the host reached the version wanted since, by an order whose own verdict it never
+/// sent (a self-update, whose binary exits before it reports), and the older verdict is not its
+/// report any more. Read in its place, a failure of an older target would count against the
+/// host (its update slot, the report) for as long as it ran the version wanted. A verdict about
+/// the version the host runs, and every verdict of a host that does not run the version wanted
+/// (a failure it fell back from, which the gate reads so that it does not order that version
+/// again), stand.
 pub(crate) fn fill(
     file: &VerdictFile,
     legacy: Option<&str>,
     host: &HostId,
     beat: &mut Heartbeat,
-) -> Vec<Heard> {
+    wanted: &dyn Fn(&str) -> Option<Version>,
+) -> (Vec<Heard>, Vec<String>) {
     let mut heard = Vec::new();
+    let mut superseded = Vec::new();
+    let mut standing = |name: &str, runs: &Version| {
+        let kept = file.standing(name, host)?;
+        let reached = wanted(name).is_some_and(|want| want == *runs) && kept.target != *runs;
+        if reached {
+            superseded.push(name.to_owned());
+            return None;
+        }
+        Some(kept)
+    };
     if let Some(name) = legacy {
         heard.push((name.to_owned(), beat.last_update.clone()));
         if beat.last_update.is_none() {
-            beat.last_update = file.standing(name, host);
+            beat.last_update = standing(name, &beat.version);
         }
     }
     for one in beat.services.iter_mut().flatten() {
         heard.push((one.name.clone(), one.last_update.clone()));
         if one.last_update.is_none() {
-            one.last_update = file.standing(&one.name, host);
+            one.last_update = standing(&one.name, &one.version);
         }
     }
-    heard
+    (heard, superseded)
 }
 
 /// Stores what the heartbeat of `host` said (`heard`, of the services it is counted or kept

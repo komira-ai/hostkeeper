@@ -809,7 +809,7 @@ async fn min_version_clears_last_good_on_the_coordinator() {
 
 /// An ops store whose file cannot be written, holding `state`.
 pub(crate) fn unwritable(state: OpsState) -> OpsStore {
-    OpsStore::with_writer(
+    OpsStore::refusing(
         state,
         Box::new(|_| {
             Err(OpsError::Io(StoreError::Io {
