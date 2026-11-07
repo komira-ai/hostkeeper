@@ -76,17 +76,19 @@ packages, `linux-x86_64` (`amd64` for the deb, `x86_64` for the rpm) and `linux-
 | `/usr/lib/hostkeeper/gh` | 0755 |
 | `/usr/lib/hostkeeper/trusted_root.json` | 0644 |
 
-all owned by root, and one link, `/etc/issue.d/hostkeeper.issue`, to
-`/run/hostkeeper/enrollment.issue`: the console's issue file, which the daemon writes while the
-host waits for its enrollment (the request's state, the coordinator and the key hash), so the
-login prompt of the machine's console shows the key hash to check before approving
-([docs/operations/enrollment.md](../../docs/operations/enrollment.md#check-the-key-hash)). The
-link points at nothing until the daemon first writes the file. The last two are what the daemon checks every package's attestation with: a
+all owned by root. The last two are what the daemon checks every package's attestation with: a
 pinned `gh` (the distribution's own may have no `gh attestation`) and the Sigstore trusted root
 captured when the package was built. Before nfpm runs, `cargo xtask release nfpm-stage` checks
 the `gh` archive against its pin and writes both into `target/nfpm/`; where they come from, how
 the pin is bumped and what a stale trusted root does are in
 `docs/deploy/verify-a-release.md`, "What the deb and the rpm check packages with".
+
+The packages also install one link, `/etc/issue.d/hostkeeper.issue`, to
+`/run/hostkeeper/enrollment.issue`: the console's issue file, which the daemon writes after each
+step of its enrollment (the request's state, the coordinator and the key hash), so the login
+prompt of the machine's console shows the key hash to check before approving
+([docs/operations/enrollment.md](../../docs/operations/enrollment.md#check-the-key-hash)). The
+link points at nothing until the daemon first writes the file.
 
 On a first install the post-install script makes the directories of `hostkeeper.conf` and
 enables the unit. It does not start it: the daemon first runs at the next

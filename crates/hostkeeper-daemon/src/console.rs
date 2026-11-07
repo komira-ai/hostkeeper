@@ -10,10 +10,10 @@
 //! The text is [`step_text`] of the step and the enrollment it left, or [`unopened_text`] while
 //! the enroller cannot be made. It is written only when it differs from the text written last
 //! by this process, through a temporary file renamed over the issue file, so a getty never reads
-//! half of it; the gettys are asked to redraw after each write. A write that fails is logged
-//! ([`NO_ISSUE`]) and tried again after the next step; a redraw that fails is logged
-//! ([`NO_REDRAW`]) and not tried again until the text changes. Each failure is logged once, and
-//! again only when its line changes or after a write and redraw that succeeded.
+//! half of it; the gettys are asked to redraw after each write, and again after each later step
+//! until a redraw succeeds. A write that fails is logged ([`NO_ISSUE`]) and tried again after the
+//! next step; so is a redraw that fails ([`NO_REDRAW`]). Each failure is logged once, and again
+//! only when its line changes or after a write and redraw that succeeded.
 //!
 //! Whatever agetty does with the file, the text holds: every character that is not printable
 //! ASCII, and every backslash (agetty's escape character in an issue file), is written as `?`.
@@ -63,6 +63,8 @@ pub struct ConsoleIssue {
     launcher: Box<dyn CommandLauncher + Send>,
     /// The text this process wrote last.
     shown: Option<String>,
+    /// Whether the gettys were asked to redraw, with success, since that text was written.
+    redrawn: bool,
     /// The failure logged last, until a write and a redraw succeed.
     failed: Option<String>,
 }
@@ -82,6 +84,7 @@ impl ConsoleIssue {
             reload: vec![agetty.to_string_lossy().into_owned(), RELOAD.to_owned()],
             launcher,
             shown: None,
+            redrawn: false,
             failed: None,
         }
     }
@@ -105,20 +108,27 @@ impl ConsoleIssue {
         self.show(text, log);
     }
 
-    /// Writes `text` when it differs from the text written last, then asks the gettys to redraw.
+    /// Writes `text` when it differs from the text written last, then asks the gettys to redraw
+    /// unless a redraw already succeeded since that text was written.
     fn show(&mut self, text: String, log: &dyn Log) {
-        if self.shown.as_ref() == Some(&text) {
+        if self.shown.as_ref() != Some(&text) {
+            if let Err(error) = write_issue(&self.path, &text) {
+                let line = format!("{NO_ISSUE}{}: {error}", self.path.display());
+                self.fail(line, log);
+                return;
+            }
+            self.shown = Some(text);
+            self.redrawn = false;
+        }
+        if self.redrawn {
             return;
         }
-        if let Err(error) = write_issue(&self.path, &text) {
-            let line = format!("{NO_ISSUE}{}: {error}", self.path.display());
-            self.fail(line, log);
-            return;
-        }
-        self.shown = Some(text);
         let argv: Vec<&str> = self.reload.iter().map(String::as_str).collect();
         match self.launcher.run(&argv) {
-            Ok(()) => self.failed = None,
+            Ok(()) => {
+                self.redrawn = true;
+                self.failed = None;
+            }
             Err(why) => self.fail(format!("{NO_REDRAW}{}: {why}", argv.join(" ")), log),
         }
     }

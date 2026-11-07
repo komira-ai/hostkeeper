@@ -113,14 +113,19 @@ fn the_issue_text_of_each_state_is_exact() {
     );
 }
 
-/// Catches a text that agetty could read as an escape or that breaks the lines: a backslash,
-/// a line break, a tab, an escape character and a character that is not ASCII, in the
-/// coordinator and in an error, are each written as `?`.
+/// Catches a text that agetty could read as an escape or that breaks the lines, and a printable
+/// character lost: a backslash, a line break, a tab, an escape character, the last control
+/// character before the space, DEL and a character that is not ASCII, in the coordinator and in
+/// an error, are each written as `?`; the space and the tilde, the ends of printable ASCII, are
+/// kept.
 #[test]
 fn every_character_that_is_not_printable_ascii_is_a_question_mark() {
     assert_eq!(
-        unopened_text("https://c\\4.example", "a\nb\tc\u{1b}[2Jd\u{e9}"),
-        "hostkeeper enrollment: error: the enroller cannot be opened: a?b?c?[2Jd?\n  coordinator: https://c?4.example\n  key sha256:  unknown\n\n"
+        unopened_text(
+            "https://coordinator.example/\\4",
+            "a\nb\tc\u{1b}[2Jd\u{e9} \u{1f}~\u{7f}"
+        ),
+        "hostkeeper enrollment: error: the enroller cannot be opened: a?b?c?[2Jd? ?~?\n  coordinator: https://coordinator.example/?4\n  key sha256:  unknown\n\n"
     );
 }
 
@@ -237,36 +242,52 @@ fn a_failed_write_is_logged_once_and_tried_again_after_the_next_step() {
     assert_eq!(log.lines().len(), 1);
 }
 
-/// Catches a failed redraw that is not logged, is logged at every step, makes the same text be
-/// written again, or that hides a later failure once a redraw has worked: the failure is logged
-/// once with the command and why; the same text is not run again; a new text is written and
-/// run, and the same failure is not logged again; after a redraw that works, a failure is
-/// logged anew.
+/// Catches a failed redraw that is not logged, is logged at every step, is not tried again
+/// while the text stays the same (so the key hash never reaches a prompt already drawn), makes
+/// the same text be written again, or hides a later failure once a redraw has worked: the
+/// failure is logged once with the command and why; each later step with the same text runs the
+/// redraw again without writing the file; once a redraw works, the same text runs nothing more;
+/// a new text is written and run, and a failure then is logged anew.
 #[test]
-fn a_failed_redraw_is_logged_once_until_a_redraw_works() {
+fn a_failed_redraw_is_tried_again_and_logged_once_until_a_redraw_works() {
     let scratch = Scratch::new("console-redraw");
     let issue = scratch.path().join("enrollment.issue");
     let (mut console, runs, failing) = console_at(&issue);
     let log = RecordingLog::default();
     *failing.lock().expect("the switch") = Some("exit status 1".to_owned());
     let refused = format!("{NO_REDRAW}/sbin/agetty --reload: exit status 1");
+    let text = unopened_text(COORDINATOR, "locked");
 
+    console.unopened("locked", &log);
+    fs::write(&issue, "changed by hand").expect("overwrite it");
     console.unopened("locked", &log);
     console.unopened("locked", &log);
     assert_eq!(log.lines(), std::slice::from_ref(&refused));
-    assert_eq!(runs.lock().expect("runs").len(), 1);
+    assert_eq!(
+        *runs.lock().expect("runs"),
+        [
+            (reload(), text),
+            (reload(), "changed by hand".to_owned()),
+            (reload(), "changed by hand".to_owned())
+        ],
+        "the redraw is run again at each step, and the file is not written again"
+    );
 
+    *failing.lock().expect("the switch") = None;
+    console.unopened("locked", &log);
+    console.unopened("locked", &log);
+    assert_eq!(
+        runs.lock().expect("runs").len(),
+        4,
+        "nothing runs once it worked"
+    );
+    assert_eq!(log.lines(), std::slice::from_ref(&refused));
+
+    *failing.lock().expect("the switch") = Some("exit status 1".to_owned());
     console.after_step(&Ok(Outcome::Pending), &pending(), &log);
     let pending_text = step_text(COORDINATOR, &Ok(Outcome::Pending), &pending());
     assert_eq!(fs::read_to_string(&issue).expect("the issue"), pending_text);
-    assert_eq!(runs.lock().expect("runs").len(), 2);
-    assert_eq!(log.lines(), std::slice::from_ref(&refused));
-
-    *failing.lock().expect("the switch") = None;
-    console.after_step(&Err(down()), &pending(), &log);
-    *failing.lock().expect("the switch") = Some("exit status 1".to_owned());
-    console.after_step(&Err(untrusted()), &pending(), &log);
-    assert_eq!(runs.lock().expect("runs").len(), 4);
+    assert_eq!(runs.lock().expect("runs").len(), 5);
     assert_eq!(log.lines(), [refused.clone(), refused]);
 }
 

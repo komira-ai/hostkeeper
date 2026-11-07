@@ -171,11 +171,11 @@ as a Linux request is.
 Claims identify nothing: any machine can claim any MAC. Before approving, check that the request
 is the key of the server in front of you.
 
-On a Linux node, the login prompt of its console shows the hash. While the host has no
-certificate, the daemon writes, after each try, the request's state, the coordinator it posts to
-and the key hash to `/run/hostkeeper/enrollment.issue`, and asks the gettys to draw their prompt
-again (`agetty --reload`); the deb and the rpm link `/etc/issue.d/hostkeeper.issue` to that
-file, and agetty shows it above the prompt:
+On a Linux node, the login prompt of its console shows the hash. After each step of its
+enrollment, whenever the text changes, the daemon writes the request's state, the coordinator it
+posts to and the key hash to `/run/hostkeeper/enrollment.issue`, and asks the gettys to draw
+their prompt again (`agetty --reload`); the deb, the rpm and the boot-image overlay link
+`/etc/issue.d/hostkeeper.issue` to that file, and agetty shows it above the prompt:
 
 ```
 hostkeeper enrollment: pending approval; approve only the request whose key_sha256 is the key sha256 below
