@@ -28,6 +28,13 @@ pub const NEW: &str = "0.2.0";
 /// A later version.
 pub const LATER: &str = "0.3.0";
 
+/// The unit file of the daemon, as the deb installs it and hostkeeper's package carries it.
+pub const SHIPPED_UNIT: &str = include_str!("../../../../packaging/linux/hostkeeper.service");
+/// Where the deb installs it.
+pub const DEB_UNIT: &str = "/usr/lib/systemd/system/hostkeeper.service";
+/// The `WantedBy=` link of the deb's `systemctl enable`, in the rig's unit directory.
+pub const DEB_WANTS: &str = "/units/multi-user.target.wants/hostkeeper.service";
+
 /// `text`, a `major.minor.patch`, as a daemon's own version.
 pub fn own(text: &str) -> HostkeeperVersion {
     HostkeeperVersion::parse(text).expect("a hostkeeper version")
@@ -104,6 +111,37 @@ impl SelfRig {
         };
         s.release(NEW);
         s
+    }
+
+    /// A rig whose host runs hostkeeper at [`OLD`] as the deb leaves it ([`SelfRig::bootstrapped`]),
+    /// its unit enabled the way the deb's `systemctl enable` enables it: the `WantedBy=` link
+    /// in the unit directory points at the unit the deb installed under `/usr/lib`, and
+    /// `placed.json` lists nothing. The release of [`NEW`] is hostkeeper's as CI packages it
+    /// ([`SelfRig::shipped_release`]).
+    pub fn deb(name: &str) -> SelfRig {
+        let s = SelfRig::bootstrapped(name);
+        s.shipped_release(NEW);
+        let wants = s.rig.host(DEB_WANTS);
+        fs::create_dir_all(wants.parent().expect("the wants directory")).expect("mkdir");
+        std::os::unix::fs::symlink(DEB_UNIT, wants).expect("the deb's enable link");
+        s
+    }
+
+    /// The release of hostkeeper at `version` as CI packages it: its binary, its hook
+    /// `bin/hostkeeper update-hook`, and the unit the deb installs, `units/hostkeeper.service`,
+    /// which its manifest runs.
+    pub fn shipped_release(&self, version: &str) -> PathBuf {
+        let manifest = super::manifest(HK, version).replace(
+            r#"command = ["bin/hook", "update-hook"]"#,
+            r#"command = ["bin/hostkeeper", "update-hook"]"#,
+        ) + "\n[units]\nrun = [\"hostkeeper.service\"]\n";
+        let dir = self.rig.store.add(HK, version, &manifest);
+        fs::create_dir_all(dir.join("units")).expect("the units directory");
+        fs::write(dir.join("units/hostkeeper.service"), SHIPPED_UNIT).expect("the unit");
+        let binary = dir.join(RELEASE_BINARY);
+        fs::write(&binary, format!("#!hostkeeper {version}\n")).expect("the binary");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
+        dir
     }
 
     /// The release of hostkeeper at `version`, with its binary, in the package store.

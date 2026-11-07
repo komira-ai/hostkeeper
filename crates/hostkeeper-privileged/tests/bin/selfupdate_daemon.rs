@@ -314,7 +314,8 @@ impl CertSource for NoCertificate {
 /// The coordinator as two files of a directory: `beats.jsonl`, to which each heartbeat is
 /// appended, and `order.json`, the order of every reply while it is there:
 /// `{"id": "...", "try": 1, "service": "...", "version": "...", "digest": "<64 hex>"}`, an
-/// `update`. A test replaces `order.json` by a rename, so it is read whole or not at all.
+/// `update`, or the same with `"verb": "install"`, an `install`. A test replaces `order.json` by
+/// a rename, so it is read whole or not at all.
 struct FileLink {
     dir: PathBuf,
 }
@@ -341,18 +342,25 @@ impl CoordinatorLink for FileLink {
     }
 }
 
-/// The `update` of an `order.json`.
+/// The order of an `order.json`: an `update`, or an `install` when its `verb` says so. Any other
+/// `verb` is no order.
 fn read_order(text: &str) -> Option<Order> {
     let json: Value = serde_json::from_str(text).ok()?;
     let word = |key: &str| json.get(key).and_then(Value::as_str);
+    let target = Target {
+        service: ServiceName::new(word("service")?).ok()?,
+        version: Version::new(word("version")?).ok()?,
+        digest: PackageDigest::new(word("digest")?).ok()?,
+        index_digest: None,
+    };
+    let verb = match word("verb") {
+        None | Some("update") => Verb::Update(target),
+        Some("install") => Verb::Install(target),
+        Some(_) => return None,
+    };
     Some(Order {
         id: OrderId::new(word("id")?).ok()?,
         order_try: json.get("try").and_then(Value::as_u64)?,
-        verb: Verb::Update(Target {
-            service: ServiceName::new(word("service")?).ok()?,
-            version: Version::new(word("version")?).ok()?,
-            digest: PackageDigest::new(word("digest")?).ok()?,
-            index_digest: None,
-        }),
+        verb,
     })
 }

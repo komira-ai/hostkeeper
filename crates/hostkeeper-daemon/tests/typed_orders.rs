@@ -38,17 +38,20 @@ use hostkeeper_link::{
     OrderRef, OrderResult, Outcome, PackageDigest, Reason, Reply, ServiceFacts, Sleeper, StopFlag,
     Target, Tick, Verb,
 };
+use hostkeeper_observe::ActiveState;
 use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
     spent,
 };
 use hostkeeper_oidc::{OidcConfig, Verifier};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
-use hostkeeper_proto::hostkeeper::operator::v1::{AbortRequest, GetHostRequest};
+use hostkeeper_proto::hostkeeper::operator::v1::{
+    AbortRequest, GateReason, GetHostRequest, HostService,
+};
 use hostkeeper_steps::Settled;
 use hostkeeper_wire::identity::Identity;
 use hostkeeper_wire::wire::{self, ServiceBeat, UpdateResult};
-use support::selfupdate::{HK, NEW, OLD, SelfRig};
+use support::selfupdate::{DEB_UNIT, DEB_WANTS, HK, NEW, OLD, SelfRig};
 use support::{OWN, Rig, Scratch, d};
 
 /// The service of the scenarios and the version the coordinator wants.
@@ -440,19 +443,7 @@ fn an_install_the_coordinator_orders_installs_the_service_and_converges() {
 /// The version of `web` that `Hosts.Get` answers installed on `host-1`; none when it lists
 /// none.
 fn listed_version(coordinator: &Coordinator) -> Option<String> {
-    let operator = Caller::Operator("operator".parse().expect("a token name"));
-    let request = GetHostRequest {
-        node_id: "host-1".to_owned(),
-    };
-    let host = coordinator
-        .get_host(&operator, &request)
-        .expect("Hosts.Get answers the host")
-        .host
-        .expect("a host");
-    host.services
-        .into_iter()
-        .find(|service| service.service == SERVICE)
-        .and_then(|service| service.installed_version)
+    on_host(coordinator, SERVICE).and_then(|service| service.installed_version)
 }
 
 /// The heartbeat loop's waits: in the first, the install the first heartbeat ordered runs to its
@@ -819,6 +810,143 @@ fn a_bootstrapped_daemon_is_installed_its_own_release_updates_itself_and_converg
     assert_eq!(
         s.hk_steps(),
         [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
+    );
+}
+
+/// What `Hosts.Get` says of `service` on `host-1`.
+fn on_host(coordinator: &Coordinator, service: &str) -> Option<HostService> {
+    let operator = Caller::Operator("operator".parse().expect("a token name"));
+    let request = GetHostRequest {
+        node_id: "host-1".to_owned(),
+    };
+    let host = coordinator.get_host(&operator, &request);
+    let services = host.expect("Hosts.Get").host.expect("a host").services;
+    services.into_iter().find(|one| one.service == service)
+}
+
+fn hk_on_host(coordinator: &Coordinator) -> HostService {
+    on_host(coordinator, HK).expect("hostkeeper on the host")
+}
+
+/// Catches the self-update of a daemon the deb installed stopping after it placed the package:
+/// the deb enabled `hostkeeper.service` with its own `WantedBy=` link, which `placed.json` does
+/// not list, and the install of hostkeeper's release (which carries that unit, run) was refused
+/// `path_conflict` before anything was written, and its verdict, of a service not listed, was
+/// never sent. The install of [`NEW`] the coordinator orders now places the release around the
+/// deb's link (left as it is), stages and switches the binary, and asks the daemon to exit; the
+/// next heartbeat reports the wait for the restart; the binary of [`NEW`] confirms it at its
+/// start, and the coordinator reads hostkeeper converged, its slot free, and orders nothing more.
+#[test]
+fn a_daemon_the_deb_enabled_installs_its_own_release_restarts_into_it_and_converges() {
+    let s = SelfRig::deb("typed-selfupdate-deb");
+    for (step, line) in HOOK_LINES {
+        s.rig.launcher.replies(HK, step, &[(0, line)]);
+    }
+    let dir = Scratch::new("typed-selfupdate-deb-coordinator");
+    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let (daemon, _) = hostkeeper_daemon(&s, OLD);
+    let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
+
+    host.beat();
+    assert_eq!(
+        order_and_try(&host, 0),
+        (Verb::Install(hostkeeper_at(NEW)), 1)
+    );
+    assert!(host.dispatch.run_next());
+    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert!(daemon.ctx().restart().requested());
+    let link = |path: &str| std::fs::read_link(s.rig.host(path)).ok();
+    assert_eq!(link(DEB_WANTS), Some(DEB_UNIT.into()));
+    assert_eq!(
+        link("/units/hostkeeper.service"),
+        Some("/packages/hostkeeper/current/units/hostkeeper.service".into())
+    );
+    host.beat();
+    let reported = hk_on_host(&coordinator).last_update.expect("the verdict");
+    assert_eq!(
+        (reported.reason.as_str(), reported.order_try),
+        ("awaiting_restart", Some(1))
+    );
+    drop(host);
+
+    // The unit systemd started again runs the binary of [`NEW`].
+    s.rig
+        .manager
+        .set("hostkeeper.service", ActiveState::Active, Some(4242));
+    let (daemon, settled) = hostkeeper_daemon(&s, NEW);
+    assert_eq!(settled, Settled::Confirmed);
+    let mut host = Host::of(daemon, &coordinator, None);
+    host.beat();
+    host.beat();
+    assert_eq!(host.ordered(), [None, None]);
+    let convergence = convergence_of(&coordinator, HK);
+    assert_eq!(convergence["state"], "converged", "{convergence}");
+    let hk = hk_on_host(&coordinator);
+    assert_eq!(
+        (
+            hk.holds_slot,
+            hk.gate_reason,
+            hk.installed_version.as_deref()
+        ),
+        (false, GateReason::UpToDate as i32, Some(NEW)),
+        "{hk:?}"
+    );
+}
+
+/// Catches the verdict of hostkeeper's own install kept unsent while hostkeeper is not listed (a
+/// daemon the deb installed lists no service `hostkeeper` until its package is placed), which
+/// left the order holding the fleet's one update slot: a release whose protocol this daemon
+/// cannot fall back from is refused before anything is written, and the next heartbeat carries
+/// that verdict, which the coordinator records as the host's last update of hostkeeper, the slot
+/// no longer held; once it is acknowledged, the coordinator does not order the same install
+/// again (the host still lists hostkeeper absent, reporting that refusal).
+#[test]
+fn a_refused_install_of_hostkeeper_is_reported_in_the_next_heartbeat() {
+    let s = SelfRig::deb("typed-selfupdate-refused");
+    s.probe.set(|| Ok(9));
+    let dir = Scratch::new("typed-selfupdate-refused-coordinator");
+    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let (daemon, _) = hostkeeper_daemon(&s, OLD);
+    let mut host = Host::of(daemon, &coordinator, None);
+
+    host.beat();
+    assert!(host.dispatch.run_next());
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.rig.record(HK), None);
+    host.beat();
+    let hk = hk_on_host(&coordinator);
+    let reported = hk
+        .last_update
+        .clone()
+        .expect("the verdict reached the coordinator");
+    assert_eq!(
+        (
+            reported.target.as_str(),
+            reported.outcome,
+            reported.reason.as_str(),
+            reported.order_try
+        ),
+        (
+            NEW,
+            pb::Outcome::Failed as i32,
+            "protocol_unsupported",
+            Some(1)
+        )
+    );
+    assert!(!hk.holds_slot, "{hk:?}");
+    // Acknowledged, the refusal stands: the host is not ordered the same install again.
+    host.beat();
+    host.beat();
+    assert_eq!(host.ordered()[1..], [None, None, None]);
+    assert_eq!(hk_on_host(&coordinator).last_update, Some(reported));
+    let id = host.ordered()[0].clone().expect("the install").id;
+    assert_eq!(
+        host.log.lines(),
+        [format!(
+            "order {} try 1 of hostkeeper, which is not installed, ended failed: \
+             protocol_unsupported: it is sent with hostkeeper listed absent",
+            id.as_str()
+        )]
     );
 }
 

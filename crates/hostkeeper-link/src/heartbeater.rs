@@ -19,7 +19,16 @@
 //!    deferral when the last reply advertised `deferred-v1`. Step records that name a service
 //!    twice send nothing. A service listed again after it was not takes the verdict its step
 //!    record kept, unless that verdict was acknowledged, so a restart resends it; a kept
-//!    deferred verdict with no deferral of its target on record starts one.
+//!    deferred verdict with no deferral of its target on record starts one. A service the
+//!    records do not list that has a verdict to send (an install that ended before it placed
+//!    anything, as a refusal does, or a service that left the records while its order ran) is
+//!    listed too, absent at the verdict's target, with its units absent and that verdict: the
+//!    coordinator reads it as not installed, and hears how the order ended. Once the verdict is
+//!    acknowledged the entry stays, with no verdict, which a coordinator that advertises
+//!    `verdict-acks-v1` reads as still reporting it, so it does not order the same target again;
+//!    it goes once the records list the service or an uninstall of it succeeds. The loop keeps
+//!    this in memory only: after a restart of the daemon, a service the records do not list is
+//!    not listed until its next order ends.
 //! 4. [`fit`] keeps the bound; a heartbeat over it is refused and logged, never sent cut short.
 //! 5. The heartbeat goes out through [`CoordinatorLink::heartbeat`], the one outbound call.
 //! 6. From the reply: the advertised features replace the last ones; a verdict whose service,
@@ -57,7 +66,8 @@
 //! The verdict of an order names its target version; an `uninstall` names none, and its verdict
 //! names the version the service runs, as the last step records listed it. While an order runs,
 //! its service's `updating` is that version: an uninstall reports the version it removes, and an
-//! install reports nothing until its service is listed. An uninstall that succeeded leaves no
+//! install reports nothing until its service is listed, or until it ends: its verdict is sent
+//! whether or not the service is listed then (step 3). An uninstall that succeeded leaves no
 //! verdict to send: the service is gone from the next heartbeat, which is the report, and the
 //! verdicts of it not yet acknowledged go with it.
 //!
@@ -80,7 +90,8 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, Feature, Features, Heartbeat, Observed, Platform, Renewal, ServiceFacts, fit,
+    ANNOUNCED, Feature, Features, Health, Heartbeat, Liveness, Observed, Platform, Renewal,
+    ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::names::Reason;
@@ -178,6 +189,10 @@ pub struct Heartbeater {
     seen: BTreeSet<String>,
     /// The services of the last step records, each at the version they listed.
     installed: BTreeMap<String, Version>,
+    /// The services the step records do not list whose last order ended, each at that order's
+    /// target: each is listed absent there, its verdict while one is to be sent, until the
+    /// records list it or an uninstall of it succeeds.
+    absent: BTreeMap<String, Version>,
     running: Option<Running>,
     /// The path the loop said it waits for, so that it says so once.
     waiting_for: Option<PathBuf>,
@@ -196,6 +211,7 @@ impl Heartbeater {
             started: BTreeMap::new(),
             seen: BTreeSet::new(),
             installed: BTreeMap::new(),
+            absent: BTreeMap::new(),
             running: None,
             waiting_for: None,
         }
@@ -313,6 +329,7 @@ impl Heartbeater {
     fn finish(&mut self, order: &Order, service: &ServiceName, result: OrderResult) {
         if matches!(order.verb, Verb::Uninstall(_)) & (result.outcome == Outcome::Succeeded) {
             self.pending.remove(service.as_str());
+            self.absent.remove(service.as_str());
             self.log(&format!(
                 "order {} try {} uninstalled {service}",
                 result.order.id.as_str(),
@@ -336,17 +353,24 @@ impl Heartbeater {
         }
         if !self.installed.contains_key(service.as_str()) {
             self.log(&format!(
-                "the verdict of order {} try {} is kept until {service} is listed again",
+                "order {} try {} of {service}, which is not installed, ended {}: it is sent with \
+                 {service} listed absent",
                 result.order.id.as_str(),
-                result.order.order_try
+                result.order.order_try,
+                answered(&result)
             ));
         }
         self.push(service, result);
     }
 
     /// Adds `result` to the verdicts to send for `service`, in place of one of the same order
-    /// id and try.
+    /// id and try; a service the step records do not list is listed absent at its target from
+    /// now on.
     fn push(&mut self, service: &ServiceName, result: OrderResult) {
+        if !self.installed.contains_key(service.as_str()) {
+            self.absent
+                .insert(service.as_str().to_owned(), result.target.clone());
+        }
         let queue = self.pending.entry(service.as_str().to_owned()).or_default();
         queue.retain(|kept| kept.order != result.order);
         queue.push(result);
@@ -389,6 +413,8 @@ impl Heartbeater {
         }
         self.seen.retain(|name| names.contains_key(name));
         self.installed = names;
+        let listed = &self.installed;
+        self.absent.retain(|name, _| !listed.contains_key(name));
         let now = self.ports.clock.unix_secs();
         let mut services = Vec::with_capacity(installed.len());
         for recorded in installed {
@@ -420,17 +446,7 @@ impl Heartbeater {
                 version,
                 health: observation.health,
                 updating: running.or(updating),
-                last_update: self
-                    .pending
-                    .get(name.as_str())
-                    .and_then(|queue| {
-                        if self.advertised.has(Feature::VerdictAcksV1) {
-                            queue.first()
-                        } else {
-                            queue.last()
-                        }
-                    })
-                    .map(|result| result.shaped(&self.advertised)),
+                last_update: self.reported(&name),
                 deferred,
                 health_detail: observation.health_detail,
                 observed: Some(Observed {
@@ -439,6 +455,21 @@ impl Heartbeater {
                 }),
                 name,
             });
+        }
+        // A service the step records do not list whose order ended (an install that ended
+        // before it placed anything, or a service that left the records while its order ran)
+        // is listed absent at the order's target, with its verdict while one is to be sent and
+        // with none once the coordinator has acknowledged it, which then reads the entry as
+        // still reporting that verdict (`verdict-acks-v1`): it does not order the same target
+        // again as if it had never heard of the service.
+        let unlisted: Vec<(ServiceName, Version)> = self
+            .absent
+            .iter()
+            .filter_map(|(name, target)| Some((ServiceName::new(name).ok()?, target.clone())))
+            .collect();
+        for (name, target) in unlisted {
+            let facts = self.absent_facts(name, target, now);
+            services.push(facts);
         }
         let Renewal {
             cert_not_after_unix,
@@ -457,6 +488,53 @@ impl Heartbeater {
                     .filter(|text| !text.is_empty()),
             },
         })
+    }
+
+    /// The verdict of `name` the heartbeat carries: of those not yet acknowledged, the oldest to
+    /// a coordinator that advertised `verdict-acks-v1`, else the newest; shaped to the features
+    /// advertised.
+    fn reported(&self, name: &ServiceName) -> Option<OrderResult> {
+        self.pending
+            .get(name.as_str())
+            .and_then(|queue| {
+                if self.advertised.has(Feature::VerdictAcksV1) {
+                    queue.first()
+                } else {
+                    queue.last()
+                }
+            })
+            .map(|result| result.shaped(&self.advertised))
+    }
+
+    /// The entry of `name`, a service the step records do not list whose last order ended at
+    /// `target`: at the target of the verdict it carries (`target` when it carries none),
+    /// absent (installed and never run, as far as the coordinator is told: it orders such a
+    /// service an install), its units absent, with its deferral when the coordinator advertised
+    /// `deferred-v1`.
+    fn absent_facts(&mut self, name: ServiceName, target: Version, now: u64) -> ServiceFacts {
+        let last_update = self.reported(&name);
+        let log = self.ports.log.as_ref();
+        let deferred = self
+            .advertised
+            .has(Feature::DeferredV1)
+            .then(|| self.book.get(&name, now, log))
+            .flatten()
+            .and_then(|deferral| deferral.report(now));
+        ServiceFacts {
+            version: last_update
+                .as_ref()
+                .map_or(target, |result| result.target.clone()),
+            health: Health::Absent,
+            updating: None,
+            last_update,
+            deferred,
+            health_detail: None,
+            observed: Some(Observed {
+                liveness: Liveness::Absent,
+                version: None,
+            }),
+            name,
+        }
     }
 
     /// What the reply asks for.

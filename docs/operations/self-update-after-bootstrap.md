@@ -27,6 +27,36 @@ A daemon of the release that carries this change, or a later one, runs an `insta
 which stages the release's binary, switches the binary directory's `current` and restarts into
 it (design, section 6.6). One order brings a bootstrapped host to the desired release.
 
+On a Linux host the deb or the rpm installed, that install meets two more things, which a daemon
+handles from the release that carries the change that leaves the deb's enable link alone (the
+first release after 0.1.100 that `hostkeeper --version` shows with that change) on:
+
+- The deb enabled `hostkeeper.service` with its own `WantedBy=` link,
+  `/etc/systemd/system/multi-user.target.wants/hostkeeper.service` to
+  `/usr/lib/systemd/system/hostkeeper.service`, which `placed.json` does not list. The release
+  runs the same unit, so its install claims that path. The daemon leaves a link like this, to a
+  unit file of the same name, as it is and does not claim it: the unit is already enabled, and
+  systemd starts `hostkeeper.service` from `/etc/systemd/system`, where the install links the
+  release's unit. An earlier daemon refuses the install `path_conflict` before it writes anything.
+- Before it stages the new binary, the daemon asks it for its self-update protocol in a transient
+  unit. An earlier Linux daemon has no way to run that probe and refuses every self-update
+  `protocol_unreadable` (komira-ai/hostkeeper#102). The macOS launcher still has none.
+
+A verdict of a service the heartbeat does not list, such as the refusal of an install that wrote
+nothing, is sent in the next heartbeat. The service is listed `absent` at the order's target with
+that verdict until the coordinator acknowledges it, and with no verdict after that, which the
+coordinator reads as still reporting the one it acknowledged. So the coordinator hears how the
+order ended, the order no longer holds the update slot, and a refused version is not ordered to
+the host again. The entry goes once the service is listed; a restart of the daemon also drops
+it, and the coordinator may then order the install once more. An earlier daemon keeps such a
+verdict unsent until the service is listed, which a refused install never is.
+
+So a Linux daemon from before that release, installed by the deb, cannot update itself to any
+release. Bring it once, by hand, to that release or a later one the way the host's packaging
+upgrade does: stage that release's binary in the binary directory, switch `current` to it, and restart
+`hostkeeper.service`. From that release on, the coordinator's install, and every update after it,
+runs as the self-update. Until then, hold or exclude the host for the service `hostkeeper`.
+
 The release's hook is its own binary, `bin/hostkeeper update-hook`, which a daemon's step
 launcher runs as `bin/hostkeeper <step> ...`; every step does nothing. Its manifest asks for a
 daemon of 0.1.53 or later, so that the daemon that runs now, older than the release, takes it.
@@ -47,9 +77,10 @@ it as an `update`, which replaces the release installed and runs the self-update
 | 0.1.95 or later, its launchd job the plist of a pkg whose program is `current` (below) | macOS | as on Linux. |
 | any other | macOS | **not reached.** Exclude the Mac from hostkeeper and install the pkg by hand once, below. |
 
-A daemon that answered an earlier install of hostkeeper and never reported it (a service its
-heartbeat does not list has its verdicts kept until it lists it) may hold that order's try in its
-step record. The coordinator orders the next install one try past an order that went 120 seconds
+A daemon that answered an earlier install of hostkeeper and never reported it (a daemon from
+before that release keeps the verdicts of a service its heartbeat does not list until it lists
+it)
+may hold that order's try in its step record. The coordinator orders the next install one try past an order that went 120 seconds
 (`ORDER_AGE`) with no word, so such a host takes the next order instead of refusing it
 `try_conflict` for good.
 

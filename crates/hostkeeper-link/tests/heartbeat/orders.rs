@@ -4,12 +4,12 @@ use std::sync::mpsc;
 
 use hostkeeper_link::testing::identity;
 use hostkeeper_link::{
-    BeatOutcome, CertState, Dispatch, Feature, LinkError, OrderResult, Outcome, PackageDigest,
-    ThreadDispatch, Verb,
+    BeatOutcome, CertState, Dispatch, Feature, Health, LinkError, OrderResult, Outcome,
+    PackageDigest, ThreadDispatch, Verb,
 };
 
 use crate::verdict;
-use crate::{Rig, forced, recorded, reply, update, version};
+use crate::{Rig, forced, recorded, reply, service, update, version};
 
 /// Catches an order run on the loop's own thread (the loop would stop beating for the whole
 /// step), an order not reported as `updating` while it runs, an order run twice, and a verdict
@@ -183,10 +183,11 @@ fn an_order_for_a_service_not_installed_is_not_run() {
     );
 }
 
-/// Catches the verdict of an order whose service left the records while it ran being lost: it
-/// is kept, said, and sent once the service is listed again.
+/// Catches the verdict of an order whose service left the records while it ran being lost or
+/// kept unsent: it is said, sent at once under an entry of the service absent at the order's
+/// target, and sent under the service's own entry once it is listed again.
 #[test]
-fn a_verdict_of_a_service_that_left_is_kept_until_it_is_listed_again() {
+fn a_verdict_of_a_service_that_left_is_sent_under_an_absent_entry() {
     let rig = Rig::new("orders-left");
     rig.install(vec![recorded("x", "1.0")]);
     let mut heartbeater = rig.heartbeater();
@@ -195,17 +196,36 @@ fn a_verdict_of_a_service_that_left_is_kept_until_it_is_listed_again() {
     heartbeater.beat_once();
     rig.world.records.set(Vec::new());
     heartbeater.beat_once();
+    assert!(rig.world.link.beats()[1].services.is_empty());
     assert!(rig.world.dispatch.run_next());
     heartbeater.beat_once();
-    assert!(rig.world.link.beats()[2].services.is_empty());
+    let absent = &rig.world.link.beats()[2].services;
+    assert_eq!(absent.len(), 1);
+    assert_eq!(
+        (&absent[0].name, &absent[0].version, absent[0].health),
+        (&service("x"), &version("2.0"), Health::Absent)
+    );
+    assert_eq!(
+        absent[0].last_update,
+        Some(verdict(&order, Outcome::Succeeded))
+    );
     assert_eq!(
         rig.world.log.lines(),
-        ["the verdict of order o-1 try 1 is kept until x is listed again"]
+        [
+            "order o-1 try 1 of x, which is not installed, ended succeeded: it is sent with x listed \
+          absent"
+        ]
     );
     rig.world.records.set(vec![recorded("x", "2.0")]);
     heartbeater.beat_once();
+    let listed = &rig.world.link.beats()[3].services;
+    assert_eq!(listed.len(), 1);
     assert_eq!(
-        rig.world.link.beats()[3].services[0].last_update,
+        listed[0].health,
+        rig.world.link.beats()[0].services[0].health
+    );
+    assert_eq!(
+        listed[0].last_update,
         Some(verdict(&order, Outcome::Succeeded))
     );
 }

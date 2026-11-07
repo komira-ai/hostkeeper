@@ -856,3 +856,31 @@ fn a_failing_write_at_any_step_of_enable_is_an_error() {
             .expect("enable")
     );
 }
+
+/// Catches `unlink_all` stopping a unit, or leaving a path or the reload behind: every placed
+/// path of the service is removed and dropped from the record, no unit is stopped, and one
+/// `daemon-reload` runs.
+#[test]
+fn unlink_all_removes_every_path_and_stops_no_unit() {
+    let world = tierstore_world("unlink-all");
+    let removal = world
+        .placer()
+        .unlink_all(&service("tierstore"))
+        .expect("the removal");
+    assert_eq!(
+        removal,
+        Removal {
+            stopped: Vec::new(),
+            removed: vec![
+                wants("tierstore@9301.service"),
+                unit_path("tierstore@.service"),
+                PathBuf::from(CONF),
+            ],
+            left_alone: Vec::new(),
+            reloaded: true,
+        }
+    );
+    assert_eq!(world.unit_calls(), [UnitCall::DaemonReload]);
+    assert!(world.placed_links().is_empty());
+    assert!(world.record().paths.is_empty());
+}

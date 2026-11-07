@@ -429,8 +429,17 @@ impl<'a> Placer<'a> {
     /// Every path the version of `manifest` places: its units and files ([`Placer::claims`],
     /// command lines checked) and the `WantedBy=` links of its `run` units.
     pub fn desired(&self, manifest: &Manifest) -> Result<Claims, PlacedError> {
+        self.desired_in(manifest, &self.store().load()?)
+    }
+
+    /// [`Placer::desired`] against `record`, the record as the caller holds it.
+    pub(crate) fn desired_in(
+        &self,
+        manifest: &Manifest,
+        record: &PlacedRecord,
+    ) -> Result<Claims, PlacedError> {
         let mut claims = self.claims(manifest)?;
-        claims.extend(self.wants_claims(manifest)?)?;
+        claims.extend(self.wants_claims_in(manifest, record)?)?;
         Ok(claims)
     }
 
