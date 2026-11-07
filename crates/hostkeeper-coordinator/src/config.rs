@@ -1,7 +1,8 @@
 //! `hostkeeper-coordinator serve`'s flags and start-up: read every file, bind the listeners,
-//! print the start line, then serve until SIGTERM or SIGINT. The binary's other two verbs,
-//! `backup` and `restore`, copy the state files `serve` keeps and put a copy back
-//! ([`crate::backup`]), under the same lock.
+//! print the start line, then serve until SIGTERM or SIGINT. The binary's other verbs: `backup`
+//! and `restore` copy the state files `serve` keeps and put a copy back ([`crate::backup`]),
+//! under the same lock; `import` and `export` move the state from those files into the database
+//! and back ([`crate::transfer`]).
 //!
 //! Everything is a flag; the coordinator reads no environment variable. Without
 //! `--enrollment-dir` it holds no CA key: its certificate and key are files the farm CA issued,
@@ -64,7 +65,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::alerts::{
     DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
 };
-use crate::backup::{Backup, BackupError, Report, Restore, backup, restore};
+use crate::audit_file::wall_clock;
+use crate::backup::{Backup, Report, Restore, backup, restore};
 use crate::channel::ReleaseChannel;
 use crate::channel_https::{ChannelUrl, HttpsChannel};
 use crate::desired::DesiredStore;
@@ -80,6 +82,7 @@ use crate::service::{Clock, Coordinator};
 use crate::services::Services;
 use crate::store::Spent;
 use crate::tokens::OperatorTokens;
+use crate::transfer::{Export, Import, export, import};
 use crate::ui::UiDir;
 use crate::verdict_file::VerdictFile;
 
@@ -135,6 +138,13 @@ pub enum Command {
     Backup(Backup),
     /// Put a copy `backup` made back, into targets that hold no state.
     Restore(Restore),
+    /// Move the state of a stopped file coordinator into the database of --database-dsn-file, in
+    /// one transaction that reads it back and compares it; without --apply, say what would be
+    /// moved and write nothing. No file is changed.
+    Import(Import),
+    /// Write the state the database of --database-dsn-file holds into files of the file store
+    /// that hold no state, and the rows of each table.
+    Export(Export),
 }
 
 /// The flags of `serve`.
@@ -843,8 +853,9 @@ fn runtime(flags: Serve) -> Result<(), StartError> {
     runtime.block_on(start(flags, Roots::System, bind_tcp, signalled()))
 }
 
-/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup or restore
-/// is exit 1; SIGTERM or SIGINT, a backup made and a restore done are exit 0. `serve` without
+/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup, restore,
+/// import or export is exit 1; SIGTERM or SIGINT, a backup made, a restore, import or export
+/// done, and an import's plan said are exit 0. `serve` without
 /// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
 pub fn main(args: Vec<OsString>) -> ExitCode {
@@ -868,12 +879,14 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
         },
         Command::Backup(flags) => finish(backup(&flags, &FileLock)),
         Command::Restore(flags) => finish(restore(&flags, &FileLock)),
+        Command::Import(flags) => finish(import(&flags, &FileLock, &wall_clock())),
+        Command::Export(flags) => finish(export(&flags, &FileLock, &wall_clock())),
     }
 }
 
-/// The exit of a backup or a restore: its report on standard output and exit 0, or why it was
-/// refused on standard error and exit 1.
-fn finish(done: Result<Report, BackupError>) -> ExitCode {
+/// The exit of a backup, a restore, an import or an export: its report on standard output and
+/// exit 0, or why it was refused on standard error and exit 1.
+fn finish(done: Result<Report, impl std::fmt::Display>) -> ExitCode {
     match done {
         Ok(report) => {
             print!("{report}");

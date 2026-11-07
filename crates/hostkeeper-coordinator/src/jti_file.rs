@@ -92,6 +92,64 @@ fn text_of(live: &BTreeMap<String, u64>) -> String {
         .collect()
 }
 
+/// What a file of spent ids holds: the ids not yet past, how many lines it has, and whether it is
+/// empty or not there.
+struct Parsed {
+    live: BTreeMap<String, u64>,
+    lines: usize,
+    empty: bool,
+}
+
+/// Reads the file at `path`, its ids past at `now` left out of the live ones.
+fn parse(path: &Path, now: u64) -> Result<Parsed, JtiError> {
+    let io_at = |source: io::Error| JtiError::Io {
+        path: path.to_owned(),
+        source,
+    };
+    let text = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(io_at(e)),
+    };
+    let malformed = |line: usize| JtiError::Malformed {
+        path: path.to_owned(),
+        line,
+    };
+    let text = String::from_utf8(text).map_err(|_| malformed(1))?;
+    if !text.is_empty() && !text.ends_with('\n') {
+        return Err(malformed(text.lines().count()));
+    }
+    let mut live = BTreeMap::new();
+    let mut lines = 0;
+    for (n, line) in text.lines().enumerate() {
+        let (jti, until) = parse_line(line).ok_or_else(|| malformed(n + 1))?;
+        lines += 1;
+        if until > now {
+            live.insert(jti, until);
+        }
+    }
+    Ok(Parsed {
+        live,
+        lines,
+        empty: text.is_empty(),
+    })
+}
+
+/// The ids the file at `path` holds that are not yet past at `now`, sorted, read as
+/// [`JtiFile::open`] reads them and without writing anything: a file that is not there holds
+/// none.
+///
+/// # Errors
+/// [`JtiError`]: the file cannot be read, or a line of it is malformed.
+pub(crate) fn read_live(path: &Path, now: u64) -> Result<Vec<(String, u64)>, JtiError> {
+    Ok(parse(path, now)?.live.into_iter().collect())
+}
+
+/// The text of a file holding the spent ids `spent`, as the file is written.
+pub(crate) fn text_of_spent(spent: &[(String, u64)]) -> String {
+    text_of(&spent.iter().cloned().collect())
+}
+
 impl JtiFile {
     /// The file at `path` (created if it is not there), its expired ids dropped by `clock` and
     /// the file rewritten without them.
@@ -103,30 +161,8 @@ impl JtiFile {
             path: path.to_owned(),
             source,
         };
-        let text = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(io_at(e)),
-        };
-        let malformed = |line: usize| JtiError::Malformed {
-            path: path.to_owned(),
-            line,
-        };
-        let text = String::from_utf8(text).map_err(|_| malformed(1))?;
-        if !text.is_empty() && !text.ends_with('\n') {
-            return Err(malformed(text.lines().count()));
-        }
-        let now = clock();
-        let mut live = BTreeMap::new();
-        let mut lines = 0;
-        for (n, line) in text.lines().enumerate() {
-            let (jti, until) = parse_line(line).ok_or_else(|| malformed(n + 1))?;
-            lines += 1;
-            if until > now {
-                live.insert(jti, until);
-            }
-        }
-        if lines != live.len() || text.is_empty() {
+        let Parsed { live, lines, empty } = parse(path, clock())?;
+        if lines != live.len() || empty {
             write_whole(path, text_of(&live).as_bytes())
                 .map_err(|why| io_at(io::Error::other(why)))?;
         }

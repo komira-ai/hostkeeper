@@ -716,6 +716,15 @@ fn each(active: &Path, visit: &mut dyn FnMut(AuditLine)) -> Result<(), OpsError>
     Ok(())
 }
 
+/// The bytes of an audit file that holds `lines`, in their order, each written as an append
+/// writes it.
+pub(crate) fn history_text(lines: &[AuditLine]) -> Vec<u8> {
+    lines
+        .iter()
+        .flat_map(|line| line.text_after(false).into_bytes())
+        .collect()
+}
+
 /// The audit file of one ops file, with its sealed segments.
 pub(crate) struct AuditLog {
     path: PathBuf,
