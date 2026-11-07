@@ -5,6 +5,8 @@
     reason = "each test binary includes this module and uses a different part of it"
 )]
 
+pub mod grub;
+
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use base64::Engine;

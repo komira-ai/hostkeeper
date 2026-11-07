@@ -12,7 +12,7 @@ use hostkeeper_pxe_seed::layout::MENU_DIR;
 use hostkeeper_pxe_seed::menu::{
     GRUB_CFG, LOCAL_DISK_MENU, LocalDiskReason, MenuChoice, MenuRequest, Mode, install_menu,
 };
-use support::{record, server, server_on};
+use support::{grub, record, server, server_on};
 
 const MAC: &str = "52:54:00:12:34:56";
 
@@ -334,5 +334,162 @@ fn each_reason_reads_whole() {
     ];
     for (reason, text) in cases {
         assert_eq!(reason.to_string(), text);
+    }
+}
+
+/// The words of a command, each spelled with its variables as `${name}`.
+fn spelled(command: &grub::Command) -> Vec<String> {
+    command.words.iter().map(grub::Word::spelled).collect()
+}
+
+/// Catches a `grub.cfg` that GRUB reads as anything but one `configfile` of the menu path:
+/// a second command, a quoting that makes the path literal text rather than GRUB's `$prefix`,
+/// `$grub_cpu` and `$net_default_mac`, or a block.
+#[test]
+fn grub_cfg_reads_as_one_configfile_of_the_menu_of_grubs_cpu_and_mac() {
+    let commands = grub::read(GRUB_CFG).expect("GRUB reads it");
+    assert_eq!(commands.len(), 1);
+    let command = &commands[0];
+    assert_eq!(command.block, None);
+    assert_eq!(command.words.len(), 2);
+    assert_eq!(command.words[0].text(), Some("configfile"));
+    assert_eq!(
+        command.words[1].0,
+        [
+            grub::Part::Var("prefix".to_owned()),
+            grub::Part::Text(format!("/{MENU_DIR}/")),
+            grub::Part::Var("grub_cpu".to_owned()),
+            grub::Part::Text("/".to_owned()),
+            grub::Part::Var("net_default_mac".to_owned()),
+        ]
+    );
+}
+
+/// Catches an install menu that GRUB reads differently from what is meant: a wait, a second
+/// entry, a kernel or initrd of another platform or server, a kernel argument split in two (the
+/// `;` of `ds=nocloud;s=` unescaped would end the `linux` command there), or one argument too
+/// many or too few. Each platform, on port 80 and on another port.
+#[test]
+fn each_install_menu_reads_as_one_entry_booting_its_platform_with_its_seed() {
+    for port in [80, 8080] {
+        let host = match port {
+            80 => "192.0.2.10".to_owned(),
+            _ => format!("192.0.2.10:{port}"),
+        };
+        for platform in LinuxPlatform::ALL {
+            let text = install_menu(&server_on(port), platform, mac());
+            let commands = grub::read(&text).expect("GRUB reads it");
+            let top: Vec<Vec<String>> = commands.iter().map(spelled).collect();
+            let title = format!("Install Ubuntu 24.04 and hostkeeper ({platform})");
+            assert_eq!(
+                top,
+                [
+                    vec!["set".to_owned(), "timeout=0".to_owned()],
+                    vec!["set".to_owned(), "default=0".to_owned()],
+                    vec!["menuentry".to_owned(), title],
+                ],
+                "{platform} on {port}"
+            );
+            assert_eq!(commands[0].block, None);
+            assert_eq!(commands[1].block, None);
+            let entry = commands[2].block.as_ref().expect("the entry's block");
+            let boot = format!("/boot/{platform}");
+            assert_eq!(
+                entry.iter().map(spelled).collect::<Vec<_>>(),
+                [
+                    vec![
+                        "linux".to_owned(),
+                        format!("(http,{host}){boot}/vmlinuz"),
+                        "ip=dhcp".to_owned(),
+                        format!("url=http://{host}{boot}/live-server.iso"),
+                        "autoinstall".to_owned(),
+                        format!("ds=nocloud;s=http://{host}/seed/{MAC}/"),
+                    ],
+                    vec!["initrd".to_owned(), format!("(http,{host}){boot}/initrd")],
+                ],
+                "{platform} on {port}"
+            );
+            assert!(entry.iter().all(|c| c.block.is_none()));
+        }
+    }
+}
+
+/// Catches a local-disk menu that GRUB reads as a wait, a second entry, or anything but `exit`.
+#[test]
+fn the_local_disk_menu_reads_as_one_entry_that_exits() {
+    let commands = grub::read(LOCAL_DISK_MENU).expect("GRUB reads it");
+    let top: Vec<Vec<&str>> = commands.iter().map(grub::Command::texts).collect();
+    assert_eq!(
+        top,
+        [
+            vec!["set", "timeout=0"],
+            vec!["set", "default=0"],
+            vec!["menuentry", "Boot the local disk"],
+        ]
+    );
+    let entry = commands[2].block.as_ref().expect("the entry's block");
+    assert_eq!(entry.len(), 1);
+    assert_eq!(entry[0].texts(), ["exit"]);
+    assert_eq!(entry[0].block, None);
+}
+
+/// Catches a reader too lenient to judge the menus: it splits an unescaped `;` as GRUB does (the
+/// defect the install menu's escape prevents), reads each quoting rule as GRUB does, and refuses
+/// whatever it does not model rather than read it some other way.
+#[test]
+fn the_grub_reader_splits_an_unescaped_semicolon_and_refuses_what_it_does_not_model() {
+    let split = grub::read("linux k ds=nocloud;s=http://seed.example/\n").expect("read");
+    let split: Vec<Vec<&str>> = split.iter().map(grub::Command::texts).collect();
+    assert_eq!(
+        split,
+        [
+            vec!["linux", "k", "ds=nocloud"],
+            vec!["s=http://seed.example/"]
+        ]
+    );
+    let words =
+        grub::read("echo 'a;b $x' \"c\\$d \\\" \\\\ \\q\" e\\ f \"\" '' g\\\nh # a comment\nx#y\n")
+            .expect("read");
+    let words: Vec<Vec<&str>> = words.iter().map(grub::Command::texts).collect();
+    assert_eq!(
+        words,
+        [
+            vec!["echo", "a;b $x", "c$d \" \\ \\q", "e f", "", "", "gh"],
+            vec!["x#y"],
+        ]
+    );
+    let vars = grub::read("echo \"${a}-$b_1\" $c/d\n").expect("read");
+    assert_eq!(
+        vars[0].words[1].0,
+        [
+            grub::Part::Var("a".to_owned()),
+            grub::Part::Text("-".to_owned()),
+            grub::Part::Var("b_1".to_owned()),
+        ]
+    );
+    assert_eq!(vars[0].words[2].spelled(), "${c}/d");
+    assert_eq!(vars[0].words[1].text(), None);
+    let refused = [
+        ("echo 'a\n", "an unterminated '...'"),
+        ("echo \"a\n", "an unterminated \"...\""),
+        ("echo \"a\\", "an unterminated \"...\""),
+        ("echo a\\", "a \\ at the end of the text"),
+        ("menuentry x {\n", "a { block with no }"),
+        ("}\n", "a } with no {"),
+        ("echo }\n", "a } in the middle of a command"),
+        ("echo {\n}\n", "a { block that does not follow menuentry"),
+        ("echo a | b\n", "the metacharacter '|' is not read"),
+        ("echo a > b\n", "the metacharacter '>' is not read"),
+        (
+            "if true; then exit; fi\n",
+            "the reserved word \"if\" is not read",
+        ),
+        ("echo ${}\n", "an empty ${}"),
+        ("echo ${a\n", "'\\n' in a ${...} variable name"),
+        ("echo ${a", "an unterminated ${...}"),
+        ("echo $ x\n", "a $ with no variable name"),
+    ];
+    for (text, error) in refused {
+        assert_eq!(grub::read(text), Err(error.to_owned()), "{text:?}");
     }
 }
