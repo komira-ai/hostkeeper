@@ -1,0 +1,40 @@
+[package]
+name = "hostkeeper-mdm-step"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The host-step layer of the MDM host kit: a dry-run-by-default planner of directory, file, user, unit and command steps over a Host that is the machine or a fake."
+
+# The host-step layer of `hostkeeper-mdm` (docs/design/hostkeeper-mdm.md, task M3): a planner of
+# file, directory, user, unit and command steps, each with a dry-run line and an apply, over a
+# `Host` that is the machine (`RealHost`) or a fake (`fake::FakeHost`). It depends on no crate of
+# the workspace (crates/xtask/tests/layering keeps it so).
+[dependencies]
+# The walk without links (`openat`, `mkdirat`, `renameat`, `unlinkat`, `statat`) and the
+# effective ids.
+rustix = { workspace = true, features = ["fs", "process"] }
+thiserror.workspace = true
+
+# The program the tests of `RealHost::run` run in place of a program of the host
+# (tests/fs_real.rs): it echoes its arguments, prints its environment, exits with a code or
+# aborts. A program of the tests, not shipped: it is built only with `test-support`, which only
+# the tests of this crate turn on.
+[[bin]]
+name = "hostkeeper-mdm-step-run-fixture"
+path = "tests/bin/run_fixture.rs"
+required-features = ["test-support"]
+
+[features]
+# Builds the run tests' fixture program. Off for everything else.
+test-support = []
+
+[dev-dependencies]
+# Its own tests turn on `test-support`.
+hostkeeper-mdm-step = { path = ".", features = ["test-support"] }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true
