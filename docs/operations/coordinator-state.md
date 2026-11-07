@@ -11,6 +11,10 @@ The coordinator keeps its durable state in one of two stores, chosen by the flag
   `--halt-marker-file` beside it ([The database store](#the-database-store) below). `backup` and
   `restore` are for the file store only.
 
+`hostkeeper-coordinator import` moves the state of a stopped file coordinator into the database, and
+`hostkeeper-coordinator export` writes the database's state back into files
+([Moving between the stores](#moving-between-the-stores-import-and-export) below).
+
 The CA's key is not part of the state in either store and never in a snapshot: back it up once,
 sealed and offline, as [ca-backup.md](ca-backup.md) says.
 
@@ -94,6 +98,65 @@ the whole audit log, and the enrollment store. The design is
 - **Backups** of the database are taken with the database's own tools while the coordinator runs:
   `pg_dump` reads one consistent snapshot. The deployment's timer and the restore drill come with
   the compose deployment ([coordinator-storage.md](../design/coordinator-storage.md), section 10).
+
+## Moving between the stores: import and export
+
+`import` moves the state of a file coordinator into a database that holds none. It takes the file
+store's flags, as `serve` names them, and the database's:
+
+```
+hostkeeper-coordinator import --state-file <file> [--ops-file <file>] [--enrollment-dir <dir>] \
+    [--legacy-service <name>] --database-dsn-file <file> [--apply]
+```
+
+- **Without `--apply`** it reads every file and the database and writes nothing anywhere: no lock
+  file is made, no migration runs. It prints the rows each table would hold and whether the
+  database holds state already, which `--apply` would refuse.
+- **With `--apply`** it takes the lock `<state-file>.lock`, so a running file coordinator refuses it,
+  and then the database's lock, so a coordinator serving on the database refuses it too. It refuses
+  `<ops-file>.halts.unfinished` (start the file coordinator once on the files, so that it settles
+  the changes the marker lists, and stop it) and `<state-file>.restore-unfinished`. It reads every
+  file with the readers `serve` reads them with, and refuses what `serve` refuses. It runs the
+  migrations, and refuses a database that holds any state row, naming the table. Then, in one
+  transaction, it writes every table; the whole audit history, every sealed segment and the active
+  file, each line with its own number and time; the record of the import in the table `imports`
+  (the name, size and SHA-256 of every file it read, and the time of the oldest audit line the files
+  still held, when older segments were deleted); and the audit row `state_imported` by
+  `coordinator`. It reads it all back through the readers a start uses and compares it with the
+  files. A difference rolls the whole import back and names the first table that differs.
+- A desired-state file in the single-state form is the state of `--legacy-service`, as `serve`
+  reads it.
+- The entries of the ops file's audit ring that its audit file has no line of (changes older than
+  the audit file) are not imported, and the import says how many; the row `state_imported` is
+  numbered past them.
+- The MDM gate's device records (`<enrollment-dir>/mdm-devices`) have no table yet: an enrollment
+  store that holds them is refused, and a coordinator that runs the gate stays on the file store.
+- No file is changed: the file coordinator can start again on the same files.
+
+A second import needs an empty database: drop it and create it again first.
+
+`export` writes the state a database holds into files of the file store that hold none:
+
+```
+hostkeeper-coordinator export --database-dsn-file <file> --state-file <file> [--ops-file <file>] \
+    [--enrollment-dir <dir>] [--legacy-service <name>] --into-empty
+```
+
+- It takes the database's lock, so a coordinator serving on the database refuses it, and reads
+  everything in one read-only snapshot.
+- It writes as `restore` does: only into targets that hold no state, never over a file, with
+  `<state-file>.restore-unfinished` while it writes, and what it wrote removed again when a write
+  fails. A database that holds the enrollment store needs `--enrollment-dir`.
+- The desired-state file is in the single-state form exactly when `--legacy-service` names the only
+  service. The whole audit history is one audit file; a history the import found pruned is written
+  as the sealed segment `<ops-file>.audit.2`, so the file store says the same time of its oldest
+  line.
+- It prints the files it wrote, the rows of every table, and the lines of the audit file.
+
+To go back from the database to the files: stop the coordinator on the database, `export
+--into-empty` into new paths, and start the file coordinator on them. Changes made on the
+database are kept. CI's spent token ids that are past are not exported, as the file store drops
+them.
 
 The rest of this page is the file store.
 

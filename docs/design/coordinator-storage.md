@@ -4,9 +4,11 @@ Status: design, for the maintainers' comments. It supersedes "plain files, no da
 [hostkeeper-design.md](hostkeeper-design.md) section 4.3 ("There is no database") and the coordinator's rows of its
 section 10, the halts-file storage of the plan position in [rollout-update-plans.md](rollout-update-plans.md) section 3,
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
-on where the coordinator keeps its state, this document wins. C1, C2 and C3 are built: the storage trait and its
-fake (section 4.1), the enrollment crate's `Records` port, and the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` and `0002`, sections 3 to 8). Every other
+on where the coordinator keeps its state, this document wins. C1 to C4 are built: the storage trait and its
+fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` and `0002`, sections 3 to 8),
+and `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
+`crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
 
@@ -74,7 +76,8 @@ storage trait (section 4.1).
 The MDM gate's device records (hostkeeper-mdm.md section 6.1, task M8, built before this store) are a table of the same
 database, `mdm_devices`, added by M8's migration (the next free number when it lands, after C3). Until then they are a
 file per device, `<--enrollment-dir>/mdm-devices/<enrollment id>.pb`, behind the gate's `DeviceStore`; the table is a
-second `DeviceStore`, and the import reads the files into it.
+second `DeviceStore`, and the import reads the files into it once the table lands; until then the import refuses an
+enrollment store that holds them.
 
 ## 3. The schema
 
@@ -725,6 +728,17 @@ volumes:
   until one passes.
 
 ## 11. The move: import, cutover and back-out
+
+**Built** (C4): `crates/hostkeeper-coordinator/src/transfer.rs`, the database's side in
+`crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`, the enrollment store read and
+written whole by `FileRecords::read_snapshot` and `Snapshot::files`
+(`crates/hostkeeper-enrollment/src/enroll/records/files.rs`); the runbook is
+[coordinator-state.md](../operations/coordinator-state.md). Where C4 decided what this section leaves
+open: the ops file's audit ring entries that its audit file holds no line of are not imported (they
+have no time), and `state_imported` is numbered past them; until M8's table lands, an enrollment
+store that holds MDM device records is refused; and a history the import found pruned is exported
+as the sealed segment `<ops-file>.audit.2`, so the file store gives back the same
+`audit_pruned_before`.
 
 **`hostkeeper-coordinator import`** takes the file flags of `serve` (`--state-file`, `--ops-file`, `--enrollment-dir`,
 `--legacy-service`) and `--database-dsn-file`. A desired-state file in the single-state form is read as the state of
