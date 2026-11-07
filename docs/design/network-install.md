@@ -234,15 +234,10 @@ the packet handling, `crates/hostkeeper-pxe-packets` (item N7).
   well as by TFTP, so a GRUB loaded by UEFI HTTP boot finds them at the same path below the server. A seed is
   served only to a MAC given its install menu in the run; its first fetch reads the answer set again and is
   refused unless the MAC is still in it. The binary ships in the hostkeeper deb and rpm as
-  `/usr/bin/hostkeeper-pxe`, with no unit of its own. Two facts the built code holds differently from the text
-  above, until they are closed: `InventoryRecord` has no platform until item N14, so every record reads as one
-  with no platform, and router mode installs nothing yet; and `Hosts.List` answers only the hosts heard from
-  since the coordinator started, so after a restart of the coordinator a retired host whose record is still in
-  the inventory is no longer known by that list (its record is not `enrolled` either), and only removing its
-  record keeps it out of the answer set. That second fact is closed by a follow-up item: `InventoryRecord` gains
-  an additive field naming the host the enrollment store holds for that id (approved, denied or retired), read
-  from the durable store, and `serve` leaves such records out; until it lands, the runbook (item N12) has the
-  operator remove a retired host's record.
+  `/usr/bin/hostkeeper-pxe`, with no unit of its own. It reads `Enrollment.ListRecords` and `Enrollment.List`,
+  not `Hosts.List`, and leaves out every record whose `host_held` is not `NONE`. One fact the built code holds
+  differently from the text above, until item N14 closes it: `InventoryRecord` has no platform yet, so every
+  record reads as one with no platform, and router mode installs nothing yet.
 
 **The L2 requirement.** A DHCPDISCOVER and a selecting DHCPREQUEST are broadcasts. `hostkeeper-pxe` sees them only on
 the same broadcast domain, unless a relay forwards them; this design adds no relay. Both modes rely on the router's

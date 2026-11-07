@@ -277,14 +277,14 @@ fn a_start_says_how_it_runs_and_a_stop_says_it_stopped() {
                  request holds it"
             ),
             format!(
-                "{NOW} the coordinator holds 2 records, 1 hosts and 1 pending requests; 1 MACs \
+                "{NOW} the coordinator holds 2 records and 1 pending requests; 1 MACs \
                  are in the answer set"
             ),
             format!("{NOW} stopped"),
         ]
     );
     let bearers = kit.fake().get(|s| s.bearers.clone());
-    assert_eq!(bearers, vec![format!("Bearer {}", super::kit::TOKEN); 3]);
+    assert_eq!(bearers, vec![format!("Bearer {}", super::kit::TOKEN); 2]);
 }
 
 /// Router mode binds no proxyDHCP socket, and says so.

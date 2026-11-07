@@ -256,9 +256,8 @@ async fn run(
         ));
     }
     log.line(format_args!(
-        "the coordinator holds {} records, {} hosts and {} pending requests; {} MACs are in the answer set",
+        "the coordinator holds {} records and {} pending requests; {} MACs are in the answer set",
         snapshot.records.len(),
-        snapshot.hosts.len(),
         snapshot.pending.len(),
         at_start.menus.len()
     ));

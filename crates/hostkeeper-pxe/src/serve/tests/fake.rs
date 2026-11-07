@@ -1,4 +1,4 @@
-//! The fake coordinator of the tests: the operator API's `Enrollment` and `Hosts` services, over
+//! The fake coordinator of the tests: the operator API's `Enrollment` service, over
 //! TLS on a loopback port the kernel chooses, answering from lists the test sets and changes,
 //! a page at a time when the test asks for small pages, and refusing every call with a status
 //! the test sets. Every other call is unimplemented.
@@ -7,8 +7,6 @@ use std::sync::{Arc, Mutex};
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::{Enrollment, EnrollmentServer};
-use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::{Hosts, HostsServer};
-use tonic::codegen::{BoxFuture, Service, http};
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 use tonic::{Code, Request, Response, Status};
 
@@ -45,7 +43,6 @@ pub fn pki() -> Pki {
 #[derive(Default)]
 pub struct State {
     pub records: Vec<proto::InventoryRecord>,
-    pub hosts: Vec<proto::Host>,
     pub pending: Vec<proto::PendingEnrollment>,
     /// Every call is refused with this, when set.
     pub refuse: Option<(Code, String)>,
@@ -167,94 +164,6 @@ impl Enrollment for Fake {
     }
 }
 
-#[tonic::async_trait]
-impl Hosts for Fake {
-    async fn list(
-        &self,
-        request: Request<proto::ListHostsRequest>,
-    ) -> Result<Response<proto::ListHostsResponse>, Status> {
-        let token = request.get_ref().page_token.clone();
-        let (hosts, next_page_token) = self.page(&request, &token, |s| s.hosts.clone())?;
-        Ok(Response::new(proto::ListHostsResponse {
-            hosts,
-            next_page_token,
-        }))
-    }
-
-    async fn get(
-        &self,
-        _: Request<proto::GetHostRequest>,
-    ) -> Result<Response<proto::GetHostResponse>, Status> {
-        unimplemented()
-    }
-
-    async fn exclude(
-        &self,
-        _: Request<proto::ExcludeRequest>,
-    ) -> Result<Response<proto::ExcludeResponse>, Status> {
-        unimplemented()
-    }
-
-    async fn include(
-        &self,
-        _: Request<proto::IncludeRequest>,
-    ) -> Result<Response<proto::IncludeResponse>, Status> {
-        unimplemented()
-    }
-
-    async fn set_labels(
-        &self,
-        _: Request<proto::SetLabelsRequest>,
-    ) -> Result<Response<proto::SetLabelsResponse>, Status> {
-        unimplemented()
-    }
-
-    async fn abort(
-        &self,
-        _: Request<proto::AbortRequest>,
-    ) -> Result<Response<proto::AbortResponse>, Status> {
-        unimplemented()
-    }
-
-    async fn retire(
-        &self,
-        _: Request<proto::RetireRequest>,
-    ) -> Result<Response<proto::RetireResponse>, Status> {
-        unimplemented()
-    }
-}
-
-/// Both services behind one: a call goes to `Hosts` or to `Enrollment` by its path.
-#[derive(Clone)]
-struct Both {
-    enrollment: EnrollmentServer<Fake>,
-    hosts: HostsServer<Fake>,
-}
-
-impl Service<http::Request<tonic::body::Body>> for Both {
-    type Response = http::Response<tonic::body::Body>;
-    type Error = std::convert::Infallible;
-    type Future = BoxFuture<Self::Response, Self::Error>;
-
-    fn poll_ready(
-        &mut self,
-        _: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, request: http::Request<tonic::body::Body>) -> Self::Future {
-        match request
-            .uri()
-            .path()
-            .starts_with("/hostkeeper.operator.v1.Hosts/")
-        {
-            true => self.hosts.call(request),
-            false => self.enrollment.call(request),
-        }
-    }
-}
-
 /// The fake on a loopback port with TLS; it stops when dropped.
 pub struct Coordinator {
     pub fake: Fake,
@@ -279,10 +188,7 @@ impl Coordinator {
             .tls_config(tls)
             .expect("TLS")
             .serve_with_incoming(
-                Both {
-                    enrollment: EnrollmentServer::new(fake.clone()),
-                    hosts: HostsServer::new(fake.clone()),
-                },
+                EnrollmentServer::new(fake.clone()),
                 tokio_stream::wrappers::TcpListenerStream::new(listener),
             );
         runtime.spawn(server);
@@ -307,20 +213,18 @@ impl Drop for Coordinator {
     }
 }
 
-/// A record of the inventory.
+/// A record of the inventory: one a host is enrolled against is held as approved, any other
+/// is held by no host.
 pub fn record(host_id: &str, macs: &[&str], enrolled: bool) -> proto::InventoryRecord {
+    let held = match enrolled {
+        true => proto::HostHeld::Approved,
+        false => proto::HostHeld::None,
+    };
     proto::InventoryRecord {
         host_id: host_id.to_owned(),
         data_macs: macs.iter().map(|m| (*m).to_owned()).collect(),
         enrolled,
-        ..Default::default()
-    }
-}
-
-/// A host the coordinator knows.
-pub fn host(node_id: &str) -> proto::Host {
-    proto::Host {
-        node_id: node_id.to_owned(),
+        host_held: held.into(),
         ..Default::default()
     }
 }

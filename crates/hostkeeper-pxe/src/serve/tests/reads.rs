@@ -4,6 +4,7 @@
 
 use std::net::{SocketAddr, UdpSocket};
 
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_pxe_seed::inputs::LinuxPlatform;
 use hostkeeper_pxe_seed::menu::LOCAL_DISK_MENU;
 use tonic::Code;
@@ -143,7 +144,7 @@ fn a_failed_read_in_router_mode_gives_the_local_disk_menu() {
 
 /// `--reinstall old-1` puts the enrolled host's record back in the answer set: the start says
 /// so, its MAC gets the proxy offer and the install menu as host `old-1`, though a host is
-/// enrolled against the record and the coordinator knows a host by its id.
+/// enrolled against the record and its host id is held as approved.
 ///
 /// Catches a reinstall that needs the record removed first, and one the opt-in does not reach.
 #[test]
@@ -179,13 +180,14 @@ fn reinstall_answers_an_enrolled_host() {
 }
 
 /// A pending request that matches the record of `new-1` leaves its MAC out, naming the request,
-/// unless `--reinstall new-1` names it; a host the coordinator knows by the id `new-1`, in any
-/// state, leaves it out too.
+/// unless `--reinstall new-1` names it; so does a `host_held` of the record other than `NONE`
+/// (retired, approved with no heartbeat since the coordinator started, denied, or not said),
+/// though the record is not enrolled and no `Hosts.List` is read.
 ///
 /// Catches a machine installed and waiting for approval that is wiped at its next reboot, and a
-/// retired host's record installed while the coordinator still knows the host.
+/// retired host's record installed after a coordinator restart forgot the host.
 #[test]
-fn a_pending_request_or_a_known_host_leaves_the_record_out() {
+fn a_pending_request_or_a_held_host_id_leaves_the_record_out() {
     let kit = Kit::new("reads-pending");
     kit.fake()
         .set(|s| s.pending = vec![fake::pending("req-1", "new-1")]);
@@ -197,23 +199,34 @@ fn a_pending_request_or_a_known_host_leaves_the_record_out() {
             "not in the answer set: the record of host new-1: the pending request req-1 matches it"
         )
     );
-    kit.fake().set(|s| {
-        s.pending.clear();
-        s.hosts.push(fake::host("new-1"));
-    });
-    assert_eq!(
-        discover(&mut run, &firmware, RECORDED, 7),
-        unanswered(
-            RECORDED,
-            "not in the answer set: the record of host new-1: the coordinator knows a host by that id"
-        )
-    );
+    kit.fake().set(|s| s.pending.clear());
+    for (held, why) in [
+        (proto::HostHeld::Retired, "that id is retired"),
+        (proto::HostHeld::Approved, "a host is approved as that id"),
+        (
+            proto::HostHeld::Denied,
+            "that id is denied, its retirement not final yet",
+        ),
+        (
+            proto::HostHeld::Unspecified,
+            "the coordinator does not say whether a host holds that id",
+        ),
+    ] {
+        kit.fake().set(|s| s.records[0].host_held = held.into());
+        assert_eq!(
+            discover(&mut run, &firmware, RECORDED, 7),
+            unanswered(
+                RECORDED,
+                &format!("not in the answer set: the record of host new-1: {why}")
+            )
+        );
+    }
     let (result, _) = run.stop();
     assert_eq!(result, Ok(()));
     assert!(!waiting(&firmware));
 
     kit.fake().set(|s| {
-        s.hosts.retain(|h| h.node_id != "new-1");
+        s.records[0].host_held = proto::HostHeld::None.into();
         s.pending = vec![fake::pending("req-1", "new-1")];
     });
     let (mut run, firmware) = start(&kit, "proxy", &["--reinstall", "new-1"]);

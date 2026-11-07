@@ -9,9 +9,9 @@
 //!    MAC is left out rather than given one record's install);
 //! 2. its machine has not fetched its seed in this run (a MAC leaves the set when its install
 //!    starts, `--reinstall` or not);
-//! 3. unless `--reinstall` names the record's host id: the record is not enrolled, the
-//!    coordinator knows no host by its host id (in any state), and no pending request matches
-//!    it;
+//! 3. unless `--reinstall` names the record's host id: the record is not enrolled, its
+//!    `host_held` is `NONE` (the enrollment store holds no host by its id: any other value,
+//!    `UNSPECIFIED` included, leaves it out), and no pending request matches it;
 //! 4. in router mode, the record states a platform (the router names one file for every
 //!    client, so the record is where the install's platform is stated);
 //! 5. the record's platform, when it states one, has a boot set.
@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use hostkeeper_enrollment::names::MacAddress;
+use hostkeeper_proto::hostkeeper::operator::v1::HostHeld as HostHeldValue;
 use hostkeeper_pxe_packets::Mac;
 use hostkeeper_pxe_packets::dhcp::{AnswerSet, Mode};
 use hostkeeper_pxe_packets::tftp::RecordPlatforms;
@@ -56,8 +57,12 @@ pub enum LeftOut {
     SharedMac { host_ids: Vec<HostId> },
     /// A host is enrolled against the record.
     Enrolled { host_id: HostId },
-    /// The coordinator knows a host by the record's host id.
-    HostKnown { host_id: HostId },
+    /// The enrollment store holds a host by the record's host id, or the coordinator does not
+    /// say whether it does (`host_held` is not `NONE`).
+    HostHeld {
+        host_id: HostId,
+        held: HostHeldValue,
+    },
     /// A pending request matches the record.
     Pending { host_id: HostId, request_id: String },
     /// Router mode, and the record states no platform.
@@ -90,11 +95,16 @@ impl fmt::Display for LeftOut {
                     "the record of host {host_id}: a host is enrolled against it"
                 )
             }
-            LeftOut::HostKnown { host_id } => {
-                write!(
-                    f,
-                    "the record of host {host_id}: the coordinator knows a host by that id"
-                )
+            LeftOut::HostHeld { host_id, held } => {
+                let what = match held {
+                    HostHeldValue::Approved => "a host is approved as that id",
+                    HostHeldValue::Denied => "that id is denied, its retirement not final yet",
+                    HostHeldValue::Retired => "that id is retired",
+                    HostHeldValue::Unspecified | HostHeldValue::None => {
+                        "the coordinator does not say whether a host holds that id"
+                    }
+                };
+                write!(f, "the record of host {host_id}: {what}")
             }
             LeftOut::Pending {
                 host_id,
@@ -202,8 +212,11 @@ fn judge<'r>(
         if record.enrolled {
             return Err(LeftOut::Enrolled { host_id: host_id() });
         }
-        if snapshot.hosts.contains(record.host_id.as_str()) {
-            return Err(LeftOut::HostKnown { host_id: host_id() });
+        if record.host_held != HostHeldValue::None {
+            return Err(LeftOut::HostHeld {
+                host_id: host_id(),
+                held: record.host_held,
+            });
         }
         let matching = snapshot.pending.iter().find(|pending| {
             pending

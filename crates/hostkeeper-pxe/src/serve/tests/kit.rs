@@ -149,7 +149,7 @@ pub struct Kit {
 impl Kit {
     /// A kit named `name` whose directory seals both platforms, whose fake coordinator holds
     /// the record of [`RECORDED`] (`new-1`, not enrolled) and of [`ENROLLED`] (`old-1`,
-    /// enrolled, and a host).
+    /// enrolled, its host id held as approved).
     pub fn new(name: &str) -> Kit {
         Kit::with(name, &LinuxPlatform::ALL)
     }
@@ -181,7 +181,6 @@ impl Kit {
                 fake::record("new-1", &[RECORDED], false),
                 fake::record("old-1", &[ENROLLED], true),
             ];
-            s.hosts = vec![fake::host("old-1")];
         });
         let coordinator = Coordinator::start(&pki, fake);
         Kit {

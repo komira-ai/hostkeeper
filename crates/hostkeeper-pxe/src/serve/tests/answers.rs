@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hostkeeper_enrollment::names::MacAddress;
+use hostkeeper_proto::hostkeeper::operator::v1::HostHeld;
 use hostkeeper_pxe_packets::dhcp::Mode;
 use hostkeeper_pxe_seed::inputs::{LinuxPlatform, Record as MenuRecord};
 use hostkeeper_wire::{HostId, Platform};
@@ -24,6 +25,7 @@ fn record(host: &str, macs: &[&str], platform: Option<LinuxPlatform>) -> Record 
         role: None,
         data_macs: macs.iter().map(|m| mac(m)).collect(),
         enrolled: false,
+        host_held: HostHeld::None,
         platform,
     }
 }
@@ -53,23 +55,25 @@ fn run(
 
 const BOTH: [LinuxPlatform; 2] = LinuxPlatform::ALL;
 
-/// The inventory of the tests: `new-1` free, `enr-1` enrolled, `known-1` a host the
-/// coordinator knows (in any state, retired included: it is in `Hosts.List`), `pend-1` matched
+/// The inventory of the tests: `new-1` free, `enr-1` enrolled, `known-1` a host id the
+/// enrollment store holds as retired (`host_held` `RETIRED`), `pend-1` matched
 /// by a pending request, `amb-1` a candidate of an ambiguous one, and `arm-1` free with the
 /// arm64 platform recorded.
 fn inventory() -> Snapshot {
     let mut enrolled = record("enr-1", &["02:00:00:00:00:02"], None);
     enrolled.enrolled = true;
+    enrolled.host_held = HostHeld::Approved;
+    let mut known = record("known-1", &["02:00:00:00:00:03"], None);
+    known.host_held = HostHeld::Retired;
     Snapshot {
         records: vec![
             record("new-1", &["02:00:00:00:00:01", "02:00:00:00:00:11"], None),
             enrolled,
-            record("known-1", &["02:00:00:00:00:03"], None),
+            known,
             record("pend-1", &["02:00:00:00:00:04"], None),
             record("amb-1", &["02:00:00:00:00:05"], None),
             record("arm-1", &["02:00:00:00:00:06"], Some(LinuxPlatform::Arm64)),
         ],
-        hosts: ["known-1".to_owned()].into(),
         pending: vec![
             Pending {
                 request_id: "req-p".to_owned(),
@@ -147,8 +151,9 @@ fn only_free_records_are_in_the_answer_set_and_each_left_out_mac_has_its_reason(
             ),
             (
                 mac("02:00:00:00:00:03").octets(),
-                LeftOut::HostKnown {
-                    host_id: id("known-1")
+                LeftOut::HostHeld {
+                    host_id: id("known-1"),
+                    held: HostHeld::Retired
                 }
             ),
             (
@@ -174,7 +179,7 @@ fn only_free_records_are_in_the_answer_set_and_each_left_out_mac_has_its_reason(
     );
     assert_eq!(
         why("02:00:00:00:00:03"),
-        "the record of host known-1: the coordinator knows a host by that id"
+        "the record of host known-1: that id is retired"
     );
     assert_eq!(
         why("02:00:00:00:00:04"),
@@ -323,4 +328,65 @@ fn an_empty_read_gives_the_empty_answer_set() {
         run(&Snapshot::default(), Mode::Proxy, &BOTH, &[], &[]),
         Answers::default()
     );
+}
+
+/// Every `host_held` but `NONE` leaves its record out: `APPROVED` (an approved host that may not
+/// have sent a heartbeat since the coordinator started), `DENIED`, `RETIRED`, and `UNSPECIFIED`
+/// (a coordinator that does not say), each with its reason; `--reinstall` naming the record's
+/// host id puts it back; `NONE` is in the set.
+///
+/// Catches a retired or silent approved host installed over because no host list showed it, and
+/// a coordinator of a release before `host_held` read as "no host".
+#[test]
+fn every_host_held_but_none_leaves_the_record_out() {
+    let cases = [
+        (HostHeld::Approved, "a host is approved as that id"),
+        (
+            HostHeld::Denied,
+            "that id is denied, its retirement not final yet",
+        ),
+        (HostHeld::Retired, "that id is retired"),
+        (
+            HostHeld::Unspecified,
+            "the coordinator does not say whether a host holds that id",
+        ),
+    ];
+    for (held, why) in cases {
+        let mut held_record = record("held-1", &["02:00:00:00:00:21"], None);
+        held_record.host_held = held;
+        let snapshot = Snapshot {
+            records: vec![held_record],
+            pending: Vec::new(),
+        };
+        let out = run(&snapshot, Mode::Proxy, &BOTH, &[], &[]);
+        assert_eq!(out.dhcp, BTreeMap::new(), "{held:?}");
+        assert_eq!(
+            out.left_out,
+            BTreeMap::from([(
+                mac("02:00:00:00:00:21").octets(),
+                LeftOut::HostHeld {
+                    host_id: id("held-1"),
+                    held
+                }
+            )]),
+            "{held:?}"
+        );
+        assert_eq!(
+            out.why_not(mac("02:00:00:00:00:21").octets()),
+            format!("the record of host held-1: {why}")
+        );
+        let again = run(&snapshot, Mode::Proxy, &BOTH, &["held-1"], &[]);
+        assert_eq!(
+            again.dhcp.keys().copied().collect::<Vec<_>>(),
+            [packet_mac(mac("02:00:00:00:00:21"))],
+            "{held:?}"
+        );
+    }
+    let free = Snapshot {
+        records: vec![record("free-1", &["02:00:00:00:00:22"], None)],
+        pending: Vec::new(),
+    };
+    let out = run(&free, Mode::Proxy, &BOTH, &[], &[]);
+    assert_eq!(out.left_out, BTreeMap::new());
+    assert_eq!(out.menus.len(), 1);
 }

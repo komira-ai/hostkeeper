@@ -1,13 +1,11 @@
 //! The read of the coordinator: the snapshot of its three lists, every page of each, with the
 //! token, over TLS that trusts the coordinator's CA alone; and every way a read fails.
 
-use std::collections::BTreeSet;
-
 use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use tonic::Code;
 
-use super::fake::{self, Coordinator as FakeCoordinator, Fake, host, pending, pki, record};
+use super::fake::{self, Coordinator as FakeCoordinator, Fake, pending, pki, record};
 use crate::serve::inventory::{
     ConnectError, Coordinator, MAX_PAGES, Pending, ReadError, Record, Snapshot,
 };
@@ -48,9 +46,10 @@ fn a_snapshot_keeps_what_the_answer_set_needs() {
         candidate_host_ids: vec!["a-1".to_owned(), "b-1".to_owned()],
         ..Default::default()
     };
+    let mut future = record("f-1", &[], false);
+    future.host_held = 99;
     let snapshot = Snapshot::of(
-        vec![with_role, record("m-1", &[], false)],
-        vec![host("h-1"), host("h-2")],
+        vec![with_role, record("m-1", &[], false), future],
         vec![pending("req-1", "r-1"), ambiguous],
     )
     .expect("a snapshot");
@@ -63,6 +62,7 @@ fn a_snapshot_keeps_what_the_answer_set_needs() {
                     role: Some("storage".parse().expect("a role")),
                     data_macs: vec![MacAddress::parse("02:00:00:00:00:01").expect("a MAC")],
                     enrolled: true,
+                    host_held: proto::HostHeld::Approved,
                     platform: None,
                 },
                 Record {
@@ -70,10 +70,19 @@ fn a_snapshot_keeps_what_the_answer_set_needs() {
                     role: None,
                     data_macs: vec![],
                     enrolled: false,
+                    host_held: proto::HostHeld::None,
+                    platform: None,
+                },
+                // A `host_held` this release does not know says nothing: the record is left out.
+                Record {
+                    host_id: "f-1".parse().expect("an id"),
+                    role: None,
+                    data_macs: vec![],
+                    enrolled: false,
+                    host_held: proto::HostHeld::Unspecified,
                     platform: None,
                 },
             ],
-            hosts: BTreeSet::from(["h-1".to_owned(), "h-2".to_owned()]),
             pending: vec![
                 Pending {
                     request_id: "req-1".to_owned(),
@@ -107,7 +116,7 @@ fn a_record_that_does_not_parse_fails_the_read() {
         (bad_mac, "the record r-2 holds \"zz\", which is not a MAC"),
     ];
     for (record, what) in cases {
-        let refused = Snapshot::of(vec![record], vec![], vec![]).expect_err(what);
+        let refused = Snapshot::of(vec![record], vec![]).expect_err(what);
         assert_eq!(
             refused,
             ReadError::Unparsable {
@@ -170,8 +179,9 @@ fn the_endpoint_is_an_https_authority_and_nothing_more() {
     });
 }
 
-/// Every page of each of the three lists is read, in order, each call with the token as
-/// `Bearer <token>`: the records, then the hosts, then the pending requests.
+/// Every page of each of the two lists is read, in order, each call with the token as
+/// `Bearer <token>`: the records, then the pending requests. `Hosts.List` is not called (the
+/// fake serves no `Hosts`, so a call of it would fail the read).
 ///
 /// Catches an inventory read that stops at its first page (a record past it would escape the
 /// enrolled check) and calls sent without the operator token.
@@ -185,7 +195,6 @@ fn every_page_of_each_list_is_read_with_the_token() {
             record("b-1", &["02:00:00:00:00:02"], false),
             record("c-1", &["02:00:00:00:00:03"], false),
         ];
-        s.hosts = vec![host("h-1"), host("h-2")];
         s.pending = vec![pending("req-1", "a-1"), pending("req-2", "b-1")];
         s.page = 1;
     });
@@ -197,10 +206,6 @@ fn every_page_of_each_list_is_read_with_the_token() {
         .map(|r| r.host_id.as_str())
         .collect();
     assert_eq!(ids, ["a-1", "b-1", "c-1"]);
-    assert_eq!(
-        snapshot.hosts,
-        BTreeSet::from(["h-1".to_owned(), "h-2".to_owned()])
-    );
     let requests: Vec<&str> = snapshot
         .pending
         .iter()
@@ -208,9 +213,9 @@ fn every_page_of_each_list_is_read_with_the_token() {
         .collect();
     assert_eq!(requests, ["req-1", "req-2"]);
     let tokens = coordinator.fake.get(|s| s.tokens.clone());
-    assert_eq!(tokens, ["", "1", "2", "", "1", "", "1"]);
+    assert_eq!(tokens, ["", "1", "2", "", "1"]);
     let bearers = coordinator.fake.get(|s| s.bearers.clone());
-    assert_eq!(bearers, vec![format!("Bearer {TOKEN}"); 7]);
+    assert_eq!(bearers, vec![format!("Bearer {TOKEN}"); 5]);
 }
 
 /// A call the coordinator refuses fails the read with the call's name, code and message, and

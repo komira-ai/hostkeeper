@@ -1,9 +1,12 @@
 //! What `serve` reads from the coordinator for each answer (docs/design/network-install.md,
 //! section 3, "Which machines may be installed: the answer set"): through the operator API on
-//! the private listener, with the operator token, the inventory (`Enrollment.ListRecords`), the
-//! hosts (`Hosts.List`) and the pending requests (`Enrollment.List`), every page of each.
+//! the private listener, with the operator token, the inventory (`Enrollment.ListRecords`, each
+//! record with its `host_held`, what the coordinator's durable enrollment store holds for its host
+//! id) and the pending requests (`Enrollment.List`), every page of each. `Hosts.List` is not read:
+//! it lists only the hosts heard from since the coordinator started (section 3, "`host_held` is
+//! the rule").
 //!
-//! [`Coordinator::snapshot`] reads all three and gives a [`Snapshot`], or a [`ReadError`] when
+//! [`Coordinator::snapshot`] reads both and gives a [`Snapshot`], or a [`ReadError`] when
 //! any call fails: the listener does not answer, the token is refused (any status the call ends
 //! with), or an answer does not parse (a status of its own from the client, or a host id, role
 //! or MAC that is not one). A read that fails gives no snapshot at all, so the caller can only
@@ -18,14 +21,12 @@
 //! mode installs the platform the firmware states, and router mode installs no record until the
 //! field exists.
 
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::time::Duration;
 
 use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_client::EnrollmentClient;
-use hostkeeper_proto::hostkeeper::operator::v1::hosts_client::HostsClient;
 use hostkeeper_pxe_seed::inputs::LinuxPlatform;
 use hostkeeper_wire::{HostId, RoleName};
 use tonic::codegen::http::Uri;
@@ -51,6 +52,9 @@ pub struct Record {
     pub data_macs: Vec<MacAddress>,
     /// A host is enrolled against it.
     pub enrolled: bool,
+    /// What the enrollment store holds for its host id; a value this release does not know
+    /// reads as `Unspecified`, which says nothing, so the record is left out.
+    pub host_held: proto::HostHeld,
     /// Its platform; `None` when not recorded.
     pub platform: Option<LinuxPlatform>,
 }
@@ -65,12 +69,10 @@ pub struct Pending {
     pub host_ids: Vec<String>,
 }
 
-/// One read of the coordinator: every record, the node id of every host it knows, and every
-/// pending request.
+/// One read of the coordinator: every record and every pending request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub records: Vec<Record>,
-    pub hosts: BTreeSet<String>,
     pub pending: Vec<Pending>,
 }
 
@@ -105,17 +107,15 @@ pub enum ConnectError {
 }
 
 const LIST_RECORDS: &str = "Enrollment.ListRecords";
-const LIST_HOSTS: &str = "Hosts.List";
 const LIST_PENDING: &str = "Enrollment.List";
 
 impl Snapshot {
-    /// The snapshot of three lists as the coordinator answered them.
+    /// The snapshot of the two lists as the coordinator answered them.
     ///
     /// # Errors
     /// [`ReadError::Unparsable`] for a record whose host id, role or a data MAC is not one.
     pub fn of(
         records: Vec<proto::InventoryRecord>,
-        hosts: Vec<proto::Host>,
         pending: Vec<proto::PendingEnrollment>,
     ) -> Result<Snapshot, ReadError> {
         let records = records
@@ -128,7 +128,6 @@ impl Snapshot {
             })?;
         Ok(Snapshot {
             records,
-            hosts: hosts.into_iter().map(|host| host.node_id).collect(),
             pending: pending
                 .into_iter()
                 .map(|request| {
@@ -171,6 +170,7 @@ fn record_of(record: proto::InventoryRecord) -> Result<Record, String> {
         role,
         data_macs,
         enrolled: record.enrolled,
+        host_held: record.host_held(),
         // `InventoryRecord` has no platform until item N14: not recorded.
         platform: None,
     })
@@ -233,7 +233,7 @@ impl Coordinator {
         request
     }
 
-    /// The records, the hosts and the pending requests, read now.
+    /// The records and the pending requests, read now.
     ///
     /// # Errors
     /// [`ReadError`]: a call failed, or an answer does not parse.
@@ -251,18 +251,6 @@ impl Coordinator {
             }
         })
         .await?;
-        let hosts = pages(LIST_HOSTS, |page_token| {
-            let mut client = HostsClient::new(self.channel.clone());
-            let request = self.request(proto::ListHostsRequest {
-                limit: 0,
-                page_token,
-            });
-            async move {
-                let page = client.list(request).await?.into_inner();
-                Ok((page.hosts, page.next_page_token))
-            }
-        })
-        .await?;
         let pending = pages(LIST_PENDING, |page_token| {
             let mut client = EnrollmentClient::new(self.channel.clone());
             let request = self.request(proto::ListPendingRequest {
@@ -276,7 +264,7 @@ impl Coordinator {
             }
         })
         .await?;
-        Snapshot::of(records, hosts, pending)
+        Snapshot::of(records, pending)
     }
 }
 
