@@ -11,6 +11,7 @@ use hostkeeper_wire::identity::PrefixError;
 use crate::channel_https::{ChannelTlsError, ChannelUrlError};
 use crate::desired::StoreError;
 use crate::enrollment::{AllowlistError, SetupError};
+use crate::inventory::WindowAboveMax;
 use crate::jti_file::JtiError;
 use crate::mdm::MdmError;
 use crate::ops::OpsError;
@@ -96,6 +97,9 @@ pub enum StartError {
     /// `--ui-dir` does not name a directory.
     #[error("--ui-dir: {0}")]
     UiDir(#[from] UiDirError),
+    /// `--record-approve-for` is longer than `--record-approve-max`.
+    #[error(transparent)]
+    RecordWindow(#[from] WindowAboveMax),
     /// A socket, the runtime or the signal handlers failed.
     #[error(transparent)]
     Io(#[from] io::Error),

@@ -13,6 +13,8 @@ mod channel_run_tests;
 mod desired;
 mod desired_tests;
 mod lint;
+mod net_install;
+mod net_install_tests;
 mod pr_device;
 mod pr_device_tests;
 mod privileged_tests;

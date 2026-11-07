@@ -152,8 +152,13 @@ impl TestCa {
 
     /// A server certificate for the loopback address `127.0.0.1`.
     pub fn loopback_server(&self) -> Leaf {
+        self.server_for(Ipv4Addr::LOCALHOST)
+    }
+
+    /// A server certificate for the address `ip`.
+    pub fn server_for(&self, ip: Ipv4Addr) -> Leaf {
         let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");
-        params.subject_alt_names = vec![SanType::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST))];
+        params.subject_alt_names = vec![SanType::IpAddress(IpAddr::V4(ip))];
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         let key = KeyPair::generate().expect("a key");
         let cert = params.signed_by(&key, &self.issuer).expect("signed");
@@ -172,13 +177,15 @@ pub fn rollout(more: &str) -> String {
 }
 
 /// The coordinator: the files its flags name, under `<scratch>/coordinator`, and the running
-/// program. It keeps its two ports across a restart, so that the daemon, which dials one
-/// address, finds it again.
+/// program. It keeps its ports across a restart, so that the daemon, which dials one address,
+/// finds it again.
 pub struct Coordinator {
     dir: PathBuf,
     extra: Vec<String>,
     pub heartbeat: SocketAddr,
     pub control: SocketAddr,
+    /// The LAN listener (`--lan-listen`), when it has one.
+    pub lan: Option<SocketAddr>,
     run: Option<Running>,
 }
 
@@ -187,9 +194,32 @@ impl Coordinator {
     /// enrollment, making its CA (`--ca-init`), on ports of loopback the system picks; `extra`
     /// are more flags of `serve`, given at every start.
     pub fn start(scratch: &Path, rollout: &str, extra: &[&str]) -> Coordinator {
+        Coordinator::start_with(scratch, rollout, extra, Ipv4Addr::LOCALHOST, false)
+    }
+
+    /// [`Self::start`], with the private listener on `address` (its certificate for that
+    /// address) and a LAN listener there too (`--lan-listen`), each on a port the system picks:
+    /// the coordinator of the network-install tests, which `hostkeeper-pxe` reads over the
+    /// farm LAN and a network-installed host dials.
+    pub fn start_on_lan(
+        scratch: &Path,
+        rollout: &str,
+        extra: &[&str],
+        address: Ipv4Addr,
+    ) -> Coordinator {
+        Coordinator::start_with(scratch, rollout, extra, address, true)
+    }
+
+    fn start_with(
+        scratch: &Path,
+        rollout: &str,
+        extra: &[&str],
+        address: Ipv4Addr,
+        lan: bool,
+    ) -> Coordinator {
         let dir = scratch.join("coordinator");
         let ca = TestCa::new("private listener CA");
-        let leaf = ca.loopback_server();
+        let leaf = ca.server_for(address);
         put(&dir.join("private-ca.pem"), ca.pem().as_bytes(), 0o644);
         put(&dir.join("tls.pem"), leaf.cert_pem.as_bytes(), 0o644);
         put(&dir.join("tls.key"), leaf.key_pem.as_bytes(), 0o600);
@@ -227,7 +257,8 @@ impl Coordinator {
             dir,
             extra: extra.iter().map(|s| (*s).to_owned()).collect(),
             heartbeat: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-            control: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            control: SocketAddr::from((address, 0)),
+            lan: lan.then(|| SocketAddr::from((address, 0))),
             run: None,
         };
         coordinator.launch(true);
@@ -267,6 +298,9 @@ impl Coordinator {
         ]
         .map(String::from)
         .to_vec();
+        if let Some(lan) = self.lan {
+            args.extend(["--lan-listen".to_owned(), lan.to_string()]);
+        }
         if init {
             args.push("--ca-init".to_owned());
         }
@@ -291,6 +325,9 @@ impl Coordinator {
         };
         self.heartbeat = addr("heartbeat=");
         self.control = addr("control=");
+        if self.lan.is_some() {
+            self.lan = Some(addr("lan="));
+        }
         self.run = Some(run);
     }
 
@@ -351,6 +388,30 @@ impl Coordinator {
         self.dir.join("ca/ca.key.cert")
     }
 
+    /// The CA of the private listener's certificate, PEM: what `hostkeeper ctl` and
+    /// `hostkeeper-pxe serve` take as `--ca-file`.
+    pub fn private_ca_path(&self) -> PathBuf {
+        self.dir.join("private-ca.pem")
+    }
+
+    /// The operator's token file (root's, mode 0600): what `hostkeeper ctl` and
+    /// `hostkeeper-pxe serve` take as `--token-file`.
+    pub fn token_path(&self) -> PathBuf {
+        self.dir.join("operator.token")
+    }
+
+    /// The URL of the private listener, by its address.
+    pub fn control_url(&self) -> String {
+        format!("https://{}", self.control)
+    }
+
+    /// The URL a network-installed host dials: the LAN listener, by its address, which the
+    /// server certificate holds as an IP SAN.
+    pub fn lan_url(&self) -> String {
+        let lan = self.lan.expect("a coordinator with a LAN listener");
+        format!("https://{lan}")
+    }
+
     /// The URL a daemon dials: the heartbeat listener, by the name its server certificate holds.
     pub fn url(&self) -> String {
         format!("https://localhost:{}", self.heartbeat.port())
@@ -359,9 +420,9 @@ impl Coordinator {
     /// Runs `hostkeeper ctl <args>` against the private listener with the operator's token and
     /// gives its JSON answer, or the exit status and what it printed.
     pub fn ctl(&self, args: &[&str]) -> Result<Value, String> {
-        let endpoint = format!("https://{}", self.control);
-        let ca = self.dir.join("private-ca.pem").display().to_string();
-        let token = self.dir.join("operator.token").display().to_string();
+        let endpoint = self.control_url();
+        let ca = self.private_ca_path().display().to_string();
+        let token = self.token_path().display().to_string();
         let mut all = vec![
             "ctl",
             "--endpoint",

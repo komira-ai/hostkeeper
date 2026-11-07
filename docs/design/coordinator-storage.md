@@ -172,7 +172,9 @@ min_versions(service text, scope text CHECK (scope IN ('host', 'role')), target 
 uninstall_intents(service text, node_id text, generation bigint NOT NULL, PRIMARY KEY (service, node_id))
 inventory(host_id text PRIMARY KEY, role text NOT NULL, data_macs text[] NOT NULL, bmc_mac text NOT NULL,
   serial text NOT NULL, notes text NOT NULL, by_name text NOT NULL, at_unix bigint NOT NULL,
-  position bigint NOT NULL)                -- the code keeps the records in the order they were added
+  position bigint NOT NULL,                -- the code keeps the records in the order they were added
+  approve_until_unix bigint NOT NULL DEFAULT 0, used_request_id text, used_unix bigint,  -- the record's window
+  CHECK ((used_request_id IS NULL) = (used_unix IS NULL)))
 CREATE UNIQUE INDEX inventory_serial ON inventory (lower(serial)) WHERE serial <> '';
 CREATE UNIQUE INDEX inventory_bmc ON inventory (lower(bmc_mac)) WHERE bmc_mac <> '';
 ```

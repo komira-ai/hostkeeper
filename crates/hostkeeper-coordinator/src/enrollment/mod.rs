@@ -18,6 +18,9 @@
 //! - `approve` and `list`: `Enrollment.Approve` and `Enrollment.List` of
 //!   `hostkeeper.operator.v1` as plain functions over the store, and the audit of each
 //!   approval in the coordinator's ops store ([`Enrollment::audit_to`]);
+//! - `by_record`: a pending request that matches an open inventory record exactly is approved by
+//!   the coordinator itself ([`Enrollment::approve_by_record`]), audited
+//!   `enrollment.auto_approved` and marking the record used;
 //! - `reject`: `Enrollment.Reject` ([`Enrollment::reject`]), and the deny row `Hosts.Retire`
 //!   writes ([`Enrollment::deny_host`]);
 //! - `expiry`: a request no operator approved within the request TTL expires
@@ -36,6 +39,7 @@
 //! whether it is ordered nothing ([`crate::service::Coordinator`]).
 
 mod approve;
+mod by_record;
 mod device_state;
 mod expiry;
 mod gate_port;
@@ -56,6 +60,7 @@ use hostkeeper_enrollment::validity::UnixClock;
 pub use hostkeeper_proto::hostkeeper::agent::v1::CoordinatorRefusal;
 
 pub use approve::{ACTION_APPROVE, ACTION_REFUSED, ACTION_REPLACE, Approved, token_of};
+pub use by_record::{ACTION_AUTO_APPROVED, ByRecord, INVENTORY_APPROVER, Waits};
 #[cfg(test)]
 pub use device_state::FakeDeviceState;
 pub use device_state::{DeviceState, DeviceStateError, DeviceStatus, NoDeviceState};

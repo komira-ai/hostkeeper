@@ -11,7 +11,10 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use serde_json::Value;
 
 use crate::holds_calls_tests::PreviousOps;
-use crate::inventory::{InventoryMatch, InventoryRecord, MAX_DATA_MACS, MAX_RECORDS, match_claims};
+use crate::inventory::{
+    DEFAULT_APPROVE_FOR_SECS, InventoryMatch, InventoryRecord, MAX_DATA_MACS, MAX_RECORDS,
+    match_claims,
+};
 use crate::marks_support::{operator, restart, rig};
 use crate::operator::Caller;
 use crate::ops::{AuditEntry, OpsState, OpsStore, Write};
@@ -77,6 +80,8 @@ fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: 1_800_000_000,
+        approve_until_unix: 0,
+        used: None,
     }
 }
 
@@ -103,6 +108,7 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
     request.serial = " SN-1 ".to_owned();
     request.notes = "  rack 4, slot 2 ".to_owned();
     let added = add(&rig, request).expect("added");
+    let added_unix = added.record.as_ref().map_or(0, |r| r.added_unix);
     let want = proto::InventoryRecord {
         host_id: "db-1".to_owned(),
         role: "storage".to_owned(),
@@ -114,9 +120,13 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
         serial: "SN-1".to_owned(),
         notes: "rack 4, slot 2".to_owned(),
         added_by: "operator".to_owned(),
-        added_unix: rig.coordinator.ops.unix_now(),
+        added_unix,
         enrolled: false,
         host_held: proto::HostHeld::Unspecified.into(),
+        approve_until_unix: added_unix + DEFAULT_APPROVE_FOR_SECS,
+        state: proto::RecordState::Open.into(),
+        used_by_request_id: String::new(),
+        used_unix: 0,
     };
     assert_eq!(added.record.as_ref(), Some(&want));
     let entry = added.entry.expect("an audit entry");
@@ -130,8 +140,12 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
             "record_add",
             Some("db-1"),
             Some(
-                "role storage; data 0c:c4:7a:00:00:02 0c:c4:7a:00:00:03; \
-                 bmc 0c:c4:7a:00:00:01; serial SN-1"
+                format!(
+                    "role storage; data 0c:c4:7a:00:00:02 0c:c4:7a:00:00:03; \
+                     bmc 0c:c4:7a:00:00:01; serial SN-1; approve until {}",
+                    added_unix + DEFAULT_APPROVE_FOR_SECS
+                )
+                .as_str()
             )
         )
     );

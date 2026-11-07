@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-label="hostkeeper is two programs: the hostkeeper daemon on every host and the coordinator service. The protobuf API generates every client: the Rust client of the daemon's link, the bash command line hkctl used by operators and CI, and the JavaScript client with TypeScript declarations used by the operator UI. PXE and the MDM stack are service packages that hostkeeper installs.">
+<title>hostkeeper is two programs</title>
+<desc>Left, the protobuf API of hostkeeper-proto and the three clients generated from it. Middle, the coordinator, hostkeeper-coordinator serve, with its heartbeat listener, its private listener with gRPC and the JSON gateway, and the static UI. Right, hosts running hostkeeper daemon, which install service packages, among them pxe and mdm. Operators and the set-desired workflow call the JSON gateway through hkctl; the UI calls it through the generated client; daemons call the heartbeat listener through the Rust client. The daemon serves nothing on the host.</desc>
+<defs><marker id="two-programs-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="two-programs-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.h{font-size:16px;font-weight:600}
+.s{font-size:12px;fill:#5A5A57}
+.m{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px}
+</style>
+<rect width="1200" height="560" fill="#FFFFFF"/>
+
+<text x="40" y="36" class="h">The API and its generated clients</text>
+<rect x="40" y="56" width="300" height="92" class="box-o"/>
+<text x="56" y="80" class="b">hostkeeper-proto</text>
+<text x="56" y="100" class="m">hostkeeper.operator.v1</text>
+<text x="56" y="118" class="m">hostkeeper.agent.v1</text>
+<text x="56" y="138" class="s">one descriptor set, one command table</text>
+
+<rect x="40" y="190" width="300" height="56" class="box"/>
+<text x="56" y="213" class="b">hkctl</text>
+<text x="56" y="233" class="s">bash and curl; operators and CI</text>
+
+<rect x="40" y="270" width="300" height="56" class="box"/>
+<text x="56" y="293" class="b">ui/gen/client.js, client.d.ts</text>
+<text x="56" y="313" class="s">the operator UI, in the browser</text>
+
+<rect x="40" y="350" width="300" height="56" class="box"/>
+<text x="56" y="373" class="b">Rust (tonic) client</text>
+<text x="56" y="393" class="s">the daemon's link, pxe, tests</text>
+
+<path d="M60,148 L60,190" class="ln-d" marker-end="url(#two-programs-ak)"/>
+<path d="M60,148 L60,170 L30,170 L30,298 L40,298" class="ln-d" marker-end="url(#two-programs-ak)"/>
+<path d="M60,148 L60,170 L24,170 L24,378 L40,378" class="ln-d" marker-end="url(#two-programs-ak)"/>
+<text x="90" y="172" class="s">generated</text>
+
+<text x="460" y="36" class="h">Program two: the service</text>
+<rect x="440" y="56" width="320" height="350" class="box-b"/>
+<text x="456" y="82" class="b m">hostkeeper-coordinator serve</text>
+<rect x="460" y="100" width="280" height="80" class="box"/>
+<text x="476" y="124" class="b">Private listener</text>
+<text x="476" y="144" class="s">gRPC and the JSON gateway</text>
+<text x="476" y="162" class="s">POST /&lt;package&gt;.&lt;Service&gt;/&lt;Method&gt;</text>
+<rect x="460" y="196" width="280" height="56" class="box"/>
+<text x="476" y="220" class="b">/ui/</text>
+<text x="476" y="240" class="s">static files of the UI</text>
+<rect x="460" y="268" width="280" height="56" class="box"/>
+<text x="476" y="292" class="b">Heartbeat listener</text>
+<text x="476" y="312" class="s">mutual TLS, hosts only</text>
+<rect x="460" y="340" width="280" height="50" class="box-p"/>
+<text x="476" y="370" class="s">state: coordinator-storage.md</text>
+
+<path d="M340,218 L460,140" class="ln-o" marker-end="url(#two-programs-ao)"/>
+<path d="M340,298 L460,150" class="ln-o" marker-end="url(#two-programs-ao)"/>
+<text x="352" y="196" class="s">bearer token</text>
+
+<text x="880" y="36" class="h">Program one: on every host</text>
+<rect x="860" y="56" width="300" height="350" class="box-b"/>
+<text x="876" y="82" class="b m">hostkeeper daemon</text>
+<text x="876" y="102" class="s">root; serves nothing on the host</text>
+<rect x="880" y="122" width="260" height="120" class="box-p"/>
+<text x="896" y="146" class="b">Service packages</text>
+<text x="896" y="168" class="s">every service of the host</text>
+<text x="896" y="188" class="m">pxe</text><text x="940" y="188" class="s">(the boot host)</text>
+<text x="896" y="208" class="m">mdm</text><text x="940" y="208" class="s">(the MDM host)</text>
+<text x="896" y="228" class="s">hook, units, two versions</text>
+<path d="M1010,104 L1010,122" class="ln" marker-end="url(#two-programs-ak)"/>
+<text x="1018" y="116" class="s">installs</text>
+
+<path d="M860,296 L740,296" class="ln" marker-end="url(#two-programs-ak)"/>
+<text x="770" y="286" class="s">heartbeat</text>
+<path d="M340,378 L420,378 L420,420 L840,420 L840,310 L860,310" class="ln-d"/>
+<text x="560" y="438" class="s">the daemon's link is the Rust client</text>
+
+<rect x="40" y="470" width="1120" height="64" class="box"/>
+<text x="56" y="494" class="b">CI: set-desired.yml</text>
+<text x="56" y="516" class="s">verifies hkctl's download and attestation, then runs hkctl releases set-desired and hkctl releases wait-converged, each asking for its own OIDC token</text>
+<path d="M190,470 L190,246" class="ln-o" marker-end="url(#two-programs-ao)"/>
+</svg>

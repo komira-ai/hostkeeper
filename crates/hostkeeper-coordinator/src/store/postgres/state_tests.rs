@@ -56,6 +56,12 @@ fn full_ops() -> OpsState {
         by: "op".to_owned(),
         at_unix: 3,
     });
+    // One record with an approval window, used; the other with neither.
+    state.inventory[0].approve_until_unix = 1_900_000_100;
+    state.inventory[0].used = Some(crate::inventory::RecordUse {
+        request_id: "ab".repeat(32),
+        at_unix: 1_900_000_050,
+    });
     let marks = state.services.get_mut("kbf").expect("kbf marks");
     marks.force = Some(ForceRecord {
         version: version("2.0"),
@@ -378,7 +384,7 @@ fn a_row_this_build_cannot_read_is_refused_naming_its_table_and_key() {
         refusal("uninstall_intents", &["kbf", "s1"], vec![Val::Int(-2)]),
         why("uninstall_intents", "kbf/s1", "a counter is negative"),
     ));
-    let inventory = |macs: Val| {
+    let inventory_used = |macs: Val, used: (Val, Val)| {
         vec![
             text("r"),
             macs,
@@ -388,8 +394,27 @@ fn a_row_this_build_cannot_read_is_refused_naming_its_table_and_key() {
             text("op"),
             Val::Int(1),
             Val::Int(0),
+            Val::Int(0),
+            used.0,
+            used.1,
         ]
     };
+    let inventory = |macs: Val| inventory_used(macs, (Val::Null, Val::Null));
+    let macs = || Val::Texts(Vec::new());
+    for half in [(text("ab"), Val::Null), (Val::Null, Val::Int(5))] {
+        cases.push((
+            refusal("inventory", &["h1"], inventory_used(macs(), half)),
+            why("inventory", "h1", "a record's use is half there"),
+        ));
+    }
+    cases.push((
+        refusal(
+            "inventory",
+            &["h1"],
+            inventory_used(macs(), (text("ab"), Val::Int(-1))),
+        ),
+        why("inventory", "h1", "a counter is negative"),
+    ));
     cases.push((
         refusal("inventory", &["h1"], inventory(text("aa"))),
         why("inventory", "h1", "the data MACs are not a list"),

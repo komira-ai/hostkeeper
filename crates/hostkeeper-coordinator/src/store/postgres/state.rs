@@ -27,7 +27,7 @@ use crate::assignment::{Entry, ServiceAssignments};
 use crate::desired::{self, StoreError};
 use crate::force::ForceRecord;
 use crate::holds::{HoldMark, HoldScope};
-use crate::inventory::InventoryRecord;
+use crate::inventory::{InventoryRecord, RecordUse};
 use crate::ops::{
     Exclusion, FailureAck, Halt, HaltAck, HaltOrigin, HostOps, OpsError, OpsState, ServiceOps,
 };
@@ -150,6 +150,9 @@ pub(crate) const OPS: [Table; 14] = [
             ("by_name", Ty::Text),
             ("at_unix", Ty::Int),
             ("position", Ty::Int),
+            ("approve_until_unix", Ty::Int),
+            ("used_request_id", Ty::Text),
+            ("used_unix", Ty::Int),
         ],
     },
     Table {
@@ -600,6 +603,12 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
                 Val::Text(record.by.clone()),
                 Val::Int(int(record.at_unix)?),
                 Val::Int(position as i64),
+                Val::Int(int(record.approve_until_unix)?),
+                Val::text_or_null(record.used.as_ref().map(|used| used.request_id.as_str())),
+                match &record.used {
+                    Some(used) => Val::Int(int(used.at_unix)?),
+                    None => Val::Null,
+                },
             ],
         );
     }
@@ -860,6 +869,14 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
             Some(Val::Texts(macs)) => macs.clone(),
             _ => return Err(at.no("the data MACs are not a list")),
         };
+        let used = match (at.text(9)?, at.values.get(10)) {
+            (Some(request_id), Some(Val::Int(_))) => Some(RecordUse {
+                request_id,
+                at_unix: at.count(10)?,
+            }),
+            (None, Some(Val::Null)) => None,
+            _ => return Err(at.no("a record's use is half there")),
+        };
         inventory.push((
             at.position(7)?,
             InventoryRecord {
@@ -871,6 +888,8 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
                 notes: at.required(4)?,
                 by: at.required(5)?,
                 at_unix: at.count(6)?,
+                approve_until_unix: at.count(8)?,
+                used,
             },
         ));
     }

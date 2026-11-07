@@ -271,3 +271,52 @@ fn a_shared_mac_or_a_platform_with_no_boot_set_is_not_answered() {
     assert_eq!(result, Ok(()));
     assert!(!waiting(&firmware));
 }
+
+/// A record whose window is `CLOSED`, `USED` or `UNSPECIFIED` leaves its MAC out, naming the
+/// state; `OPEN` is offered; `--reinstall new-1` serves a closed or a used record.
+///
+/// Catches a machine installed after its record's window ended or its approval was used, and
+/// `--reinstall` held back by the window.
+#[test]
+fn a_record_whose_window_is_not_open_is_not_answered_unless_reinstalled() {
+    let kit = Kit::new("reads-window");
+    let (mut run, firmware) = start(&kit, "proxy", &[]);
+    assert_eq!(
+        discover(&mut run, &firmware, RECORDED, 7),
+        offered(RECORDED)
+    );
+    let _ = receive(&firmware);
+    for (state, why) in [
+        (proto::RecordState::Closed, "its approval window is closed"),
+        (proto::RecordState::Used, "an approval used it"),
+        (
+            proto::RecordState::Unspecified,
+            "the coordinator does not say whether its approval window is open",
+        ),
+    ] {
+        kit.fake().set(|s| s.records[0].state = state.into());
+        assert_eq!(
+            discover(&mut run, &firmware, RECORDED, 7),
+            unanswered(
+                RECORDED,
+                &format!("not in the answer set: the record of host new-1: {why}")
+            )
+        );
+    }
+    let (result, _) = run.stop();
+    assert_eq!(result, Ok(()));
+    assert!(!waiting(&firmware));
+
+    for state in [proto::RecordState::Closed, proto::RecordState::Used] {
+        kit.fake().set(|s| s.records[0].state = state.into());
+        let (mut run, firmware) = start(&kit, "proxy", &["--reinstall", "new-1"]);
+        assert_eq!(
+            discover(&mut run, &firmware, RECORDED, 7),
+            offered(RECORDED)
+        );
+        let (offer, _) = receive(&firmware);
+        assert_eq!(options(&offer)[&67], b"hostkeeper/shimx64.efi");
+        let (result, _) = run.stop();
+        assert_eq!(result, Ok(()));
+    }
+}

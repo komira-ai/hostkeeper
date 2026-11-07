@@ -94,7 +94,11 @@ CREATE TABLE inventory (
   notes     text NOT NULL,
   by_name   text NOT NULL,
   at_unix   bigint NOT NULL,
-  position  bigint NOT NULL);
+  position  bigint NOT NULL,
+  approve_until_unix bigint NOT NULL DEFAULT 0,   -- the record's approval window; 0 for none
+  used_request_id    text,                        -- the request it approved, once used
+  used_unix          bigint,
+  CHECK ((used_request_id IS NULL) = (used_unix IS NULL)));
 CREATE UNIQUE INDEX inventory_serial ON inventory (lower(serial)) WHERE serial <> '';
 CREATE UNIQUE INDEX inventory_bmc ON inventory (lower(bmc_mac)) WHERE bmc_mac <> '';
 

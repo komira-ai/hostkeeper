@@ -1,8 +1,11 @@
 # Enrolling a node
 
-How one server becomes a host the coordinator manages: the operator records it in the host
-inventory, the node boots and asks for a certificate, and the operator checks the request and
-approves it. The coordinator's side (its flags, its CA, its state files) is
+How one server becomes a host the coordinator manages: the operator enters its record in the host
+inventory, and the node boots, asks for a certificate and is enrolled. Entering the record is the
+approval: there is no approve step for a server that matches its record
+([The record is the approval](#the-record-is-the-approval)). A request that does not match, or
+that needs a second look, waits for an operator to [approve](#approve) it by hand. The
+coordinator's side (its flags, its CA, its state files) is
 [enrollment-coordinator.md](../enrollment-coordinator.md); every command, flag and exit code of
 `hostkeeper ctl` is [ctl.md](../ctl.md).
 
@@ -34,6 +37,10 @@ host id is refused `record_exists`; a record with a MAC or a serial that another
 refused `record_conflict`. To change a record, remove it and add it again. Removing a record does
 not touch a host already enrolled under it: the host keeps its certificate.
 
+A record that names a role is the approval of the server's enrollment, for a limited time and
+once: [The record is the approval](#the-record-is-the-approval) says how. Give the record a role
+unless you want to approve its server by hand.
+
 ```
 hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --limit 50
@@ -58,6 +65,91 @@ heartbeat: `HOST_HELD_NONE` (no host by that id), `HOST_HELD_APPROVED` (approved
 `hostHeld` is `HOST_HELD_NONE` ([network install](../design/network-install.md), section 3), so a
 retired host's record keeps its machine from being reinstalled by accident. There is no call that
 reads one record by host id: list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
+
+## The record is the approval
+
+The flow for each server, from the operator's side:
+
+1. Note the server's data MAC and its BMC MAC, from the chassis label or the BMC.
+2. Name the host (its host id) and its role.
+3. Enter the record:
+
+```
+hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment add-record --host-id web-17 --role web \
+    --data-macs 00:00:5e:00:53:01 --bmc-mac 00:00:5e:00:53:a1 \
+    --approve-for-secs 43200 --notes "rack 4, unit 17"
+```
+
+4. Boot the server. It gets the network install ([network-install.md](network-install.md)), posts
+   its request, and is enrolled with no approve step: the coordinator approves the request itself,
+   as the record's host id and role, and the daemon takes its certificate at its next poll. A
+   server that booted before its record was entered is approved when the record is entered.
+
+A MAC is not secret: it is on the label, and every frame the server sends carries it. What keeps
+the wrong machine out is the record, its one use and its window, and nothing else: a request is
+approved by a record only while the record is open, once, and only when the request matches that
+one record exactly. After enrollment the host does not rely on its MAC at all: it proves itself by
+its key, which the approval bound to the host id.
+
+**The window.** A record that names a role opens its window when it is added, and the coordinator
+approves a matching request only while the window is open. The window is 24 hours unless you give
+another: `--approve-for-secs` is its length from now, `--approve-until-unix` its end as a unix
+time; give at most one. No window is longer than 7 days. The defaults are the coordinator's
+flags `--record-approve-for` (24h) and `--record-approve-max` (7d), each written as digits and one
+of `s`, `m`, `h`, `d`; the coordinator refuses to start with a default longer than the maximum.
+They need no `--enrollment-dir`. A window longer than the maximum, an end that is not in the
+future, both fields at once, or a window on a record that names no role is refused
+`invalid_window`. A record with no role has no window and approves nothing.
+
+**One use.** A record approves one enrollment. When the coordinator approves a request by it, the
+record is used: it records the request and the time, and approves no other request, whatever its
+window. The use is audited `enrollment.auto_approved` by `inventory`, with the request id, the
+record's host id and role, the request's claims and the reason `approved by its inventory record
+<host id>`; a manual approval is audited `enroll_approve` by the operator's token, as before.
+A coordinator that stopped between the approval and its audit line writes the entry and marks
+the record used at its next start.
+
+**What is checked.** The coordinator approves a request by a record only when all of these hold:
+
+- the request matches exactly one record and no other, by a data MAC of the record among the
+  claimed addresses; when the record holds a BMC MAC, the request must claim that same BMC MAC
+  (a request that claims none, or another, is not approved), and a Mac matches by its serial;
+- the record is open (its window is not over) and unused, and names a role;
+- the request is not a renewal and is not a `duplicate_claim`;
+- no other pending request matches the same record (`contested_by`);
+- no other key holds the record's host id.
+
+**What stays manual.** A request that fails any of those waits for an operator, as before, and
+`list` shows it: unmatched, ambiguous, outside the window, used, contested, a duplicate claim
+(approve it with `--replace true`), a renewal, a record with no role, and a BMC MAC the request
+does not claim or claims differently from the record's. [Approve](#approve) is for these.
+`list` shows the match's `record_state` (`RECORD_STATE_OPEN`, `RECORD_STATE_CLOSED` or
+`RECORD_STATE_USED`) and `record_approve_until_unix`, so you can see why a matched request still
+waits.
+
+**Open a record again.** A record whose window ended, a record added before windows existed, or
+one whose window you want to move is opened again from now with `open-record`, with the same two
+window fields; the end of the window is audited `record_open` with the reason. A pending request
+that matches it is approved then.
+
+```
+hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment open-record --host-id web-17 --approve-for-secs 86400 \
+    --reason "rack delayed to Thursday"
+```
+
+`open-record` changes only the window, never the MACs. A used record is refused `record_used`:
+its one use is spent, so to enroll another machine under that record, remove the record and add it
+again. This is deliberate: it is what keeps a second request from riding a record that already
+enrolled its server.
+
+**See the state.** `list-records` says for each record `state`: `RECORD_STATE_OPEN` (the
+window is open and the record unused), `RECORD_STATE_CLOSED` (unused, with its window over or
+none) or `RECORD_STATE_USED` (with `used_by_request_id` and `used_unix`), and `approve_until_unix`.
+`hostkeeper-pxe` serves a record's data MAC a network install only while its state is open, unless
+`--reinstall` names its host id ([network-install.md](network-install.md)): a server whose window
+is over, or whose record is used, is not installed from the network.
 
 ## Bootstrap a Linux node
 
@@ -142,7 +234,11 @@ the record's means no match. A record that holds only a serial never matches a L
 
 - **`INVENTORY_MATCH_MATCHED`**: exactly one record matches; `record_host_id` and `record_role`
   are its host id and role, and `record_serial` and `record_bmc_mac` its serial and BMC MAC
-  (empty when it holds none). Check the key hash, then approve as that record (below).
+  (empty when it holds none), and `record_state` and `record_approve_until_unix` where its window
+  stands. A matched request is approved by the coordinator itself when its record is open and
+  the other conditions of [the record is the approval](#the-record-is-the-approval) hold; one
+  still listed is waiting for an operator. Check the key hash, then approve as that record
+  (below).
 - **`INVENTORY_MATCH_UNMATCHED`**: no record matches. Either the server has no record (add one,
   and list again) or its record has the wrong MACs (remove it, add the right one, and list
   again). An approval of an unmatched request must name the host id.
@@ -150,15 +246,18 @@ the record's means no match. A record that holds only a serial never matches a L
   none is chosen. Two records share this server's MACs between them: remove the wrong ones until
   one matches, or approve naming the host id.
 
-Matched is not proof. A request that claims a data MAC of a record, and does not contradict its
+Matched is not proof, and it is what an open record approves on. A request that claims a data MAC of a record, and does not contradict its
 BMC MAC, matches it, and the machine wrote those claims itself: anyone who read the label or the
 network can write the same. The claims that are hard to copy are the DMI serial, the BMC MAC and
 the product UUID, which are not on the data network; compare them with the record's
 (`record_serial`, `record_bmc_mac`; the record holds no product UUID). The web app's Enrollment
 page puts each beside the record's value, says "not recorded" for a value the record does not
 hold and "not claimed" for a claim the request leaves out, and warns when the record holds a BMC
-MAC the request does not claim (it matched on a data MAC alone). Approve only the key hash shown
-on the machine's own console.
+MAC the request does not claim (it matched on a data MAC alone; such a request is not approved by
+its record). Approve by hand only the key hash shown on the machine's own console. For a record
+you leave open, the safeguards are its short window and its one use: enter the record shortly
+before the server boots, and look at `list-records` afterwards, where the record should be
+`RECORD_STATE_USED` by the request you expected.
 
 `contested_by` is set on a request when another pending request matches a record it matches: it
 lists those requests' ids, and each of them lists this one. A contested request cannot be
@@ -188,6 +287,10 @@ MACs are not compared. Record a Mac with `--serial` and no MAC:
 hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id mac-03 --role build --serial C02XK1ABJG5J
 ```
+
+With a role, that record is also the approval of the Mac, as a Linux record is
+([The record is the approval](#the-record-is-the-approval)): a Mac request whose claimed serial
+equals the record's, with the record open and unused, is approved by the coordinator.
 
 The enrollment request can carry a one-time nonce from MDM (`mac_nonce`, one hour, one use),
 which lets the coordinator approve a Mac whose serial is in `--mac-serial-allowlist` without an
@@ -271,7 +374,11 @@ same key is `/etc/updater/pki/current/key`. `hostkeeper admin status` gives it t
 
 ## Approve
 
-An approval names the request, its key hash, the host's role, the services to assign (each one
+A server that matches an open record needs no approval ([The record is the
+approval](#the-record-is-the-approval)). Approve by hand a request that waits: one that matches
+no record or several, is outside its record's window, matches a used record, is contested, a
+duplicate claim or a renewal, or whose record names no role. Approving by hand does not mark a
+record used. An approval names the request, its key hash, the host's role, the services to assign (each one
 the coordinator's rollout file defines; none is allowed) and a reason. The role is required even
 when the record names one: the record's role is shown, not applied. The certificate is not in the
 answer: the host takes it at its next poll, within seconds.
@@ -456,7 +563,7 @@ approve; a queue that still fills needs a larger `--max-pending-enrollments` or 
 ## Refusals of the operator calls
 
 The `Enrollment` service (`list`, `approve`, `reject`, `add-record`, `list-records`,
-`remove-record`)
+`remove-record`, `open-record`)
 refuses with exactly one of these tokens; `hostkeeper ctl` exits 2 on INVALID_ARGUMENT and
 FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the others.
 
@@ -478,10 +585,12 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `store_failed` | INTERNAL | the change could not be written (on the database store, also while its session is lost: the alert `store_unreachable` stands); nothing changed | read the coordinator's log and ask again |
 | `record_exists` | ALREADY_EXISTS | `add-record` for a host id that has a record | remove the record first |
 | `record_conflict` | ALREADY_EXISTS | `add-record` with a MAC or a serial another record holds | remove or correct the other record |
-| `no_record` | NOT_FOUND | `remove-record` of a host id with no record | check the host id with `list-records` |
+| `no_record` | NOT_FOUND | `remove-record` or `open-record` of a host id with no record | check the host id with `list-records` |
 | `capacity` | RESOURCE_EXHAUSTED | `add-record` past the 10000 records the coordinator keeps | remove records no longer needed |
-| `audit_unavailable` | UNAVAILABLE | `add-record` or `remove-record` whose audit line could not be appended (a full disk, on the file store; the database store commits the line with the change and never answers this); nothing changed | free the disk of the audit file, then ask again |
+| `audit_unavailable` | UNAVAILABLE | `add-record`, `remove-record` or `open-record` whose audit line could not be appended (a full disk, on the file store; the database store commits the line with the change and never answers this); nothing changed | free the disk of the audit file, then ask again |
 | `record_mismatch` | FAILED_PRECONDITION | `approve` names a host id other than that of the one record the request matches | leave out `--host-id`, or `--replace true` |
+| `invalid_window` | INVALID_ARGUMENT | `add-record` or `open-record` with both `--approve-until-unix` and `--approve-for-secs`, an end not in the future, a window longer than the coordinator's `--record-approve-max`, or a window on a record that names no role | give one field, within the maximum, for a record with a role |
+| `record_used` | FAILED_PRECONDITION | `open-record` of a record whose one use is spent (`RECORD_STATE_USED`) | `remove-record`, then `add-record` it again |
 | `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
 
 ## Refusals of the host's calls

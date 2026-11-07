@@ -7,7 +7,7 @@ use super::*;
 const PINNED: [(i32, &str, &str); 1] = [(
     1,
     "state",
-    "f0357b8182be93e1ee15ba52c1516f4bd421be47f3da0aa862d675662a01355a",
+    "8c6d2cda2f25de712f26bdd02b36d73c30a4d42a09ba91b5f1dc99f6aa5e9015",
 )];
 
 fn hex(bytes: &[u8]) -> String {

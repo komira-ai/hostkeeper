@@ -79,6 +79,13 @@ path = "tests/bin/coordinator.rs"
 name = "hostkeeper-selfupdate-daemon"
 path = "tests/bin/selfupdate_daemon.rs"
 
+# The boot server the network-install tests (`tests/net_install.rs`, `tests/net_install_arm64.rs`)
+# run, `fetch` once and `serve` as a child process: `hostkeeper-pxe`, built here so that the
+# tests have its path. It only forwards to `hostkeeper_pxe::cli::main`.
+[[bin]]
+name = "hostkeeper-privileged-pxe"
+path = "tests/bin/pxe.rs"
+
 # The tierstore-shaped fixture of `tests/tierstore_shaped.rs`: a stand-in service and its update
 # hook in one program, which the tests put at `bin/tierstore-like` of a package they build at
 # test time (`fixtures/tierstore-shaped/` holds the rest of that package as source). A program of
@@ -93,6 +100,12 @@ path = "tests/bin/tierstore_like.rs"
 [[bin]]
 name = "hello-e2e"
 path = "tests/bin/hello_e2e.rs"
+
+# The boot server of the network-install tests' program `hostkeeper-privileged-pxe`, which
+# forwards to its command line as the `hostkeeper-pxe` binary does. It builds on Linux only, as
+# `hostkeeper-pxe` does (its sockets and its privilege drop are Linux's).
+[target.'cfg(target_os = "linux")'.dependencies]
+hostkeeper-pxe = { path = "../hostkeeper-pxe" }
 
 [features]
 # The tests that run as root against the host's systemd. Only privileged.yml turns it on.
@@ -143,8 +156,14 @@ rcgen.workspace = true
 rustls.workspace = true
 serde_json.workspace = true
 x509-parser.workspace = true
-# The effective uid the privileged tests check before they act.
-rustix = { workspace = true, features = ["fs", "process"] }
+# The effective uid the privileged tests check before they act; and the network namespace a
+# thread of the network-install tests moves into, to make the router's DHCP socket there.
+rustix = { workspace = true, features = ["fs", "process", "thread"] }
+# The network-install rig (`tests/netinstall/`): the router's DHCP reads a client's packet with
+# the packet crate of `hostkeeper-pxe`, and binds its socket to the LAN's interface
+# (SO_BINDTODEVICE, which neither std nor rustix sets).
+hostkeeper-pxe-packets = { path = "../hostkeeper-pxe-packets" }
+socket2.workspace = true
 
 [lints]
 workspace = true
