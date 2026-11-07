@@ -682,7 +682,7 @@ operator recognise the machine and match it against the inventory, but they auth
 at most
 <span data-cell="c-inventory" data-source="crates/hostkeeper-coordinator/src/inventory.rs" data-item="MAX_RECORDS">10,000</span>
 records. <code>Enrollment.List</code> marks each pending request as matched, unmatched or ambiguous against
-it. A match fills the approval form but approves nothing; a request matching one record is approved
+it. A match fills the approval form; only an exact, uncontested match of an open, unused record that names a role is approved by the coordinator itself, within the record's window and once. A request matching one record is approved
 under that record's host id, and another host id needs <code>replace</code>. An enrolled host is matched the same way, by
 the claims of the request its key was approved from: <code>Hosts.Get</code> and <code>Hosts.List</code> answer the record it
 matches with that record's MACs and serial, and when the host was approved, and <code>ListRecords</code> marks each record a
@@ -1216,7 +1216,7 @@ paths (the CA bundle, <code>gh</code> and the trusted root use their Linux paths
 <p>A machine is known to hostkeeper in four steps, each kept by a different hand:</p>
 <ol>
 <li><strong>MAC address and serial.</strong> When a server is built, the operator records its data MACs and its BMC MAC, and for a Mac its serial. These are what the machine says it is when it asks to enroll: a Linux daemon claims its network addresses, machine id, DMI serial and BMC MAC, and a Mac claims its serial and platform UUID. A claim is written by the requester, so it proves nothing.</li>
-<li><strong>Host record.</strong> The record (<code>Enrollment.AddRecord</code>, the Inventory page) gives the machine its host id and its expected role. A pending request whose claimed addresses include a record&rsquo;s data MAC (or, for a Mac, whose serial is the record&rsquo;s) shows that record&rsquo;s host id and role on the Enrollment page. The match fills in the approval form and approves nothing.</li>
+<li><strong>Host record.</strong> The record (<code>Enrollment.AddRecord</code>, the Inventory page) gives the machine its host id and its expected role. A pending request whose claimed addresses include a record&rsquo;s data MAC (or, for a Mac, whose serial is the record&rsquo;s) shows that record&rsquo;s host id and role on the Enrollment page. The match fills in the approval form; it approves only when the record is open, unused and names a role, the match is exact and uncontested, and the request arrives within the record&rsquo;s window, and then once.</li>
 <li><strong>Role.</strong> The operator approves the request by its key hash, with a host id and a role. The role goes into the host&rsquo;s certificate, and the coordinator reads it from there on every connection.</li>
 <li><strong>Assigned services.</strong> The rollout file assigns each service to roles, and the operator&rsquo;s entries (<code>Services.Assign</code>, <code>Services.Unassign</code>) go on top, first for the host itself, then for its role. Labels the operator sets on a host can narrow a service further.</li>
 </ol>

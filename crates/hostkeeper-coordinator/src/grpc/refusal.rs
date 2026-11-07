@@ -96,7 +96,8 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         | EnrollmentRefusal::NotPending
         | EnrollmentRefusal::Denied
         | EnrollmentRefusal::RecordMismatch
-        | EnrollmentRefusal::RecordContested => Code::FailedPrecondition,
+        | EnrollmentRefusal::RecordContested
+        | EnrollmentRefusal::RecordUsed => Code::FailedPrecondition,
         EnrollmentRefusal::HostIdTaken
         | EnrollmentRefusal::RecordExists
         | EnrollmentRefusal::RecordConflict => Code::AlreadyExists,
@@ -105,6 +106,7 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         EnrollmentRefusal::InvalidHostId
         | EnrollmentRefusal::InvalidRole
         | EnrollmentRefusal::InvalidService
+        | EnrollmentRefusal::InvalidWindow
         | EnrollmentRefusal::InvalidRequest => Code::InvalidArgument,
     };
     refused(code, refusal.as_str_name(), "ENROLLMENT_REFUSAL_")

@@ -6,6 +6,7 @@
     { "method": "hostkeeper.operator.v1.Enrollment/Approve", "pages": ["enrollment"] },
     { "method": "hostkeeper.operator.v1.Enrollment/List", "pages": ["enrollment"] },
     { "method": "hostkeeper.operator.v1.Enrollment/ListRecords", "pages": ["inventory"] },
+    { "method": "hostkeeper.operator.v1.Enrollment/OpenRecord", "pages": ["inventory"] },
     { "method": "hostkeeper.operator.v1.Enrollment/Reject", "pages": ["enrollment"] },
     { "method": "hostkeeper.operator.v1.Enrollment/RemoveRecord", "pages": ["inventory"] },
     { "method": "hostkeeper.operator.v1.Hosts/Abort", "pages": ["host"] },

@@ -25,6 +25,8 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 | `--lan-listen <address:port>` | A third listener, on the farm LAN, for network-installed hosts: it serves what the heartbeat listener serves, with its TLS and its checks (below), and the server certificate names its IP address. The address of one interface: a wildcard address stops the start. Requires `--enrollment-dir`. |
 | `--max-pending-enrollments <n>` | How many requests may wait for an operator at once, 1 or more; 256 when not given. A new request over it is refused `pending_full`; no waiting request is dropped for it, and a host posting its waiting request again is still answered. Requires `--enrollment-dir`. |
 | `--enrollment-request-ttl <time>` | How long a request waits for an operator before it expires: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second; `72h` when not given. Requires `--enrollment-dir`. |
+| `--record-approve-for <time>` | The approval window of a new inventory record that names a role when `Enrollment.AddRecord` names none: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `24h`), at least one second, no longer than `--record-approve-max`; `24h` when not given. While it is open a pending request that matches the record exactly is approved by the coordinator itself. Needs no `--enrollment-dir`. |
+| `--record-approve-max <time>` | The longest approval window a record may be given, by `Enrollment.AddRecord` and `Enrollment.OpenRecord` alike; a longer one is refused `invalid_window`; `7d` when not given. A `--record-approve-for` above it stops the start. Needs no `--enrollment-dir`. |
 | `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--enrollment-dir`. |
 | `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and `--enrollment-dir`. |
 | `--mdm-api-key-file <file>` | NanoHUB's API key (NanoHUB's `-api-key`): one key of visible ASCII, in a file of mode 0600 or 0400 owned by the coordinator's user; a link, another mode or owner, or an empty file stops the start, and the message names the flag, never the path or the key. Requires `--mdm-api-url`. |
@@ -115,6 +117,12 @@ role, serial and BMC MAC), and `contested_by`: the ids of the other pending requ
 record it matches, looked for among every pending request, not the page. It never answers a CSR
 or a nonce. With `unenrolled` it answers, in the same order and pages, the
 requests that expired in their place (Request expiry, below).
+
+Automatic approval: a pending request that matches exactly one open, unused record naming a role,
+with no other pending request contesting that record, is approved by the coordinator itself while
+the record's window is open (`--record-approve-for`, `--record-approve-max`), once. The audit entry
+is `enrollment.auto_approved`. Any other match only fills in the form. See
+[operations/enrollment.md](operations/enrollment.md).
 
 `Approve` names the request, the SHA-256 of its key as listed (compared whole, in constant time;
 another request's key hash is `key_mismatch`), the host id, the role, the services (each one the
@@ -242,8 +250,8 @@ claimed the same serial; the old key's certificate then names no host, as after 
 
 A coordinator without the gate (no `--mdm-api-url`) knows no device, so it approves no Mac by its
 nonce (`device_state_unavailable`); with it, the gate's records say whether the device is enrolled
-and supervised and when its current enrollment began. No operator token may be named `mdm-nonce`
-or `mdm-gate`.
+and supervised and when its current enrollment began. No operator token may be named `mdm-nonce`,
+`inventory` or `mdm-gate`.
 
 ```toml
 [[mac]]

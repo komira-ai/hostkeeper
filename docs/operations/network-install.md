@@ -1,8 +1,9 @@
 # Installing a Linux machine from the network
 
-How a new Linux server gets Ubuntu 24.04 and the hostkeeper daemon from the farm LAN, with two
-manual steps of its own: record it, then approve it by the key hash on its console. A third step,
-once, is needed on a board that does not try network boot before its disk. The design, and the
+How a new Linux server gets Ubuntu 24.04 and the hostkeeper daemon from the farm LAN, with one
+manual step of its own: enter its record, which is also its approval
+([enrollment.md](enrollment.md#the-record-is-the-approval)). A second step, once, is needed on a
+board that does not try network boot before its disk. The design, and the
 reason for every rule below, is [network-install.md](../design/network-install.md) (cited here as
 "the design"). Enrolling the machine once it has posted its request is
 [enrollment.md](enrollment.md), and every `hostkeeper ctl` command and flag is
@@ -44,6 +45,10 @@ from two reads of the coordinator taken for that answer: `Enrollment.ListRecords
   its install starts);
 - the record is not `enrolled`, no pending request matches it, and its `hostHeld` is
   `HOST_HELD_NONE`, unless `--reinstall` names its host id ([Reinstall](#reinstall-a-known-host));
+- the record's `state` is `RECORD_STATE_OPEN`: its approval window is open and its one use not
+  spent, so a machine whose window is over, or whose record is used, is not installed (open the
+  record again with `enrollment open-record`, enrollment.md), unless `--reinstall` names its host
+  id;
 - in router mode, the record has a platform (none has one yet, above);
 - the platform agrees with the architecture the firmware or GRUB states, and the sealed directory
   has a boot set for it.
@@ -332,13 +337,18 @@ Before the first machine, check `serve`'s start line and the answer set's count 
 
 **Step 1. Record the machine.** From the chassis label: its data MACs, its BMC MAC and its
 serial, as in [enrollment.md](enrollment.md#record-the-server). Record the MAC of the farm-LAN
-NIC the firmware boots from among the data MACs.
+NIC the firmware boots from among the data MACs. Give the record its host id and its role: the
+record is the approval, so the machine that matches it, within its window and once, is enrolled
+with no further step ([enrollment.md](enrollment.md#the-record-is-the-approval)). The window is
+24 hours unless you give `--approve-for-secs` or `--approve-until-unix`; enter the record shortly
+before the machine boots.
 
 ```
 hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --role web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
-    --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --notes "rack 4, unit 17"
+    --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --approve-for-secs 43200 \
+    --notes "rack 4, unit 17"
 ```
 
 The answer shows `hostHeld` `HOST_HELD_NONE` for a host id no host holds. If it shows anything
@@ -364,10 +374,24 @@ gets no install: its MAC left the answer set at its seed fetch, and from then on
 request keeps it out, after a restart of `serve` too. Its daemon makes its key, posts its
 request, and its console shows the key hash.
 
-**Step 2. Compare the key hash and approve.** List the pending requests: the machine's request
-is `INVENTORY_MATCH_MATCHED` to `web-17`. Compare the request's `key_sha256` with the hash on the
-machine's console (the BMC's remote console, or its serial console with `--serial-console`), and
-approve, as in [enrollment.md](enrollment.md#approve):
+**Step 2. Check that it enrolled.** The coordinator approves the request itself, as `web-17` with
+the record's role, and the daemon takes its certificate at its next poll. No approve is run. The
+daemon logs `enrolled as host:web-17`, and the record is used: `list-records` shows it
+`RECORD_STATE_USED`, with the request that used it.
+
+```
+hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment list-records --limit 50
+```
+
+A MAC is not secret: anyone on the LAN can post the recorded MACs. The record, its one use and its
+window are what keep the wrong machine out, and after enrollment the host proves itself by its
+key. Compare the key hash on the machine's console with the used record's `used_by_request_id`
+(the request's key hash) afterwards. A request the record does not approve waits in
+`enrollment list`: one that matches no record or several, arrived outside the window (open the
+record again with `enrollment open-record`), matches a used record, claims no BMC MAC or another
+than the record's, or is contested by another request. Approve those by hand, by the key hash on
+the console, as in [enrollment.md](enrollment.md#approve):
 
 ```
 hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
@@ -380,13 +404,11 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
     --role web --services api --reason "network install, key checked on the console"
 ```
 
-Matched is not proof: anyone on the LAN can post the recorded MACs. Approve only the key hash
-the machine's own console shows, and compare the hard-to-copy claims (serial, BMC MAC) with the
-record. A request that matches a record another request also matches is `contested` and cannot be
+A request that matches a record another request also matches is `contested` and cannot be
 approved until the other is rejected ([enrollment.md](enrollment.md#the-pending-request-and-its-match)).
 The coordinator then orders the services assigned to the host or its role, as for every host.
 
-**A third step, on a board that does not try network boot first:** pick its UEFI network boot
+**A further step, on a board that does not try network boot first:** pick its UEFI network boot
 entry once in the firmware's boot menu, over the BMC's remote console, when it powers on.
 
 A machine whose install failed is not installed again in this run: its MAC left the answer set

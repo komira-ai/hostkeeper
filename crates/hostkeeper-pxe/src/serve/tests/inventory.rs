@@ -31,7 +31,8 @@ fn read(endpoint: &str, ca: &str) -> Result<Snapshot, ReadError> {
     })
 }
 
-/// A snapshot keeps each record's host id, role (none when empty), MACs and enrolled mark,
+/// A snapshot keeps each record's host id, role (none when empty), MACs, enrolled mark, `host_held`
+/// and window state (a value this release does not know reads as `UNSPECIFIED`),
 /// with no platform (the field is not in the API yet); each host's node id; and, for each
 /// pending request, the host ids of the records it matches: the candidates of AMBIGUOUS, then
 /// the one of MATCHED.
@@ -48,6 +49,8 @@ fn a_snapshot_keeps_what_the_answer_set_needs() {
     };
     let mut future = record("f-1", &[], false);
     future.host_held = 99;
+    // A state this release does not know reads as not said.
+    future.state = 99;
     let snapshot = Snapshot::of(
         vec![with_role, record("m-1", &[], false), future],
         vec![pending("req-1", "r-1"), ambiguous],
@@ -63,6 +66,7 @@ fn a_snapshot_keeps_what_the_answer_set_needs() {
                     data_macs: vec![MacAddress::parse("02:00:00:00:00:01").expect("a MAC")],
                     enrolled: true,
                     host_held: proto::HostHeld::Approved,
+                    state: proto::RecordState::Open,
                     platform: None,
                 },
                 Record {
@@ -71,6 +75,7 @@ fn a_snapshot_keeps_what_the_answer_set_needs() {
                     data_macs: vec![],
                     enrolled: false,
                     host_held: proto::HostHeld::None,
+                    state: proto::RecordState::Open,
                     platform: None,
                 },
                 // A `host_held` this release does not know says nothing: the record is left out.
@@ -80,6 +85,7 @@ fn a_snapshot_keeps_what_the_answer_set_needs() {
                     data_macs: vec![],
                     enrolled: false,
                     host_held: proto::HostHeld::Unspecified,
+                    state: proto::RecordState::Unspecified,
                     platform: None,
                 },
             ],

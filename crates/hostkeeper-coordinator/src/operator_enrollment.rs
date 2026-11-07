@@ -18,30 +18,38 @@
 //! `record_contested` until all but one are rejected (a request posted while the call runs is
 //! seen at the next call).
 //!
+//! A request that matches an open inventory record exactly is not left to an operator: the
+//! coordinator approves it itself, as the record's host id and role, with no service, when it is
+//! posted ([`Coordinator::enroll`]) and when the record is added or opened
+//! ([`Coordinator::add_record`], [`Coordinator::open_record`]); the conditions are
+//! [`Enrollment::approve_by_record`]'s. What waits for an operator is listed with the record's
+//! state (`record_state`, `record_approve_until_unix`).
+//!
 //! An approval assigns the services it names to the host it approves
 //! ([`Coordinator::assign_host`], the one path by which `Services.Assign` of a host assigns
 //! too), after the approval is recorded: each service is one audit entry `assign`. An
 //! assignment that cannot be written is logged and leaves the approval standing; the operator
 //! assigns the services with `Services.Assign`. A Mac approved by its MDM nonce at its
 //! `Enroll` ([`Coordinator::enroll`]) has the services of its allowlist entry assigned the same
-//! way, by `mdm-nonce`.
+//! way, by `mdm-nonce`. An approval by a record assigns none.
 
 use std::collections::BTreeMap;
 
 use hostkeeper_enrollment::names::KeyHash;
-use hostkeeper_proto::hostkeeper::agent::v1::{EnrollRequest, EnrollResponse};
+use hostkeeper_proto::hostkeeper::agent::v1::{EnrollRequest, EnrollResponse, EnrollState};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 use hostkeeper_wire::{HostId, RoleName};
 
-use crate::enrollment::{Enrollment, MAC_APPROVER, RpcError};
+use crate::enrollment::{ByRecord, Enrollment, MAC_APPROVER, RpcError};
 use crate::inventory::show_match;
 use crate::operator::{Caller, entry_proto};
 use crate::service::Coordinator;
 
 impl Coordinator {
     /// `Enrollment.List`: the requests waiting for an operator ([`Enrollment::list`]), each
-    /// with its match against the host inventory ([`crate::inventory::show_match`]) and, when it
+    /// with its match against the host inventory ([`crate::inventory::show_match`], with where
+    /// the record's window stands at the time of the call) and, when it
     /// is contested, the other pending requests that match its record
     /// ([`Enrollment::contests`]).
     ///
@@ -57,6 +65,7 @@ impl Coordinator {
             return Ok(proto::ListPendingResponse::default());
         };
         let mut listed = enrollment.list(request)?;
+        let now = self.ops.unix_now();
         let records = self.ops.read(|state| state.inventory.clone());
         // An expired request is not pending, so no contest names it.
         let contested: BTreeMap<String, Vec<String>> = enrollment
@@ -65,7 +74,7 @@ impl Coordinator {
             .map(|(id, others)| (id.to_hex(), others.iter().map(KeyHash::to_hex).collect()))
             .collect();
         for pending in &mut listed.requests {
-            show_match(pending, &records);
+            show_match(pending, &records, now);
             if let Some(others) = contested.get(&pending.request_id) {
                 pending.contested_by.clone_from(others);
             }
@@ -104,7 +113,9 @@ impl Coordinator {
     /// `Enroll` of `hostkeeper.agent.v1.Coordinator` over `enrollment`, this coordinator's
     /// ([`Enrollment::enrolled`]): when a Mac's request is approved by its nonce, the services
     /// of its allowlist entry are assigned to its host by `mdm-nonce`, as an operator's
-    /// approval assigns the services it names.
+    /// approval assigns the services it names. A request still pending (a new one or a repost)
+    /// is tried against the host inventory ([`Enrollment::approve_by_record`]); one it approves
+    /// is answered as one already approved (`UNSPECIFIED`: poll it), as a Mac's by its nonce.
     ///
     /// # Errors
     /// As [`Enrollment::enrolled`].
@@ -113,7 +124,10 @@ impl Coordinator {
         enrollment: &Enrollment,
         request: EnrollRequest,
     ) -> Result<EnrollResponse, RpcError> {
-        let enrolled = enrollment.enrolled(request)?;
+        let mut enrolled = enrollment.enrolled(request)?;
+        if enrolled.response.state == EnrollState::Pending as i32 {
+            self.approve_posted(enrollment, &enrolled.request_id, &mut enrolled.response);
+        }
         if let Some(entry) = &enrolled.by_nonce {
             let services: Vec<String> = entry
                 .services
@@ -128,6 +142,20 @@ impl Coordinator {
             );
         }
         Ok(enrolled.response)
+    }
+
+    /// Tries the pending request `request_id` against the host inventory; when the record
+    /// approves it the answer `response` becomes the one of a request already approved.
+    fn approve_posted(
+        &self,
+        enrollment: &Enrollment,
+        request_id: &KeyHash,
+        response: &mut EnrollResponse,
+    ) {
+        let records = self.ops.read(|state| state.inventory.clone());
+        if let ByRecord::Approved { .. } = enrollment.approve_by_record(request_id, &records) {
+            response.state = EnrollState::Unspecified as i32;
+        }
     }
 
     /// Assigns `services` to `host_id` of `role`, just approved by `by`

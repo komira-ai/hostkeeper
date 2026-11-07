@@ -86,7 +86,7 @@ const REQUESTS: &[(&str, &str)] = &[
     (
         "hostkeeper.operator.v1.Enrollment/AddRecord",
         r#"{"hostId": "storage-1", "role": "storage", "dataMacs": ["02:00:00:00:00:01"],
-            "bmcMac": "", "serial": "", "notes": "racked"}"#,
+            "bmcMac": "", "serial": "", "notes": "racked", "approveForSecs": "7200"}"#,
     ),
     (
         "hostkeeper.operator.v1.Enrollment/Approve",
@@ -102,6 +102,10 @@ const REQUESTS: &[(&str, &str)] = &[
     (
         "hostkeeper.operator.v1.Enrollment/ListRecords",
         r#"{"limit": 100, "pageToken": ""}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Enrollment/OpenRecord",
+        r#"{"hostId": "storage-1", "approveForSecs": "3600", "reason": "rebuilt"}"#,
     ),
     (
         "hostkeeper.operator.v1.Enrollment/Reject",

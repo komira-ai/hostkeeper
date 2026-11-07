@@ -21,6 +21,11 @@
 //! coordinator's start for any recorded approval the audit log does not hold
 //! ([`Enrollment::audit_to`]). A refused approval is audited `enroll_approve_refused` with its
 //! token, and changes nothing else.
+//!
+//! An approval the coordinator made itself by an inventory record ([`INVENTORY_APPROVER`], see
+//! `by_record`) is audited `enrollment.auto_approved`, in one change of the ops file with the
+//! mark that the record is used, and at the start that change is made again for one whose entry
+//! the audit log lacks. `Approve` does not mark a record used.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, PoisonError};
@@ -34,6 +39,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 use hostkeeper_wire::RoleName;
 
 use super::Enrollment;
+use super::by_record::{ACTION_AUTO_APPROVED, INVENTORY_APPROVER, record_auto_approval};
 use super::expiry::ExpiriesAudited;
 use crate::inventory::{InventoryMatch, InventoryRecord, match_claims};
 use crate::operator::valid_reason;
@@ -108,7 +114,7 @@ pub fn token_of(refusal: EnrollmentRefusal) -> String {
 }
 
 /// `role` if it is one both by the operator API's rule (a letter first) and the store's.
-fn role_of(role: &str) -> Option<Role> {
+pub(super) fn role_of(role: &str) -> Option<Role> {
     role.parse::<RoleName>().ok()?;
     Role::parse(role).ok()
 }
@@ -232,12 +238,18 @@ pub(super) fn claims_summary(claims: &Claims) -> String {
 }
 
 /// The audit entry of `approval`: by its approver, about its host id; its reason starts with
-/// `request <id>;`, which is how a start finds the approvals already audited.
+/// `request <id>;`, which is how a start finds the approvals already audited. An approval by an
+/// inventory record is `enrollment.auto_approved` and names the record after the request.
 pub(super) fn approval_entry(approval: &RecordedApproval) -> AuditEntry {
-    let action = if approval.replace {
-        ACTION_REPLACE
+    let (action, record) = if approval.approver == INVENTORY_APPROVER {
+        (
+            ACTION_AUTO_APPROVED,
+            format!("record {}; ", approval.host_id),
+        )
+    } else if approval.replace {
+        (ACTION_REPLACE, String::new())
     } else {
-        ACTION_APPROVE
+        (ACTION_APPROVE, String::new())
     };
     let services = if approval.services.is_empty() {
         "none".to_owned()
@@ -247,7 +259,7 @@ pub(super) fn approval_entry(approval: &RecordedApproval) -> AuditEntry {
     let mut entry = AuditEntry::new(&approval.approver, action);
     entry.node_id = Some(approval.host_id.clone());
     entry.reason = Some(format!(
-        "request {}; role {}; services {services}; claims {}; {}",
+        "request {}; {record}role {}; services {services}; claims {}; {}",
         approval.request_id,
         approval.role,
         claims_summary(&approval.claims),
@@ -258,7 +270,7 @@ pub(super) fn approval_entry(approval: &RecordedApproval) -> AuditEntry {
 
 /// The request id an approval's audit entry names, if `entry` is one.
 fn audited_request(entry: &AuditEntry) -> Option<&str> {
-    if entry.action != ACTION_APPROVE && entry.action != ACTION_REPLACE {
+    if ![ACTION_APPROVE, ACTION_REPLACE, ACTION_AUTO_APPROVED].contains(&entry.action.as_str()) {
         return None;
     }
     entry.reason.as_deref()?.strip_prefix("request ")?.get(..64)
@@ -293,7 +305,11 @@ impl Enrollment {
                         request_id = %approval.request_id,
                         "auditing an approval whose entry did not land before the last stop"
                     );
-                    write_entry(&ops, approval_entry(approval));
+                    if approval.approver == INVENTORY_APPROVER {
+                        record_auto_approval(&ops, approval);
+                    } else {
+                        write_entry(&ops, approval_entry(approval));
+                    }
                 }
             }
             (Err(why), _) => {
@@ -309,15 +325,18 @@ impl Enrollment {
         *self.audit.lock().unwrap_or_else(PoisonError::into_inner) = Some(ops);
     }
 
+    /// The ops store enrollment audits into; `None` until a coordinator takes this enrollment.
+    pub(super) fn ops(&self) -> Option<Arc<OpsStore>> {
+        self.audit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// Writes `entry` to the ops store enrollment audits into: the entry as numbered, or `None`
     /// when there is none yet or the write failed (logged).
     pub(super) fn audit(&self, entry: AuditEntry) -> Option<AuditEntry> {
-        let ops = self
-            .audit
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        match ops {
+        match self.ops() {
             Some(ops) => write_entry(&ops, entry),
             None => {
                 tracing::info!(action = %entry.action, "no ops store to audit an enrollment change in");
@@ -445,7 +464,24 @@ impl Enrollment {
         record: &ApprovalRecord,
         claims: Claims,
     ) -> Approved {
-        let approval = RecordedApproval {
+        let approval = self.recorded(checked, record, claims);
+        Approved {
+            host_id: checked.decision.host_id.clone(),
+            entry: self.audit(approval_entry(&approval)),
+        }
+    }
+
+    /// The approval the store just wrote for `checked` with `record`, for a request that claimed
+    /// `claims`, as the store lists it ([`EnrollmentStore::recorded_approvals`]).
+    ///
+    /// [`EnrollmentStore::recorded_approvals`]: hostkeeper_enrollment::enroll::EnrollmentStore::recorded_approvals
+    pub(super) fn recorded(
+        &self,
+        checked: &Checked,
+        record: &ApprovalRecord,
+        claims: Claims,
+    ) -> RecordedApproval {
+        RecordedApproval {
             request_id: checked.request_id,
             host_id: checked.decision.host_id.to_string(),
             role: checked.decision.role.as_str().to_owned(),
@@ -461,10 +497,6 @@ impl Enrollment {
             reason: record.reason.clone(),
             claims,
             mac_nonce: record.mac_nonce.is_some(),
-        };
-        Approved {
-            host_id: checked.decision.host_id.clone(),
-            entry: self.audit(approval_entry(&approval)),
         }
     }
 }

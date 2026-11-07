@@ -608,6 +608,17 @@ impl EnrollmentApi for EnrollmentService {
             .map(Response::new)
             .map_err(refusal::enrollment)
     }
+
+    async fn open_record(
+        &self,
+        request: Request<proto::OpenRecordRequest>,
+    ) -> Result<Response<proto::OpenRecordResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .open_record(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
+    }
 }
 
 /// The service of `Audit`.

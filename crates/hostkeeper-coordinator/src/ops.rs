@@ -98,7 +98,7 @@ use crate::audit_file::{
 use crate::desired::{Staged, StoreError};
 use crate::force::ForceRecord;
 use crate::holds::HoldMark;
-use crate::inventory::InventoryRecord;
+use crate::inventory::{InventoryRecord, RecordWindow};
 use crate::ops_file;
 use crate::rollouts::Rollout;
 use crate::store::{BackendError, Commit, Fake, Files, Shared, commit_across};
@@ -494,6 +494,8 @@ pub struct OpsStore {
     backend: Shared,
     /// Seconds since the epoch, for the lines of the audit.
     unix: UnixClock,
+    /// How long the approval window of a new inventory record is, and the longest it may be.
+    record_window: RecordWindow,
     /// The marker of changes in memory and not yet committed: `<ops-file>.halts.unfinished` for a
     /// store over a file; the others have none.
     marker: Option<PathBuf>,
@@ -581,6 +583,7 @@ impl OpsStore {
             writing: Mutex::new(()),
             backend,
             unix: wall_clock(),
+            record_window: RecordWindow::default(),
             marker: None,
             pending: Mutex::new(pending::Pending::default()),
             #[cfg(test)]
@@ -595,6 +598,20 @@ impl OpsStore {
     pub(crate) fn with_marker(mut self, marker: PathBuf) -> Self {
         self.marker = Some(marker);
         self
+    }
+
+    /// The store with `record_window` as the limits of the windows of new inventory records
+    /// (`--record-approve-for`, `--record-approve-max`).
+    #[must_use]
+    pub fn with_record_window(mut self, record_window: RecordWindow) -> Self {
+        self.record_window = record_window;
+        self
+    }
+
+    /// The limits of the windows of new inventory records.
+    #[must_use]
+    pub fn record_window(&self) -> RecordWindow {
+        self.record_window
     }
 
     /// A store that keeps nothing durable: changes stand in memory only (an in-memory backend,
