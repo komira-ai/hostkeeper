@@ -52,11 +52,13 @@
 //!   Business Manager through depserver's API on loopback: its token certificate, the server
 //!   token, the ADE profile (defined once per change, then depsyncer started) and its assignment
 //!   to devices already in ABM (exit 1 unless Apple assigns every one).
-//! * `hostkeeper-mdm migrate --from OLD --settings NEW --bin-dir DIR --profile-id ID [--apply]`:
+//! * `hostkeeper-mdm migrate --from OLD --settings NEW --bin-dir DIR --profile-id ID
+//!   [--scep-ca-cn CN] [--acme-resolvers R] [--acme-propagation-wait W] [--apply]`:
 //!   as root, the old kit's live stack moved to this kit's names while no Mac is enrolled: the
 //!   new settings written from the old ones, NanoHUB's push certificate and NanoDEP's ABM token
-//!   copied from the old state, the old units stopped and disabled, and this kit installed (a
-//!   fresh SCEP CA under its final name included). The old state directory is never changed.
+//!   copied from the old state with the DNS provider's `dns.env`, this kit's files installed (a
+//!   fresh SCEP CA under its final name included), the old units stopped and disabled, and this
+//!   kit's services started. The old state and etc directories are never changed.
 //!
 //! A call to NanoHUB's or NanoDEP's API (`api`) is printed as a step is, with its method, URL and
 //! body size, and made only with `--apply`.

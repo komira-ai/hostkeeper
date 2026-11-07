@@ -563,3 +563,43 @@ crate as it was moved:
 
 The tests kbf's crate had are kept, renamed to hostkeeper's names, in
 `crates/hostkeeper-mdm/tests/`; each fix above adds its own.
+
+# The MDM kit's push-cert and dep verbs
+
+The verbs `push-cert` and `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`) of the
+MDM kit's binary (docs/design/hostkeeper-mdm.md, section 8, task M5) were ported from the `mdm`
+module of kbf's `kbf-deploy` (`crates/kbf-deploy/src/mdm/push_cert.rs`, `dep.rs` and `api.rs`) at
+kbf's commit `5d7a2c405f9e23949661ee1e2b34fc029a623cbd`. kbf's copy stays until the design's task
+M6a deletes it. Its `erase-request` verb is not ported: the design leaves erase out of v1.
+
+| kbf | hostkeeper |
+|---|---|
+| `kbf-deploy mdm push-cert --config FILE` | `hostkeeper-mdm push-cert --settings FILE` |
+| `kbf-deploy mdm dep <verb> --config FILE` | `hostkeeper-mdm dep <verb> --settings FILE` |
+| the API calls on loopback over a raw socket | `crates/hostkeeper-mdm/src/api.rs`: the same calls through the injected `Loopback`, whose real client is ureq to `127.0.0.1` only |
+
+## What changed
+
+- **The enrollment profile is mode 0640, root's and the service group's.** kbf wrote it 0600 and
+  the service user's, so the service could rewrite the file it serves. The proxy reads it through
+  the group (`the_enrollment_profile_is_served_mode_0640`); `verify` checks the mode, owner and
+  group.
+- **The time of the expiry check is the injected clock** (`the_certificate_expires_exactly_at_not_after`).
+- **The git work tree check resolves the path.** kbf walked the path as given; a relative path
+  or a link into a work tree got past it. The path must be absolute and every link on the way is
+  resolved first (`a_relative_path_or_a_link_into_a_work_tree_is_refused`).
+- **`dep define-profile` defines again when the uuid record is lost.** kbf called nothing when
+  the profile's sha256 was recorded, even with no uuid recorded, which left `assign` without a
+  profile (`a_matching_digest_without_a_uuid_record_defines_again`).
+- **`dep upload-token` refuses an empty token or one over 64 KiB, and fails on an account answer
+  that is not a JSON object**, where kbf sent the file whole and printed `?`
+  (`upload_token_refuses_an_empty_or_oversized_file`,
+  `upload_token_fails_on_an_account_answer_that_is_not_json`).
+
+## New in hostkeeper
+
+`hostkeeper-mdm migrate --from <old settings file>` (design section 8.3) has no kbf original; its
+settings half is `crates/hostkeeper-mdm-core/src/migrate.rs` and its host half
+`crates/hostkeeper-mdm/src/migrate.rs`. The pkg directory (`MDM_PKG_DIR`) and the Caddyfile's
+`/pkg/<sha256>.pkg` route are new too (design section 7.1); `tests/kbf_port.rs` names the route
+as the Caddyfile's one difference from kbf's outside its comments.
