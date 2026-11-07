@@ -14,6 +14,7 @@
 pub mod readers;
 pub mod replay;
 pub mod rig;
+pub mod serve;
 
 use std::collections::HashMap;
 use std::io;

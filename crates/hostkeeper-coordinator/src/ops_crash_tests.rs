@@ -275,7 +275,7 @@ fn start_failing_rename(rig: &mut Rig, fails: &Arc<AtomicBool>) {
     let path = ops_path(rig);
     let state = OpsStore::open(&path).expect("read").state();
     let fails = Arc::clone(fails);
-    let store = OpsStore::with_writer(
+    let store = OpsStore::refusing(
         state,
         Box::new(move |state| {
             ops_file::write_with(&path, state, &|step| {

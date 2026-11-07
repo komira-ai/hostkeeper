@@ -30,10 +30,9 @@
 //! none stored: a coordinator of the release before never wrote one, and ignores this one.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_wire::HostId;
@@ -41,8 +40,9 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Heartbeat, UpdateResult, VerdictAck};
 use serde::{Deserialize, Serialize};
 
-use crate::desired::{StoreError, io_at, write_whole};
+use crate::desired::{StoreError, io_at};
 use crate::fleet::Fleet;
+use crate::store::{BackendError, Commit, Fake, Files, Shared};
 
 /// The feature an agent announces to be acknowledged its verdicts.
 pub const FEATURE: &str = hostkeeper_wire::wire::VERDICT_ACKS_FEATURE;
@@ -75,7 +75,7 @@ pub enum VerdictsError {
 
 /// What the file holds: by service.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct Held {
+pub(crate) struct Held {
     #[serde(default)]
     services: BTreeMap<String, Kept>,
 }
@@ -122,13 +122,10 @@ mod host_text {
     }
 }
 
-/// How what the store holds is written: whole, durably.
-type Writer = Box<dyn Fn(&Held) -> Result<(), StoreError> + Send + Sync>;
-
-/// The verdicts stored, and how a change of them is written.
+/// The verdicts stored, and the backend a change of them is committed to ([`crate::store`]).
 pub struct VerdictFile {
     held: Mutex<Held>,
-    write: Writer,
+    backend: Shared,
 }
 
 impl std::fmt::Debug for VerdictFile {
@@ -146,10 +143,7 @@ impl VerdictFile {
     /// each write is taken as done.
     #[must_use]
     pub fn volatile() -> Self {
-        Self {
-            held: Mutex::new(Held::default()),
-            write: Box::new(|_| Ok(())),
-        }
+        Self::over(Arc::new(Fake::new()), Held::default())
     }
 
     /// The verdicts stored in the file at `path`, none if it is not there; changes are written
@@ -158,16 +152,17 @@ impl VerdictFile {
     /// # Errors
     /// [`VerdictsError`]: the file cannot be read, or holds a value this build cannot read.
     pub fn open(path: &Path) -> Result<Self, VerdictsError> {
-        let held = match fs::read(path) {
-            Ok(bytes) => parse(path, &bytes)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Held::default(),
-            Err(e) => return Err(io_at(path)(e).into()),
-        };
-        let path = path.to_owned();
-        Ok(Self {
+        let files = Files::default().with_verdicts(path);
+        let held = files.load_verdicts()?;
+        Ok(Self::over(Arc::new(files), held))
+    }
+
+    /// The verdicts `held`, as loaded from `backend`, to which their changes are committed.
+    pub(crate) fn over(backend: Shared, held: Held) -> Self {
+        Self {
             held: Mutex::new(held),
-            write: Box::new(move |held| write_whole(&path, &text_of(&path, held)?)),
-        })
+            backend,
+        }
     }
 
     fn held(&self) -> std::sync::MutexGuard<'_, Held> {
@@ -196,9 +191,24 @@ impl VerdictFile {
             kept.standing.remove(host.as_str());
         }
         next.services.retain(|_, kept| !kept.is_empty());
-        (self.write)(&next)?;
+        self.commit(&held, &next)?;
         *held = next;
         Ok(())
+    }
+
+    /// Commits `next` in place of `held` to the backend.
+    ///
+    /// # Errors
+    /// [`VerdictsError`]: the backend did not take it.
+    fn commit(&self, held: &Held, next: &Held) -> Result<(), VerdictsError> {
+        let commit = Commit {
+            verdicts: Some((held, next)),
+            ..Commit::default()
+        };
+        self.backend.commit(&commit).map_err(|why| match why {
+            BackendError::Verdicts(why) => why,
+            other => VerdictsError::Io(other.into_store()),
+        })
     }
 
     /// Every verdict counted: the service, the host and its report.
@@ -255,7 +265,7 @@ impl VerdictFile {
                 .collect();
         }
         next.services.retain(|_, kept| !kept.is_empty());
-        (self.write)(&next)?;
+        self.commit(&held, &next)?;
         *held = next;
         Ok(())
     }
@@ -299,7 +309,7 @@ fn ackable(report: &UpdateResult) -> bool {
 }
 
 /// The text of the file at `path` holding `held`.
-fn text_of(path: &Path, held: &Held) -> Result<Vec<u8>, StoreError> {
+pub(crate) fn text_of(path: &Path, held: &Held) -> Result<Vec<u8>, StoreError> {
     let mut text = serde_json::to_vec_pretty(held)
         .map_err(io::Error::from)
         .map_err(io_at(path))?;
@@ -308,7 +318,7 @@ fn text_of(path: &Path, held: &Held) -> Result<Vec<u8>, StoreError> {
 }
 
 /// What the file at `path`, whose bytes are `bytes`, holds.
-fn parse(path: &Path, bytes: &[u8]) -> Result<Held, VerdictsError> {
+pub(crate) fn parse(path: &Path, bytes: &[u8]) -> Result<Held, VerdictsError> {
     let invalid = |why: String| VerdictsError::Invalid {
         path: path.to_owned(),
         why,

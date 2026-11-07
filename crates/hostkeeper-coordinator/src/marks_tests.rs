@@ -801,10 +801,11 @@ async fn every_new_operator_method_refuses_a_ci_token_and_no_token() {
     }
 }
 
-/// A store that cannot be written refuses `mark_bad`, `abort`, `exclude` and `hold` as
-/// `store_failed`.
+/// A store that cannot be written refuses `mark_bad`, `exclude` and `hold` as `store_failed`;
+/// `abort`, the operator's way out, is queued all the same and stands pending.
 ///
-/// Catches: a failed write answered as done, or as a different refusal.
+/// Catches: a failed write answered as done, or as a different refusal; or an abort refused
+/// because storage fails.
 #[test]
 fn a_store_that_cannot_be_written_refuses_as_store_failed() {
     let mut rig = rig("marks-store-failed", "");
@@ -818,9 +819,14 @@ fn a_store_that_cannot_be_written_refuses_as_store_failed() {
         rig.coordinator.mark_bad(&operator(), mark_of(WEB, "2.0")),
         Err(proto::ReleasesRefusal::StoreFailed)
     );
-    assert_eq!(
-        rig.coordinator.abort(&operator(), abort_of("d1", WEB)),
-        Err(proto::HostsRefusal::StoreFailed)
+    let aborted = rig
+        .coordinator
+        .abort(&operator(), abort_of("d1", WEB))
+        .expect("queued all the same");
+    assert!(aborted.queued);
+    assert!(
+        rig.coordinator.ops().halt_unwritten(),
+        "the abort is pending"
     );
     assert_eq!(
         rig.coordinator

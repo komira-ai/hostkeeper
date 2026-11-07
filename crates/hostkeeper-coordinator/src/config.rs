@@ -29,11 +29,14 @@
 //!
 //! Before it opens any state file, the start takes the lock of `<state-file>.lock`
 //! ([`crate::lock`]) and holds it for as long as the coordinator runs, so a second `serve` on
-//! the same files is refused. It then refuses to start over a halt that was being written when
-//! the coordinator stopped (`<ops-file>.halts.unfinished`, [`crate::ops::Write::Halt`]) and
-//! over a restore that stopped partway (`<state-file>.restore-unfinished`, [`crate::backup`]),
-//! and
-//! reads the spent ids of CI's tokens (`<state-file>.jti`, [`crate::jti_file`]).
+//! the same files is refused. It then refuses to start over a restore that stopped partway
+//! (`<state-file>.restore-unfinished`, [`crate::backup`]), opens the state files as one backend
+//! ([`crate::store::Files`]) under the three stores and the spent ids of CI's tokens
+//! (`<state-file>.jti`, [`crate::jti_file`]), and settles the marker of changes that were in
+//! memory and not yet written when the coordinator stopped (`<ops-file>.halts.unfinished`,
+//! [`crate::ops::Marker`]): removed when the ops file holds every change it lists, a refusal to
+//! start naming those it does not hold, and a refusal, as the release before made, for a marker
+//! that lists nothing this build reads.
 
 use std::convert::Infallible;
 use std::ffi::OsString;
@@ -61,10 +64,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::alerts::{
     DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
 };
-use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation};
-use crate::backup::{
-    Backup, BackupError, Report, Restore, backup, ops_path, restore, restore_marker,
-};
+use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED};
+use crate::backup::{Backup, BackupError, Report, Restore, backup, ops_path, restore};
 use crate::channel::ReleaseChannel;
 use crate::channel_https::{ChannelTlsError, ChannelUrl, ChannelUrlError, HttpsChannel};
 use crate::desired::{DesiredStore, StoreError};
@@ -73,16 +74,17 @@ use crate::enrollment::{
 };
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::http::Surface;
-use crate::jti_file::{JtiError, JtiFile, jti_path};
+use crate::jti_file::JtiError;
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
 use crate::lock::{FileLock, LockError, LockGuard, StateLock, lock_path};
 use crate::mdm::{Mdm, MdmError, MdmFlags};
 use crate::ops::{OpsError, OpsStore};
 use crate::service::{Clock, Coordinator};
 use crate::services::{Services, ServicesError};
+use crate::store::{Shared, Spent};
 use crate::tokens::{OperatorTokens, TokensError};
 use crate::ui::{UiDir, UiDirError};
-use crate::verdict_file::{VerdictFile, VerdictsError, verdicts_path};
+use crate::verdict_file::{VerdictFile, VerdictsError};
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -188,6 +190,18 @@ pub enum StartError {
         /// The marker file.
         path: PathBuf,
     },
+    /// Changes were in memory and not yet written to the ops file when the coordinator stopped,
+    /// and the ops file does not hold them.
+    #[error(
+        "{path}: the changes numbered {} were in memory and not yet written to the ops file when the coordinator stopped, and it does not hold them; look each up by its number in the coordinator's log (target hostkeeper_coordinator::audit), make it again by hand if it still matters (a halt is raised again by the host's next report while the host is up), and remove this file to start",
+        numbers.iter().map(u64::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    ChangesUnwritten {
+        /// The marker file.
+        path: PathBuf,
+        /// The audit numbers of the changes that did not land.
+        numbers: Vec<u64>,
+    },
     /// A restore into these state files stopped before it finished.
     #[error(
         "{path}: a restore into these state files stopped before it finished, so they may hold part of a snapshot; remove them and this file, and restore again"
@@ -222,6 +236,14 @@ pub enum StartError {
     #[error(transparent)]
     Mdm(#[from] MdmError),
 }
+
+/// The start's state files, opened as one backend once the markers a stop left beside them are
+/// settled.
+#[path = "config_state.rs"]
+mod state;
+
+#[cfg(test)]
+pub(crate) use state::{refuse_unfinished_halt, refuse_unfinished_restore, settle_unfinished};
 
 /// How long the verifier waits before it fetches the issuer's keys again for an unknown `kid`.
 const KEY_REFETCH: Duration = Duration::from_secs(30);
@@ -600,26 +622,22 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     // which is a write) before this process is the one coordinator on them.
     let held = take_lock(lock, &lock_path(&flags.state_file))?;
     let ops_path = ops_path(&flags.state_file, flags.ops_file.as_deref());
-    refuse_unfinished_halt(&ops_path)?;
-    refuse_unfinished_restore(&flags.state_file)?;
     // The wall clock is read for the validity of CI's tokens and the expiry of their spent
     // ids, and for nothing the coordinator decides.
     let oidc_clock = hostkeeper_oidc::system_clock();
-    let spent = JtiFile::open(&jti_path(&flags.state_file), Arc::clone(&oidc_clock))?;
+    let (files, loaded) = state::open(flags, legacy, &ops_path, &oidc_clock)?;
+    let backend: Shared = Arc::new(files);
     let verifier = Verifier::new(
         oidc,
         Arc::new(keys),
         KEY_REFETCH,
-        oidc_clock,
-        Arc::new(spent),
+        Arc::clone(&oidc_clock),
+        Arc::new(Spent::new(Arc::clone(&backend), loaded.spent, oidc_clock)),
     );
-    let desired = DesiredStore::open(&flags.state_file, legacy)?;
-    let rotation = Rotation {
-        max_bytes: flags.audit_max_bytes,
-        retained: flags.audit_retained_segments,
-    };
-    let ops = OpsStore::open_with(&ops_path, rotation)?;
-    let verdicts = VerdictFile::open(&verdicts_path(&flags.state_file))?;
+    let desired = DesiredStore::over(Arc::clone(&backend), loaded.desired);
+    let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
+        .with_marker(crate::ops_file::unfinished_path(&ops_path));
+    let verdicts = VerdictFile::over(backend, loaded.verdicts);
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
     let files = |client_ca| TlsFiles {
@@ -729,33 +747,6 @@ pub(crate) fn alert_thresholds(flags: &Serve) -> Thresholds {
         silent_after: Duration::from_secs(flags.alert_silent_host_secs),
         cert_window_secs: flags.alert_cert_window_secs,
     }
-}
-
-/// Refuses to start over the marker of a halt that was being written to the ops file at `ops`
-/// when the coordinator stopped ([`crate::ops::Write::Halt`]): the halt may be lost, and the
-/// operator settles the halts file by hand and removes the marker.
-///
-/// # Errors
-/// [`StartError::HaltWriteUnfinished`]: the marker is there.
-pub(crate) fn refuse_unfinished_halt(ops: &Path) -> Result<(), StartError> {
-    let marker = crate::ops_file::unfinished_path(ops);
-    if marker.exists() {
-        return Err(StartError::HaltWriteUnfinished { path: marker });
-    }
-    Ok(())
-}
-
-/// Refuses to start over the marker of a restore into the state file `state` that did not
-/// finish ([`crate::backup::restore_marker`]): the state files may be part of a snapshot only.
-///
-/// # Errors
-/// [`StartError::RestoreUnfinished`]: the marker is there.
-pub(crate) fn refuse_unfinished_restore(state: &Path) -> Result<(), StartError> {
-    let marker = restore_marker(state);
-    if marker.exists() {
-        return Err(StartError::RestoreUnfinished { path: marker });
-    }
-    Ok(())
 }
 
 /// `--enrollment-request-ttl` in seconds: digits, then one unit of `s`, `m`, `h` or `d`, and at

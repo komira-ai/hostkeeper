@@ -847,7 +847,7 @@ async fn nothing_is_written_while_halted_bad_paused_or_quiet() {
 /// for while it failed; otherwise it keeps nothing.
 fn flaky(failing: &Arc<AtomicBool>, attempts: &Arc<AtomicUsize>) -> OpsStore {
     let (failing, attempts) = (Arc::clone(failing), Arc::clone(attempts));
-    OpsStore::with_writer(
+    OpsStore::refusing(
         OpsState::default(),
         Box::new(move |_| {
             if failing.load(Ordering::SeqCst) {

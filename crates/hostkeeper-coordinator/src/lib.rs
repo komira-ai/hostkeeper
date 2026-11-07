@@ -135,6 +135,7 @@ pub mod services;
 pub mod stages;
 pub mod stamp;
 pub mod status;
+pub(crate) mod store;
 pub mod tokens;
 pub mod ui;
 pub mod verdict_file;
@@ -300,6 +301,8 @@ mod state_safety_jti_tests;
 mod state_safety_rollout_tests;
 #[cfg(test)]
 mod status_service_tests;
+#[cfg(test)]
+mod store_orders_tests;
 #[cfg(test)]
 mod testutil;
 #[cfg(test)]

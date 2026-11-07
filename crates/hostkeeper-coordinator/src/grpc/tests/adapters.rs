@@ -46,7 +46,7 @@ fn as_ci_caller<T>(message: T) -> Request<T> {
 /// A store whose every write fails.
 fn unwritable() -> OpsStore {
     let writer = Box::new(|_: &OpsState| Err(disk_full()));
-    OpsStore::with_writer(OpsState::default(), writer)
+    OpsStore::refusing(OpsState::default(), writer)
 }
 
 /// A world that manages kbf, `other` and `floor`; CI's token may set the services `allowed`

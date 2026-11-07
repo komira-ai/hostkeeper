@@ -49,13 +49,7 @@ async fn a_rollback_paused_at_its_mark_does_not_overwrite_the_version_ci_sets_me
     });
     let mut state = OpsState::default();
     state.services.insert(LEGACY.to_owned(), good());
-    let rig = rig_over(
-        "rb-race-ci",
-        AUTO,
-        ONE,
-        OpsStore::with_writer(state, writer),
-    )
-    .await;
+    let rig = rig_over("rb-race-ci", AUTO, ONE, OpsStore::refusing(state, writer)).await;
     rig.set(TWO).await;
     round(&rig, 2_000, &[]);
     rig.at(2_015);

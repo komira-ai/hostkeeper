@@ -153,8 +153,8 @@ async fn the_calls_know_the_hosts_and_roles_the_ops_file_names() {
             ..ServiceAssignments::default()
         },
     );
-    rig.coordinator = start(&rig.dir, &rig.clock, "")
-        .with_ops(OpsStore::with_writer(state, Box::new(|_| Ok(()))));
+    rig.coordinator =
+        start(&rig.dir, &rig.clock, "").with_ops(OpsStore::refusing(state, Box::new(|_| Ok(()))));
     let entry = unassign(&rig, WEB, "", "builder", false)
         .expect("builder is named by an assignment")
         .entry

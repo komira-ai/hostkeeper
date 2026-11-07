@@ -118,7 +118,7 @@ fn a_halt_is_raised_only_under_the_lock_every_order_is_decided_under() {
         Coordinator::new(store, verifier, OPERATOR.to_owned(), clock_of(&clock))
             .with_services(kbf_services())
             .with_legacy_service(Some(LEGACY.to_owned()))
-            .with_ops(OpsStore::with_writer(OpsState::default(), writer)),
+            .with_ops(OpsStore::refusing(OpsState::default(), writer)),
     );
     me.set(Arc::downgrade(&coordinator)).expect("set once");
     coordinator

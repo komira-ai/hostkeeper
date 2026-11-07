@@ -120,7 +120,7 @@ async fn farm_of_two(name: &str, fail: &Arc<AtomicBool>) -> Rig {
     });
     rig.coordinator = Rig::start_with_allow_list(&rig.dir, &rig.clock, &list)
         .with_services(crate::testutil::with_kbf(SERVICES_TEXT))
-        .with_ops(OpsStore::with_writer(OpsState::default(), writer));
+        .with_ops(OpsStore::refusing(OpsState::default(), writer));
     for body in [
         r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#,
         r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,

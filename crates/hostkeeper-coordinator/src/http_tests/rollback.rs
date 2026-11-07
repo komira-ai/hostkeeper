@@ -11,7 +11,7 @@ fn rig_over(name: &str, marks: ServiceOps) -> Rig {
     let mut rig = Rig::new(name);
     let mut state = OpsState::default();
     state.services.insert("kbf".to_owned(), marks);
-    let ops = OpsStore::with_writer(
+    let ops = OpsStore::refusing(
         state,
         Box::new(|_| {
             Err(OpsError::Io(StoreError::Io {

@@ -33,9 +33,7 @@ fn a_sync_failure_after_the_rename_updates_memory_and_reports_not_synced() {
         .expect("a store")
         .set(LEGACY, desired("1.0", 0, 0))
         .expect("the first state");
-    let store = DesiredStore::open(&path, Some(LEGACY))
-        .expect("a store")
-        .with_sync_dir(failing_sync);
+    let store = DesiredStore::open_syncing(&path, Some(LEGACY), failing_sync).expect("a store");
     let err = store
         .set(LEGACY, desired("2.0", 0, 0))
         .expect_err("not synced");

@@ -21,7 +21,7 @@ use crate::marks_support::{
 use crate::ops::{AuditEntry, OpsError, OpsState, OpsStore, Write};
 use crate::orders::Order;
 use crate::service::SetError;
-use crate::testutil::{Log, Rig, ops_of, scratch};
+use crate::testutil::{Log, Rig, ops_of, scratch, version};
 
 /// The role of every host of these tests.
 const DAEMON: &str = "daemon";
@@ -206,8 +206,8 @@ async fn every_other_changing_verb_refuses_when_append_fails() {
 
 /// Proves: with the audit file taking no lines, `Hosts.Abort` and `Releases.Halt` succeed and
 /// take effect: the abort is sent on `d1`'s next typed heartbeat and `web` is halted; the ring
-/// holds both entries as answered, the audit file holds neither, and each failed append is
-/// logged at error as a change that stands.
+/// holds both entries as answered, the audit file holds neither, both are pending, and each
+/// failed commit is logged at error as a change that stands.
 ///
 /// Catches: the operator's way out refused on a full disk, or an abort or a halt that stands
 /// with no record anywhere.
@@ -254,8 +254,8 @@ async fn abort_and_halt_proceed_when_append_fails() {
         "{ring:?}"
     );
     assert_eq!(files(&rig)[2], audit_before, "the audit file took no line");
-    let stands =
-        "the audit file could not be appended to: the change stands, and the ring holds it";
+    assert!(rig.coordinator.ops().halt_unwritten(), "both are pending");
+    let stands = "a change stands in memory and is not yet written";
     assert_eq!(log.text().matches(stands).count(), 2, "{}", log.text());
 
     rig.at(2_100);
@@ -366,8 +366,8 @@ fn the_store_appends_the_audit_line_before_it_writes_the_ops_file() {
 }
 
 /// Proves: a force refused for its audit whose desired state cannot be put back (the desired
-/// file can no longer be replaced) is still `audit_unavailable`, with no force recorded, and the
-/// failed put-back is logged at error.
+/// file can no longer be replaced) is still `audit_unavailable`, with no force recorded and the
+/// desired version in memory as it was, and the failed put-back is logged at error.
 ///
 /// Catches: a put-back failure that goes unsaid, or one that turns the refusal into a success.
 #[tokio::test]
@@ -392,7 +392,11 @@ async fn a_force_whose_desired_state_cannot_be_put_back_is_refused_and_logged() 
     );
     assert_eq!(forced, Err(proto::ReleasesRefusal::AuditUnavailable));
     assert_eq!(rig.coordinator.ops().marks(WEB).force, None);
+    assert_eq!(
+        rig.coordinator.desired.get(WEB).map(|d| d.version),
+        Some(version("2.0"))
+    );
     let text = log.text();
-    let error = "a force refused for its audit could not put the desired state back";
+    let error = "a change failed after its desired state was written, and the desired state could not be put back";
     assert_eq!(text.matches(error).count(), 1, "{text}");
 }

@@ -521,7 +521,7 @@ fn the_marker_of_an_unfinished_halt_is_restored_and_said() {
     assert_eq!(
         report.to_string().lines().last(),
         Some(
-            "the snapshot holds the marker of a halt that was being written: serve refuses to start until the halts file is settled by hand and the marker removed, as it did before the backup"
+            "the snapshot holds the marker of changes that were not yet written: serve refuses to start until they are settled by hand and the marker removed, unless the ops file holds every change it lists, as it did before the backup"
         )
     );
 }

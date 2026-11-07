@@ -9,8 +9,8 @@
 //!   ops file itself, the audit file (`.audit`) and each of its sealed segments (`.audit.<n>`,
 //!   named `ops-audit.<n>` in a snapshot, with the number it has), the halts file (`.halts`), a
 //!   halts file staged by a change that had not finished (`.halts.next`, which the next start
-//!   settles) and the marker of a halt that was being written (`.halts.unfinished`, which
-//!   refuses a start);
+//!   settles) and the marker of changes that were not yet written (`.halts.unfinished`, which
+//!   refuses a start unless the ops file holds every change it lists);
 //! - with `--enrollment-dir`, every file of the enrollment store: each file ending `.pb` in that
 //!   directory and in the directories under it. Anything else there (the store's `lock`, a
 //!   `.tmp` file a crash left, a CA key or a server certificate kept in the same directory) is
@@ -87,7 +87,7 @@ pub fn restore_marker(state: &Path) -> PathBuf {
     with_suffix(state, RESTORE_UNFINISHED)
 }
 
-/// The name in a snapshot of the marker of a halt that was being written.
+/// The name in a snapshot of the marker of changes that were not yet written.
 const UNFINISHED: &str = "ops-halts-unfinished";
 
 /// The name in a snapshot of the audit file; its sealed segment `n` is `ops-audit.<n>`.
@@ -495,7 +495,7 @@ pub fn restore(flags: &Restore, lock: &dyn StateLock) -> Result<Report, BackupEr
     }
     if manifest.files.iter().any(|entry| entry.name == UNFINISHED) {
         lines.push(
-            "the snapshot holds the marker of a halt that was being written: serve refuses to start until the halts file is settled by hand and the marker removed, as it did before the backup".to_owned(),
+            "the snapshot holds the marker of changes that were not yet written: serve refuses to start until they are settled by hand and the marker removed, unless the ops file holds every change it lists, as it did before the backup".to_owned(),
         );
     }
     Ok(Report(lines))

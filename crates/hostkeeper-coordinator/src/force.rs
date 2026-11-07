@@ -12,9 +12,9 @@
 //! (`confirm_mismatch`); a role the service does not run on, or a host the coordinator has not
 //! heard from since it started (`unknown_target`).
 //!
-//! Otherwise it sets the desired version to the target, through the store CI's set writes
-//! (the registry keeps the digest, and the floor was checked above), and then, in one write of
-//! the ops file with its audit entries in this order: records the force (`force`, by the
+//! Otherwise, in one commit ([`crate::ops::OpsStore::decide_changes_with`]), it sets the desired
+//! version to the target, through the store CI's set writes (the registry keeps the digest, and
+//! the floor was checked above), and, with its audit entries in this order: records the force (`force`, by the
 //! operator's token, naming the targets and the hosts holding a slot it passed), lifts the
 //! bad mark of the target (`unmark_bad`), marks bad each version a targeted host leaves on a
 //! downgrade, from the versions those hosts last reported (`mark_bad`), and clears a standing
@@ -443,9 +443,10 @@ impl Coordinator {
     /// # Errors
     /// The refusal, as `ReleasesRefusal`: `unauthorized` or `forbidden` for a caller that is no
     /// operator, then `self_service`, `unknown_service`, `invalid_request`, `confirm_mismatch`,
-    /// `below_min_version`, `no_digest`, `unknown_target`; `store_failed` when the desired state
-    /// or the ops file could not be written; `audit_unavailable` when the force's audit lines
-    /// could not be appended, and the desired state is put back as it was.
+    /// `below_min_version`, `no_digest`, `unknown_target`; `store_failed` when its commit failed;
+    /// `audit_unavailable` when its audit lines could not be appended. A refused force changes
+    /// nothing: over the files, whose desired state is written before the ops file, the desired
+    /// state is put back as it was.
     pub fn force(
         &self,
         caller: &Caller,
@@ -495,21 +496,18 @@ impl Coordinator {
             now,
         )
         .map_err(|UnknownTarget| proto::ReleasesRefusal::UnknownTarget)?;
-        // The desired state first: a force whose ops write fails leaves the target desired and
-        // its bad mark standing, so nothing is ordered of it until the force is asked again. A
-        // registered digest comes only with a desired state CI set, so there is one; its limits
-        // are kept.
+        // The desired state and the force's entries are one commit: a force whose commit fails
+        // changes nothing, in storage or in memory. A registered digest comes only with a desired
+        // state CI set, so there is one; its limits are kept.
         let before = self
             .desired
             .get(&def.name)
             .ok_or(proto::ReleasesRefusal::NoDigest)?;
-        let mut wanted = before.clone();
+        let mut wanted = before;
         wanted.version = version.clone();
         wanted.set_release(Some(release.clone()));
         let marks = self.ops.marks(&def.name);
-        self.desired
-            .record(&def.name, wanted, |v| kept(&marks, v))
-            .map_err(OpsError::from)?;
+        let staged = self.desired.stage(&def.name, wanted, |v| kept(&marks, v));
         let forcing = Forcing {
             service: &def.name,
             version: &version,
@@ -520,23 +518,9 @@ impl Coordinator {
             include_held: request.include_held,
             plan: &plan,
         };
-        let changed = self.ops.decide_changes(Write::BeforeMemory, |state| {
-            Ok::<_, proto::ReleasesRefusal>(forcing.apply(state))
-        });
-        // A force the audit cannot record is not made: its desired state, written above, is put
-        // back (the fleet's lock is still held, so no heartbeat has read it). A put-back that
-        // fails is logged and leaves the target desired with no force, as a failed ops write
-        // does.
-        if changed == Err(proto::ReleasesRefusal::AuditUnavailable)
-            && let Err(why) = self.desired.set(&def.name, before)
-        {
-            tracing::error!(
-                service = %def.name,
-                %why,
-                "a force refused for its audit could not put the desired state back"
-            );
-        }
-        let entries = changed?;
+        let entries = self
+            .ops
+            .decide_changes_with(staged, |state| forcing.apply(state))?;
         fleet.set_marks(marks_of(&self.ops.state()));
         tracing::warn!(
             service = %def.name,
