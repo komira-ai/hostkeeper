@@ -82,8 +82,9 @@ impl Api for AgentService {
         &self,
         request: Request<proto::EnrollRequest>,
     ) -> Result<Response<proto::EnrollResponse>, Status> {
-        self.enrollment()?
-            .enroll(request.into_inner())
+        let enrollment = self.enrollment()?;
+        self.coordinator
+            .enroll(enrollment, request.into_inner())
             .map(Response::new)
             .map_err(|why| why.status())
     }

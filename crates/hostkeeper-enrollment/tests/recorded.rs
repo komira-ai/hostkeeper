@@ -42,6 +42,7 @@ fn record(who: &str, at: u64, nonce: Option<MacNonceHash>) -> ApprovalRecord {
         approved_unix: at,
         reason: "new rack".to_owned(),
         mac_nonce: nonce,
+        mac_enrolled_since_unix: None,
     }
 }
 
@@ -312,8 +313,19 @@ fn a_mac_nonce_approves_once_within_an_hour_for_its_serial() {
     let dir = scratch("nonce");
     let store = open(Arc::new(RealFs), dir.path());
     let nonce = MacNonceHash::of(b"nonce-one-0123456789abcdef012345");
-    assert!(store.issue_mac_nonce(SERIAL, &nonce, NOW).expect("issue"));
-    assert!(!store.issue_mac_nonce(SERIAL, &nonce, NOW).expect("again"));
+    // The key the nonce is issued for: the one that approves at the last second of the hour.
+    let bound = HostKey::new();
+    let for_bound = bound.key_hash();
+    assert!(
+        store
+            .issue_mac_nonce(SERIAL, &for_bound, &nonce, NOW)
+            .expect("issue")
+    );
+    assert!(
+        !store
+            .issue_mac_nonce(SERIAL, &for_bound, &nonce, NOW)
+            .expect("again")
+    );
     assert_eq!(format!("{nonce:?}"), "MacNonceHash(..)");
 
     let refusal = |result: Result<KeyHash, ApproveError>| match result {
@@ -347,7 +359,7 @@ fn a_mac_nonce_approves_once_within_an_hour_for_its_serial() {
 
     // The last second of the hour approves; the nonce is then used.
     let at = NOW + MAC_NONCE_VALID_SECS;
-    let approved = approve_mac(&store, &HostKey::new(), "mac-4", nonce, at).expect("approved");
+    let approved = approve_mac(&store, &bound, "mac-4", nonce, at).expect("approved");
     assert_eq!(
         store.request(&approved).expect("read").expect("held").state,
         RequestState::Approved
@@ -361,6 +373,7 @@ fn a_mac_nonce_approves_once_within_an_hour_for_its_serial() {
         MacNonceRefusal::Expired,
         MacNonceRefusal::Used,
         MacNonceRefusal::WrongSerial,
+        MacNonceRefusal::WrongRequest,
     ]
     .map(|refusal| {
         (
@@ -374,7 +387,8 @@ fn a_mac_nonce_approves_once_within_an_hour_for_its_serial() {
             ("nonce_unknown", true),
             ("nonce_expired", true),
             ("nonce_used", true),
-            ("nonce_wrong_serial", true)
+            ("nonce_wrong_serial", true),
+            ("nonce_wrong_request", true)
         ]
     );
     let recorded = store.recorded_approvals().expect("read");
@@ -436,9 +450,14 @@ impl MacRun {
         let fs = Arc::new(FaultFs::new());
         let store = open(fs.clone(), dir.path());
         let nonce = MacNonceHash::of(name.as_bytes());
-        assert!(store.issue_mac_nonce(SERIAL, &nonce, NOW).expect("issue"));
+        let key = HostKey::new();
+        assert!(
+            store
+                .issue_mac_nonce(SERIAL, &key.key_hash(), &nonce, NOW)
+                .expect("issue")
+        );
         let id = store
-            .post(mac_request(&HostKey::new(), "m-1", SERIAL), NOW)
+            .post(mac_request(&key, "m-1", SERIAL), NOW)
             .expect("post")
             .request_id;
         MacRun {
@@ -467,11 +486,14 @@ impl MacRun {
     }
 }
 
-/// Whether `store` holds the request `id` approved, and whether the nonce approves another
-/// Mac request now.
+/// Whether `store` holds the request `id` approved, and whether the nonce is still unused now:
+/// presented by another Mac request, it is refused only for being another request's.
 fn after(store: &EnrollmentStore, id: &KeyHash, nonce: MacNonceHash) -> (bool, bool) {
     let approved = store.request(id).expect("read").expect("held").state == RequestState::Approved;
-    let free = approve_mac(store, &HostKey::new(), "mac-9", nonce, NOW).is_ok();
+    let free = matches!(
+        approve_mac(store, &HostKey::new(), "mac-9", nonce, NOW),
+        Err(ApproveError::MacNonce(MacNonceRefusal::WrongRequest))
+    );
     (approved, free)
 }
 
@@ -566,7 +588,12 @@ fn a_nonce_file_marked_consumed_is_used() {
     let dir = scratch("nonce-marked");
     let store = open(Arc::new(RealFs), dir.path());
     let nonce = MacNonceHash::of(b"nonce-marked-0123456789abcdef012");
-    assert!(store.issue_mac_nonce(SERIAL, &nonce, NOW).expect("issue"));
+    let key = HostKey::new();
+    assert!(
+        store
+            .issue_mac_nonce(SERIAL, &key.key_hash(), &nonce, NOW)
+            .expect("issue")
+    );
     let path = dir
         .path()
         .join("mac-nonces")
@@ -577,6 +604,6 @@ fn a_nonce_file_marked_consumed_is_used() {
         .open(&path)
         .and_then(|mut file| file.write_all(&[0x2a, 0x01, 0x01]))
         .expect("appended");
-    let refused = approve_mac(&store, &HostKey::new(), "mac-1", nonce, NOW).expect_err("used");
+    let refused = approve_mac(&store, &key, "mac-1", nonce, NOW).expect_err("used");
     assert_eq!(refused.token(), Some("nonce_used"));
 }

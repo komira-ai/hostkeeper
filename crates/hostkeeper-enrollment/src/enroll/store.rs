@@ -533,10 +533,17 @@ impl EnrollmentStore {
     /// Under the same lock, before anything is written, it also refuses a request flagged
     /// `duplicate_claim` unless `decision.replace` ([`ApproveError::DuplicateClaim`]), and
     /// checks the Mac nonce of `record`, if any, at `record.approved_unix`: issued, unexpired,
-    /// unused, and for the serial the request claims ([`ApproveError::MacNonce`]). The request
-    /// file that marks the request approved is the one write that commits the approval and
-    /// consumes the nonce; the nonce's own file is marked after it (and at the next
-    /// [`Self::open`], should that write not land).
+    /// unused, for the serial the request claims, and for this request when the nonce names one
+    /// ([`ApproveError::MacNonce`]). The request file that marks the request approved is the one
+    /// write that commits the approval and consumes the nonce; the nonce's own file is marked
+    /// after it (and at the next [`Self::open`], should that write not land).
+    ///
+    /// An approval with a Mac nonce takes over a host id another key holds, as `replace` would,
+    /// when the Mac enrolled in MDM anew since that key was approved: `record` says when its
+    /// current enrollment began ([`ApprovalRecord::mac_enrolled_since_unix`]), that key's own
+    /// request claimed the same Mac serial, and its approval was recorded before that time. It
+    /// never takes a denied host id, and never lifts a `duplicate_claim`. The approval is
+    /// recorded as replacing ([`Approval::replace`]).
     ///
     /// # Errors
     /// [`ApproveError`]; nothing is written when one is returned before the writes.
@@ -601,7 +608,10 @@ impl EnrollmentStore {
             return Err(ApproveError::DuplicateClaim);
         }
         let nonce = match record.and_then(|r| r.mac_nonce.map(|hash| (hash, r.approved_unix))) {
-            Some((hash, at)) => Some((hash, self.mac_nonce_verdict(&hash, row.mac_serial(), at)??)),
+            Some((hash, at)) => Some((
+                hash,
+                self.mac_nonce_verdict(&hash, request_id, row.mac_serial(), at)??,
+            )),
             None => None,
         };
         let renewal = row.renewal_of()?;
@@ -615,9 +625,18 @@ impl EnrollmentStore {
         if denied && !replace {
             return Err(ApproveError::Denied);
         }
-        if current.as_ref().is_some_and(|h| h.key != *request_id) && !replace {
+        let holder = current.as_ref().filter(|h| h.key != *request_id);
+        let rejoined = match (holder, record.and_then(|r| r.mac_enrolled_since_unix)) {
+            // A renewal's key is its host's: it has no other holder.
+            (Some(holder), Some(since)) if nonce.is_some() => {
+                self.mac_rejoined(holder, row.mac_serial(), since)?
+            }
+            _ => false,
+        };
+        if holder.is_some() && !replace && !rejoined {
             return Err(ApproveError::HostIdTaken);
         }
+        let replaced = decision.replace || rejoined;
         if denied {
             self.write_deny(host, DenyState::Cleared, request_id.as_bytes())?;
         }
@@ -651,7 +670,7 @@ impl EnrollmentStore {
             host_id: host.to_string(),
             role: decision.role.as_str().to_owned(),
             services,
-            replace: decision.replace,
+            replace: replaced,
             approver: record.map(|r| r.approver.clone()).unwrap_or_default(),
             approved_unix: record.map_or(0, |r| r.approved_unix),
             reason: record.map(|r| r.reason.clone()).unwrap_or_default(),
@@ -671,7 +690,20 @@ impl EnrollmentStore {
             services: decision.services.clone(),
             renewal: renewal.is_some(),
             cleared_deny: denied,
+            replace: replaced,
         })
+    }
+
+    /// Whether the host id `holder` holds may go to a new key of the Mac of `serial`, whose
+    /// current MDM enrollment began at `since`: the holder's own request claimed `serial` (not
+    /// empty), and its approval was recorded (with a time) before `since`. A holder whose
+    /// request is missing may not. The caller holds the lock.
+    fn mac_rejoined(&self, holder: &HostRow, serial: &str, since: u64) -> Result<bool, StoreError> {
+        let Some(own) = self.load_request(&holder.key)? else {
+            return Ok(false);
+        };
+        let approved_unix = own.pb.approved.as_ref().map_or(0, |a| a.approved_unix);
+        Ok(!serial.is_empty() && own.mac_serial() == serial && (1..since).contains(&approved_unix))
     }
 }
 
