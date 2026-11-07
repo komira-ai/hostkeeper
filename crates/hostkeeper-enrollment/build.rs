@@ -2,7 +2,7 @@
 //!
 //! `protox` parses the `.proto` file in pure Rust, so the build needs no `protoc`;
 //! `tonic-prost-build` turns the descriptors into messages. There is no service. Nothing
-//! generated is checked in: the code lands in `OUT_DIR`, and `src/enroll/files.rs` includes it.
+//! generated is checked in: the code lands in `OUT_DIR`, and `src/enroll/records/mod.rs` includes it.
 
 /// The one file under `proto/`.
 const FILE: &str = "hostkeeper/enrollment/store/v1/store.proto";

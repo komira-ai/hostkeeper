@@ -2,18 +2,21 @@
 //!
 //! The order of the writes is what makes it so. Under the store lock:
 //!
-//! 1. a serial is reserved in the request row (the counter first, then the row), unless the
-//!    row already holds one for this round;
-//! 2. the certificate is signed with that serial and written to `issued/<request id>.pb`;
-//! 3. the request is marked issued.
+//! 1. a serial is taken and reserved in the request ([`Records::take_serial`](super::records::Records::take_serial)), unless the
+//!    request already holds one for this round;
+//! 2. the certificate is signed with that serial;
+//! 3. the certificate's record is written and the request marked issued, in one commit (the
+//!    files write the certificate first).
 //!
-//! A crash before 2 leaves the reserved serial and no file: the retry signs again with the
-//! same serial, and the certificate signed before the crash was never written or returned. A
-//! crash after 2 leaves the file: the retry returns its bytes unchanged and finishes 3. So
-//! however often a daemon polls and whatever fails between approval and issuance, one
-//! certificate, with one serial, is ever returned for a request id and round.
+//! A crash before 3 leaves the reserved serial and no certificate: the retry signs again with
+//! the same serial, and the certificate signed before the crash was never written or returned.
+//! A crash in 3 after the certificate's file leaves that file: the retry returns its bytes
+//! unchanged and marks the request. So however often a daemon polls and whatever fails between
+//! approval and issuance, one certificate, with one serial, is ever returned for a request id
+//! and round.
 
-use super::files::{corrupt, pb};
+use super::records::{Record, pb};
+use super::rows::corrupt;
 use super::store::EnrollmentStore;
 use super::{IssueError, RequestState};
 use crate::ca::{HOST_VALIDITY_SECS, SignRequest, Signer, Subject};
@@ -44,7 +47,7 @@ impl EnrollmentStore {
     /// [`IssueError::NotApproved`] while the request waits for an operator, or after it expired
     /// (the poll answers "pending"); [`IssueError::Denied`] when the request or its host is denied;
     /// [`IssueError::UnknownRequest`]; [`IssueError::Sign`]; [`IssueError::Store`], also for an
-    /// issued request whose certificate file is gone (nothing is signed again).
+    /// issued request whose certificate record is gone (nothing is signed again).
     pub fn issue(
         &self,
         signer: &dyn Signer,
@@ -70,13 +73,14 @@ impl EnrollmentStore {
         }
         let round = row.pb.round;
         if let Some(issued) = self
-            .load_issued(request_id)?
+            .records()
+            .issued(request_id)?
             .filter(|issued| issued.round == round)
         {
             let first = row.state != RequestState::Issued;
             if first {
                 row.set_state(RequestState::Issued);
-                self.write_request(&row)?;
+                self.commit(&[Record::Request(row.pb)])?;
             }
             return Ok(view(request_id, &host_id, issued, first));
         }
@@ -85,8 +89,7 @@ impl EnrollmentStore {
             return Err(corrupt(&row.path, reason).into());
         }
         if row.pb.serial == 0 {
-            row.pb.serial = self.next_serial()?;
-            self.write_request(&row)?;
+            row.pb.serial = self.records().take_serial(Some(&row.pb))?;
         }
         let certificate = signer.sign(&SignRequest {
             subject: Subject::Host(&host_id),
@@ -95,7 +98,7 @@ impl EnrollmentStore {
             serial: row.pb.serial,
         })?;
         let issued = pb::Issued {
-            schema: super::files::SCHEMA,
+            schema: super::rows::SCHEMA,
             request_id: request_id.as_bytes().to_vec(),
             round,
             serial: certificate.serial,
@@ -103,9 +106,8 @@ impl EnrollmentStore {
             host_id: host_id.to_string(),
             not_after: certificate.not_after,
         };
-        self.write_issued(&issued, request_id)?;
         row.set_state(RequestState::Issued);
-        self.write_request(&row)?;
+        self.commit(&[Record::Issued(issued.clone()), Record::Request(row.pb)])?;
         Ok(view(request_id, &host_id, issued, true))
     }
 }

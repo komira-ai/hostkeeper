@@ -4,9 +4,10 @@ Status: design, for the maintainers' comments. It supersedes "plain files, no da
 [hostkeeper-design.md](hostkeeper-design.md) section 4.3 ("There is no database") and the coordinator's rows of its
 section 10, the halts-file storage of the plan position in [rollout-update-plans.md](rollout-update-plans.md) section 3,
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
-on where the coordinator keeps its state, this document wins. Nothing here is built: every statement about new code is
-**Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of
-hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means nothing implements it yet.
+on where the coordinator keeps its state, this document wins. Nothing here is built but C2 (section 4.1): every
+other statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request
+each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
+nothing implements it yet.
 
 Ruling: the coordinator runs as one container and Postgres 16 as a second, on one machine for now, later on separate
 small Linux servers. The coordinator's durable state moves from its files into that database. The file lock goes, and a
@@ -299,7 +300,8 @@ enrollment_hosts(host_id text PRIMARY KEY, key_hash bytea NOT NULL, machine_id t
 enrollment_deny(host_id text PRIMARY KEY, state smallint NOT NULL,  -- 1 retiring, 2 retired, 3 cleared
   cleared_by bytea)
 enrollment_serial(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), next bigint NOT NULL)  -- starts at 2
-mac_nonces(nonce_sha256 bytea PRIMARY KEY, serial text NOT NULL, issued_unix bigint NOT NULL, consumed_by bytea)
+mac_nonces(nonce_sha256 bytea PRIMARY KEY, serial text NOT NULL, issued_unix bigint NOT NULL, consumed_by bytea,
+  request_id bytea)                       -- the request it was issued for; none on a nonce written before the field
 ```
 
 The columns are the fields of the store's protobuf messages (`store.proto` of `hostkeeper-enrollment`), one for one, so
@@ -359,13 +361,16 @@ refusal tests use in place of `ops_hooks.rs` and `with_writer`.
 
 The enrollment store gets the same cut one level down. Its `Fs` port (`crates/hostkeeper-enrollment/src/fs.rs`,
 **Built**) is file-shaped: names, renames, directory syncs and a `flock`. The store's use of it is replaced by a port of
-records, `Records`, a public trait of the enrollment crate: load a request, list requests by state, put several records
+records, `Records`, a public trait of the enrollment crate: load a request, list every request, put several records
 in one commit, take the next serial, set a host's first heartbeat time and its duplicate mark. Its implementations are
 the files (the code of today behind it, still on `Fs`), Postgres (in the coordinator, which owns the database
 connection), and a fake. `Fs` itself stays: the CA key file is read through it (`read_private`, the owner and mode check
 of `Ca::open`), and the file `Records` writes through it. Under Postgres the store's lock is its in-process mutex alone;
 the advisory lock of section 5 keeps other processes off. Adding the public trait to the enrollment crate is a change to
-its public interface, made in its own pull request (C2).
+its public interface, made in its own pull request (C2). **Built** (C2):
+`crates/hostkeeper-enrollment/src/enroll/records/`, with `FileRecords`, `MemoryRecords` and the conformance suite
+(`records::conformance`). Its list gives every request, not the requests of one state: the store checks every request
+a list gives it, as a file reader does today, so a list by state would leave the other requests unread and unchecked.
 
 ### 4.2 What is one transaction
 
