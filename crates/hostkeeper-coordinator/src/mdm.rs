@@ -139,6 +139,7 @@ impl DeviceState for GateDeviceState {
             .map(|status| DeviceStatus {
                 enrolled: status.enrolled,
                 supervised: status.supervised,
+                enrolled_since_unix: status.enrolled_since_unix,
             })
             .map_err(|why| DeviceStateError(why.to_string()))
     }

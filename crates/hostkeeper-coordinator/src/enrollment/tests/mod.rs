@@ -16,6 +16,7 @@ mod inventory;
 mod inventory_approve;
 mod list;
 mod mac;
+mod mac_binding;
 mod mac_restart;
 mod nonces;
 mod operator;

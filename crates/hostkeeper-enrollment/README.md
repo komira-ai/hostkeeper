@@ -14,7 +14,7 @@ crate's plain types. The crate depends on no crate of this workspace;
 | `ca::issue` | `Ca::issue_host` (subject `CN=host:<approved id>`, `clientAuth` only, `CA:FALSE`, exactly 7 days from the CA's clock) and `Ca::issue_server` (`serverAuth` only, the names of `ServerNames` asked for: at least one DNS name, then the IP addresses, at most 90 days). A validity above the cap is refused (`validity_over_cap`), never clamped. `Signer` is the seam a separate signer process would implement; `Ca` is the one implementation. |
 | `ca::key` | `Ca::init` makes the CA (a P-256 key and its self-signed certificate, 20 years); `Ca::open` loads it. The key is one PKCS#8 file, mode 0600, of the user the coordinator runs as; a key file that is a symbolic link, another user's, or open to group or others is refused, checked on the opened file. |
 | `ca::bundle` | `CaBundle`: the CA certificate and its SHA-256 (the `ca_sha256` a daemon config pins), and `host_certificate`, which reads a certificate a caller presents back as the host and key it names when this CA signed it with the subject `host:<id>`. `PollBundle`: what a poll returns. |
-| `enroll` | `EnrollmentStore`: `post` (refused `pending_full` while `max_pending` requests wait, 256 unless `with_max_pending` says otherwise), `approve`, `approve_recorded` (the approval with who made it, when and why, refusing a `duplicate_claim` request unless it replaces, and checking and consuming a Mac nonce in the same write), `expire` (every waiting request older than a TTL, at a given time, once), `issue`, `verify_poll`, `deny`, `retire`, `report_live`, `note_heartbeat` (the first heartbeat accepted since the host's approval, written once), `issue_mac_nonce`, and `is_denied`, `is_retiring`, `is_duplicate`, `renew_allowed`, `host_role`, `host_role_for` (only for the key the host id is approved for), `pending`, `expired`, `request`, `recorded_approvals`, `bound_macs`, `allocate_serial`. A new request (not a renewal) is a duplicate claim when another request has its machine id, or when it claims a MAC bound to an enrolled host: a universally administered unicast MAC (data or BMC) claimed by the request a host's key came from, for a host that is not denied. `Claims` reads its MACs (`data_macs`, `bmc`, `all_macs`). |
+| `enroll` | `EnrollmentStore`: `post` (refused `pending_full` while `max_pending` requests wait, 256 unless `with_max_pending` says otherwise), `approve`, `approve_recorded` (the approval with who made it, when and why, refusing a `duplicate_claim` request unless it replaces, checking and consuming a Mac nonce in the same write, and, with a nonce, taking over the host id of the same Mac's key approved before its current MDM enrollment began), `expire` (every waiting request older than a TTL, at a given time, once), `issue`, `verify_poll`, `deny`, `retire`, `report_live`, `note_heartbeat` (the first heartbeat accepted since the host's approval, written once), `issue_mac_nonce` (for a serial and the request it binds to), and `is_denied`, `is_retiring`, `is_duplicate`, `renew_allowed`, `host_role`, `host_role_for` (only for the key the host id is approved for), `pending`, `expired`, `request`, `recorded_approvals`, `bound_macs`, `allocate_serial`. A new request (not a renewal) is a duplicate claim when another request has its machine id, or when it claims a MAC bound to an enrolled host: a universally administered unicast MAC (data or BMC) claimed by the request a host's key came from, for a host that is not denied. `Claims` reads its MACs (`data_macs`, `bmc`, `all_macs`). |
 | `validity` | `UnixClock` and `SystemClock`, the only read of the wall clock in the crate (the wall-clock lint allows this file), and the validity window. |
 | `fs` | The `Fs` port every file is written through, `RealFs`, and `FaultFs`, which fails a chosen operation for the crash tests. |
 | `names` | `HostId` (a DNS label), `Role`, `ServiceName`, `KeyHash` (compared in constant time where an approval checks it), `MacAddress` (six octets read as `aa:bb:..`, `AA-BB-..` or twelve hex digits, written lower-case and colon-separated). |
@@ -34,7 +34,7 @@ and a state it does not know, and ignores fields it does not know.
 | `hosts/<host id>.pb` | `Host` | the key hash (the request id it came from), machine id, role, services, the `duplicate` mark, the time of the first heartbeat accepted since the approval |
 | `deny/<host id>.pb` | `Deny` | retiring, retired, or cleared by a named request |
 | `serial.pb` | `SerialCounter` | the next serial (the first is 2; 1 is the CA certificate's) |
-| `mac-nonces/<nonce SHA-256>.pb` | `MacNonce` | a Mac nonce by its SHA-256 only: the serial it was issued for, when, and the request whose approval consumed it |
+| `mac-nonces/<nonce SHA-256>.pb` | `MacNonce` | a Mac nonce by its SHA-256 only: the serial and the request it was issued for (no request on a file written before field 6), when, and the request whose approval consumed it |
 | `lock` | | the file every mutation `flock`s, under the store's mutex |
 
 The request id is the SHA-256 of the CSR's SubjectPublicKeyInfo, as 64 lower-case hex digits in
@@ -64,7 +64,7 @@ signing returns `None` and is not a refusal.
 | `ApproveError` | `Denied` | `denied` |
 | `ApproveError` | `RenewalOfOtherHost` | `renewal_of_other_host` |
 | `ApproveError` | `DuplicateClaim` | `duplicate_claim` |
-| `ApproveError` | `MacNonce(_)` | `nonce_unknown`, `nonce_expired`, `nonce_used`, `nonce_wrong_serial` |
+| `ApproveError` | `MacNonce(_)` | `nonce_unknown`, `nonce_expired`, `nonce_used`, `nonce_wrong_serial`, `nonce_wrong_request` |
 | `IssueError` | `UnknownRequest` | `unknown_request` |
 | `IssueError` | `Denied` | `denied` |
 | `IssueError` | `NotApproved(_)` (also an expired request) | none: the poll answers "pending" |
@@ -76,8 +76,10 @@ signing returns `None` and is not a refusal.
 ## Mac nonces
 
 A Mac nonce is good for one hour from its issue (`MAC_NONCE_VALID_SECS`, by the caller's clock)
-and for one approval. `approve_recorded` checks it under the store lock (known, unexpired,
-unused, issued for the serial the request claims) and writes the approval with the nonce's
+and for one approval, of the request it was issued for (`issue_mac_nonce` records the request's
+key hash; a nonce file written before that field names none and is judged without it).
+`approve_recorded` checks it under the store lock (known, unexpired, unused, issued for the serial
+the request claims, issued for this request) and writes the approval with the nonce's
 SHA-256 in the request file: that one write is the consumption. The nonce's own file is marked
 after it; should that mark not land, the store remembers the consumption in memory and `open`
 marks the file. A check that does not end in an approval consumes nothing.

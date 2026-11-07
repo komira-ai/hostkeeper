@@ -13,10 +13,14 @@ use support::{
     recorded_device_information, security_info, token_update,
 };
 
-const ENROLLED_SUPERVISED: DeviceStatus = DeviceStatus {
-    enrolled: true,
-    supervised: true,
-};
+/// Enrolled and supervised, in an enrollment that began at `since`.
+const fn enrolled_supervised(since: u64) -> DeviceStatus {
+    DeviceStatus {
+        enrolled: true,
+        supervised: true,
+        enrolled_since_unix: Some(since),
+    }
+}
 
 /// Catches: a device counted enrolled before its `TokenUpdate`, or still enrolled after its
 /// `CheckOut`; a re-enrollment that keeps what the device said in its last enrollment (its
@@ -51,12 +55,12 @@ async fn a_device_is_enrolled_from_token_update_until_check_out() {
     let uuid = rig.sent(UDID, "DeviceInformation");
     rig.post(&device_information(UDID, &uuid, Some(SERIAL), Some(true)))
         .await;
-    assert_eq!(rig.gate.status(SERIAL), Ok(ENROLLED_SUPERVISED));
+    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_010)));
 
     // A later `TokenUpdate` of the same enrollment changes nothing.
     rig.post(&token_update(UDID, 2)).await;
     assert_eq!(rig.record(UDID).enrollment, 1);
-    assert_eq!(rig.gate.status(SERIAL), Ok(ENROLLED_SUPERVISED));
+    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_010)));
 
     rig.clock.set(1_020);
     rig.post(&check_out(UDID)).await;
@@ -73,7 +77,8 @@ async fn a_device_is_enrolled_from_token_update_until_check_out() {
         rig.gate.status(SERIAL),
         Ok(DeviceStatus {
             enrolled: false,
-            supervised: true
+            supervised: true,
+            enrolled_since_unix: Some(1_010),
         })
     );
 
@@ -93,7 +98,7 @@ async fn a_device_is_enrolled_from_token_update_until_check_out() {
     let uuid = rig.sent(UDID, "DeviceInformation");
     rig.post(&device_information(UDID, &uuid, Some(SERIAL), Some(true)))
         .await;
-    assert_eq!(rig.gate.status(SERIAL), Ok(ENROLLED_SUPERVISED));
+    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_030)));
 
     // A `TokenUpdate` NanoMDM counts first, whose `Authenticate` the gate did not hear, is a new
     // enrollment too.
@@ -134,6 +139,7 @@ async fn supervised_comes_from_device_information_and_nothing_else() {
     let not_supervised = DeviceStatus {
         enrolled: true,
         supervised: false,
+        enrolled_since_unix: Some(1_000),
     };
     assert_eq!(rig.gate.status(SERIAL), Ok(not_supervised));
 
@@ -191,7 +197,7 @@ async fn a_device_without_a_serial_is_unavailable() {
 async fn a_serial_under_two_enrollments_is_unavailable() {
     let rig = Rig::new("two-enrollments").await;
     rig.enroll(UDID, SERIAL, true).await;
-    assert_eq!(rig.gate.status(SERIAL), Ok(ENROLLED_SUPERVISED));
+    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_000)));
     rig.enroll(OTHER_UDID, SERIAL, false).await;
     assert_eq!(rig.gate.status(SERIAL), Err(Unavailable::Ambiguous));
     rig.post(&check_out(UDID)).await;
@@ -199,7 +205,8 @@ async fn a_serial_under_two_enrollments_is_unavailable() {
         rig.gate.status(SERIAL),
         Ok(DeviceStatus {
             enrolled: true,
-            supervised: false
+            supervised: false,
+            enrolled_since_unix: Some(1_000),
         }),
         "once the older checks out, the serial is the newer enrollment's"
     );
@@ -275,10 +282,10 @@ async fn a_device_record_survives_a_coordinator_restart() {
     assert_eq!(rig.gate.records(), before);
     rig.post(&device_information(UDID, &uuid, Some(SERIAL), Some(true)))
         .await;
-    assert_eq!(rig.gate.status(SERIAL), Ok(ENROLLED_SUPERVISED));
+    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_000)));
     assert_eq!(rig.hub.commands().len(), 2, "nothing was sent again");
     rig.restart().expect("the gate opens again");
-    assert_eq!(rig.gate.status(SERIAL), Ok(ENROLLED_SUPERVISED));
+    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_000)));
 
     let path = rig.dir().join(format!("{UDID}.pb"));
     let whole = std::fs::read(&path).expect("the record file");
@@ -313,5 +320,5 @@ async fn a_device_record_survives_a_coordinator_restart() {
     );
     std::fs::write(&path, &whole).expect("put the file back");
     rig.restart().expect("the whole file opens");
-    assert_eq!(rig.gate.status(SERIAL), Ok(ENROLLED_SUPERVISED));
+    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_000)));
 }

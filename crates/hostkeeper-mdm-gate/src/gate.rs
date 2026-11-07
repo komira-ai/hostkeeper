@@ -51,6 +51,9 @@ pub struct DeviceStatus {
     pub enrolled: bool,
     /// Its `DeviceInformation` answer of this enrollment said `IsSupervised` true.
     pub supervised: bool,
+    /// When its current enrollment began: its first `TokenUpdate` after an `Authenticate` or a
+    /// `CheckOut`, by the gate's clock; `None` before one.
+    pub enrolled_since_unix: Option<u64>,
 }
 
 /// Why the gate says nothing of a serial.
@@ -160,6 +163,7 @@ impl Gate {
         Ok(DeviceStatus {
             enrolled: record.is_enrolled(),
             supervised: record.supervised == Some(true),
+            enrolled_since_unix: record.enrolled_since_unix,
         })
     }
 

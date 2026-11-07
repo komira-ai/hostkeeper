@@ -84,7 +84,7 @@ whole (temporary file, fsync, rename, directory fsync), mode 0600:
 | `hosts/<host id>.pb` | an approved host: its key's hash, machine id, role, services, the duplicate mark, when its first heartbeat since the approval was accepted |
 | `deny/<host id>.pb` | a denied host: retiring, retired, or cleared by a later approval |
 | `serial.pb` | the next certificate serial |
-| `mac-nonces/<nonce SHA-256>.pb` | a Mac nonce by its SHA-256 only: its serial, when it was issued, the request that consumed it |
+| `mac-nonces/<nonce SHA-256>.pb` | a Mac nonce by its SHA-256 only: its serial, the request it was issued for (absent on a nonce stored before that field), when it was issued, the request that consumed it |
 | `mdm-devices/<enrollment id>.pb` | with the MDM gate, its record of one device (below), with the SHA-256 of the record, so a torn file is refused |
 | `lock` | the lock every change takes |
 
@@ -180,7 +180,7 @@ again, as it did before it expired.
 | `record_contested` | another pending request matches an inventory record the request matches; `replace` does not set it aside |
 | `not_pending` | the request was approved, issued or denied already, or it expired |
 | `duplicate_claim` | the request is a duplicate claim and `replace` is not set |
-| `host_id_taken` | another key holds the host id and `replace` is not set |
+| `host_id_taken` | another key holds the host id and `replace` is not set (a Mac's nonce approval takes its own host id over without it: [A Mac approved by its nonce](#a-mac-approved-by-its-nonce)) |
 | `denied` | the host id is denied and `replace` is not set |
 | `store_failed` | the store could not be read or written; nothing changed |
 
@@ -211,16 +211,32 @@ is `unknown_host`.
 
 The MDM policy gate gives each Mac a one-time nonce through `Enrollment::issue_mac_nonce`: 32
 random bytes, of which the store keeps the SHA-256
-only, for one serial, good for one hour and one approval. A Mac's `Enroll` carries it
-(`mac_nonce`). The request is approved, as the allowlist entry of its serial says and by the
-approver `mdm-nonce`, only when the serial it claims is on `--mac-serial-allowlist`, the gate says
-the device is enrolled and supervised, and the nonce is known, unexpired, unused and was issued
-for that serial. The nonce is consumed in the approval's own write. Any condition false leaves the
-request pending for an operator and is audited `mac_auto_approve_declined` with one of
-`serial_not_allowed`, `device_state_unavailable`, `device_not_enrolled`, `device_not_supervised`,
-`nonce_unknown`, `nonce_expired`, `nonce_used`, `nonce_wrong_serial`; such an attempt does not use
-the nonce. A coordinator without the gate (no `--mdm-api-url`) knows no device, so it approves no
-Mac by its nonce (`device_state_unavailable`). No operator token may be named `mdm-nonce`.
+only, for one serial and the one pending request the gate saw (its key hash), good for one hour
+and one approval. A Mac's `Enroll` carries it (`mac_nonce`). The request is approved, as the
+allowlist entry of its serial says and by the approver `mdm-nonce`, only when the serial it claims
+is on `--mac-serial-allowlist`, the gate says the device is enrolled and supervised, and the nonce
+is known, unexpired, unused, was issued for that serial and was issued for that request. A nonce
+stored before the request field names no request and is judged without it. The nonce is consumed
+in the approval's own write. Any condition false leaves the request pending for an operator and is
+audited `mac_auto_approve_declined` with one of `serial_not_allowed`, `device_state_unavailable`,
+`device_not_enrolled`, `device_not_supervised`, `nonce_unknown`, `nonce_expired`, `nonce_used`,
+`nonce_wrong_serial`, `nonce_wrong_request`; such an attempt does not use the nonce. Another key
+that presents the nonce, a local user's who read it first for instance, is `nonce_wrong_request`.
+
+The approval assigns the allowlist entry's services to the host as an operator's approval assigns
+the services it names: one `assign` entry per service, by `mdm-nonce`. An assignment that cannot
+be made is logged and leaves the approval standing.
+
+A Mac wiped after its approval comes back with a new key while its host id is held by the old
+one. Its nonce approval takes the host id over, audited `enroll_replace`, when the gate says the
+device's current MDM enrollment began after the old key's approval and the old key's own request
+claimed the same serial; the old key's certificate then names no host, as after an operator's
+`replace`. Otherwise it is refused as an operator's approval of a taken host id is
+(`enroll_approve_refused`, `host_id_taken`), and a denied host id is never taken over (`denied`).
+
+A coordinator without the gate (no `--mdm-api-url`) knows no device, so it approves no Mac by its
+nonce (`device_state_unavailable`); with it, the gate's records say whether the device is enrolled
+and supervised and when its current enrollment began. No operator token may be named `mdm-nonce`.
 
 ```toml
 [[mac]]

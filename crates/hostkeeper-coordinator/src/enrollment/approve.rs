@@ -386,6 +386,7 @@ impl Enrollment {
             approved_unix: self.clock.now_unix(),
             reason: checked.reason.clone(),
             mac_nonce: None,
+            mac_enrolled_since_unix: None,
         };
         self.store
             .approve_recorded(

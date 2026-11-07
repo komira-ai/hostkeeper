@@ -1,17 +1,28 @@
 //! The Mac path of enrollment (design 5.9): a Mac that enrolls with the one-time nonce the MDM
 //! policy gate gave it is approved without an operator, when every condition holds.
 //!
-//! - [`Enrollment::issue_mac_nonce`] is how the gate gets a nonce for a serial: 32 random
-//!   bytes, of which the store keeps only the SHA-256, good for one hour and one approval. The
-//!   gate is a component linked into the coordinator, so this is a library call and no RPC.
+//! - [`Enrollment::issue_mac_nonce`] is how the gate gets a nonce for a serial and the pending
+//!   request it saw (docs/design/hostkeeper-mdm.md, section 5.2): 32 random bytes, of which the
+//!   store keeps only the SHA-256, with the request's key hash, good for one hour and one
+//!   approval of that request. The gate is a component linked into the coordinator, so this is
+//!   a library call and no RPC.
 //! - On an `Enroll` that carries a nonce, [`Enrollment::mac_auto_approve`] approves the request
 //!   only when the serial the request claims is on the allowlist (`--mac-serial-allowlist`),
 //!   the gate says the device is enrolled and supervised, and the nonce is known, unexpired,
-//!   unused and issued for that serial, checked in that order. The nonce is checked under the
-//!   store's lock, in the approval itself, so two requests racing with one nonce cannot both
-//!   win; the gate is asked only about a serial the allowlist names. It approves through the same recorded approval as an
-//!   operator's, by [`MAC_APPROVER`], with the host id, role and services of the serial's
-//!   allowlist entry, and the nonce is consumed in that approval's write.
+//!   unused, issued for that serial and issued for that request, checked in that order (a
+//!   nonce stored before the request field names none and is judged without it). The nonce is
+//!   checked under the store's lock, in the approval itself, so two requests racing with one
+//!   nonce cannot both win; the gate is asked only about a serial the allowlist names. It
+//!   approves through the same recorded approval as an operator's, by [`MAC_APPROVER`], with
+//!   the host id, role and services of the serial's allowlist entry, and the nonce is consumed
+//!   in that approval's write. The coordinator then assigns the entry's services to the host
+//!   as it does an operator approval's ([`crate::service::Coordinator::enroll`]).
+//! - A Mac wiped after its approval comes back with a new key, and its host id is held by the
+//!   old one. The nonce approval takes it over, audited `enroll_replace`, when the gate says
+//!   the device's current enrollment began after the old key's approval and the old key's own
+//!   request claimed the same serial ([`DeviceStatus::enrolled_since_unix`](super::DeviceStatus::enrolled_since_unix)); the old key's
+//!   certificate then names no host, as after an operator's `replace`. A denied host id is
+//!   never taken over: that is `denied`, and any other holder `host_id_taken`.
 //! - Any condition false leaves the request pending, for an operator, and is audited
 //!   `mac_auto_approve_declined` with its token ([`MacDecline`]). A declined attempt does not
 //!   consume the nonce.
@@ -67,6 +78,7 @@ pub enum MacDecline {
     NonceExpired,
     NonceUsed,
     NonceWrongSerial,
+    NonceWrongRequest,
     DeviceNotEnrolled,
     DeviceNotSupervised,
     SerialNotAllowed,
@@ -82,6 +94,7 @@ impl MacDecline {
             MacDecline::NonceExpired => "nonce_expired",
             MacDecline::NonceUsed => "nonce_used",
             MacDecline::NonceWrongSerial => "nonce_wrong_serial",
+            MacDecline::NonceWrongRequest => "nonce_wrong_request",
             MacDecline::DeviceNotEnrolled => "device_not_enrolled",
             MacDecline::DeviceNotSupervised => "device_not_supervised",
             MacDecline::SerialNotAllowed => "serial_not_allowed",
@@ -97,6 +110,7 @@ impl From<MacNonceRefusal> for MacDecline {
             MacNonceRefusal::Expired => MacDecline::NonceExpired,
             MacNonceRefusal::Used => MacDecline::NonceUsed,
             MacNonceRefusal::WrongSerial => MacDecline::NonceWrongSerial,
+            MacNonceRefusal::WrongRequest => MacDecline::NonceWrongRequest,
         }
     }
 }
@@ -104,8 +118,8 @@ impl From<MacNonceRefusal> for MacDecline {
 /// What became of a nonce-bearing request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MacOutcome {
-    /// Approved as this host id.
-    Approved(HostId),
+    /// Approved as the allowlist entry says: its host id, role and services.
+    Approved(MacAllowEntry),
     /// A condition was false: the request stays pending.
     Declined(MacDecline),
     /// The approval was refused as an operator's would be (the host id is taken, the request
@@ -284,12 +298,18 @@ impl fmt::Debug for MacPolicy {
 }
 
 impl Enrollment {
-    /// A new nonce for the Mac of `serial`, issued now and good for one hour and one approval.
-    /// Only its SHA-256 is recorded; the bytes returned are the only copy.
+    /// A new nonce for the Mac of `serial` and its pending request `request_id` (the request's
+    /// key hash), issued now and good for one hour and one approval of that request. Only its
+    /// SHA-256 is recorded, with the serial and the request id; the bytes returned are the only
+    /// copy.
     ///
     /// # Errors
     /// [`MacNonceError`].
-    pub fn issue_mac_nonce(&self, serial: &str) -> Result<MacNonce, MacNonceError> {
+    pub fn issue_mac_nonce(
+        &self,
+        serial: &str,
+        request_id: &KeyHash,
+    ) -> Result<MacNonce, MacNonceError> {
         if !is_serial(serial) {
             return Err(MacNonceError::InvalidSerial);
         }
@@ -300,7 +320,7 @@ impl Enrollment {
         let hash = MacNonceHash::of(&nonce);
         if !self
             .store
-            .issue_mac_nonce(serial, &hash, self.clock.now_unix())?
+            .issue_mac_nonce(serial, request_id, &hash, self.clock.now_unix())?
         {
             return Err(MacNonceError::NoRandom);
         }
@@ -327,7 +347,7 @@ impl Enrollment {
         let Some(entry) = self.mac.allowlist.get(serial) else {
             return self.decline(request_id, serial, MacDecline::SerialNotAllowed);
         };
-        match self.mac.device_state.status(serial) {
+        let status = match self.mac.device_state.status(serial) {
             Err(why) => {
                 tracing::warn!(%why, "the device-state gate gave no answer");
                 return self.decline(request_id, serial, MacDecline::DeviceStateUnavailable);
@@ -338,9 +358,9 @@ impl Enrollment {
             Ok(status) if !status.supervised => {
                 return self.decline(request_id, serial, MacDecline::DeviceNotSupervised);
             }
-            Ok(_) => {}
-        }
-        let checked = Checked {
+            Ok(status) => status,
+        };
+        let mut checked = Checked {
             request_id: *request_id,
             key_sha256: *request_id,
             decision: Decision {
@@ -356,13 +376,18 @@ impl Enrollment {
             approved_unix: self.clock.now_unix(),
             reason: MAC_REASON.to_owned(),
             mac_nonce: Some(MacNonceHash::of(nonce)),
+            mac_enrolled_since_unix: status.enrolled_since_unix,
         };
         let approved =
             match self
                 .store
                 .approve_recorded(request_id, request_id, &checked.decision, &record)
             {
-                Ok(_) => Ok(Ok(self.audited(&checked, &record, pending.claims.clone()))),
+                Ok(approval) => {
+                    // Recorded as replacing when it took the Mac's own host id over.
+                    checked.decision.replace = approval.replace;
+                    Ok(Ok(self.audited(&checked, &record, pending.claims.clone())))
+                }
                 Err(ApproveError::MacNonce(refusal)) => Ok(Err(MacDecline::from(refusal))),
                 Err(other) => Err(refusal_of(&other)),
             };
@@ -373,7 +398,7 @@ impl Enrollment {
                     host_id = %approved.host_id,
                     "a Mac was approved by its nonce"
                 );
-                MacOutcome::Approved(approved.host_id)
+                MacOutcome::Approved(entry.clone())
             }
             Ok(Err(why)) => self.decline(request_id, serial, why),
             Err(refusal) => self.mac_refused(request_id, Some(&entry.host_id), refusal),

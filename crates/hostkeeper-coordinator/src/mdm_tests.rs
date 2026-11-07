@@ -41,6 +41,7 @@ pub(crate) fn record(
     record.serial = serial.map(str::to_owned);
     record.phase = phase;
     record.supervised = supervised;
+    record.enrolled_since_unix = (phase != Phase::Authenticated).then_some(NOW);
     record
 }
 
@@ -141,6 +142,7 @@ fn the_port_answers_from_the_gates_records() {
         Ok(DeviceStatus {
             enrolled,
             supervised,
+            enrolled_since_unix: Some(NOW),
         })
     };
     assert_eq!(said(&mdm, "GOODSERIAL01"), status(true, true));
@@ -223,8 +225,8 @@ fn the_mac_path_approves_only_an_enrolled_and_supervised_device_of_the_gate() {
             |enrollment| enrollment.with_mac(policy),
         );
         let e = &rig.enrollment;
-        let nonce = e.issue_mac_nonce(SERIAL).expect("a nonce");
         let key = HostKey::new();
+        let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
         e.enroll(mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes()))
             .expect("enrolled");
         match decline {

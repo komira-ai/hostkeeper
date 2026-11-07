@@ -12,6 +12,12 @@ pub struct DeviceStatus {
     pub enrolled: bool,
     /// The device is supervised.
     pub supervised: bool,
+    /// When the device's current MDM enrollment began, unix seconds by the coordinator's clock:
+    /// its first `TokenUpdate`, under a new enrollment id or after a `CheckOut`. `None` when the
+    /// gate does not know. A nonce approval takes the host id of the same Mac's key approved
+    /// before this time over (docs/design/hostkeeper-mdm.md, section 5.1); with `None` it
+    /// takes none over.
+    pub enrolled_since_unix: Option<u64>,
 }
 
 /// The gate could not say: it does not know the device, or could not be asked. Nothing is
