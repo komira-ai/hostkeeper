@@ -472,7 +472,7 @@ fn an_additive_step_keeps_its_exit_within_its_bound_and_is_stopped_past_it() {
         let line = "{\"detail\":\"removed\"}";
         rig.script(unit, Hook::exits(29, 0, line));
         rig.script(unit, Hook::exits(3600, 0, "{}"));
-        let mut run = || {
+        let run = || {
             rig.launcher()
                 .run_additive(&uninstall)
                 .unwrap_or_else(|e| panic!("{}: the step ran: {e}", rig.name()))
