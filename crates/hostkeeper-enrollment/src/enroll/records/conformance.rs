@@ -141,7 +141,7 @@ fn request(n: u8, state: pb::RequestState) -> pb::Request {
             machine_id: format!("m-{id}"),
             dmi_serial: "dmi".to_owned(),
             dmi_product_uuid: "uuid".to_owned(),
-            addresses: vec!["aa:bb:cc:dd:ee:01".to_owned(), "10.0.0.1".to_owned()],
+            addresses: vec!["aa:bb:cc:dd:ee:01".to_owned(), "192.0.2.1".to_owned()],
             mac_serial: "C02".to_owned(),
             mac_platform_uuid: "platform".to_owned(),
             bmc_mac: "aa:bb:cc:dd:ee:02".to_owned(),
