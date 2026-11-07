@@ -192,6 +192,14 @@ message ServiceBeat {
   // heartbeats read as they always did. The service is pinned on that host: root holds it on a
   // release, and kbf's agent acts on no order for it until root lifts the pin.
   PinReport pinned = 11;
+  // The try the service's step record holds (`order_try` of `StepRecord` in
+  // `hostkeeper/local/v1/admin.proto`): the try of the last order the host took for the service,
+  // whatever its verb, sent in every heartbeat whether or not its verdict is. The coordinator
+  // numbers its next order of the service past it (design 8.3), so a coordinator that never heard
+  // the verdict (a restart, an order the host ran across its own restart) does not order a try
+  // the record already holds. Absent when the service has no step record, the record names no
+  // try, or the agent predates the field.
+  optional uint64 record_try = 12;
 }
 
 // Whether a service serves what it should.

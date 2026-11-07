@@ -343,6 +343,7 @@ fn with_other(mut top: Heartbeat, running: &str, to: Option<&str>) -> Heartbeat 
         step_secs: Default::default(),
         promotion_pending: false,
         deferred: None,
+        record_try: None,
     }]);
     top
 }

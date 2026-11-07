@@ -105,7 +105,26 @@ pub struct UpdateResult {
     pub order_try: Option<u64>,
 }
 
+/// The reasons of the refusals a daemon gives an order for its try alone (design 8.3): the same
+/// try as its step record's for another package (`try_conflict`), or a lower one (`stale_try`).
+pub const TRY_REFUSALS: [&str; 2] = ["try_conflict", "stale_try"];
+
 impl UpdateResult {
+    /// Whether this is a refusal of [`TRY_REFUSALS`]: failed, with no phase and no class, for
+    /// one of their reasons. The host ran nothing; the two sides disagree on the try, and the
+    /// release is not at fault, so the coordinator orders again past the host's try and never
+    /// counts it as the host failing the version.
+    #[must_use]
+    pub fn is_try_refusal(&self) -> bool {
+        let refused =
+            self.outcome == Outcome::Failed && self.phase.is_none() && self.class.is_none();
+        refused
+            && self
+                .reason
+                .as_ref()
+                .is_some_and(|reason| TRY_REFUSALS.contains(&reason.as_str()))
+    }
+
     /// A result with no phase, class, reason or order: what an updater without them reports.
     #[must_use]
     pub fn new(target: Version, outcome: Outcome) -> Self {
@@ -219,6 +238,16 @@ pub struct Heartbeat {
         deserialize_with = "renew_error_text"
     )]
     pub last_renew_error: Option<String>,
+    /// The try the service's step record holds ([`ServiceBeat::record_try`]), for the service
+    /// this heartbeat is about; absent at the top level of a heartbeat that announces
+    /// [`ORDER_FEATURE`], which is the agent itself. A value that is no whole number reads as
+    /// `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub record_try: Option<u64>,
 }
 
 /// The most bytes of a heartbeat's `last_renew_error` that are sent and read.
@@ -350,6 +379,17 @@ pub struct ServiceBeat {
     /// An update the host declined for a reason about its moment, not the release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deferred: Option<DeferredReport>,
+    /// The try the service's step record holds: the try of the last order the host took for
+    /// the service, whatever its verb, whether or not its verdict is sent. The coordinator
+    /// numbers its next order of the service past it (design 8.3). Absent when the service has
+    /// no step record or its record names no try, and from an agent that predates it; a value
+    /// that is no whole number reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub record_try: Option<u64>,
 }
 
 impl ServiceBeat {
@@ -373,6 +413,7 @@ impl ServiceBeat {
             sent_unix: None,
             cert_not_after_unix: None,
             last_renew_error: None,
+            record_try: self.record_try,
         }
     }
 }
@@ -532,6 +573,8 @@ struct HeartbeatLoose {
     cert_not_after_unix: Option<u64>,
     #[serde(default, deserialize_with = "renew_error_text")]
     last_renew_error: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    record_try: Option<u64>,
 }
 
 /// One droppable value read as `T`: its default, and the reason, when it is bad.
@@ -625,6 +668,7 @@ fn without_droppable(bytes: &[u8]) -> Option<HeartbeatRead> {
         sent_unix: rest.sent_unix,
         cert_not_after_unix: rest.cert_not_after_unix,
         last_renew_error: rest.last_renew_error,
+        record_try: rest.record_try,
     };
     let mut facts: Vec<&'static str> = extras.iter().map(|(fact, _)| *fact).collect();
     facts.sort_unstable();

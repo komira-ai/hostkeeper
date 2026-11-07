@@ -18,18 +18,31 @@ use hostkeeper_observe::{
     HealthView, ServiceState, UnhealthyReason, UnobservedReason, VersionView,
 };
 use hostkeeper_steps::record::RECORD_FILE;
-use support::{Rig, d, name, update};
+use support::force::succeeded;
+use support::{Rig, d, install, name, update};
 
 fn version(text: &str) -> Version {
     Version::new(text).expect("a version")
 }
 
+/// `service` listed at `at`, updating to `updating`, with no step record's try.
 fn listed(service: &str, at: &str, updating: Option<&str>) -> RecordedService {
+    tried(service, at, updating, None)
+}
+
+/// `service` listed at `at`, updating to `updating`, its step record at the try `record_try`.
+fn tried(
+    service: &str,
+    at: &str,
+    updating: Option<&str>,
+    record_try: Option<u64>,
+) -> RecordedService {
     RecordedService {
         name: name(service),
         version: version(at),
         updating: updating.map(version),
         last_result: None,
+        record_try,
     }
 }
 
@@ -55,7 +68,7 @@ fn the_installed_services_are_those_whose_current_names_a_version() {
 /// Catches a heartbeat that does not say an update runs, or that keeps saying it after it ended:
 /// while an update of `web` to 2.0.0 is held in `verify`, the step record is unfinished and `web`
 /// is listed updating to 2.0.0 (at the version `current` names by then); once it ended it is
-/// listed at 2.0.0 updating nothing.
+/// listed at 2.0.0 updating nothing. Both times the listing carries the record's try, 1.
 #[test]
 fn an_unfinished_step_record_is_listed_as_updating_to_its_target() {
     let rig = Rig::new("records-updating");
@@ -74,13 +87,31 @@ fn an_unfinished_step_record_is_listed_as_updating_to_its_target() {
     gate.entered(&order).expect("the held step is entered");
     assert_eq!(
         records.installed().expect("read"),
-        [listed("web", "2.0.0", Some("2.0.0"))]
+        [tried("web", "2.0.0", Some("2.0.0"), Some(1))]
     );
     gate.release();
     order.join().expect("the order's thread");
     assert_eq!(
         records.installed().expect("read"),
-        [listed("web", "2.0.0", None)]
+        [tried("web", "2.0.0", None, Some(1))]
+    );
+}
+
+/// Catches a heartbeat that leaves out the try a finished step record holds, which a coordinator
+/// that never heard the order's verdict needs to number past (the install of a self-update, which
+/// the daemon ran across its own restart): after an install of `web` at try 1 and a restart of
+/// the daemon, `web` is listed at 1.0.0, updating nothing, with the record's try 1.
+#[test]
+fn the_try_of_a_finished_step_record_is_listed_after_a_restart() {
+    let rig = Rig::new("records-try");
+    rig.stage("web", "1.0.0");
+    let first = rig.daemon();
+    assert_eq!(first.order(&install("web", "1.0.0", &d(), 1)), succeeded());
+    drop(first);
+    let records = DaemonRecords::new(Arc::new(rig.daemon()));
+    assert_eq!(
+        records.installed().expect("read"),
+        [tried("web", "1.0.0", None, Some(1))]
     );
 }
 

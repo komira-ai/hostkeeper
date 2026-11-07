@@ -15,8 +15,10 @@
 //! 2. The certificate source is read. With no pair the loop says once what it waits for, and
 //!    makes no call; the first call after a pair appears is at the next period.
 //! 3. The facts are built from the step records and the observer: every installed service, its
-//!    version, health and running update, its newest verdict not yet acknowledged, and its
-//!    deferral when the last reply advertised `deferred-v1`. Step records that name a service
+//!    version, health and running update, the try its step record holds (whether or not its
+//!    verdict is sent, so a coordinator that never heard the verdict numbers past it), its
+//!    newest verdict not yet acknowledged, and its deferral when the last reply advertised
+//!    `deferred-v1`. Step records that name a service
 //!    twice send nothing. A service listed again after it was not takes the verdict its step
 //!    record kept, unless that verdict was acknowledged, so a restart resends it; a kept
 //!    deferred verdict with no deferral of its target on record starts one. A service the
@@ -423,6 +425,7 @@ impl Heartbeater {
                 version,
                 updating,
                 last_result,
+                record_try,
             } = recorded;
             if self.seen.insert(name.as_str().to_owned())
                 && let Some(result) = last_result
@@ -453,6 +456,7 @@ impl Heartbeater {
                     liveness: observation.liveness,
                     version: observation.version,
                 }),
+                record_try,
                 name,
             });
         }
@@ -533,6 +537,7 @@ impl Heartbeater {
                 liveness: Liveness::Absent,
                 version: None,
             }),
+            record_try: None,
             name,
         }
     }

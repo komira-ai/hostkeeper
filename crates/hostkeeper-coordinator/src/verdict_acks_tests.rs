@@ -244,6 +244,7 @@ fn web(running: &str, last: Option<&Heartbeat>) -> ServiceBeat {
         step_secs: Default::default(),
         promotion_pending: false,
         deferred: None,
+        record_try: None,
     }
 }
 

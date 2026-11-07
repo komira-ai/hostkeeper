@@ -341,6 +341,11 @@ impl Coordinator {
         sha256_hex(&fs::read(self.ca_cert_path()).expect("the CA certificate"))
     }
 
+    /// The file of the verdicts it acknowledged, beside its state file (`--state-file`).
+    pub fn verdicts_path(&self) -> PathBuf {
+        self.dir.join("state/desired.json.verdicts")
+    }
+
     /// The enrollment CA's certificate, DER: beside its key (`--ca-key-file`), `.cert` added.
     pub fn ca_cert_path(&self) -> PathBuf {
         self.dir.join("ca/ca.key.cert")
@@ -544,6 +549,19 @@ impl Daemon {
     /// What the daemon wrote to its standard error, over all its starts.
     pub fn log(&self) -> String {
         fs::read_to_string(self.dir.join("daemon.err")).unwrap_or_default()
+    }
+
+    /// The step record of `service` the daemon keeps, as JSON: `null` when it cannot be read.
+    pub fn step_record(&self, service: &str) -> Value {
+        fs::read(
+            self.dir
+                .join("state")
+                .join(service)
+                .join("step-record.json"),
+        )
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(Value::Null)
     }
 
     /// The daemon's packages directory.

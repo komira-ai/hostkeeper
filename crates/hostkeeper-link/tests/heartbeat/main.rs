@@ -130,6 +130,7 @@ pub fn recorded(name: &str, at: &str) -> RecordedService {
         version: version(at),
         updating: None,
         last_result: None,
+        record_try: None,
     }
 }
 

@@ -182,7 +182,7 @@ fn each_platform_has_its_json_name_and_an_unknown_one_has_none() {
 /// Proves a service entry with nothing but a name and a version is those two keys, and one with
 /// every fact is every key the JSON route has for it: a health, the last update (its outcome,
 /// phase, class, reason and order), the update running, its step, commit state and step
-/// timings, the promotion, and a deferral. The facts that have no JSON key (a pin, an update's
+/// timings, the promotion, a deferral, and the try the step record holds. The facts that have no JSON key (a pin, an update's
 /// start, force, detail and log tail) are left out.
 #[test]
 fn a_service_entry_is_the_json_entry_of_its_facts() {
@@ -223,6 +223,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         pinned: Some(proto::PinReport {
             commit: Some("abc".to_owned()),
         }),
+        record_try: Some(2),
     };
     let want = json!({
         "name": "svc", "version": "3.1", "health": "absent",
@@ -237,6 +238,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         "step_secs": {"cutover": 41},
         "promotion_pending": true,
         "deferred": {"target": "3.0", "reason": "drain_bound", "retry_after_secs": 300},
+        "record_try": 2,
     });
     assert_eq!(service_json(full.clone()), want);
 
@@ -254,6 +256,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         listed[0].last_update.as_ref().and_then(|u| u.order_try),
         Some(2)
     );
+    assert_eq!(listed[0].record_try, Some(2));
 }
 
 /// Proves every enum reaches its JSON word, and an unset one or one the proto does not know

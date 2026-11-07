@@ -10,7 +10,8 @@
 //! What they assert: a host assigned the fixture service is ordered to install it and does, once,
 //! when the coordinator is killed after the assignment, again while the install runs and again
 //! after it; a daemon killed and started again (its boot pass) keeps the service as it was,
-//! reports it and runs none of its steps again; a new desired version is installed over it; and
+//! reports it and runs none of its steps again; a new desired version is installed over it, also
+//! by a coordinator restarted with no word of the install (its verdicts file gone); and
 //! the uninstall the operator orders runs the package's `uninstall` hook and takes the file, the
 //! unit and the package off the host, after which the coordinator lists the host neither as
 //! running the service nor as uninstalling it.
@@ -278,6 +279,47 @@ fn a_new_desired_version_is_installed_over_the_installed_one() {
     host.wait_settled("2.0.0", 2);
     host.assert_on_host("2.0.0");
     host.assert_steps(2, "the update ran each step once");
+}
+
+/// The coordinator's first update of a host whose last order of the service
+/// (the install, try 1) it holds no word of, neither in memory nor in its verdicts file, as for
+/// a coordinator replaced with its in-memory fleet rebuilt from heartbeats after an install the
+/// daemon ran across its own restart. The daemon is started again too, so it resends no verdict.
+/// The update is ordered past the try the daemon's step record holds and runs once, at try 2 by
+/// the record, and the coordinator never hears a refusal for the try.
+///
+/// Catches: a coordinator that numbers that update try 1, which the daemon refuses
+/// `try_conflict` (its record holds the install's try 1 for another package) and the
+/// coordinator then reads as the host failing the version, so the host never updates.
+#[test]
+fn an_update_after_a_coordinator_restart_that_forgot_the_install_runs_once() {
+    let mut host = Installed::new("install_restart_update");
+    let scratch = host.bench.scratch().to_path_buf();
+    host.coordinator.kill();
+    std::fs::remove_file(host.coordinator.verdicts_path())
+        .expect("the verdicts file, which holds the install's acknowledged verdict, is removed");
+    host.daemon.restart();
+    host.coordinator.start_again();
+    host.wait_settled("1.0.0", 1);
+
+    set_desired(&host.coordinator, &scratch, &host.v2);
+    host.wait_settled("2.0.0", 2);
+    host.assert_on_host("2.0.0");
+    host.assert_steps(2, "the install and the update ran each step once");
+    let record = host.daemon.step_record(SERVICE);
+    assert_eq!(
+        (
+            record["target_version"].as_str(),
+            record["order_try"].as_u64()
+        ),
+        (Some("2.0.0"), Some(2)),
+        "the update ran at the try after the install's: {record}"
+    );
+    let log = host.coordinator.log();
+    assert!(
+        !log.contains("refused the order for its try"),
+        "the coordinator heard a refusal for the try:\n{log}"
+    );
 }
 
 /// Catches an uninstall that is not ordered or not run, one that leaves the placed file, the unit

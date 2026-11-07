@@ -258,23 +258,29 @@ impl ServiceRecords for DaemonRecords {
 /// `service` as the heartbeat lists it: at the version its `current` link names, `None` when
 /// it has none (it is not installed, or not yet); `updating` the target of its step record while
 /// the record is unfinished, and nothing when it is finished, absent, newer or unreadable (the
-/// executor refuses the service's orders while it cannot read the record). The record keeps no
-/// order id of a hooked order, so no verdict is given back here: after a restart the
-/// coordinator's resend of the order is answered from the record (design 8.3).
+/// executor refuses the service's orders while it cannot read the record); and the try the
+/// record holds, finished or not, none when it is absent, newer or unreadable or names no try.
+/// The record keeps no order id of a hooked order, so no verdict is given back here: after a
+/// restart the coordinator's resend of the order is answered from the record (design 8.3), and
+/// the try tells a coordinator that never heard the verdict which try to number past.
 pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
     let version = installed::linked_version(&ctx.dirs.packages, &service, CURRENT)?;
-    let updating = match ctx.store(&service).load() {
-        Ok(Loaded::Current(record)) => match record.state {
-            State::Finished { .. } => None,
-            _ => Version::new(&record.target_version).ok(),
-        },
-        _ => None,
+    let (updating, record_try) = match ctx.store(&service).load() {
+        Ok(Loaded::Current(record)) => {
+            let updating = match record.state {
+                State::Finished { .. } => None,
+                _ => Version::new(&record.target_version).ok(),
+            };
+            (updating, record.order_try)
+        }
+        _ => (None, None),
     };
     Some(RecordedService {
         name: service,
         version,
         updating,
         last_result: None,
+        record_try,
     })
 }
 

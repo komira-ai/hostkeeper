@@ -65,6 +65,7 @@ pub(crate) fn own_beat(services: &Services, beat: &mut Heartbeat) -> Option<Serv
             step_secs: Default::default(),
             promotion_pending: false,
             deferred: None,
+            record_try: None,
         }),
     }
 }
