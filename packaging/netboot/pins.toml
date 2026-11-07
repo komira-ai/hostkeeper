@@ -1,0 +1,86 @@
+# The boot sets of network install (docs/design/network-install.md, section 5): for each of
+# linux-x86_64 and linux-arm64, the Ubuntu live-server ISO and the four files of the network boot
+# chain, each pinned by its size in bytes and its SHA-256. `cargo xtask release netboot` renders
+# this file into the release asset `netboot.json`, which the artifacts workflow sums and attests.
+#
+# Where each file comes from, and which of Canonical's signed checksums covers it:
+#
+# - `iso`: the ISO, at `url` on Canonical's release site, listed in `sums` (the `SHA256SUMS` of
+#   that directory), which Canonical signs in `SHA256SUMS.gpg` beside it.
+# - `kernel` and `initrd`: the files at `iso_path` inside that ISO, so the ISO's checksum covers
+#   them.
+# - `shim` and `grub`: the file at `deb_path` inside the deb at `iso_path` of the ISO's package
+#   pool: Canonical's signed packages `shim-signed` and `grub-efi-<deb arch>-signed`, which the
+#   ISO's checksum covers, and which the Ubuntu archive's signed package indexes list with the
+#   same SHA-256.
+#
+# Canonical's `netboot/` directories and `-netboot-` tarballs are not used: no signed checksum
+# lists them. How every pin was taken, and how to check a changed one, is in README.md beside
+# this file.
+
+# The Ubuntu release of both ISOs.
+ubuntu = "24.04.5"
+
+[linux-x86_64.iso]
+url = "https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso"
+sums = "https://releases.ubuntu.com/24.04/SHA256SUMS"
+bytes = 4080486400
+sha256 = "97f3d7ffb032c3eb3b23d2c8be9cc76e60c2c1f2c0146ba5ba9fe01cafae0fd8"
+
+# Ubuntu's shim, signed by the Microsoft Corporation UEFI CA 2011: the file the ISO itself boots
+# as `EFI/boot/bootx64.efi`.
+[linux-x86_64.shim]
+iso_path = "pool/main/s/shim-signed/shim-signed_1.58+15.8-0ubuntu1_amd64.deb"
+deb_path = "usr/lib/shim/shimx64.efi.signed.latest"
+bytes = 966664
+sha256 = "6fe6e1bcbe6cf6baec8e056d40361ca1aa715cc04ddcc2855351de060b84350b"
+
+# Ubuntu's signed network GRUB (the ISO's own `EFI/boot/grubx64.efi` is the CD GRUB, not this).
+[linux-x86_64.grub]
+iso_path = "pool/main/g/grub2-signed/grub-efi-amd64-signed_1.202.5+2.12-1ubuntu7.3_amd64.deb"
+deb_path = "usr/lib/grub/x86_64-efi-signed/grubnetx64.efi.signed"
+bytes = 2344840
+sha256 = "b457801e0f4cfd77fe375ecf8dcf098786e540706d81f552c8e58949755c62e8"
+
+# The ISO's default kernel and initrd (its first boot entry): 6.8.0-139-generic.
+[linux-x86_64.kernel]
+iso_path = "casper/vmlinuz"
+bytes = 15059336
+sha256 = "0066409132868538bc0c9076f60131025775d5bbd8617df074d059f91b584918"
+
+[linux-x86_64.initrd]
+iso_path = "casper/initrd"
+bytes = 78777934
+sha256 = "62b1e77d0ff5ddeb292a712119eda81981a11a75b657a84ee569be35a51865ac"
+
+# The arm64 ISO is published on cdimage.ubuntu.com, not beside the amd64 one.
+[linux-arm64.iso]
+url = "https://cdimage.ubuntu.com/ubuntu/releases/24.04/release/ubuntu-24.04.5-live-server-arm64.iso"
+sums = "https://cdimage.ubuntu.com/ubuntu/releases/24.04/release/SHA256SUMS"
+bytes = 3825512448
+sha256 = "f12484464c7d4d73e2167e0a7dbda1e669f8fae9bcf778dc0944937034b320cb"
+
+# Ubuntu's shim, signed by the Microsoft Corporation UEFI CA 2011: the file the ISO itself boots
+# as `efi/boot/bootaa64.efi`.
+[linux-arm64.shim]
+iso_path = "pool/main/s/shim-signed/shim-signed_1.58+15.8-0ubuntu1_arm64.deb"
+deb_path = "usr/lib/shim/shimaa64.efi.signed.latest"
+bytes = 987336
+sha256 = "706f15b9578f780a2fddda8ee0806cd15b59124692cc297db320414a5a40fe44"
+
+[linux-arm64.grub]
+iso_path = "pool/main/g/grub2-signed/grub-efi-arm64-signed_1.202.5+2.12-1ubuntu7.3_arm64.deb"
+deb_path = "usr/lib/grub/arm64-efi-signed/grubnetaa64.efi.signed"
+bytes = 2463624
+sha256 = "f9bf85d005a6be54313a478f33728825515bc6c87509ce39f4fec7212a1b1305"
+
+# The ISO's default kernel (gzip-compressed, as the ISO boots it) and initrd: 6.8.0-139-generic.
+[linux-arm64.kernel]
+iso_path = "casper/vmlinuz"
+bytes = 18581403
+sha256 = "b4567593bda98a0723d9234603ec51d6ec7ee0553e1f36793a9da3956a68183e"
+
+[linux-arm64.initrd]
+iso_path = "casper/initrd"
+bytes = 76091508
+sha256 = "993024a4daa493bd297ca34a6ed60efaf932225b25f901a3734d2ee6c57af187"

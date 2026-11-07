@@ -51,11 +51,12 @@ p256 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
 # safe wrapper over libproc: a macOS-only target dependency, never compiled on Linux. Its build
 # script runs bindgen on macOS.
 libproc = "0.14.11"
-# A property-list decoder (MIT), without its serde support: the daemon's `mac-config` and the
-# enroller's nonce read (hostkeeper-enroll) read the managed preferences of the MDM with it, binary
-# or XML; hostkeeper-mdm-core writes the MDM
-# enrollment profile (an XML plist) with it; the tests of hostkeeper-steps and hostkeeper-launchd
-# read back the launchd plists they generate.
+# A property-list reader and writer (MIT), without its serde support: the daemon's `mac-config`
+# and the enroller's nonce read (hostkeeper-enroll) read the managed preferences of the MDM with
+# it, binary or XML; hostkeeper-mdm-core writes the MDM enrollment profile (an XML plist) with it;
+# the MDM gate (hostkeeper-mdm-gate) writes the commands it sends and reads the check-ins and
+# results; the tests of hostkeeper-steps and hostkeeper-launchd read back the launchd plists they
+# generate.
 plist = { version = "1.10.3", default-features = false }
 # The protobuf runtime of the code hostkeeper-proto generates, and the descriptor types its tests read.
 prost = "0.14.4"

@@ -197,9 +197,9 @@ for approval`. No line the daemon writes holds a byte of the nonce. To see what 
 as root: `plutil -p '/Library/Managed Preferences/dev.hostkeeper.enrollment.plist'` and `ls -l` on
 it.
 
-In this build the coordinator has no MDM device-state gate, so it declines every nonce
-(`device_state_unavailable`) and no MDM pushes one. Every Mac waits for an operator, with
-`mac_nonce_presented` false, and is approved as a Linux request is.
+In this build no Mac gets a nonce: the coordinator's MDM gate (`--mdm-api-url`) knows which Macs
+are enrolled and supervised but issues no nonce yet, so no MDM pushes one. Every Mac waits for an
+operator, with `mac_nonce_presented` false, and is approved as a Linux request is.
 
 Once the gate pushes nonces, three things follow for an operator. A nonce approves
 only the request it was issued for: a second request presenting it (another key on the same Mac)

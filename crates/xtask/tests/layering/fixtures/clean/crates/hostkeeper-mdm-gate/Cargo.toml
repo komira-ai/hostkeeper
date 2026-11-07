@@ -1,0 +1,11 @@
+[package]
+name = "hostkeeper-mdm-gate"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
