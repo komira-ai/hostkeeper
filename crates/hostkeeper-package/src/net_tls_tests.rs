@@ -129,13 +129,16 @@ impl TlsServer {
 }
 
 /// The answers of the tests: a body with a cookie for any path, a redirect to another host for
-/// `/moved-away`, and one to this server for `/moved-here`.
+/// `/moved-away`, one to this server for `/moved-here`, one to this server over plain `http://`
+/// for `/moved-to-http`, and one to `/moved-here` for `/moved-again`.
 fn standard_reply() -> Reply {
     Arc::new(|port: u16, head: &str| {
         let path = head.split_whitespace().nth(1).expect("a request target");
         let answer = match path {
             "/moved-away" => "302 Found\r\nLocation: https://other.example/pkg/1.tar".to_owned(),
             "/moved-here" => format!("302 Found\r\nLocation: https://127.0.0.1:{port}/pkg/1.tar"),
+            "/moved-to-http" => format!("302 Found\r\nLocation: http://127.0.0.1:{port}/pkg/1.tar"),
+            "/moved-again" => format!("302 Found\r\nLocation: https://127.0.0.1:{port}/moved-here"),
             _ => "200 OK\r\nSet-Cookie: session=1\r\nContent-Length: 5".to_owned(),
         };
         let body = if path.starts_with("/moved") {
@@ -293,4 +296,45 @@ fn net_fetcher_over_tls_delivers_a_body_and_refuses_a_redirect() {
     assert_eq!(refused, Err(NetError::Status(302)));
     assert!(other.body.is_empty());
     assert_eq!(server.finish().len(), 2);
+}
+
+/// Made with [`UreqTransport::following_redirects`], a 302 to this server is followed: the body
+/// of the second request comes back, and the server saw both requests. A redirect to an
+/// `http://` URL is no connection, and the server saw only the first request. A chain longer
+/// than the bound comes back as its last redirect, unfollowed.
+///
+/// Catches a release-asset download that stops at a GitHub redirect, one that follows a redirect
+/// off HTTPS, and one that follows redirects without bound.
+#[test]
+fn ureq_tls_following_redirects_follows_https_only_and_within_its_bound() {
+    let server = TlsServer::start(standard_reply());
+    let transport = UreqTransport::following_redirects(&[der_of(CA_PEM)], 1);
+    let mut response = transport
+        .open(&server.url("/moved-here"), timeouts())
+        .expect("the followed response");
+    assert_eq!(response.status, 200);
+    let mut body = Vec::new();
+    response.body.read_to_end(&mut body).expect("the body");
+    assert_eq!(body, b"hello".to_vec());
+    let refused = transport.open(&server.url("/moved-to-http"), timeouts());
+    assert_eq!(refused.err(), Some(NetError::Connect));
+    let bounded = transport
+        .open(&server.url("/moved-again"), timeouts())
+        .expect("the last redirect");
+    assert_eq!(bounded.status, 302);
+    let targets: Vec<String> = server
+        .finish()
+        .iter()
+        .map(|head| head.lines().next().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            "GET /moved-here HTTP/1.1",
+            "GET /pkg/1.tar HTTP/1.1",
+            "GET /moved-to-http HTTP/1.1",
+            "GET /moved-again HTTP/1.1",
+            "GET /moved-here HTTP/1.1",
+        ]
+    );
 }
