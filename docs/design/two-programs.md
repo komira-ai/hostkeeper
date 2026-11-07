@@ -1,8 +1,8 @@
 # hostkeeper is two programs
 
-Status: design, for the maintainers' comments. Nothing here is built. Every statement about new code is **Designed**;
-**Built** names code on `main` with a path, as in [hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the
-build items, one pull request each.
+Status: design, for the maintainers' comments. Built so far: item P2's proto and coordinator side of section 3.2.
+Every other statement about new code is **Designed**; **Built** names code on `main` with a path, as in
+[hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the build items, one pull request each.
 
 The ruling: hostkeeper is two programs. `hostkeeper` is the daemon. The coordinator is the service. The service's API
 is the protobuf, and every client is generated from it: a bash command line over the JSON gateway, and the TypeScript
@@ -306,7 +306,8 @@ message ClearRecordResponse { string order_id = 1; }
 
 - The coordinator orders the host the new verb `clear-record` for the service, in the next heartbeat answer, only to a
   daemon that announces the feature `clear-record-v1`; to any other it refuses `daemon_too_old`, as `Force` does
-  (`crates/hostkeeper-coordinator/src/force.rs`, **Built**). The order is a new case of `Order`'s `oneof verb` in
+  (`crates/hostkeeper-coordinator/src/force.rs`, **Built**). This bullet and the audit line below are **Built**:
+  `crates/hostkeeper-coordinator/src/clear_record.rs`, the order sent once and taking no slot as `Hosts.Abort`'s is. The order is a new case of `Order`'s `oneof verb` in
   `hostkeeper.agent.v1` (`agent.proto`, **Built**), with the service as its argument; a daemon that does not announce
   the feature is never sent it.
 - The daemon runs exactly what the admin socket's `ClearRecord` runs today

@@ -20,7 +20,7 @@
 //!
 //! The operator's holds, the hosts a standing force orders and where each service's update plan
 //! stands are kept here as a copy of the ops store's ([`Marks`]), refreshed under the fleet's
-//! lock, so the decisions read them with the beats; the `abort` orders an operator queued are kept in memory only, like the other orders.
+//! lock, so the decisions read them with the beats; the `abort` and `clear_record` orders an operator queued are kept in memory only, like the other orders.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -213,6 +213,8 @@ pub struct Fleet {
     /// The `abort` orders an operator queued, per host and service, each with its order id: sent
     /// once, at the host's next heartbeat ([`crate::orders`]).
     aborts: BTreeMap<(HostId, String), String>,
+    /// The `clear_record` orders an operator queued ([`crate::clear_record`]).
+    pub(crate) clear_records: crate::clear_record::Queue,
     /// The canaries that failed a release, per service and version, by node id
     /// ([`crate::reconcile::Change::CanaryFailed`]): kept in memory only, like the orders.
     canaries: BTreeMap<(String, String), String>,
@@ -251,6 +253,7 @@ impl Fleet {
             verdicts: Verdicts::default(),
             marks: Marks::default(),
             aborts: BTreeMap::new(),
+            clear_records: crate::clear_record::Queue::default(),
             canaries: BTreeMap::new(),
             tries: BTreeMap::new(),
             sent: BTreeMap::new(),

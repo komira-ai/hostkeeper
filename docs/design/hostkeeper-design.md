@@ -137,7 +137,7 @@ force_start_secs       = 60
 
 Every table refuses unknown keys. A config that fails to load stops the daemon with an error naming the key; nothing changes on the host. There is no list of services in it: a host runs the services the coordinator assigns (section 5.7), and the daemon learns each service's lifecycle from the manifest of a package whose signature verified.
 
-**The verbs** are code. The coordinator can send every row but `clear_record`; the local CLI runs only the three marked local. No verb names a platform. An order carries the digest of the package of the host's platform and the digest of the release index; the daemon takes the package of its own platform and that package's size from the version's release index, which it checks against the index digest, and checks the package against the index entry and against the order's package digest (section 5.5). There is no other way to make the daemon do anything:
+**The verbs** are code. The coordinator can send every row, `clear_record` only to a daemon that announces `clear-record-v1` ([two-programs.md](two-programs.md) section 3.2); the local CLI runs only the three marked local. No verb names a platform. An order carries the digest of the package of the host's platform and the digest of the release index; the daemon takes the package of its own platform and that package's size from the version's release index, which it checks against the index digest, and checks the package against the index entry and against the order's package digest (section 5.5). There is no other way to make the daemon do anything:
 
 | Verb | Typed arguments | Meaning |
 |---|---|---|

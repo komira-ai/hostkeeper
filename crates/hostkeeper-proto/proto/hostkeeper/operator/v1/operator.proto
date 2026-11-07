@@ -98,6 +98,12 @@ service Hosts {
   // host is sent no `uninstall`. Retiring a host already retired is answered as retired and
   // audited once.
   rpc Retire(RetireRequest) returns (RetireResponse);
+  // Order the host to set aside its step record of the service when the record does not read
+  // (the `clear_record` verb of `hostkeeper.agent.v1`), at the host's next heartbeat; it takes no
+  // slot and is sent once. Only for a host whose daemon announced `clear-record-v1` in its last
+  // heartbeat; to any other it is refused `daemon_too_old` and nothing is ordered. The daemon's
+  // verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
+  rpc ClearRecord(ClearRecordRequest) returns (ClearRecordResponse);
 }
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
@@ -191,6 +197,9 @@ enum HostsRefusal {
   // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
   // changed, and asking again is safe once the file takes lines again.
   HOSTS_REFUSAL_AUDIT_UNAVAILABLE = 8;
+  // FAILED_PRECONDITION: the host's daemon did not announce, in its last heartbeat, the feature
+  // the order needs (`ClearRecord`: `clear-record-v1`); nothing is ordered.
+  HOSTS_REFUSAL_DAEMON_TOO_OLD = 9;
 }
 
 // Why `Releases` refused a request. The token is the value's name without the prefix, in lower
@@ -555,6 +564,19 @@ message AbortResponse {
   // The `abort` order waits for the host's next heartbeat.
   bool queued = 1;
   AuditEntry entry = 2;
+}
+
+message ClearRecordRequest {
+  // The host, heard from since the coordinator started.
+  string node_id = 1;
+  // The service whose step record the host sets aside; one the coordinator manages.
+  string service = 2;
+}
+
+message ClearRecordResponse {
+  // The id of the `clear_record` order (`clear-record-<n>`, the number of its `record_cleared`
+  // audit entry), which the host's verdict names (`UpdateResult.order_id`).
+  string order_id = 1;
 }
 
 message RetireRequest {

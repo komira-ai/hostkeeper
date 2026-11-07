@@ -191,3 +191,6 @@ flag enrollment open-record --host-id STRING
 flag enrollment open-record --approve-until-unix UINT64
 flag enrollment open-record --approve-for-secs UINT64
 flag enrollment open-record --reason STRING
+command hosts clear-record /hostkeeper.operator.v1.Hosts/ClearRecord
+flag hosts clear-record --node-id STRING
+flag hosts clear-record --service STRING

@@ -14,6 +14,7 @@ use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
 use hostkeeper_daemon::verbs::clear_record::CORRUPT_FILE;
 use hostkeeper_daemon::{Refusal, Refused, Reply, Verb};
 use hostkeeper_hook::Verdict;
+use hostkeeper_proto::hostkeeper::agent::v1::{ClearRecord, Order, order};
 use hostkeeper_steps::record::{PARAMS_FILE, RECORD_FILE};
 use support::{Rig, d, name, snapshot, update};
 
@@ -147,9 +148,11 @@ fn clear_record_is_refused_while_the_service_lock_is_held() {
     drop(guard);
 }
 
-/// Catches `clear_record` reachable from the coordinator: the verb in an order's path is refused
-/// `forbidden` before any lock is tried (with the service's lock held it is still `forbidden`,
-/// never `busy`), and the corrupt record stays where it is. No `Order` can carry the verb.
+/// Catches `clear_record` reachable from the coordinator: the verb in an order's path, and an
+/// `Order` of the wire's `clear_record` case, are refused `forbidden` before any lock is tried
+/// (with the service's lock held it is still `forbidden`, never `busy`), and the corrupt record
+/// stays where it is. This daemon does not announce `clear-record-v1`, so no coordinator sends
+/// it the order.
 #[test]
 fn clear_record_from_a_coordinator_order_is_refused_before_any_lock() {
     let rig = Rig::new("clear-record-order");
@@ -162,13 +165,22 @@ fn clear_record_from_a_coordinator_order_is_refused_before_any_lock() {
     };
     let detail = "`clear_record` of web is the admin socket's, not an order's";
     let forbidden = Reply::refused(Refusal::Forbidden, detail);
+    let order = Order {
+        order_id: "clear-record-7".to_owned(),
+        r#try: 1,
+        verb: Some(order::Verb::ClearRecord(ClearRecord {
+            service: "web".to_owned(),
+        })),
+    };
     assert_eq!(daemon.execute(Verb::ClearRecord(name("web"))), forbidden);
+    assert_eq!(daemon.order(&order), forbidden);
     let guard = daemon
         .ctx()
         .locks
         .take(&name("web"), package)
         .expect("free");
     assert_eq!(daemon.execute(Verb::ClearRecord(name("web"))), forbidden);
+    assert_eq!(daemon.order(&order), forbidden);
     drop(guard);
     assert_eq!(fs::read(dir.join(RECORD_FILE)).expect("in place"), b"{");
     assert_eq!(daemon.ctx().locks.holder(&name("web")), None);

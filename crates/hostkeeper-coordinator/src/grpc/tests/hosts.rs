@@ -1,7 +1,7 @@
-//! `Hosts.List`, `Hosts.Get`, `Hosts.Retire`, `Enrollment.Reject` and `Releases.UnmarkBad` end
-//! to end, through the router as the private listener serves them: over a coordinator that
-//! enrolled a host and heard its heartbeat on its certificate, by gRPC and by the gateway the
-//! UI calls.
+//! `Hosts.List`, `Hosts.Get`, `Hosts.Retire`, `Hosts.ClearRecord`, `Enrollment.Reject` and
+//! `Releases.UnmarkBad` end to end, through the router as the private listener serves them: over
+//! a coordinator that enrolled a host and heard its heartbeat on its certificate, by gRPC and by
+//! the gateway the UI calls.
 //!
 //! The gateway's answer to `Hosts.List` here is the reply the UI's Fleet page is tested on
 //! (`crates/hostkeeper-ui-tests/tests/fixtures/hosts_list.json`): the test below fails when
@@ -367,4 +367,77 @@ async fn retire_and_reject_answer_by_grpc_and_the_gateway() {
             serde_json::json!({"code": "NOT_FOUND", "reason": "unknown_request"})
         )
     );
+}
+
+/// Proves: `Hosts.ClearRecord` of a host whose last heartbeat did not announce
+/// `clear-record-v1` is `FAILED_PRECONDITION` `daemon_too_old` by gRPC and 400 at the gateway,
+/// and the host's next heartbeat carries no order; once its heartbeat announces the feature, the
+/// gateway's call answers the order id, and the host's next gRPC heartbeat carries that order as
+/// the `clear_record` case of `Order` (try 1) and the one after carries none. A host id nobody
+/// heard from is `NOT_FOUND` `unknown_host`.
+///
+/// Catches: a method the router does not serve, a refusal with another code or token, a body
+/// the gateway does not read, and an order that does not reach the host's heartbeat answer on
+/// the wire, or reaches it twice.
+#[tokio::test]
+async fn clear_record_answers_by_grpc_and_the_gateway_and_reaches_the_heartbeat() {
+    use hostkeeper_proto::hostkeeper::agent::v1 as agent;
+
+    let enrollment = EnrollmentRig::new("grpc-hosts-clear-record");
+    let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
+    let world = world_over("grpc-hosts-clear-record-coordinator", &enrollment);
+    let c = &world.coordinator;
+    let peer = peer_of(&certificate);
+    let today = proto_message(&[svc("kbf", "1.0")]);
+    let mut announcing = today.clone();
+    announcing
+        .features
+        .push(crate::clear_record::FEATURE.to_owned());
+    let order_of =
+        |reply: super::heartbeat::Reply| reply.decode::<agent::HeartbeatResponse>().order;
+    assert_eq!(order_of(beat(c, &peer, &today).await), None);
+
+    let path = "/hostkeeper.operator.v1.Hosts/ClearRecord";
+    let request = proto::ClearRecordRequest {
+        node_id: "s1".to_owned(),
+        service: "kbf".to_owned(),
+    };
+    let (code, said, answer) =
+        operator_call::<proto::ClearRecordResponse>(&world, path, request).await;
+    assert_eq!(
+        (code, said.as_str(), answer),
+        (Code::FailedPrecondition, "daemon_too_old", None)
+    );
+    let body = r#"{"nodeId":"s1","service":"kbf"}"#;
+    assert_eq!(
+        gateway(&world, path, body).await,
+        (
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"code": "FAILED_PRECONDITION", "reason": "daemon_too_old"})
+        )
+    );
+    assert_eq!(order_of(beat(c, &peer, &announcing).await), None);
+
+    let (status, json) = gateway(&world, path, body).await;
+    assert_eq!(status, StatusCode::OK);
+    let order_id = json["orderId"].as_str().expect("an order id").to_owned();
+    assert!(order_id.starts_with("clear-record-"), "{order_id}");
+    assert_eq!(
+        order_of(beat(c, &peer, &announcing).await),
+        Some(agent::Order {
+            order_id,
+            r#try: 1,
+            verb: Some(agent::order::Verb::ClearRecord(agent::ClearRecord {
+                service: "kbf".to_owned(),
+            })),
+        })
+    );
+    assert_eq!(order_of(beat(c, &peer, &announcing).await), None);
+
+    let ghost = proto::ClearRecordRequest {
+        node_id: "ghost".to_owned(),
+        service: "kbf".to_owned(),
+    };
+    let (code, said, _) = operator_call::<proto::ClearRecordResponse>(&world, path, ghost).await;
+    assert_eq!((code, said.as_str()), (Code::NotFound, "unknown_host"));
 }
