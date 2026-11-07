@@ -14,7 +14,7 @@ use hostkeeper_wire::wire::{HEARTBEAT_PATH, ServiceReply};
 use hostkeeper_wire::{HostId, RoleName};
 use hyper::{Request, StatusCode};
 
-use super::heartbeat::{DONE, UPDATING, beat_json, denied, order, peer_of};
+use super::heartbeat::{DONE, UPDATING, beat_json, denied, order, peer_of, slot_coordinator};
 use super::support::{
     HostKey, PATIENCE, Rig, audit_after, audit_of, audited, coordinator_over, enrolled, host_id,
     identity, watched,
@@ -157,7 +157,7 @@ async fn a_host_retired_mid_update_keeps_its_slot_until_its_update_is_final() {
     let (one, two) = (HostKey::new(), HostKey::new());
     let first = enrolled(&enrollment.enrollment, &one, "machine-1", "s1");
     let second = enrolled(&enrollment.enrollment, &two, "machine-2", "s2");
-    let rig = coordinator_over("retire-mid-update-coordinator", &enrollment).await;
+    let rig = slot_coordinator("retire-mid-update-coordinator", &enrollment).await;
     let c = &rig.coordinator;
     let (s1, s2) = (identity(c, &first), identity(c, &second));
     assign(c, "s1");

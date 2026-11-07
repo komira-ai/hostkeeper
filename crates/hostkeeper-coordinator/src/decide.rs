@@ -47,7 +47,7 @@
 //!    own order is told the same again. A host the service no longer counts (excluded, out of its
 //!    selector, not announcing it) still holds its slot until its beats or its order's age free
 //!    it ([`Fleet::occupants_of`]).
-
+//!
 //! A version marked bad ([`crate::reconcile`]) is ordered to nobody, whatever the rules above
 //! say, and is held at [`Gate::Bad`] after the quiet start; so is a desired version below the
 //! minimum version that applies to the host ([`Gate::BelowMinVersion`]: its own, else its
@@ -57,7 +57,8 @@
 //!
 //! An uninstall is ordered to a host that lists the service, is not assigned it, and has an
 //! uninstall intent for it, under the halt, the hold, the quiet start, the one update at a time
-//! on the host (rule 2) and the other services' live rollouts (`rollout_elsewhere`); one that failed is left for the operator, and one the host declined waits
+//! on the host (rule 2) and the other services' live rollouts (`rollout_elsewhere`); one that
+//! failed is left for the operator, and one the host declined waits
 //! out its backoff, keyed by the version the host runs.
 //!
 //! A pair an operator holds ([`crate::holds`]: the host, its role at the time of the decision,

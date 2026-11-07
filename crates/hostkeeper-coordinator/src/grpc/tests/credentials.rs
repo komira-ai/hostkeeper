@@ -280,6 +280,7 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "Enrollment",
             "Hosts",
             "Releases",
+            "Rollouts",
             "Services"
         ])
     );

@@ -12,9 +12,10 @@ use crate::desired::DesiredStore;
 use crate::fleet::ORDER_AGE;
 use crate::identity::Identity;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError, Unauthorized};
+use crate::services::Services;
 use crate::testutil::{
-    LEGACY, OPERATOR, Rig, beat, ci_token, clock_of, id, kbf_services, last, role, scratch,
-    updating, version,
+    KBF_ENTRY, LEGACY, OPERATOR, Rig, beat, ci_token, clock_of, id, kbf_services, last, role,
+    scratch, updating, version,
 };
 
 const STATE: &str = r#"{"version":"2.0","max_updating":{"daemon":1},
@@ -25,6 +26,18 @@ fn who(name: &str, role: RoleName) -> Identity {
         host_id: id(name),
         role,
     }
+}
+
+/// kbf rolled in one stage (`stages = [100]`): every host of the service is in the stage
+/// from the start, so what holds a host back is the state's per-role limit alone.
+fn one_stage_kbf() -> Services {
+    Services::parse(&format!("{KBF_ENTRY}\nstages = [100]\n")).expect("kbf in one stage")
+}
+
+/// The rig's coordinator replaced by one on the same files that rolls kbf in one stage (and
+/// starts now, as a restart does).
+fn one_stage(rig: &mut Rig) {
+    rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_services(one_stage_kbf());
 }
 
 fn update(target: &str) -> Reply {
@@ -242,10 +255,11 @@ fn the_status_is_for_the_operator_token_only() {
 /// Catches: a restart forgetting what the hosts said: after a restart the coordinator orders
 /// nothing for 30 seconds, then counts a host that heartbeats as updating against its role's
 /// limit, so a second daemon is not started beside it; and the desired state is the one set
-/// before the restart.
+/// before the restart. Kbf rolls in one stage, so the daemon limit of one is what holds `d2`.
 #[tokio::test]
 async fn after_a_restart_a_host_that_was_updating_is_still_counted() {
     let mut rig = Rig::new("svc-restart");
+    one_stage(&mut rig);
     rig.at(2_000);
     rig.set(STATE).await;
     assert_eq!(
@@ -255,7 +269,7 @@ async fn after_a_restart_a_host_that_was_updating_is_still_counted() {
         update("2.0")
     );
     rig.at(3_000);
-    rig.restart();
+    one_stage(&mut rig);
     let busy = updating(beat("1.0"), "2.0");
     let early = rig
         .coordinator
@@ -404,16 +418,20 @@ async fn the_convergence_follows_the_heartbeats() {
 
 // ---- an order holds its slot until the host reports ------------------------------------
 
+/// One storage host updates at a time; none has to stay up (`min_up` is not what these tests
+/// are about, and the first storage host to ask would otherwise be the only one up).
 const ONE_STORAGE: &str = r#"{"version":"2.0","max_updating":{"storage":1},
-    "min_up":{"storage":1,"frontend":1}}"#;
+    "min_up":{"storage":0,"frontend":0}}"#;
 
 fn storage(name: &str) -> Identity {
     who(name, role("storage"))
 }
 
-/// A rig past the quiet start with `state` set.
+/// A rig past the quiet start with `state` set, kbf rolling in one stage: the stage holds every
+/// host, so the state's `max_updating` of the role is the only limit on the orders.
 async fn started(name: &str, state: &str) -> Rig {
-    let rig = Rig::new(name);
+    let mut rig = Rig::new(name);
+    one_stage(&mut rig);
     rig.at(2_000);
     rig.set(state).await;
     rig.at(2_100);

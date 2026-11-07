@@ -10,6 +10,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::wire::{Heartbeat, ServiceReply};
 
 use crate::decide::{Gate, Why};
+use crate::install_tests::{ONE_STAGE, set_one_slot};
 use crate::marks_support::{
     NEW_DAEMON, OLD_DAEMON, WEB, ask, ask_typed, beat_of, digest, fleet_target, force_request,
     hold, operator, ops_bytes, rig, runs, scope_fleet, set, start, update, who,
@@ -409,12 +410,13 @@ async fn mark_bad_stops_ordering_the_version_and_is_audited() {
 /// next host is ordered; the entry says `possibly_mid_update`, the log carries the alert, and the
 /// exclusion stands in the status.
 ///
-/// Catches: an abandon that keeps the slot of a vanished host (the farm stalls), that does not
-/// say the host may have been mid-update, that is not alerted, or that does not exclude.
+/// Catches: an abandon that keeps the slot of a vanished host (the role stalls), that does not
+/// say the host may have been mid-update, that is not alerted, or that does not exclude. (The
+/// daemons update one at a time here: `max_updating` of 1 and one stage.)
 #[tokio::test]
 async fn exclude_abandon_frees_the_slot_of_a_mid_update_host_and_audits_possibly_mid_update() {
-    let rig = rig("marks-abandon", "");
-    set(&rig, WEB, "2.0", 1).await;
+    let rig = rig("marks-abandon", ONE_STAGE);
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(
         ask(&rig, "d1", "daemon", updating_to("1.0", "2.0")),
         ServiceReply::Nothing
@@ -461,11 +463,11 @@ async fn exclude_abandon_frees_the_slot_of_a_mid_update_host_and_audits_possibly
 /// nothing, and the entry is a plain `exclude` with no alert.
 ///
 /// Catches: an exclusion that frees a slot a host may still be using, or that is audited as an
-/// abandon.
+/// abandon. (The daemons update one at a time here: `max_updating` of 1 and one stage.)
 #[tokio::test]
 async fn exclude_without_abandon_keeps_the_slot() {
-    let rig = rig("marks-exclude", "");
-    set(&rig, WEB, "2.0", 1).await;
+    let rig = rig("marks-exclude", ONE_STAGE);
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(
         ask(&rig, "d1", "daemon", updating_to("1.0", "2.0")),
         ServiceReply::Nothing

@@ -18,9 +18,17 @@ use crate::testutil::{
     Rig, beat, desired, id, kbf_def, last, role, secs, unhealthy, updating, version,
 };
 
-/// One service on daemons with `extra` lines in its table.
+/// One service on daemons with `extra` lines in its table, rolled in one stage (`stages =
+/// [100]`) so that the role's `max_updating` alone decides who is ordered.
 fn text(extra: &str) -> String {
-    format!("[[service]]\nname = \"svc\"\n{extra}\nroles = [\"daemon\"]\n")
+    format!("[[service]]\nname = \"svc\"\nstages = [100]\n{extra}\nroles = [\"daemon\"]\n")
+}
+
+/// The desired state of `target` that lets one daemon update at a time.
+fn one_at_a_time(target: &str) -> Desired {
+    let mut want = desired(target, 0, 0);
+    want.max_updating.set("daemon", 1);
+    want
 }
 
 /// A heartbeat of a daemon running `running` that says it declined `target`.
@@ -45,13 +53,13 @@ impl Farm {
     fn new(extra: &str) -> Self {
         Self {
             services: Services::parse(&text(extra)).expect("services"),
-            want: BTreeMap::from([("svc".to_owned(), desired("2.0", 0, 0))]),
+            want: BTreeMap::from([("svc".to_owned(), one_at_a_time("2.0"))]),
             fleet: Fleet::new(Duration::ZERO, crate::fleet::QUIET_START),
         }
     }
 
     fn desire(&mut self, target: &str) {
-        self.want.insert("svc".to_owned(), desired(target, 0, 0));
+        self.want.insert("svc".to_owned(), one_at_a_time(target));
     }
 
     fn beat(&mut self, host: &str, b: Heartbeat, at: u64) {

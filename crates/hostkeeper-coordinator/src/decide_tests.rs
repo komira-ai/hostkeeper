@@ -6,13 +6,13 @@ use std::time::Duration;
 use hostkeeper_wire::RoleName;
 use hostkeeper_wire::wire::{Outcome, Reply};
 
-use crate::decide::decide_in;
+use crate::decide::{Decision, Gate, decide_in, decide_why};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::services::{ServiceDef, Services};
 use crate::testutil::{
-    LEGACY, beat, decide, desired, fleet, id, kbf_def, kbf_services, last, role, secs, unhealthy,
-    updating, version,
+    KBF_ENTRY, LEGACY, beat, decide, desired, fleet, id, kbf_def, kbf_services, last, role, secs,
+    unhealthy, updating, version,
 };
 
 const NOW: Duration = Duration::from_secs(1_000);
@@ -25,6 +25,27 @@ fn update(target: &str) -> Reply {
 
 fn ask(d: &Desired, f: &Fleet, host: &str) -> Reply {
     decide(d, f, &id(host), NOW)
+}
+
+/// The recorded kbf service rolled in one stage (`stages = [100]`): every eligible host is in
+/// the stage at once, so only the desired state's per-role limits (`max_updating`, `min_up`)
+/// hold an order.
+fn kbf_whole() -> Services {
+    Services::parse(&format!("{KBF_ENTRY}\nstages = [100]\n")).expect("services")
+}
+
+fn whole_wants(d: &Desired) -> BTreeMap<String, Desired> {
+    BTreeMap::from([(LEGACY.to_owned(), d.clone())])
+}
+
+/// What `host` is told under `d` when kbf rolls in one stage.
+fn ask_whole(d: &Desired, f: &Fleet, host: &str) -> Reply {
+    decide_in(&kbf_whole(), &whole_wants(d), LEGACY, f, &id(host), NOW)
+}
+
+/// Why `host` is held under `d` when kbf rolls in one stage.
+fn why_whole(d: &Desired, f: &Fleet, host: &str) -> Decision {
+    decide_why(&kbf_whole(), &whole_wants(d), LEGACY, f, &id(host), NOW)
 }
 
 /// Catches: a host that runs an older version than the desired one not being told to update,
@@ -57,10 +78,11 @@ fn a_host_that_has_not_heartbeated_is_told_nothing() {
 }
 
 /// Catches: the hosts that are updating not being counted, so a second daemon starts while
-/// one is updating, though the desired state's daemon limit is two (which no decision reads);
-/// and the slot not freeing when the update ends.
+/// one is updating under a daemon limit of one; and the slot not freeing when the update ends.
+/// With the default plan the second daemon also waits, for the first stage, which one host
+/// fills.
 #[test]
-fn a_host_updating_holds_the_one_slot_until_it_is_done() {
+fn a_host_updating_holds_the_slot_of_its_role_until_it_is_done() {
     let with = |d1: hostkeeper_wire::wire::Heartbeat| {
         fleet(
             NOW,
@@ -70,20 +92,33 @@ fn a_host_updating_holds_the_one_slot_until_it_is_done() {
             ],
         )
     };
-    let d = desired("2.0", 1, 1);
+    let mut d = desired("2.0", 1, 1);
     assert_eq!(
         ask(&d, &with(updating(beat("1.0"), "2.0")), "d2"),
         Reply::Nothing,
-        "one update at a time, though the daemon limit is two"
+        "the first stage holds one of the two hosts"
     );
-    assert_eq!(ask(&d, &with(beat("2.0")), "d2"), update("2.0"));
+    d.max_updating.set("daemon", 1);
+    assert_eq!(
+        ask_whole(&d, &with(updating(beat("1.0"), "2.0")), "d2"),
+        Reply::Nothing,
+        "one daemon updating fills a daemon limit of one"
+    );
+    assert_eq!(ask_whole(&d, &with(beat("2.0")), "d2"), update("2.0"));
+    d.max_updating.set("daemon", 2);
+    assert_eq!(
+        ask_whole(&d, &with(updating(beat("1.0"), "2.0")), "d2"),
+        update("2.0"),
+        "a daemon limit of two has a place left"
+    );
 }
 
-/// Catches: the slot counted per role (a storage host updating leaving a daemon free to
-/// start), a limit above one letting a second host go, and a limit of zero holding its role (it
-/// no longer does).
+/// Catches: the slot counted across roles (a storage host updating holding a daemon back), a
+/// limit above one not letting a second host of its role go, a limit reached not holding the
+/// role, and a limit of zero not holding its role. The plan is of one stage, so only the limits
+/// decide.
 #[test]
-fn no_role_limit_widens_a_roll_or_holds_a_role() {
+fn max_updating_caps_a_role_within_a_stage() {
     let busy = fleet(
         NOW,
         &[
@@ -94,32 +129,47 @@ fn no_role_limit_widens_a_roll_or_holds_a_role() {
             ("m1", role("mac-daemon"), beat("1.0")),
         ],
     );
-    let mut d = desired("2.0", 1, 1);
+    let mut d = desired("2.0", 0, 0);
     assert_eq!(
-        ask(&d, &busy, "d1"),
-        Reply::Nothing,
-        "a storage host updating holds the daemons' slot too"
+        ask_whole(&d, &busy, "d1"),
+        update("2.0"),
+        "a storage host updating holds no slot of the daemons"
+    );
+    assert_eq!(ask_whole(&d, &busy, "m1"), update("2.0"));
+    assert_eq!(
+        why_whole(&d, &busy, "s2"),
+        Decision::Gate(Gate::NoSlot),
+        "the storage limit of one is reached"
     );
     d.max_updating.set("storage", 2);
-    d.max_updating.set("daemon", 3);
-    d.max_updating.set("mac-daemon", 3);
-    for host in ["s2", "d1", "m1"] {
-        assert_eq!(ask(&d, &busy, host), Reply::Nothing, "{host}");
-    }
-    let idle = fleet(
+    assert_eq!(
+        ask_whole(&d, &busy, "s2"),
+        update("2.0"),
+        "a storage limit of two has a place left"
+    );
+    let full = fleet(
         NOW,
         &[
-            ("d1", role("daemon"), beat("2.0")),
-            ("m1", role("mac-daemon"), beat("1.0")),
-            ("m2", role("mac-daemon"), beat("1.0")),
+            ("s1", role("storage"), updating(beat("1.0"), "2.0")),
+            ("s2", role("storage"), updating(beat("1.0"), "2.0")),
+            ("s3", role("storage"), beat("1.0")),
         ],
     );
-    assert_eq!(ask(&d, &idle, "m2"), update("2.0"));
-    d.max_updating.set("mac-daemon", 0);
     assert_eq!(
-        ask(&d, &idle, "m2"),
+        why_whole(&d, &full, "s3"),
+        Decision::Gate(Gate::NoSlot),
+        "two storage hosts updating fill a limit of two"
+    );
+    d.max_updating.set("daemon", 0);
+    assert_eq!(
+        why_whole(&d, &busy, "d1"),
+        Decision::Gate(Gate::NoSlot),
+        "a limit of zero holds the role"
+    );
+    assert_eq!(
+        ask_whole(&d, &busy, "m1"),
         update("2.0"),
-        "a limit of zero holds nothing: no decision reads it"
+        "and no other role"
     );
 }
 
@@ -156,11 +206,12 @@ fn the_last_frontend_that_is_up_is_told_to_update_like_any_host() {
     assert_eq!(ask(&d, &alone, "f1"), update("2.0"), "the only frontend");
 }
 
-/// Catches: a minimum of hosts up read again: the desired state names more storage and
-/// frontend hosts up than the fleet has, with hosts silent, unhealthy or alone, and the host
-/// asked is told to update all the same; the numbers are kept in the state.
+/// Catches: the desired state's `min_up` of a role not read: an order that would leave fewer of
+/// the role's live hosts up than the minimum given anyway, with the hosts alone, silent or
+/// unhealthy; and the hosts that stay up not counted, so an order the minimum allows is held.
+/// The numbers are kept in the state.
 #[test]
-fn min_up_is_kept_and_holds_no_order() {
+fn min_up_holds_an_order_that_would_leave_too_few_of_the_role_up() {
     let d = desired("2.0", 3, 3);
     let lone = fleet(
         NOW,
@@ -169,8 +220,8 @@ fn min_up_is_kept_and_holds_no_order() {
             ("f1", role("frontend"), beat("1.0")),
         ],
     );
-    assert_eq!(ask(&d, &lone, "s1"), update("2.0"));
-    assert_eq!(ask(&d, &lone, "f1"), update("2.0"));
+    assert_eq!(why_whole(&d, &lone, "s1"), Decision::Gate(Gate::BelowMinUp));
+    assert_eq!(why_whole(&d, &lone, "f1"), Decision::Gate(Gate::BelowMinUp));
     let sick = fleet(
         NOW,
         &[
@@ -178,10 +229,10 @@ fn min_up_is_kept_and_holds_no_order() {
             ("s2", role("storage"), unhealthy(beat("1.0"))),
         ],
     );
-    assert_eq!(ask(&d, &sick, "s1"), update("2.0"));
+    assert_eq!(ask(&d, &sick, "s1"), Reply::Nothing);
     let mut silent = fleet(NOW, &[("s1", role("storage"), beat("1.0"))]);
     silent.record_in(LEGACY, id("s2"), role("storage"), beat("1.0"), secs(900));
-    assert_eq!(ask(&d, &silent, "s1"), update("2.0"));
+    assert_eq!(ask(&d, &silent, "s1"), Reply::Nothing);
     assert_eq!(
         (
             d.min_up.min_up_of("storage"),
@@ -189,6 +240,19 @@ fn min_up_is_kept_and_holds_no_order() {
         ),
         (3, 3)
     );
+    // The same hosts under a minimum of one: the host that stays up allows the order.
+    let one = desired("2.0", 1, 1);
+    let pair = fleet(
+        NOW,
+        &[
+            ("s1", role("storage"), beat("1.0")),
+            ("s2", role("storage"), beat("1.0")),
+        ],
+    );
+    assert_eq!(ask(&one, &pair, "s1"), update("2.0"));
+    assert_eq!(ask(&one, &sick, "s1"), Reply::Nothing, "s2 is not up");
+    assert_eq!(ask(&one, &silent, "s1"), Reply::Nothing, "s2 is silent");
+    assert_eq!(ask(&one, &lone, "s1"), Reply::Nothing, "s1 is the only one");
 }
 
 /// Catches: an order given while the coordinator is still within 30 seconds of starting,
@@ -206,7 +270,7 @@ fn no_order_is_given_within_thirty_seconds_of_starting() {
 /// Catches: a role waiting for another: a frontend (or any role) told nothing while a host of
 /// another role is behind. With nothing ordered, the frontend is told to update whether a
 /// storage, daemon or Mac host is behind, at the version, silent or not; it waits only while
-/// that host holds the slot (updating).
+/// that host's update fills the first stage.
 #[test]
 fn no_role_waits_for_another_role() {
     let d = desired("2.0", 0, 1);
@@ -257,10 +321,12 @@ fn no_role_waits_for_another_role() {
 }
 
 /// Catches: a failed host giving its slot back before it heartbeats healthy (a bad version
-/// would then roll on through the role), and keeping it after.
+/// would then roll on through the role), and keeping it after. The plan is of one stage and the
+/// daemon limit is one, so the slot is the only thing that holds the second daemon.
 #[test]
 fn a_failed_host_keeps_its_slot_until_it_heartbeats_healthy() {
-    let d = desired("2.0", 1, 1);
+    let mut d = desired("2.0", 1, 1);
+    d.max_updating.set("daemon", 1);
     let failed = last(beat("1.0"), "2.0", Outcome::Failed);
     let f = |d1: hostkeeper_wire::wire::Heartbeat| {
         fleet(
@@ -271,8 +337,11 @@ fn a_failed_host_keeps_its_slot_until_it_heartbeats_healthy() {
             ],
         )
     };
-    assert_eq!(ask(&d, &f(unhealthy(failed.clone())), "d2"), Reply::Nothing);
-    assert_eq!(ask(&d, &f(failed), "d2"), update("2.0"));
+    assert_eq!(
+        why_whole(&d, &f(unhealthy(failed.clone())), "d2"),
+        Decision::Gate(Gate::NoSlot)
+    );
+    assert_eq!(ask_whole(&d, &f(failed), "d2"), update("2.0"));
 }
 
 /// Catches: a host that failed the desired version being told it again as soon as it is
@@ -296,8 +365,8 @@ fn a_host_that_failed_a_version_is_not_told_it_again() {
 }
 
 /// Catches: a rollback (the desired version older than the one the hosts run) not ordered, or
-/// ordered under other rules than an update: one host at a time, and nothing else. Storage and
-/// frontends are alike, and too few storage hosts for the minimum do not hold it.
+/// ordered under other rules than an update: the first stage holds one host whatever its role,
+/// the others wait for it, and the `min_up` of the role holds it as it holds an update.
 #[test]
 fn a_rollback_is_an_older_desired_version_under_the_same_rules() {
     let d = desired("1.0", 2, 1);
@@ -321,7 +390,23 @@ fn a_rollback_is_an_older_desired_version_under_the_same_rules() {
             ("s3", role("storage"), beat("2.0")),
         ],
     );
-    assert_eq!(ask(&d, &busy, "s1"), Reply::Nothing, "one host at a time");
+    assert_eq!(
+        why_whole(&d, &busy, "s1"),
+        Decision::Gate(Gate::NoSlot),
+        "the storage limit of one"
+    );
+    assert_eq!(
+        decide_why(
+            &kbf_services(),
+            &whole_wants(&d),
+            LEGACY,
+            &busy,
+            &id("s1"),
+            NOW
+        ),
+        Decision::Gate(Gate::StageWait),
+        "the first stage is full"
+    );
     let thin = fleet(
         NOW,
         &[
@@ -329,7 +414,16 @@ fn a_rollback_is_an_older_desired_version_under_the_same_rules() {
             ("s2", role("storage"), beat("2.0")),
         ],
     );
-    assert_eq!(ask(&d, &thin, "s1"), update("1.0"), "no minimum holds it");
+    assert_eq!(
+        ask(&d, &thin, "s1"),
+        Reply::Nothing,
+        "two storage hosts do not leave two up"
+    );
+    assert_eq!(
+        ask(&desired("3.0", 2, 1), &thin, "s1"),
+        Reply::Nothing,
+        "an update is held the same"
+    );
 }
 
 /// Catches: a host whose role the service's definition does not name being ordered to
@@ -435,18 +529,30 @@ fn a_host_whose_role_no_definition_names_is_never_ordered() {
     assert_eq!(ask("d1"), update("2.0"));
 }
 
-/// Catches: the desired state's limit or minimum for a role no format key names read again: a
-/// limit of 0 and a minimum of 3 hosts up for `builder` hold nothing; the first builder is
-/// ordered and the others wait for its slot, not for a number.
+/// Catches: the desired state's limit or minimum for a role no format key names not read: a
+/// limit of 0 for `builder` holds the role (`no_slot`), a minimum of 3 hosts up with three
+/// builders holds every order (`below_min_up`), and a minimum of 2 lets the first builder go.
 #[test]
-fn a_limit_or_a_minimum_for_a_named_role_decides_nothing() {
-    let wants = pool_wants(
-        r#"{"version":"2.0","max_updating":{"builder":0},"min_up":{"storage":0,"frontend":0,"builder":3}}"#,
+fn a_limit_or_a_minimum_for_a_named_role_is_read() {
+    let gate_of = |wants: &BTreeMap<String, Desired>, fleet: &Fleet, host: &str| {
+        decide_why(&pool(), wants, "pool", fleet, &id(host), NOW)
+    };
+    let fleet = builders(&["b1", "b2", "b3"]);
+    let limit = pool_wants(
+        r#"{"version":"2.0","max_updating":{"builder":0},"min_up":{"storage":0,"frontend":0}}"#,
     );
-    let mut fleet = builders(&["b1", "b2", "b3"]);
-    assert_eq!(pool_ask(&wants, &fleet, "b1"), update("2.0"));
+    assert_eq!(gate_of(&limit, &fleet, "b1"), Decision::Gate(Gate::NoSlot));
+    let minimum =
+        pool_wants(r#"{"version":"2.0","min_up":{"storage":0,"frontend":0,"builder":3}}"#);
+    assert_eq!(
+        gate_of(&minimum, &fleet, "b1"),
+        Decision::Gate(Gate::BelowMinUp)
+    );
+    let two = pool_wants(r#"{"version":"2.0","min_up":{"storage":0,"frontend":0,"builder":2}}"#);
+    assert_eq!(pool_ask(&two, &fleet, "b1"), update("2.0"));
+    let mut fleet = fleet;
     fleet.order("pool", id("b1"), version("2.0"), NOW);
     for host in ["b2", "b3"] {
-        assert_eq!(pool_ask(&wants, &fleet, host), Reply::Nothing, "{host}");
+        assert_eq!(pool_ask(&two, &fleet, host), Reply::Nothing, "{host}");
     }
 }

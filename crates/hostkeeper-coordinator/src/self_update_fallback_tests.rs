@@ -17,12 +17,13 @@ use crate::services::Services;
 use crate::testutil::{OPERATOR, Rig, beat, id, role, version, with_kbf};
 
 /// hostkeeper as a service of the coordinator: an entry of a rollout file after kbf's, rolled to
-/// the hosts of the storage role one at a time, rolled back by itself only after two failed
-/// hosts.
+/// the hosts of the storage role in one stage, one at a time (the desired state's `max_updating`
+/// of the storage role is 1, [`TWO`]), rolled back by itself only after two failed hosts.
 const HOSTKEEPER_ENTRY: &str = r#"
 [[service]]
 name = "hostkeeper"
 roles = ["storage"]
+stages = [100]
 bake_beats = 1
 rollback = "automatic"
 rollback_after_failed = { percent = 25, min_hosts = 2 }
@@ -33,7 +34,7 @@ roles = ["storage"]
 "#;
 
 const HOSTS: [&str; 6] = ["s1", "s2", "s3", "s4", "s5", "s6"];
-const TWO: &str = r#"{"service":"hostkeeper","version":"2.0"}"#;
+const TWO: &str = r#"{"service":"hostkeeper","version":"2.0","max_updating":{"storage":1}}"#;
 
 /// A rig whose coordinator runs kbf's and hostkeeper's definitions, and whose CI token may set
 /// both.

@@ -1,6 +1,6 @@
 //! The `install` order of the rollout gate (design 5.4 and 5.7): a service assigned to a host
 //! that does not run it is ordered `install S V D` at its next heartbeat, under every rule an
-//! update is under, taking and freeing the one live update slot as an update does; a service not
+//! update is under, taking and freeing the role's update slot as an update does; a service not
 //! assigned to the host is never ordered; minimum versions per role and host. Every time is the
 //! rig's clock; every transport is the in-process one, with the host's identity explicit.
 
@@ -19,7 +19,23 @@ use crate::marks_support::{
     runs, scope_host, set, unhold, update,
 };
 use crate::orders::{INSTALL_FEATURE, Order};
-use crate::testutil::{beat, id, version};
+use crate::testutil::{Rig, beat, ci_token, id, version};
+
+/// The rollout file line that rolls a service in one stage, whatever the number of hosts.
+pub(crate) const ONE_STAGE: &str = "stages = [100]";
+
+/// `set` of `service` to `version`, registering the digest `n`, with `max_updating` of 1 for
+/// the daemons: with [`ONE_STAGE`], a role holds one update slot of the service at a time.
+pub(crate) async fn set_one_slot(rig: &Rig, service: &str, version: &str, n: u8) {
+    let body = format!(
+        r#"{{"service":"{service}","version":"{version}","release_digest":"{}","max_updating":{{"daemon":1}}}}"#,
+        digest(n)
+    );
+    rig.coordinator
+        .set_desired(Some(&ci_token()), body.as_bytes())
+        .await
+        .expect("set");
+}
 
 /// Catches: the old `absent` rule still in force (an absent copy skipped, or ordered `update`
 /// over the JSON route), or an install sent as an update: a daemon that does not run the
@@ -144,7 +160,7 @@ async fn a_service_not_assigned_to_the_host_is_never_ordered() {
             &rig,
             "d2",
             "daemon",
-            beat_of(INSTALLER, vec![runs(WEB, "1.0")])
+            beat_of(INSTALLER, vec![runs(WEB, "1.0"), runs(DB, "2.0")])
         ),
         ServiceReply::Nothing
     );
@@ -167,15 +183,20 @@ async fn a_service_not_assigned_to_the_host_is_never_ordered() {
 /// and leaves it out otherwise), with `d1`'s own heartbeat ordered nothing.
 async fn judged(rule: &str, installed: bool) -> Option<Why> {
     let extra = match rule {
-        "canary_wait" => "canary = { count = 1 }",
+        "stage_wait" => "canary = { count = 1 }",
         "baking" => "bake_beats = 2",
+        "no_slot" => ONE_STAGE,
         _ => "",
     };
     let mut rig = rig(&format!("install-rule-{rule}-{installed}"), extra);
     if rule == "below_min_version" {
         set_min(&rig, WEB, MinScope::Role("daemon".to_owned()), "3.0").expect("a minimum");
     }
-    set(&rig, WEB, "2.0", 1).await;
+    if rule == "no_slot" {
+        set_one_slot(&rig, WEB, "2.0", 1).await;
+    } else {
+        set(&rig, WEB, "2.0", 1).await;
+    }
     let reported = installed || matches!(rule, "updating" | "failed_here" | "deferred");
     let mut web: ServiceBeat = if installed {
         runs(WEB, "1.0")
@@ -231,10 +252,12 @@ async fn judged(rule: &str, installed: bool) -> Option<Why> {
         "updating" => web.updating = Some(version("2.0")),
         "busy_elsewhere" => others.push(busy()),
         "no_slot" => {
-            order_to(&rig, "d2", vec![runs(WEB, "2.0"), busy()]);
+            let mut updating = runs(WEB, "1.0");
+            updating.updating = Some(version("2.0"));
+            order_to(&rig, "d2", vec![updating]);
         }
         "quiet" => restart(&mut rig, extra),
-        "canary_wait" => {
+        "stage_wait" => {
             let canary = beat_of(INSTALLER, vec![runs(WEB, "1.0")]);
             let (reply, _) = ask_typed(&rig, "d0", "daemon", canary);
             assert_eq!(reply, update(WEB, "2.0"), "d0 is the canary");
@@ -264,8 +287,8 @@ async fn judged(rule: &str, installed: bool) -> Option<Why> {
 }
 
 /// Catches: a rule of the gate skipped for an install: each rule that holds an update of a host
-/// holds the install of the same host, with the same reason, the host's role, its slot and its
-/// reports alike. (The coordinator has no pending or cloned-disk host to order: enrollment is
+/// holds the install of the same host, with the same reason, the host's role, its slot, its
+/// stage and its reports alike. (The coordinator has no pending or cloned-disk host to order: enrollment is
 /// not wired into it yet.)
 #[tokio::test]
 async fn install_obeys_every_rule_an_update_obeys() {
@@ -279,7 +302,7 @@ async fn install_obeys_every_rule_an_update_obeys() {
         ("busy_elsewhere", Why::Gate(Gate::BusyElsewhere)),
         ("no_slot", Why::Gate(Gate::NoSlot)),
         ("quiet", Why::Gate(Gate::Quiet)),
-        ("canary_wait", Why::Gate(Gate::CanaryWait)),
+        ("stage_wait", Why::Gate(Gate::StageWait)),
         ("baking", Why::Gate(Gate::Baking)),
         ("failed_here", Why::Skip(Skip::FailedHere)),
         ("deferred", Why::Skip(Skip::Deferred)),
@@ -298,14 +321,14 @@ async fn install_obeys_every_rule_an_update_obeys() {
     }
 }
 
-/// Catches: an install that does not hold the one live update, or never frees it: while `d1`
-/// has an install out, `d2` is held at `no_slot` and `d1`'s other service at `busy_elsewhere`;
-/// asked again, `d1` is told the same install; once `d1` runs the version, healthy, `d2` is
-/// ordered.
+/// Catches: an install that does not hold the role's update slot of its service, or never frees
+/// it: with `max_updating` of 1 for the daemons and one stage, while `d1` has an install out,
+/// `d2` is held at `no_slot` and `d1`'s other service at `busy_elsewhere`; asked again, `d1` is
+/// told the same install; once `d1` runs the version, healthy, `d2` is ordered.
 #[tokio::test]
-async fn an_install_takes_and_frees_the_one_live_update_slot() {
-    let rig = rig("install-slot", "");
-    set(&rig, WEB, "2.0", 1).await;
+async fn an_install_takes_and_frees_the_roles_update_slot() {
+    let rig = rig("install-slot", ONE_STAGE);
+    set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(order_to(&rig, "d1", vec![]), Some(install("2.0", 1)));
     assert_eq!(order_to(&rig, "d2", vec![runs(WEB, "1.0")]), None);
     assert_eq!(why_of(&rig, WEB, "d2"), Some(Why::Gate(Gate::NoSlot)));

@@ -175,11 +175,12 @@ fn going(host: &str) -> (&str, &str, Option<&str>, Option<UpdateResult>) {
 
 /// A coordinator that runs the recorded definition orders tierstore to the storage hosts and
 /// to them only; one host first (the canary), and no other until the canary has beaten
-/// healthy three times at the new version; then one host at a time, the next only after
-/// the last has baked. A daemon that announces tierstore is never ordered it, and the
-/// convergence counts the storage role alone.
+/// healthy three times at the new version; then, in the stage of three hosts, one storage host
+/// at a time (the role's `max_updating` is 1), the next as soon as the last has come up; and
+/// the stage of six only after all three of the stage have baked. A daemon that announces
+/// tierstore is never ordered it, and the convergence counts the storage role alone.
 #[tokio::test]
-async fn a_canary_goes_first_then_one_storage_host_at_a_time_each_baking() {
+async fn a_canary_goes_first_then_a_stage_updates_storage_hosts_one_at_a_time() {
     let rig = rig("ts-roll");
     rig.set(TWO).await;
     // The first round already orders the canary, s1; the assertions below follow it.
@@ -204,18 +205,26 @@ async fn a_canary_goes_first_then_one_storage_host_at_a_time_each_baking() {
     assert_eq!(
         ordered,
         ["s2"],
-        "the canary baked three beats; one host more"
+        "the canary baked three beats; the second stage orders one host at a time"
     );
     assert_eq!(daemon, ServiceReply::Nothing);
 
     let (ordered, _) = round(&rig, 2_090, &[at_two("s1"), going("s2")]);
     assert_eq!(ordered, Vec::<String>::new(), "one at a time");
-    for at in [2_105, 2_120] {
-        let (ordered, _) = round(&rig, at, &[at_two("s1"), at_two("s2")]);
-        assert_eq!(ordered, Vec::<String>::new(), "s2 is baking");
+    let (ordered, _) = round(&rig, 2_105, &[at_two("s1"), at_two("s2")]);
+    assert_eq!(ordered, ["s3"], "s2 is up, and the stage has a place left");
+    let (ordered, _) = round(&rig, 2_120, &[at_two("s1"), at_two("s2"), going("s3")]);
+    assert_eq!(ordered, Vec::<String>::new(), "the stage is full");
+    for at in [2_135, 2_150] {
+        let (ordered, _) = round(&rig, at, &[at_two("s1"), at_two("s2"), at_two("s3")]);
+        assert_eq!(ordered, Vec::<String>::new(), "s3 is baking");
     }
-    let (ordered, _) = round(&rig, 2_135, &[at_two("s1"), at_two("s2")]);
-    assert_eq!(ordered, ["s3"], "s2 has baked");
+    let (ordered, _) = round(&rig, 2_165, &[at_two("s1"), at_two("s2"), at_two("s3")]);
+    assert_eq!(
+        ordered,
+        ["s4"],
+        "the stage has baked; the last stage starts"
+    );
 
     let status = rig.coordinator.status(Some(OPERATOR)).expect("status");
     let convergence =

@@ -99,8 +99,15 @@ fn update_of(service: &str, target: &str) -> hostkeeper_wire::wire::ServiceReply
     }
 }
 
-/// A rig whose coordinator defines `other` beside kbf: `other` is rolled one host at a time
-/// (the one live update).
+/// `other` rolled in one stage (`stages = [100]`), so the state's limit alone holds a host.
+const OTHER_ONE_STAGE: &str =
+    "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\nstages = [100]\n";
+
+/// The state of `other` with one daemon updating at a time.
+const OTHER_ONE_AT_A_TIME: &str = r#"{"service":"other","version":"3.0","max_updating":{"daemon":1},"min_up":{"storage":0,"frontend":0}}"#;
+
+/// A rig whose coordinator defines `other` beside kbf: `other` is rolled in one stage, one
+/// daemon at a time (its `max_updating`).
 async fn services_rig(name: &str) -> Rig {
     let mut rig = Rig::new(name);
     rig.coordinator = Rig::start_with_allow_list(
@@ -108,9 +115,9 @@ async fn services_rig(name: &str) -> Rig {
         &rig.clock,
         &single_table("services = [\"kbf\", \"other\"]"),
     )
-    .with_services(with_kbf(OTHER_SERVICE));
+    .with_services(with_kbf(OTHER_ONE_STAGE));
     rig.set(STATE).await;
-    rig.set(OTHER).await;
+    rig.set(OTHER_ONE_AT_A_TIME).await;
     rig.at(2_000);
     rig
 }
