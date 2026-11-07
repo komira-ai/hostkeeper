@@ -1,0 +1,43 @@
+[package]
+name = "hostkeeper-mdm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The MDM kit's binary: fetch, install, tls and verify the MDM server stack on its Linux host, dry-run by default."
+
+# docs/design/hostkeeper-mdm.md, task M4: the port of komira-ai/kbf's `mdm-host`. The pure
+# rendering is hostkeeper-mdm-core; the steps that touch the host are hostkeeper-mdm-step. It
+# depends on no other crate of the workspace (crates/xtask/tests/layering keeps it so).
+[[bin]]
+name = "hostkeeper-mdm"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+# The gzip of the tar archives of the pinned tools.
+flate2.workspace = true
+# The kernel's random bytes the secrets are made of.
+getrandom = { workspace = true, features = ["std"] }
+hex.workspace = true
+hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
+hostkeeper-mdm-step = { path = "../hostkeeper-mdm-step" }
+# The owner of `--bin-dir`, which `install` trusts for the paths below it.
+rustix = { workspace = true, features = ["fs"] }
+# The TLS of the downloads: the ring provider ureq is built with.
+rustls.workspace = true
+# The roots the downloads trust: the host's. Every download is checked against its sha256 pin
+# after it arrives, so the roots guard the transfer, not what is installed.
+rustls-native-certs.workspace = true
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+
+[lints]
+workspace = true
