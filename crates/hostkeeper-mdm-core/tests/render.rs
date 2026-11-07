@@ -106,10 +106,15 @@ fn strip_comments_drops_only_whole_comment_lines() {
 /// started by exists under the configured prefix.
 #[test]
 fn names_follow_the_prefix_and_the_slice_and_units_refer_to_each_other_by_them() {
-    let text = with("MDM_UNIT_PREFIX", "site-a").replace(
-        "MDM_SLICE=hostkeeper-mdm.slice",
-        "MDM_SLICE=site-a-cap.slice",
-    );
+    let text = with("MDM_UNIT_PREFIX", "site-a")
+        .replace(
+            "MDM_SLICE=hostkeeper-mdm.slice",
+            "MDM_SLICE=site-a-cap.slice",
+        )
+        .replace(
+            "MDM_PKG_DIR=/var/lib/hostkeeper-mdm-pkg",
+            "MDM_PKG_DIR=/var/lib/site-a-pkg",
+        );
     let c = MdmConfig::parse(&text).expect("valid");
     let n = UnitNames::new(&c);
     assert_eq!(n.slice, "site-a-cap.slice");

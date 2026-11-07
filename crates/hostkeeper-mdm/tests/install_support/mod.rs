@@ -49,6 +49,7 @@ pub fn uninstall_at(host: &FakeHost, mode: Mode, now: u64) -> (Result<(), MdmErr
     let env = hostkeeper_mdm::Env {
         host,
         net: &net,
+        api: &common::FakeApi::new(),
         random: &common::fill,
         now,
     };

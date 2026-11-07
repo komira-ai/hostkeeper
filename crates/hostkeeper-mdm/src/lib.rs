@@ -61,12 +61,16 @@
 
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod api;
 pub mod archive;
 mod cli;
+pub mod dep;
 mod error;
 pub mod fetch;
 pub mod install;
+pub mod migrate;
 pub mod net;
+pub mod push_cert;
 pub mod secret;
 mod system;
 pub mod tls;
@@ -76,21 +80,25 @@ use std::io;
 
 use hostkeeper_mdm_step::Host;
 
+pub use api::{HttpLoopback, Loopback};
 pub use cli::{run, run_with};
 pub use error::MdmError;
 pub use net::{Download, DownloadError, Net};
 pub use system::{RealMachine, main, system_random};
 
-/// What a verb needs from the outside: the host, the network, a random source and the time.
+/// What a verb needs from the outside: the host, the network, the services' APIs on loopback,
+/// a random source and the time.
 pub struct Env<'a> {
     /// The host.
     pub host: &'a dyn Host,
     /// Downloads.
     pub net: &'a dyn Download,
+    /// Calls to NanoHUB's and NanoDEP's APIs on `127.0.0.1`.
+    pub api: &'a dyn Loopback,
     /// Fills a buffer with random bytes.
     pub random: &'a dyn Fn(&mut [u8]) -> io::Result<()>,
-    /// Unix seconds now, read once when the program starts: it names an uninstall snapshot,
-    /// and nothing decides on it.
+    /// Unix seconds now, read once when the program starts (the injected clock): it names an
+    /// uninstall snapshot, and `push-cert` refuses a push certificate that has expired by it.
     pub now: u64,
 }
 
@@ -117,12 +125,15 @@ pub trait Machine {
     fn owner(&self, path: &str) -> io::Result<Option<u32>>;
 }
 
-/// What [`run`] acts on: the machine, the network, a random source and the time.
+/// What [`run`] acts on: the machine, the network, the services' APIs, a random source and the
+/// time.
 pub struct System<'a> {
     /// The machine.
     pub machine: &'a dyn Machine,
     /// Downloads.
     pub net: &'a dyn Download,
+    /// Calls to the services' APIs on loopback.
+    pub api: &'a dyn Loopback,
     /// Fills a buffer with random bytes.
     pub random: &'a dyn Fn(&mut [u8]) -> io::Result<()>,
     /// Unix seconds now.

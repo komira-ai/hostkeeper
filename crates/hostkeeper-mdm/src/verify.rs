@@ -22,7 +22,8 @@
 //!   `MDM_BIND:443` only, and nothing on port 80;
 //! - the TLS certificate in `MDM_STATE/lego/certificates/` exists and is valid for 21 more days;
 //! - `MDM_STATE` is a 0700 directory of `MDM_USER`'s; `MDM_ETC` a 0750 directory of root's;
-//!   `nanohub.env`, `nanodep.env`, `scep.env` and `dns.env` under it are 0600 files of root's.
+//!   `nanohub.env`, `nanodep.env`, `scep.env` and `dns.env` under it are 0600 files of root's;
+//! - `MDM_PKG_DIR` is a 0755 directory of root's.
 
 use std::fmt;
 use std::io::Write;
@@ -166,6 +167,10 @@ pub fn checks(host: &dyn Host, v: &Verify<'_>) -> Vec<Check> {
             mode_is(host, &path, Kind::File, 0o600, 0),
         );
     }
+    row(
+        format!("{} is a 0755 directory of root", c.pkg_dir()),
+        mode_is(host, c.pkg_dir().as_str(), Kind::Dir, 0o755, 0),
+    );
     rows
 }
 

@@ -42,6 +42,18 @@ https://mdm.example.com:443 {
 		file_server
 	}
 
+	# The hostkeeper pkg, by its digest only: GET /pkg/<sha256>.pkg is the file
+	# <sha256>.pkg of /var/lib/hostkeeper-mdm-pkg. Every other name under /pkg is 404, so a
+	# directory listing or another file is never served. The Mac checks the digest
+	# itself (the manifest of InstallEnterpriseApplication carries it). The matcher's
+	# name, @pkg, is a value of the render, as the template syntax needs.
+	@pkg path_regexp ^/pkg/[0-9a-f]{64}\.pkg$
+	handle @pkg {
+		uri strip_prefix /pkg
+		root * /var/lib/hostkeeper-mdm-pkg
+		file_server
+	}
+
 	# Everything else, NanoHUB's /api/ and NanoDEP included, is not served here.
 	handle {
 		respond 404

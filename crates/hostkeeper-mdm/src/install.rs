@@ -4,7 +4,7 @@
 //! It checks the host first, read only, and refuses before anything changes: the effective uid
 //! is not 0 (the plan reads root-only files, so a dry run needs root too); `uname -m` is not
 //! `x86_64` (the pins are linux-amd64 builds); `MDM_STATE`,
-//! `MDM_ETC` or `MDM_BIN` is a symbolic link; no interface carries `MDM_BIND`; a port it uses
+//! `MDM_ETC`, `MDM_BIN` or `MDM_PKG_DIR` is a symbolic link; no interface carries `MDM_BIND`; a port it uses
 //! is held by another process (one held by the kit's own active unit is a rerun); the SCEP depot
 //! holds only one of `ca.pem` and `ca.key`, or both but not as two regular files that
 //! `openssl` reads and that hold one key pair; an archive in `--bin-dir` is missing or its
@@ -13,7 +13,8 @@
 //! The plan has each of these only when the host differs:
 //! 1. the user `MDM_USER` (a system user and group of its name, no login);
 //! 2. `MDM_STATE` and its subdirectories, `MDM_USER`'s, 0700; `MDM_ETC`, root and `MDM_USER`'s
-//!    group, 0750; `MDM_BIN`, root's, 0755;
+//!    group, 0750; `MDM_BIN`, root's, 0755; `MDM_PKG_DIR`, the pkgs the proxy serves at
+//!    `/pkg/<sha256>.pkg`, root's, 0755 (a release pkg is public, and only root adds one);
 //! 3. each binary unpacked from its checked archive into `MDM_BIN`, root's, 0755, the one it
 //!    replaces kept as `<name>.previous`;
 //! 4. the secrets, each made once from 32 random bytes as hex and never printed:
@@ -44,7 +45,7 @@
 //! the unit files to `MDM_STATE/removed/<unix seconds>/` (a 0700 directory of `MDM_USER`'s;
 //! when that name exists the first free `<unix seconds>-1`, `-2`, ... is used), then reloads
 //! systemd. The state (database, SCEP CA, DEP token, TLS key and certificate), the secrets,
-//! the binaries and the user stay.
+//! the binaries, the pkg directory and the user stay.
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
@@ -164,6 +165,7 @@ pub fn plan(
     }
     p.dir(etc, 0o750, &etc_owner)?;
     p.dir(bin, 0o755, &root)?;
+    p.dir(c.pkg_dir().as_str(), 0o755, &root)?;
 
     let mut changed: BTreeSet<String> = BTreeSet::new();
     for (name, bytes) in binaries {
@@ -318,7 +320,7 @@ impl<'h> Restarts<'h> {
 fn preflight(host: &dyn Host, c: &MdmConfig, out: &mut dyn Write) -> Result<(), MdmError> {
     root_only(host, "install")?;
     architecture(host)?;
-    for path in [&c.state(), &c.etc(), &c.bin()] {
+    for path in [&c.state(), &c.etc(), &c.bin(), &c.pkg_dir()] {
         let link = host.stat(path.as_str())?.map(|m| m.kind) == Some(Kind::Other);
         if link {
             return Err(MdmError::IsLink(path.to_string()));
@@ -598,10 +600,11 @@ pub fn plan_uninstall(env: &Env<'_>, c: &MdmConfig, out: &mut dyn Write) -> Resu
         p.unit(UnitVerb::DaemonReload, &[]);
     }
     let kept = format!(
-        "kept: {} (database, SCEP CA, DEP token, TLS key and certificate), {} (secrets), {}, the user {}",
+        "kept: {} (database, SCEP CA, DEP token, TLS key and certificate), {} (secrets), {}, {} (pkgs), the user {}",
         c.state(),
         c.etc(),
         c.bin(),
+        c.pkg_dir(),
         c.user()
     );
     writeln!(out, "{kept}")?;

@@ -443,6 +443,7 @@ fn a_failing_random_source_fails_the_run_and_writes_no_secret() {
     let env = Env {
         host: &host,
         net: &net,
+        api: &common::FakeApi::new(),
         random: &broken,
         now: 0,
     };
@@ -491,7 +492,7 @@ fn uninstall_moves_units_aside_and_keeps_state_and_the_certificate() {
     assert!(shown.contains(
         "DRY-RUN: systemctl disable --now -- hostkeeper-mdm-scep.service hostkeeper-mdm-nanohub.service hostkeeper-mdm-depserver.service hostkeeper-mdm-depsyncer.service hostkeeper-mdm-proxy.service hostkeeper-mdm-cert.timer hostkeeper-mdm-proxy-reload.path"
     ), "{shown}");
-    assert!(shown.contains("kept: /var/lib/hostkeeper-mdm (database, SCEP CA, DEP token, TLS key and certificate), /etc/hostkeeper-mdm (secrets), /opt/hostkeeper-mdm/bin, the user hostkeeper-mdm"));
+    assert!(shown.contains("kept: /var/lib/hostkeeper-mdm (database, SCEP CA, DEP token, TLS key and certificate), /etc/hostkeeper-mdm (secrets), /opt/hostkeeper-mdm/bin, /var/lib/hostkeeper-mdm-pkg (pkgs), the user hostkeeper-mdm"));
 
     host.clear_calls();
     let (result, _) = uninstall(&host, Mode::Apply);

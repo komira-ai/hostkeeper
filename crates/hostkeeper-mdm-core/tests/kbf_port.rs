@@ -10,11 +10,12 @@
 //! `tests/kbf_f89ed5c/kbf_names.conf`, which holds `@TEST_BIND@` and `@TEST_LAN@` for
 //! kbf's bind address and LAN; the tests build those addresses at run time.
 //!
-//! Three differences from kbf are deliberate, and the tests name them: comment lines are
+//! Four differences from kbf are deliberate, and the tests name them: comment lines are
 //! this crate's own wording (they say `hostkeeper-mdm`, not `kbf-deploy`), the slice's
-//! `Description=` has lost the words ` on the dev box`, and the ADE profile sets
-//! `auto_advance_setup` (docs/design/hostkeeper-mdm.md section 6.2). Everything else is
-//! compared byte for byte.
+//! `Description=` has lost the words ` on the dev box`, the Caddyfile has the route
+//! `/pkg/<sha256>.pkg` (docs/design/hostkeeper-mdm.md section 7.1, task M5), and the ADE
+//! profile sets `auto_advance_setup` (section 6.2). Everything else is compared byte for
+//! byte.
 
 mod common;
 
@@ -97,6 +98,31 @@ fn kbf_slice_wording(text: &str) -> String {
     text.replace(" on the dev box", "")
 }
 
+/// The lines of the pkg route, with kbf's state directory's sibling as the pkg directory
+/// (`MDM_PKG_DIR`'s default for the prefix `kbf-mdm`).
+const PKG_ROUTE: &str = "\t@pkg path_regexp ^/pkg/[0-9a-f]{64}\\.pkg$\n\thandle @pkg {\n\t\turi strip_prefix /pkg\n\t\troot * /var/lib/kbf-mdm-pkg\n\t\tfile_server\n\t}\n\n";
+
+/// kbf's Caddyfile with the pkg route added before its last route, the 404 of everything
+/// else: the one deliberate change of the Caddyfile outside its comments.
+fn kbf_pkg_route(text: &str) -> String {
+    let last = "\thandle {\n\t\trespond 404\n";
+    assert_eq!(
+        text.matches(last).count(),
+        1,
+        "kbf's Caddyfile ends with its 404"
+    );
+    text.replace(last, &format!("{PKG_ROUTE}{last}"))
+}
+
+/// kbf's file `name` (comment lines kept) with the deliberate changes of that file.
+fn deliberate(name: &str, text: &str) -> String {
+    match name {
+        "kbf-mdm.slice" => kbf_slice_wording(text),
+        "Caddyfile" => kbf_pkg_route(text),
+        _ => text.to_owned(),
+    }
+}
+
 fn rendered() -> Vec<Unit> {
     let (c, acme) = site();
     let mut all = render(&c).expect("renders").files();
@@ -130,19 +156,22 @@ fn rendering_with_kbfs_names_reproduces_kbfs_files() {
     assert_eq!(ours.len(), expected.len());
     for (unit, (name, template)) in ours.iter().zip(expected) {
         assert_eq!(unit.name, name);
-        let want = strip_comments(&expand(template));
-        let want = kbf_slice_wording(&want);
+        let want = strip_comments(&deliberate(name, &expand(template)));
         assert_eq!(strip_comments(&unit.text), want, "{name}");
     }
 }
 
 /// Catches the deliberate differences growing: the comment lines are the only other
-/// lines that differ, so a file's non-comment lines are exactly kbf's, and the only
-/// line that changed outside a comment is the slice's `Description=`.
+/// lines that differ, so a file's non-comment lines are exactly kbf's, the only line that
+/// changed outside a comment is the slice's `Description=`, and the only lines added are the
+/// Caddyfile's pkg route.
 #[test]
 fn the_only_lines_that_differ_are_comments_and_one_description() {
     for unit in rendered() {
-        let want = expand(&unit.name);
+        let want = match unit.name.as_str() {
+            "Caddyfile" => kbf_pkg_route(&expand(&unit.name)),
+            _ => expand(&unit.name),
+        };
         let mut ours = unit
             .text
             .lines()
@@ -174,7 +203,8 @@ fn the_only_lines_that_differ_are_comments_and_one_description() {
 /// Catches the hook's reference data drifting from kbf's templates: the committed
 /// hashes of what kbf-deploy installs (comments left out) must be the hashes of kbf's
 /// templates expanded here, and this crate's manifest must equal them for every file
-/// except the slice, whose hash must be that of the slice with the one wording change.
+/// except the slice and the Caddyfile, whose hashes must be those of kbf's files with
+/// their deliberate changes.
 #[test]
 fn the_manifest_equals_the_committed_hashes_of_kbfs_installed_files() {
     let committed = kbf("expected_installed.strip.sha256");
@@ -192,18 +222,18 @@ fn the_manifest_equals_the_committed_hashes_of_kbfs_installed_files() {
     }
     let recomputed = manifest(&expanded, Comments::Strip);
     assert_eq!(recomputed, committed);
-    for (i, (a, b)) in our_lines.iter().zip(&committed_lines).enumerate() {
-        if i == 0 {
-            let renamed = Unit {
-                name: "kbf-mdm.slice".to_owned(),
-                text: kbf_slice_wording(&expanded[0].text),
-            };
-            assert_eq!(*a, manifest(&[renamed], Comments::Strip).trim_end());
-            assert_ne!(a, b, "the slice differs by its Description");
-        } else {
-            assert_eq!(a, b);
+    let mut changed = Vec::new();
+    for ((a, b), file) in our_lines.iter().zip(&committed_lines).zip(&expanded) {
+        let theirs = Unit {
+            name: file.name.clone(),
+            text: deliberate(&file.name, &file.text),
+        };
+        assert_eq!(*a, manifest(&[theirs], Comments::Strip).trim_end());
+        if a != b {
+            changed.push(file.name.as_str());
         }
     }
+    assert_eq!(changed, ["kbf-mdm.slice", "Caddyfile"]);
 }
 
 /// Catches an enrollment profile that differs from the one kbf-deploy's tests hold as
@@ -356,5 +386,6 @@ fn every_key_kbf_read_is_still_accepted() {
         assert_eq!(kept, key != "MDM_ERASE_NAMESPACE", "{key}");
     }
     assert!(KEYS.contains(&"MDM_SIGNATURE_NAMESPACE"));
-    assert_eq!(KEYS.len(), KBF_KEYS.len() - 1 + 14);
+    assert!(KEYS.contains(&"MDM_PKG_DIR"));
+    assert_eq!(KEYS.len(), KBF_KEYS.len() - 1 + 15);
 }

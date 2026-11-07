@@ -137,6 +137,15 @@ pub trait Host {
     /// As [`Host::read`]; the file is too large.
     fn read_limited(&self, path: &str, limit: u64) -> io::Result<Option<Vec<u8>>>;
 
+    /// The names in the directory at `path`, sorted, without `.` and `..`; `None` when nothing
+    /// is there. The real host follows no link: not one on the way, and not the directory
+    /// itself.
+    ///
+    /// # Errors
+    /// The system's error, other than "not found"; `path` is not a directory; a name is not
+    /// UTF-8.
+    fn list(&self, path: &str) -> io::Result<Option<Vec<String>>>;
+
     /// Writes `bytes` to `path` with exactly `mode`, owned by `owner` (uid, gid), replacing
     /// any file there in one step.
     ///

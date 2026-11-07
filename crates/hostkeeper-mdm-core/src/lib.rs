@@ -35,6 +35,7 @@
 //! * [`profile::enrollment`] and [`profile::AdeProfile`] give the profiles.
 //! * [`pins::Pins::built_in`] gives the pinned tools.
 //! * [`commands`] gives the SCEP CA's and the DEP certificate's arguments.
+//! * [`migrate::new_settings`] writes the settings of a stack moved from the old kit.
 //!
 //! # Comparing with an installed host
 //!
@@ -52,6 +53,7 @@ pub mod commands;
 pub mod config;
 mod dns;
 pub mod https;
+pub mod migrate;
 pub mod path;
 pub mod pins;
 pub mod profile;

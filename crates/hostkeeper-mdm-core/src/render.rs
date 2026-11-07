@@ -153,6 +153,9 @@ fn values(c: &MdmConfig) -> Values {
         ("STATE", c.state().to_string()),
         ("ETC", c.etc().to_string()),
         ("BIN", c.bin().to_string()),
+        ("PKG_DIR", c.pkg_dir().to_string()),
+        // Caddy's named matcher of the pkg route: the template cannot spell an `@` itself.
+        ("PKG_MATCHER", "@pkg".to_owned()),
         ("NANOHUB_PORT", c.nanohub_port().to_string()),
         ("SCEP_PORT", c.scep_port().to_string()),
         ("DEP_PORT", c.dep_port().to_string()),

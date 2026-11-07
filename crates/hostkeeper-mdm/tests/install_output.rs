@@ -49,6 +49,7 @@ fn steps() -> Vec<String> {
     }
     steps.push("mkdir /etc/hostkeeper-mdm mode 0750 owner root:hostkeeper-mdm".to_owned());
     steps.push("mkdir /opt/hostkeeper-mdm/bin mode 0755 owner root:root".to_owned());
+    steps.push("mkdir /var/lib/hostkeeper-mdm-pkg mode 0755 owner root:root".to_owned());
     for name in [
         "nanohub",
         "depserver",

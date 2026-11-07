@@ -75,6 +75,7 @@ fn installed() -> FakeHost {
     );
     host.put_dir(STATE, 0o700, (SVC, SVC));
     host.put_dir(ETC, 0o750, (0, SVC));
+    host.put_dir("/var/lib/hostkeeper-mdm-pkg", 0o755, (0, 0));
     for f in ["nanohub.env", "nanodep.env", "scep.env", "dns.env"] {
         host.put_file(&format!("{ETC}/{f}"), 0o600, (0, 0), b"K=v\n");
     }
@@ -105,7 +106,7 @@ fn a_host_as_installed_passes_every_check_and_every_file_is_the_same() {
     assert!(!shown.contains("FAIL"));
     assert_eq!(
         shown.lines().filter(|l| l.starts_with("ok    ")).count(),
-        6 + 4 + 1 + 1 + 2 + 4
+        6 + 4 + 1 + 1 + 2 + 4 + 1
     );
     assert_eq!(
         shown
@@ -535,5 +536,30 @@ fn a_masked_unit_is_reported_as_a_link() {
     assert!(
         !shown.contains(&format!("same       {path}"))
             && !shown.contains(&format!("missing    {path}"))
+    );
+}
+
+/// Catches a pkg directory the service user could write (it would choose the pkg a Mac is
+/// sent, short of its digest) or that is missing, passing the check: a 0775 directory of the
+/// service user's and no directory each fail by name, and the directory of the install plan
+/// passes.
+#[test]
+fn the_pkg_directory_must_be_roots_and_0755() {
+    let pkg = "/var/lib/hostkeeper-mdm-pkg";
+    let line = format!("{pkg} is a 0755 directory of root");
+    let host = installed();
+    let (_, shown) = go(&host, true, &[]);
+    assert!(shown.contains(&format!("ok    {line}\n")), "{shown}");
+    host.put_dir(pkg, 0o775, (SVC, SVC));
+    let (ok, shown) = go(&host, true, &[]);
+    assert!(!ok);
+    let want = format!("FAIL  {line}: is Dir 0775 uid {SVC}, not Dir 0755 uid 0\n");
+    assert!(shown.contains(&want), "{shown}");
+    host.remove(pkg).unwrap();
+    let (ok, shown) = go(&host, true, &[]);
+    assert!(!ok);
+    assert!(
+        shown.contains(&format!("FAIL  {line}: {pkg} is not there\n")),
+        "{shown}"
     );
 }
