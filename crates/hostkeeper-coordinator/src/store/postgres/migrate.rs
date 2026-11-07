@@ -49,8 +49,19 @@ pub(crate) struct Migration {
 }
 
 /// The migrations this binary ships, in order.
-pub(crate) const SHIPPED: [(i32, &str, &str); 1] =
-    [(1, "state", include_str!("migrations/0001_state.sql"))];
+pub(crate) const SHIPPED: [(i32, &str, &str); 3] = [
+    (1, "state", include_str!("migrations/0001_state.sql")),
+    (
+        2,
+        "generations",
+        include_str!("migrations/0002_generations.sql"),
+    ),
+    (
+        3,
+        "first_serving",
+        include_str!("migrations/0003_first_serving.sql"),
+    ),
+];
 
 /// Why a migration, or the set of them, is refused before it runs.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

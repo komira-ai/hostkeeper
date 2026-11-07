@@ -4,9 +4,10 @@ Status: design, for the maintainers' comments. It supersedes "plain files, no da
 [hostkeeper-design.md](hostkeeper-design.md) section 4.3 ("There is no database") and the coordinator's rows of its
 section 10, the halts-file storage of the plan position in [rollout-update-plans.md](rollout-update-plans.md) section 3,
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
-on where the coordinator keeps its state, this document wins. C1, C2 and C3 are built: the storage trait and its
-fake (section 4.1), the enrollment crate's `Records` port, and the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migration `0001`, sections 3 to 8). Every other
+on where the coordinator keeps its state, this document wins. C1, C2, C3 and C6 are built: the storage trait and its
+fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migration `0001`, sections 3 to 8), and the
+generations and write ids (migration `0002`, section 3.2). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
 nothing implements it yet.
 
@@ -140,7 +141,9 @@ coordinator refuses both fields today because the file store keeps neither (`des
   replaced_min_up   jsonb
 ```
 
-and honours the two fields as the proto describes. C6's migration is one an older release must not run on (section 6):
+and honours the two fields as the proto describes (**Built**: `crates/hostkeeper-coordinator/src/write_record.rs`, the
+columns in `store/postgres/generations.rs`; a force raises the generation too, with no write id). C6's migration is
+one an older release must not run on (section 6):
 an older coordinator would write a desired state without raising its generation, and a writer's `if_generation` would
 then pass against a state it never saw. C6 is a behaviour change of its own: an identical set, which writes nothing
 today (`Recorded::Unchanged`), raises the generation and is written.
@@ -302,7 +305,8 @@ CREATE INDEX enrollment_machine ON enrollment_requests (machine_id) WHERE machin
 enrollment_issued(request_id bytea PRIMARY KEY REFERENCES enrollment_requests, round bigint NOT NULL,
   serial bigint NOT NULL, host_id text NOT NULL, not_after bigint NOT NULL, certificate_der bytea NOT NULL)
 enrollment_hosts(host_id text PRIMARY KEY, key_hash bytea NOT NULL, machine_id text NOT NULL, role text NOT NULL,
-  services text[] NOT NULL, duplicate boolean NOT NULL, first_heartbeat_unix bigint, first_serving_unix bigint)
+  services text[] NOT NULL, duplicate boolean NOT NULL, first_heartbeat_unix bigint,
+  first_serving_unix bigint)               -- first_serving_unix added by migration 0003 (`refuse`)
 enrollment_deny(host_id text PRIMARY KEY, state smallint NOT NULL,  -- 1 retiring, 2 retired, 3 cleared
   cleared_by bytea)
 enrollment_serial(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), next bigint NOT NULL)  -- starts at 2

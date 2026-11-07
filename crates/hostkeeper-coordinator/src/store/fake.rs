@@ -28,6 +28,8 @@ struct Durable {
     audit: Vec<AuditLine>,
     spent: BTreeMap<String, u64>,
     commits: u64,
+    /// Whether it keeps write records, as the Postgres store does: never outside the tests.
+    keeps_records: bool,
     #[cfg(test)]
     refuse: Option<Refusal>,
 }
@@ -57,6 +59,15 @@ impl Fake {
     pub(crate) fn holding(ops: OpsState) -> Self {
         let fake = Self::new();
         fake.lock().ops = ops;
+        fake
+    }
+
+    /// A fake that holds nothing and keeps write records ([`Backend::keeps_write_records`]), as
+    /// the Postgres store does.
+    #[must_use]
+    pub(crate) fn keeping_records() -> Self {
+        let fake = Self::new();
+        fake.lock().keeps_records = true;
         fake
     }
 
@@ -185,6 +196,10 @@ impl Backend for Fake {
 
     fn last_seq(&self) -> u64 {
         self.lock().audit.last().map_or(0, |line| line.seq)
+    }
+
+    fn keeps_write_records(&self) -> bool {
+        self.lock().keeps_records
     }
 
     fn audit_pruned_before(&self) -> Result<Option<u64>, BackendError> {

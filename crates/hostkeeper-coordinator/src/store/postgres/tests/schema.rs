@@ -44,6 +44,15 @@ fn message(error: &postgres::Error) -> String {
         .unwrap_or_default()
 }
 
+/// The rows of `schema_version` of a database that ran every shipped migration.
+fn all_shipped() -> Vec<Vec<Option<String>>> {
+    vec![
+        row("1", "state", "refuse"),
+        row("2", "generations", "refuse"),
+        row("3", "first_serving", "refuse"),
+    ]
+}
+
 /// Proves: a fresh database gets every shipped migration once, in order, each recorded in
 /// `schema_version` with its name and its rule for older releases; a start on it again runs
 /// nothing and leaves those rows (and the time they ran) as they were.
@@ -53,11 +62,11 @@ fn message(error: &postgres::Error) -> String {
 fn a_fresh_database_gets_every_migration_in_order() {
     let db = TestDatabase::new();
     let (first, _) = db.open("first").expect("the store opens");
-    assert_eq!(versions(&db), vec![row("1", "state", "refuse")]);
+    assert_eq!(versions(&db), all_shipped());
     let applied = db.rows("SELECT applied_unix FROM schema_version");
     first.stop();
     let (second, _) = db.open("second").expect("the store opens again");
-    assert_eq!(versions(&db), vec![row("1", "state", "refuse")]);
+    assert_eq!(versions(&db), all_shipped());
     assert_eq!(db.rows("SELECT applied_unix FROM schema_version"), applied);
     second.stop();
 }
@@ -73,7 +82,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     let db = TestDatabase::new();
     let shipped = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
     let failing = Migration {
-        version: 2,
+        version: 4,
         name: "half",
         older: OlderReleases::Refuse,
         sql: "CREATE TABLE half (x int); SELECT 1/0;",
@@ -86,24 +95,24 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     assert!(matches!(
         error,
         ApplyError::Failed {
-            version: 2,
+            version: 4,
             name: "half",
             ..
         }
     ));
     assert_eq!(
         error.to_string(),
-        "migration 2 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
+        "migration 4 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
     );
     assert_eq!(
         db.rows("SELECT to_regclass('hostkeeper.half')::text"),
         vec![vec![None]]
     );
-    assert_eq!(versions(&db), vec![row("1", "state", "refuse")]);
+    assert_eq!(versions(&db), all_shipped());
 
     // A migration that works is run, once, and its number answered.
     let good = Migration {
-        version: 2,
+        version: 4,
         name: "later",
         older: OlderReleases::MayRun,
         sql: "CREATE TABLE later (x int)",
@@ -114,10 +123,10 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
         let ran = migrate::apply(session, &set).expect("the set applies");
         (ran, migrate::apply(session, &set).expect("and again"))
     });
-    assert_eq!((ran, again), (vec![2], Vec::<i32>::new()));
+    assert_eq!((ran, again), (vec![4], Vec::<i32>::new()));
     assert_eq!(
         versions(&db),
-        vec![row("1", "state", "refuse"), row("2", "later", "may-run")]
+        [all_shipped(), vec![row("4", "later", "may-run")]].concat()
     );
 }
 
@@ -161,18 +170,87 @@ fn a_migration_marked_refuse_stops_an_older_release_and_may_run_does_not() {
     let (store, _) = db.open("first").expect("the store opens");
     store.stop();
     db.run(
-        "INSERT INTO schema_version (version, name, older_releases) VALUES (2, 'later', 'refuse')",
+        "INSERT INTO schema_version (version, name, older_releases) VALUES (4, 'later', 'refuse')",
     )
     .expect("a later migration is recorded");
     let error = db.open("older").err().expect("an older release is refused");
     assert!(matches!(error, DatabaseError::Schema(_)));
     assert_eq!(
         error.to_string(),
-        "the database's schema is newer than this coordinator (migration 2, later)"
+        "the database's schema is newer than this coordinator (migration 4, later)"
     );
-    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 2")
+    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 4")
         .expect("the rule is changed");
     let (store, _) = db.open("older").expect("an older release may run");
+    store.stop();
+}
+
+/// Proves: the release before this one, which ships migration `0001` only, is refused on a
+/// database this release migrated, naming `0002`: the runner of the release before, given its
+/// own set, answers `the database's schema is newer than this coordinator (migration 2,
+/// generations)` and runs nothing, because `0002` says older releases must not run on it.
+///
+/// Catches: an older coordinator that starts on the database and writes a desired state without
+/// raising its generation, so a writer's `if_generation` would pass against a state it never saw.
+#[test]
+fn an_older_release_is_refused_on_a_database_with_0002() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("this release").expect("the store opens");
+    store.stop();
+    let before = migrate::checked(&migrate::SHIPPED[..1]).expect("the release before's set");
+    let error = with_session(&db, move |session| {
+        migrate::apply(session, &before).expect_err("the release before is refused")
+    });
+    assert!(matches!(error, ApplyError::Newer { version: 2, .. }));
+    assert_eq!(
+        error.to_string(),
+        "the database's schema is newer than this coordinator (migration 2, generations)"
+    );
+    assert_eq!(versions(&db), all_shipped());
+}
+
+/// Proves: this release starts on a database the release before wrote: a desired state written
+/// under `0001` alone (with its registry) is loaded as it was after `0002` and `0003` run, its
+/// write record read as never written (generation 0, no write id, nothing replaced), and the
+/// next set over it is generation 1. A host row written under `0001` reads with no first serving
+/// time.
+///
+/// Catches: a migration that makes rows of the release before unreadable, or reads them as a
+/// write this release never saw.
+#[test]
+fn a_desired_row_written_before_0002_reads_as_never_written() {
+    let db = TestDatabase::new();
+    let before = migrate::checked(&migrate::SHIPPED[..1]).expect("the release before's set");
+    with_session(&db, move |session| {
+        migrate::apply(session, &before).expect("the release before's migrations")
+    });
+    db.run(
+        "INSERT INTO desired (service, version, max_updating, min_up, release_digest) VALUES \
+         ('web', '1.0', '{\"frontend\":1,\"storage\":1,\"daemon\":2,\"mac-daemon\":2}', \
+         '{\"storage\":0,\"frontend\":0}', repeat('ab', 32)); \
+         INSERT INTO desired_digests (service, version, release) VALUES \
+         ('web', '1.0', to_jsonb(repeat('ab', 32))); \
+         INSERT INTO enrollment_hosts (host_id, key_hash, machine_id, role, services, duplicate) \
+         VALUES ('host:web-1', '\\x07', 'm-1', 'daemon', '{}', false)",
+    )
+    .expect("the release before's rows");
+    let (store, loaded) = db.open("this release").expect("the store opens");
+    assert_eq!(versions(&db), all_shipped());
+    assert_eq!(loaded.desired.desired["web"].version.as_str(), "1.0");
+    assert_eq!(loaded.desired.digests["web"].len(), 1);
+    assert!(loaded.desired.records.is_empty());
+    assert_eq!(
+        db.rows("SELECT generation, write_id, replaced_version, first_serving_unix FROM desired, enrollment_hosts"),
+        vec![vec![Some("0".to_owned()), None, None, None]]
+    );
+
+    let backend: crate::store::Shared = Arc::new(store.clone());
+    let desired = crate::desired::DesiredStore::over(backend, loaded.desired);
+    let state = desired.get("web").expect("the state");
+    desired
+        .record("web", state, |_| true)
+        .expect("a set over it");
+    assert_eq!(desired.write_record("web").map(|r| r.generation), Some(1));
     store.stop();
 }
 

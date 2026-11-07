@@ -109,6 +109,13 @@ pub(crate) trait Backend: Send + Sync {
     fn epoch(&self) -> Option<u64> {
         None
     }
+
+    /// Whether the backend keeps each service's write record ([`crate::write_record`]): its
+    /// generation, the last write's id and the state the last change of version replaced. The
+    /// desired-state file keeps none of them.
+    fn keeps_write_records(&self) -> bool {
+        false
+    }
 }
 
 /// Whether a backend takes writes (`docs/design/coordinator-storage.md`, section 5).

@@ -21,7 +21,9 @@ use crate::marks_support::{
 use crate::ops::{AuditEntry, OpsError, OpsState, OpsStore, Write};
 use crate::orders::Order;
 use crate::service::SetError;
+use crate::service::ci_calls::Setter;
 use crate::testutil::{Log, Rig, ops_of, scratch, version};
+use crate::write_record::WriteAsk;
 
 /// The role of every host of these tests.
 const DAEMON: &str = "daemon";
@@ -91,8 +93,13 @@ fn snapshot(rig: &Rig) -> (Vec<Option<Vec<u8>>>, OpsState, Option<String>) {
 async fn operator_set(rig: &Rig, version: &str, n: u8) -> Result<(), SetError> {
     let body = json!({"service": WEB, "version": version, "release_digest": digest(n)});
     rig.coordinator
-        .set_desired_operator("operator", body.to_string().as_bytes())
+        .set_desired_by(
+            &Setter::Operator("operator"),
+            body.to_string().as_bytes(),
+            &WriteAsk::default(),
+        )
         .await
+        .map(|(set, _)| set)
         .map(drop)
 }
 

@@ -15,9 +15,10 @@ use crate::force::end_by_setter;
 use crate::halt::lift_by_setter;
 use crate::ops::{AuditEntry, Write};
 use crate::status::convergence_of;
+use crate::write_record::{WriteAsk, WriteRecord};
 
 /// Who sets the desired state.
-enum Setter<'a> {
+pub(crate) enum Setter<'a> {
     /// CI, by this verified token.
     Ci(&'a Verified),
     /// The operator token of this name.
@@ -36,36 +37,46 @@ impl Coordinator {
         verified: &Verified,
         body: &[u8],
     ) -> Result<Set, SetError> {
-        self.set_desired_by(&Setter::Ci(verified), body).await
+        self.set_desired_by(&Setter::Ci(verified), body, &WriteAsk::default())
+            .await
+            .map(|(set, _)| set)
     }
 
-    /// Sets the desired state from `body` for the operator token named `operator`. It is
-    /// [`Self::set_desired_verified`] with no allow-list: the operator may set any service the
-    /// coordinator manages. The refusals are the same and in the same order (the release channel's
-    /// among them), and nothing changes when one is made. Before the state is recorded, one audit entry `set_desired` by
-    /// `operator` is written (the service, and as its reason the version, followed by `with
-    /// package digest <digest>` when the body named one, or `with release index <digest>` when it
-    /// named an index); then the state is recorded, a force of another version ends and a halt
-    /// the updater raised is lifted, both audited by `operator`.
+    /// Sets the desired state from `body` for `setter`. CI's set is [`Self::set_desired_verified`];
+    /// an operator's is the same with no allow-list (the operator may set any service the
+    /// coordinator manages), with the same refusals in the same order (the release channel's
+    /// among them), and nothing changes when one is made. Parse, admit the service, ask the
+    /// release channel (with `--release-channel`), then under the fleet's lock refuse, audit (an
+    /// operator's), record, and end a force and lift a halt. Before an operator's state is
+    /// recorded, one audit entry `set_desired` by the operator is written (the service, and as its
+    /// reason the version, followed by `with package digest <digest>` when the body named one, or
+    /// `with release index <digest>` when it named an index); then the state is recorded, a force
+    /// of another version ends and a halt the updater raised is lifted, both audited by the
+    /// operator.
+    ///
+    /// `ask` is what `Releases.SetDesired` asks of the store beside the state ([`WriteAsk`]); the
+    /// answer carries the service's write record after the set, none over a store that keeps no
+    /// records.
     ///
     /// # Errors
     /// [`SetError`], other than the refusals of a token. [`SetError::Ops`] of
     /// [`crate::ops::OpsError::AuditUnavailable`] from the `set_desired` entry means nothing is
     /// set. Any later [`SetError::Ops`] means the desired state is set and the end of a force or
     /// the lift of a halt could not be written; setting the same state again is safe and tries
-    /// them again.
-    pub(crate) async fn set_desired_operator(
+    /// them again. Two refusals are of `ask`, each with nothing changed:
+    /// [`DesiredError::Unrecorded`] first of all, when `ask` asks for anything and the store keeps
+    /// no records (the desired-state file); and [`DesiredError::GenerationConflict`] after the
+    /// refusals of the state itself and before the operator's audit entry, when its
+    /// `if_generation` is not the service's generation.
+    pub(crate) async fn set_desired_by(
         &self,
-        operator: &str,
+        setter: &Setter<'_>,
         body: &[u8],
-    ) -> Result<Set, SetError> {
-        self.set_desired_by(&Setter::Operator(operator), body).await
-    }
-
-    /// The set both callers share: parse, admit the service, ask the release channel (with
-    /// `--release-channel`), then under the fleet's lock refuse, audit (an operator's), record,
-    /// and end a force and lift a halt.
-    async fn set_desired_by(&self, setter: &Setter<'_>, body: &[u8]) -> Result<Set, SetError> {
+        ask: &WriteAsk,
+    ) -> Result<(Set, Option<WriteRecord>), SetError> {
+        if ask.needs_records() && !self.desired.keeps_write_records() {
+            return Err(SetError::Invalid(DesiredError::Unrecorded));
+        }
         let (service, desired, dropped_roles) =
             Desired::parse_request_noting(body, &self.services, self.legacy.as_deref())?;
         if let Setter::Ci(verified) = setter {
@@ -98,13 +109,15 @@ impl Coordinator {
         // the registry the set is made over. The desired state goes first and the lift of an
         // updater's halt after it: a lift that fails leaves the service halted (the safe side),
         // and the reverse would order the halted target again.
-        {
+        let record = {
             let _fleet = self.lock_fleet_for_set();
             let def = self
                 .services
                 .get(&service)
                 .ok_or(SetError::Invalid(DesiredError::UnknownService))?;
             self.refuse(def, &desired)?;
+            // The precondition before the audit entry: a set refused for it writes nothing.
+            self.desired.admits(&service, ask)?;
             let marks = self.ops.marks(&service);
             // An operator's set is audited before the desired state is written: a set whose
             // audit line cannot be appended is refused (`audit_unavailable`) with nothing
@@ -123,13 +136,15 @@ impl Coordinator {
                 });
                 self.ops.change(Write::BeforeMemory, entry, |_| {})?;
             }
-            self.desired
-                .record(&service, desired.clone(), |v| kept(&marks, v))?;
+            let record =
+                self.desired
+                    .record_as(&service, desired.clone(), |v| kept(&marks, v), ask)?;
             // A set of another version ends a force that stands ([`crate::force`]), before
             // the lift: a lift that fails then leaves no force ordering the old version.
             end_by_setter(&self.ops, &service, &desired.version, actor, &set_by)?;
             lift_by_setter(&self.ops, &service, &desired.version, actor, &set_by)?;
-        }
+            record
+        };
         match setter {
             Setter::Ci(verified) => tracing::info!(
                 workflow = %verified.job_workflow_ref,
@@ -143,10 +158,19 @@ impl Coordinator {
                 "desired state set by an operator"
             ),
         }
-        Ok(Set {
-            desired,
-            dropped_roles,
-        })
+        Ok((
+            Set {
+                desired,
+                dropped_roles,
+            },
+            record,
+        ))
+    }
+
+    /// How the writes of `service` are recorded now, as `Releases.Converge` shows them: none
+    /// when the store keeps no records ([`crate::desired::DesiredStore::write_record`]).
+    pub(crate) fn write_record(&self, service: &str) -> Option<WriteRecord> {
+        self.desired.write_record(service)
     }
 
     /// Where the hosts of `service` stand against its desired state, as
