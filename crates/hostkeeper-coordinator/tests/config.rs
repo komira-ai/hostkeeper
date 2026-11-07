@@ -534,15 +534,13 @@ async fn run_binds_both_listeners_and_reports_them() {
         "192.0.2.1:1".parse().expect("an address"),
         "192.0.2.1:2".parse().expect("an address"),
     ];
-    assert_eq!(
-        asked, want,
-        "the heartbeat address first, then the control one"
-    );
+    assert_eq!(asked, want, "the heartbeat address, then the control one");
     assert_eq!(
         *ready.lock().expect("told"),
         Some(Bound {
             heartbeat: "192.0.2.9:1".parse().expect("an address"),
             control: "192.0.2.9:2".parse().expect("an address"),
+            lan: None,
         })
     );
 }
