@@ -28,10 +28,10 @@
 //! The guest's console, the logs and the coordinator's are kept under
 //! `target/privileged-artifacts/net_install/`, with the inputs of the measurement of the first
 //! install that are not logs (design section 11, item N11): `pending.json`, the pending list as
-//! `enrollment list` gave it before the approval; `host.json`, the host as `hosts get` gave it
-//! once the fixture service was installed; and `admin-status.txt`, what `hostkeeper admin
-//! status` printed on the guest then. The job's step after this test makes the report of them
-//! with `cargo xtask netinstall-report`; no test asserts a time.
+//! `enrollment list` gave it before the approval, and `host.json`, the host as `hosts get` gave
+//! it once the fixture service was installed, its serving time among them. The job's step after
+//! this test makes the report of them with `cargo xtask netinstall-report`; no test asserts a
+//! time.
 
 mod e2e;
 mod netinstall;
@@ -212,17 +212,11 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     let first_cert = unix(&first["certNotAfterUnix"]).expect("the host's certificate");
     wait_installed(&mut rig, first_cert - 1);
     let got = rig.ctl(&["hosts", "get", "--node-id", HOST]);
-    rig.keep("host.json", got.to_string().as_bytes());
-    let status = rig
-        .ssh
-        .output("sudo hostkeeper admin status", b"")
-        .expect("the guest's admin status");
-    let text = String::from_utf8_lossy(&status);
     assert!(
-        text.contains(&format!("service[{SERVICE}].last.outcome: succeeded\n")),
-        "the fixture's install is the daemon's last order of it, succeeded: {text}"
+        unix(&got["host"]["firstServingUnix"]).is_some(),
+        "the heartbeat that reported the fixture service installed is kept as serving: {got}"
     );
-    rig.keep("admin-status.txt", &status);
+    rig.keep("host.json", got.to_string().as_bytes());
 
     // 3. Router mode: the enrolled guest boots its disk.
     rig.serve(Mode::Router, &[]);

@@ -269,6 +269,10 @@ pub struct EnrolledHost {
     /// When the coordinator accepted the host's first heartbeat since that approval, unix
     /// seconds ([`EnrollmentStore::note_heartbeat`]); `None` until it does.
     pub first_heartbeat_unix: Option<u64>,
+    /// When the coordinator accepted the host's first heartbeat since that approval that
+    /// reported a service it manages for the host installed and healthy, unix seconds
+    /// ([`EnrollmentStore::note_serving`]); `None` until it does.
+    pub first_serving_unix: Option<u64>,
 }
 
 /// What the store holds for a host id ([`EnrollmentStore::held`]). It is read from the store's

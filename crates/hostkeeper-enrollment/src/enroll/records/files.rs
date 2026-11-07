@@ -346,6 +346,12 @@ impl Records for FileRecords {
         self.commit(&[Record::Host(host)])
     }
 
+    fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
+        let mut host = host.clone();
+        host.first_serving_unix = Some(at_unix);
+        self.commit(&[Record::Host(host)])
+    }
+
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError> {
         let mut host = host.clone();
         host.duplicate = true;

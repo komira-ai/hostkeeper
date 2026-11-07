@@ -61,6 +61,7 @@ fn enrolled(host: &str, machine: &str, at: u64) -> EnrolledHost {
         claims: claimed(machine),
         approved_unix: at,
         first_heartbeat_unix: None,
+        first_serving_unix: None,
     }
 }
 

@@ -201,6 +201,8 @@ mod extras_dropped_tests;
 #[cfg(test)]
 mod first_heartbeat_tests;
 #[cfg(test)]
+mod first_serving_tests;
+#[cfg(test)]
 mod force_targets_tests;
 #[cfg(test)]
 mod force_tests;

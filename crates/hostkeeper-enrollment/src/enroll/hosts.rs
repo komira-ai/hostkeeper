@@ -133,6 +133,7 @@ impl EnrollmentStore {
             claims: claims_of_pb(request.pb.claims.as_ref()),
             approved_unix: request.pb.approved.as_ref().map_or(0, |a| a.approved_unix),
             first_heartbeat_unix: row.pb.first_heartbeat_unix,
+            first_serving_unix: row.pb.first_serving_unix,
         }))
     }
 
@@ -223,6 +224,33 @@ impl EnrollmentStore {
             self.records().set_first_heartbeat(&row.pb, now)?;
         }
         heard().insert(host.clone());
+        Ok(())
+    }
+
+    /// The heartbeat path's report that a heartbeat of `host` it accepted at `now` said a
+    /// service the coordinator manages for the host is installed and healthy: the first since
+    /// the host's approval is written into its host record, and every later one leaves it as it
+    /// is. An approval writes the host record without it. A host id never approved has no
+    /// record and nothing is recorded.
+    ///
+    /// Decided under the store's lock, as [`Self::note_heartbeat`] is; a host whose record is
+    /// known to hold the time already is answered from memory, and an approval forgets it.
+    ///
+    /// # Errors
+    /// [`StoreError`] when the host record cannot be read or written.
+    pub fn note_serving(&self, host: &HostId, now: u64) -> Result<(), StoreError> {
+        let served = || self.served.lock().unwrap_or_else(PoisonError::into_inner);
+        if served().contains(host) {
+            return Ok(());
+        }
+        let _held = self.lock()?;
+        let Some(row) = self.load_host(host)? else {
+            return Ok(());
+        };
+        if row.pb.first_serving_unix.is_none() {
+            self.records().set_first_serving(&row.pb, now)?;
+        }
+        served().insert(host.clone());
         Ok(())
     }
 

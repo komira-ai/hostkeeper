@@ -130,6 +130,10 @@ message Host {
   // When the coordinator accepted the first heartbeat of this host since its approval; absent
   // until then. Written once; an approval writes the file anew without it.
   optional uint64 first_heartbeat_unix = 8;
+  // When the coordinator accepted the first heartbeat of this host since its approval that
+  // reported a service the coordinator manages for it installed and healthy; absent until then.
+  // Written once; an approval writes the file anew without it.
+  optional uint64 first_serving_unix = 9;
 }
 
 enum DenyState {

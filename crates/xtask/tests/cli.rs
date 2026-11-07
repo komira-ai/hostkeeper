@@ -796,16 +796,12 @@ fn netinstall_report(mac: &str) -> Vec<&str> {
         "net-1",
         "--mode",
         "router",
-        "--service",
-        "hello",
         "--pxe-log",
         "serve.log",
         "--pending",
         "pending.json",
         "--host",
         "host.json",
-        "--admin-status",
-        "admin-status.txt",
     ]
 }
 
@@ -828,7 +824,6 @@ fn netinstall_report_prints_the_report_with_status_0() {
         r#"{"host": {"nodeId": "net-1", "enrolledUnix": "1960"}}"#,
     )
     .expect("the host");
-    std::fs::write(d.join("admin-status.txt"), "services: 0\n").expect("the status");
     let o = run(&d, &netinstall_report("52:54:00:4e:10:01"));
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     let out = stdout(&o);

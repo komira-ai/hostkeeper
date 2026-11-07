@@ -3,7 +3,7 @@
 //! one machine took from power-on to serving, with the person's wait (pending to approved) apart
 //! from the machine's time.
 //!
-//! It reads the times the components record, from four files the operator (or the end-to-end
+//! It reads the times the components record, from three files the operator (or the end-to-end
 //! test) keeps of one machine's install, and reads no clock:
 //!
 //! - `--pxe-log`: the log of `hostkeeper-pxe serve` (its standard error), whose lines are
@@ -15,10 +15,8 @@
 //!   its `firstSeenUnix`.
 //! - `--host`: what `hostkeeper ctl --output json hosts get --node-id <host-id>` printed once
 //!   the host served: approved is its `enrolledUnix`, the first heartbeat its
-//!   `firstHeartbeatUnix`.
-//! - `--admin-status`: what `hostkeeper admin status` printed on the host then: serving is when
-//!   the first of the `--service`s' last order ended `succeeded` (its version running and
-//!   confirmed healthy), its `finished_unix`, by the host's clock.
+//!   `firstHeartbeatUnix`, and serving its `firstServingUnix` (the first heartbeat that reported
+//!   a service the coordinator manages for the host installed and healthy).
 //!
 //! The parsing is [`inputs`], the report [`render`]; both are pure functions of their text. An
 //! event the files do not show is printed `not reached`, never as a number.
@@ -116,10 +114,6 @@ pub(crate) struct Flags {
     /// The mode `serve` installed it in.
     #[arg(long, value_enum)]
     pub(crate) mode: Mode,
-    /// A service assigned to the host; serving is the first of them installed and confirmed
-    /// healthy. Repeat it for each.
-    #[arg(long = "service", required = true)]
-    pub(crate) services: Vec<String>,
     /// The log of `hostkeeper-pxe serve` (its standard error).
     #[arg(long)]
     pub(crate) pxe_log: PathBuf,
@@ -130,9 +124,6 @@ pub(crate) struct Flags {
     /// What `hostkeeper ctl --output json hosts get --node-id <host-id>` printed once it served.
     #[arg(long)]
     pub(crate) host: PathBuf,
-    /// What `hostkeeper admin status` printed on the host once it served.
-    #[arg(long)]
-    pub(crate) admin_status: PathBuf,
 }
 
 /// The text of `path`, the `what` of `flag`.
@@ -148,16 +139,15 @@ pub(crate) fn run(flags: &Flags) -> Result<Vec<String>, Error> {
     let log = read("--pxe-log", &flags.pxe_log)?;
     let pending = read("--pending", &flags.pending)?;
     let host = read("--host", &flags.host)?;
-    let status = read("--admin-status", &flags.admin_status)?;
     let (power_on, install_started) = inputs::pxe_log(&log, &flags.mac, flags.mode, &flags.host_id);
-    let (approved, first_heartbeat) = inputs::host(&host, &flags.host_id)?;
+    let host = inputs::host(&host, &flags.host_id)?;
     let events = Events {
         power_on,
         install_started,
         pending: inputs::pending(&pending, &flags.host_id)?,
-        approved,
-        first_heartbeat,
-        serving: inputs::admin_status(&status, &flags.services)?,
+        approved: host.approved,
+        first_heartbeat: host.first_heartbeat,
+        serving: host.serving,
     };
     Ok(render::report(
         &flags.mac,

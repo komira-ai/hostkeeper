@@ -2,7 +2,7 @@
 //! the intervals between them, and the machine's time apart from the person's wait. Pure: no
 //! clock is read, and an event that is not there is `not reached`, never a number.
 
-use super::inputs::{Events, Serving};
+use super::inputs::Events;
 use super::{Mac, Mode};
 
 /// The time between two events.
@@ -72,11 +72,7 @@ fn at(unix: Option<u64>) -> String {
 /// The report of `events`, the install of `mac` as the record's host `host_id` by `serve` in
 /// `mode`, as lines.
 pub(crate) fn report(mac: &Mac, host_id: &str, mode: Mode, events: &Events) -> Vec<String> {
-    let serving = events.serving.as_ref().map(|s| s.unix);
-    let served_by = match &events.serving {
-        Some(Serving { service, .. }) => format!("the install of {service} confirmed healthy"),
-        None => "the first `--service` installed and confirmed healthy".to_owned(),
-    };
+    let serving = events.serving;
     let rows = [
         (
             "power-on",
@@ -106,7 +102,7 @@ pub(crate) fn report(mac: &Mac, host_id: &str, mode: Mode, events: &Events) -> V
         (
             "serving",
             serving,
-            format!("the host's daemon: {served_by} (`finished_unix`)"),
+            "the coordinator: the host's `first_serving_unix`".to_owned(),
         ),
     ];
     let mut lines = vec![
@@ -169,8 +165,8 @@ pub(crate) fn report(mac: &Mac, host_id: &str, mode: Mode, events: &Events) -> V
             "Power-on to serving: {}.",
             interval(span(events.power_on, serving))
         ),
-        "Serving is stamped by the host's clock; the other events by the clocks of the hosts of \
-         hostkeeper-pxe and the coordinator."
+        "Power-on and the install's start are stamped by the clock of hostkeeper-pxe's host; \
+         pending, approved, the first heartbeat and serving by the coordinator's."
             .to_owned(),
     ]);
     lines

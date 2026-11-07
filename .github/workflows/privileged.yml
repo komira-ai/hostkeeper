@@ -371,10 +371,10 @@ jobs:
         run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test net_install -- --test-threads=1 --nocapture
       # The measurement of network install (design section 11, item N11): the guest's first
       # install from power-on to serving, from hostkeeper-pxe's log and the files the test kept
-      # beside it. The MAC, host id and service are the test's (tests/net_install.rs); its first
-      # install is in proxy mode. As the runner's user, into target/, which root does not own.
+      # beside it. The MAC and host id are the test's (tests/net_install.rs); its first install is
+      # in proxy mode. As the runner's user, into target/, which root does not own.
       - name: The report of the network install
-        run: cargo xtask netinstall-report --mac 52:54:00:4e:10:01 --host-id net-1 --mode proxy --service hostkeeper-ci-fixture --pxe-log target/privileged-artifacts/net_install/hostkeeper-pxe.log --pending target/privileged-artifacts/net_install/pending.json --host target/privileged-artifacts/net_install/host.json --admin-status target/privileged-artifacts/net_install/admin-status.txt > target/netinstall-report.md
+        run: cargo xtask netinstall-report --mac 52:54:00:4e:10:01 --host-id net-1 --mode proxy --pxe-log target/privileged-artifacts/net_install/hostkeeper-pxe.log --pending target/privileged-artifacts/net_install/pending.json --host target/privileged-artifacts/net_install/host.json > target/netinstall-report.md
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: net-install-report

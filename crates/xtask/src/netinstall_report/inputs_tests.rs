@@ -1,4 +1,4 @@
-use super::inputs::{Serving, admin_status, host, pending, pxe_log};
+use super::inputs::{HostTimes, host, pending, pxe_log};
 use super::{Error, Mac, Mode};
 
 const HOST: &str = "net-1";
@@ -145,15 +145,32 @@ fn a_pending_file_that_is_not_a_list_of_requests_is_refused() {
     assert!(why.starts_with("--pending: not JSON: "), "{why}");
 }
 
-/// Catches approved or the first heartbeat read from another field, and an absent or zero time
-/// (ctl leaves a zero out) read as a time.
+/// Catches approved, the first heartbeat or serving read from another field (the last
+/// heartbeat is not serving), and an absent or zero time (ctl leaves a zero out) read as a time.
 #[test]
-fn the_host_gives_approved_and_the_first_heartbeat() {
+fn the_host_gives_approved_the_first_heartbeat_and_serving() {
     let got = r#"{"host": {"nodeId": "net-1", "enrolledUnix": "1600", "firstHeartbeatUnix": "1615",
-        "lastHeartbeatUnix": "1900"}}"#;
-    assert_eq!(host(got, HOST), Ok((Some(1600), Some(1615))));
+        "firstServingUnix": "1650", "lastHeartbeatUnix": "1900"}}"#;
+    assert_eq!(
+        host(got, HOST),
+        Ok(HostTimes {
+            approved: Some(1600),
+            first_heartbeat: Some(1615),
+            serving: Some(1650),
+        })
+    );
+    let heard =
+        r#"{"host": {"nodeId": "net-1", "enrolledUnix": "1600", "firstHeartbeatUnix": "1615"}}"#;
+    assert_eq!(
+        host(heard, HOST),
+        Ok(HostTimes {
+            approved: Some(1600),
+            first_heartbeat: Some(1615),
+            serving: None,
+        })
+    );
     let pending = r#"{"host": {"nodeId": "net-1", "enrolledUnix": "0"}}"#;
-    assert_eq!(host(pending, HOST), Ok((None, None)));
+    assert_eq!(host(pending, HOST), Ok(HostTimes::default()));
 }
 
 /// Catches the file of another host, or one that is not what `hosts get` prints, read as this
@@ -182,99 +199,15 @@ fn a_host_file_of_another_host_or_shape_is_refused() {
             "--host: `firstHeartbeatUnix` is \"soon\", not unix seconds as a string of digits",
         ),
         (
+            r#"{"host": {"nodeId": "net-1", "firstServingUnix": 1650}}"#,
+            "--host: `firstServingUnix` is 1650, not unix seconds as a string of digits",
+        ),
+        (
             "\"net-1\"",
             "--host: not a JSON object, as `hostkeeper ctl --output json` prints",
         ),
     ];
     for (text, why) in cases {
         assert_eq!(host(text, HOST), Err(refused(why)), "{text}");
-    }
-}
-
-/// `hostkeeper admin status` of a host with `api` installed and healthy, `db` failed and `web`
-/// not installed, as the daemon prints it.
-const STATUS: &str = "\
-enrollment: enrolled
-enrollment.host_id: net-1
-link.last_success_unix: 1900
-link.consecutive_failures: 0
-trusted_root.age_secs: 86400
-trusted_root.reason: none
-services: 3
-service[api].lifecycle: running
-service[api].current: none
-service[api].last.version: 1.0.0
-service[api].last.outcome: succeeded
-service[api].last.started_unix: 1640
-service[api].last.finished_unix: 1700
-service[cache].lifecycle: running
-service[cache].current: none
-service[cache].last.outcome: succeeded
-service[cache].last.started_unix: 1630
-service[cache].last.finished_unix: 1690
-service[db].lifecycle: absent
-service[db].current: none
-service[db].last.outcome: failed
-service[db].last.finished_unix: 1650
-";
-
-fn names(services: &[&str]) -> Vec<String> {
-    services.iter().map(|s| (*s).to_owned()).collect()
-}
-
-/// Catches serving read from a service the flags do not name, from one whose last order
-/// failed, from a later install than the first, or from its start rather than its end.
-#[test]
-fn serving_is_the_first_named_service_whose_last_order_succeeded() {
-    let serving = |unix, service: &str| {
-        Ok(Some(Serving {
-            unix,
-            service: service.to_owned(),
-        }))
-    };
-    assert_eq!(admin_status(STATUS, &names(&["api"])), serving(1700, "api"));
-    assert_eq!(
-        admin_status(STATUS, &names(&["api", "cache"])),
-        serving(1690, "cache")
-    );
-    assert_eq!(
-        admin_status(STATUS, &names(&["cache", "api"])),
-        serving(1690, "cache")
-    );
-    assert_eq!(
-        admin_status(STATUS, &names(&["db", "web", "api"])),
-        serving(1700, "api")
-    );
-    assert_eq!(admin_status(STATUS, &names(&["db", "web"])), Ok(None));
-}
-
-/// Catches a file that is not the admin status read as a host serving nothing, and a daemon
-/// that prints no step times, or a time that is not one, read as serving.
-#[test]
-fn an_admin_status_without_its_lines_or_times_is_refused() {
-    let older = "services: 1\nservice[api].last.outcome: succeeded\n";
-    let none = "services: 1\nservice[api].last.outcome: succeeded\n\
-                service[api].last.finished_unix: none\n";
-    let cases = [
-        (
-            "{\"host\": {}}",
-            "--admin-status: no `services` line, as `hostkeeper admin status` prints",
-        ),
-        (
-            older,
-            "--admin-status: no `service[api].last.finished_unix`: the host's hostkeeper \
-             predates the step record's times",
-        ),
-        (
-            none,
-            "--admin-status: `service[api].last.finished_unix` is `none`, not unix seconds",
-        ),
-    ];
-    for (text, why) in cases {
-        assert_eq!(
-            admin_status(text, &names(&["api"])),
-            Err(refused(why)),
-            "{text}"
-        );
     }
 }

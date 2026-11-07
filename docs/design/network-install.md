@@ -876,7 +876,7 @@ the number of manual steps.
   - pending: `first_seen_unix`, **Built**;
   - approved: `enrolled_unix`, **Built**;
   - first heartbeat: `first_heartbeat_unix`, **Built**;
-  - serving: the first assigned service reported installed and healthy.
+  - serving: the first assigned service reported installed and healthy, `first_serving_unix`, **Built** (N11).
 - `cargo xtask netinstall-report` reads these and prints each interval, with the person's wait (pending to approved)
   apart from the machine's time. It is a pure function of its inputs, tested with fixed inputs, and reads no clock. An
   event that never happened is printed "not reached", never as zero.
@@ -887,20 +887,15 @@ the number of manual steps.
   steps of today's hand install of a node are counted from its current runbook at the same time. No count is quoted
   before then.
 - **Built** (item N11): `cargo xtask netinstall-report` (`crates/xtask/src/netinstall_report.rs`), run by the job
-  `net-install`, which keeps the report as the artifact `net-install-report`. As built:
-  - **Inputs**: four files of one machine, with its MAC, record host id, mode and `--service`s: `serve`'s standard
-    error (power-on, the earliest `DHCPDISCOVER` or, in router mode, `DHCPREQUEST` from the MAC; the install's start,
-    its earliest seed fetch as the record's host); `enrollment list --output json` taken while it was pending, since
-    a request leaves that list at its approval (the earliest `firstSeenUnix` of the record's requests); `hosts get`
-    and, on the host, `hostkeeper admin status`, taken once it serves.
-  - **Serving is the host daemon's record**, as no time of it reaches the coordinator: when the first service's last
-    order ended `succeeded` ("the version running and confirmed healthy"). `hostkeeper admin status` now prints each
-    step record's `started_unix` and `finished_unix`, additive lines (`docs/admin.md`). Serving is by the host's
-    clock, which the report says; an interval that ends before it starts prints `out of order`, never a number.
-  - **The report**: the events and the intervals between them, as two tables, then the machine's time (power-on to
-    pending, and approved to serving), the person's wait and power-on to serving. `net_install.rs` keeps the files of
-    the guest's first install beside `hostkeeper-pxe.log` and asserts no time; the arm64 job makes no report. The
-    runbook's "Measure the first machine" is the real machine's procedure.
+  `net-install`, which keeps the report as the artifact `net-install-report`. Its inputs are `serve`'s standard error,
+  `enrollment list --output json` taken while the request was pending (a request leaves that list at its approval),
+  and `hosts get` once the host serves. No component recorded serving, so the coordinator now does:
+  `Host.first_serving_unix`, its first heartbeat since the approval that reported a service it manages for the host
+  (present, not the agent itself) healthy with no update under way, kept with the host's enrollment behind the
+  `Records` port as `first_heartbeat_unix` is, and cleared by an approval. So every event but power-on and the
+  install's start is by the coordinator's clock; an interval that ends before it starts prints `out of order`.
+  `net_install.rs` keeps the files of the guest's first install beside `hostkeeper-pxe.log`; the runbook's "Measure
+  the first machine" is the real machine's procedure.
 
 ## 12. Tasks
 

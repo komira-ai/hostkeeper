@@ -18,7 +18,7 @@ fn scratch(name: &str) -> TestDir {
 /// The path of one input among the flags.
 type FileOf = fn(&mut Flags) -> &mut PathBuf;
 
-/// The four inputs of one served install, written into `dir`, and the flags that name them.
+/// The three inputs of one served install, written into `dir`, and the flags that name them.
 fn inputs(dir: &Path) -> Flags {
     let write = |name: &str, text: &str| {
         let path = dir.join(name);
@@ -29,7 +29,6 @@ fn inputs(dir: &Path) -> Flags {
         mac: "52:54:00:4E:10:01".parse().expect("a MAC"),
         host_id: "net-1".to_owned(),
         mode: Mode::Proxy,
-        services: vec!["hello".to_owned()],
         pxe_log: write(
             "hostkeeper-pxe.log",
             "hostkeeper-pxe serve: 1000 dhcp: DHCPDISCOVER from 52:54:00:4e:10:01, architecture \
@@ -45,18 +44,14 @@ fn inputs(dir: &Path) -> Flags {
         ),
         host: write(
             "host.json",
-            r#"{"host": {"nodeId": "net-1", "enrolledUnix": "1960", "firstHeartbeatUnix": "1975"}}"#,
-        ),
-        admin_status: write(
-            "admin-status.txt",
-            "services: 1\nservice[hello].last.outcome: succeeded\n\
-             service[hello].last.finished_unix: 2010\n",
+            r#"{"host": {"nodeId": "net-1", "enrolledUnix": "1960", "firstHeartbeatUnix": "1975",
+                "firstServingUnix": "2010"}}"#,
         ),
     }
 }
 
 /// Catches an input read from another flag's file, or one left out of the report: each of the
-/// six events comes from its own file.
+/// six events comes from the file that records it.
 #[test]
 fn the_report_reads_each_event_from_its_file() {
     let dir = scratch("served");
@@ -69,8 +64,7 @@ fn the_report_reads_each_event_from_its_file() {
             "| pending | 1900 | the coordinator: the request's `first_seen_unix` |",
             "| approved | 1960 | the coordinator: the host's `enrolled_unix` |",
             "| first heartbeat | 1975 | the coordinator: the host's `first_heartbeat_unix` |",
-            "| serving | 2010 | the host's daemon: the install of hello confirmed healthy \
-             (`finished_unix`) |",
+            "| serving | 2010 | the coordinator: the host's `first_serving_unix` |",
         ],
         "{report:#?}"
     );
@@ -82,11 +76,10 @@ fn the_report_reads_each_event_from_its_file() {
 fn a_file_that_cannot_be_read_is_refused_by_its_flag() {
     let dir = scratch("unread");
     let missing = dir.join("missing");
-    let cases: [(&str, FileOf); 4] = [
+    let cases: [(&str, FileOf); 3] = [
         ("--pxe-log", |f| &mut f.pxe_log),
         ("--pending", |f| &mut f.pending),
         ("--host", |f| &mut f.host),
-        ("--admin-status", |f| &mut f.admin_status),
     ];
     for (flag, field) in cases {
         let mut flags = inputs(&dir);
@@ -100,20 +93,17 @@ fn a_file_that_cannot_be_read_is_refused_by_its_flag() {
 }
 
 /// Catches a refusal of an input's text not reaching the caller: a pending file of another
-/// shape, a host file of another host, an admin status that is not one.
+/// shape, a host file of another host.
 #[test]
 fn a_file_that_does_not_say_what_its_flag_names_is_refused() {
     let dir = scratch("refused");
-    let edits: [(&str, &str, FileOf); 3] = [
+    let edits: [(&str, &str, FileOf); 2] = [
         ("[]", "--pending: not a JSON object", |f| &mut f.pending),
         (
             r#"{"host": {"nodeId": "net-2"}}"#,
             "--host: the host is net-2",
             |f| &mut f.host,
         ),
-        ("", "--admin-status: no `services` line", |f| {
-            &mut f.admin_status
-        }),
     ];
     for (text, why, file) in edits {
         let mut flags = inputs(&dir);
@@ -179,14 +169,13 @@ fn the_runbooks_report_line_parses() {
 #[test]
 fn the_runbook_check_refuses_each_defect() {
     let line = "cargo xtask netinstall-report --mac 00:00:5e:00:53:01 --host-id web-17 \\\n\
-                --mode proxy --service api --pxe-log serve.log --pending pending.json \\\n\
-                --host host.json --admin-status admin-status.txt";
+                --mode proxy --pxe-log serve.log --pending pending.json --host host.json";
     let fenced = |line: &str| format!("text\n```\n{line}\n```\n");
     assert_eq!(runbook_problems(&fenced(line)), Vec::<String>::new());
     for (bad, kind) in [
         (line.replace("--pending", "--pendng"), "unexpected argument"),
         (
-            line.replace(" --service api", ""),
+            line.replace(" --host host.json", ""),
             "required arguments were not provided",
         ),
         (line.replace("proxy", "dhcp"), "isn't valid"),
@@ -196,7 +185,7 @@ fn the_runbook_check_refuses_each_defect() {
         assert!(problems[0].contains(kind), "{problems:?}");
     }
     assert_eq!(
-        runbook_problems("no fence\n```\nhostkeeper admin status\n```\n"),
+        runbook_problems("no fence\n```\nhostkeeper ctl hosts list\n```\n"),
         ["no `cargo xtask netinstall-report` line"]
     );
 }

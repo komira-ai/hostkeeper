@@ -1,8 +1,6 @@
 //! The times of one machine's install, read from the text of each input file. Pure: each
 //! function is of its text and its flags only.
 
-use std::collections::BTreeMap;
-
 use serde_json::Value;
 
 use super::{Error, Mac, Mode};
@@ -24,16 +22,17 @@ pub(crate) struct Events {
     pub(crate) approved: Option<u64>,
     /// The coordinator's `first_heartbeat_unix` of the host.
     pub(crate) first_heartbeat: Option<u64>,
-    /// The first of the services that the host's daemon installed and confirmed healthy.
-    pub(crate) serving: Option<Serving>,
+    /// The coordinator's `first_serving_unix` of the host: its first heartbeat since its
+    /// approval that reported a service the coordinator manages for it installed and healthy.
+    pub(crate) serving: Option<u64>,
 }
 
-/// When a service's install ended with its version running and confirmed healthy, by the host's
-/// clock.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Serving {
-    pub(crate) unix: u64,
-    pub(crate) service: String,
+/// What `hosts get` says of the host: the three times it answers, each `None` when absent.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HostTimes {
+    pub(crate) approved: Option<u64>,
+    pub(crate) first_heartbeat: Option<u64>,
+    pub(crate) serving: Option<u64>,
 }
 
 /// `text` as unix seconds: one or more ASCII digits, nothing else.
@@ -130,8 +129,8 @@ pub(crate) fn pending(text: &str, host_id: &str) -> Result<Option<u64>, Error> {
     Ok(first)
 }
 
-/// Approved and the first heartbeat of `host_id`, from what `hosts get` printed of it.
-pub(crate) fn host(text: &str, host_id: &str) -> Result<(Option<u64>, Option<u64>), Error> {
+/// Approved, the first heartbeat and serving of `host_id`, from what `hosts get` printed of it.
+pub(crate) fn host(text: &str, host_id: &str) -> Result<HostTimes, Error> {
     let got = object("--host", text)?;
     let Some(host) = got.get("host").filter(|host| host.is_object()) else {
         return Err(Error::Refused(
@@ -147,48 +146,9 @@ pub(crate) fn host(text: &str, host_id: &str) -> Result<(Option<u64>, Option<u64
             )));
         }
     }
-    Ok((
-        unix("--host", host, "enrolledUnix")?,
-        unix("--host", host, "firstHeartbeatUnix")?,
-    ))
-}
-
-/// Serving: the earliest of `services` whose last order ended `succeeded`, and when, from what
-/// `hostkeeper admin status` printed. A service it does not list, or whose last order did not
-/// succeed, is not serving.
-pub(crate) fn admin_status(text: &str, services: &[String]) -> Result<Option<Serving>, Error> {
-    let keys: BTreeMap<&str, &str> = text.lines().filter_map(|l| l.split_once(": ")).collect();
-    if !keys.contains_key("services") {
-        return Err(Error::Refused(
-            "--admin-status: no `services` line, as `hostkeeper admin status` prints".to_owned(),
-        ));
-    }
-    let mut first: Option<Serving> = None;
-    for service in services {
-        let last = format!("service[{service}].last");
-        if keys.get(format!("{last}.outcome").as_str()) != Some(&"succeeded") {
-            continue;
-        }
-        let key = format!("{last}.finished_unix");
-        let unix = match keys.get(key.as_str()) {
-            None => {
-                return Err(Error::Refused(format!(
-                    "--admin-status: no `{key}`: the host's hostkeeper predates the step \
-                     record's times"
-                )));
-            }
-            Some(value) => digits(value).ok_or_else(|| {
-                Error::Refused(format!(
-                    "--admin-status: `{key}` is `{value}`, not unix seconds"
-                ))
-            })?,
-        };
-        if first.as_ref().is_none_or(|f| unix < f.unix) {
-            first = Some(Serving {
-                unix,
-                service: service.clone(),
-            });
-        }
-    }
-    Ok(first)
+    Ok(HostTimes {
+        approved: unix("--host", host, "enrolledUnix")?,
+        first_heartbeat: unix("--host", host, "firstHeartbeatUnix")?,
+        serving: unix("--host", host, "firstServingUnix")?,
+    })
 }

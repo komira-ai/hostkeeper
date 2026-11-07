@@ -1,4 +1,4 @@
-use super::inputs::{Events, Serving};
+use super::inputs::Events;
 use super::render::{Span, duration, plus, report, span};
 use super::{Mac, Mode};
 
@@ -14,10 +14,7 @@ fn served() -> Events {
         pending: Some(1_900),
         approved: Some(1_960),
         first_heartbeat: Some(1_975),
-        serving: Some(Serving {
-            unix: 2_010,
-            service: "hello".to_owned(),
-        }),
+        serving: Some(2_010),
     }
 }
 
@@ -42,7 +39,7 @@ Network install of 52:54:00:4e:10:01 as host net-1, proxy mode.
 | pending | 1900 | the coordinator: the request's `first_seen_unix` |
 | approved | 1960 | the coordinator: the host's `enrolled_unix` |
 | first heartbeat | 1975 | the coordinator: the host's `first_heartbeat_unix` |
-| serving | 2010 | the host's daemon: the install of hello confirmed healthy (`finished_unix`) |
+| serving | 2010 | the coordinator: the host's `first_serving_unix` |
 
 | Interval | Time |
 |---|---|
@@ -55,7 +52,7 @@ Network install of 52:54:00:4e:10:01 as host net-1, proxy mode.
 The machine's time: 950 s (15 min 50 s): power-on to pending, and approved to serving.
 The person's wait: 60 s (1 min 0 s): pending to approved.
 Power-on to serving: 1010 s (16 min 50 s).
-Serving is stamped by the host's clock; the other events by the clocks of the hosts of hostkeeper-pxe and the coordinator."
+Power-on and the install's start are stamped by the clock of hostkeeper-pxe's host; pending, approved, the first heartbeat and serving by the coordinator's."
         )
     );
 }
@@ -77,7 +74,7 @@ Network install of 52:54:00:4e:10:01 as host net-1, router mode.
 | pending | not reached | the coordinator: the request's `first_seen_unix` |
 | approved | not reached | the coordinator: the host's `enrolled_unix` |
 | first heartbeat | not reached | the coordinator: the host's `first_heartbeat_unix` |
-| serving | not reached | the host's daemon: the first `--service` installed and confirmed healthy (`finished_unix`) |
+| serving | not reached | the coordinator: the host's `first_serving_unix` |
 
 | Interval | Time |
 |---|---|
@@ -90,39 +87,36 @@ Network install of 52:54:00:4e:10:01 as host net-1, router mode.
 The machine's time: not reached: power-on to pending, and approved to serving.
 The person's wait: not reached: pending to approved.
 Power-on to serving: not reached.
-Serving is stamped by the host's clock; the other events by the clocks of the hosts of hostkeeper-pxe and the coordinator."
+Power-on and the install's start are stamped by the clock of hostkeeper-pxe's host; pending, approved, the first heartbeat and serving by the coordinator's."
         )
     );
 }
 
-/// Catches a host whose clock is behind printed as a huge or a negative interval: serving
-/// stamped before the first heartbeat is out of order, and so is the machine's time; the
-/// intervals that do not use it are unchanged.
+/// Catches a coordinator whose clock is behind hostkeeper-pxe's host printed as a huge or a
+/// negative interval: pending stamped before the install's start is out of order, and when it is
+/// before power-on so is the machine's time; the intervals that do not use it are unchanged.
 #[test]
 fn an_event_stamped_before_the_one_it_follows_is_out_of_order() {
     let mut events = served();
-    events.serving = Some(Serving {
-        unix: 1_970,
-        service: "hello".to_owned(),
-    });
+    events.pending = Some(1_030);
     let late = report(&mac(), "net-1", Mode::Proxy, &events);
     assert_eq!(
-        late[16..22],
+        late[13..22],
         lines(
             "\
+| power-on to install started | 40 s |
+| install started to pending | out of order: it ends 10 s before it starts |
+| pending to approved (the person's wait) | 930 s (15 min 30 s) |
 | approved to first heartbeat | 15 s |
-| first heartbeat to serving | out of order: it ends 5 s before it starts |
+| first heartbeat to serving | 35 s |
 
-The machine's time: 910 s (15 min 10 s): power-on to pending, and approved to serving.
-The person's wait: 60 s (1 min 0 s): pending to approved.
-Power-on to serving: 970 s (16 min 10 s)."
+The machine's time: 80 s (1 min 20 s): power-on to pending, and approved to serving.
+The person's wait: 930 s (15 min 30 s): pending to approved.
+Power-on to serving: 1010 s (16 min 50 s)."
         ),
         "{late:#?}"
     );
-    events.serving = Some(Serving {
-        unix: 1_950,
-        service: "hello".to_owned(),
-    });
+    events.pending = Some(990);
     let before = report(&mac(), "net-1", Mode::Proxy, &events);
     assert_eq!(
         before[19],

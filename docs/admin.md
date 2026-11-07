@@ -75,11 +75,7 @@ Then, for each service in name order:
 A step record is printed as these keys under its prefix (`service[<name>].current`,
 `service[<name>].last`, or `record` for `abort`): `order_id`, `order_try`, `version`, `step`,
 `outcome` (`succeeded`, `failed`, `deferred`, or `none` while it runs), `phase` and `class` (`none`
-unless it failed with one), `reason`, `forced`, `started_unix` (when the daemon took the step lock
-for the order) and `finished_unix` (when it ended; `none` while it runs). A `succeeded` order ended
-with its version running and confirmed healthy, so the `finished_unix` of a service's first
-install is when the host began serving it: the measurement of network install reads it
-(`cargo xtask netinstall-report`, [network-install.md](operations/network-install.md#measure-the-first-machine)).
+unless it failed with one), `reason` and `forced`.
 
 `abort <service>` prints `aborted: <service>` and then the order as its step record holds it
 once it ended, under `record` (`record: none` when the daemon sent no record). `clear-record

@@ -421,7 +421,7 @@ Boot off again if the wait of a network boot with no server matters on the farm'
 
 Once, on the first real machine of each platform: how long it took from power-on to serving,
 with your wait (pending to approved) apart from the machine's time. Every time in it is one the
-components record; nothing is timed by hand. Keep four files of that machine:
+components record; nothing is timed by hand. Keep three files of that machine:
 
 - `serve`'s standard error, as a file (`serve.log` below), for the whole run.
 - Before you approve, in step 2: the answer of `enrollment list` with `--output json`, saved as
@@ -432,35 +432,31 @@ components record; nothing is timed by hand. Keep four files of that machine:
       --output json enrollment list --limit 50
   ```
 
-- Once the host serves its services: its `hosts get` with `--output json`, saved as `host.json`.
+- Once the host serves a service assigned to it: its `hosts get` with `--output json`, saved as
+  `host.json`. Its `firstServingUnix` is there once a heartbeat since the approval reported a
+  service the coordinator manages for the host (not hostkeeper itself) healthy, with no update of
+  it under way; until then take it again.
 
   ```
   hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
       --output json hosts get --node-id web-17
   ```
 
-- At the same time, on the host, as root: `hostkeeper admin status`, saved as
-  `admin-status.txt`. Take it before any later order of the service (an update), which replaces
-  the record of its install.
-
-Then, in a checkout of hostkeeper, name the machine as its record does, the mode `serve` ran in,
-and each service assigned to it:
+Then, in a checkout of hostkeeper, name the machine as its record does and the mode `serve` ran
+in:
 
 ```
 cargo xtask netinstall-report --mac 00:00:5e:00:53:01 --host-id web-17 --mode proxy \
-    --service api --pxe-log serve.log --pending pending.json --host host.json \
-    --admin-status admin-status.txt
+    --pxe-log serve.log --pending pending.json --host host.json
 ```
 
 It prints each event in unix seconds and what recorded it (power-on is `serve`'s first
 `DHCPDISCOVER` from the MAC in proxy mode, its first `DHCPREQUEST` in router mode; the install's
-start is the seed fetch; pending, approved and the first heartbeat are the coordinator's;
-serving is when the first of the services ended its install running and confirmed healthy, by
-the host's own clock), then each interval, the machine's time and your wait. An event the files
-do not show is `not reached`. An interval whose end is stamped before its start says `out of
-order`: the clocks of two hosts disagree (power-on and the install's start are by the clock of
-`serve`'s host, pending to the first heartbeat by the coordinator's, serving by the machine's own). Keep the
-report with the machine's row in [What has been checked](#what-has-been-checked).
+start is the seed fetch; pending, approved, the first heartbeat and serving are the
+coordinator's, by its one clock), then each interval, the machine's time and your wait. An event
+the files do not show is `not reached`. An interval whose end is stamped before its start says
+`out of order`: the clock of `serve`'s host and the coordinator's disagree. Keep the report with
+the machine's row in [What has been checked](#what-has-been-checked).
 
 ## Reinstall a known host
 

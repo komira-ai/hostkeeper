@@ -636,8 +636,8 @@ impl Coordinator {
         // A change whose commit failed is committed again at every heartbeat until it lands.
         self.ops.retry_unwritten(now);
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
-        let platform = beat.platform;
-        let ops = self.ops.state();
+        let (platform, ops) = (beat.platform, self.ops.state());
+        self.note_serving(&who.host_id, &node, &beat, &ops, now);
         let counted =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Counted;
         for def in self.services.defs() {
