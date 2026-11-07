@@ -131,13 +131,33 @@ claimed addresses, and the request claims no BMC MAC or the record's; a BMC MAC 
 the record's means no match. A record that holds only a serial never matches a Linux request.
 
 - **`INVENTORY_MATCH_MATCHED`**: exactly one record matches; `record_host_id` and `record_role`
-  are its host id and role. Check the key hash, then approve as that record (below).
+  are its host id and role, and `record_serial` and `record_bmc_mac` its serial and BMC MAC
+  (empty when it holds none). Check the key hash, then approve as that record (below).
 - **`INVENTORY_MATCH_UNMATCHED`**: no record matches. Either the server has no record (add one,
   and list again) or its record has the wrong MACs (remove it, add the right one, and list
   again). An approval of an unmatched request must name the host id.
 - **`INVENTORY_MATCH_AMBIGUOUS`**: several records match; `candidate_host_ids` lists them all and
   none is chosen. Two records share this server's MACs between them: remove the wrong ones until
   one matches, or approve naming the host id.
+
+Matched is not proof. A request that claims a data MAC of a record, and does not contradict its
+BMC MAC, matches it, and the machine wrote those claims itself: anyone who read the label or the
+network can write the same. The claims that are hard to copy are the DMI serial, the BMC MAC and
+the product UUID, which are not on the data network; compare them with the record's
+(`record_serial`, `record_bmc_mac`; the record holds no product UUID). The web app's Enrollment
+page puts each beside the record's value, says "not recorded" for a value the record does not
+hold and "not claimed" for a claim the request leaves out, and warns when the record holds a BMC
+MAC the request does not claim (it matched on a data MAC alone). Approve only the key hash shown
+on the machine's own console.
+
+`contested_by` is set on a request when another pending request matches a record it matches: it
+lists those requests' ids, and each of them lists this one. A contested request cannot be
+approved (`record_contested`), with or without `--replace`, until all but one are rejected. One
+of them is likely not the machine on the label, for example a request posted with the recorded
+MACs before the machine first booted. Compare each request's `key_sha256` with the key hash on
+the machine's console (below), reject the requests that are not it, then approve the one that
+is. A request that matches several records (`INVENTORY_MATCH_AMBIGUOUS`) contests the requests
+of each. `contested_by` is empty in the `--unenrolled` list: an expired request contests nothing.
 
 `duplicate_claim` is set on a request that another host's identity collides with: another request
 has the same machine id, a MAC it claims belongs to a host already enrolled (only universally
@@ -414,6 +434,7 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `capacity` | RESOURCE_EXHAUSTED | `add-record` past the 10000 records the coordinator keeps | remove records no longer needed |
 | `audit_unavailable` | UNAVAILABLE | `add-record` or `remove-record` whose audit line could not be appended (a full disk); nothing changed | free the disk of the audit file, then ask again |
 | `record_mismatch` | FAILED_PRECONDITION | `approve` names a host id other than that of the one record the request matches | leave out `--host-id`, or `--replace true` |
+| `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
 
 ## Refusals of the host's calls
 

@@ -1350,11 +1350,8 @@ the coordinator and the daemon started as child processes on loopback and driven
 <code>hostkeeper ctl</code>. <code>first_boot.rs</code> covers an enrollment, its approval, the host certificate,
 heartbeats over mutual TLS and a restart of each program. <code>install_uninstall.rs</code> covers a package
 assigned and installed once across coordinator restarts, and kept by the daemon&rsquo;s boot pass, from a
-release channel the test serves over HTTPS. Its update and uninstall tests are ignored for the gaps
-they found: an update after an install is refused <code>try_conflict</code>
-(<a href="https://github.com/komira-ai/hostkeeper/issues/109"><code>komira-ai/hostkeeper#109</code></a>), and the Linux
-launcher runs no <code>uninstall</code> hook
-(<a href="https://github.com/komira-ai/hostkeeper/issues/110"><code>komira-ai/hostkeeper#110</code></a>). Its one stand-in is the attestation
+release channel the test serves over HTTPS, then updated to a new desired version, then uninstalled
+by the operator: the package, its placed file and its unit are taken off the host. Its one stand-in is the attestation
 verifier, <code>true</code> in place of <code>gh</code>. A renewal is not covered: no flag shortens the host
 certificate&rsquo;s validity (<a href="https://github.com/komira-ai/hostkeeper/issues/100"><code>komira-ai/hostkeeper#100</code></a>). On macOS, the
 <code>macos-device</code> job above is the only test that runs the daemon binary under launchd.</li>
