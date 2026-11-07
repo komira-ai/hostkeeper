@@ -630,8 +630,8 @@ volumes:
   hostkeeper-coordinator: {}
 ```
 
-- **Host networking for both.** `--private-listen` refuses a wildcard address today, and `--lan-listen`
-  (network-install.md section 7) is designed to bind one interface's address. In a bridge network the container has no
+- **Host networking for both.** `--private-listen` and `--lan-listen` (network-install.md section 7) each refuse a
+  wildcard address and take one interface's address. In a bridge network the container has no
   such address, so the coordinator uses the host's network and binds the addresses it binds today. Postgres then listens
   on the host's loopback only, and is not reachable from any other machine.
 - **The image.** The release's image tar is checked against its attestation

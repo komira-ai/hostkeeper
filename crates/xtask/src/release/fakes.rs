@@ -600,19 +600,36 @@ pub(crate) struct PkgCall {
     pub(crate) pkg: PathBuf,
 }
 
-/// A `pkgbuild` that writes [`FakePkgbuild::BYTES`] as the pkg, or fails with `fail` when it is
-/// set. Each call is recorded, with the tree as it was then (every path under the root, with
-/// `/` after a directory's, sorted).
+/// One call of [`FakePkgbuild::build_product`]: the component, the identifier, the version and
+/// the product asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProductCall {
+    pub(crate) component: PathBuf,
+    pub(crate) identifier: String,
+    pub(crate) version: Version,
+    pub(crate) product: PathBuf,
+}
+
+/// A `pkgbuild` that writes [`FakePkgbuild::BYTES`] as the component pkg and a `productbuild`
+/// that writes [`FakePkgbuild::PRODUCT_BYTES`] as the product, or fails with `fail` (the
+/// component) or `fail_product` (the product) when set. Each call is recorded, the component's
+/// with the tree as it was then (every path under the root, with `/` after a directory's,
+/// sorted).
 #[derive(Default)]
 pub(crate) struct FakePkgbuild {
     pub(crate) fail: Option<PortError>,
+    pub(crate) fail_product: Option<PortError>,
     pub(crate) calls: RefCell<Vec<PkgCall>>,
+    pub(crate) product_calls: RefCell<Vec<ProductCall>>,
     pub(crate) trees: RefCell<Vec<Vec<String>>>,
 }
 
 impl FakePkgbuild {
-    /// What the fake writes as the pkg.
-    pub(crate) const BYTES: &'static [u8] = b"a flat pkg";
+    /// What the fake writes as the component pkg.
+    pub(crate) const BYTES: &'static [u8] = b"a component pkg";
+
+    /// What the fake writes as the product pkg.
+    pub(crate) const PRODUCT_BYTES: &'static [u8] = b"a product pkg";
 }
 
 /// Every path under `root`, relative to it, a directory's with a `/` after it, sorted.
@@ -660,6 +677,28 @@ impl BuildPkg for FakePkgbuild {
             Some(e) => Err(e.clone()),
             None => {
                 std::fs::write(pkg, Self::BYTES).expect("write the pkg");
+                Ok(())
+            }
+        }
+    }
+
+    fn build_product(
+        &self,
+        component: &Path,
+        identifier: &str,
+        version: &Version,
+        product: &Path,
+    ) -> Result<(), PortError> {
+        self.product_calls.borrow_mut().push(ProductCall {
+            component: component.to_owned(),
+            identifier: identifier.to_owned(),
+            version: *version,
+            product: product.to_owned(),
+        });
+        match &self.fail_product {
+            Some(e) => Err(e.clone()),
+            None => {
+                std::fs::write(product, Self::PRODUCT_BYTES).expect("write the product");
                 Ok(())
             }
         }

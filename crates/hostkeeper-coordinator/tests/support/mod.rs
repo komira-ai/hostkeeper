@@ -420,6 +420,7 @@ impl Farm {
             control_tls: control_tls.clone(),
             heartbeat_listen: HEARTBEAT_ADDR.parse().expect("an address"),
             control_listen: CONTROL_ADDR.parse().expect("an address"),
+            lan_listen: None,
             reload,
             lock: hostkeeper_coordinator::lock::LockGuard::new(()),
         };

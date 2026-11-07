@@ -3,6 +3,7 @@
 //! a request body that tells whether it was read.
 
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -71,6 +72,8 @@ pub struct Files {
     pub ca_key: PathBuf,
     pub server_cert: PathBuf,
     pub names: Vec<String>,
+    /// The IP addresses the server certificate names besides (`--lan-listen`'s).
+    pub ips: Vec<IpAddr>,
 }
 
 impl Files {
@@ -80,6 +83,7 @@ impl Files {
             ca_key: dir.path().join("ca.key"),
             server_cert: dir.path().join("server.pem"),
             names: vec![SERVER_NAME.to_owned()],
+            ips: Vec::new(),
         }
     }
 
@@ -91,6 +95,7 @@ impl Files {
             ca_init: init,
             server_cert: &self.server_cert,
             server_names: &self.names,
+            server_ips: &self.ips,
         }
     }
 

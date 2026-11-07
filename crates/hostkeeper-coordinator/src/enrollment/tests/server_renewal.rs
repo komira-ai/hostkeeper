@@ -376,8 +376,13 @@ async fn a_renewal_that_cannot_be_written_keeps_the_certificate_in_use_and_says_
 #[tokio::test]
 async fn a_file_the_tick_cannot_read_is_an_error_and_a_missing_one_is_made_again() {
     let rig = Rig::new("renew-unreadable");
-    let file = ServerFile::new(Arc::new(RealFs), &rig.files.server_cert, &rig.files.names)
-        .expect("a file");
+    let file = ServerFile::new(
+        Arc::new(RealFs),
+        &rig.files.server_cert,
+        &rig.files.names,
+        &[],
+    )
+    .expect("a file");
     assert_eq!(file.path(), rig.files.server_cert.as_path());
     let first = leaf_of(&rig.files.server_cert);
     std::fs::remove_file(&rig.files.server_cert).expect("removed");

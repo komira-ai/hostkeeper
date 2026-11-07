@@ -129,6 +129,7 @@ fn enrollment_in(dir: &Scratch) -> Arc<Enrollment> {
         ca_init: true,
         server_cert: &server_cert,
         server_names: &names,
+        server_ips: &[],
     };
     Arc::new(
         setup(Arc::new(RealFs), &files, Arc::new(FixedClock), os_random())

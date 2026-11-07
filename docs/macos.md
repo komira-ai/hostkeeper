@@ -82,7 +82,7 @@ serve it:
 launchd has no counterpart of the unit's `ExecStartPre=`, so on a Mac the binary directory gets
 its first binary at install: the pkg's `postinstall` runs
 `/usr/local/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/local/bin/hostkeeper`
-(see [Release and installer pkg](#release-and-installer-pkg)). A `current` that later starts
+as its first command (see [Release and installer pkg](#release-and-installer-pkg)). A `current` that later starts
 nothing (removed by hand, or a link to a version that is gone) leaves launchd retrying a program it
 cannot spawn; installing the pkg again seeds it.
 
@@ -366,34 +366,92 @@ system roots macOS keeps there, which the pkg does not install. (A Linux host re
 `/etc/ssl/certs/ca-certificates.crt`, or `/etc/pki/tls/certs/ca-bundle.crt` when only that one
 exists.)
 
-It has one script, a `postinstall` of one command, which the installer runs as root once the files
-are in place:
+The file `hostkeeper-<v>-macos-arm64.pkg` is a distribution pkg: `productbuild` wraps the component
+pkg that `pkgbuild` makes from the payload and the script, and the wrapper holds the one
+component and nothing else (no installer script, no installation check, no volume check). The
+installer runs the component's one script, a `postinstall` of three commands, as root once the
+files are in place. Each command that fails ends the script with its status, which fails the
+install, and the last one is the script's own status:
 
 ```
-exec '/usr/local/bin/hostkeeper' self-update-seed --state-dir '/var/lib/updater/state' --binary '/usr/local/bin/hostkeeper'
+#!/bin/sh
+# The hostkeeper pkg's postinstall: three commands, in order. One that fails ends the
+# script with its status and its message, which fails the install.
+# 1. When current of the binary directory of hostkeeper's own update starts nothing,
+#    put the binary the pkg installed there and point current at it; when current
+#    starts a binary, as after a self-update, change nothing.
+# 2. Write the daemon config from the managed preferences the MDM installed. A config
+#    that is there is kept; with neither, fail.
+# 3. Load the daemon's launchd job, once any copy loaded before is booted out (which
+#    fails when none is loaded).
+'/usr/local/bin/hostkeeper' self-update-seed --state-dir '/var/lib/updater/state' --binary '/usr/local/bin/hostkeeper' || exit
+'/usr/local/bin/hostkeeper' mac-config --managed '/Library/Managed Preferences/dev.hostkeeper.config.plist' --config '/etc/hostkeeper/hostkeeper.toml' || exit
+'/bin/launchctl' bootout 'system/dev.hostkeeper.hostkeeper' 2>/dev/null
+exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'
 ```
 
-It is the seed the Linux unit runs before each start (`hostkeeper_daemon::seed`): when `current`
-of the binary directory starts nothing, it stages the installed binary as its version
-(`versions/<version>`) and points `current` at it, so the job's first start runs it; when
-`current` starts a binary, as after a self-update, it changes nothing, so installing the pkg again
-never puts an older binary back over an update. A seed that cannot do its work fails the install
-with its message: the binary or the directory cannot be read or written, or a daemon holds the
-state directory's lock while `current` starts nothing (a daemon an older pkg started, which runs
-`/usr/local/bin/hostkeeper`; boot its job out before installing). The script starts nothing and
-writes no config. The operator's bootstrap places `hostkeeper.toml` and loads the job. The pkg carries no installer signature, since that needs an
+1. The seed is the one the Linux unit runs before each start (`hostkeeper_daemon::seed`): when
+   `current` of the binary directory starts nothing, it stages the installed binary as its version
+   (`versions/<version>`) and points `current` at it, so the job's first start runs it; when
+   `current` starts a binary, as after a self-update, it changes nothing, so installing the pkg again
+   never puts an older binary back over an update. A seed that cannot do its work fails the install
+   with its message: the binary or the directory cannot be read or written, or a daemon holds the
+   state directory's lock while `current` starts nothing (a daemon an older pkg started, which runs
+   `/usr/local/bin/hostkeeper`; boot its job out before installing).
+2. `hostkeeper mac-config [--managed <file>] [--config <file>]` (`hostkeeper_daemon::mac_config`)
+   writes the daemon config; the flags default to the paths in the script. A config that is there
+   as a regular file is kept: nothing is written, the managed file is not read, and the line
+   `hostkeeper mac-config: <path> exists and is kept; the managed config is not read` goes to
+   standard error. Anything else at the config path, a link or a directory, is left as it is and
+   refused (`<path> is there but is not a regular file; it is not replaced`), since the daemon
+   reads its config only from a regular file and not through a link. Otherwise the verb reads the managed preferences file, which the
+   config profile of the MDM makes (see the farm's config profile in
+   [hostkeeper-mdm.md](design/hostkeeper-mdm.md) section 4). It accepts that file only when root
+   owns it, no one else can write it and it is a regular file (checked on the open file, so a link
+   is refused). The file is a property list, binary or XML, whose top level is a dictionary. The
+   verb renders it as TOML and has the daemon's config loader judge that text, so a missing key,
+   an unknown key or a bad value is refused with the loader's reason, as in a hand-written file.
+   A date, a data value or a uid, and an integer that does not fit 64 bits, has no form in the
+   config and is refused naming its key. The config is then written atomically (a temporary file in
+   the config's directory, synced, hard-linked to the config path, which fails when a config
+   appeared meanwhile; that one is judged as above), as root's file of mode 0600, and its directory is made
+   with mode 0755 when it is missing. The file starts with a comment that names the managed
+   preferences domain `dev.hostkeeper.config`. With neither a managed file nor a config, the verb
+   fails with a message that names both paths, and so does the install.
+3. `launchctl bootout` unloads a copy of the job loaded before, and its status is ignored
+   because it fails when none is loaded. `launchctl bootstrap` loads the job, and `RunAtLoad`
+   starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+
+The manual path, for a Mac without an MDM: place `/etc/hostkeeper/hostkeeper.toml` first, then
+install the pkg. `mac-config` keeps that file, and the postinstall loads the job. Installing the
+pkg with neither a config nor a managed file fails at `mac-config`, before the job is loaded.
+
+The pkg carries no installer signature, since that needs an
 Apple Developer ID Installer identity. It is attested like every other asset, and the binary in it
 keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
-`cargo xtask release macos-pkg` builds it with `pkgbuild` from the binary, `gh` and the trusted
-root (`--binary`, `--gh`, `--trusted-root`); `cargo xtask release check-macos-pkg` reads back the
-pkg that `pkgutil --expand` expanded (the files `Bom`, `PackageInfo` and `Payload`, and the
-directory `Scripts` it expands the pkg's scripts into), against the same three files, and refuses a
-missing part and any other file, mode, owner or bytes, any script but that `postinstall` (a regular
-file of mode 0755) with exactly those bytes, a plist whose program is not `current` of the binary directory or whose output paths are
-not the daemon's two log files, and a newsyslog file whose entries name other paths than those two.
+`cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
+trusted root (`--binary`, `--gh`, `--trusted-root`), then runs `productbuild --package` over it
+with the pkg identifier and the version and no signature; only the product goes to `--out`, and
+the digest line is its digest. `cargo xtask release check-macos-pkg` reads back the product
+archive that `pkgutil --expand` expanded, layer by layer.
+
+- The outer layer holds exactly the file `Distribution` and the directory `hostkeeper.pkg`, no
+  link in place of either, and no other entry. `Distribution` must have the root element
+  `installer-gui-script`; every `pkg-ref` with an `id` has the identifier `dev.hostkeeper.hostkeeper`
+  and none lacks one; exactly one `pkg-ref` names the file `#hostkeeper.pkg` and carries the
+  release version; a `product` element has the identifier and the version; the `onConclusion`
+  attribute of that reference, when present, is `none`; and it holds no `script`,
+  `installation-check` or `volume-check` element.
+- The component directory `hostkeeper.pkg` is read as the whole pkg was before the wrapper: the
+  files `Bom`, `PackageInfo` and `Payload`, and the directory `Scripts` that `pkgutil` expands the
+  pkg's scripts into, against the same three files. It refuses a missing part and any other file,
+  mode, owner or bytes, any script but that `postinstall` (a regular file of mode 0755) with exactly
+  the bytes above, a plist whose program is not `current` of the binary directory or whose output
+  paths are not the daemon's two log files, and a newsyslog file whose entries name other paths
+  than those two.
 
 Since no pull request runs the macOS build, the unit tests of the check read fixtures, not what
-`pkgbuild` and `pkgutil` really make. A pull request that changes `crates/xtask/src/release/macos_pkg*`,
+`pkgbuild`, `productbuild` and `pkgutil` really make. A pull request that changes `crates/xtask/src/release/macos_pkg*`,
 `crates/hostkeeper-launchd/` or `.github/workflows/artifacts.yml` therefore links, before it
 merges, a green run of the artifacts workflow started by hand on its branch (`gh workflow run
 artifacts.yml --ref <branch>`), which builds, expands and checks the pkg on the macOS runner and

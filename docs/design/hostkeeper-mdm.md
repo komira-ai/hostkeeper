@@ -86,7 +86,8 @@ the nonce before the request, and a gate call named `CheckSerial` where the code
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
 | Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). Its enrollment side (config profile, nonce, pkg) is not built, and it runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its eight decline tokens (`crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. No nonce is issued yet, so no Mac is approved by a nonce today. |
-| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its seed postinstall (`docs/macos.md`). **Not built**: the daemon sends no nonce, and the pkg writes no config. |
+| MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). **Not built**: the binary with its verbs (M4, M5), so nothing in this repository installs the stack yet. |
+| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). **Not built**: the daemon sends no nonce. |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
 The kit's code is in three places:
@@ -131,7 +132,7 @@ Before this document the two disagreed, and nonce delivery depends on the answer
 - Design section 5.9 said "the pkg's postinstall writes the whole daemon config
   (`hostkeeper.toml`: coordinator, CA hash, release channel and trusted signers)", and section 4.6
   said the same. Neither said where a generic release pkg would get those values.
-- `docs/macos.md`, matching the code today, says: "The script starts nothing and writes no
+- `docs/macos.md`, matching the code at that time, said: "The script starts nothing and writes no
   config. The operator's bootstrap places `hostkeeper.toml` and loads the job."
 
 **Decision: the postinstall writes the config, from a managed config profile that the gate
@@ -148,7 +149,7 @@ installs before the pkg.** The pkg itself carries no config. The steps:
 3. The pkg's postinstall runs three commands of the installed binary, in order. Each command stops
    the install with its message if it fails.
    - `self-update-seed`, unchanged (**Built**).
-   - `mac-config`, a new verb. It reads the managed preferences of the domain, which macOS
+   - `mac-config`, a new verb (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`). It reads the managed preferences of the domain, which macOS
      writes to `/Library/Managed Preferences/dev.hostkeeper.config.plist` (a binary or XML
      plist). The path, the file's owner and its mode are to verify on a device (tasks M11 and
      M16), because Apple's payload schema does not state them. The verb accepts the file only when
@@ -165,6 +166,10 @@ installs before the pkg.** The pkg itself carries no config. The steps:
    - `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, only
      when a config file exists after `mac-config`, and after any earlier copy of the job is booted
      out.
+
+   The three commands are **Built** as the pkg's postinstall
+   (`crates/hostkeeper-launchd/src/postinstall.rs`), and `check-macos-pkg` holds the script to its
+   exact bytes (`crates/xtask/src/release/macos_pkg.rs`).
 
 Why the profile and not the pkg:
 
@@ -188,11 +193,12 @@ fails, and the re-send covers it.
 
 **The manual path.** A Mac without MDM, or one being debugged, is installed by hand. The operator
 places `hostkeeper.toml` first, then installs the pkg. `mac-config` finds the file, keeps it, and
-the job is loaded. This is the "operator's bootstrap" of today's `docs/macos.md`, with the job
+the job is loaded. This is the "operator's bootstrap" of the earlier `docs/macos.md`, with the job
 load moved into the pkg. The Mac is then approved by an operator, as a Linux host is.
 
-Design sections 4.6 and 5.9 were changed with this document. Task M10 changes `docs/macos.md`
-and the postinstall check of `check-macos-pkg`.
+Design sections 4.6 and 5.9 were changed with this document. Task M10 changed `docs/macos.md`
+and the postinstall check of `check-macos-pkg` (**Built**: `docs/macos.md`,
+`crates/xtask/src/release/macos_pkg.rs`).
 
 ## 5. The nonce
 
@@ -308,8 +314,10 @@ nonce field, and the gRPC adapter always sends `mac_nonce` empty. New:
 
 The postinstall's `mac-config` and the daemon's nonce read use the same plist reader, the
 `plist` crate. It is already declared in the root `Cargo.toml` (rule R5) and used by xtask's
-`check-macos-pkg` and by tests. M10 adds the production use, updates the root comment that calls
-it test-only, and checks that its features read both binary and XML plists.
+`check-macos-pkg` and by tests. M10 added the production use (**Built**:
+`crates/hostkeeper-daemon/src/mac_config.rs`), updated the root comment that called it
+test-only, and tests that it reads both binary and XML plists
+(`crates/hostkeeper-daemon/tests/mac_config.rs`).
 
 ### 5.4 Re-issue and clean-up
 
@@ -382,7 +390,7 @@ The flow of section 1. It is the only path with no person at the Mac after step 
 The profile kbf's kit renders already has these properties (`is_supervised`, `is_mandatory`, not
 `is_mdm_removable`, and a long `skip_setup_items` list), and the kit's parser refuses anything
 weaker. The port keeps that check and sets the existing `auto_advance_setup` to
-true.
+true (**Built**: `AdeProfile::from_config` in `crates/hostkeeper-mdm-core/src/profile.rs`).
 
 The cost: a wipe. On Apple silicon, "Erase All Content and Settings" or the MDM `EraseDevice`
 erases every user's data and every extra volume. On a farm Mac that means its build state, its
@@ -511,9 +519,10 @@ Pkg 4 is the negative case that shows the root payload is what makes pkg 3 pass.
 installs, the farm identity is the answer. If it does not, Developer ID Installer is required, and
 question Q4 asks for it.
 
-Whatever the test says, the release pkg becomes a distribution pkg (`productbuild` around today's
+Whatever the test says, the release pkg becomes a distribution pkg (`productbuild` around the
 component pkg). It costs one tool call in `cargo xtask release macos-pkg`, every source that
-names a format names that one, and `check-macos-pkg` reads both layers.
+names a format names that one, and `check-macos-pkg` reads both layers (**Built**:
+`crates/xtask/src/release/macos_pkg.rs`, `crates/xtask/src/release/macos_pkg/distribution.rs`).
 
 ### 7.3 Who signs, for each outcome
 
@@ -550,6 +559,7 @@ CA, the ADE profile, the unit and path names. The order:
    gate, `kbf-mdm`, is not ported. It was never deployed, its two ends do not agree on a protocol,
    and its OS-update and erase verbs are not v1 work. The design takes only its lessons: the
    loopback-only NanoHUB URL, the trusted-file checks, and profiles by allowlisted digest.
+   **Built** for M2: `crates/hostkeeper-mdm-core`, recorded in `MIGRATION.md`.
 2. **Rename to hostkeeper names.**
    - user `hostkeeper-mdm`;
    - `/var/lib/hostkeeper-mdm`, `/etc/hostkeeper-mdm`, `/opt/hostkeeper-mdm/bin`;
@@ -735,7 +745,7 @@ pull request.
 | # | Task | After | Size |
 |---|---|---|---|
 | M1 | This design. Design 5.9 and 4.6 point at it and say the config comes from a managed profile | none | S |
-| M2 | `hostkeeper-mdm-core`: port of `mdm-core`, pure, hostkeeper names. Fixes from komira-ai/kbf#2248: the three loopback ports checked together; checked constructors and read-only accessors for `MdmConfig` and `Cidr`; DNS label and name length limits; authorities with whitespace, queries and fragments. ADE profile with `auto_advance_setup` true | M1 | M |
+| M2 | `hostkeeper-mdm-core`: port of `mdm-core`, pure, hostkeeper names. Fixes from komira-ai/kbf#2248: the three loopback ports checked together; checked constructors and read-only accessors for `MdmConfig` and `Cidr`; DNS label and name length limits; authorities with whitespace, queries and fragments. ADE profile with `auto_advance_setup` true. **Built**: `crates/hostkeeper-mdm-core` | M1 | M |
 | M3 | `hostkeeper-mdm-step`: port of `host-step`. Fixes: the path's trusted owners include the operator's and the service's (a filesystem-backed test); a unique temporary name per writer; an existing account that resolves to uid 0 refused; whole-output redaction tests. **Built**: `crates/hostkeeper-mdm-step`; the owners are granted per directory with `RealHost::trust_below`, which M4 calls for `--bin-dir` and the state directory | M1 | M |
 | M4 | `hostkeeper-mdm` binary, verbs `fetch`, `install`, `tls`, `verify`: port of `mdm-host`. Fixes: restarts planned from the installed state, not only this run's changes; malformed ACME settings refused, not skipped; `lego --help` exit status checked; archive limits exact and safe at `u64::MAX`; environment files read by systemd's rules; a typed error for `Tool::named`. The test gaps of komira-ai/kbf#2248 as tests: download redirects (HTTPS to HTTP, cycles, exhaustion), bodies of exactly the limit, chunked and interrupted bodies; TLS with a directory or link at the certificate path, a malformed certificate, a missing or mismatched key, renewal and the proxy reload; install with a damaged SCEP depot, failures part-way through a plan and the retry, uninstall during the certificate or reload job, two uninstall snapshots in one second, an unsupported architecture refused first; whole-output redaction | M2, M3 | L |
 | M5 | Verbs `push-cert`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), the enrollment profile at `/enroll` (mode 0640, the service group's), the pkg directory and `/pkg/` route in the proxy, and `migrate --from` (section 8), from kbf-deploy's `mdm` | M4 | M |
