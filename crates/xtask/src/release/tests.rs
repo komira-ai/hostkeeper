@@ -115,9 +115,9 @@ fn stamp_prints_the_stamp_without_asking_for_adapters() {
 }
 
 #[test]
-fn set_version_and_compare_images_ask_for_no_adapters() {
-    // Catches: `set-version` or `compare-images` building the real adapters, so that they would
-    // need git and gh on the runner.
+fn set_version_compare_images_and_netboot_ask_for_no_adapters() {
+    // Catches: `set-version`, `compare-images` or `netboot` building the real adapters, so that
+    // they would need git and gh on the runner.
     let d = scratch("release-offline");
     let (out, connected) = connects(verb(&[
         "set-version",
@@ -137,6 +137,19 @@ fn set_version_and_compare_images_ask_for_no_adapters() {
         text(&d.join("b")),
     ]));
     assert!(out.is_ok(), "{out:?}");
+    assert!(!connected);
+
+    // `netboot` reads the pins and nothing else.
+    let (out, connected) = connects(verb(&[
+        "netboot",
+        "--pins",
+        text(&d.join("absent.toml")),
+        "--version",
+        "0.1.9",
+        "--dir",
+        text(&d),
+    ]));
+    assert!(matches!(out, Err(Error::Io { .. })), "{out:?}");
     assert!(!connected);
 }
 
@@ -172,6 +185,18 @@ fn verbs_that_read_no_port_run_with_the_ports_lent_back() {
 
     let index = verb(&["index", "--version", "0.1.9", "--dir", text(&d)]);
     assert!(matches!(run_with(index, &ports), Err(Error::Refused(_))));
+
+    let pins = d.join("pins.toml");
+    let netboot = verb(&[
+        "netboot",
+        "--pins",
+        text(&pins),
+        "--version",
+        "0.1.9",
+        "--dir",
+        text(&d),
+    ]);
+    assert!(matches!(run_with(netboot, &ports), Err(Error::Io { .. })));
 
     let absent = d.join("absent");
     let check = verb(&[

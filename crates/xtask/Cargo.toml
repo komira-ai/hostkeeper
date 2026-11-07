@@ -76,6 +76,10 @@ hostkeeper-package = { path = "../hostkeeper-package" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The daemon's unpacker (design 5.5), which the package test unpacks the produced archive with.
 hostkeeper-unpack = { path = "../hostkeeper-unpack" }
+# The netboot test holds the served names of the shim and GRUB in netboot.json to the ones the
+# packet handling of network install serves them by (`LoaderNames`), for each platform.
+hostkeeper-pxe-packets = { path = "../hostkeeper-pxe-packets" }
+hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The example service hello, whose command-line parser and served version the hello package test
 # checks the package's units and manifest against: the version a package names is the one its
 # server answers `/version` with.

@@ -96,7 +96,7 @@ fn text<'v>(
 }
 
 /// Whether `text` is 64 lowercase hex digits.
-fn is_sha256(text: &str) -> bool {
+pub(crate) fn is_sha256(text: &str) -> bool {
     (text.len() == 64) & text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
