@@ -28,6 +28,8 @@
 //!   each start where they differ, telling the service manager only then; [`seed`] is the verb
 //!   `self-update-seed` the unit runs before each start (on macOS the pkg's `postinstall`, at
 //!   install), which gives the binary directory its first binary.
+//! - [`mac_config`]: the verb `mac-config`, which the pkg's `postinstall` runs to write the
+//!   daemon config from the managed preferences the MDM installed.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
@@ -86,6 +88,7 @@ pub mod link_adapters;
 pub mod links;
 pub mod locks;
 pub mod mac;
+pub mod mac_config;
 pub mod node;
 pub mod notify;
 pub mod observer;

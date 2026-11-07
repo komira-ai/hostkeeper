@@ -10,8 +10,11 @@
 //!
 //! `Enrollment.List` ([`Coordinator::enrollment_list`]) shows each pending request with its
 //! match ([`show_match`], [`match_claims`]): the one record it matches, none, or several (every candidate named, none
-//! chosen). A match fills in a host id and a role for the operator to read; it approves nothing,
-//! and an approval still names the request's key hash (design 5.7, step 3). `Enrollment.Approve`
+//! chosen). A match fills in a host id, a role, and the record's serial and BMC MAC for the
+//! operator to read; it approves nothing, and an approval still names the request's key hash
+//! (design 5.7, step 3). Two pending requests that match one record contest it ([`contests`]):
+//! the list names, on each, the others, and `Enrollment.Approve` of any of them is refused
+//! `record_contested` until all but one are rejected. `Enrollment.Approve`
 //! matches the request again ([`match_claims`]): a request (not a renewal) that matches exactly
 //! one record is approved as that record's host id, which an empty host id defaults to, and
 //! another host id is `record_mismatch` unless the approval replaces.
@@ -25,8 +28,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hostkeeper_enrollment::enroll::{Claims, EnrolledHost, StoreError};
-use hostkeeper_enrollment::names::MacAddress;
+use hostkeeper_enrollment::enroll::{Claims, EnrolledHost, RequestView, StoreError};
+use hostkeeper_enrollment::names::{KeyHash, MacAddress};
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::{HostId, RoleName};
@@ -150,6 +153,35 @@ pub fn match_claims<'a>(claims: &Claims, records: &'a [InventoryRecord]) -> Inve
     }
 }
 
+/// The contested requests among `pending` (network-install design section 7): for each request
+/// that matches a record another of them matches, the ids of those others, sorted. A request
+/// that shares no matching record with another is left out. Records are matched as
+/// [`match_claims`] matches them, so a request that matches several records contests the
+/// requests of each.
+#[must_use]
+pub fn contests(
+    pending: &[RequestView],
+    records: &[InventoryRecord],
+) -> BTreeMap<KeyHash, BTreeSet<KeyHash>> {
+    let index = RecordIndex::new(records);
+    let mut by_record: BTreeMap<usize, BTreeSet<KeyHash>> = BTreeMap::new();
+    for view in pending {
+        for at in index.matching(&view.claims) {
+            by_record.entry(at).or_default().insert(view.request_id);
+        }
+    }
+    let mut contested: BTreeMap<KeyHash, BTreeSet<KeyHash>> = BTreeMap::new();
+    for ids in by_record.values().filter(|ids| ids.len() > 1) {
+        for id in ids {
+            contested
+                .entry(*id)
+                .or_default()
+                .extend(ids.iter().filter(|other| *other != id));
+        }
+    }
+    contested
+}
+
 /// The records, by the data MACs and the serials that pick them out.
 pub struct RecordIndex<'a> {
     records: &'a [InventoryRecord],
@@ -184,11 +216,11 @@ impl<'a> RecordIndex<'a> {
         Self { records, by_key }
     }
 
-    /// The one record a request claiming `claims` matches, as [`match_claims`] matches it;
-    /// `None` when none or several do. A record that matches holds the claimed Mac serial or
-    /// one of the claimed data MACs, so only those records are compared.
+    /// Every record a request claiming `claims` matches, as [`match_claims`] matches them, as
+    /// their places in the records, in order. A record that matches holds the claimed Mac
+    /// serial or one of the claimed data MACs, so only those records are compared.
     #[must_use]
-    pub fn matched(&self, claims: &Claims) -> Option<&'a InventoryRecord> {
+    pub fn matching(&self, claims: &Claims) -> Vec<usize> {
         let keys: Vec<String> = if claims.mac_serial.is_empty() {
             claims
                 .data_macs()
@@ -204,13 +236,18 @@ impl<'a> RecordIndex<'a> {
             .flatten()
             .copied()
             .collect();
-        let found: Vec<&'a InventoryRecord> = candidates
+        candidates
             .into_iter()
-            .filter_map(|at| self.records.get(at))
-            .filter(|record| record.matches(claims))
-            .collect();
-        match found.as_slice() {
-            [one] => Some(one),
+            .filter(|&at| self.records.get(at).is_some_and(|r| r.matches(claims)))
+            .collect()
+    }
+
+    /// The one record a request claiming `claims` matches, as [`match_claims`] matches it;
+    /// `None` when none or several do.
+    #[must_use]
+    pub fn matched(&self, claims: &Claims) -> Option<&'a InventoryRecord> {
+        match self.matching(claims).as_slice() {
+            [one] => self.records.get(*one),
             _ => None,
         }
     }
@@ -350,8 +387,8 @@ fn claims_of(claims: &agent::Claims) -> Claims {
     }
 }
 
-/// Fills in how the pending request `pending` matches `records`: the one record's host id and
-/// role, every candidate of an ambiguous match, or unmatched.
+/// Fills in how the pending request `pending` matches `records`: the one record's host id,
+/// role, serial and BMC MAC, every candidate of an ambiguous match, or unmatched.
 pub fn show_match(pending: &mut proto::PendingEnrollment, records: &[InventoryRecord]) {
     let claims = claims_of(&pending.claims.clone().unwrap_or_default());
     match match_claims(&claims, records) {
@@ -359,6 +396,8 @@ pub fn show_match(pending: &mut proto::PendingEnrollment, records: &[InventoryRe
             pending.set_inventory_match(proto::InventoryMatch::Matched);
             pending.record_host_id.clone_from(&record.host_id);
             pending.record_role.clone_from(&record.role);
+            pending.record_serial.clone_from(&record.serial);
+            pending.record_bmc_mac.clone_from(&record.bmc_mac);
         }
         InventoryMatch::Unmatched => pending.set_inventory_match(proto::InventoryMatch::Unmatched),
         InventoryMatch::Ambiguous(ids) => {

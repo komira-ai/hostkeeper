@@ -1141,8 +1141,8 @@ itself and falls back after
 starts within
 <span data-cell="c-burst-window" data-source="crates/hostkeeper-steps/src/selfupdate.rs" data-item="START_LIMIT_WINDOW_SECS">300 s</span>.
 The timer job meant to run it is rendered but not installed.</li>
-<li>The installer is an unsigned <code>.pkg</code> holding the binary, the daemon&rsquo;s plist, its log directory and
-newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root, with no scripts. The operator writes <code>hostkeeper.toml</code>.</li>
+<li>The installer is an unsigned distribution <code>.pkg</code> (<code>productbuild</code> around one component pkg) holding the binary, the daemon&rsquo;s plist, its log directory and
+newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root. Its <code>postinstall</code> seeds the binary directory, writes <code>hostkeeper.toml</code> from the MDM&rsquo;s managed preferences (<code>hostkeeper mac-config</code>, which keeps a config already there) and loads the daemon&rsquo;s job.</li>
 </ul>
 <p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine
@@ -1350,11 +1350,8 @@ the coordinator and the daemon started as child processes on loopback and driven
 <code>hostkeeper ctl</code>. <code>first_boot.rs</code> covers an enrollment, its approval, the host certificate,
 heartbeats over mutual TLS and a restart of each program. <code>install_uninstall.rs</code> covers a package
 assigned and installed once across coordinator restarts, and kept by the daemon&rsquo;s boot pass, from a
-release channel the test serves over HTTPS. Its update and uninstall tests are ignored for the gaps
-they found: an update after an install is refused <code>try_conflict</code>
-(<a href="https://github.com/komira-ai/hostkeeper/issues/109"><code>komira-ai/hostkeeper#109</code></a>), and the Linux
-launcher runs no <code>uninstall</code> hook
-(<a href="https://github.com/komira-ai/hostkeeper/issues/110"><code>komira-ai/hostkeeper#110</code></a>). Its one stand-in is the attestation
+release channel the test serves over HTTPS, then updated to a new desired version, then uninstalled
+by the operator: the package, its placed file and its unit are taken off the host. Its one stand-in is the attestation
 verifier, <code>true</code> in place of <code>gh</code>. A renewal is not covered: no flag shortens the host
 certificate&rsquo;s validity (<a href="https://github.com/komira-ai/hostkeeper/issues/100"><code>komira-ai/hostkeeper#100</code></a>). On macOS, the
 <code>macos-device</code> job above is the only test that runs the daemon binary under launchd.</li>

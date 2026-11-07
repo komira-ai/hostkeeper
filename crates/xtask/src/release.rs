@@ -45,7 +45,7 @@
 //!   version already there.
 //!
 //! The names and formats a consumer relies on are in [`contract`]. The adapters that run `git`,
-//! `gh` and `pkgbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
+//! `gh`, `pkgbuild` and `productbuild` are in [`git`], [`github`] and [`macos_pkg`], over the [`ports::Exec`]
 //! port; the only code that starts
 //! a process is `real::SystemExec`, built in [`real`] alone.
 
@@ -265,10 +265,11 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Build the installer pkg of a Mac's first install with `pkgbuild`: the daemon binary, its
-    /// launchd plist, its log directory and newsyslog file, the pinned `gh` and the Sigstore
-    /// trusted root, nothing else, and one script, a postinstall that seeds the binary directory
-    /// the plist starts `current` of.
+    /// Build the installer pkg of a Mac's first install: `pkgbuild` builds a component pkg of the
+    /// daemon binary, its launchd plist, its log directory and newsyslog file, the pinned `gh`
+    /// and the Sigstore trusted root, nothing else, and one script, a postinstall that seeds the
+    /// binary directory the plist starts `current` of, writes the config with `mac-config` and
+    /// loads the job; `productbuild` wraps the component as the unsigned distribution pkg.
     MacosPkg {
         #[arg(long)]
         version: Version,
@@ -282,19 +283,22 @@ pub(crate) enum Verb {
         /// `/usr/local/lib/hostkeeper/trusted_root.json` in the pkg.
         #[arg(long)]
         trusted_root: PathBuf,
-        /// A directory to lay the pkg's tree and its scripts out in; it must not exist.
+        /// A directory to lay the pkg's tree and its scripts out in, and to write the component
+        /// pkg to; it must not exist.
         #[arg(long)]
         stage: PathBuf,
-        /// The directory the pkg is written to.
+        /// The directory the distribution pkg is written to.
         #[arg(long)]
         out: PathBuf,
     },
-    /// Check a pkg that `pkgutil --expand` expanded into a directory: its one script, the
-    /// postinstall `macos-pkg` writes, and a payload
-    /// of exactly the binary, the daemon's plist, its log directory and newsyslog file, `gh` and
-    /// the trusted root with their modes, owners and bytes.
+    /// Check a distribution pkg that `pkgutil --expand` expanded into a directory: a
+    /// `Distribution` that names the one component under the pkg's identifier and version and
+    /// runs no installer script, and the component, whose one script is the postinstall
+    /// `macos-pkg` writes (byte for byte) and whose payload is exactly the binary, the daemon's
+    /// plist, its log directory and newsyslog file, `gh` and the trusted root with their modes,
+    /// owners and bytes.
     CheckMacosPkg {
-        /// The directory `pkgutil --expand` wrote.
+        /// The directory `pkgutil --expand` wrote of the distribution pkg.
         expanded: PathBuf,
         #[arg(long)]
         version: Version,

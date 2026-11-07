@@ -334,8 +334,8 @@ fn pins_whose_values_are_not_of_their_form_are_refused_naming_each() {
         ),
         (
             "https://cd.example/r/u-arm64.iso",
-            "https://u-arm64.iso",
-            "linux-arm64.iso.url: \"https://u-arm64.iso\" is not an https:// URL of a live-server ISO of arm64 (a file named ...-arm64.iso)",
+            "https://cd.example",
+            "linux-arm64.iso.url: \"https://cd.example\" is not an https:// URL of a live-server ISO of arm64 (a file named ...-arm64.iso)",
         ),
         (
             "https://cd.example/r/u-arm64.iso",
@@ -416,7 +416,9 @@ fn pins_whose_values_are_not_of_their_form_are_refused_naming_each() {
     for (from, to, problem) in cases {
         assert_eq!(render(&edited(from, to)), refused(&[problem]), "{to}");
     }
-    for release in ["24", "24.04.5.1", "24..5", "24.04a", ".04"] {
+    // Four numbers are too many (written as a documentation address, which is what they look
+    // like).
+    for release in ["24", "192.0.2.1", "24..5", "24.04a", ".04"] {
         assert_eq!(
             render(&edited("\"24.04.5\"", &format!("{release:?}"))),
             refused(&[&format!(

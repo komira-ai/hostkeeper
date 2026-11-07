@@ -9,6 +9,15 @@
 // renewal) that matches one record is approved as that record's host id: an empty host id is sent
 // empty for the coordinator to fill in, and another host id needs Replace. The answer names the
 // host id approved.
+//
+// A matched Linux request is shown with the claims that are hard to copy beside the record's
+// values: its DMI serial, its BMC MAC and its product UUID (the record holds no UUID yet, so it is
+// "not recorded"). A value the record does not hold is "not recorded" and a claim left out "not
+// claimed", neither shown as agreement; a BMC MAC the record holds and the request does not claim
+// is a warning. Beside the match line, the page says that "matched" is not proof. A request that
+// another pending request contests (`contestedBy`: they match one record) says so, naming the
+// others, and its approval is refused in the page, as the coordinator refuses it
+// (`record_contested`), until the operator rejects all but one.
 
 import {
   h, action, checkbox, errorView, field, fmtUnix, reasonProblem, table, trimmed, words,
@@ -45,8 +54,14 @@ function recordHostId(request) {
   return matched ? request.recordHostId || "" : "";
 }
 
+// The request ids of the other pending requests that contest `request`'s record.
+function contestedBy(request) {
+  return Array.isArray(request.contestedBy) ? request.contestedBy : [];
+}
+
 // The ApproveRequest for `request` (a PendingEnrollment) from what the operator typed, or a
 // sentence saying what is missing or wrong, each input checked on its own against its grammar.
+// A contested request is not approved, whatever was typed.
 // The key hash is the one the list gave, sent back unchanged; `replace` is true only when its box
 // is ticked. For a request that matches one record, an empty host id is sent empty (the
 // coordinator approves it as the record's), and another host id than the record's needs Replace.
@@ -57,6 +72,9 @@ export function approval(request, form) {
   const reason = trimmed(form.reason);
   const record = recordHostId(request);
   const replace = form.replace === true;
+  if (contestedBy(request).length > 0) {
+    return "This request is contested: reject the other requests that match its record first.";
+  }
   if (hostId === "" && record === "") {
     return "Name the host id.";
   }
@@ -108,6 +126,78 @@ export function matchLine(request) {
   }
 }
 
+// What the approval screen says beside a match line of one record. Its full stop is a string of
+// its own: the source scan of tests/sources.rs refuses the text of a call of the console API.
+export const NOT_PROOF = "Matched means this request claims a data MAC of the record and does not "
+  + "contradict its BMC MAC. The machine wrote the claims itself, and anyone who read the label or "
+  + "the network can write the same. Approve only the key hash shown on this machine's console" + ".";
+
+// A text claim or record value, trimmed; "" for none.
+function text(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+// Whether `request` is a Linux request (it claims no Mac serial) that matches one record: by a
+// data MAC, and not contradicting the record's BMC MAC.
+function linuxMatch(request) {
+  return request.inventoryMatch === "INVENTORY_MATCH_MATCHED" && text((request["claims"] || {}).macSerial) === "";
+}
+
+// A MAC in one spelling for comparing: lower case, without separators.
+function macKey(text) {
+  return text.toLowerCase().replace(/[:-]/g, "");
+}
+
+// How a claim compares with the record's value: "same", "differs", "not recorded" or "not
+// claimed" (both missing: "not claimed"). `same` compares two values given.
+function check(claimed, recorded, same) {
+  if (claimed === "") {
+    return "not claimed";
+  }
+  if (recorded === "") {
+    return "not recorded";
+  }
+  return same(claimed, recorded) ? "same" : "differs";
+}
+
+// The claims of a matched Linux `request` that are hard to copy, each beside the record's value
+// and how they compare; and a warning when the record holds a BMC MAC the request does not claim.
+// Nothing for any other request: a Mac request is matched by its serial, which the match line
+// already names the record of.
+export function hardClaims(request) {
+  if (!linuxMatch(request)) {
+    return null;
+  }
+  const c = request["claims"] || {};
+  const rows = [
+    ["DMI serial", text(c.dmiSerial), text(request.recordSerial),
+      (a, b) => a.toLowerCase() === b.toLowerCase()],
+    ["BMC MAC", text(c.bmcMac), text(request.recordBmcMac), (a, b) => macKey(a) === macKey(b)],
+    ["Product UUID", text(c.productUuid), "", (a, b) => a.toLowerCase() === b.toLowerCase()],
+  ].map(([name, claimed, recorded, same]) => [name, claimed, recorded, check(claimed, recorded, same)]);
+  const bmcUnclaimed = rows[1][3] === "not claimed" && rows[1][2] !== "";
+  return h("div", {},
+    table(["Hard to copy", "This request", "The record", ""], rows.map(([name, claimed, recorded, how]) =>
+      h("tr", how === "same" ? {} : { class: "warning" },
+        h("th", {}, name),
+        h("td", {}, claimed || "not claimed"),
+        h("td", {}, recorded || "not recorded"),
+        h("td", {}, how)))),
+    bmcUnclaimed
+      ? h("p", { class: "warning", role: "alert" },
+        `The record holds the BMC MAC ${rows[1][2]}, and this request does not claim one: `
+        + "it matched on a data MAC alone.")
+      : null);
+}
+
+// What a contested `request` says: the others that match its record, and what to do.
+export function contestedLine(request) {
+  const others = contestedBy(request);
+  return `Contested: ${others.length === 1 ? "another pending request matches" : `${others.length} other pending requests match`} `
+    + `the same record: ${others.join(", ")}. Approval is refused until all but one are rejected. `
+    + "Find this machine's key hash on its console, and reject the requests that are not it.";
+}
+
 function pending(ctx, request) {
   const matched = request.inventoryMatch === "INVENTORY_MATCH_MATCHED";
   const form = {
@@ -124,8 +214,13 @@ function pending(ctx, request) {
         "Duplicate claim: another host presents the same machine id or key, or a MAC of an enrolled host. "
         + "Approving it needs Replace.")
       : null,
+    contestedBy(request).length > 0
+      ? h("p", { class: "error", role: "alert" }, contestedLine(request))
+      : null,
     h("p", { class: request.inventoryMatch === "INVENTORY_MATCH_AMBIGUOUS" ? "warning" : "note" },
       matchLine(request)),
+    linuxMatch(request) ? h("p", { class: "warning" }, NOT_PROOF) : null,
+    hardClaims(request),
     table(["", ""], [
       ["Key SHA-256", request.keySha256 || "-"],
       ["Image", request.image || "-"],
