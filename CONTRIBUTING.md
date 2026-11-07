@@ -260,8 +260,8 @@ converged on its own version's package:
 
 - `the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded`;
 - `this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary`: by the released
-  binary's own fallback unit or job, the update `Failed`, `self_update_fallback`, and the
-  coordinator converging the host back on the release;
+  binary's own fallback unit or job, the update `Failed`, `self_update_fallback`, reported to the
+  coordinator;
 - `this_build_updates_to_itself_under_a_newer_version_name`.
 
 To move the pin, in the pull request that needs it: set `tag` and `version`, and each platform's

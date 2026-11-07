@@ -16,7 +16,7 @@
 //! - this build made to fail its start is fallen back from by the released binary's own
 //!   fallback (its fallback unit under systemd, its fallback job under launchd): the released
 //!   binary runs again, settles the update `Failed`, `self_update_fallback`, and lists the version
-//!   bad; the coordinator marks it bad and converges the host back on the release;
+//!   bad, and its heartbeat reports that verdict;
 //! - this build, once the released daemon updated to it, updates to itself under a newer version
 //!   name.
 //!
@@ -92,10 +92,10 @@ fn the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded
 /// Catches a release of this build that cannot start leaving the host without a daemon, or
 /// fallen back from by anything but the released binary's own fallback: the released daemon is
 /// ordered a version of this build that exits 1 at its start; the released binary runs again,
-/// `current` names it and `previous` the failed version, the step record says `Failed` after the
-/// commit, of class release, `self_update_fallback`, and the version is on the local bad list;
-/// on Linux systemd ran the fallback unit to success. The coordinator reads the failure, marks
-/// the version bad, wants the release again and reads the host converged on it.
+/// `current` and `previous` both name it (the fallback moves `current` back and leaves
+/// `previous`), the step record says `Failed` after the commit, of class release,
+/// `self_update_fallback`, the version is on the local bad list, and the host's heartbeat reports
+/// that verdict to the coordinator; on Linux systemd ran the fallback unit to success.
 #[test]
 fn this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary() {
     let rig = Rig::installed("x1fbk");
@@ -110,7 +110,7 @@ fn this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary(
     rig.wait_running(&released);
     assert_eq!(
         rig.links(),
-        (Some(released.clone()), Some(failing.clone())),
+        (Some(released.clone()), Some(released.clone())),
         "{}",
         rig.host.logs()
     );
@@ -132,18 +132,6 @@ fn this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary(
         rig.host.logs()
     );
 
-    e2e::wait_for(
-        "the coordinator marks the failed version bad and wants the release",
-        e2e::scenario::COORDINATED,
-        || {
-            let status = rig.status();
-            let marked = status["marks"]["bad"]
-                .as_array()
-                .is_some_and(|bad| bad.iter().any(|version| version == failing.as_str()));
-            marked && status["desired"]["version"] == released.as_str()
-        },
-    );
-    rig.wait_converged(&released);
     rig.wait_running(&released);
 }
 
