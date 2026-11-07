@@ -85,6 +85,11 @@ pub const ALERT_UNSTOPPABLE: &str = "unstoppable_unit";
 pub const ALERT_JOURNAL: &str = "journal_unavailable";
 /// The alert of a release that is not the one its seal or step record names: a halt.
 pub const ALERT_ARTIFACT_CHANGED: &str = "artifact_changed";
+/// The alert of a hooked order that stopped without a verdict, for any reason but a step that
+/// could not be stopped ([`ALERT_UNSTOPPABLE`]): its service, its reason and what failed.
+pub const ALERT_INTERRUPTED: &str = "order_interrupted";
+/// The warning of a switch around a hooked step that failed and is tried again.
+pub const WARN_SWITCH_RETRIED: &str = "switch_retried";
 /// The alert of a post-success watcher that stopped without a verdict for another reason.
 pub const ALERT_WATCHER: &str = "watcher_interrupted";
 /// The alert of a `boot` step that failed or could not be run.
@@ -98,6 +103,12 @@ pub const ALERT_START: &str = "start_incomplete";
 /// [`Ctx::alert`].
 pub fn alert_line(alert: &str, detail: &str) -> String {
     format!("hostkeeper daemon: level=error alert={alert} {detail}")
+}
+
+/// The log line of a warning: a failure the daemon recovers from by itself, with its `alert=`
+/// field, at warn level.
+pub(crate) fn warn_line(alert: &str, detail: &str) -> String {
+    format!("hostkeeper daemon: level=warn alert={alert} {detail}")
 }
 
 /// Whether the host may have booted since the last start pass wrote the boot id: the id in
