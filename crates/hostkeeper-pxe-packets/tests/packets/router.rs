@@ -75,6 +75,23 @@ fn a_request_with_no_option_93_takes_the_architecture_of_its_discover() {
     assert_eq!(dhcp.lease(OFFERED), Some(want));
 }
 
+/// A REQUEST in the INIT-REBOOT state (option 50, no server identifier) is learned as a
+/// selecting one is: the client takes that address unless the router refuses it.
+#[test]
+fn an_init_reboot_request_is_learned() {
+    let request = ClientPacket::selecting(RECORDED)
+        .without(54)
+        .with(93, &[0, 9]);
+    let (outcomes, dhcp) = learn(&[request]);
+    let want = Lease {
+        address: OFFERED,
+        mac: RECORDED,
+        arch: Some(ClientArch::X86_64_UEFI),
+    };
+    assert_eq!(outcomes, [Outcome::Lease(want)]);
+    assert_eq!(dhcp.lease(OFFERED), Some(want));
+}
+
 /// A REQUEST's own option 93 wins over its DISCOVER's.
 #[test]
 fn a_request_option_93_wins_over_the_discover() {

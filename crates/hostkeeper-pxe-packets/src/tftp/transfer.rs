@@ -5,8 +5,9 @@ use super::packet::{ClientPacket, DEFAULT_BLKSIZE, ErrorCode, Options, oack};
 
 /// The most blocks a transfer sends: a block number is 16 bits, and RFC 1350 says nothing of
 /// what follows block 65535, so a file that needs more is refused rather than numbered past it.
-/// At the default block size that is 32 MiB less 512 bytes; the boot loaders and menus served
-/// by TFTP are a few MiB at most.
+/// The final block is always short (empty when the size is a multiple of the block size), so at
+/// the default block size the largest file served is 65535 * 512 - 1 bytes, 32 MiB less 513; the
+/// boot loaders and menus served by TFTP are a few MiB at most.
 pub const MAX_BLOCKS: u16 = u16::MAX;
 
 /// How many times a packet is sent again, each on a timeout the caller's clock gives, before

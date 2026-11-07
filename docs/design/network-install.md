@@ -579,19 +579,23 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
     nothing.
   - Nothing is sent for: a MAC not in the set, a DHCP message with no PXE vendor class (the installer's own DHCP and
     every ordinary client), the architectures 0 (BIOS) and 10 (32-bit ARM) and an unlisted value, an architecture with
-    no boot set, a REQUEST naming another server, and truncated, oversized or malformed packets.
+    no boot set, a REQUEST naming another server, a packet a relay forwarded (`giaddr` set), and truncated, oversized
+    or malformed packets.
 - Router-mode learning (N7, pure: a packet in, an address, a MAC and an architecture or nothing out): a selecting
   DHCPREQUEST yields the address of its option 50, its `chaddr` and its option 93; a REQUEST with no option 93 takes the
   architecture of an earlier DISCOVER with the same `chaddr`, and with no such DISCOVER yields the address and MAC with
-  no architecture; a REQUEST with no option 50, and a malformed packet, yield nothing. In router mode no packet is ever
-  sent, which a test asserts for every input above.
+  no architecture; a REQUEST with no option 50, and a malformed packet, yield nothing. A REQUEST with option 50 and no
+  server identifier (the INIT-REBOOT state of RFC 2131) is learned as a selecting one is. A run keeps at most 4096
+  addresses and 4096 MACs, and drops the one learned longest ago first. In router mode no packet is ever sent, which a
+  test asserts for every input above.
 - TFTP packets (N7, pure): only names of the file set are served; a write request, a path with `..`, an absolute path
-  and an unknown name are refused. One leading `/` names the root of the served tree, as a TFTP server confined to its
-  directory reads it, so a GRUB that asks for `/grub/grub.cfg` gets `grub/grub.cfg`; an absolute path is then a name
-  outside the set and is refused, and a name that still starts with `/` is refused as unsafe. `hostkeeper/boot.efi` is the x86-64 or the arm64 shim by the architecture learned for
-  the reader's address, or by the record's platform of its MAC when it stated no architecture, and a TFTP error for an
-  address with no MAC, a MAC with neither, or an architecture with no boot set. Block numbering
-  and the final short block follow RFC 1350, and option negotiation RFC 2347.
+  outside the served tree and an unknown name are refused. One leading `/` names the root of the served tree, as a
+  TFTP server confined to its directory reads it, so a GRUB that asks for `/grub/grub.cfg` gets `grub/grub.cfg`; once
+  that one `/` is removed, a name outside the set (such as `/etc/passwd`) is refused as unknown, and a name that still
+  starts with `/` (such as `//grub/grub.cfg`) is refused as unsafe. `hostkeeper/boot.efi` is the x86-64 or the arm64
+  shim by the architecture learned for the reader's address, or by the record's platform of its MAC when it stated no
+  architecture, and a TFTP error for an address with no MAC, a MAC with neither, or an architecture with no boot set.
+  Block numbering and the final short block follow RFC 1350, and option negotiation RFC 2347.
 - Boot menu (N6, goldens by exact equality): the fixed `grub.cfg`; the install menu for each platform; the local-disk
   menu. The menu for a MAC is the install menu exactly when the MAC is in the answer set and the architecture in the
   path agrees with the record's platform, and the local-disk menu for: a MAC not in the set, a MAC that is not
@@ -679,7 +683,7 @@ the artifacts workflow already uses to build the arm64 deb) would run the guest 
   It runs on `ubuntu-24.04-arm`, under KVM, and fails with that reason when `/dev/kvm` is missing.
 - `arm64_boots_to_seed_fetch`, the fallback: an arm64 guest under TCG on the hosted `ubuntu-24.04` runner, in router
   mode, until the seed fetch. It checks that the guest's REQUEST stated architecture 11, that `hostkeeper/boot.efi`
-  was served as `shimaa64.efi`, that GRUB asked for the arm64 menu of its MAC, and that the seed fetched names the
+  was served as `hostkeeper/shimaa64.efi`, that GRUB asked for the arm64 menu of its MAC, and that the seed fetched names the
   `arm64` deb. That is every part of the boot chain that differs by platform. If **[V]** shows that even this does not
   fit a hosted job, it ends at the kernel's first request for the arm64 ISO, which still proves the shim, GRUB, the
   menu and the kernel.
