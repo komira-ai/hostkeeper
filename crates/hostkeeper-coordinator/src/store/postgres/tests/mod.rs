@@ -16,28 +16,9 @@ use super::{Dsn, Postgres, TIMEOUTS, Timeouts};
 use crate::audit_file::UnixClock;
 use crate::store::Loaded;
 
-/// The variable that names the test server, the one place a test reads the environment.
-pub(crate) const URL_VAR: &str = "HOSTKEEPER_TEST_POSTGRES_URL";
-
-/// What a test says when the server is not named.
-const NO_SERVER: &str = "HOSTKEEPER_TEST_POSTGRES_URL names no Postgres server: start one (for \
-    example `docker run --rm -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16`) and \
-    set it to its URL, as `postgres://postgres@127.0.0.1:5432/postgres`";
-
-/// The URL of the test server.
-///
-/// # Panics
-/// When the variable is not set: a test that needs the server fails, never skips.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' server is named by CI's job in one variable, read here only; no product \
-              code reads the environment (AGENTS.md S2)"
-)]
+/// The URL of the test server ([`hostkeeper_testkit::postgres_url`]).
 pub(crate) fn server_url() -> String {
-    match std::env::var(URL_VAR) {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => panic!("{NO_SERVER}"),
-    }
+    hostkeeper_testkit::postgres_url()
 }
 
 /// The key of the advisory lock the tests take around a `CREATE DATABASE` or `DROP DATABASE`,
@@ -252,6 +233,7 @@ mod reads;
 mod records;
 mod records_errors;
 mod schema;
+mod serve;
 mod session;
 mod start;
 pub(crate) mod store;

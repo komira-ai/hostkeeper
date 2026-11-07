@@ -9,6 +9,10 @@
 //! - [`fifo`]: a named pipe at a path, on Linux and on macOS alike: the file that is neither a
 //!   regular file, a directory nor a link, which the tests of what refuses such a file make.
 //!
+//! - [`postgres_url`]: the URL of the Postgres server the coordinator's store tests run against,
+//!   from the one variable CI's job sets: the one read of the environment in the tests, and none
+//!   in any product code.
+//!
 //! No moved test opens a port, so there is no port helper.
 
 use std::io;
@@ -16,6 +20,45 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// The variable that names the tests' Postgres server, as `postgres://<user>@<host>:<port>/<db>`.
+pub const POSTGRES_URL_VAR: &str = "HOSTKEEPER_TEST_POSTGRES_URL";
+
+/// The URL of the tests' Postgres server ([`POSTGRES_URL_VAR`]).
+///
+/// # Panics
+/// When the variable is not set or empty: a test that needs the server fails, saying how to
+/// start one; it never skips.
+#[must_use]
+pub fn postgres_url() -> String {
+    postgres_url_of(postgres_url_var())
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests' Postgres server is named by CI's job in one variable, read here and \
+              nowhere else; no product code reads the environment (AGENTS.md S2), and a test \
+              binary takes no flags of its own to name it by"
+)]
+fn postgres_url_var() -> Option<String> {
+    std::env::var(POSTGRES_URL_VAR).ok()
+}
+
+/// The URL `value` names: what [`postgres_url`] answers for the variable's value.
+///
+/// # Panics
+/// When `value` is none or blank.
+#[must_use]
+pub fn postgres_url_of(value: Option<String>) -> String {
+    match value {
+        Some(url) if !url.trim().is_empty() => url,
+        _ => panic!(
+            "{POSTGRES_URL_VAR} names no Postgres server: start one (for example `docker run \
+             --rm -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16`) and set it to its \
+             URL, as `postgres://postgres@127.0.0.1:5432/postgres`"
+        ),
+    }
+}
 
 /// Makes a named pipe at `path` with the permission bits `mode` (as the umask leaves them). An
 /// error when `path` exists or its directory does not. rustix's `mknodat` and `mkfifoat` are not
@@ -116,6 +159,28 @@ impl Drop for Scratch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Proves: the URL of the tests' server is the variable's value, and a value that is none or
+    /// blank fails the test that needs the server, saying how to start one.
+    ///
+    /// Catches: a test that runs against no server, or skips, when the variable is not set.
+    #[test]
+    fn the_postgres_url_is_the_variables_and_none_fails_saying_how_to_start_one() {
+        assert_eq!(
+            postgres_url_of(Some("postgres://u@127.0.0.1:1/d".to_owned())),
+            "postgres://u@127.0.0.1:1/d"
+        );
+        for value in [None, Some("  ".to_owned())] {
+            let failed = std::panic::catch_unwind(|| postgres_url_of(value)).expect_err("fails");
+            let said = failed.downcast_ref::<String>().cloned().unwrap_or_default();
+            assert!(
+                said.starts_with(
+                    "HOSTKEEPER_TEST_POSTGRES_URL names no Postgres server: start one"
+                ),
+                "{said}"
+            );
+        }
+    }
 
     /// The base of these tests: a directory beside the test binary, inside the target directory.
     fn base(name: &str) -> PathBuf {

@@ -18,11 +18,6 @@ use postgres::{Client, NoTls};
 use support::OPERATOR;
 use support::serve::{Files, build_given, exit_code, flags_of, refusal, without};
 
-/// What a test says when the server is not named.
-const NO_SERVER: &str = "HOSTKEEPER_TEST_POSTGRES_URL names no Postgres server: start one (for \
-    example `docker run --rm -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16`) and \
-    set it to its URL, as `postgres://postgres@127.0.0.1:5432/postgres`";
-
 /// The key of the advisory lock the coordinator holds on its database.
 const COORDINATOR_LOCK: i64 = 0x686b_6370_6731;
 
@@ -30,20 +25,9 @@ const COORDINATOR_LOCK: i64 = 0x686b_6370_6731;
 /// which the server does not take side by side.
 const CATALOG_LOCK: i64 = 0x686b_6974_6573;
 
-/// The URL of the test server.
-///
-/// # Panics
-/// When the variable is not set: a test that needs the server fails, never skips.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the tests' server is named by CI's job in one variable, read here only; no product \
-              code reads the environment (AGENTS.md S2)"
-)]
+/// The URL of the test server ([`hostkeeper_testkit::postgres_url`]).
 fn server_url() -> String {
-    match std::env::var("HOSTKEEPER_TEST_POSTGRES_URL") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => panic!("{NO_SERVER}"),
-    }
+    hostkeeper_testkit::postgres_url()
 }
 
 /// A client of the server, of the database `dbname` when one is named.

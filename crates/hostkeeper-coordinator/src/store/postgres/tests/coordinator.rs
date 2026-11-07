@@ -30,7 +30,7 @@ use crate::marks_support::{
     DB, NEW_DAEMON, WEB, ask, ask_typed, beat_of, force_request, operator, runs, services_with,
     set, update,
 };
-use crate::ops::{AuditEntry, OpsStore, Write};
+use crate::ops::OpsStore;
 use crate::orders::Order;
 use crate::store::postgres::dsn::Timeouts;
 use crate::store::postgres::writer::{Fault, LOCK_KEY};
@@ -39,7 +39,7 @@ use crate::testutil::{Log, Rig};
 use crate::verdict_file::VerdictFile;
 
 /// The role of every host of these tests.
-const DAEMON: &str = "daemon";
+pub(super) const DAEMON: &str = "daemon";
 
 /// The message of the alert that says the session is lost.
 const LOST_MESSAGE: &str = "the session with the database is lost: nothing is ordered, a change that lowers protection is refused, and one that raises it stands in memory until the session is back";
@@ -47,7 +47,7 @@ const LOST_MESSAGE: &str = "the session with the database is lost: nothing is or
 /// A client of the database that holds what a test tells it to, on a thread of its own, until it
 /// is released: the lock of the coordinator that a revival must not find free, a table another
 /// session has locked.
-struct Holding {
+pub(super) struct Holding {
     release: mpsc::Sender<()>,
     thread: JoinHandle<()>,
 }
@@ -55,7 +55,7 @@ struct Holding {
 impl Holding {
     /// Runs `hold` in a session of the database and waits until it has run (so, for a lock,
     /// until the lock is taken); `free` is run when the holding is released.
-    fn start(database: &TestDatabase, hold: &str, free: &str) -> Holding {
+    pub(super) fn start(database: &TestDatabase, hold: &str, free: &str) -> Holding {
         let (name, hold, free) = (database.name().to_owned(), hold.to_owned(), free.to_owned());
         let (release, released) = mpsc::channel::<()>();
         let (ready_tx, ready) = mpsc::channel::<()>();
@@ -72,7 +72,7 @@ impl Holding {
 
     /// Holds the coordinator's advisory lock, then raises the lease's epoch: what a second
     /// coordinator that started on the database did, if it had not yet gone.
-    fn another_led(database: &TestDatabase) -> Holding {
+    pub(super) fn another_led(database: &TestDatabase) -> Holding {
         Holding::start(
             database,
             &format!(
@@ -93,19 +93,19 @@ impl Holding {
     }
 
     /// Frees what is held, and returns once it is.
-    fn release(self) {
+    pub(super) fn release(self) {
         self.release.send(()).expect("the holder waits");
         self.thread.join().expect("the holder ends");
     }
 }
 
 /// A coordinator over one Postgres store, and what its tests reach beside it.
-struct Farm {
-    rig: Rig,
-    store: Postgres,
+pub(super) struct Farm {
+    pub(super) rig: Rig,
+    pub(super) store: Postgres,
     marker: PathBuf,
     enrollment: Option<Arc<Enrollment>>,
-    database: TestDatabase,
+    pub(super) database: TestDatabase,
 }
 
 /// The waits of the store's sessions that a test that does not tune them opens it with.
@@ -185,12 +185,12 @@ impl Farm {
     }
 
     /// [`Farm::start`] with the standard waits and no enrollment.
-    fn plain(test: &str) -> Farm {
+    pub(super) fn plain(test: &str) -> Farm {
         Farm::start(test, waits(), false)
     }
 
     /// `web` and `db` desired at 2.0 (1.0 registered before), and `d1` heard at 1.0 at 2100.
-    async fn seeded(self) -> Farm {
+    pub(super) async fn seeded(self) -> Farm {
         ask(&self.rig, "d1", DAEMON, daemon("1.0"));
         for service in [WEB, DB] {
             set(&self.rig, service, "1.0", 1).await;
@@ -202,7 +202,7 @@ impl Farm {
 
     /// Makes the session lost the way the world does: every session of the store is ended, and
     /// then the first write finds out (the exclusion of `d1` it refuses).
-    fn lose_session(&self) {
+    pub(super) fn lose_session(&self) {
         self.database.end_sessions();
         assert_eq!(
             self.rig.coordinator.exclude(&operator(), exclude("d1")),
@@ -258,11 +258,11 @@ impl Farm {
 }
 
 /// A daemon of this release running `web` and `db` at `at`.
-fn daemon(at: &str) -> Heartbeat {
+pub(super) fn daemon(at: &str) -> Heartbeat {
     beat_of(NEW_DAEMON, vec![runs(WEB, at), runs(DB, at)])
 }
 
-fn exclude(node: &str) -> proto::ExcludeRequest {
+pub(super) fn exclude(node: &str) -> proto::ExcludeRequest {
     proto::ExcludeRequest {
         service: WEB.to_owned(),
         node_id: node.to_owned(),
@@ -884,134 +884,5 @@ async fn a_heartbeat_in_the_steady_state_runs_no_query() {
         farm.store.statements(),
         statements,
         "the reads a heartbeat makes of the host ran no statement"
-    );
-}
-
-/// One change by `by` of `action` on `service` for `node`, through the ops store.
-fn record(rig: &Rig, by: &str, action: &str, service: &str, node: Option<&str>) {
-    let mut entry = AuditEntry::new(by, action);
-    entry.service = Some(service.to_owned());
-    entry.node_id = node.map(str::to_owned);
-    rig.coordinator
-        .ops()
-        .change(Write::BeforeMemory, entry, |_| {})
-        .expect("a recorded change");
-}
-
-/// Proves: `Audit.List` answers the same from the files and from the database: the same audited
-/// changes, listed under every filter (actor, name, action, service, node, since, newest, limit),
-/// give equal answers.
-///
-/// Catches: a filter the database applies differently from the files, an order or a page edge
-/// that differs, or an entry whose time or name the database does not keep.
-#[test]
-fn audit_list_answers_the_same_from_files_and_from_the_database() {
-    let mut files = crate::marks_support::rig("pg-audit-files", "");
-    files.coordinator = crate::marks_support::start(&files.dir, &files.clock, "")
-        .with_ops(crate::testutil::ops_of(&files.dir).with_unix(Arc::new(|| AT)));
-    let farm = Farm::plain("pg-audit-database");
-
-    let changes = [
-        ("alice", "exclude", WEB, Some("d1")),
-        ("bob", "exclude", DB, Some("d2")),
-        ("alice", "hold", WEB, None),
-        ("bob", "hold", DB, None),
-        ("ci", "set_desired", WEB, None),
-        ("coordinator", "last_good", DB, None),
-        ("alice", "exclude", DB, Some("d1")),
-    ];
-    for (by, action, service, node) in changes {
-        record(&files, by, action, service, node);
-        record(&farm.rig, by, action, service, node);
-    }
-
-    let base = proto::ListAuditRequest::default;
-    let requests = [
-        base(),
-        proto::ListAuditRequest {
-            actor: Some("operator".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            actor: Some("ci".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            actor: Some("coordinator".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            by_name: Some("alice".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            action: Some("exclude".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            service: Some(DB.to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            node_id: Some("d1".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            since_seq: 3,
-            ..base()
-        },
-        proto::ListAuditRequest {
-            newest: true,
-            limit: 3,
-            ..base()
-        },
-        proto::ListAuditRequest {
-            limit: 2,
-            since_seq: 1,
-            ..base()
-        },
-        proto::ListAuditRequest {
-            newest: true,
-            limit: 2,
-            since_seq: 2,
-            action: Some("hold".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            by_name: Some("alice".to_owned()),
-            service: Some(WEB.to_owned()),
-            action: Some("exclude".to_owned()),
-            node_id: Some("d1".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            by_name: Some("carol".to_owned()),
-            ..base()
-        },
-        proto::ListAuditRequest {
-            since_seq: 99,
-            ..base()
-        },
-    ];
-    for request in requests {
-        let from_files = files
-            .coordinator
-            .audit_list(&operator(), request.clone())
-            .expect("a page from the files");
-        let from_database = farm
-            .rig
-            .coordinator
-            .audit_list(&operator(), request.clone())
-            .expect("a page from the database");
-        assert_eq!(from_database, from_files, "{request:?}");
-    }
-    assert_eq!(
-        farm.rig
-            .coordinator
-            .audit_list(&operator(), base())
-            .expect("a page")
-            .entries
-            .len(),
-        changes.len()
     );
 }
