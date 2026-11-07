@@ -86,6 +86,7 @@ the nonce before the request, and a gate call named `CheckSerial` where the code
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
 | Policy gate | None runs. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its eight decline tokens (`crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). The only `DeviceState` is `NoDeviceState`, so no Mac is approved by a nonce today. |
+| MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). **Not built**: the binary with its verbs (M4, M5), so nothing in this repository installs the stack yet. |
 | Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). **Not built**: the daemon sends no nonce. |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
@@ -374,7 +375,7 @@ The flow of section 1. It is the only path with no person at the Mac after step 
 The profile kbf's kit renders already has these properties (`is_supervised`, `is_mandatory`, not
 `is_mdm_removable`, and a long `skip_setup_items` list), and the kit's parser refuses anything
 weaker. The port keeps that check and sets the existing `auto_advance_setup` to
-true.
+true (**Built**: `AdeProfile::from_config` in `crates/hostkeeper-mdm-core/src/profile.rs`).
 
 The cost: a wipe. On Apple silicon, "Erase All Content and Settings" or the MDM `EraseDevice`
 erases every user's data and every extra volume. On a farm Mac that means its build state, its
@@ -543,6 +544,7 @@ CA, the ADE profile, the unit and path names. The order:
    gate, `kbf-mdm`, is not ported. It was never deployed, its two ends do not agree on a protocol,
    and its OS-update and erase verbs are not v1 work. The design takes only its lessons: the
    loopback-only NanoHUB URL, the trusted-file checks, and profiles by allowlisted digest.
+   **Built** for M2: `crates/hostkeeper-mdm-core`, recorded in `MIGRATION.md`.
 2. **Rename to hostkeeper names.**
    - user `hostkeeper-mdm`;
    - `/var/lib/hostkeeper-mdm`, `/etc/hostkeeper-mdm`, `/opt/hostkeeper-mdm/bin`;
@@ -728,7 +730,7 @@ pull request.
 | # | Task | After | Size |
 |---|---|---|---|
 | M1 | This design. Design 5.9 and 4.6 point at it and say the config comes from a managed profile | none | S |
-| M2 | `hostkeeper-mdm-core`: port of `mdm-core`, pure, hostkeeper names. Fixes from komira-ai/kbf#2248: the three loopback ports checked together; checked constructors and read-only accessors for `MdmConfig` and `Cidr`; DNS label and name length limits; authorities with whitespace, queries and fragments. ADE profile with `auto_advance_setup` true | M1 | M |
+| M2 | `hostkeeper-mdm-core`: port of `mdm-core`, pure, hostkeeper names. Fixes from komira-ai/kbf#2248: the three loopback ports checked together; checked constructors and read-only accessors for `MdmConfig` and `Cidr`; DNS label and name length limits; authorities with whitespace, queries and fragments. ADE profile with `auto_advance_setup` true. **Built**: `crates/hostkeeper-mdm-core` | M1 | M |
 | M3 | `hostkeeper-mdm-step`: port of `host-step`. Fixes: the path's trusted owners include the operator's and the service's (a filesystem-backed test); a unique temporary name per writer; an existing account that resolves to uid 0 refused; whole-output redaction tests. **Built**: `crates/hostkeeper-mdm-step`; the owners are granted per directory with `RealHost::trust_below`, which M4 calls for `--bin-dir` and the state directory | M1 | M |
 | M4 | `hostkeeper-mdm` binary, verbs `fetch`, `install`, `tls`, `verify`: port of `mdm-host`. Fixes: restarts planned from the installed state, not only this run's changes; malformed ACME settings refused, not skipped; `lego --help` exit status checked; archive limits exact and safe at `u64::MAX`; environment files read by systemd's rules; a typed error for `Tool::named`. The test gaps of komira-ai/kbf#2248 as tests: download redirects (HTTPS to HTTP, cycles, exhaustion), bodies of exactly the limit, chunked and interrupted bodies; TLS with a directory or link at the certificate path, a malformed certificate, a missing or mismatched key, renewal and the proxy reload; install with a damaged SCEP depot, failures part-way through a plan and the retry, uninstall during the certificate or reload job, two uninstall snapshots in one second, an unsupported architecture refused first; whole-output redaction | M2, M3 | L |
 | M5 | Verbs `push-cert`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), the enrollment profile at `/enroll` (mode 0640, the service group's), the pkg directory and `/pkg/` route in the proxy, and `migrate --from` (section 8), from kbf-deploy's `mdm` | M4 | M |

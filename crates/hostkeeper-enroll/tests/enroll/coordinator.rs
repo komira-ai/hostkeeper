@@ -218,6 +218,7 @@ fn start(world: &World) -> Arc<Enrollment> {
         ca_init: true,
         server_cert: &server_cert,
         server_names: &names,
+        server_ips: &[],
     };
     let clock = Arc::new(SharedWall(Arc::clone(&world.wall)));
     Arc::new(setup(Arc::new(RealFs), &files, clock, counting()).expect("enrollment starts"))

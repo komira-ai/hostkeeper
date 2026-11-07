@@ -6,7 +6,7 @@ mod support;
 
 use std::sync::Arc;
 
-use hostkeeper_enrollment::ca::{CaBundle, HostCertificate, Signer};
+use hostkeeper_enrollment::ca::{CaBundle, HostCertificate, ServerNames, Signer};
 use hostkeeper_enrollment::enroll::{EnrollmentStore, StoreError};
 use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_enrollment::names::Role;
@@ -41,7 +41,15 @@ fn a_host_certificate_is_read_back_only_when_this_ca_signed_it() {
 
     let server = ca
         .ca
-        .issue_server(&key.p256(), &["coordinator.example".to_owned()], 3600, 8)
+        .issue_server(
+            &key.p256(),
+            ServerNames {
+                dns: &["coordinator.example".to_owned()],
+                ips: &[],
+            },
+            3600,
+            8,
+        )
         .expect("a server certificate");
     assert_eq!(bundle.host_certificate(&server.der), None);
     assert_eq!(bundle.host_certificate(b"not a certificate"), None);

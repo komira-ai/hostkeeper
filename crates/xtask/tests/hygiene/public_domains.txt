@@ -31,6 +31,10 @@ apple.com
 # its README checks the pinned packages against (archive.ubuntu.com, ports.ubuntu.com).
 ubuntu.com
 
+# The ACME directory of Let's Encrypt (acme-v02.api.letsencrypt.org), which the MDM kit's example
+# settings name for its TLS certificate (crates/hostkeeper-mdm-core/config.example).
+letsencrypt.org
+
 # The registry of the distroless base image of the coordinator's container image
 # (packaging/container/Dockerfile, gcr.io/distroless/cc-debian13).
 gcr.io
