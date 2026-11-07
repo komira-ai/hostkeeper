@@ -331,8 +331,7 @@ Every release ships macos-arm64 beside the two Linux platforms: the binary tarba
 `units/hello.a.plist` and `units/hello.b.plist`, the plists of its two slots rendered by
 `hostkeeper_launchd::service_plist`; `hello` carries the same ad-hoc code signature as the
 hostkeeper binary. The artifacts workflow builds them on a GitHub-hosted Apple
-silicon runner, never on a pull request; it runs by hand until its push-to-`main` trigger lands with
-the rest of the release automation.
+silicon runner, on each push to `main` and by hand, never on a pull request.
 
 The pkg is the first install of a Mac. It installs exactly five files and one empty directory,
 and the directories that hold them (each 0755, as macOS has them already; `/usr/local/lib` and
@@ -387,10 +386,18 @@ Apple Developer ID Installer identity. It is attested like every other asset, an
 keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
 `cargo xtask release macos-pkg` builds it with `pkgbuild` from the binary, `gh` and the trusted
 root (`--binary`, `--gh`, `--trusted-root`); `cargo xtask release check-macos-pkg` reads back the
-pkg that `pkgutil --expand` expanded, against the same three files, and refuses a missing file and
-any other file, mode, owner or bytes, any script but that `postinstall` with exactly those
-bytes, a plist whose program is not `current` of the binary directory or whose output paths are
+pkg that `pkgutil --expand` expanded (the files `Bom`, `PackageInfo` and `Payload`, and the
+directory `Scripts` it expands the pkg's scripts into), against the same three files, and refuses a
+missing part and any other file, mode, owner or bytes, any script but that `postinstall` (a regular
+file of mode 0755) with exactly those bytes, a plist whose program is not `current` of the binary directory or whose output paths are
 not the daemon's two log files, and a newsyslog file whose entries name other paths than those two.
+
+Since no pull request runs the macOS build, the unit tests of the check read fixtures, not what
+`pkgbuild` and `pkgutil` really make. A pull request that changes `crates/xtask/src/release/macos_pkg*`,
+`crates/hostkeeper-launchd/` or `.github/workflows/artifacts.yml` therefore links, before it
+merges, a green run of the artifacts workflow started by hand on its branch (`gh workflow run
+artifacts.yml --ref <branch>`), which builds, expands and checks the pkg on the macOS runner and
+signs and publishes nothing.
 
 hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the

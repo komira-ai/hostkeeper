@@ -145,9 +145,10 @@ impl fmt::Display for Rule {
 
 /// Why [`crate::unpack`] gave no sealed version. Whatever the error, nothing outside the staging
 /// directory was changed and no version directory was created, with one exception: an
-/// [`UnpackError::Io`] or [`UnpackError::NoSpace`] from the last step of the publish (the fsync
-/// of the service directory after the rename) leaves the version in place, whole and sealed,
-/// and the next unpack of the same order takes it as it is.
+/// [`UnpackError::Io`] or [`UnpackError::NoSpace`] from the last steps of the publish (the fsync
+/// of the service directory after the rename, the mode 0555 of the version directory and its
+/// fsync) leaves the version in place, whole and sealed, and the next unpack of the same order
+/// takes it as it is and makes its directory 0555.
 #[derive(Debug, thiserror::Error)]
 pub enum UnpackError {
     /// `entry` is the entry's name with every byte that is not printable ASCII escaped, or
