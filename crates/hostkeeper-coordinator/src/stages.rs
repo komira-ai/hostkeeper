@@ -342,7 +342,9 @@ impl View {
 
     /// The plan of `def` for `want` at `now` from the position `kept`, having entered every
     /// stage it may enter by itself since ([`reach`]): where the decision and the status read it.
-    /// The coordinator writes the position it reaches at the next heartbeat of the service
+    /// It enters none while the plan is paused, the service is halted or its version marked bad,
+    /// or the coordinator is quiet, as the coordinator writes none then; otherwise the
+    /// coordinator writes the position it reaches at the same heartbeat
     /// ([`crate::rollouts::advance`]), with its audit entry.
     #[must_use]
     pub fn effective(
@@ -353,6 +355,12 @@ impl View {
         now: Duration,
     ) -> Self {
         let view = Self::of(def, want, kept, fleet, now);
+        if view.paused.is_some()
+            || fleet.is_stopped(&def.name, &want.version)
+            || fleet.is_quiet(now)
+        {
+            return view;
+        }
         let held = view.clone();
         reach(def, want, view, false, fleet, now).unwrap_or(held)
     }

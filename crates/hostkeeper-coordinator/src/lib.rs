@@ -234,6 +234,8 @@ mod ops_tests;
 #[cfg(test)]
 mod order_terms_tests;
 #[cfg(test)]
+mod plan_rollout_tests;
+#[cfg(test)]
 mod priority_tests;
 #[cfg(test)]
 mod recorded_definition_tests;

@@ -51,7 +51,7 @@ A stage is **done** when it is full (as many eligible hosts have started as the 
 
 ### 1.4 Advancing
 
-When a stage is done, the plan enters the next stage. An `auto` stage is entered as soon as the stage before it is done: the decision reads the position the plan reaches by itself from the one kept (its **effective** position), and the coordinator writes that position, with an audit entry (`rollout_advance`, by `coordinator`), at the same heartbeat that finds the stage done, before it answers any order. A write that fails is logged and tried again at the next heartbeat; the decision does not wait for it, since the position it records follows from the hosts' reports. A `manual` stage waits for an operator's `Rollouts.Advance`, which enters it with an audit entry under the operator's token name. A first stage that is `manual` waits for an Advance before any host is ordered.
+When a stage is done, the plan enters the next stage. An `auto` stage is entered as soon as the stage before it is done: the decision reads the position the plan reaches by itself from the one kept (its **effective** position), and the coordinator writes that position, with an audit entry (`rollout_advance`, by `coordinator`), at the same heartbeat that finds the stage done, before it answers any order. A write that fails is logged and tried again at the next heartbeat; the decision does not wait for it, since the position it records follows from the hosts' reports. Neither enters a stage while the plan is paused, the service is halted or its version is marked bad, or the coordinator is within its quiet start. A `manual` stage waits for an operator's `Rollouts.Advance`, which enters it with an audit entry under the operator's token name. A first stage that is `manual` waits for an Advance before any host is ordered.
 
 When hosts already run the desired version (a rollback to a version most hosts still run, say), the coordinator enters every `auto` stage they already fill in one write: the plan goes straight to the first stage with hosts left to order, or stops at a `manual` stage.
 
@@ -65,7 +65,7 @@ A failure below the threshold does not stop the stage: the stage's other hosts g
 
 ### 1.6 Across services
 
-`--live-rollouts N` (default 1, at most 16) is how many services may have a live rollout at once. A service's rollout is **live** when one of its hosts holds an update slot or bakes the desired version, or when its plan has started a host and still has a host to order (not counting hosts that are deferring). A paused plan and one waiting for an Advance are live: the operator is in the middle of it. A service whose rollout is not live is told `rollout_elsewhere` while `N` others are. A service that is live is never held by the others, so two live rollouts (after a restart, say) do not wait on each other. An uninstall counts towards its service's rollout the same way.
+`--live-rollouts N` (default 1, at most 16) is how many services may have a live rollout at once. A service's rollout is **live** when one of its hosts holds an update slot or bakes the desired version, or when its plan has started a host and still has a host to order (not counting hosts that are deferring). A paused plan, one waiting for an Advance and one held by a failed host are live: the operator is in the middle of it. A service whose rollout is not live is told `rollout_elsewhere` while `N` others are. A service that is live is never held by the others, so two live rollouts (after a restart, say) do not wait on each other. An uninstall counts towards its service's rollout the same way.
 
 This keeps the rule of one service's rollout at a time across the fleet as the default, as a setting rather than a constant.
 
@@ -81,7 +81,7 @@ Stage sizes are recomputed from the eligible hosts at every decision, and the po
 ### 1.8 Holds, force, abort and halts inside a plan
 
 - **Hold.** A held pair is not eligible: it is in no stage, takes no place, does not count towards a stage being done, and is told `held`, as before. Unhold makes it eligible at the next decision.
-- **Force.** A force orders its pairs itself and takes no slot; a forced pair is not eligible for the plan. A force sets a new desired version, so the plan starts over for it (section 3).
+- **Force.** A force orders its pairs itself and takes no slot; a forced pair is not eligible for the plan, and no rule of the plan holds it: its plain update route is told the desired version, which the force set to the forced one. A force of another version than the desired one sets a new desired version, so the plan starts over for it (section 3).
 - **Abort.** `Hosts.Abort` stops a running update; the host reports a halt, which halts the service (`halted`). The plan keeps its position, and `Releases.ClearHalt` lets it go on from there.
 - **Halt.** A halted service orders nothing; the plan waits as `halted`.
 
