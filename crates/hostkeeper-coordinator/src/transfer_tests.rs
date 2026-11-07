@@ -477,7 +477,7 @@ fn import_rolls_back_when_the_read_back_differs() {
         (
             "enrollment_serial",
             "UPDATE",
-            "NEW.next := NEW.next + 1",
+            "NEW.\"next\" := NEW.\"next\" + 1",
             "enrollment_serial",
         ),
         (
