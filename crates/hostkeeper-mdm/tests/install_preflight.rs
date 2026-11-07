@@ -61,9 +61,9 @@ fn an_x86_64_host_is_accepted() {
     );
 }
 
-/// Catches a `uname` that fails passing as a host of unknown kind: a non-zero exit, and a
-/// program that cannot be started, both fail the run (exit 1) with the command named, and no
-/// change is made.
+/// Catches a `uname` that fails passing as a host of unknown kind: a non-zero exit fails the run
+/// (exit 1) with the command named, a program that cannot be started fails it with the host's
+/// error (exit 1), and no change is made.
 #[test]
 fn a_uname_that_fails_or_cannot_run_fails_the_run() {
     let kit = kit();
@@ -77,10 +77,7 @@ fn a_uname_that_fails_or_cannot_run_fails_the_run() {
     let bare = FakeHost::new(0);
     let (result, _) = install(&bare, &kit, Mode::Apply);
     let err = result.unwrap_err();
-    assert!(
-        matches!(&err, MdmError::Command { line, code: -1 } if line == "/usr/bin/uname -m"),
-        "{err}"
-    );
+    assert!(matches!(&err, MdmError::Io(_)), "{err}");
     assert_eq!(err.exit_code(), 1);
     assert_eq!(bare.calls(), [UNAME.map(str::to_owned).to_vec()]);
     assert!(bare.paths().is_empty());

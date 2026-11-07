@@ -44,7 +44,9 @@
 //!
 //! * A dry run is the default and changes nothing; `--apply` acts. A rerun finds nothing to
 //!   do.
-//! * Verbs that read root-only files refuse to run as another user, even for a dry run.
+//! * `install` and `tls` read root-only files, so they refuse to run as another user, even for
+//!   a dry run; `verify` runs as anyone, says it is not root, and fails the checks of the files
+//!   it cannot see.
 //! * Files are made without following links: a link in a directory the service user owns is
 //!   refused, never chmodded, chowned or written through. The directories on the way to a path
 //!   must be root's, or the operator's on the way to `--bin-dir`, or the service user's below
@@ -52,8 +54,9 @@
 //! * A plan names paths, sizes and modes, never contents (its `Debug` form neither). No secret
 //!   is put on a command line or printed; the SCEP challenge and API keys are written straight
 //!   to 0600 root files.
-//! * Exit 0 done (or nothing to do), 1 a step, a download or a check failed, 2 refused
-//!   (`REFUSED: ...` on stderr).
+//! * Exit 0 done (or nothing to do), 1 a step, a download or a check failed, or the host could
+//!   not be read (`FAILED: ...` on stderr; a link or an untrusted owner met on the way to a path
+//!   the verb reads is such a failure), 2 refused (`REFUSED: ...` on stderr).
 //! * Settings come from the file `--settings` names, never from the environment.
 
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]

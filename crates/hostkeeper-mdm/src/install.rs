@@ -368,10 +368,7 @@ fn preflight(host: &dyn Host, c: &MdmConfig, out: &mut dyn Write) -> Result<(), 
 /// The host must be x86-64: the pinned tools are linux-amd64 builds.
 fn architecture(host: &dyn Host) -> Result<(), MdmError> {
     let cmd = Cmd::new(UNAME).arg("-m");
-    let out = host.run(&cmd).map_err(|_| MdmError::Command {
-        line: cmd.line(),
-        code: -1,
-    })?;
+    let out = host.run(&cmd)?;
     match (out.code, out.stdout.trim()) {
         (0, SUPPORTED_MACHINE) => Ok(()),
         (0, machine) => Err(MdmError::Architecture {

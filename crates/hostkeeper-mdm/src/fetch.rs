@@ -9,7 +9,7 @@
 //! with `--apply` downloaded, checked, and written to its name; a download whose sha256 is not
 //! the pin is written to `<file>.rejected` for inspection and fails the run.
 
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::Path;
 
 use hostkeeper_mdm_core::path::AbsPath;
@@ -28,6 +28,8 @@ pub struct Fetch {
     pub dir: String,
     /// Only these tools; every pinned tool when empty.
     pub only: Vec<Tool>,
+    /// The largest archive kept or downloaded, in bytes ([`MAX_ARCHIVE`] from the command line).
+    pub max_archive: u64,
 }
 
 /// Check what is in the directory, then print or carry out the downloads.
@@ -52,7 +54,18 @@ pub fn run(
             continue;
         }
         let file = format!("{dir}/{}", pin.archive());
-        match host.read(&file)? {
+        // One bounded read, as `install` reads the same file: a file larger than an archive
+        // may be is refused without being loaded whole.
+        let kept = host
+            .read_limited(&file, f.max_archive)
+            .map_err(|e| match e.kind() {
+                io::ErrorKind::FileTooLarge => MdmError::ArchiveTooBig {
+                    path: file.clone(),
+                    max: f.max_archive,
+                },
+                _ => MdmError::Io(e),
+            });
+        match kept? {
             Some(bytes) => {
                 let got = hex::encode(Sha256::digest(&bytes));
                 if got != pin.sha256_hex() {
@@ -88,7 +101,7 @@ pub fn run(
             Mode::DryRun => writeln!(out, "DRY-RUN: {step}")?,
             Mode::Apply => {
                 writeln!(out, "+ {step}")?;
-                download(env, pin, &dir, file)?;
+                download(env, pin, &dir, file, f.max_archive)?;
                 writeln!(out, "ok: {file}")?;
             }
         }
@@ -116,13 +129,13 @@ fn outside_git(env: &Env<'_>, dir: &str, given: &str) -> Result<(), MdmError> {
 }
 
 /// Download `pin`, check it, and write it to `file`.
-fn download(env: &Env<'_>, pin: &Pin, dir: &AbsPath, file: &str) -> Result<(), MdmError> {
+fn download(env: &Env<'_>, pin: &Pin, dir: &AbsPath, file: &str, max: u64) -> Result<(), MdmError> {
     let host = env.host;
     let owner = (host.euid(), host.egid());
     let url = pin.url.to_string();
     let bytes = env
         .net
-        .get(&url, MAX_ARCHIVE)
+        .get(&url, max)
         .map_err(|source| MdmError::Download {
             url: url.clone(),
             source,

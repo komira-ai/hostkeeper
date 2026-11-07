@@ -10,6 +10,8 @@ use hostkeeper_mdm_step::Mode;
 use hostkeeper_mdm_step::fake::FakeHost;
 
 const DIR: &str = "/srv/op/archives";
+/// The largest archive in these tests: larger than every test archive, smaller than `TOO_BIG`.
+const MAX: u64 = 4096;
 
 fn go(host: &FakeHost, net: &FakeNet, only: &[Tool], mode: Mode) -> (Result<(), MdmError>, String) {
     let kit = kit();
@@ -17,6 +19,7 @@ fn go(host: &FakeHost, net: &FakeNet, only: &[Tool], mode: Mode) -> (Result<(), 
     let f = Fetch {
         dir: DIR.to_owned(),
         only: only.to_vec(),
+        max_archive: MAX,
     };
     let result = with_env(host, net, |env| run(env, &f, &kit.pins, mode, &mut out));
     (result, String::from_utf8(out).unwrap())
@@ -97,6 +100,7 @@ fn root_a_relative_dir_and_a_git_tree_are_refused() {
     let f = Fetch {
         dir: "archives".to_owned(),
         only: vec![],
+        max_archive: MAX,
     };
     let err = with_env(&host, &net, |env| {
         run(env, &f, &kit.pins, Mode::Apply, &mut Vec::new())
@@ -233,4 +237,24 @@ fn only_with_an_unknown_tool_is_refused_with_the_unknown_tool_message() {
     );
     assert!(net.asked.borrow().is_empty());
     assert!(host.paths().is_empty());
+}
+
+/// Catches a kept file loaded whole however large it is: a file in `--dir` larger than an
+/// archive may be is refused by a bounded read, naming the limit, before anything is
+/// downloaded.
+#[test]
+fn a_kept_file_larger_than_an_archive_may_be_is_refused_unread() {
+    let kit = kit();
+    let (host, net) = (FakeHost::new(1000), FakeNet::new(kit.urls.clone()));
+    let path = format!("{DIR}/caddy-v1.0.0.tar.gz");
+    host.put_file(&path, 0o644, (1000, 1000), &vec![0u8; MAX as usize + 1]);
+    let (result, shown) = go(&host, &net, &[], Mode::Apply);
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!("{path} is larger than the {MAX} bytes an archive may be")
+    );
+    assert_eq!(err.exit_code(), 2);
+    assert_eq!(shown, "");
+    assert!(net.asked.borrow().is_empty());
 }

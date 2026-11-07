@@ -197,7 +197,12 @@ fn dispatch(
     match verb {
         Verb::Fetch { dir, only, apply } => {
             let env = env(system, base.as_ref());
-            fetch::run(&env, &Fetch { dir, only }, pins, mode(apply), out)?;
+            let f = Fetch {
+                dir,
+                only,
+                max_archive: fetch::MAX_ARCHIVE,
+            };
+            fetch::run(&env, &f, pins, mode(apply), out)?;
         }
         Verb::Install {
             settings,
