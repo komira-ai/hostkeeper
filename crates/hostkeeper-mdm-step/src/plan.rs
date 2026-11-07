@@ -1,9 +1,13 @@
 //! The planner and the executor.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Write};
 
-use crate::{Cmd, DRY_RUN_NOTE, GETENT, Host, Kind, NOTHING_TO_DO, Output, SYSTEMCTL, USERADD};
+use crate::trust;
+use crate::{
+    Cmd, DRY_RUN_NOTE, GETENT, Host, Kind, NOTHING_TO_DO, Output, SYSTEMCTL, Trustee, USERADD,
+};
 
 /// Whether a plan is printed or carried out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,9 +248,7 @@ fn id(host: &dyn Host, database: &str, name: &str) -> Result<Option<u32>, PlanEr
         || format!("getent {database} {name}"),
         host.run(&Cmd::new(GETENT).arg(database).arg(name)),
     )?;
-    let field = found.stdout.trim().split(':').nth(2);
-    let id = field.and_then(|f| f.parse().ok());
-    Ok(id.filter(|_| found.code == 0))
+    Ok(trust::id_field(&found))
 }
 
 /// The kind, the permission bits and the owner's ids (uid, gid) of a path.
@@ -440,6 +442,19 @@ pub enum ExecError {
     /// Applying needs root.
     #[error("applying a plan needs root (effective uid is {0})")]
     NotRoot(u32),
+    /// A step would be refused when it is carried out (a directory on its way is owned by a
+    /// user not trusted for its path, as the steps before it leave the host); no step was
+    /// carried out or printed.
+    #[error("step {index} ({what}) would fail, so no step was carried out: {source}")]
+    Refused {
+        /// The step's position, from 1.
+        index: usize,
+        /// Its line in the plan.
+        what: String,
+        /// What is wrong.
+        #[source]
+        source: StepError,
+    },
     /// A step failed; the steps before it were done.
     #[error("step {index} ({what}) failed: {source}")]
     Step {
@@ -456,8 +471,15 @@ pub enum ExecError {
     Write(#[from] io::Error),
 }
 
-/// Prints `plan`, and with [`Mode::Apply`] carries it out step by step, stopping at the first
-/// that fails.
+/// Checks `plan`, then prints it, and with [`Mode::Apply`] carries it out step by step,
+/// stopping at the first that fails.
+///
+/// The check is the same for a dry run and an apply, and comes before the first step is
+/// printed or carried out: every directory, file and removal step is judged against the
+/// owners the directories on its way will have when it runs ([`Host::way`] says who owns them
+/// now; an earlier directory step of the plan sets the owner of its directory, and makes each
+/// missing directory above it as the effective user's), so a plan that an apply would stop
+/// part way is refused whole ([`ExecError::Refused`]) by both.
 ///
 /// # Errors
 /// [`ExecError`].
@@ -470,6 +492,7 @@ pub fn execute(
     if mode == Mode::Apply && host.euid() != 0 {
         return Err(ExecError::NotRoot(host.euid()));
     }
+    check(plan, host)?;
     if plan.steps.is_empty() {
         writeln!(out, "{NOTHING_TO_DO}")?;
     }
@@ -491,6 +514,119 @@ pub fn execute(
         writeln!(out, "{DRY_RUN_NOTE}")?;
     }
     Ok(())
+}
+
+/// Who a directory on the way to a path is owned by when a step runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Who {
+    /// The user with this id.
+    Uid(u32),
+    /// The user of this name, which does not exist yet: the plan makes it before the step.
+    Made(String),
+}
+
+impl Who {
+    /// The owner `account` is, by id when its user exists.
+    fn of(host: &dyn Host, account: &Account) -> Result<Who, PlanError> {
+        let uid = id(host, "passwd", &account.user)?;
+        Ok(uid.map_or_else(|| Who::Made(account.user.clone()), Who::Uid))
+    }
+
+    /// Whether a directory this user owns may be on the way to a path that an operation
+    /// asking for `owner` changes, when `trusted` are trusted there.
+    fn trusted(&self, trusted: &[Trustee], owner: Option<&Who>) -> bool {
+        owner == Some(self)
+            || trusted.iter().any(|t| match (self, t) {
+                (Who::Uid(a), Trustee::Uid(b)) => a == b,
+                (Who::Made(a), Trustee::User(b)) => a == b,
+                _ => false,
+            })
+    }
+
+    /// The refusal of the directory `label`, owned by this user, on the way to `path`: the
+    /// words of the walk that would refuse it.
+    fn refusal(&self, path: &str, label: &str) -> io::Error {
+        match self {
+            Who::Uid(uid) => trust::untrusted(path, label, *uid),
+            Who::Made(user) => trust::refused_at(
+                path,
+                &format!(
+                    "{label} is to be owned by {user}, a user this plan makes, which is not trusted for this path"
+                ),
+            ),
+        }
+    }
+}
+
+/// Every step of `plan` judged as the host will judge it when it runs, before any runs.
+fn check(plan: &Plan, host: &dyn Host) -> Result<(), ExecError> {
+    // The owner each directory a step of the plan makes or changes has after that step.
+    let mut planned: BTreeMap<String, Who> = BTreeMap::new();
+    for (i, step) in plan.steps.iter().enumerate() {
+        let judged = match step {
+            Step::Dir { path, owner, .. } => judge(host, &mut planned, path, Some(owner), true)
+                .map(|who| {
+                    if let Some(who) = who {
+                        planned.insert(path.clone(), who);
+                    }
+                }),
+            Step::File { path, owner, .. } => {
+                judge(host, &mut planned, path, Some(owner), false).map(drop)
+            }
+            Step::Absent { path } => judge(host, &mut planned, path, None, false).map(drop),
+            Step::User { .. } | Step::Unit { .. } | Step::Run(_) => Ok(()),
+        };
+        judged.map_err(|source| ExecError::Refused {
+            index: i + 1,
+            what: step.describe(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+/// The directories on the way to `path` judged for an operation asking for `owner`: each
+/// owned as `planned` says, else as the host says, else (when `create`, as a directory step
+/// makes the missing ones) by the effective user, which `planned` then records. The walk ends
+/// at a directory that is neither there nor made: the step itself fails there. The owner, as
+/// judged; `None` when the host judges no owner (then nothing is looked up).
+fn judge(
+    host: &dyn Host,
+    planned: &mut BTreeMap<String, Who>,
+    path: &str,
+    owner: Option<&Account>,
+    create: bool,
+) -> Result<Option<Who>, StepError> {
+    let Some(way) = host.way(path)? else {
+        return Ok(None);
+    };
+    let owner = owner.map(|a| Who::of(host, a)).transpose()?;
+    let names: Vec<&str> = path.split('/').filter(|n| !n.is_empty()).collect();
+    let root = way.owners.first().map(|uid| Who::Uid(*uid));
+    let mut on_way = vec![(way.root.clone(), String::new(), root)];
+    let mut at = String::new();
+    for (k, name) in names.iter().enumerate().take(names.len().saturating_sub(1)) {
+        at = format!("{at}/{name}");
+        let there = way.owners.get(k + 1).map(|uid| Who::Uid(*uid));
+        on_way.push(((*name).to_owned(), at.clone(), there));
+    }
+    for (label, dir, there) in on_way {
+        let made = (create && !dir.is_empty()).then(|| Who::Uid(host.euid()));
+        let who = match planned.get(&dir).cloned().or(there) {
+            Some(who) => who,
+            None => match made {
+                Some(who) => {
+                    planned.insert(dir, who.clone());
+                    who
+                }
+                None => break,
+            },
+        };
+        if !who.trusted(&way.trusted, owner.as_ref()) {
+            return Err(StepError::Host(who.refusal(path, &label)));
+        }
+    }
+    Ok(owner)
 }
 
 fn apply(host: &dyn Host, step: &Step) -> Result<(), StepError> {

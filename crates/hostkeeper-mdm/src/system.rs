@@ -5,7 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hostkeeper_mdm_step::{Host, RealHost};
+use hostkeeper_mdm_step::{Host, RealHost, Trustee};
 
 use crate::{Grant, HttpLoopback, Machine, Net, System, run};
 
@@ -15,9 +15,10 @@ pub struct RealMachine;
 
 impl Machine for RealMachine {
     fn host(&self, grants: &[Grant]) -> Box<dyn Host + '_> {
-        let host = grants
-            .iter()
-            .fold(RealHost::new(), |host, g| host.trust_below(&g.dir, g.uid));
+        let host = grants.iter().fold(RealHost::new(), |host, g| match &g.who {
+            Trustee::Uid(uid) => host.trust_below(&g.dir, *uid),
+            Trustee::User(user) => host.trust_below_user(&g.dir, user),
+        });
         Box::new(host)
     }
 

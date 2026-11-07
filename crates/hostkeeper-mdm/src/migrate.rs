@@ -42,10 +42,18 @@
 //!    unit is not) or active: stopped and disabled in one step. Their unit files stay;
 //! 5. the rest of `install`'s plan: `daemon-reload`, and the new services enabled and started.
 //!
-//! A run that fails before step 4 leaves the old stack running. After the plan (a dry run
-//! included) the back-out is printed (stop the new units, start the old ones) with the next
-//! steps: `tls`, `push-cert --profile-only`, `verify` and `dep define-profile`, each with
-//! `--settings` of the new file.
+//! The new user does not exist before step 1 makes it, and step 3 writes root's records below
+//! its state, so the command line grants the new state to that user by name, looked up on each
+//! walk (and the old state to the old user so). The whole plan is checked before its first step,
+//! for a dry run as for an apply (`hostkeeper_mdm_step::execute`): a step the walk would refuse
+//! refuses the plan with nothing done.
+//!
+//! A run that fails before step 4 leaves the old stack running. A rerun finishes a run that
+//! stopped part way: every step is planned again against the host as that run left it, so what
+//! was done is kept and checked again (the user, the SCEP CA, the unit files, the settings, the
+//! copies) and the rest is done. After the plan (a dry run included) the back-out is printed
+//! (stop the new units, start the old ones) with the next steps: `tls`, `push-cert
+//! --profile-only`, `verify` and `dep define-profile`, each with `--settings` of the new file.
 
 use std::io::Write;
 

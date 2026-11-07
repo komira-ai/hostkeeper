@@ -9,8 +9,9 @@
 //!
 //! Every directory on the way to a path must be owned by a user trusted for that path: a user
 //! the host trusts everywhere (root and the effective user, by default), the owner a write or a
-//! mkdir asks for, or a user granted the paths below a directory with
-//! [`RealHost::trust_below`].
+//! mkdir asks for, or a user granted the paths below a directory with [`RealHost::trust_below`]
+//! (by id) or [`RealHost::trust_below_user`] (by name, looked up with `getent passwd` on each
+//! walk, so a user a plan makes is trusted from the step that makes it on).
 
 use std::fs::{self, File, Permissions};
 use std::io::{self, Read, Write};
@@ -25,7 +26,8 @@ use rustix::fs::{
 };
 use rustix::io::Errno;
 
-use crate::{Cmd, Host, Kind, Meta, Output};
+use crate::trust::{self, Grant, components, refused, refused_at};
+use crate::{Cmd, GETENT, Host, Kind, Meta, Output, Trustee, Way};
 
 /// The end of every temporary file name a write uses: `NAME.PID-N.hostkeeper-mdm.tmp`.
 pub const TEMP_SUFFIX: &str = ".hostkeeper-mdm.tmp";
@@ -43,7 +45,8 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 pub struct RealHost {
     root: PathBuf,
     trusted: Vec<u32>,
-    grants: Vec<(Vec<String>, u32)>,
+    grants: Vec<Grant>,
+    getent: String,
 }
 
 impl RealHost {
@@ -62,13 +65,24 @@ impl RealHost {
 
     /// Like [`RealHost::under`], trusting directories owned by `uids` on the way to any path,
     /// and no other user but the owner a write or a mkdir asks for and the grants of
-    /// [`RealHost::trust_below`].
+    /// [`RealHost::trust_below`] and [`RealHost::trust_below_user`].
     pub fn trusting(root: impl Into<PathBuf>, uids: &[u32]) -> RealHost {
         RealHost {
             root: root.into(),
             trusted: uids.to_vec(),
             grants: Vec::new(),
+            getent: GETENT.to_owned(),
         }
+    }
+
+    /// This host, looking a [`RealHost::trust_below_user`] grant's user up with `program`
+    /// (given `passwd NAME`, as `getent` is) in place of `getent`: the tests' fixture, so they
+    /// read no account database.
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn looking_up_users_with(mut self, program: &str) -> RealHost {
+        program.clone_into(&mut self.getent);
+        self
     }
 
     /// This host, also trusting directories owned by `uid` on the way to `dir` and to every
@@ -79,12 +93,19 @@ impl RealHost {
     /// every operation refuses such a path.
     #[must_use]
     pub fn trust_below(mut self, dir: &str, uid: u32) -> RealHost {
-        let names = dir
-            .split('/')
-            .filter(|n| !n.is_empty())
-            .map(str::to_owned)
-            .collect();
-        self.grants.push((names, uid));
+        self.grants.push(trust::grant(dir, Trustee::Uid(uid)));
+        self
+    }
+
+    /// Like [`RealHost::trust_below`], for the user named `user` with the id it has when a
+    /// path is walked: `getent passwd USER` is asked on each walk to or below `dir`, so a user
+    /// a plan makes is trusted from the step that makes it on, and nobody is while it does not
+    /// exist. The service's state directory is granted so: `install` and `migrate` make the
+    /// service user and then write root's files below its state.
+    #[must_use]
+    pub fn trust_below_user(mut self, dir: &str, user: &str) -> RealHost {
+        self.grants
+            .push(trust::grant(dir, Trustee::User(user.to_owned())));
         self
     }
 
@@ -92,22 +113,31 @@ impl RealHost {
         self.root.join(path.trim_start_matches('/'))
     }
 
-    /// The users trusted on the way to the path of components `names`: the host's, `owner`
-    /// when a step asks for one, and those granted a directory at or above the path.
-    fn trusted_for(&self, names: &[&str], owner: Option<u32>) -> Vec<u32> {
-        let granted = self
-            .grants
-            .iter()
-            .filter(|(dir, _)| {
-                dir.len() <= names.len() && dir.iter().zip(names).all(|(a, b)| a == b)
-            })
-            .map(|(_, uid)| *uid);
-        self.trusted
-            .iter()
-            .copied()
-            .chain(owner)
-            .chain(granted)
-            .collect()
+    /// The users trusted on the way to the path of components `names`: the host's and those
+    /// granted a directory at or above the path, a granted user that exists by its id.
+    fn resolved(&self, names: &[&str]) -> io::Result<Vec<Trustee>> {
+        trust::resolve(&self.trusted, &self.grants, names, |user| {
+            let cmd = Cmd::new(&self.getent).arg("passwd").arg(user);
+            // Not "not found": a lookup that cannot start must not read as a path not there.
+            let found = self
+                .run(&cmd)
+                .map_err(|e| io::Error::other(format!("{}: {e}", cmd.line())))?;
+            Ok(trust::id_field(&found))
+        })
+    }
+
+    /// The root, opened without following a link, for a walk to `path`.
+    fn open_root(&self, path: &str) -> io::Result<File> {
+        let anchor = openat(rustix::fs::CWD, &self.root, DIR_FLAGS, FileMode::empty());
+        Ok(File::from(anchor.map_err(|e| {
+            let linked = is_link(rustix::fs::CWD, &self.root);
+            walk_error(path, &self.root_label(), linked, e)
+        })?))
+    }
+
+    /// The root's name in a refusal.
+    fn root_label(&self) -> String {
+        self.root.display().to_string()
     }
 
     /// The directory that holds `path` as a descriptor, and the name in it. The root and each
@@ -117,21 +147,16 @@ impl RealHost {
     /// caller checked.
     fn parent(&self, path: &str, create: bool, owner: Option<u32>) -> io::Result<(File, String)> {
         let all = components(path)?;
-        let trusted = self.trusted_for(&all, owner);
+        let trusted = trust::uids(&self.resolved(&all)?, owner);
         let mut names = all;
         let name = names.pop().ok_or_else(|| refused(path, "names no file"))?;
-        let flags = OFlags::DIRECTORY | OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        let anchor = openat(rustix::fs::CWD, &self.root, flags, FileMode::empty());
-        let mut dir = File::from(anchor.map_err(|e| {
-            let linked = is_link(rustix::fs::CWD, &self.root);
-            walk_error(path, &self.root.display().to_string(), linked, e)
-        })?);
-        vet(&dir, &trusted, path, &self.root.display().to_string())?;
+        let mut dir = self.open_root(path)?;
+        vet(&dir, &trusted, path, &self.root_label())?;
         for component in names {
-            let opened = match openat(&dir, component, flags, FileMode::empty()) {
+            let opened = match openat(&dir, component, DIR_FLAGS, FileMode::empty()) {
                 Err(Errno::NOENT) if create => {
                     mkdirat(&dir, component, FileMode::from_raw_mode(0o755))?;
-                    openat(&dir, component, flags, FileMode::empty())
+                    openat(&dir, component, DIR_FLAGS, FileMode::empty())
                 }
                 other => other,
             };
@@ -151,15 +176,18 @@ impl Default for RealHost {
     }
 }
 
+/// How every directory on the way is opened: as a directory, read only, not through a link.
+const DIR_FLAGS: OFlags = OFlags::DIRECTORY
+    .union(OFlags::RDONLY)
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::CLOEXEC);
+
 /// Refuses a directory owned by a user that is not in `trusted`.
 fn vet(dir: &File, trusted: &[u32], path: &str, label: &str) -> io::Result<()> {
     let uid = dir.metadata()?.uid();
     match trusted.contains(&uid) {
         true => Ok(()),
-        false => Err(refused_at(
-            path,
-            &format!("{label} is owned by uid {uid}, which is not trusted for this path"),
-        )),
+        false => Err(trust::untrusted(path, label, uid)),
     }
 }
 
@@ -216,15 +244,6 @@ fn put(
     dir.sync_all()
 }
 
-/// The components of `path`, refusing `.` and `..`.
-fn components(path: &str) -> io::Result<Vec<&str>> {
-    let names: Vec<&str> = path.split('/').filter(|n| !n.is_empty()).collect();
-    match names.iter().any(|n| *n == "." || *n == "..") {
-        true => Err(refused(path, "has a . or .. component")),
-        false => Ok(names),
-    }
-}
-
 /// Whether `name` in `at` is a symbolic link (not followed). The system says "not a directory"
 /// for a link opened as one, so this is how a link is told from a file.
 fn is_link(at: impl AsFd, name: impl rustix::path::Arg) -> bool {
@@ -243,15 +262,6 @@ fn walk_error(path: &str, component: &str, linked: bool, e: Errno) -> io::Error 
         (Errno::NOTDIR, false) => refused_at(path, &format!("{component} is not a directory")),
         (other, _) => io::Error::from(other),
     }
-}
-
-/// A refusal that names the path and then what is wrong, as `refused: PATH: WHAT`.
-fn refused_at(path: &str, what: &str) -> io::Error {
-    io::Error::other(format!("refused: {path}: {what}"))
-}
-
-fn refused(path: &str, why: &str) -> io::Error {
-    io::Error::other(format!("refused: {path} {why}"))
 }
 
 /// `result`, or `None` when the error is "not found".
@@ -427,6 +437,27 @@ impl Host for RealHost {
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         })
+    }
+
+    fn way(&self, path: &str) -> io::Result<Option<Way>> {
+        let mut names = components(path)?;
+        let trusted = self.resolved(&names)?;
+        names.pop().ok_or_else(|| refused(path, "names no file"))?;
+        let mut dir = self.open_root(path)?;
+        let mut owners = vec![dir.metadata()?.uid()];
+        for component in names {
+            match openat(&dir, component, DIR_FLAGS, FileMode::empty()) {
+                Err(Errno::NOENT) => break,
+                Err(e) => return Err(walk_error(path, component, is_link(&dir, component), e)),
+                Ok(next) => dir = File::from(next),
+            }
+            owners.push(dir.metadata()?.uid());
+        }
+        Ok(Some(Way {
+            root: self.root_label(),
+            owners,
+            trusted,
+        }))
     }
 }
 

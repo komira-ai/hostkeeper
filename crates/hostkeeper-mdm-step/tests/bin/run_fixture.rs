@@ -3,7 +3,9 @@
 //!
 //! `echo ARGS...` prints its arguments joined by one space and a line feed; `environ` prints
 //! the environment it was given as `K=V` lines; `exit CODE` exits with the code; `abort` ends
-//! by the signal `SIGABRT`. Anything else exits 64.
+//! by the signal `SIGABRT`; `passwd NAME` answers as `getent passwd NAME` would for a user
+//! `fixture-UID` with that uid, and exits 2 (no such user) for any other name. Anything else
+//! exits 64.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -47,6 +49,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         ["exit", code] => ExitCode::from(code.parse::<u8>().unwrap_or(64)),
+        ["passwd", name] => match name.strip_prefix("fixture-").map(str::parse::<u32>) {
+            Some(Ok(uid)) => {
+                let _ = writeln!(out, "{name}:x:{uid}:{uid}::/nonexistent:/usr/sbin/nologin");
+                ExitCode::SUCCESS
+            }
+            _ => ExitCode::from(2),
+        },
         ["abort"] => std::process::abort(),
         _ => ExitCode::from(64),
     }

@@ -78,7 +78,8 @@
 //! * Files are made without following links: a link in a directory the service user owns is
 //!   refused, never chmodded, chowned or written through. The directories on the way to a path
 //!   must be root's, or the operator's on the way to `--bin-dir`, or the service user's below
-//!   `MDM_STATE`.
+//!   `MDM_STATE` (granted by name, so also when the verb's own plan makes that user). A plan is
+//!   checked whole against these owners before its first step, for a dry run as for an apply.
 //! * A plan names paths, sizes and modes, never contents (its `Debug` form neither). No secret
 //!   is put on a command line or printed; the SCEP challenge and API keys are written straight
 //!   to 0600 root files.
@@ -111,7 +112,7 @@ pub mod verify;
 
 use std::io;
 
-use hostkeeper_mdm_step::Host;
+use hostkeeper_mdm_step::{Host, Trustee};
 
 pub use api::{HttpLoopback, Loopback};
 pub use cli::{run, run_with};
@@ -140,8 +141,9 @@ pub struct Env<'a> {
 pub struct Grant {
     /// The directory.
     pub dir: String,
-    /// The owner trusted.
-    pub uid: u32,
+    /// The owner trusted: by id (the operator's directory, owned now), or by name (a service
+    /// user, which the verb's own plan may make before it writes below its state).
+    pub who: Trustee,
 }
 
 /// Where a verb's [`Host`] comes from: the machine, trusting root and the effective user, and

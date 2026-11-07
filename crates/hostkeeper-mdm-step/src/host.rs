@@ -100,6 +100,32 @@ pub struct Output {
     pub stderr: String,
 }
 
+/// A user trusted on the way to a path, besides the users a host trusts everywhere and the
+/// owner a step asks for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Trustee {
+    /// The user with this id.
+    Uid(u32),
+    /// The user of this name, by the id it has when a path is walked: nobody while it does not
+    /// exist, and the user a plan makes once the plan has made it.
+    User(String),
+}
+
+/// What is on the way to a path, as [`execute`](crate::execute) checks a plan against it before
+/// the plan's first step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Way {
+    /// The root's name in a refusal.
+    pub root: String,
+    /// The owner of the root, then of each directory on the way to the path (not the path
+    /// itself) that is there, in order, up to the first that is not.
+    pub owners: Vec<u32>,
+    /// The users trusted on the way to the path, besides the owner a step asks for: those
+    /// trusted everywhere and those granted a directory at or above it. A [`Trustee::User`]
+    /// that exists is given as its [`Trustee::Uid`].
+    pub trusted: Vec<Trustee>,
+}
+
 /// The machine: files, programs and the effective user. Paths are absolute.
 pub trait Host {
     /// The effective user id.
@@ -171,4 +197,13 @@ pub trait Host {
     /// # Errors
     /// The program could not be started (a program that ran and failed is an [`Output`]).
     fn run(&self, cmd: &Cmd) -> io::Result<Output>;
+
+    /// What is on the way to `path`, walked without following a link and without judging an
+    /// owner; `None` for a host that judges no owner (the plain fake).
+    ///
+    /// # Errors
+    /// As every walk: `path` names no file or has a `.` or `..` component; a link or a file is
+    /// on the way; the system's error, other than "not found"; a user lookup could not be
+    /// started.
+    fn way(&self, path: &str) -> io::Result<Option<Way>>;
 }
