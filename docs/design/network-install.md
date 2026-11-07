@@ -823,6 +823,10 @@ request (rule B9), and the workflow lint is extended to know the jobs and their 
     smallest SSD) takes it; `serve` runs with `--serial-console ttyS0`, so the console's issue text and the login
     prompt are on the serial line the test reads. "The disk is untouched" is checked as: no proxy offer and no seed
     fetched after the retirement, and the same `/etc/machine-id` before and after each boot.
+  - **What it found in `serve`**: GRUB's HTTP client matches `Content-Length: ` byte for byte, and `serve` wrote its
+    header names in lower case, so GRUB took the kernel's size as unknown and its `linux` failed with "out of
+    memory". `serve` now writes title-case header names (`crates/hostkeeper-pxe/src/serve/http.rs`, test
+    `the_size_of_a_file_is_spelt_as_grub_reads_it`).
   - **The old certificate's heartbeat** is the JSON route of the LAN listener (`POST /v1/heartbeat`), sent by the test
     with the certificate and key the guest held before its reinstall, read over SSH: it is refused 403 `forbidden`.
 

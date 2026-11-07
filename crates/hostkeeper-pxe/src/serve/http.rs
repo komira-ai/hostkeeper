@@ -4,6 +4,11 @@
 //! path with a query 404, and every other method 405 with `Allow: GET, HEAD`; nothing is ever
 //! written. A sealed file is sent a chunk at a time from the descriptor checked at start.
 //!
+//! Header names are written in title case (`Content-Length`), the spelling GRUB's HTTP client
+//! matches, byte for byte: a GRUB that reads no `Content-Length` takes the size as unknown, and its
+//! `linux` and `initrd` then fail with "out of memory" (found by the network-install end-to-end
+//! test, `crates/hostkeeper-privileged/tests/net_install.rs`).
+//!
 //! Each request is logged with the peer, the method, the path and the status.
 
 use std::convert::Infallible;
@@ -48,6 +53,7 @@ pub async fn serve(server: Arc<Server>, listener: TcpListener, mut stop: watch::
                 async move { Ok::<_, Infallible>(answer(&server, request, peer).await) }
             });
             let _ = http1::Builder::new()
+                .title_case_headers(true)
                 .serve_connection(TokioIo::new(stream), service)
                 .await;
         });

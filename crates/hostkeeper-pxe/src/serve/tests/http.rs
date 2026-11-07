@@ -71,6 +71,36 @@ fn every_sealed_file_is_served_whole_by_get_and_sized_by_head() {
     assert_eq!(run.stop().0, Ok(()));
 }
 
+/// The header names of an answer are in title case, as GRUB's HTTP client reads them: it matches
+/// `Content-Length: ` byte for byte, and a GRUB that finds none loads no kernel ("out of memory").
+///
+/// Catches a server whose answers spell `content-length` in lower case, which a browser or curl
+/// reads and GRUB does not.
+#[test]
+fn the_size_of_a_file_is_spelt_as_grub_reads_it() {
+    let (_kit, run) = start("http-grub-headers");
+    let got = http(run.http, "GET", "/vmlinuz-linux-x86_64");
+    assert_eq!(got.status, 200);
+    let names: Vec<&str> = got
+        .head
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':').map(|(name, _)| name))
+        .collect();
+    assert!(
+        got.head.lines().any(|line| line == "Content-Length: 200"),
+        "{}",
+        got.head
+    );
+    assert!(
+        names.iter().all(|name| name
+            .split('-')
+            .all(|word| word.chars().next().is_some_and(char::is_uppercase))),
+        "every header name is in title case: {names:?}"
+    );
+    assert_eq!(run.stop().0, Ok(()));
+}
+
 /// Every method but GET and HEAD is answered 405 with `Allow: GET, HEAD`; an unknown path, the
 /// seal itself (in the directory, but not a sealed file), a path with a query, and `/` are
 /// answered 404.
