@@ -1,7 +1,7 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! hello's macOS package installed, updated, rolled back and uninstalled end to end on a Mac, as
 //! root, under the real launchd of a GitHub-hosted macOS runner, in `.github/workflows/
-//! privileged.yml`'s job `macos-device` only. The real coordinator (in process) orders each
+//! privileged.yml`'s job `macos-device` (and pr-device.yml's copy of it). The real coordinator (in process) orders each
 //! version; the real daemon (a launchd job of the system domain) fetches it from a release
 //! channel the test serves on loopback, checks its attestation with the pinned `gh` against a
 //! test trust root, unpacks it with the Mac's quarantine and code-signature checks, links its

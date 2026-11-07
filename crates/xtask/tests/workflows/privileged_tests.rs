@@ -14,6 +14,7 @@ use super::lint::{
     PRIVILEGED_RUNNERS, PRIVILEGED_WORKFLOW, WRITE_ALLOWED, entries, entry, lint,
     privileged_runners, root_line, scalars,
 };
+use super::pr_device;
 use super::release::{REQUIRED_WORKFLOWS, publish_problems};
 use super::yaml::{self, Node, Value};
 use super::{push_only, with_in, workflows};
@@ -534,10 +535,24 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         ])
     );
     assert_eq!(shape_problems(text, &targets), Vec::<String>::new());
+    // Root in no other workflow, but in the jobs of pr-device.yml that are copies of this file's
+    // (pr_device_tests.rs holds them to that).
     for (file, other) in all.iter().filter(|(file, _)| file != PRIVILEGED_WORKFLOW) {
         let doc = yaml::load(other).expect("a workflow parses");
         let mut values = Vec::new();
-        scalars(&doc, &mut values);
+        for (key, value) in entries(&doc) {
+            let jobs = entry(&doc, "jobs").map_or(&[][..], entries);
+            match key.as_str() {
+                Some("jobs") if file == pr_device::FILE => {
+                    for (name, job) in jobs {
+                        if !pr_device::root_allowed(file, name.as_str().unwrap_or_default()) {
+                            scalars(job, &mut values);
+                        }
+                    }
+                }
+                _ => scalars(value, &mut values),
+            }
+        }
         assert_eq!(root_line(&values), None, "{file} runs something as root");
     }
 }

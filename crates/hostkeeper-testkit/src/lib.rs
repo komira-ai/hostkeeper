@@ -6,6 +6,9 @@
 //! - [`HookMode`]: the exit code and last line a fixture hook ends with, for each behaviour a
 //!   test can pick.
 //!
+//! - [`fifo`]: a named pipe at a path, on Linux and on macOS alike: the file that is neither a
+//!   regular file, a directory nor a link, which the tests of what refuses such a file make.
+//!
 //! No moved test opens a port, so there is no port helper.
 
 use std::io;
@@ -13,6 +16,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// Makes a named pipe at `path` with the permission bits `mode` (as the umask leaves them). An
+/// error when `path` exists or its directory does not. rustix's `mknodat` and `mkfifoat` are not
+/// built for macOS; this is the one way the workspace's tests make a FIFO on both.
+pub fn fifo(path: &Path, mode: u16) -> io::Result<()> {
+    let mode = nix::sys::stat::Mode::from_bits_truncate(nix::sys::stat::mode_t::from(mode));
+    nix::unistd::mkfifo(path, mode).map_err(io::Error::from)
+}
 
 /// The fixture hook's behaviours a test can pick.
 pub enum HookMode {
@@ -121,6 +132,28 @@ mod tests {
         assert_eq!(
             mode.last_line(),
             r#"{"class":"environment","reason":"leases_live","retry_after_secs":60}"#
+        );
+    }
+
+    /// Catches a `fifo` that makes another kind of file, or that passes over a path that already
+    /// exists or whose directory is missing.
+    #[test]
+    fn fifo_makes_a_named_pipe_and_refuses_a_path_that_exists_or_has_no_directory() {
+        use std::os::unix::fs::FileTypeExt;
+        let dir = Scratch::under(&base("testkit-unit"), "fifo").expect("scratch");
+        let pipe = dir.path().join("pipe");
+        fifo(&pipe, 0o600).expect("a fifo");
+        let meta = std::fs::symlink_metadata(&pipe).expect("its metadata");
+        assert!(meta.file_type().is_fifo());
+        assert_eq!(
+            fifo(&pipe, 0o600).expect_err("it exists").kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            fifo(&dir.path().join("missing/pipe"), 0o600)
+                .expect_err("no directory")
+                .kind(),
+            io::ErrorKind::NotFound
         );
     }
 

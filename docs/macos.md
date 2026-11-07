@@ -496,7 +496,10 @@ older releases wrote on a Mac, so the on-disk format is unchanged.
 ### The device run
 
 The job `macos-device` of `.github/workflows/privileged.yml` runs on a GitHub-hosted arm64 macOS
-runner (`macos-15`) after every merge to `main` and by hand, never on a pull request, as root.
+runner (`macos-15`) after every merge to `main` and by hand, as root, and in
+`.github/workflows/pr-device.yml`, a copy of it key for key, on every pull request, beside the
+job `macos-test`, which runs the tests of the Mac's crates on the same runner (CONTRIBUTING.md
+says which).
 Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`, `device_mac_e2e.rs` and
 `device_mac_selfupdate.rs`) are not
 counted by the coverage gate; what they drive is measured against fakes on Linux. They:

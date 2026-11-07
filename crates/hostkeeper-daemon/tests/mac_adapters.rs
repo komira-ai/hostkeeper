@@ -10,7 +10,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hostkeeper_daemon::adapters::{Adapters, host_boot_id, host_claims, host_clock, host_managed};
+use hostkeeper_daemon::adapters::{Adapters, host_claims, host_managed};
 use hostkeeper_daemon::cli::{DEFAULT_ADMIN_SOCKET, UNWIRED, Unwired};
 use hostkeeper_daemon::ipmi::DevIpmi;
 use hostkeeper_daemon::mac::{
@@ -25,7 +25,6 @@ use hostkeeper_launchd::{
     PlatformKind,
 };
 use hostkeeper_observe::{ActiveState, ObserveError, ProcessIdentity};
-use hostkeeper_steps::{BootId, Clock, Stamp};
 use hostkeeper_testkit::Scratch;
 use hostkeeper_unpack::{MacVerify, SignatureVerdict, VerifyIoError};
 use rustix::fs::XattrFlags;
@@ -500,13 +499,22 @@ fn a_macos_set_that_cannot_be_built_stops_the_start() {
         "{error}"
     );
 
-    let error = Adapters::for_platform(&Platform::macos())
-        .err()
-        .expect("this is a Linux build");
-    assert!(matches!(
-        error,
-        StartError::NoAdapters { platform: "macOS" }
-    ));
+    // A Linux build has no macOS adapters to give; a Mac's build gives its host set.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let error = Adapters::for_platform(&Platform::macos())
+            .err()
+            .expect("this is a Linux build");
+        assert!(matches!(
+            error,
+            StartError::NoAdapters { platform: "macOS" }
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let adapters = Adapters::for_platform(&Platform::macos()).expect("this is a Mac build");
+        assert_eq!(adapters.kind, PlatformKind::Macos);
+    }
 }
 
 /// Catches a Linux set that is not the systemd set: the systemd unit directory and no package
@@ -536,6 +544,10 @@ fn the_admin_socket_default_is_the_host_platforms() {
 #[cfg(target_os = "linux")]
 #[test]
 fn the_host_clock_of_a_linux_build_reads_the_kernels_boot_id() {
+    // Imported here, not at the top: on a Mac, which runs none of this test, they would be unused.
+    use hostkeeper_daemon::adapters::{host_boot_id, host_clock};
+    use hostkeeper_steps::{BootId, Clock, Stamp};
+
     let clock = host_clock();
     let id = clock.boot_id().expect("the host's boot id");
     assert!(BootId::uuid("the host", id.as_str()).is_ok(), "{id}");
