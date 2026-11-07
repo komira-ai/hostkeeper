@@ -72,6 +72,7 @@ The kit's directory holds three things:
 | `<mdm-host>` | the MDM host's name, which its certificate carries | | |
 | `<udid>` | the Mac's enrollment id in NanoHUB | | |
 | `<scratch>` | a directory only root can read, on the MDM host | | |
+| `<mac-scratch>` | the operator's scratch directory for the run, on the Mac under test | | |
 
 The live stack's names come from kbf's kit as it was reinstalled under jobscheduler's paths. The
 design's section 2 explains this mix. Confirm them on the host with
@@ -228,9 +229,9 @@ The order of the steps:
 4. **Pkg 3's chain on the Mac, before sending it.** Download pkg 3 and read its signature:
 
    ```
-   d="$HOME/pkg-signing-test"; mkdir -p "$d"
-   curl -fsS -o "$d/pkg3.pkg" https://<mdm-host>/pkg/<sha256 of pkg 3>.pkg
-   pkgutil --check-signature "$d/pkg3.pkg"
+   mkdir -p <mac-scratch>
+   curl -fsS -o <mac-scratch>/pkg3.pkg https://<mdm-host>/pkg/<sha256 of pkg 3>.pkg
+   pkgutil --check-signature <mac-scratch>/pkg3.pkg
    ```
 
    With root A installed, `pkgutil` is expected to say the certificate is trusted. Record the
@@ -288,7 +289,7 @@ sudo pkgutil --forget dev.hostkeeper.signing-test.pkg<n>
 sudo rmdir '/Library/Application Support/hostkeeper-signing-test'
 ```
 
-Remove `$HOME/pkg-signing-test`. Confirm that `profiles show -type configuration` no longer
+Remove `<mac-scratch>/pkg3.pkg`. Confirm that `profiles show -type configuration` no longer
 lists the root's profile. `report` prints a `Cleanup:` line while the run has not recorded
 `remove-root-profile` as `Acknowledged`.
 
