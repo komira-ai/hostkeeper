@@ -120,6 +120,7 @@ impl Link {
     }
 
     /// Whether a commit's outcome is not yet known.
+    #[cfg(test)]
     pub(crate) fn unsettled(&self) -> bool {
         self.lock().unknown.is_some()
     }
@@ -196,6 +197,7 @@ impl Tx<'_> {
     ///
     /// # Errors
     /// The client's error.
+    #[cfg(test)]
     pub(crate) fn query(
         &mut self,
         sql: &str,
@@ -316,16 +318,15 @@ impl Writer {
             }
             Err(e) => return Err(self.failed(&e)),
         };
-        let mut tx = Tx { session };
+        let mut tx = Tx {
+            session: &mut *session,
+        };
         let answer = match body(&mut tx) {
             Ok(answer) => answer,
             Err(e) => return Err(self.failed(&e)),
         };
         #[cfg(test)]
         let fault = self.fault.take();
-        let Some(session) = self.session.as_mut() else {
-            return Err(WriteFail::Lost("the database session is lost".to_owned()));
-        };
         let committed = session.batch("COMMIT");
         #[cfg(test)]
         let committed = match (committed, fault) {
@@ -421,6 +422,7 @@ impl Writer {
     }
 
     /// The epoch this coordinator holds.
+    #[cfg(test)]
     pub(crate) fn epoch(&self) -> i64 {
         self.epoch
     }

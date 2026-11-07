@@ -41,26 +41,10 @@ impl Val {
         text.map_or(Val::Null, |text| Val::Text(text.to_owned()))
     }
 
-    /// The text of a `text` value; `None` for any other.
-    pub(crate) fn as_text(&self) -> Option<&str> {
-        match self {
-            Val::Text(text) => Some(text),
-            _ => None,
-        }
-    }
-
     /// The integer of a `bigint` value.
     pub(crate) fn as_int(&self) -> Option<i64> {
         match self {
             Val::Int(n) => Some(*n),
-            _ => None,
-        }
-    }
-
-    /// The JSON of a `jsonb` value.
-    pub(crate) fn as_json(&self) -> Option<&serde_json::Value> {
-        match self {
-            Val::Json(value) => Some(value),
             _ => None,
         }
     }
@@ -71,7 +55,6 @@ impl From<&KeyVal> for Val {
         match key {
             KeyVal::Text(text) => Val::Text(text.clone()),
             KeyVal::Int(n) => Val::Int(*n),
-            KeyVal::Bytes(bytes) => Val::Bytes(bytes.clone()),
         }
     }
 }
@@ -111,8 +94,6 @@ pub(crate) enum KeyVal {
     Text(String),
     /// `bigint`.
     Int(i64),
-    /// `bytea`.
-    Bytes(Vec<u8>),
 }
 
 impl KeyVal {
@@ -130,10 +111,8 @@ impl KeyVal {
 pub(crate) enum Ty {
     Text,
     Int,
-    Small,
     Bool,
     Json,
-    Bytes,
     Texts,
 }
 
@@ -142,7 +121,6 @@ pub(crate) enum Ty {
 pub(crate) enum KeyTy {
     Text,
     Int,
-    Bytes,
 }
 
 /// A table: its name, the columns of its primary key, and its other columns, each in order.
@@ -263,7 +241,6 @@ impl Table {
                 key.push(match ty {
                     KeyTy::Text => KeyVal::Text(row.try_get(i)?),
                     KeyTy::Int => KeyVal::Int(row.try_get(i)?),
-                    KeyTy::Bytes => KeyVal::Bytes(row.try_get(i)?),
                 });
             }
             let mut values = Vec::with_capacity(self.values.len());
@@ -284,10 +261,8 @@ fn read(row: &Row, i: usize, ty: Ty) -> Result<Val, postgres::Error> {
     Ok(match ty {
         Ty::Text => or_null(row.try_get::<_, Option<String>>(i)?, Val::Text),
         Ty::Int => or_null(row.try_get::<_, Option<i64>>(i)?, Val::Int),
-        Ty::Small => or_null(row.try_get::<_, Option<i16>>(i)?, Val::Small),
         Ty::Bool => or_null(row.try_get::<_, Option<bool>>(i)?, Val::Bool),
         Ty::Json => or_null(row.try_get::<_, Option<serde_json::Value>>(i)?, Val::Json),
-        Ty::Bytes => or_null(row.try_get::<_, Option<Vec<u8>>>(i)?, Val::Bytes),
         Ty::Texts => or_null(row.try_get::<_, Option<Vec<String>>>(i)?, Val::Texts),
     })
 }

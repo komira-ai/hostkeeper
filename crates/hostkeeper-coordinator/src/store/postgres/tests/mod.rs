@@ -5,10 +5,12 @@
 //! never skips. Each test makes its own database with a unique name and drops it, so tests running
 //! in parallel share nothing.
 
-use std::sync::Arc;
+use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Once, PoisonError};
 
 use postgres::{Client, NoTls};
+use tracing_subscriber::fmt::MakeWriter;
 
 use super::{Dsn, Postgres, TIMEOUTS, Timeouts};
 use crate::audit_file::UnixClock;
@@ -174,6 +176,14 @@ impl TestDatabase {
         self.open_with(TIMEOUTS, holder)
     }
 
+    /// The store opened on a connection string of the test's own making.
+    pub(crate) fn open_dsn(
+        dsn: &Dsn,
+        holder: &str,
+    ) -> Result<(Postgres, Loaded), super::DatabaseError> {
+        Postgres::open_with(dsn, TIMEOUTS, holder, &unix(), Arc::new(|| SPENT_NOW))
+    }
+
     /// [`TestDatabase::open`] with the bounded waits `timeouts`.
     pub(crate) fn open_with(
         &self,
@@ -235,6 +245,59 @@ pub(crate) fn unix() -> UnixClock {
     Arc::new(|| AT)
 }
 
+mod connect;
 mod coordinator;
+mod lost;
+mod reads;
 mod records;
+mod records_errors;
+mod schema;
+mod session;
+mod start;
 pub(crate) mod store;
+
+/// What the process logged since it started, as the tests' subscriber wrote it.
+static LOG: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+/// The writer of the tests' subscriber: it keeps what is logged in [`LOG`].
+#[derive(Clone)]
+struct Capture;
+
+impl io::Write for Capture {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        LOG.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for Capture {
+    type Writer = Capture;
+
+    fn make_writer(&'a self) -> Capture {
+        Capture
+    }
+}
+
+/// Turns on the process's logging, once, into [`LOG`]: the store's alerts are lines of it.
+pub(crate) fn logging() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Capture)
+            .with_ansi(false)
+            .finish();
+        // Another subscriber set first is the process's; the lines are then not captured.
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
+}
+
+/// Whether the process logged `text`.
+pub(crate) fn logged(text: &str) -> bool {
+    String::from_utf8_lossy(&LOG.lock().unwrap_or_else(PoisonError::into_inner)).contains(text)
+}

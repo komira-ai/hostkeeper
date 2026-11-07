@@ -43,6 +43,8 @@ pub(crate) use files::Files;
 #[cfg(test)]
 pub(crate) use files::OpsWriter;
 pub(crate) use postgres::Landing;
+#[cfg(test)]
+pub(crate) use postgres::Postgres;
 
 /// Where the coordinator's state is durable.
 pub(crate) trait Backend: Send + Sync {

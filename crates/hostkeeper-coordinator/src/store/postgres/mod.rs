@@ -194,6 +194,7 @@ struct Inner {
     writer: Worker<Writer>,
     reader: Worker<Reader>,
     link: Arc<Link>,
+    #[cfg(test)]
     statements: Arc<AtomicU64>,
     last_seq: AtomicU64,
     epoch: u64,
@@ -394,6 +395,7 @@ impl Postgres {
             )
             .map_err(spawned)?,
             link,
+            #[cfg(test)]
             statements,
             last_seq: AtomicU64::new(last),
             epoch: u64::try_from(epoch).unwrap_or_default(),
@@ -442,11 +444,13 @@ impl Postgres {
     }
 
     /// Whether a commit's outcome is not yet known.
+    #[cfg(test)]
     pub(crate) fn unsettled(&self) -> bool {
         self.inner.link.unsettled()
     }
 
     /// How many statements the store's sessions have run.
+    #[cfg(test)]
     pub(crate) fn statements(&self) -> u64 {
         self.inner.statements.load(Ordering::Relaxed)
     }

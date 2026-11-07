@@ -126,21 +126,20 @@ pub(crate) fn checked(
 /// dropped, the bodies of dollar-quoted text kept as words of their own statements, so a
 /// function body is read too.
 fn statements(sql: &str) -> Vec<Vec<String>> {
-    let mut out = vec![Vec::new()];
+    let mut out: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
     let mut word = String::new();
     let mut chars = sql.chars().peekable();
-    let flush = |word: &mut String, out: &mut Vec<Vec<String>>| {
+    let flush = |word: &mut String, current: &mut Vec<String>| {
         if !word.is_empty() {
-            if let Some(last) = out.last_mut() {
-                last.push(word.to_uppercase());
-            }
+            current.push(word.to_uppercase());
             word.clear();
         }
     };
     while let Some(c) = chars.next() {
         match c {
             '-' if chars.peek() == Some(&'-') => {
-                flush(&mut word, &mut out);
+                flush(&mut word, &mut current);
                 for c in chars.by_ref() {
                     if c == '\n' {
                         break;
@@ -148,7 +147,7 @@ fn statements(sql: &str) -> Vec<Vec<String>> {
                 }
             }
             '\'' | '"' => {
-                flush(&mut word, &mut out);
+                flush(&mut word, &mut current);
                 while let Some(q) = chars.next() {
                     if q == c {
                         if chars.peek() == Some(&c) {
@@ -159,22 +158,24 @@ fn statements(sql: &str) -> Vec<Vec<String>> {
                     }
                 }
             }
-            ';' => {
-                flush(&mut word, &mut out);
-                out.push(Vec::new());
+            // A `;`, and a dollar quote's tag, end the statement they follow: so the first
+            // statement of a dollar-quoted body is read as a statement of its own, like the
+            // ones after its `;`.
+            ';' | '$' => {
+                flush(&mut word, &mut current);
+                out.push(std::mem::take(&mut current));
             }
             c if c.is_ascii_alphanumeric() || c == '_' => word.push(c),
             '(' | ')' | ',' => {
-                flush(&mut word, &mut out);
-                if let Some(last) = out.last_mut() {
-                    last.push(c.to_string());
-                }
+                flush(&mut word, &mut current);
+                current.push(c.to_string());
             }
-            // `$` and the rest separate words; a dollar quote's body is read as statements.
-            _ => flush(&mut word, &mut out),
+            // The rest separates words.
+            _ => flush(&mut word, &mut current),
         }
     }
-    flush(&mut word, &mut out);
+    flush(&mut word, &mut current);
+    out.push(current);
     out.retain(|statement| !statement.is_empty());
     out
 }

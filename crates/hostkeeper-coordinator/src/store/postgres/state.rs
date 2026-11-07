@@ -634,7 +634,6 @@ fn refused(table: &str, key: &[KeyVal], why: impl std::fmt::Display) -> OpsError
         .map(|k| match k {
             KeyVal::Text(text) => text.clone(),
             KeyVal::Int(n) => n.to_string(),
-            KeyVal::Bytes(bytes) => format!("{} bytes", bytes.len()),
         })
         .collect();
     OpsError::Invalid {
