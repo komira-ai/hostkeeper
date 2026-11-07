@@ -295,10 +295,9 @@ impl Fleet {
     /// it cleared the halt the failure raised, or set a version by hand over it.
     #[must_use]
     pub fn is_acked(&self, service: &str, id: &HostId, version: &Version) -> bool {
-        self.marks
-            .acked
-            .get(service)
-            .is_some_and(|acked| acked.contains(&(id.as_str().to_owned(), version.as_str().to_owned())))
+        self.marks.acked.get(service).is_some_and(|acked| {
+            acked.contains(&(id.as_str().to_owned(), version.as_str().to_owned()))
+        })
     }
 
     /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the

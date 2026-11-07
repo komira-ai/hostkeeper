@@ -191,9 +191,10 @@ pub(crate) async fn admit(
 ) -> Result<Admitted, Status> {
     let served = match (surface, service_of(path)) {
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
-        (Surface::Control, Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS)) => {
-            Served::Operator
-        }
+        (
+            Surface::Control,
+            Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS),
+        ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
     };
     match served {

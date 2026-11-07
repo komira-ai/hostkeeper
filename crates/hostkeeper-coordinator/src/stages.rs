@@ -372,7 +372,8 @@ impl View {
             .into_iter()
             .map(|(id, host)| {
                 let state = state_of(def, want, &done, fleet, &id, host, now);
-                let deferring = state == HostState::Waiting && is_deferring(def, want, fleet, &id, now);
+                let deferring =
+                    state == HostState::Waiting && is_deferring(def, want, fleet, &id, now);
                 Member {
                     role: fleet.role_in(&def.name, &id).to_owned(),
                     id,
@@ -384,9 +385,7 @@ impl View {
             .collect();
         // The hosts that started fill the stages first, the done ones first; then the hosts
         // left to order, in node-id order, the deferring ones last.
-        members.sort_by(|a, b| {
-            (a.state, a.deferring, &a.id).cmp(&(b.state, b.deferring, &b.id))
-        });
+        members.sort_by(|a, b| (a.state, a.deferring, &a.id).cmp(&(b.state, b.deferring, &b.id)));
         let stages = def.plan.stages(members.len());
         let mut stage = 0;
         for (i, member) in members.iter_mut().enumerate() {
@@ -417,7 +416,9 @@ impl View {
     }
 
     fn started(&self) -> impl Iterator<Item = &Member> {
-        self.members.iter().filter(|m| m.state != HostState::Waiting)
+        self.members
+            .iter()
+            .filter(|m| m.state != HostState::Waiting)
     }
 
     /// How many places of the current stage no host has taken: an eligible host that has not
@@ -463,7 +464,13 @@ impl View {
     /// quiet start and the other services' rollouts): none when it has a free place to order,
     /// or nothing is left to roll.
     #[must_use]
-    pub fn wait(&self, def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Duration) -> Option<Wait> {
+    pub fn wait(
+        &self,
+        def: &ServiceDef,
+        want: &Desired,
+        fleet: &Fleet,
+        now: Duration,
+    ) -> Option<Wait> {
         if self.finished() {
             return None;
         }
@@ -500,7 +507,11 @@ impl View {
 /// it advances by itself.
 #[must_use]
 pub fn first_entered(plan: &Plan) -> usize {
-    usize::from(plan.defs().first().is_some_and(|s| s.advance == Advance::Auto))
+    usize::from(
+        plan.defs()
+            .first()
+            .is_some_and(|s| s.advance == Advance::Auto),
+    )
 }
 
 /// The eligible hosts of `def` at `now`, by node id, each with what the service heard of it.
@@ -601,7 +612,13 @@ fn state_of(
     }
 }
 
-fn is_deferring(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
+fn is_deferring(
+    def: &ServiceDef,
+    want: &Desired,
+    fleet: &Fleet,
+    id: &HostId,
+    now: Duration,
+) -> bool {
     fleet
         .deferred_until(&def.name, id, &want.version, &def.defer_backoff)
         .is_some_and(|until| now < until)
@@ -610,7 +627,13 @@ fn is_deferring(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, no
 /// Whether ordering the host `id` would leave fewer live hosts of its role up for `def` than the
 /// desired state's `min_up` of the role. Every live host of the role that runs the service and
 /// is not excluded counts, held ones included: `min_up` is about what stays serving.
-fn below_min_up(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
+fn below_min_up(
+    def: &ServiceDef,
+    want: &Desired,
+    fleet: &Fleet,
+    id: &HostId,
+    now: Duration,
+) -> bool {
     let service = def.name.as_str();
     let role = fleet.role_in(service, id);
     let min = want.min_up.min_up_of(role) as usize;
@@ -638,7 +661,8 @@ fn no_slot(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Du
     let service = def.name.as_str();
     let role = fleet.role_in(service, id);
     let cap = want.max_updating.max_updating_of(role);
-    let others = |o: &HostId| o != id && !fleet.is_forced(service, o) && fleet.role_in(service, o) == role;
+    let others =
+        |o: &HostId| o != id && !fleet.is_forced(service, o) && fleet.role_in(service, o) == role;
     let occupying = fleet
         .occupants_of(service)
         .filter(|(o, _)| others(o))
@@ -650,7 +674,10 @@ fn no_slot(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Du
             }
         })
         .count();
-    let unseen = fleet.ordered_unseen(service, now).filter(|o| others(o)).count();
+    let unseen = fleet
+        .ordered_unseen(service, now)
+        .filter(|o| others(o))
+        .count();
     occupying + unseen >= cap as usize
 }
 
@@ -684,7 +711,13 @@ pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Dur
 
 /// Whether `service` may not start a rollout now: its own is not live and as many other
 /// services' are as `--live-rollouts` lets be.
-pub(crate) fn elsewhere(services: &Services, all: &BTreeMap<String, Desired>, service: &str, fleet: &Fleet, now: Duration) -> bool {
+pub(crate) fn elsewhere(
+    services: &Services,
+    all: &BTreeMap<String, Desired>,
+    service: &str,
+    fleet: &Fleet,
+    now: Duration,
+) -> bool {
     let live = |def: &ServiceDef| is_live(def, all.get(&def.name), fleet, now);
     if services.get(service).is_some_and(live) {
         return false;
