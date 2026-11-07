@@ -25,7 +25,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The Mac and service-manager surface: a change here runs the macOS jobs. The launchd adapters
-/// and the Mac's platform names, the daemon (the step runner, the executor, self-update and the
+/// and the Mac's platform names (the config's and the package index's `Platform::current`), the daemon (the step runner, the executor, self-update and the
 /// boot pass), the step launcher, placement, the package check, the observer and the enrollment
 /// claims, the `hostkeeper` binary (the pkg's postinstall), hello (the device test's package),
 /// the privileged tests, the Mac packaging, the workflows that build or check the Mac, this
@@ -40,6 +40,7 @@ pub(crate) const MAC: &[&str] = &[
     "crates/hostkeeper-enroll/",
     "crates/hostkeeper-launchd/",
     "crates/hostkeeper-observe/",
+    "crates/hostkeeper-package/src/index",
     "crates/hostkeeper-placed/",
     "crates/hostkeeper-privileged/",
     "crates/hostkeeper-steps/",

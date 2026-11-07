@@ -4,8 +4,8 @@
 
 use super::lint::{PRIVILEGED_WORKFLOW, entries, entry, lint};
 use super::pr_device::{
-    CONCURRENCY_PROBLEM, FILE, GATE_IF, GROUP, JOBS, LINUX_IF, MAC_IF, ON_PROBLEM, mirror_problems,
-    same,
+    CONCURRENCY_PROBLEM, FILE, GATE_IF, GROUP, JOBS, LINUX_IF, MAC_IF, ON_PROBLEM, TOP_LEVEL,
+    mirror_problems, same,
 };
 use super::yaml::{self, Node};
 use super::{CLEAN, with, with_in, workflows};
@@ -85,7 +85,7 @@ fn a_macos_job_with_a_secret_on_a_pull_request_is_refused() {
     // Catches: a secret or the token handed to a macOS job of a pull request, as an expression in
     // its env, a step's `with:` or a run line, in any case, through `toJSON(secrets)`, or passed
     // with a `secrets:` key; and a secret set once for every job beside `jobs`.
-    let cases: [(&str, &str); 6] = [
+    let cases: [(&str, &str); 9] = [
         (
             "    env:\n      TOKEN: ${{ secrets.DEPLOY_KEY }}\n",
             "job macos-test: a secret on pull_request (`${{ secrets.DEPLOY_KEY }}`)",
@@ -105,6 +105,18 @@ fn a_macos_job_with_a_secret_on_a_pull_request_is_refused() {
         (
             "    env:\n      TOKEN: a-${{ GitHub.Token }}-b\n",
             "job macos-test: a secret on pull_request (`a-${{ GitHub.Token }}-b`)",
+        ),
+        (
+            "    env:\n      TOKEN: ${{ github['token'] }}\n",
+            "job macos-test: a secret on pull_request (`${{ github['token'] }}`)",
+        ),
+        (
+            "    env:\n      TOKEN: ${{ github [ \"token\" ] }}\n",
+            "job macos-test: a secret on pull_request (`${{ github [ \"token\" ] }}`)",
+        ),
+        (
+            "    env:\n      ALL: ${{ toJSON( github ) }}\n",
+            "job macos-test: a secret on pull_request (`${{ toJSON( github ) }}`)",
         ),
         (
             "    secrets:\n      key: x\n",
@@ -155,6 +167,7 @@ fn the_secret_rule_holds_in_every_pull_request_workflow_and_reads_only_expressio
         "      - run: cargo test secrets_are_redacted\n",
         "      - run: echo ${{ github.sha }} ${{ github.token_kind }}x\n",
         "      - run: echo ${{ inputs.secretsless }}\n",
+        "      - run: echo ${{ github['sha'] }} ${{ toJSON(github.event.pull_request.labels) }}\n",
     ] {
         assert_eq!(
             lint("ci.yml", &with(step, innocent)),
@@ -359,7 +372,7 @@ fn each_job_of_pr_device_yml_has_its_needs_its_if_and_its_runner() {
         ),
         (
             "  changes:\n    runs-on: ubuntu-24.04\n",
-            "  changes:\n    if: ${{ github.actor != 'x' }}\n    needs: gate\n    runs-on: ubuntu-24.04\n"
+            "  changes:\n    if: ${{ always() }}\n    needs: gate\n    runs-on: ubuntu-24.04\n"
                 .to_owned(),
             vec![
                 "job changes: has an `if:`, and runs for every pull request".to_owned(),
@@ -463,4 +476,26 @@ fn same_compares_trees_not_where_they_were_written() {
         assert!(!same(&load(a), &load(b)), "{a} against {b}");
     }
     assert!(CLEAN.contains("pull_request"));
+}
+
+#[test]
+fn a_top_level_key_that_would_change_the_copies_is_refused() {
+    // Catches: a top-level `defaults` (a shell or a working directory for every step), which
+    // changes what the copies of privileged.yml's jobs run while their keys still compare equal.
+    let at = "\npermissions: {}\n";
+    for (added, key) in [
+        (
+            "defaults:\n  run:\n    working-directory: crates\n",
+            "defaults",
+        ),
+        ("run-name: x\n", "run-name"),
+    ] {
+        assert_eq!(
+            problems(&device_with(at, &format!("{at}{added}"))),
+            [format!(
+                "pr-device.yml: the top-level key `{key}` is not one of {TOP_LEVEL:?}"
+            )],
+            "{added}"
+        );
+    }
 }

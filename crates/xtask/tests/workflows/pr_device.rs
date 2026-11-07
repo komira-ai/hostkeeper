@@ -6,6 +6,7 @@
 //! holds the file to its shape, so that what such a job may do is fixed here:
 //! - its `on` is exactly `pull_request` with no filter (no `types`, `branches` or `paths`): the
 //!   workflow starts for every pull request, so [`GATE_JOB`] always reports;
+//! - its top-level keys are among [`TOP_LEVEL`] (no `defaults`, which would change the copies);
 //! - its `concurrency` is exactly the group [`GROUP`], one per pull request, with
 //!   `cancel-in-progress: true`: a newer push cancels the older run and its macOS runners;
 //! - its jobs are exactly those of [`JOBS`]; each has exactly the `if:` and `needs` its entry
@@ -96,6 +97,10 @@ pub const JOBS: &[Job] = &[
     },
 ];
 
+/// The top-level keys [`FILE`] may have: a `defaults` or any other key would change how the
+/// copies of privileged.yml's jobs run, where [`mirror_problems`] does not look.
+pub const TOP_LEVEL: &[&str] = &["name", "on", "permissions", "concurrency", "env", "jobs"];
+
 /// What [`FILE`] is refused with when its `on` is anything else.
 pub const ON_PROBLEM: &str = "pr-device.yml: on must be pull_request alone, with no filter";
 /// What [`FILE`] is refused with when its `concurrency` is anything else.
@@ -161,6 +166,14 @@ pub fn problems(doc: &Node) -> Vec<String> {
     }
     if !one_group_per_pull_request(entry(doc, "concurrency")) {
         problems.push(CONCURRENCY_PROBLEM.to_owned());
+    }
+    for (key, _) in entries(doc) {
+        let key = key.as_str().unwrap_or_default();
+        if !TOP_LEVEL.contains(&key) {
+            problems.push(format!(
+                "{FILE}: the top-level key `{key}` is not one of {TOP_LEVEL:?}"
+            ));
+        }
     }
     let jobs = entry(doc, "jobs").map_or(&[][..], entries);
     let named: BTreeSet<&str> = jobs.iter().filter_map(|(name, _)| name.as_str()).collect();

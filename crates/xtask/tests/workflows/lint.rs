@@ -30,7 +30,8 @@
 //!   `--target aarch64-apple-darwin`). The job names a job's `needs` lists are not its values;
 //! - the workflow runs for a pull request and a job of it, or what sits beside `jobs`, names a
 //!   secret or the token: a key or value `secrets`, or an expression (`${{ ... }}`) that names
-//!   `secrets` or `github.token` as a word, in any case. The token's rights are those of the
+//!   `secrets` or `github.token` as a word (or the token as `github['token']`, or the whole
+//!   context through `toJSON(github)`), in any case and spacing. The token's rights are those of the
 //!   job's `permissions`; naming it hands them to a step of pull-request code;
 //! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
 //! - it is not [`PRIVILEGED_WORKFLOW`], it does not run for a pull request, and a job of it, or
@@ -659,9 +660,16 @@ fn secret_problems(who: &str, values: &[&str]) -> Vec<String> {
     first_line(values, |line| {
         let lower = line.to_ascii_lowercase();
         lower.trim() == "secrets"
-            || expressions(&lower)
-                .iter()
-                .any(|e| has_word(e, "secrets") || has_word(e, "github.token"))
+            || expressions(&lower).iter().any(|e| {
+                // `github['token']` and `github [ "token" ]` read as `github.token`.
+                let e = e
+                    .replace([' ', '\t'], "")
+                    .replace(['\'', '"'], "")
+                    .replace("[token]", ".token");
+                has_word(&e, "secrets")
+                    || has_word(&e, "github.token")
+                    || e.contains("tojson(github)")
+            })
     })
     .map(|line| format!("{who}: a secret on pull_request (`{line}`)"))
     .into_iter()

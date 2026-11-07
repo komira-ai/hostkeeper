@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The tests that run as root against the real service manager of a host (systemd, and launchd on a Mac) and that run the coordinator and the daemon as programs, in .github/workflows/privileged.yml only, and the workload fixture they drive."
+description = "The tests that run as root against the real service manager of a host (systemd, and launchd on a Mac) and that run the coordinator and the daemon as programs, in .github/workflows/privileged.yml and in pr-device.yml's copies of its jobs, and the workload fixture they drive."
 
 # The one place where the adapters behind the fakes of the pull-request set meet the real host:
 # the step launcher's transient units, the dead-man's stop by name, the observer's systemd and
@@ -14,7 +14,8 @@ description = "The tests that run as root against the real service manager of a 
 # unit file, drop-in and fallback unit. The tests under tests/ that do so start with `#![cfg(feature = "privileged")]`:
 # the feature is off by default and nothing of the workspace turns it on, so CI's `test` job
 # compiles and runs none of them; privileged.yml builds them as the runner's user and runs them
-# as root, after a merge to main. The library is what they share and what can be tested without
+# as root, after a merge to main, and pr-device.yml's copies of its jobs do the same on a pull
+# request that changes what they prove. The library is what they share and what can be tested without
 # root (the fixture's arguments and modes, the host check, the names and files of the rig), and
 # is measured by the 99% gate like any crate.
 [dependencies]

@@ -152,6 +152,7 @@ crates/hostkeeper-coordinator/src/lib.rs
 crates/hostkeeper-link/src/beat.rs
 crates/hostkeeper-mdm/src/lib.rs
 crates/hostkeeper-config/src/lib.rs
+crates/hostkeeper-package/src/fetch.rs
 crates/hostkeeper-daemonx/src/lib.rs
 crates/xtask/src/release.rs
 crates/xtask/tests/workflows/lint.rs
@@ -188,6 +189,8 @@ fn each_list_selects_its_own_surface() {
         "crates/xtask/src/release/macos_pkg/scripts.rs",
         "crates/xtask/src/release/macos_pkg_verb_tests.rs",
         "crates/hostkeeper-config/src/platform.rs",
+        "crates/hostkeeper-package/src/index.rs",
+        "crates/hostkeeper-package/src/index_tests.rs",
         "examples/hello/src/main.rs",
     ] {
         assert_eq!(on_list(MAC, stem), [stem], "{stem}");
